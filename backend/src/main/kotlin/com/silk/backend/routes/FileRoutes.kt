@@ -134,6 +134,10 @@ fun Route.fileRoutes() {
                 
                 logger.info("📁 文件已保存: ${targetFile.absolutePath}")
                 
+                // 获取用户名（用于显示在聊天消息中）
+                val user = com.silk.backend.database.UserRepository.findUserById(userId!!)
+                val userName = user?.fullName ?: "用户"
+                
                 // 先返回上传成功响应（不阻塞用户）
                 call.respond(HttpStatusCode.OK, FileUploadResponse(
                     success = true,
@@ -146,12 +150,26 @@ fun Route.fileRoutes() {
                     message = "文件已上传，正在索引..."
                 ))
                 
-                // 异步索引到搜索系统（不阻塞用户对话）
+                // ✅ 发送文件消息到聊天室（让所有群成员都能看到）
                 val finalSessionId = sessionId!!
                 val finalUserId = userId!!
+                val finalUserName = userName
                 val finalFileName = fileName!!
+                val finalSafeFileName = safeFileName
+                val fileSize = fileBytes!!.size.toLong()
+                
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
+                        // 广播文件消息到聊天室
+                        com.silk.backend.broadcastFileMessage(
+                            groupId = finalSessionId,
+                            userId = finalUserId,
+                            userName = finalUserName,
+                            fileName = finalFileName,
+                            fileSize = fileSize,
+                            downloadUrl = "/api/files/download/$finalSessionId/$finalSafeFileName"
+                        )
+                        
                         // 发送开始索引状态
                         broadcastSystemStatus(finalSessionId, "🔄 正在索引文件: $finalFileName ...")
                         
