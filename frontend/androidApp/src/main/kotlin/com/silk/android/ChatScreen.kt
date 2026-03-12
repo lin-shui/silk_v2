@@ -59,6 +59,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
+import org.json.JSONObject
 
 // Web版的 collectAsState 实现
 @Composable
@@ -1508,11 +1509,36 @@ fun MessageItem(
     
     // ✅ 文件消息特殊处理
     if (isFileMessage) {
-        // 解析文件信息：content 格式为 "fileName|fileSize|downloadUrl"
-        val parts = message.content.split("|")
-        val fileName = parts.getOrNull(0) ?: "未知文件"
-        val fileSize = parts.getOrNull(1)?.toLongOrNull() ?: 0L
-        val downloadUrl = parts.getOrNull(2) ?: ""
+        // 解析文件信息：content 格式为 JSON {"fileName":"xxx","fileSize":123,"downloadUrl":"xxx"}
+        // 兼容旧格式 "fileName|fileSize|downloadUrl"
+        val fileName: String
+        val fileSize: Long
+        val downloadUrl: String
+        
+        if (message.content.startsWith("{")) {
+            // JSON 格式
+            val json = try {
+                org.json.JSONObject(message.content)
+            } catch (e: Exception) {
+                println("⚠️ 解析文件消息JSON失败: ${e.message}")
+                null
+            }
+            if (json != null) {
+                fileName = json.optString("fileName", "未知文件")
+                fileSize = json.optLong("fileSize", 0L)
+                downloadUrl = json.optString("downloadUrl", "")
+            } else {
+                fileName = "解析失败"
+                fileSize = 0L
+                downloadUrl = ""
+            }
+        } else {
+            // 兼容旧的 | 分隔符格式
+            val parts = message.content.split("|")
+            fileName = parts.getOrNull(0) ?: "未知文件"
+            fileSize = parts.getOrNull(1)?.toLongOrNull() ?: 0L
+            downloadUrl = parts.getOrNull(2) ?: ""
+        }
         
         Column(
             modifier = Modifier.fillMaxWidth(),
