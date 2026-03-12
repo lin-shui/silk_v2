@@ -199,8 +199,14 @@ kill_all_ports() {
     
     kill_port_process $BACKEND_PORT "Silk Backend" $force
     kill_port_process $FRONTEND_PORT "Silk Frontend" $force
-    kill_port_process $WEAVIATE_HTTP_PORT "Weaviate HTTP" $force
-    kill_port_process $WEAVIATE_GRPC_PORT "Weaviate gRPC" $force
+    
+    # 使用远程 Weaviate 时跳过本地端口清理
+    if [ "$WEAVIATE_IS_REMOTE" != "true" ]; then
+        kill_port_process $WEAVIATE_HTTP_PORT "Weaviate HTTP" $force
+        kill_port_process $WEAVIATE_GRPC_PORT "Weaviate gRPC" $force
+    else
+        echo -e "  ${GREEN}✓ 使用远程 Weaviate，跳过本地端口清理${NC}"
+    fi
 }
 
 # ============================================================
