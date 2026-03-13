@@ -110,11 +110,12 @@ if [ -f "$SILK_DIR/.env" ]; then
     rm -f "$TMP_ENV"
 fi
 
-# 端口定义
-BACKEND_PORT=8006
-FRONTEND_PORT=8005
-WEAVIATE_HTTP_PORT=8008
-WEAVIATE_GRPC_PORT=50051
+# 端口定义：从 .env 读取，未设置时使用默认值
+# BACKEND_PORT 优先跟随 BACKEND_HTTP_PORT（APK 公网访问端口）
+BACKEND_PORT=${BACKEND_HTTP_PORT:-${BACKEND_PORT:-8006}}
+FRONTEND_PORT=${FRONTEND_PORT:-8005}
+WEAVIATE_HTTP_PORT=${WEAVIATE_HTTP_PORT:-8008}
+WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-50051}
 
 # Weaviate URL 处理：优先使用 .env 中的 WEAVIATE_URL，否则使用本地
 WEAVIATE_CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
@@ -200,13 +201,8 @@ kill_all_ports() {
     kill_port_process $BACKEND_PORT "Silk Backend" $force
     kill_port_process $FRONTEND_PORT "Silk Frontend" $force
     
-    # 使用远程 Weaviate 时跳过本地端口清理
-    if [ "$WEAVIATE_IS_REMOTE" != "true" ]; then
-        kill_port_process $WEAVIATE_HTTP_PORT "Weaviate HTTP" $force
-        kill_port_process $WEAVIATE_GRPC_PORT "Weaviate gRPC" $force
-    else
-        echo -e "  ${GREEN}✓ 使用远程 Weaviate，跳过本地端口清理${NC}"
-    fi
+    # 永不清理 Weaviate 端口：若 8008 已有 Weaviate 在跑则直接复用，不停止、不杀进程
+    echo -e "  ${GREEN}✓ 跳过 Weaviate 端口 ($WEAVIATE_HTTP_PORT/$WEAVIATE_GRPC_PORT)，保持已有实例${NC}"
 }
 
 # ============================================================
@@ -263,6 +259,15 @@ weaviate_start() {
         fi
     fi
     
+    # 本地：若 8008 上已有 Weaviate 在跑且就绪，直接复用，不启动、不杀进程
+    if check_port $WEAVIATE_HTTP_PORT; then
+        local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+        if [ "$READY" == "200" ]; then
+            echo -e "  ${GREEN}✓ 端口 $WEAVIATE_HTTP_PORT 已有 Weaviate 在运行，直接使用${NC}"
+            return 0
+        fi
+    fi
+    
     # 首先检查 Docker 容器是否已存在且运行中
     local CONTAINER_STATUS=$(docker inspect -f '{{.State.Status}}' silk-weaviate 2>/dev/null)
     if [ "$CONTAINER_STATUS" == "running" ]; then
@@ -293,12 +298,15 @@ weaviate_start() {
         echo -e "  ${YELLOW}⚠ Weaviate 容器状态异常 ($CONTAINER_STATUS)，重新创建...${NC}"
         docker rm -f silk-weaviate 2>/dev/null
     else
-        # 检查端口是否被其他进程占用
+        # 端口已被占用时：若是 Weaviate 则直接复用，不杀进程
         if check_port $WEAVIATE_HTTP_PORT; then
-            echo -e "  ${YELLOW}⚠ 端口 $WEAVIATE_HTTP_PORT 被其他进程占用，尝试清理...${NC}"
-            kill_port_process $WEAVIATE_HTTP_PORT "Weaviate HTTP" true
-            kill_port_process $WEAVIATE_GRPC_PORT "Weaviate gRPC" true
-            sleep 2
+            local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+            if [ "$READY" == "200" ]; then
+                echo -e "  ${GREEN}✓ 端口 $WEAVIATE_HTTP_PORT 已有 Weaviate 在运行，直接使用${NC}"
+                return 0
+            fi
+            echo -e "  ${YELLOW}⚠ 端口 $WEAVIATE_HTTP_PORT 被非 Weaviate 进程占用，请先释放端口${NC}"
+            return 1
         fi
     fi
     
@@ -346,18 +354,30 @@ weaviate_start() {
 weaviate_stop() {
     echo -e "${BLUE}停止 Weaviate...${NC}"
     
-    # 停止 Docker 容器
+    # 若 8008 上已有 Weaviate 在跑，一律不停止、不杀进程，直接复用
+    if check_port $WEAVIATE_HTTP_PORT; then
+        local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+        if [ "$READY" == "200" ]; then
+            echo -e "  ${GREEN}✓ 端口 $WEAVIATE_HTTP_PORT 上 Weaviate 正在运行，保持不停止${NC}"
+            return 0
+        fi
+    fi
+    
+    # 停止 Docker 容器（仅限本脚本启动的 silk-weaviate 容器）
     if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "silk-weaviate"; then
         cd "$SILK_DIR/search"
         docker-compose down 2>/dev/null
         echo -e "  ${GREEN}✓ Docker 容器已停止${NC}"
     fi
     
-    # 停止本地进程
+    # 停止本地进程（仅当端口占用且不是 Weaviate 就绪时）
     if check_port $WEAVIATE_HTTP_PORT; then
-        local PID=$(get_pid_on_port $WEAVIATE_HTTP_PORT)
-        kill -9 $PID 2>/dev/null
-        echo -e "  ${GREEN}✓ 本地进程已停止 (PID: $PID)${NC}"
+        local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
+        if [ "$READY" != "200" ]; then
+            local PID=$(get_pid_on_port $WEAVIATE_HTTP_PORT)
+            kill -9 $PID 2>/dev/null
+            echo -e "  ${GREEN}✓ 本地进程已停止 (PID: $PID)${NC}"
+        fi
     fi
 }
 

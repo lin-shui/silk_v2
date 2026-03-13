@@ -1,7 +1,40 @@
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.TimeZone
+
+// ==================== 读取 .env 文件 ====================
+// 从项目根目录读取 .env，返回 Map
+fun readEnvFile(): Map<String, String> {
+    val env = mutableMapOf<String, String>()
+    val cwd = File(System.getProperty("user.dir"))
+    val candidates = listOf(
+        File(cwd, ".env"),
+        cwd.parentFile?.let { File(it, ".env") },
+        cwd.parentFile?.parentFile?.let { File(it, ".env") }
+    ).filterNotNull()
+    
+    for (file in candidates) {
+        if (file.isFile) {
+            file.forEachLine { line ->
+                val trimmed = line.trim()
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) return@forEachLine
+                val eq = trimmed.indexOf('=')
+                if (eq <= 0) return@forEachLine
+                var key = trimmed.substring(0, eq).trim()
+                var value = trimmed.substring(eq + 1).trim()
+                if (key.startsWith("export ")) key = key.removePrefix("export ").trim()
+                if (value.startsWith("\"") && value.endsWith("\"")) value = value.drop(1).dropLast(1)
+                if (value.startsWith("'") && value.endsWith("'")) value = value.drop(1).dropLast(1)
+                env[key] = value
+            }
+            break
+        }
+    }
+    return env
+}
+val envFile = readEnvFile()
 
 plugins {
     id("com.android.application")
@@ -48,13 +81,15 @@ android {
         targetSdk = 34
         versionCode = currentVersionCode
         versionName = currentVersionName
-        // 构建时后端地址：优先 -PBACKEND_BASE_URL（silk.sh build-apk 会从 .env 传入），否则环境变量，最后默认模拟器地址
+        // 构建时后端地址：优先级: 1) -PBACKEND_BASE_URL 2) 环境变量 3) .env 文件 4) 默认模拟器地址
         val baseUrl = project.findProperty("BACKEND_BASE_URL")?.toString()
             ?: System.getenv("BACKEND_BASE_URL")
-            ?: (System.getenv("BACKEND_HOST")?.let { host ->
-                val port = System.getenv("BACKEND_HTTP_PORT") ?: "8006"
+            ?: envFile["BACKEND_BASE_URL"]
+            ?: (envFile["BACKEND_HOST"] ?: System.getenv("BACKEND_HOST"))?.let { host ->
+                val port = envFile["BACKEND_HTTP_PORT"] ?: System.getenv("BACKEND_HTTP_PORT") ?: "8006"
                 "http://$host:$port"
-            } ?: "http://10.0.2.2:8006")
+            }
+            ?: "http://10.0.2.2:${envFile["BACKEND_HTTP_PORT"] ?: "8006"}"
         buildConfigField("String", "BACKEND_BASE_URL", "\"$baseUrl\"")
         println("📱 [Android] BACKEND_BASE_URL = $baseUrl")
     }
