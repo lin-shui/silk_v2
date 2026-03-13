@@ -374,32 +374,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var mentionSearchText by remember { mutableStateOf("") }
     var mentionStartIndex by remember { mutableStateOf(-1) }
     
-    // 消息撤回相关状态
-    var showRecallConfirm by remember { mutableStateOf<String?>(null) } // 要撤回的消息ID
-    var isRecalling by remember { mutableStateOf(false) }
-    
-    // 撤回消息的处理函数
-    val handleRecallMessage: (String) -> Unit = { messageId ->
-        scope.launch {
-            isRecalling = true
-            try {
-                val response = ApiClient.recallMessage(group.id, user.id, messageId)
-                if (response.success) {
-                    console.log("✅ 消息撤回成功: $messageId")
-                    // ChatClient 会通过 WebSocket 收到撤回通知并自动处理
-                } else {
-                    console.error("❌ 消息撤回失败: ${response.message}")
-                    window.alert("撤回失败: ${response.message}")
-                }
-            } catch (e: Exception) {
-                console.error("❌ 撤回消息异常:", e)
-                window.alert("撤回失败: ${e.message}")
-            } finally {
-                isRecalling = false
-                showRecallConfirm = null
-            }
-        }
-    }
+    // 消息撤回相关状态：正在撤回中的消息ID集合，防止重复点击
+    var recallingMessageIds by remember { mutableStateOf(setOf<String>()) }
     
     // 从消息历史中提取用户列表（去重）
     val sessionUsers = remember(messages) {
@@ -714,18 +690,22 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     isTransient = false,
                     currentUserId = user.id,
                     groupId = group.id,
+                    isRecalling = message.id in recallingMessageIds,
                     onRecall = { messageId ->
-                        scope.launch {
-                            try {
-                                val response = ApiClient.recallMessage(group.id, messageId, user.id)
-                                if (response.success) {
-                                    console.log("✅ 消息撤回成功")
-                                } else {
-                                    window.alert("撤回失败: ${response.message}")
+                        if (messageId !in recallingMessageIds) {
+                            recallingMessageIds = recallingMessageIds + messageId
+                            scope.launch {
+                                try {
+                                    val response = ApiClient.recallMessage(group.id, messageId, user.id)
+                                    if (!response.success) {
+                                        window.alert("撤回失败: ${response.message}")
+                                    }
+                                } catch (e: Exception) {
+                                    console.error("❌ 撤回消息失败:", e)
+                                    window.alert("撤回失败: ${e.message}")
+                                } finally {
+                                    recallingMessageIds = recallingMessageIds - messageId
                                 }
-                            } catch (e: Exception) {
-                                console.error("❌ 撤回消息失败:", e)
-                                window.alert("撤回失败: ${e.message}")
                             }
                         }
                     }
@@ -2027,6 +2007,7 @@ fun MessageItem(
     isTransient: Boolean = false,
     currentUserId: String = "",
     groupId: String = "",
+    isRecalling: Boolean = false,
     onRecall: (String) -> Unit = {}
 ) {
     val timeString = remember(message.timestamp) {
@@ -2071,25 +2052,26 @@ fun MessageItem(
                     Span({ classes(SilkStylesheet.timestamp) }) {
                         Text(timeString)
                     }
-                    // 撤回按钮 - 仅对自己的消息显示
                     if (canRecall) {
                         Span({
                             style {
                                 marginLeft(8.px)
                                 fontSize(11.px)
-                                color(Color(SilkColors.textLight))
-                                property("cursor", "pointer")
-                                property("opacity", "0.6")
+                                color(Color(if (isRecalling) "#BDBDBD" else SilkColors.textLight))
+                                property("cursor", if (isRecalling) "default" else "pointer")
+                                property("opacity", if (isRecalling) "0.4" else "0.6")
                                 property("transition", "opacity 0.2s")
-                                property("text-decoration", "underline")
+                                if (!isRecalling) property("text-decoration", "underline")
                             }
-                            onClick {
-                                if (window.confirm("确定要撤回这条消息吗？")) {
-                                    onRecall(message.id)
+                            if (!isRecalling) {
+                                onClick {
+                                    if (window.confirm("确定要撤回这条消息吗？")) {
+                                        onRecall(message.id)
+                                    }
                                 }
                             }
                         }) {
-                            Text("撤回")
+                            Text(if (isRecalling) "撤回中..." else "撤回")
                         }
                     }
                 }
