@@ -146,13 +146,11 @@ data class SimpleResponse(
 )
 
 object ApiClient {
-    // 动态检测后端地址：使用当前访问的 hostname + 后端端口
     private val BASE_URL: String
         get() {
             val hostname = window.location.hostname
             val protocol = window.location.protocol
-            // 始终使用当前 hostname + 后端端口 8003 (silk-fork)
-            return "$protocol//$hostname:8003"
+            return "$protocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
         }
     private val jsonParser = Json { ignoreUnknownKeys = true }
     

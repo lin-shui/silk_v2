@@ -332,8 +332,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val wsUrl = remember {
         val protocol = if (window.location.protocol == "https:") "wss:" else "ws:"
         val host = window.location.hostname
-        // 始终使用后端端口 8003 (silk-fork)
-        val url = "$protocol//$host:8003"
+        val url = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}"
         console.log("🔌 WebSocket URL: $url")
         url
     }
@@ -439,7 +438,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             console.error("❌ WebSocket连接失败")
             console.error("   错误:", e.toString())
             console.error("   可能原因: 后端未运行或网络问题")
-            console.error("   建议: 检查后端是否在8003端口运行")
+            console.error("   建议: 检查后端是否在${BuildConfig.BACKEND_HTTP_PORT}端口运行")
             // 不再抛出异常，静默失败
         }
     }
@@ -774,7 +773,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             val userId = user.id
             val protocol = window.location.protocol
             val host = window.location.hostname
-            val uploadUrl = "$protocol//$host:8003/api/files/upload"
+            val uploadUrl = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}/api/files/upload"
             val primaryColor = SilkColors.primary
             
             // Store values in window for JavaScript to access
@@ -1500,7 +1499,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             val protocol = window.location.protocol
             val host = window.location.hostname
             // 始终使用后端端口 8901
-            val uploadUrl = "$protocol//$host:8003/api/files/upload"
+            val uploadUrl = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}/api/files/upload"
             
             js("""
                 (function() {
@@ -1556,7 +1555,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             val protocol = window.location.protocol
             val host = window.location.hostname
             // 始终使用后端端口 8901
-            val uploadUrl = "$protocol//$host:8003/api/files/upload"
+            val uploadUrl = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}/api/files/upload"
             
             js("""
                 (function() {
@@ -1672,7 +1671,7 @@ fun FolderExplorerDialog(
     LaunchedEffect(groupId) {
         val protocol = window.location.protocol
         val host = window.location.hostname
-        val apiUrl = "$protocol//$host:8003/api/files/list/$groupId"
+        val apiUrl = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}/api/files/list/$groupId"
         
         window.asDynamic().tempApiUrl = apiUrl
         window.asDynamic().folderLoadCallback = { data: dynamic ->
@@ -2008,7 +2007,7 @@ fun FolderExplorerDialog(
                                     val protocol = window.location.protocol
                                     val host = window.location.hostname
                                     // 始终使用后端端口 8901
-                                    val fullUrl = "$protocol//$host:8003$downloadUrl"
+                                    val fullUrl = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}$downloadUrl"
                                     window.open(fullUrl, "_blank")
                                 }
                             }) {
@@ -2130,7 +2129,7 @@ fun MessageItem(
                         // 显示下载按钮 - 丝滑绿色
                         if (pdfUrl != null) {
                             val baseUrl = js("window.location.protocol + '//' + window.location.hostname") as String
-                            val port = "8003"
+                            val port = BuildConfig.BACKEND_HTTP_PORT
                             val fullUrl = "$baseUrl:$port$pdfUrl"
                             
                             Div({
@@ -2299,7 +2298,7 @@ fun MessageItem(
                     onClick {
                         if (downloadUrl.isNotEmpty()) {
                             val baseUrl = js("window.location.protocol + '//' + window.location.hostname") as String
-                            val port = "8003"
+                            val port = BuildConfig.BACKEND_HTTP_PORT
                             val fullUrl = "$baseUrl:$port$downloadUrl"
                             console.log("打开文件下载: $fullUrl")
                             

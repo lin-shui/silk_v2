@@ -81,17 +81,19 @@ android {
         targetSdk = 34
         versionCode = currentVersionCode
         versionName = currentVersionName
+        val backendPort = envFile["BACKEND_HTTP_PORT"] ?: System.getenv("BACKEND_HTTP_PORT") ?: "8003"
+        val frontendPort = envFile["FRONTEND_PORT"] ?: System.getenv("FRONTEND_PORT") ?: "8004"
         // 构建时后端地址：优先级: 1) -PBACKEND_BASE_URL 2) 环境变量 3) .env 文件 4) 默认模拟器地址
         val baseUrl = project.findProperty("BACKEND_BASE_URL")?.toString()
             ?: System.getenv("BACKEND_BASE_URL")
             ?: envFile["BACKEND_BASE_URL"]
             ?: (envFile["BACKEND_HOST"] ?: System.getenv("BACKEND_HOST"))?.let { host ->
-                val port = envFile["BACKEND_HTTP_PORT"] ?: System.getenv("BACKEND_HTTP_PORT") ?: "8006"
-                "http://$host:$port"
+                "http://$host:$backendPort"
             }
-            ?: "http://10.0.2.2:${envFile["BACKEND_HTTP_PORT"] ?: "8006"}"
+            ?: "http://10.0.2.2:$backendPort"
         buildConfigField("String", "BACKEND_BASE_URL", "\"$baseUrl\"")
-        println("📱 [Android] BACKEND_BASE_URL = $baseUrl")
+        buildConfigField("String", "FRONTEND_PORT", "\"$frontendPort\"")
+        println("📱 [Android] BACKEND_BASE_URL = $baseUrl, FRONTEND_PORT = $frontendPort")
     }
     
     buildFeatures {

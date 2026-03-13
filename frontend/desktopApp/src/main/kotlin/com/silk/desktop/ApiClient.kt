@@ -80,7 +80,7 @@ data class GroupResponse(
  * API客户端
  */
 object ApiClient {
-    private const val BASE_URL = "http://localhost:8006"
+    private val BASE_URL = BuildConfig.BACKEND_BASE_URL
     private val json = Json { ignoreUnknownKeys = true }
     
     /**
