@@ -1959,7 +1959,7 @@ fun InvitationDialog(
                         
                         📱 下载/访问 Silk：
                         • Android APK: ${BackendUrlHolder.getBaseUrl()}/api/files/download-apk
-                        • Web 网页版: ${BackendUrlHolder.getBaseUrl().replace(":8006", ":8001")}
+                        • Web 网页版: ${BackendUrlHolder.getBaseUrl().substringBeforeLast(":")}:${BuildConfig.FRONTEND_PORT}
                         
                         打开 Silk，点击"加入群组"，输入邀请码即可加入！
                     """.trimIndent()

@@ -23,8 +23,8 @@ fun InvitationDialog(
 ━━━━━━━━━━━━━━━━━
 
 📱 下载/访问 Silk：
-• Android APK: ${window.location.protocol}//${window.location.hostname}:8006/api/files/download-apk
-• Web 网页版: ${window.location.protocol}//${window.location.hostname}:8001
+• Android APK: ${window.location.protocol}//${window.location.hostname}:${BuildConfig.BACKEND_HTTP_PORT}/api/files/download-apk
+• Web 网页版: ${window.location.protocol}//${window.location.hostname}:${BuildConfig.FRONTEND_PORT}
 
 🚀 如何加入：
 1. 下载或访问 Silk 应用

@@ -103,7 +103,7 @@ fun ChatScreen(appState: AppState) {
     val group = appState.selectedGroup ?: return
     val user = appState.currentUser ?: return
     
-    val chatClient = remember { ChatClient("ws://localhost:8006") }
+    val chatClient = remember { ChatClient(BuildConfig.BACKEND_WS_URL) }
     val messages by chatClient.messages.collectAsState()
     val transientMessage by chatClient.transientMessage.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
@@ -576,7 +576,7 @@ enum class DownloadResult {
 suspend fun openOrDownloadPDF(downloadUrl: String, defaultFileName: String): DownloadResult {
     return try {
         // 构建完整的下载URL
-        val fullUrl = "http://localhost:8006$downloadUrl"
+        val fullUrl = "${BuildConfig.BACKEND_BASE_URL}$downloadUrl"
         
         println("📋 开始从服务器下载PDF文件:")
         println("   下载URL: $fullUrl")
