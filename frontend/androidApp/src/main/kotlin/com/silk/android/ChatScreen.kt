@@ -214,6 +214,10 @@ fun ChatScreen(appState: AppState) {
     var isLoadingContacts by remember { mutableStateOf(false) }
     var addMemberResult by remember { mutableStateOf<String?>(null) }
     
+    // 消息撤回相关状态
+    var recallingMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }  // 正在撤回中的消息ID集合
+    var recallResult by remember { mutableStateOf<String?>(null) }  // 撤回结果提示
+    
     // 查看成员列表状态
     var showMembersDialog by remember { mutableStateOf(false) }
     var selectedMemberForInvite by remember { mutableStateOf<GroupMember?>(null) }
@@ -931,6 +935,26 @@ fun ChatScreen(appState: AppState) {
                                 if (clickedMessage.userId != user.id) {
                                     showAddContactConfirm = clickedMessage
                                 }
+                            },
+                            // 撤回相关参数
+                            isRecalling = message.id in recallingMessageIds,
+                            onRecall = { messageId ->
+                                if (messageId !in recallingMessageIds) {
+                                    recallingMessageIds = recallingMessageIds + messageId
+                                    scope.launch {
+                                        try {
+                                            val response = ApiClient.recallMessage(group.id, messageId, user.id)
+                                            if (!response.success) {
+                                                android.widget.Toast.makeText(context, "撤回失败: ${response.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                            }
+                                        } catch (e: Exception) {
+                                            println("❌ 撤回消息失败: ${e.message}")
+                                            android.widget.Toast.makeText(context, "撤回失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                        } finally {
+                                            recallingMessageIds = recallingMessageIds - messageId
+                                        }
+                                    }
+                                }
                             }
                         )
                     }
@@ -1495,11 +1519,20 @@ fun MessageItem(
     isSelected: Boolean = false,
     onToggleSelection: (String) -> Unit = {},
     onLongPress: (String) -> Unit = {},
-    onUserNameClick: ((Message) -> Unit)? = null
+    onUserNameClick: ((Message) -> Unit)? = null,
+    // 撤回功能相关参数
+    isRecalling: Boolean = false,
+    onRecall: (String) -> Unit = {}
 ) {
     val isCurrentUser = message.userId == currentUserId
     val isSystemMessage = message.type == MessageType.SYSTEM
     val isFileMessage = message.type == MessageType.FILE
+    
+    // 是否可以撤回：只能撤回自己发送的消息，且不是 Silk 的消息，且不是系统消息
+    val canRecall = isCurrentUser && 
+                    message.userName != "Silk" && 
+                    !isSystemMessage && 
+                    !isTransient
     
     val dateFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
     val timeString = dateFormat.format(Date(message.timestamp))
@@ -1884,15 +1917,39 @@ fun MessageItem(
                     }
                 }  // ✅ Row 结束（选中图标容器）
             
-            // 当前用户消息的时间
+            // 当前用户消息的时间和撤回按钮
             if (isCurrentUser) {
                 Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = timeString,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
+                Row(
+                    modifier = Modifier.padding(horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = timeString,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    
+                    // 撤回按钮：只能撤回自己的消息，且不是 Silk 的消息，且不在选择模式
+                    val canRecall = message.userName != "Silk" && !isSelectionMode && !isTransient
+                    if (canRecall) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (isRecalling) "撤回中..." else "撤回",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (isRecalling) 
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            else 
+                                SilkColors.textSecondary,
+                            modifier = Modifier
+                                .clickable(enabled = !isRecalling) {
+                                    if (!isRecalling) {
+                                        onRecall(message.id)
+                                    }
+                                }
+                        )
+                    }
+                }
             }
         }
     }

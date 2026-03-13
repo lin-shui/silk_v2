@@ -131,6 +131,14 @@ data class LeaveGroupResponse(
     val groupDeleted: Boolean = false
 )
 
+// ==================== 通用响应模型 ====================
+
+@Serializable
+data class SimpleResponse(
+    val success: Boolean,
+    val message: String
+)
+
 // ==================== 版本检查相关数据模型 ====================
 
 @Serializable
@@ -421,6 +429,25 @@ object ApiClient {
         } catch (e: Exception) {
             println("❌ 发送消息失败: ${e.message}")
             false
+        }
+    }
+    
+    // ==================== 消息撤回相关 API ====================
+    
+    /**
+     * 撤回消息
+     * @param groupId 群组ID
+     * @param messageId 要撤回的消息ID
+     * @param userId 当前用户ID
+     */
+    suspend fun recallMessage(groupId: String, messageId: String, userId: String): SimpleResponse = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"groupId":"$groupId","messageId":"$messageId","userId":"$userId"}"""
+            val response = post("/api/messages/recall", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("❌ 撤回消息失败: ${e.message}")
+            SimpleResponse(false, "网络错误")
         }
     }
     
