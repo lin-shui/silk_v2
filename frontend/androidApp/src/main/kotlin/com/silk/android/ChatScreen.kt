@@ -1650,6 +1650,7 @@ fun AIMessageCardAndroid(
     onForward: (Message) -> Unit = {}
 ) {
     val isLongContent = message.content.length > 500
+    val effectiveExpanded = if (isTransient) true else isExpanded
     
     // 调试日志
     LaunchedEffect(message.id, isExpanded) {
@@ -1706,22 +1707,22 @@ fun AIMessageCardAndroid(
                 )
                 
                 // 展开/折叠按钮
-                if (isLongContent) {
+                if (isLongContent && !isTransient) {
                     Spacer(modifier = Modifier.weight(1f))
                     
                     Box(
                         modifier = Modifier
                             .background(
-                                color = if (isExpanded) Color.Transparent else Color(0x1AC9A86C),
+                                color = if (effectiveExpanded) Color.Transparent else Color(0x1AC9A86C),
                                 shape = RoundedCornerShape(4.dp)
                             )
                             .clickable { 
-                                onExpandChange(!isExpanded)
+                                onExpandChange(!effectiveExpanded)
                             }
                             .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
                         Text(
-                            text = if (isExpanded) "▼ 收起" else "▶ 展开",
+                            text = if (effectiveExpanded) "▼ 收起" else "▶ 展开",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -1740,8 +1741,8 @@ fun AIMessageCardAndroid(
             Spacer(modifier = Modifier.height(12.dp))
             
             // 内容区域
-            if (isExpanded || !isLongContent) {
-                if (isLongContent && isExpanded) {
+            if (effectiveExpanded || !isLongContent) {
+                if (isLongContent && effectiveExpanded && !isTransient) {
                     // 长内容展开时改为卡片内滚动，避免整条消息高度突变导致列表跳动
                     Box(
                         modifier = Modifier
