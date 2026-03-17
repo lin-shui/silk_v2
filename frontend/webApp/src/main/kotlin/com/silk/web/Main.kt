@@ -2751,6 +2751,7 @@ fun AIMessageCard(
 ) {
     var isExpanded by remember { mutableStateOf(false) }  // 默认收起
     val isLongContent = message.content.length > 500
+    val effectiveExpanded = if (isTransient) true else isExpanded
     
     Div({
         classes(SilkStylesheet.aiMessageCard)
@@ -2800,7 +2801,7 @@ fun AIMessageCard(
             }
             
             // 展开/折叠按钮（长内容时显示）
-            if (isLongContent) {
+            if (isLongContent && !isTransient) {
                 Div({ style { property("flex", "1") } }) { }
                 Span({
                     style {
@@ -2811,26 +2812,38 @@ fun AIMessageCard(
                         borderRadius(4.px)
                         property("transition", "all 0.2s")
                         property("user-select", "none")
-                        if (!isExpanded) {
+                        if (!effectiveExpanded) {
                             property("background", "rgba(201, 168, 108, 0.1)")
                         }
                     }
                     onClick {
-                        isExpanded = !isExpanded
+                        isExpanded = !effectiveExpanded
                     }
                 }) {
-                    Text(if (isExpanded) "▼ 收起" else "▶ 展开")
+                    Text(if (effectiveExpanded) "▼ 收起" else "▶ 展开")
                 }
             }
         }
         
         // 内容区域
-        if (isExpanded || !isLongContent) {
-            Div({
-                classes(SilkStylesheet.aiMessageContent)
-            }) {
-                // 使用 Markdown 渲染
-                MarkdownContent(message.content)
+        if (effectiveExpanded || !isLongContent) {
+            if (isLongContent && effectiveExpanded && !isTransient) {
+                Div({
+                    classes(SilkStylesheet.aiMessageContent)
+                    style {
+                        maxHeight(360.px)
+                        property("overflow-y", "auto")
+                    }
+                }) {
+                    MarkdownContent(message.content)
+                }
+            } else {
+                Div({
+                    classes(SilkStylesheet.aiMessageContent)
+                }) {
+                    // 使用 Markdown 渲染
+                    MarkdownContent(message.content)
+                }
             }
         } else {
             // 折叠时显示摘要
