@@ -44,6 +44,8 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -1611,6 +1613,444 @@ fun ChatScreen(appState: AppState) {
     }
 }
 
+// ==================== AI 消息卡片组件 ====================
+
+/**
+ * AI 消息卡片 - 专门用于 Silk AI 回复的卡片样式
+ */
+@Composable
+fun AIMessageCardAndroid(
+    message: Message,
+    timeString: String,
+    isTransient: Boolean = false,
+    onCopy: (String) -> Unit = {},
+    onForward: (Message) -> Unit = {}
+) {
+    var isExpanded by remember { mutableStateOf(true) }
+    val isLongContent = message.content.length > 500
+    
+    Card(
+        modifier = Modifier
+            .fillMaxWidth(0.95f)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFFF8F6F0)  // 温暖的奶白色背景
+        ),
+        shape = RoundedCornerShape(16.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            // 顶部标识栏
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // AI 头像
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .background(
+                            Brush.linearGradient(
+                                colors = listOf(Color(0xFFC9A86C), Color(0xFFA8894D))
+                            ),
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("🤖", fontSize = 16.sp)
+                }
+                
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                // 名称和时间
+                Text(
+                    text = "Silk AI",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFFC9A86C)  // 金色
+                )
+                
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                Text(
+                    text = timeString,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                
+                // 展开/折叠按钮
+                if (isLongContent) {
+                    Spacer(modifier = Modifier.weight(1f))
+                    
+                    TextButton(
+                        onClick = { isExpanded = !isExpanded },
+                        modifier = Modifier.padding(0.dp)
+                    ) {
+                        Text(
+                            text = if (isExpanded) "收起" else "展开",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            // 分隔线
+            Divider(
+                color = Color(0xFFE8E0D4),
+                thickness = 1.dp
+            )
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            // 内容区域
+            if (isExpanded || !isLongContent) {
+                MarkdownContentAndroid(message.content)
+            } else {
+                Text(
+                    text = "${message.content.take(200)}...",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            
+            // 底部操作栏
+            if (!isTransient) {
+                Spacer(modifier = Modifier.height(12.dp))
+                
+                Divider(
+                    color = Color(0xFFE8E0D4).copy(alpha = 0.5f),
+                    thickness = 0.5.dp
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    // 复制按钮
+                    TextButton(
+                        onClick = { onCopy(message.content) },
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    ) {
+                        Text("📋", fontSize = 14.sp)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("复制", style = MaterialTheme.typography.bodySmall)
+                    }
+                    
+                    // 转发按钮
+                    TextButton(
+                        onClick = { onForward(message) },
+                        modifier = Modifier.padding(horizontal = 4.dp)
+                    ) {
+                        Text("↗", fontSize = 14.sp)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("转发", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            
+            // 临时消息状态
+            if (isTransient) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "⏳",
+                        fontSize = 12.sp
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "生成中...",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFE8B86C)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Markdown 内容渲染 - Android 端
+ */
+@Composable
+fun MarkdownContentAndroid(content: String) {
+    val lines = content.split("\n")
+    var inCodeBlock = false
+    var codeBlockContent = StringBuilder()
+    var codeLanguage = ""
+    
+    Column(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        lines.forEachIndexed { index, line ->
+            when {
+                // 代码块开始/结束
+                line.trim().startsWith("```") -> {
+                    if (inCodeBlock) {
+                        // 代码块结束
+                        if (codeBlockContent.isNotEmpty()) {
+                            CodeBlockAndroid(
+                                code = codeBlockContent.toString().trimEnd(),
+                                language = codeLanguage
+                            )
+                            codeBlockContent = StringBuilder()
+                        }
+                        inCodeBlock = false
+                    } else {
+                        // 代码块开始
+                        inCodeBlock = true
+                        codeLanguage = line.trim().removePrefix("```").trim()
+                    }
+                }
+                // 代码块内容
+                inCodeBlock -> {
+                    codeBlockContent.append(line).append("\n")
+                }
+                // 标题
+                line.startsWith("### ") -> {
+                    if (index > 0) Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = line.removePrefix("### "),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF4A4038)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                line.startsWith("## ") -> {
+                    if (index > 0) Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = line.removePrefix("## "),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF4A4038)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                }
+                line.startsWith("# ") -> {
+                    if (index > 0) Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = line.removePrefix("# "),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFC9A86C)  // 金色大标题
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                // 无序列表
+                line.trim().startsWith("- ") || line.trim().startsWith("* ") -> {
+                    val content = line.trim().removePrefix("- ").removePrefix("* ")
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, bottom = 4.dp)
+                    ) {
+                        Text(
+                            text = "•",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFFC9A86C),
+                            modifier = Modifier.padding(end = 8.dp)
+                        )
+                        InlineMarkdownAndroid(content)
+                    }
+                }
+                // 有序列表
+                line.trim().matches(Regex("^\\d+\\.\\s.*")) -> {
+                    val parts = line.trim().split(".", limit = 2)
+                    if (parts.size == 2) {
+                        val num = parts[0].trim()
+                        val listContent = parts[1].trim()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 16.dp, bottom = 4.dp)
+                        ) {
+                            Text(
+                                text = "$num.",
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color(0xFFC9A86C),
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                            InlineMarkdownAndroid(listContent)
+                        }
+                    }
+                }
+                // 分隔线
+                line.trim() == "---" || line.trim() == "***" -> {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Divider(
+                        color = Color(0xFFE8E0D4),
+                        thickness = 1.dp,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                }
+                // 引用块
+                line.startsWith("> ") -> {
+                    val quoteContent = line.removePrefix("> ")
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 8.dp, bottom = 8.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFF0F0F0)
+                        ),
+                        shape = RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp, bottomStart = 8.dp)
+                    ) {
+                        Row(modifier = Modifier.padding(12.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .width(3.dp)
+                                    .height(20.dp)
+                                    .background(Color(0xFF7BA8C9))
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            InlineMarkdownAndroid(quoteContent)
+                        }
+                    }
+                }
+                // 普通文本
+                line.isNotBlank() -> {
+                    InlineMarkdownAndroid(line)
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                // 空行
+                else -> {
+                    if (index > 0 && lines.getOrNull(index - 1)?.isNotBlank() == true) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 代码块组件
+ */
+@Composable
+fun CodeBlockAndroid(code: String, language: String) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF2D2D2D)
+        ),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // 语言标签
+            if (language.isNotEmpty()) {
+                Text(
+                    text = language,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF888888),
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+            // 代码内容
+            SelectionContainer {
+                Text(
+                    text = code,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFE0E0E0),
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 行内 Markdown 渲染
+ */
+@Composable
+fun InlineMarkdownAndroid(text: String) {
+    // 简化的行内渲染
+    val annotatedText = buildAnnotatedString {
+        var remaining = text
+        
+        while (remaining.isNotEmpty()) {
+            // 处理粗体 **text**
+            val boldStart = remaining.indexOf("**")
+            if (boldStart >= 0) {
+                // 添加前面的普通文本
+                if (boldStart > 0) {
+                    append(remaining.substring(0, boldStart))
+                }
+                
+                val boldEnd = remaining.indexOf("**", boldStart + 2)
+                if (boldEnd > boldStart) {
+                    val boldText = remaining.substring(boldStart + 2, boldEnd)
+                    withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) {
+                        append(boldText)
+                    }
+                    remaining = remaining.substring(boldEnd + 2)
+                    continue
+                }
+            }
+            
+            // 处理斜体 *text*
+            val italicStart = remaining.indexOf("*")
+            if (italicStart >= 0 && (italicStart == 0 || remaining[italicStart - 1] != '*')) {
+                if (italicStart > 0) {
+                    append(remaining.substring(0, italicStart))
+                }
+                
+                val italicEnd = remaining.indexOf("*", italicStart + 1)
+                if (italicEnd > italicStart && (italicEnd == remaining.length - 1 || remaining[italicEnd + 1] != '*')) {
+                    val italicText = remaining.substring(italicStart + 1, italicEnd)
+                    withStyle(androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) {
+                        append(italicText)
+                    }
+                    remaining = remaining.substring(italicEnd + 1)
+                    continue
+                }
+            }
+            
+            // 处理行内代码 `code`
+            val codeStart = remaining.indexOf("`")
+            if (codeStart >= 0) {
+                if (codeStart > 0) {
+                    append(remaining.substring(0, codeStart))
+                }
+                
+                val codeEnd = remaining.indexOf("`", codeStart + 1)
+                if (codeEnd > codeStart) {
+                    val codeText = remaining.substring(codeStart + 1, codeEnd)
+                    withStyle(
+                        androidx.compose.ui.text.SpanStyle(
+                            background = Color(0xFFF0F0F0),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    ) {
+                        append(" $codeText ")
+                    }
+                    remaining = remaining.substring(codeEnd + 1)
+                    continue
+                }
+            }
+            
+            // 没有特殊标记，添加剩余文本
+            append(remaining)
+            break
+        }
+    }
+    
+    Text(
+        text = annotatedText,
+        style = MaterialTheme.typography.bodySmall,
+        color = Color(0xFF4A4038)
+    )
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageItem(
@@ -1645,6 +2085,18 @@ fun MessageItem(
     
     // ✅ 是否显示上下文菜单（非临时消息、非系统消息、文本消息）
     val canShowContextMenu = !isTransient && !isSystemMessage && message.type == MessageType.TEXT
+    
+    // ✅ AI 消息特殊处理 - 使用专用卡片
+    val isAIMessage = message.userId == "silk_ai_agent"
+    if (isAIMessage && message.type == MessageType.TEXT && 
+        message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS) {
+        AIMessageCardAndroid(
+            message = message,
+            timeString = timeString,
+            isTransient = isTransient
+        )
+        return
+    }
     
     // ✅ 文件消息特殊处理
     if (isFileMessage) {

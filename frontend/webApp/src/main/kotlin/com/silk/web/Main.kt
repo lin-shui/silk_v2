@@ -299,6 +299,189 @@ object SilkStylesheet : StyleSheet() {
         property("transition", "width 0.3s ease")
         property("box-shadow", "0 0 8px rgba(201, 168, 108, 0.5)")
     }
+    
+    // ==================== AI 消息卡片样式 ====================
+    // AI 消息卡片 - 渐变背景
+    val aiMessageCard by style {
+        property("background", "linear-gradient(135deg, #F8FBFF 0%, #EEF4FF 50%, #E8F0FE 100%)")
+        borderRadius(16.px)
+        padding(16.px, 20.px)
+        marginBottom(12.px)
+        property("box-shadow", "0 4px 20px rgba(59, 130, 246, 0.15)")
+        property("border", "1px solid rgba(59, 130, 246, 0.2)")
+        property("position", "relative")
+        property("overflow", "hidden")
+    }
+    
+    // AI 头像区域
+    val aiAvatar by style {
+        width(36.px)
+        height(36.px)
+        property("background", "linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%)")
+        borderRadius(50.percent)
+        display(DisplayStyle.Flex)
+        property("justify-content", "center")
+        property("align-items", "center")
+        property("font-size", "18px")
+        property("flex-shrink", "0")
+    }
+    
+    // AI 消息头部
+    val aiMessageHeader by style {
+        display(DisplayStyle.Flex)
+        property("align-items", "center")
+        property("gap", "10px")
+        marginBottom(12.px)
+    }
+    
+    // AI 标签
+    val aiBadge by style {
+        padding(4.px, 10.px)
+        property("background", "linear-gradient(135deg, #3B82F6 0%, #8B5CF6 100%)")
+        borderRadius(12.px)
+        color(Color.white)
+        fontSize(11.px)
+        property("font-weight", "600")
+        property("letter-spacing", "0.5px")
+    }
+    
+    // AI 消息内容区域
+    val aiMessageContent by style {
+        property("line-height", "1.8")
+        property("color", "#1E293B")
+        property("font-size", "14px")
+    }
+    
+    // Markdown 标题样式
+    val markdownH1 by style {
+        fontSize(20.px)
+        property("font-weight", "700")
+        color(Color("#1E293B"))
+        marginTop(16.px)
+        marginBottom(12.px)
+        paddingBottom(8.px)
+        property("border-bottom", "2px solid #E2E8F0")
+    }
+    
+    val markdownH2 by style {
+        fontSize(18.px)
+        property("font-weight", "600")
+        color(Color("#334155"))
+        marginTop(14.px)
+        marginBottom(10.px)
+        property("border-left", "3px solid #3B82F6")
+        paddingLeft(10.px)
+    }
+    
+    val markdownH3 by style {
+        fontSize(16.px)
+        property("font-weight", "600")
+        color(Color("#475569"))
+        marginTop(12.px)
+        marginBottom(8.px)
+    }
+    
+    // Markdown 代码块
+    val markdownCodeBlock by style {
+        property("background", "#1E293B")
+        color(Color("#E2E8F0"))
+        padding(16.px)
+        borderRadius(8.px)
+        property("font-family", "'JetBrains Mono', 'Fira Code', monospace")
+        fontSize(13.px)
+        property("overflow-x", "auto")
+        marginTop(10.px)
+        marginBottom(10.px)
+        property("line-height", "1.6")
+    }
+    
+    // Markdown 行内代码
+    val markdownInlineCode by style {
+        property("background", "rgba(59, 130, 246, 0.1)")
+        color(Color("#3B82F6"))
+        padding(2.px, 6.px)
+        borderRadius(4.px)
+        property("font-family", "'JetBrains Mono', 'Fira Code', monospace")
+        fontSize(13.px)
+    }
+    
+    // Markdown 引用
+    val markdownBlockquote by style {
+        property("border-left", "4px solid #3B82F6")
+        paddingLeft(16.px)
+        marginLeft(0.px)
+        property("background", "rgba(59, 130, 246, 0.05)")
+        padding(12.px, 16.px)
+        borderRadius(0.px, 8.px, 8.px, 0.px)
+        marginTop(10.px)
+        marginBottom(10.px)
+        property("font-style", "italic")
+        color(Color("#64748B"))
+    }
+    
+    // Markdown 列表
+    val markdownList by style {
+        marginLeft(20.px)
+        marginTop(8.px)
+        marginBottom(8.px)
+    }
+    
+    val markdownListItem by style {
+        marginBottom(6.px)
+        property("line-height", "1.6")
+        property("position", "relative")
+    }
+    
+    // Markdown 链接
+    val markdownLink by style {
+        color(Color("#3B82F6"))
+        property("text-decoration", "none")
+        property("border-bottom", "1px solid rgba(59, 130, 246, 0.3)")
+        property("transition", "all 0.2s")
+    }
+    
+    // Markdown 分割线
+    val markdownHr by style {
+        property("border", "none")
+        height(1.px)
+        property("background", "linear-gradient(90deg, transparent, #E2E8F0, transparent)")
+        marginTop(16.px)
+        marginBottom(16.px)
+    }
+    
+    // Markdown 表格
+    val markdownTable by style {
+        width(100.percent)
+        property("border-collapse", "collapse")
+        marginTop(10.px)
+        marginBottom(10.px)
+        property("font-size", "13px")
+    }
+    
+    val markdownTableHeader by style {
+        property("background", "rgba(59, 130, 246, 0.1)")
+        property("font-weight", "600")
+        padding(10.px)
+        property("text-align", "left")
+        property("border-bottom", "2px solid #E2E8F0")
+    }
+    
+    val markdownTableCell by style {
+        padding(10.px)
+        property("border-bottom", "1px solid #E2E8F0")
+    }
+    
+    // Markdown 加粗
+    val markdownBold by style {
+        property("font-weight", "700")
+        color(Color("#1E293B"))
+    }
+    
+    // Markdown 斜体
+    val markdownItalic by style {
+        property("font-style", "italic")
+        color(Color("#64748B"))
+    }
 }
 
 @Composable
@@ -2221,6 +2404,518 @@ fun FolderExplorerDialog(
     }
 }
 
+// ==================== Markdown 渲染组件 ====================
+
+/**
+ * 简单的 Markdown 解析和渲染
+ * 支持：标题、粗体、斜体、代码块、行内代码、列表、链接
+ */
+@Composable
+fun MarkdownContent(content: String) {
+    val lines = content.split("\n")
+    var inCodeBlock = false
+    var codeBlockContent = StringBuilder()
+    var codeLanguage = ""
+    var inList = false
+    
+    Div({
+        style {
+            property("white-space", "pre-wrap")
+            property("word-wrap", "break-word")
+            property("line-height", "1.7")
+            property("color", SilkColors.textPrimary)
+        }
+    }) {
+        lines.forEachIndexed { index, line ->
+            // 处理代码块
+            if (line.trim().startsWith("```")) {
+                if (inCodeBlock) {
+                    // 结束代码块
+                    inCodeBlock = false
+                    // 渲染代码块
+                    Pre({
+                        style {
+                            backgroundColor(Color("#F5F5F5"))
+                            padding(12.px)
+                            borderRadius(8.px)
+                            property("overflow-x", "auto")
+                            marginBottom(12.px)
+                            fontSize(13.px)
+                            property("font-family", "'Fira Code', 'Consolas', monospace")
+                            property("border-left", "3px solid ${SilkColors.primary}")
+                        }
+                    }) {
+                        Code({
+                            style {
+                                property("white-space", "pre")
+                                property("font-family", "'Fira Code', 'Consolas', monospace")
+                            }
+                        }) {
+                            Text(codeBlockContent.toString().trimEnd())
+                        }
+                    }
+                    codeBlockContent = StringBuilder()
+                } else {
+                    // 开始代码块
+                    inCodeBlock = true
+                    codeLanguage = line.trim().removePrefix("```").trim()
+                }
+                return@forEachIndexed
+            }
+            
+            if (inCodeBlock) {
+                codeBlockContent.append(line).append("\n")
+                return@forEachIndexed
+            }
+            
+            // 处理标题
+            when {
+                line.startsWith("### ") -> {
+                    H3({
+                        style {
+                            color(Color(SilkColors.textPrimary))
+                            fontSize(16.px)
+                            fontWeight("600")
+                            marginTop(12.px)
+                            marginBottom(8.px)
+                            property("border-bottom", "1px solid ${SilkColors.border}")
+                            paddingBottom(4.px)
+                        }
+                    }) {
+                        renderInlineMarkdown(line.removePrefix("### "))
+                    }
+                }
+                line.startsWith("## ") -> {
+                    H2({
+                        style {
+                            color(Color(SilkColors.textPrimary))
+                            fontSize(18.px)
+                            fontWeight("600")
+                            marginTop(14.px)
+                            marginBottom(10.px)
+                            property("border-bottom", "1px solid ${SilkColors.border}")
+                            paddingBottom(6.px)
+                        }
+                    }) {
+                        renderInlineMarkdown(line.removePrefix("## "))
+                    }
+                }
+                line.startsWith("# ") -> {
+                    H1({
+                        style {
+                            color(Color(SilkColors.primary))
+                            fontSize(20.px)
+                            fontWeight("700")
+                            marginTop(16.px)
+                            marginBottom(12.px)
+                            property("border-bottom", "2px solid ${SilkColors.primary}")
+                            paddingBottom(8.px)
+                        }
+                    }) {
+                        renderInlineMarkdown(line.removePrefix("# "))
+                    }
+                }
+                // 处理无序列表
+                line.trim().startsWith("- ") || line.trim().startsWith("* ") -> {
+                    val content = line.trim().removePrefix("- ").removePrefix("* ")
+                    Div({
+                        style {
+                            display(DisplayStyle.Flex)
+                            paddingLeft(16.px)
+                            marginBottom(4.px)
+                            property("gap", "8px")
+                        }
+                    }) {
+                        Span({ style { color(Color(SilkColors.primary)) } }) { Text("•") }
+                        Span({ style { property("flex", "1") } }) { renderInlineMarkdown(content) }
+                    }
+                }
+                // 处理有序列表
+                line.trim().matches(Regex("^\\d+\\.\\s.*")) -> {
+                    val parts = line.trim().split(".", limit = 2)
+                    if (parts.size == 2) {
+                        val num = parts[0].trim()
+                        val content = parts[1].trim()
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                paddingLeft(16.px)
+                                marginBottom(4.px)
+                                property("gap", "8px")
+                            }
+                        }) {
+                            Span({ style { color(Color(SilkColors.primary)); fontWeight("600") } }) { Text("$num.") }
+                            Span({ style { property("flex", "1") } }) { renderInlineMarkdown(content) }
+                        }
+                    }
+                }
+                // 处理分隔线
+                line.trim() == "---" || line.trim() == "***" -> {
+                    Hr({
+                        style {
+                            property("border", "none")
+                            property("border-top", "1px solid ${SilkColors.border}")
+                            marginTop(16.px)
+                            marginBottom(16.px)
+                        }
+                    })
+                }
+                // 处理引用块
+                line.startsWith("> ") -> {
+                    val content = line.removePrefix("> ")
+                    Div({
+                        style {
+                            paddingLeft(12.px)
+                            property("border-left", "3px solid ${SilkColors.info}")
+                            marginBottom(8.px)
+                            color(Color(SilkColors.textSecondary))
+                            property("font-style", "italic")
+                            backgroundColor(Color("#F8F8F8"))
+                            padding(8.px, 12.px)
+                            borderRadius(0.px, 8.px, 8.px, 0.px)
+                        }
+                    }) {
+                        renderInlineMarkdown(content)
+                    }
+                }
+                // 普通文本
+                line.isNotBlank() -> {
+                    P({
+                        style {
+                            marginBottom(8.px)
+                            marginTop(0.px)
+                        }
+                    }) {
+                        renderInlineMarkdown(line)
+                    }
+                }
+                // 空行
+                else -> {
+                    if (index > 0 && lines.getOrNull(index - 1)?.isNotBlank() == true) {
+                        Br()
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 渲染行内 Markdown（粗体、斜体、行内代码、链接）
+ */
+@Composable
+fun renderInlineMarkdown(text: String) {
+    // 简化的行内渲染：处理粗体、斜体、行内代码
+    val segments = mutableListOf<InlineSegment>()
+    var remaining = text
+    var currentPos = 0
+    
+    while (remaining.isNotEmpty()) {
+        // 查找下一个特殊标记
+        val boldIndex = remaining.indexOf("**")
+        val italicIndex = remaining.indexOf("*")
+        val codeIndex = remaining.indexOf("`")
+        val linkIndex = remaining.indexOf("[")
+        
+        val nextIndex = listOfNotNull(
+            if (boldIndex >= 0) boldIndex else null,
+            if (italicIndex >= 0 && italicIndex != boldIndex) italicIndex else null,
+            if (codeIndex >= 0) codeIndex else null,
+            if (linkIndex >= 0) linkIndex else null
+        ).minOrNull()
+        
+        if (nextIndex == null || nextIndex > 0) {
+            // 输出普通文本
+            val plainText = if (nextIndex != null) remaining.substring(0, nextIndex) else remaining
+            Text(plainText)
+            remaining = if (nextIndex != null) remaining.substring(nextIndex) else ""
+            continue
+        }
+        
+        when {
+            // 行内代码
+            codeIndex == 0 -> {
+                val endCode = remaining.indexOf("`", 1)
+                if (endCode > 0) {
+                    val code = remaining.substring(1, endCode)
+                    Code({
+                        style {
+                            backgroundColor(Color("#F0F0F0"))
+                            padding(2.px, 6.px)
+                            borderRadius(4.px)
+                            fontSize(13.px)
+                            property("font-family", "'Fira Code', 'Consolas', monospace")
+                            color(Color(SilkColors.error))
+                        }
+                    }) {
+                        Text(code)
+                    }
+                    remaining = remaining.substring(endCode + 1)
+                } else {
+                    Text("`")
+                    remaining = remaining.substring(1)
+                }
+            }
+            // 粗体
+            boldIndex == 0 -> {
+                val endBold = remaining.indexOf("**", 2)
+                if (endBold > 0) {
+                    val boldText = remaining.substring(2, endBold)
+                    B({
+                        style {
+                            fontWeight("700")
+                            color(Color(SilkColors.textPrimary))
+                        }
+                    }) {
+                        Text(boldText)
+                    }
+                    remaining = remaining.substring(endBold + 2)
+                } else {
+                    Text("**")
+                    remaining = remaining.substring(2)
+                }
+            }
+            // 斜体（单星号）
+            italicIndex == 0 -> {
+                val endItalic = remaining.indexOf("*", 1)
+                if (endItalic > 0) {
+                    val italicText = remaining.substring(1, endItalic)
+                    Em({
+                        style {
+                            property("font-style", "italic")
+                            color(Color(SilkColors.textSecondary))
+                        }
+                    }) {
+                        Text(italicText)
+                    }
+                    remaining = remaining.substring(endItalic + 1)
+                } else {
+                    Text("*")
+                    remaining = remaining.substring(1)
+                }
+            }
+            // 链接
+            linkIndex == 0 -> {
+                val endBracket = remaining.indexOf("]")
+                if (endBracket > 0 && remaining.getOrNull(endBracket + 1) == '(') {
+                    val endParen = remaining.indexOf(")", endBracket + 2)
+                    if (endParen > 0) {
+                        val linkText = remaining.substring(1, endBracket)
+                        val linkUrl = remaining.substring(endBracket + 2, endParen)
+                        A(href = linkUrl, {
+                            style {
+                                color(Color(SilkColors.info))
+                                property("text-decoration", "underline")
+                            }
+                            attr("target", "_blank")
+                        }) {
+                            Text(linkText)
+                        }
+                        remaining = remaining.substring(endParen + 1)
+                    } else {
+                        Text("[")
+                        remaining = remaining.substring(1)
+                    }
+                } else {
+                    Text("[")
+                    remaining = remaining.substring(1)
+                }
+            }
+            else -> {
+                Text(remaining.substring(0, 1))
+                remaining = remaining.substring(1)
+            }
+        }
+    }
+}
+
+data class InlineSegment(val type: String, val content: String, val extra: String = "")
+
+// ==================== AI 消息卡片组件 ====================
+
+/**
+ * AI 消息卡片 - 用于 @silk 的回复
+ * 特点：
+ * 1. 左侧有 AI 图标和标识
+ * 2. 渐变背景色
+ * 3. Markdown 内容优化渲染
+ * 4. 可折叠的长内容
+ */
+@Composable
+fun AIMessageCard(
+    message: Message,
+    timeString: String,
+    isTransient: Boolean = false,
+    onCopy: (String) -> Unit = {},
+    onForward: (Message) -> Unit = {}
+) {
+    var isExpanded by remember { mutableStateOf(true) }
+    val isLongContent = message.content.length > 500
+    
+    Div({
+        classes(SilkStylesheet.aiMessageCard)
+    }) {
+        // AI 头部标识
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                property("gap", "10px")
+                marginBottom(12.px)
+            }
+        }) {
+            // AI 图标
+            Div({
+                classes(SilkStylesheet.aiBadge)
+            }) {
+                Text("🤖")
+            }
+            
+            // AI 名称和时间
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "2px")
+                }
+            }) {
+                Span({
+                    style {
+                        fontWeight("600")
+                        fontSize(14.px)
+                        color(Color(SilkColors.primary))
+                        property("letter-spacing", "0.5px")
+                    }
+                }) {
+                    Text("Silk AI")
+                }
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textLight))
+                    }
+                }) {
+                    Text(timeString)
+                }
+            }
+            
+            // 展开/折叠按钮（长内容时显示）
+            if (isLongContent) {
+                Div({ style { property("flex", "1") } }) { }
+                Span({
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("cursor", "pointer")
+                        padding(4.px, 8.px)
+                        borderRadius(4.px)
+                        property("transition", "all 0.2s")
+                        property("user-select", "none")
+                        if (!isExpanded) {
+                            property("background", "rgba(201, 168, 108, 0.1)")
+                        }
+                    }
+                    onClick {
+                        isExpanded = !isExpanded
+                    }
+                }) {
+                    Text(if (isExpanded) "▼ 收起" else "▶ 展开")
+                }
+            }
+        }
+        
+        // 内容区域
+        if (isExpanded || !isLongContent) {
+            Div({
+                classes(SilkStylesheet.aiMessageContent)
+            }) {
+                // 使用 Markdown 渲染
+                MarkdownContent(message.content)
+            }
+        } else {
+            // 折叠时显示摘要
+            Div({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    property("font-style", "italic")
+                }
+            }) {
+                Text("${message.content.take(200)}...")
+            }
+        }
+        
+        // 底部操作栏
+        if (!isTransient) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    property("justify-content", "flex-end")
+                    property("gap", "12px")
+                    marginTop(12.px)
+                    paddingTop(8.px)
+                    property("border-top", "1px solid rgba(232, 224, 212, 0.5)")
+                }
+            }) {
+                // 复制按钮
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("cursor", "pointer")
+                        padding(4.px, 10.px)
+                        borderRadius(4.px)
+                        property("transition", "all 0.2s")
+                        display(DisplayStyle.Flex)
+                        alignItems(AlignItems.Center)
+                        property("gap", "4px")
+                    }
+                    onClick { onCopy(message.content) }
+                }) {
+                    Text("📋")
+                    Text("复制")
+                }
+                
+                // 转发按钮
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("cursor", "pointer")
+                        padding(4.px, 10.px)
+                        borderRadius(4.px)
+                        property("transition", "all 0.2s")
+                        display(DisplayStyle.Flex)
+                        alignItems(AlignItems.Center)
+                        property("gap", "4px")
+                    }
+                    onClick { onForward(message) }
+                }) {
+                    Text("↗")
+                    Text("转发")
+                }
+            }
+        }
+        
+        // 临时消息状态指示
+        if (isTransient) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "6px")
+                    marginTop(10.px)
+                    fontSize(12.px)
+                    color(Color(SilkColors.warning))
+                }
+            }) {
+                Text("⏳")
+                Text("生成中...")
+            }
+        }
+    }
+}
+
 @Composable
 fun MessageItem(
     message: Message, 
@@ -2234,6 +2929,21 @@ fun MessageItem(
 ) {
     val timeString = remember(message.timestamp) {
         formatTime(message.timestamp)
+    }
+    
+    // 是否是 AI 消息
+    val isAIMessage = message.userId == "silk_ai_agent"
+    
+    // AI 消息使用专用卡片
+    if (isAIMessage && message.type == MessageType.TEXT && message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS) {
+        AIMessageCard(
+            message = message,
+            timeString = timeString,
+            isTransient = isTransient,
+            onCopy = onCopy,
+            onForward = onForward
+        )
+        return
     }
     
     // 是否可以撤回：只能撤回自己发送的消息，且不是 Silk 的消息
