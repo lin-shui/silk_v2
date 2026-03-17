@@ -17,6 +17,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -256,6 +257,16 @@ fun ChatScreen(appState: AppState) {
     }
     
     val listState = rememberLazyListState()
+    
+    // ✅ AI 消息展开状态管理 - 使用 Map 存储每个消息的展开状态
+    val aiMessageExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
+    
+    // ✅ 当展开/收起 AI 消息时，滚动到该消息位置
+    val scopeForScroll = rememberCoroutineScope()
+    fun onAIExpandChange(messageId: String, isExpanded: Boolean) {
+        aiMessageExpandedStates[messageId] = isExpanded
+        println("🤖 AI消息展开状态变化: messageId=$messageId, isExpanded=$isExpanded")
+    }
     
     // 显示连接状态
     LaunchedEffect(connectionState) {
@@ -971,6 +982,37 @@ fun ChatScreen(appState: AppState) {
                                         }
                                     }
                                 }
+                            },
+                            // AI 消息展开状态
+                            isAIExpanded = aiMessageExpandedStates[message.id] ?: true,
+                            onAIExpandChange = { messageId, isExpanded ->
+                                // 获取消息在列表中的索引（考虑 reverseLayout=true）
+                                val reversedIndex = messages.indexOfFirst { it.id == messageId }
+                                if (reversedIndex >= 0) {
+                                    // 计算在 LazyColumn 中的实际索引
+                                    // statusMessages 和 transientMessage 会在消息列表之前
+                                    val statusOffset = if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0
+                                    val transientOffset = if (transientMessage != null) 1 else 0
+                                    val actualIndex = statusOffset + transientOffset + (messages.size - 1 - reversedIndex)
+                                    
+                                    println("🔄 AI消息展开状态变化: messageId=$messageId, isExpanded=$isExpanded, reversedIndex=$reversedIndex, actualIndex=$actualIndex")
+                                    
+                                    // 先更新状态，触发动画
+                                    aiMessageExpandedStates[messageId] = isExpanded
+                                    
+                                    // 等待动画完成后再滚动 (animateContentSize = 200ms)
+                                    scope.launch {
+                                        if (isExpanded) {
+                                            // 展开：等待动画完成后滚动到消息开头
+                                            kotlinx.coroutines.delay(220)
+                                            listState.animateScrollToItem(index = actualIndex, scrollOffset = 0)
+                                        } else {
+                                            // 收起：等待动画完成，保持位置稳定
+                                            kotlinx.coroutines.delay(220)
+                                            // 不做额外滚动，让动画自然完成
+                                        }
+                                    }
+                                }
                             }
                         )
                     }
@@ -1618,28 +1660,32 @@ fun ChatScreen(appState: AppState) {
 
 /**
  * AI 消息卡片 - 专门用于 Silk AI 回复的卡片样式
+ * 
+ * @param isExpanded 外部控制的展开状态（由父组件管理）
+ * @param onExpandChange 展开/收起状态变化回调
  */
 @Composable
 fun AIMessageCardAndroid(
     message: Message,
     timeString: String,
     isTransient: Boolean = false,
+    isExpanded: Boolean = true,
+    onExpandChange: (Boolean) -> Unit = {},
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {}
 ) {
-    // 使用 rememberSaveable 确保状态在重组时保持
-    var isExpanded by rememberSaveable { mutableStateOf(true) }
     val isLongContent = message.content.length > 500
     
     // 调试日志
-    LaunchedEffect(message.id) {
+    LaunchedEffect(message.id, isExpanded) {
         println("🤖 AIMessageCardAndroid: messageId=${message.id}, contentLength=${message.content.length}, isLongContent=$isLongContent, isExpanded=$isExpanded")
     }
     
     Card(
         modifier = Modifier
             .fillMaxWidth(0.95f)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .animateContentSize(animationSpec = tween(durationMillis = 200)),
         colors = CardDefaults.cardColors(
             containerColor = Color(0xFFF8F6F0)  // 温暖的奶白色背景
         ),
@@ -1696,7 +1742,7 @@ fun AIMessageCardAndroid(
                                 shape = RoundedCornerShape(4.dp)
                             )
                             .clickable { 
-                                isExpanded = !isExpanded 
+                                onExpandChange(!isExpanded)
                             }
                             .padding(horizontal = 12.dp, vertical = 6.dp)
                     ) {
@@ -2080,7 +2126,10 @@ fun MessageItem(
     onUserNameClick: ((Message) -> Unit)? = null,
     // 撤回功能相关参数
     isRecalling: Boolean = false,
-    onRecall: (String) -> Unit = {}
+    onRecall: (String) -> Unit = {},
+    // AI 消息展开状态相关参数
+    isAIExpanded: Boolean = true,
+    onAIExpandChange: (String, Boolean) -> Unit = { _, _ -> }
 ) {
     val isCurrentUser = message.userId == currentUserId
     val isSystemMessage = message.type == MessageType.SYSTEM
@@ -2108,7 +2157,9 @@ fun MessageItem(
         AIMessageCardAndroid(
             message = message,
             timeString = timeString,
-            isTransient = isTransient
+            isTransient = isTransient,
+            isExpanded = isAIExpanded,
+            onExpandChange = { newExpanded -> onAIExpandChange(message.id, newExpanded) }
         )
         return
     }
