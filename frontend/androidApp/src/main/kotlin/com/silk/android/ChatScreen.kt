@@ -16,6 +16,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.lazy.LazyColumn
@@ -986,49 +987,8 @@ fun ChatScreen(appState: AppState) {
                             // AI 消息展开状态（默认收起，只有长内容才需要展开/收起功能）
                             isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
                             onAIExpandChange = { messageId, isExpanded ->
-                                // 获取消息在列表中的索引（考虑 reverseLayout=true）
-                                val reversedIndex = messages.indexOfFirst { it.id == messageId }
-                                if (reversedIndex >= 0) {
-                                    // 计算在 LazyColumn 中的实际索引
-                                    // statusMessages 和 transientMessage 会在消息列表之前
-                                    val statusOffset = if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0
-                                    val transientOffset = if (transientMessage != null) 1 else 0
-                                    val actualIndex = statusOffset + transientOffset + (messages.size - 1 - reversedIndex)
-                                    
-                                    println("🔄 AI消息展开状态变化: messageId=$messageId, isExpanded=$isExpanded, reversedIndex=$reversedIndex, actualIndex=$actualIndex")
-                                    
-                                    // 先更新状态，触发动画
-                                    aiMessageExpandedStates[messageId] = isExpanded
-                                    
-                                    // 等待动画完成后再滚动 (animateContentSize = 200ms)
-                                    scope.launch {
-                                        if (isExpanded) {
-                                            // 展开：等待动画完成后滚动到消息开头
-                                            // 由于 reverseLayout=true，需要先滚动到消息位置
-                                            // 然后通过调整 scrollOffset 使消息顶部可见
-                                            kotlinx.coroutines.delay(220)
-                                            // 先滚动到该消息
-                                            listState.scrollToItem(index = actualIndex, scrollOffset = 0)
-                                            // 再等待一下让布局稳定
-                                            kotlinx.coroutines.delay(50)
-                                            // 获取该 item 的布局信息
-                                            val layoutInfo = listState.layoutInfo.visibleItemsInfo.find { it.index == actualIndex }
-                                            if (layoutInfo != null) {
-                                                // 计算需要的 offset 使消息顶部对齐到屏幕顶部
-                                                val viewportHeight = listState.layoutInfo.viewportSize.height
-                                                val itemSize = layoutInfo.size
-                                                // offset 使 item 顶部对齐到 viewport 顶部
-                                                // 对于 reverseLayout=true，scrollOffset 是负值表示向上滚动
-                                                val desiredOffset = -(viewportHeight - itemSize)
-                                                listState.animateScrollToItem(index = actualIndex, scrollOffset = desiredOffset.coerceAtMost(0))
-                                            }
-                                        } else {
-                                            // 收起：等待动画完成，保持位置稳定
-                                            kotlinx.coroutines.delay(220)
-                                            // 不做额外滚动，让动画自然完成
-                                        }
-                                    }
-                                }
+                                // 只切换展开状态，不做任何列表滚动，避免视图跳动
+                                aiMessageExpandedStates[messageId] = isExpanded
                             }
                         )
                     }
@@ -1783,7 +1743,19 @@ fun AIMessageCardAndroid(
             
             // 内容区域
             if (isExpanded || !isLongContent) {
-                MarkdownContentAndroid(message.content)
+                if (isLongContent && isExpanded) {
+                    // 长内容展开时改为卡片内滚动，避免整条消息高度突变导致列表跳动
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 360.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        MarkdownContentAndroid(message.content)
+                    }
+                } else {
+                    MarkdownContentAndroid(message.content)
+                }
             } else {
                 Text(
                     text = "${message.content.take(200)}...",
