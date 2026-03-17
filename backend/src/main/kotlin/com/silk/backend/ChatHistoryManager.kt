@@ -5,11 +5,15 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.nio.file.Files
-import java.nio.file.Paths
-import java.nio.file.StandardOpenOption
+import java.nio.file.StandardCopyOption
 
 /**
  * 聊天历史管理器 - 负责持久化聊天记录到文件系统
+ * 
+ * 安全特性：
+ * 1. 原子写入：先写入临时文件，再重命名，避免写入中断导致文件损坏
+ * 2. 损坏文件备份：解析失败时自动备份损坏文件，防止数据丢失
+ * 3. 不自动覆盖：加载失败时不创建新会话，避免覆盖历史数据
  */
 class ChatHistoryManager(
     private val baseDir: String = "chat_history"
@@ -27,15 +31,71 @@ class ChatHistoryManager(
     
     /**
      * 获取会话目录路径
+     * 对于群组会话，统一使用 group_ 前缀格式
      */
     private fun getSessionDir(sessionName: String): String {
         // 清理会话名称，移除不安全的字符
+        val safeName = sessionName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        
+        // 统一群组会话的目录命名格式
+        // 如果 sessionName 是 UUID 格式（不带 group_ 前缀），添加 group_ 前缀
+        // 这样确保与 WebSocketConfig.kt 中的 uploads 目录命名一致
+        val normalizedSessionName = if (safeName.matches(Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"))) {
+            "group_$safeName"
+        } else {
+            safeName
+        }
+        
+        return "$baseDir/$normalizedSessionName"
+    }
+    
+    /**
+     * 获取会话目录路径（不进行标准化，用于查找旧格式目录）
+     */
+    private fun getSessionDirLegacy(sessionName: String): String {
         val safeName = sessionName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
         return "$baseDir/$safeName"
     }
     
     /**
+     * 备份损坏的文件
+     * @param file 损坏的文件
+     * @param reason 损坏原因
+     */
+    private fun backupCorruptedFile(file: File, reason: String) {
+        if (!file.exists()) return
+        
+        val timestamp = System.currentTimeMillis()
+        val backupFile = File("${file.parent}/${file.nameWithoutExtension}.corrupted_$timestamp.${file.extension}")
+        try {
+            Files.copy(file.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            println("⚠️ 已备份损坏文件: ${file.name} -> ${backupFile.name} (原因: $reason)")
+        } catch (e: Exception) {
+            println("❌ 备份损坏文件失败: ${e.message}")
+        }
+    }
+    
+    /**
+     * 原子写入文件
+     * 先写入临时文件，成功后重命名，避免写入中断导致文件损坏
+     */
+    private fun atomicWrite(file: File, content: String) {
+        val tempFile = File("${file.path}.tmp")
+        try {
+            // 写入临时文件
+            tempFile.writeText(content)
+            // 原子重命名
+            Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        } catch (e: Exception) {
+            // 清理临时文件
+            if (tempFile.exists()) tempFile.delete()
+            throw e
+        }
+    }
+    
+    /**
      * 创建新会话
+     * 注意：如果会话已存在且有数据，此操作会被阻止（使用 ensureSessionExists 代替）
      */
     fun createSession(sessionName: String): SessionData {
         val sessionDir = getSessionDir(sessionName)
@@ -58,15 +118,45 @@ class ChatHistoryManager(
     }
     
     /**
+     * 确保会话存在，如果不存在则创建
+     * 如果会话数据损坏，返回 null 而不是创建新会话（避免覆盖历史）
+     */
+    fun ensureSessionExists(sessionName: String): SessionData? {
+        val existing = loadSessionData(sessionName)
+        if (existing != null) {
+            return existing
+        }
+        
+        // 检查是否有损坏的文件
+        val sessionFile = File("${getSessionDir(sessionName)}/session.json")
+        if (sessionFile.exists()) {
+            // 文件存在但解析失败，说明文件损坏，不要创建新会话
+            println("⚠️ 会话文件损坏，拒绝创建新会话: $sessionName")
+            return null
+        }
+        
+        // 文件不存在，可以安全创建
+        return createSession(sessionName)
+    }
+    
+    /**
      * 加载会话数据
+     * @return SessionData 或 null（如果文件不存在或损坏）
      */
     fun loadSessionData(sessionName: String): SessionData? {
         val sessionFile = File("${getSessionDir(sessionName)}/session.json")
         return if (sessionFile.exists()) {
             try {
-                json.decodeFromString<SessionData>(sessionFile.readText())
+                val content = sessionFile.readText()
+                if (content.isBlank()) {
+                    println("❌ 会话文件为空: ${sessionFile.path}")
+                    backupCorruptedFile(sessionFile, "文件为空")
+                    return null
+                }
+                json.decodeFromString<SessionData>(content)
             } catch (e: Exception) {
                 println("❌ 加载会话数据失败: ${e.message}")
+                backupCorruptedFile(sessionFile, e.message ?: "JSON解析错误")
                 null
             }
         } else {
@@ -75,12 +165,15 @@ class ChatHistoryManager(
     }
     
     /**
-     * 保存会话数据
+     * 保存会话数据（原子写入）
      */
     fun saveSessionData(sessionName: String, sessionData: SessionData) {
-        val sessionFile = File("${getSessionDir(sessionName)}/session.json")
+        val sessionDir = getSessionDir(sessionName)
+        File(sessionDir).mkdirs()
+        
+        val sessionFile = File("$sessionDir/session.json")
         try {
-            sessionFile.writeText(json.encodeToString(sessionData))
+            atomicWrite(sessionFile, json.encodeToString(sessionData))
             println("💾 会话数据已保存: $sessionName")
         } catch (e: Exception) {
             println("❌ 保存会话数据失败: ${e.message}")
@@ -89,14 +182,28 @@ class ChatHistoryManager(
     
     /**
      * 加载聊天历史
+     * @return ChatHistory 或 null（如果文件不存在或损坏）
      */
     fun loadChatHistory(sessionName: String): ChatHistory? {
         val historyFile = File("${getSessionDir(sessionName)}/chat_history.json")
         return if (historyFile.exists()) {
             try {
-                json.decodeFromString<ChatHistory>(historyFile.readText())
+                val content = historyFile.readText()
+                if (content.isBlank()) {
+                    println("❌ 历史文件为空: ${historyFile.path}")
+                    backupCorruptedFile(historyFile, "文件为空")
+                    return null
+                }
+                val history = json.decodeFromString<ChatHistory>(content)
+                // 确保messages列表存在
+                if (history.messages == null) {
+                    println("⚠️ 历史文件缺少messages字段，已修复: $sessionName")
+                    return ChatHistory(sessionId = history.sessionId, messages = mutableListOf())
+                }
+                history
             } catch (e: Exception) {
                 println("❌ 加载聊天历史失败: ${e.message}")
+                backupCorruptedFile(historyFile, e.message ?: "JSON解析错误")
                 null
             }
         } else {
@@ -105,12 +212,15 @@ class ChatHistoryManager(
     }
     
     /**
-     * 保存聊天历史
+     * 保存聊天历史（原子写入）
      */
     fun saveChatHistory(sessionName: String, chatHistory: ChatHistory) {
-        val historyFile = File("${getSessionDir(sessionName)}/chat_history.json")
+        val sessionDir = getSessionDir(sessionName)
+        File(sessionDir).mkdirs()
+        
+        val historyFile = File("$sessionDir/chat_history.json")
         try {
-            historyFile.writeText(json.encodeToString(chatHistory))
+            atomicWrite(historyFile, json.encodeToString(chatHistory))
             println("💾 聊天历史已保存: $sessionName (${chatHistory.messages.size} 条消息)")
         } catch (e: Exception) {
             println("❌ 保存聊天历史失败: ${e.message}")
@@ -159,13 +269,17 @@ class ChatHistoryManager(
     
     /**
      * 添加成员到会话
+     * 使用 ensureSessionExists 避免在文件损坏时覆盖历史数据
      */
     fun addMember(
         sessionName: String,
         userId: String,
         userName: String
     ) {
-        var sessionData = loadSessionData(sessionName) ?: createSession(sessionName)
+        var sessionData = ensureSessionExists(sessionName) ?: run {
+            println("⚠️ 无法加载或创建会话，跳过成员添加: $sessionName")
+            return
+        }
         
         // 检查成员是否已存在
         val existingMember = sessionData.members.find { it.userId == userId }
@@ -322,6 +436,31 @@ class ChatHistoryManager(
         
         println("🔍 查找AI回复: 用户消息 $userMessageId -> 找到 ${agentReplies.size} 条AI回复")
         return agentReplies
+    }
+    
+    /**
+     * 获取 uploads 目录路径（公开方法，供 WebSocketConfig 等模块使用）
+     * @param sessionName 会话名称
+     * @return uploads 目录的 File 对象
+     */
+    fun getUploadsDir(sessionName: String): File {
+        val sessionDir = getSessionDir(sessionName)
+        val uploadDir = File("$sessionDir/uploads")
+        uploadDir.mkdirs()
+        return uploadDir
+    }
+    
+    /**
+     * 获取标准化后的会话名称（公开方法）
+     * 用于调试和日志记录
+     */
+    fun getNormalizedSessionName(sessionName: String): String {
+        val safeName = sessionName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
+        return if (safeName.matches(Regex("[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}"))) {
+            "group_$safeName"
+        } else {
+            safeName
+        }
     }
     
     /**

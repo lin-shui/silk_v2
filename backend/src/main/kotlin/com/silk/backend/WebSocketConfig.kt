@@ -69,8 +69,8 @@ class ChatServer(
     private val processedUrlsFile: java.io.File
     
     init {
-        // 初始化并从文件恢复已处理的URL列表
-        val uploadDir = java.io.File("chat_history/group_${sessionName.removePrefix("group_")}/uploads")
+        // 初始化并从文件恢复已处理的URL列表（使用统一的目录命名逻辑）
+        val uploadDir = historyManager.getUploadsDir(sessionName)
         uploadDir.mkdirs()
         processedUrlsFile = java.io.File(uploadDir, "processed_urls.txt")
         
@@ -350,8 +350,8 @@ class ChatServer(
         
         println("🔗 检测到 ${urls.size} 个URL，其中 ${newUrls.size} 个是新的: $newUrls")
         
-        // 创建上传目录
-        val uploadDir = java.io.File("chat_history/group_${sessionName.removePrefix("group_")}/uploads")
+        // 创建上传目录（使用统一的方法获取目录路径）
+        val uploadDir = historyManager.getUploadsDir(sessionName)
         
         for (url in newUrls) {
             val normalizedUrl = url.lowercase().trimEnd('/')
