@@ -17,6 +17,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import org.w3c.dom.HTMLAnchorElement
+import org.w3c.dom.HTMLElement
 
 // 时间格式化函数在文件后面定义
 
@@ -564,7 +566,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var showMentionMenu by remember { mutableStateOf(false) }
     var mentionSearchText by remember { mutableStateOf("") }
     var mentionStartIndex by remember { mutableStateOf(-1) }
-    var mentionMenuPosition by remember { mutableStateOf(Pair(0.0, 0.0)) } // (left, bottom)
     
     // 消息撤回相关状态：正在撤回中的消息ID集合，防止重复点击
     var recallingMessageIds by remember { mutableStateOf(setOf<String>()) }
@@ -576,19 +577,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var isLoadingGroups by remember { mutableStateOf(false) }
     var forwardResult by remember { mutableStateOf<String?>(null) }
     
-    // 从群组成员列表和消息历史中提取用户列表（去重）
-    // 优先使用 groupMembers（包含所有成员），然后补充消息历史中的成员
-    val sessionUsers = remember(groupMembers, messages) {
+    // 从消息历史中提取用户列表（去重）
+    val sessionUsers = remember(messages) {
         val users = mutableSetOf<Pair<String, String>>() // (id, name)
         // 始终添加 Silk AI
         users.add("silk_ai_agent" to "🤖 Silk")
-        // 添加群组成员列表中的所有成员
-        groupMembers.forEach { member ->
-            users.add(member.id to member.fullName)
-        }
-        // 添加当前用户（以防万一）
+        // 添加当前用户
         users.add(user.id to user.fullName)
-        // 从消息中提取其他用户（补充可能不在成员列表中的用户，如已退群的用户）
+        // 从消息中提取其他用户
         messages.forEach { msg ->
             if (msg.userId != "silk_ai_agent" && msg.userId != user.id) {
                 users.add(msg.userId to msg.userName)
@@ -606,15 +602,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         
         // Reset flag when group changes
         hasSentDefaultInstruction = false
-        
-        // 加载群成员列表（用于 @ mention 功能）
-        try {
-            val membersResponse = ApiClient.getGroupMembers(group.id)
-            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-            console.log("✅ 群成员列表已加载，共 ${groupMembers.size} 人")
-        } catch (e: dynamic) {
-            console.error("❌ 加载群成员列表失败:", e.toString())
-        }
         
         // 延迟1秒，确保页面已完全渲染
         kotlinx.coroutines.delay(1000)
@@ -1183,9 +1170,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     property("gap", "12px")
                 }
             }) {
-                // @Silk 快捷按钮（在 Silk 私聊中隐藏）
-                val isSilkPrivateChat = group.name.startsWith("[Silk]")
-                if (!isSilkPrivateChat) {
+                // @Silk 快捷按钮
                 Div({
                     style {
                         display(DisplayStyle.Flex)
@@ -1239,7 +1224,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         Text("@Silk")
                     }
                 }
-                }
                 
                 // 第一行：输入框占据整行
                 // 发送消息的函数
@@ -1272,12 +1256,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             if (newValue.length > oldValue.length) {
                                 val lastChar = newValue.lastOrNull()
                                 if (lastChar == '@') {
-                                    // 计算输入框位置用于 fixed 定位菜单
-                                    val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLElement
-                                    if (input != null) {
-                                        val rect = input.getBoundingClientRect()
-                                        mentionMenuPosition = Pair(rect.left, window.innerHeight - rect.top + 4)
-                                    }
                                     showMentionMenu = true
                                     mentionStartIndex = newValue.length - 1
                                     mentionSearchText = ""
@@ -1296,7 +1274,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 }
                             }
                         }
-                        attr("placeholder", if (group.name.startsWith("[Silk]")) strings.silkChatInputPlaceholder else strings.messageInputPlaceholder)
+                        attr("placeholder", strings.messageInputPlaceholder)
                         attr("rows", "2")
                         attr("id", "chat-input")
                         style {
@@ -1306,13 +1284,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }
                     
-                    // @ Mention 下拉菜单 - 使用 fixed 定位避免被 overflow:hidden 裁剪
+                    // @ Mention 下拉菜单
                     if (showMentionMenu) {
                         Div({
                             style {
-                                property("position", "fixed")
-                                property("left", "${mentionMenuPosition.first}px")
-                                property("bottom", "${mentionMenuPosition.second}px")
+                                property("position", "absolute")
+                                property("bottom", "100%")
+                                property("left", "0")
+                                property("margin-bottom", "4px")
                                 backgroundColor(Color(SilkColors.surface))
                                 border {
                                     width(1.px)
@@ -1321,7 +1300,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 }
                                 borderRadius(8.px)
                                 property("box-shadow", "0 4px 12px rgba(0,0,0,0.15)")
-                                property("z-index", "9999")
+                                property("z-index", "1000")
                                 property("max-height", "200px")
                                 property("overflow-y", "auto")
                                 property("min-width", "200px")
@@ -2453,330 +2432,288 @@ fun FolderExplorerDialog(
 
 // ==================== Markdown 渲染组件 ====================
 
-/**
- * 简单的 Markdown 解析和渲染
- * 支持：标题、粗体、斜体、代码块、行内代码、列表、链接
- */
+@JsModule("markdown-it")
+@JsNonModule
+private external class MarkdownIt(options: dynamic = definedExternally) {
+    fun render(src: String): String
+    fun use(plugin: dynamic, options: dynamic = definedExternally): MarkdownIt
+}
+
+@JsModule("markdown-it-task-lists")
+@JsNonModule
+private external val markdownItTaskLists: dynamic
+
+@JsModule("highlight.js")
+@JsNonModule
+private external object HighlightJs {
+    fun highlight(code: String, options: dynamic): dynamic
+    fun highlightAuto(code: String): dynamic
+    fun getLanguage(languageName: String): dynamic
+}
+
+@JsModule("dompurify")
+@JsNonModule
+private external object DOMPurify {
+    fun sanitize(dirty: String, config: dynamic = definedExternally): String
+}
+
+@JsModule("katex/contrib/auto-render")
+@JsNonModule
+private external fun renderMathInElement(element: HTMLElement, options: dynamic = definedExternally)
+
+@JsModule("katex/dist/katex.min.css")
+@JsNonModule
+private external val katexStylesheet: dynamic
+
+@JsModule("github-markdown-css/github-markdown-light.css")
+@JsNonModule
+private external val githubMarkdownStylesheet: dynamic
+
+@JsModule("highlight.js/styles/github-dark.css")
+@JsNonModule
+private external val highlightStylesheet: dynamic
+
+private const val markdownRuntimeStyleId = "silk-markdown-runtime-style"
+
+private val silkMarkdownRuntimeCss = """
+    .silk-markdown.markdown-body {
+        color: #1E293B;
+        background: transparent;
+        font-size: 14px;
+        line-height: 1.8;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        overflow-wrap: anywhere;
+    }
+    .silk-markdown.markdown-body > :first-child {
+        margin-top: 0 !important;
+    }
+    .silk-markdown.markdown-body > :last-child {
+        margin-bottom: 0 !important;
+    }
+    .silk-markdown.markdown-body p,
+    .silk-markdown.markdown-body li,
+    .silk-markdown.markdown-body td,
+    .silk-markdown.markdown-body th {
+        white-space: pre-wrap;
+    }
+    .silk-markdown.markdown-body pre {
+        background: #0F172A !important;
+        border-radius: 12px;
+        padding: 14px 16px;
+        overflow-x: auto;
+    }
+    .silk-markdown.markdown-body pre code {
+        background: transparent !important;
+        color: inherit !important;
+        font-size: 13px;
+    }
+    .silk-markdown.markdown-body .hljs {
+        color: #E5E7EB;
+        background: transparent;
+    }
+    .silk-markdown.markdown-body :not(pre) > code {
+        background: rgba(59, 130, 246, 0.10);
+        color: #1D4ED8;
+        border-radius: 6px;
+        padding: 0.15em 0.45em;
+        font-size: 0.92em;
+    }
+    .silk-markdown.markdown-body blockquote {
+        color: #475569;
+        background: linear-gradient(180deg, rgba(59, 130, 246, 0.10), rgba(59, 130, 246, 0.04));
+        border-left: 4px solid #3B82F6;
+        border-radius: 0 12px 12px 0;
+        padding: 12px 16px;
+    }
+    .silk-markdown.markdown-body blockquote blockquote {
+        background: rgba(255, 255, 255, 0.6);
+        margin-top: 12px;
+    }
+    .silk-markdown.markdown-body table {
+        display: block;
+        width: max-content;
+        max-width: 100%;
+        overflow-x: auto;
+        border-radius: 10px;
+    }
+    .silk-markdown.markdown-body table thead tr {
+        background: #EFF6FF;
+    }
+    .silk-markdown.markdown-body table th,
+    .silk-markdown.markdown-body table td {
+        border: 1px solid #E2E8F0;
+        padding: 8px 12px;
+    }
+    .silk-markdown.markdown-body hr {
+        height: 1px;
+        border: 0;
+        background: linear-gradient(90deg, rgba(226, 232, 240, 0), rgba(148, 163, 184, 0.75), rgba(226, 232, 240, 0));
+    }
+    .silk-markdown.markdown-body .katex-display {
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding: 0.35rem 0.15rem;
+    }
+    .silk-markdown.markdown-body .task-list-item {
+        list-style: none;
+    }
+    .silk-markdown.markdown-body .task-list-item-checkbox {
+        margin: 0 0.5rem 0 0;
+    }
+    .silk-markdown.markdown-body img {
+        max-width: 100%;
+    }
+""".trimIndent()
+
+@Suppress("UNUSED_EXPRESSION")
+private fun ensureMarkdownAssetsLoaded() {
+    githubMarkdownStylesheet
+    katexStylesheet
+    highlightStylesheet
+}
+
+private fun ensureMarkdownStylesInjected() {
+    if (document.getElementById(markdownRuntimeStyleId) != null) return
+
+    val styleElement = document.createElement("style") as HTMLElement
+    styleElement.id = markdownRuntimeStyleId
+    styleElement.textContent = silkMarkdownRuntimeCss
+    document.head?.appendChild(styleElement)
+}
+
+private fun escapeHtml(raw: String): String {
+    return raw
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
+}
+
+private fun highlightCode(code: String, language: String): String {
+    val normalizedLanguage = language
+        .trim()
+        .split(Regex("\\s+"))
+        .firstOrNull()
+        ?.lowercase()
+        .orEmpty()
+
+    return try {
+        val highlighted = if (normalizedLanguage.isNotBlank() && HighlightJs.getLanguage(normalizedLanguage) != null) {
+            val options = js("{}")
+            options.language = normalizedLanguage
+            options.ignoreIllegals = true
+            HighlightJs.highlight(code, options).value as String
+        } else {
+            HighlightJs.highlightAuto(code).value as String
+        }
+
+        val className = if (normalizedLanguage.isNotBlank()) "language-${escapeHtml(normalizedLanguage)}" else ""
+        """<pre class="hljs"><code class="$className">$highlighted</code></pre>"""
+    } catch (_: Throwable) {
+        val safeLanguage = if (normalizedLanguage.isNotBlank()) """ class="language-${escapeHtml(normalizedLanguage)}"""" else ""
+        """<pre class="hljs"><code$safeLanguage>${escapeHtml(code)}</code></pre>"""
+    }
+}
+
+@NoLiveLiterals
+private fun createMarkdownEngine(): MarkdownIt {
+    ensureMarkdownAssetsLoaded()
+
+    val options = js("{}")
+    options.html = true
+    options.linkify = true
+    options.typographer = true
+    options.breaks = false
+    options.highlight = { code: String, language: String ->
+        highlightCode(code, language)
+    }
+
+    val taskListOptions = js("{}")
+    taskListOptions.enabled = true
+    taskListOptions.label = true
+    taskListOptions.labelAfter = true
+
+    return MarkdownIt(options).apply {
+        use(markdownItTaskLists, taskListOptions)
+    }
+}
+
+@NoLiveLiterals
+private fun createSanitizeConfig(): dynamic {
+    val config = js("{}")
+    config.ADD_TAGS = arrayOf("input")
+    config.ADD_ATTR = arrayOf("checked", "disabled", "type", "class")
+    return config
+}
+
+@NoLiveLiterals
+private fun createMathRenderOptions(): dynamic {
+    fun delimiter(left: String, right: String, display: Boolean): dynamic {
+        val value = js("{}")
+        value.left = left
+        value.right = right
+        value.display = display
+        return value
+    }
+
+    val options = js("{}")
+    options.throwOnError = false
+    options.strict = "ignore"
+    options.ignoredTags = arrayOf("script", "noscript", "style", "textarea", "pre", "code", "option")
+    options.delimiters = arrayOf(
+        delimiter("$$", "$$", true),
+        delimiter("\\[", "\\]", true),
+        delimiter("$", "$", false),
+        delimiter("\\(", "\\)", false)
+    )
+    return options
+}
+
+@Composable
+private fun rememberMarkdownEngine(): MarkdownIt {
+    return remember { createMarkdownEngine() }
+}
+
 @Composable
 fun MarkdownContent(content: String) {
-    val lines = content.split("\n")
-    var inCodeBlock = false
-    var codeBlockContent = StringBuilder()
-    var codeLanguage = ""
-    var inList = false
-    
+    ensureMarkdownStylesInjected()
+
+    val markdownEngine = rememberMarkdownEngine()
+    val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
+    val safeHtml = remember(content) {
+        DOMPurify.sanitize(markdownEngine.render(content), createSanitizeConfig())
+    }
+
     Div({
-        style {
-            property("white-space", "pre-wrap")
-            property("word-wrap", "break-word")
-            property("line-height", "1.7")
-            property("color", SilkColors.textPrimary)
+        classes("markdown-body", "silk-markdown")
+        id(containerId)
+    }) { }
+
+    DisposableEffect(containerId, safeHtml) {
+        val element = document.getElementById(containerId) as? HTMLElement
+        if (element != null) {
+            element.innerHTML = safeHtml
+
+            val links = element.querySelectorAll("a")
+            for (index in 0 until links.length) {
+                val link = links.item(index) as? HTMLAnchorElement ?: continue
+                link.target = "_blank"
+                link.rel = "noopener noreferrer nofollow"
+            }
+
+            try {
+                renderMathInElement(element, createMathRenderOptions())
+            } catch (error: Throwable) {
+                console.warn("Markdown math render failed:", error)
+            }
         }
-    }) {
-        lines.forEachIndexed { index, line ->
-            // 处理代码块
-            if (line.trim().startsWith("```")) {
-                if (inCodeBlock) {
-                    // 结束代码块
-                    inCodeBlock = false
-                    // 渲染代码块
-                    Pre({
-                        style {
-                            backgroundColor(Color("#F5F5F5"))
-                            padding(12.px)
-                            borderRadius(8.px)
-                            property("overflow-x", "auto")
-                            marginBottom(12.px)
-                            fontSize(13.px)
-                            property("font-family", "'Fira Code', 'Consolas', monospace")
-                            property("border-left", "3px solid ${SilkColors.primary}")
-                        }
-                    }) {
-                        Code({
-                            style {
-                                property("white-space", "pre")
-                                property("font-family", "'Fira Code', 'Consolas', monospace")
-                            }
-                        }) {
-                            Text(codeBlockContent.toString().trimEnd())
-                        }
-                    }
-                    codeBlockContent = StringBuilder()
-                } else {
-                    // 开始代码块
-                    inCodeBlock = true
-                    codeLanguage = line.trim().removePrefix("```").trim()
-                }
-                return@forEachIndexed
-            }
-            
-            if (inCodeBlock) {
-                codeBlockContent.append(line).append("\n")
-                return@forEachIndexed
-            }
-            
-            // 处理标题
-            when {
-                line.startsWith("### ") -> {
-                    H3({
-                        style {
-                            color(Color(SilkColors.textPrimary))
-                            fontSize(16.px)
-                            fontWeight("600")
-                            marginTop(12.px)
-                            marginBottom(8.px)
-                            property("border-bottom", "1px solid ${SilkColors.border}")
-                            paddingBottom(4.px)
-                        }
-                    }) {
-                        renderInlineMarkdown(line.removePrefix("### "))
-                    }
-                }
-                line.startsWith("## ") -> {
-                    H2({
-                        style {
-                            color(Color(SilkColors.textPrimary))
-                            fontSize(18.px)
-                            fontWeight("600")
-                            marginTop(14.px)
-                            marginBottom(10.px)
-                            property("border-bottom", "1px solid ${SilkColors.border}")
-                            paddingBottom(6.px)
-                        }
-                    }) {
-                        renderInlineMarkdown(line.removePrefix("## "))
-                    }
-                }
-                line.startsWith("# ") -> {
-                    H1({
-                        style {
-                            color(Color(SilkColors.primary))
-                            fontSize(20.px)
-                            fontWeight("700")
-                            marginTop(16.px)
-                            marginBottom(12.px)
-                            property("border-bottom", "2px solid ${SilkColors.primary}")
-                            paddingBottom(8.px)
-                        }
-                    }) {
-                        renderInlineMarkdown(line.removePrefix("# "))
-                    }
-                }
-                // 处理无序列表
-                line.trim().startsWith("- ") || line.trim().startsWith("* ") -> {
-                    val content = line.trim().removePrefix("- ").removePrefix("* ")
-                    Div({
-                        style {
-                            display(DisplayStyle.Flex)
-                            paddingLeft(16.px)
-                            marginBottom(4.px)
-                            property("gap", "8px")
-                        }
-                    }) {
-                        Span({ style { color(Color(SilkColors.primary)) } }) { Text("•") }
-                        Span({ style { property("flex", "1") } }) { renderInlineMarkdown(content) }
-                    }
-                }
-                // 处理有序列表
-                line.trim().matches(Regex("^\\d+\\.\\s.*")) -> {
-                    val parts = line.trim().split(".", limit = 2)
-                    if (parts.size == 2) {
-                        val num = parts[0].trim()
-                        val content = parts[1].trim()
-                        Div({
-                            style {
-                                display(DisplayStyle.Flex)
-                                paddingLeft(16.px)
-                                marginBottom(4.px)
-                                property("gap", "8px")
-                            }
-                        }) {
-                            Span({ style { color(Color(SilkColors.primary)); fontWeight("600") } }) { Text("$num.") }
-                            Span({ style { property("flex", "1") } }) { renderInlineMarkdown(content) }
-                        }
-                    }
-                }
-                // 处理分隔线
-                line.trim() == "---" || line.trim() == "***" -> {
-                    Hr({
-                        style {
-                            property("border", "none")
-                            property("border-top", "1px solid ${SilkColors.border}")
-                            marginTop(16.px)
-                            marginBottom(16.px)
-                        }
-                    })
-                }
-                // 处理引用块
-                line.startsWith("> ") -> {
-                    val content = line.removePrefix("> ")
-                    Div({
-                        style {
-                            paddingLeft(12.px)
-                            property("border-left", "3px solid ${SilkColors.info}")
-                            marginBottom(8.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("font-style", "italic")
-                            backgroundColor(Color("#F8F8F8"))
-                            padding(8.px, 12.px)
-                            borderRadius(0.px, 8.px, 8.px, 0.px)
-                        }
-                    }) {
-                        renderInlineMarkdown(content)
-                    }
-                }
-                // 普通文本
-                line.isNotBlank() -> {
-                    P({
-                        style {
-                            marginBottom(8.px)
-                            marginTop(0.px)
-                        }
-                    }) {
-                        renderInlineMarkdown(line)
-                    }
-                }
-                // 空行
-                else -> {
-                    if (index > 0 && lines.getOrNull(index - 1)?.isNotBlank() == true) {
-                        Br()
-                    }
-                }
-            }
+
+        onDispose {
+            element?.innerHTML = ""
         }
     }
 }
-
-/**
- * 渲染行内 Markdown（粗体、斜体、行内代码、链接）
- */
-@Composable
-fun renderInlineMarkdown(text: String) {
-    // 简化的行内渲染：处理粗体、斜体、行内代码
-    val segments = mutableListOf<InlineSegment>()
-    var remaining = text
-    var currentPos = 0
-    
-    while (remaining.isNotEmpty()) {
-        // 查找下一个特殊标记
-        val boldIndex = remaining.indexOf("**")
-        val italicIndex = remaining.indexOf("*")
-        val codeIndex = remaining.indexOf("`")
-        val linkIndex = remaining.indexOf("[")
-        
-        val nextIndex = listOfNotNull(
-            if (boldIndex >= 0) boldIndex else null,
-            if (italicIndex >= 0 && italicIndex != boldIndex) italicIndex else null,
-            if (codeIndex >= 0) codeIndex else null,
-            if (linkIndex >= 0) linkIndex else null
-        ).minOrNull()
-        
-        if (nextIndex == null || nextIndex > 0) {
-            // 输出普通文本
-            val plainText = if (nextIndex != null) remaining.substring(0, nextIndex) else remaining
-            Text(plainText)
-            remaining = if (nextIndex != null) remaining.substring(nextIndex) else ""
-            continue
-        }
-        
-        when {
-            // 行内代码
-            codeIndex == 0 -> {
-                val endCode = remaining.indexOf("`", 1)
-                if (endCode > 0) {
-                    val code = remaining.substring(1, endCode)
-                    Code({
-                        style {
-                            backgroundColor(Color("#F0F0F0"))
-                            padding(2.px, 6.px)
-                            borderRadius(4.px)
-                            fontSize(13.px)
-                            property("font-family", "'Fira Code', 'Consolas', monospace")
-                            color(Color(SilkColors.error))
-                        }
-                    }) {
-                        Text(code)
-                    }
-                    remaining = remaining.substring(endCode + 1)
-                } else {
-                    Text("`")
-                    remaining = remaining.substring(1)
-                }
-            }
-            // 粗体
-            boldIndex == 0 -> {
-                val endBold = remaining.indexOf("**", 2)
-                if (endBold > 0) {
-                    val boldText = remaining.substring(2, endBold)
-                    B({
-                        style {
-                            fontWeight("700")
-                            color(Color(SilkColors.textPrimary))
-                        }
-                    }) {
-                        Text(boldText)
-                    }
-                    remaining = remaining.substring(endBold + 2)
-                } else {
-                    Text("**")
-                    remaining = remaining.substring(2)
-                }
-            }
-            // 斜体（单星号）
-            italicIndex == 0 -> {
-                val endItalic = remaining.indexOf("*", 1)
-                if (endItalic > 0) {
-                    val italicText = remaining.substring(1, endItalic)
-                    Em({
-                        style {
-                            property("font-style", "italic")
-                            color(Color(SilkColors.textSecondary))
-                        }
-                    }) {
-                        Text(italicText)
-                    }
-                    remaining = remaining.substring(endItalic + 1)
-                } else {
-                    Text("*")
-                    remaining = remaining.substring(1)
-                }
-            }
-            // 链接
-            linkIndex == 0 -> {
-                val endBracket = remaining.indexOf("]")
-                if (endBracket > 0 && remaining.getOrNull(endBracket + 1) == '(') {
-                    val endParen = remaining.indexOf(")", endBracket + 2)
-                    if (endParen > 0) {
-                        val linkText = remaining.substring(1, endBracket)
-                        val linkUrl = remaining.substring(endBracket + 2, endParen)
-                        A(href = linkUrl, {
-                            style {
-                                color(Color(SilkColors.info))
-                                property("text-decoration", "underline")
-                            }
-                            attr("target", "_blank")
-                        }) {
-                            Text(linkText)
-                        }
-                        remaining = remaining.substring(endParen + 1)
-                    } else {
-                        Text("[")
-                        remaining = remaining.substring(1)
-                    }
-                } else {
-                    Text("[")
-                    remaining = remaining.substring(1)
-                }
-            }
-            else -> {
-                Text(remaining.substring(0, 1))
-                remaining = remaining.substring(1)
-            }
-        }
-    }
-}
-
-data class InlineSegment(val type: String, val content: String, val extra: String = "")
 
 // ==================== AI 消息卡片组件 ====================
 
