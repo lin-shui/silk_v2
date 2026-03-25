@@ -3,6 +3,7 @@ import { appStore } from '../stores/AppStore';
 import { SilkColors } from '../common/Theme';
 import { User } from '../models/User';
 import { router as appRouter } from '../common/Router';
+import promptAction from '@ohos.promptAction';
 
 /**
  * 登录页面
@@ -18,6 +19,8 @@ export struct LoginPage {
   @State phoneNumber: string = '';
   @State isLoading: boolean = false;
   @State errorMessage: string = '';
+  private static readonly QUICK_LOGIN_USER_KEY: string = 'quickLoginUserName';
+  private static readonly QUICK_LOGIN_PASS_KEY: string = 'quickLoginPassword';
 
   private readonly apiClient = globalApiClient;
 
@@ -72,7 +75,7 @@ export struct LoginPage {
   LoginForm() {
     Column() {
       // 用户名输入
-      TextInput({ placeholder: '用户名' })
+      TextInput({ placeholder: '用户名', text: $$this.username })
         .width('100%')
         .height(50)
         .backgroundColor(SilkColors.surface)
@@ -85,7 +88,7 @@ export struct LoginPage {
         })
 
       // 密码输入
-      TextInput({ placeholder: '密码' })
+      TextInput({ placeholder: '密码', text: $$this.password })
         .width('100%')
         .height(50)
         .type(InputType.Password)
@@ -122,6 +125,37 @@ export struct LoginPage {
         .onClick(() => {
           this.handleLogin();
         })
+
+      Row() {
+        Button('保存为一键登录')
+          .layoutWeight(1)
+          .height(42)
+          .backgroundColor(SilkColors.surfaceVariant)
+          .borderRadius(8)
+          .fontColor(SilkColors.textPrimary)
+          .fontSize(14)
+          .enabled(!this.isLoading && this.username.length > 0 && this.password.length > 0)
+          .opacity((!this.isLoading && this.username.length > 0 && this.password.length > 0) ? 1 : 0.5)
+          .onClick(() => {
+            this.saveQuickLoginCredentials();
+          })
+
+        Button('一键登录')
+          .layoutWeight(1)
+          .height(42)
+          .backgroundColor('#D7C3A0')
+          .borderRadius(8)
+          .fontColor(SilkColors.textPrimary)
+          .fontSize(14)
+          .margin({ left: 8 })
+          .enabled(!this.isLoading)
+          .opacity(!this.isLoading ? 1 : 0.5)
+          .onClick(() => {
+            this.handleQuickLogin();
+          })
+      }
+      .width('100%')
+      .margin({ top: 12 })
     }
     .width('100%')
     .padding({ left: 16, right: 16 })
@@ -264,6 +298,34 @@ export struct LoginPage {
     }
   }
 
+  private async handleLoginWithCredentials(username: string, password: string): Promise<void> {
+    this.username = username;
+    this.password = password;
+    await this.handleLogin();
+  }
+
+  private saveQuickLoginCredentials(): void {
+    if (this.username.trim().length === 0 || this.password.length === 0) {
+      this.showToast('请先输入用户名和密码');
+      return;
+    }
+    AppStorage.setOrCreate<string>(LoginPage.QUICK_LOGIN_USER_KEY, this.username.trim());
+    AppStorage.setOrCreate<string>(LoginPage.QUICK_LOGIN_PASS_KEY, this.password);
+    this.showToast('已保存一键登录凭据');
+  }
+
+  private handleQuickLogin(): void {
+    const localUser = AppStorage.get<string>(LoginPage.QUICK_LOGIN_USER_KEY);
+    const localPass = AppStorage.get<string>(LoginPage.QUICK_LOGIN_PASS_KEY);
+    const username = localUser ? localUser.trim() : '';
+    const password = localPass ? localPass : '';
+    if (username.length === 0 || password.length === 0) {
+      this.showToast('请先手动登录并点击“保存为一键登录”');
+      return;
+    }
+    this.handleLoginWithCredentials(username, password);
+  }
+
   // 处理注册
   private async handleRegister(): Promise<void> {
     this.isLoading = true;
@@ -300,5 +362,16 @@ export struct LoginPage {
     AppStorage.setOrCreate<string>('currentUserId', user.id);
     AppStorage.setOrCreate<string>('currentUserName', user.name);
     console.log('保存用户信息:', user);
+  }
+
+  private showToast(message: string): void {
+    try {
+      promptAction.showToast({
+        message: message,
+        duration: 1200
+      });
+    } catch (error) {
+      console.error('Toast failed:', error);
+    }
   }
 }

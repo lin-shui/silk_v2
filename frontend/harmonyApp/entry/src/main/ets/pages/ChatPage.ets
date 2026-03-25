@@ -456,6 +456,36 @@ export struct ChatPage {
     globalChatStore.connect(this.userId, this.userName, this.groupId);
   }
 
+  private shouldShowMessageTime(index: number): boolean {
+    if (index <= 0 || index >= this.messages.length) {
+      return true;
+    }
+    const current = this.messages[index];
+    const prev = this.messages[index - 1];
+    const gap = current.timestamp - prev.timestamp;
+    // 与 Android 聊天列表策略一致：相邻消息时间差超过 5 分钟展示时间分隔
+    return gap > 5 * 60 * 1000;
+  }
+
+  private formatMessageTimeDivider(timestamp: number): string {
+    const current = new Date(timestamp);
+    const now = new Date();
+    const currentDate = new Date(current.getFullYear(), current.getMonth(), current.getDate());
+    const todayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diffDays = Math.floor((todayDate.getTime() - currentDate.getTime()) / (24 * 60 * 60 * 1000));
+    const hours = current.getHours().toString().padStart(2, '0');
+    const minutes = current.getMinutes().toString().padStart(2, '0');
+    if (diffDays === 0) {
+      return `${hours}:${minutes}`;
+    }
+    if (diffDays === 1) {
+      return `昨天 ${hours}:${minutes}`;
+    }
+    const month = (current.getMonth() + 1).toString().padStart(2, '0');
+    const day = current.getDate().toString().padStart(2, '0');
+    return `${month}-${day} ${hours}:${minutes}`;
+  }
+
   build() {
     Column() {
       // 顶部导航栏
@@ -538,42 +568,59 @@ export struct ChatPage {
         .justifyContent(FlexAlign.Center)
       } else {
         List({ space: 4 }) {
-          ForEach(this.messages, (message: Message) => {
+          ForEach(this.messages, (message: Message, index?: number) => {
             ListItem() {
-              Row() {
-                if (this.isSelectionMode) {
-                  Text(this.isMessageSelected(message.id) ? '☑' : '☐')
-                    .fontSize(18)
-                    .fontColor(this.isMessageSelected(message.id) ? SilkColors.primary : SilkColors.textLight)
-                    .margin({ left: 8, right: 4 })
-                    .onClick(() => {
-                      this.toggleSelectMessage(message.id);
-                    })
+              Column() {
+                if (this.shouldShowMessageTime(index !== undefined ? index : 0)) {
+                  Row() {
+                    Text(this.formatMessageTimeDivider(message.timestamp))
+                      .fontSize(11)
+                      .fontColor(SilkColors.textLight)
+                      .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                      .backgroundColor('#14000000')
+                      .borderRadius(8)
+                  }
+                  .width('100%')
+                  .justifyContent(FlexAlign.Center)
+                  .margin({ top: 4, bottom: 2 })
                 }
-                MessageBubble({
-                  message: message,
-                  isOwn: message.userId === this.userId,
-                  currentUserId: this.userId,
-                  actionsEnabled: !this.isSelectionMode,
-                  messageStatus: this.getMessageStatus(message.id),
-                  onCopy: (content: string): void => this.handleCopy(content),
-                  onForward: (msg: Message): void => this.handleForward(msg),
-                  onRetry: (msg: Message): void => this.retryMessage(msg),
-                  onOpenActions: (msg: Message): void => this.openMessageActions(msg)
+
+                Row() {
+                  if (this.isSelectionMode) {
+                    Text(this.isMessageSelected(message.id) ? '☑' : '☐')
+                      .fontSize(18)
+                      .fontColor(this.isMessageSelected(message.id) ? SilkColors.primary : SilkColors.textLight)
+                      .margin({ left: 8, right: 4 })
+                      .onClick(() => {
+                        this.toggleSelectMessage(message.id);
+                      })
+                  }
+                  MessageBubble({
+                    message: message,
+                    isOwn: message.userId === this.userId,
+                    currentUserId: this.userId,
+                    actionsEnabled: !this.isSelectionMode,
+                    messageStatus: this.getMessageStatus(message.id),
+                    onCopy: (content: string): void => this.handleCopy(content),
+                    onForward: (msg: Message): void => this.handleForward(msg),
+                    onRetry: (msg: Message): void => this.retryMessage(msg),
+                    onOpenActions: (msg: Message): void => this.openMessageActions(msg)
+                  })
+                }
+                .width('100%')
+                .onClick(() => {
+                  if (this.isSelectionMode) {
+                    this.toggleSelectMessage(message.id);
+                  }
                 })
+                .gesture(
+                  LongPressGesture({ repeat: false })
+                    .onAction(() => {
+                      this.handleMessageLongPress(message);
+                    })
+                )
               }
               .width('100%')
-              .onClick(() => {
-                if (this.isSelectionMode) {
-                  this.toggleSelectMessage(message.id);
-                }
-              })
-              .gesture(
-                LongPressGesture({ repeat: false })
-                  .onAction(() => {
-                    this.handleMessageLongPress(message);
-                  })
-              )
             }
           }, (message: Message) => `${message.id}_${message.timestamp}`)
         }

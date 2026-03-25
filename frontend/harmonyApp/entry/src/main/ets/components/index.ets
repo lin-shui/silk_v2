@@ -7,4 +7,5 @@ export { GroupCard } from './GroupCard';
 export { LoadingIndicator } from './LoadingIndicator';
 export { ChatInput } from './ChatInput';
 export { MarkdownWeb } from './MarkdownWeb';
+export { MarkdownLite } from './MarkdownLite';
 export { AIMessageCard } from './AIMessageCard';
