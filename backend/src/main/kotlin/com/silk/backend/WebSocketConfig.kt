@@ -15,6 +15,7 @@ import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import com.silk.backend.database.UnreadRepository
 import com.silk.backend.database.GroupRepository
+import org.slf4j.LoggerFactory
 
 @Serializable
 data class Message(
@@ -54,6 +55,7 @@ data class User(
 class ChatServer(
     private val sessionName: String = "default_room"
 ) {
+    private val logger = LoggerFactory.getLogger(ChatServer::class.java)
     private val connections = ConcurrentHashMap<String, WebSocketSession>()
     private val messageHistory = Collections.synchronizedList(mutableListOf<Message>())
     private val historyManager = ChatHistoryManager()
@@ -82,9 +84,9 @@ class ChatServer(
                         processedUrls.add(line.trim().lowercase())
                     }
                 }
-                println("📋 已从缓存恢复 ${processedUrls.size} 个已处理的URL")
+                logger.debug("📋 已从缓存恢复 {} 个已处理的URL", processedUrls.size)
             } catch (e: Exception) {
-                println("⚠️ 读取URL缓存失败: ${e.message}")
+                logger.warn("⚠️ 读取URL缓存失败: {}", e.message)
         }
         
         // ✅ 从持久化存储加载历史消息到内存（用于消息撤回等功能）
@@ -106,10 +108,10 @@ class ChatServer(
                     )
                     messageHistory.add(msg)
                 }
-                println("📜 已从持久化加载 ${messageHistory.size} 条历史消息到内存 (session: $sessionName)")
+                logger.debug("📜 已从持久化加载 {} 条历史消息到内存 (session: {})", messageHistory.size, sessionName)
             }
         } catch (e: Exception) {
-            println("⚠️ 加载历史消息到内存失败: ${e.message}")
+            logger.warn("⚠️ 加载历史消息到内存失败: {}", e.message)
             }
         }
     }
@@ -119,7 +121,7 @@ class ChatServer(
         try {
             processedUrlsFile.appendText("$url\n")
         } catch (e: Exception) {
-            println("⚠️ 保存URL缓存失败: ${e.message}")
+            logger.warn("⚠️ 保存URL缓存失败: {}", e.message)
         }
     }
     
@@ -162,7 +164,7 @@ class ChatServer(
                 )
                 session.send(Frame.Text(Json.encodeToString(msg)))
             }
-            println("📜 已发送 ${chatHistory.messages.size.coerceAtMost(50)} 条历史消息给 $userName")
+            logger.debug("📜 已发送 {} 条历史消息给 {}", chatHistory.messages.size.coerceAtMost(50), userName)
         } else {
             // 如果没有历史记录，发送内存中的消息
             messageHistory.takeLast(50).forEach { msg ->
@@ -172,7 +174,7 @@ class ChatServer(
         
         // 不发送加入消息到聊天室（避免产生无意义的历史记录）
         // 用户加入已经通过会话管理记录
-        println("👤 用户已加入聊天室: $userName ($userId)")
+        logger.debug("👤 用户已加入聊天室: {} ({})", userName, userId)
     }
     
     /**
@@ -187,7 +189,7 @@ class ChatServer(
         // 不发送加入消息和欢迎消息（避免无意义的 chat 消息）
         // Silk 只在用户发送消息时才响应
         
-        println("🤖 Silk AI Agent 已静默加入会话")
+        logger.info("🤖 Silk AI Agent 已静默加入会话")
     }
     
     suspend fun leave(userId: String, userName: String) {
@@ -198,16 +200,16 @@ class ChatServer(
         
         // 不发送离开消息到聊天室（避免产生无意义的历史记录）
         // 用户离开已经通过会话管理记录
-        println("👋 用户已离开聊天室: $userName ($userId)")
+        logger.debug("👋 用户已离开聊天室: {} ({})", userName, userId)
     }
     
     suspend fun broadcast(message: Message) {
         // ✅ 添加调试日志
-        println("📨 [broadcast] 收到消息: ID=${message.id}, User=${message.userName}, IsTransient=${message.isTransient}, Content=${message.content.take(30)}...")
+        logger.debug("📨 [broadcast] 收到消息: ID={}, User={}, IsTransient={}, Content={}...", message.id, message.userName, message.isTransient, message.content.take(30))
         
         // ✅ 防止重复处理：检查消息是否已经在历史中
         if (!message.isTransient && messageHistory.any { it.id == message.id }) {
-            println("⚠️ [broadcast] 忽略重复消息: ${message.id} from ${message.userName}")
+            logger.warn("⚠️ [broadcast] 忽略重复消息: {} from {}", message.id, message.userName)
             return
         }
         
@@ -218,7 +220,7 @@ class ChatServer(
             
             // 持久化到文件系统
             historyManager.addMessage(sessionName, message)
-            println("💾 [broadcast] 消息已保存: ${message.id}")
+            logger.debug("💾 [broadcast] 消息已保存: {}", message.id)
             
             // 记录新消息用于未读追踪（提取 groupId）
             // 使用服务器时间而非客户端时间，避免时钟不同步导致未读状态错误
@@ -242,10 +244,10 @@ class ChatServer(
                     
                     val indexed = silkAgent.indexMessageToSearch(historyEntry, participants)
                     if (indexed) {
-                        println("🔍 [broadcast] 消息已索引到 Weaviate: ${message.id}")
+                        logger.debug("🔍 [broadcast] 消息已索引到 Weaviate: {}", message.id)
                     }
                 } catch (e: Exception) {
-                    println("⚠️ [broadcast] Weaviate 索引失败: ${e.message}")
+                    logger.warn("⚠️ [broadcast] Weaviate 索引失败: {}", e.message)
                 }
             }
         } 
@@ -263,7 +265,7 @@ class ChatServer(
                 e.printStackTrace()
             }
         }
-        println("📤 [broadcast] 消息已广播到 ${connections.size} 个连接")
+        logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", connections.size)
         
         // ✅ URL检测和网页下载索引
         if (message.type == MessageType.TEXT && !message.isTransient && message.userId != SilkAgent.AGENT_ID) {
@@ -271,7 +273,7 @@ class ChatServer(
                 try {
                     processUrlsInMessage(message)
                 } catch (e: Exception) {
-                    println("⚠️ URL处理失败: ${e.message}")
+                    logger.warn("⚠️ URL处理失败: {}", e.message)
                 }
             }
         }
@@ -304,7 +306,7 @@ class ChatServer(
                 
                 if (!isSilkPrivateChat && silkContent.isBlank()) {
                     // 只有 @silk（非私聊），显示帮助信息
-                    println("📖 [broadcast] @silk 帮助提示")
+                    logger.debug("📖 [broadcast] @silk 帮助提示")
                     CoroutineScope(Dispatchers.IO).launch {
                         sendAgentStatus("""
                             🎯 Silk 使用帮助：
@@ -316,14 +318,14 @@ class ChatServer(
                 } else if (silkContent == "重置角色" || silkContent.lowercase() == "reset") {
                     // 重置角色
                     historyManager.updateRolePrompt(sessionName, null)
-                    println("🎭 [broadcast] 角色已重置")
+                    logger.debug("🎭 [broadcast] 角色已重置")
                     CoroutineScope(Dispatchers.IO).launch {
                         sendAgentStatus("🎭 角色已重置为默认")
                     }
                 } else if (isRolePrompt) {
                     // 角色设置消息
                     historyManager.updateRolePrompt(sessionName, silkContent)
-                    println("🎭 [broadcast] 角色已设置: $silkContent")
+                    logger.debug("🎭 [broadcast] 角色已设置: {}", silkContent)
                     
                     CoroutineScope(Dispatchers.IO).launch {
                         sendAgentStatus("🎭 角色已设置")
@@ -333,13 +335,13 @@ class ChatServer(
                 } else {
                     // 普通问题 - 使用搜索 + AI 回复
                     val logPrefix = if (isSilkPrivateChat) "[Silk私聊]" else "[@silk]"
-                    println("💬 [broadcast] $logPrefix 问题: ${silkContent.take(50)}...")
+                    logger.debug("💬 [broadcast] {} 问题: {}...", logPrefix, silkContent.take(50))
                     
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
                             generateIntelligentResponse(silkContent, message.userId)
                         } catch (e: Exception) {
-                            println("❌ 生成AI回答异常: ${e.message}")
+                            logger.error("❌ 生成AI回答异常: {}", e.message)
                             e.printStackTrace()
                         }
                     }
@@ -347,7 +349,7 @@ class ChatServer(
             } else {
                 // 普通消息 - 只索引到 Weaviate，不生成 AI 回复
                 // 索引已在上面的代码中完成（historyManager.addMessage 和 indexMessageToSearch）
-                println("📝 [broadcast] 普通消息已索引，不触发 AI 回复: ${message.content.take(30)}...")
+                logger.debug("📝 [broadcast] 普通消息已索引，不触发 AI 回复: {}...", message.content.take(30))
             }
         }
     }
@@ -356,12 +358,12 @@ class ChatServer(
      * 处理消息中的URL - 下载网页并索引
      */
     private suspend fun processUrlsInMessage(message: Message) {
-        println("🔗 [URL检测] 开始检测消息: ${message.content.take(50)}...")
+        logger.debug("🔗 [URL检测] 开始检测消息: {}...", message.content.take(50))
         val urls = com.silk.backend.utils.WebPageDownloader.extractUrls(message.content)
-        println("🔗 [URL检测] 提取到 ${urls.size} 个URL: $urls")
+        logger.debug("🔗 [URL检测] 提取到 {} 个URL: {}", urls.size, urls)
         
         if (urls.isEmpty()) {
-            println("🔗 [URL检测] 没有URL，跳过")
+            logger.debug("🔗 [URL检测] 没有URL，跳过")
             return
         }
         
@@ -372,11 +374,11 @@ class ChatServer(
         }
         
         if (newUrls.isEmpty()) {
-            println("🔗 检测到 ${urls.size} 个URL，但都已处理过，跳过")
+            logger.debug("🔗 检测到 {} 个URL，但都已处理过，跳过", urls.size)
             return
         }
         
-        println("🔗 检测到 ${urls.size} 个URL，其中 ${newUrls.size} 个是新的: $newUrls")
+        logger.debug("🔗 检测到 {} 个URL，其中 {} 个是新的: {}", urls.size, newUrls.size, newUrls)
         
         // 创建上传目录（使用统一的方法获取目录路径）
         val uploadDir = historyManager.getUploadsDir(sessionName)
@@ -424,14 +426,14 @@ class ChatServer(
                     
                     val indexed = silkAgent.indexMessageToSearch(webPageEntry, participants)
                     if (indexed) {
-                        println("🔍 内容已索引: ${content.title}")
+                        logger.debug("🔍 内容已索引: {}", content.title)
                         broadcastSystemStatus("✅ 已索引$fileType: ${content.title}")
                     }
                 } else {
                     broadcastSystemStatus("⚠️ 无法下载: $url")
                 }
             } catch (e: Exception) {
-                println("❌ 处理URL失败: $url - ${e.message}")
+                logger.error("❌ 处理URL失败: {} - {}", url, e.message)
                 broadcastSystemStatus("❌ 处理链接失败: $url")
             }
         }
@@ -470,7 +472,7 @@ class ChatServer(
      * 广播系统状态消息（灰色显示）- 公开方法，供其他模块调用
      */
     suspend fun broadcastSystemStatus(status: String) {
-        println("📢 [状态广播] $status (连接数: ${connections.size})")
+        logger.debug("📢 [状态广播] {} (连接数: {})", status, connections.size)
         
         val statusMessage = Message(
             id = generateId(),
@@ -487,9 +489,9 @@ class ChatServer(
         connections.values.forEach { session ->
             try {
                 session.send(Frame.Text(messageJson))
-                println("   ✅ 状态已发送到一个连接")
+                logger.info("   ✅ 状态已发送到一个连接")
             } catch (e: Exception) {
-                println("   ❌ 状态发送失败: ${e.message}")
+                logger.error("   ❌ 状态发送失败: {}", e.message)
             }
         }
     }
@@ -502,7 +504,7 @@ class ChatServer(
      */
     private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "") {
         val callId = System.currentTimeMillis()
-        println("🤖 [Agent-$callId] 开始直接调用模型 (userId=$userId)")
+        logger.info("🤖 [Agent-{}] 开始直接调用模型 (userId={})", callId, userId)
         
         // 发送开始状态
         sendAgentStatus("🤖 正在处理您的问题...")
@@ -599,10 +601,10 @@ class ChatServer(
                 // 流式输出：发送增量消息
                 if (stepType == "complete" && isComplete) {
                     // 发送最终消息
-                    println("📤 [智能回答-$callId] 准备发送最终消息，内容长度: ${fullResponse.length}")
+                    logger.debug("📤 [智能回答-{}] 准备发送最终消息，内容长度: {}", callId, fullResponse.length)
                     
                     val messageId = generateId()
-                    println("📤 [智能回答-$callId] 生成消息ID: $messageId (响应userId=$userId)")
+                    logger.debug("📤 [智能回答-{}] 生成消息ID: {} (响应userId={})", callId, messageId, userId)
                     
                     val finalMessage = Message(
                         id = messageId,
@@ -617,34 +619,34 @@ class ChatServer(
                     
                     // 检查是否已经在历史中（防止重复）
                     if (messageHistory.any { it.id == messageId }) {
-                        println("⚠️ [智能回答-$callId] 消息ID已存在，跳过发送: $messageId")
+                        logger.warn("⚠️ [智能回答-{}] 消息ID已存在，跳过发送: {}", callId, messageId)
                         return@processInput
                     }
                     
                     messageHistory.add(finalMessage)
                     historyManager.addMessage(sessionName, finalMessage)
-                    println("📤 [智能回答-$callId] 已保存到历史，当前历史大小: ${messageHistory.size}")
+                    logger.debug("📤 [智能回答-{}] 已保存到历史，当前历史大小: {}", callId, messageHistory.size)
                     
                     // 发送最终消息
                     val messageJson = Json.encodeToString(finalMessage)
-                    println("📤 [智能回答-$callId] 发送最终消息到 ${connections.size} 个连接")
+                    logger.debug("📤 [智能回答-{}] 发送最终消息到 {} 个连接", callId, connections.size)
                     connections.values.forEach { session ->
                         try {
                             session.send(Frame.Text(messageJson))
-                            println("   ✅ [智能回答-$callId] 已发送到一个连接")
+                            logger.info("   ✅ [智能回答-{}] 已发送到一个连接", callId)
                         } catch (e: Exception) {
                             e.printStackTrace()
                         }
                     }
-                    println("📤 [智能回答-$callId] 最终消息发送完成 (messageId=$messageId)")
+                    logger.debug("📤 [智能回答-{}] 最终消息发送完成 (messageId={})", callId, messageId)
                 }
             }
             
             fullResponse = response
-            println("🏁 [generateIntelligentResponse-$callId] 函数执行完成，响应长度: ${fullResponse.length}")
+            logger.debug("🏁 [generateIntelligentResponse-{}] 函数执行完成，响应长度: {}", callId, fullResponse.length)
             
         } catch (e: Exception) {
-            println("❌ [generateIntelligentResponse-$callId] 生成AI回答失败: ${e.message}")
+            logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败: {}", callId, e.message)
             e.printStackTrace()
             
             // 发送错误消息
@@ -678,11 +680,11 @@ class ChatServer(
         val hasPreviousDiagnosis = checkPreviousDiagnosis()
         
         if (hasPreviousDiagnosis) {
-            println("📋 发现历史诊断，执行快速更新流程")
+            logger.debug("📋 发现历史诊断，执行快速更新流程")
             // 执行快速诊断更新
             executeQuickDiagnosisUpdate()
         } else {
-            println("📋 无历史诊断，执行完整11步诊断")
+            logger.debug("📋 无历史诊断，执行完整11步诊断")
             // 执行完整诊断
             executeStepwiseAITask()
         }
@@ -693,8 +695,8 @@ class ChatServer(
      */
     private fun checkPreviousDiagnosis(): Boolean {
         return try {
-            println("🔍 检查历史诊断文件:")
-            println("   sessionName: $sessionName")
+            logger.debug("🔍 检查历史诊断文件:")
+            logger.debug("   sessionName: {}", sessionName)
             
             // 尝试多个可能的路径（因为工作目录可能不同）
             val possiblePaths = listOf(
@@ -705,10 +707,10 @@ class ChatServer(
             
             possiblePaths.forEachIndexed { index, path ->
                 val testFile = java.io.File(path)
-                println("   路径${index + 1}: ${testFile.absolutePath}")
-                println("     存在: ${testFile.exists()}")
+                logger.debug("   路径{}: {}", index + 1, testFile.absolutePath)
+                logger.debug("     存在: {}", testFile.exists())
                 if (testFile.exists()) {
-                    println("     大小: ${testFile.length()} bytes")
+                    logger.debug("     大小: {} bytes", testFile.length())
                 }
             }
             
@@ -717,17 +719,17 @@ class ChatServer(
                 .firstOrNull { it.exists() && it.length() > 0 }
             
             if (file != null) {
-                println("✅ 找到历史诊断文件: ${file.absolutePath}")
-                println("   文件大小: ${file.length()} bytes")
-                println("   将执行快速更新")
+                logger.info("✅ 找到历史诊断文件: {}", file.absolutePath)
+                logger.debug("   文件大小: {} bytes", file.length())
+                logger.debug("   将执行快速更新")
                 true
             } else {
-                println("ℹ️ 无历史诊断文件")
-                println("   将执行完整11步诊断")
+                logger.debug("ℹ️ 无历史诊断文件")
+                logger.debug("   将执行完整11步诊断")
                 false
             }
         } catch (e: Exception) {
-            println("⚠️ 检查历史诊断失败: ${e.message}")
+            logger.warn("⚠️ 检查历史诊断失败: {}", e.message)
             e.printStackTrace()
             false
         }
@@ -918,11 +920,11 @@ class ChatServer(
                 val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
                 val isHost = group?.hostId == userId
                 if (isHost) {
-                    println("🩺 确认用户是Host（医生）: $userId")
+                    logger.debug("🩺 确认用户是Host（医生）: {}", userId)
                 }
                 isHost
             } catch (e: Exception) {
-                println("⚠️ 检查Host角色失败: ${e.message}")
+                logger.warn("⚠️ 检查Host角色失败: {}", e.message)
                 false
             }
         } else {
@@ -989,7 +991,7 @@ class ChatServer(
                 groupDisplayName = groupDisplayName
             )
         } catch (e: Exception) {
-            println("❌ 医生诊断更新失败: ${e.message}")
+            logger.error("❌ 医生诊断更新失败: {}", e.message)
             e.printStackTrace()
         }
     }
@@ -1004,7 +1006,7 @@ class ChatServer(
                 val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
                 group?.hostId
             } catch (e: Exception) {
-                println("⚠️ 获取Host ID失败: ${e.message}")
+                logger.warn("⚠️ 获取Host ID失败: {}", e.message)
                 null
             }
         } else {
@@ -1020,26 +1022,26 @@ class ChatServer(
         return if (sessionName.startsWith("group_")) {
             // 提取群组ID
             val groupId = sessionName.removePrefix("group_")
-            println("📋 正在查询群组名称，groupId: $groupId")
+            logger.debug("📋 正在查询群组名称，groupId: {}", groupId)
             
             // 从数据库查询群组名称
             try {
                 val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
                 if (group != null) {
-                    println("📋 找到群组名称: ${group.name}")
+                    logger.debug("📋 找到群组名称: {}", group.name)
                     group.name  // 返回群组的实际名称，例如："liaoheng's Sophie Ankle"
                 } else {
-                    println("⚠️ 未找到群组：$groupId")
+                    logger.warn("⚠️ 未找到群组：{}", groupId)
                     null
                 }
             } catch (e: Exception) {
-                println("⚠️ 查询群组名称失败: ${e.message}")
+                logger.warn("⚠️ 查询群组名称失败: {}", e.message)
                 e.printStackTrace()
                 null
             }
         } else {
             // 不是群组session，返回null（使用sessionName作为标题）
-            println("📋 非群组session，使用sessionName: $sessionName")
+            logger.debug("📋 非群组session，使用sessionName: {}", sessionName)
             null
         }
     }
@@ -1051,25 +1053,25 @@ class ChatServer(
      * @return 撤回结果：成功/失败，以及被删除的消息ID列表
      */
     suspend fun recallMessage(messageId: String, userId: String): RecallResult {
-        println("🔄 [recallMessage] 开始撤回消息: $messageId by user $userId")
-        println("🔄 [recallMessage] sessionName: $sessionName")
+        logger.debug("🔄 [recallMessage] 开始撤回消息: {} by user {}", messageId, userId)
+        logger.debug("🔄 [recallMessage] sessionName: {}", sessionName)
         
         // 1. 从历史记录中查找消息
         val chatHistory = historyManager.loadChatHistory(sessionName)
-        println("🔄 [recallMessage] chatHistory: ${chatHistory != null}, messages count: ${chatHistory?.messages?.size}")
+        logger.debug("🔄 [recallMessage] chatHistory: {}, messages count: {}", chatHistory != null, chatHistory?.messages?.size)
         if (chatHistory != null) {
-            println("🔄 [recallMessage] message IDs in history: ${chatHistory.messages.map { it.messageId }}")
+            logger.debug("🔄 [recallMessage] message IDs in history: {}", chatHistory.messages.map { it.messageId })
         }
         val messageEntry = chatHistory?.messages?.find { it.messageId == messageId }
         
         if (messageEntry == null) {
-            println("❌ [recallMessage] 消息不存在: $messageId")
+            logger.error("❌ [recallMessage] 消息不存在: {}", messageId)
             return RecallResult(false, "消息不存在", emptyList())
         }
         
         // 2. 验证权限：只有消息发送者才能撤回
         if (messageEntry.senderId != userId) {
-            println("❌ [recallMessage] 无权撤回此消息: sender=${messageEntry.senderId}, requester=$userId")
+            logger.error("❌ [recallMessage] 无权撤回此消息: sender={}, requester={}", messageEntry.senderId, userId)
             return RecallResult(false, "只能撤回自己发送的消息", emptyList())
         }
         
@@ -1079,7 +1081,7 @@ class ChatServer(
         val isSilkMessage = messageEntry.content.startsWith("@Silk") || messageEntry.content.startsWith("@silk")
         
         if (isSilkMessage) {
-            println("🔄 [recallMessage] 检测到 @silk 消息，查找 Silk 的回复")
+            logger.debug("🔄 [recallMessage] 检测到 @silk 消息，查找 Silk 的回复")
             
             // 4. 查找 Silk 的回复消息（在用户消息之后，最近的 Silk 消息）
             val messageIndex = chatHistory.messages.indexOf(messageEntry)
@@ -1088,7 +1090,7 @@ class ChatServer(
                 .firstOrNull { it.senderId == SilkAgent.AGENT_ID }
             
             if (silkReply != null) {
-                println("🔄 [recallMessage] 找到 Silk 回复: ${silkReply.messageId}")
+                logger.debug("🔄 [recallMessage] 找到 Silk 回复: {}", silkReply.messageId)
                 
                 // 5. 删除用户消息和 Silk 回复
                 historyManager.deleteMessages(sessionName, listOf(messageId, silkReply.messageId))
@@ -1101,9 +1103,9 @@ class ChatServer(
                 // 7. 广播撤回通知
                 broadcastRecallNotification(listOf(messageId, silkReply.messageId))
                 
-                println("✅ [recallMessage] 已撤回用户消息和 Silk 回复")
+                logger.info("✅ [recallMessage] 已撤回用户消息和 Silk 回复")
             } else {
-                println("⚠️ [recallMessage] 未找到 Silk 回复，只撤回用户消息")
+                logger.warn("⚠️ [recallMessage] 未找到 Silk 回复，只撤回用户消息")
                 historyManager.deleteMessages(sessionName, listOf(messageId))
                 deletedMessageIds.add(messageId)
                 messageHistory.removeIf { it.id == messageId }
@@ -1111,7 +1113,7 @@ class ChatServer(
             }
         } else {
             // 普通消息：直接删除
-            println("🔄 [recallMessage] 普通消息，直接撤回")
+            logger.debug("🔄 [recallMessage] 普通消息，直接撤回")
             historyManager.deleteMessages(sessionName, listOf(messageId))
             deletedMessageIds.add(messageId)
             messageHistory.removeIf { it.id == messageId }
@@ -1140,10 +1142,10 @@ class ChatServer(
             try {
                 session.send(Frame.Text(notificationJson))
             } catch (e: Exception) {
-                println("❌ [broadcastRecallNotification] 发送失败: ${e.message}")
+                logger.error("❌ [broadcastRecallNotification] 发送失败: {}", e.message)
             }
         }
-        println("📢 [broadcastRecallNotification] 已广播撤回通知: $messageIds")
+        logger.debug("📢 [broadcastRecallNotification] 已广播撤回通知: {}", messageIds)
     }
     
     private fun generateId(): String {
