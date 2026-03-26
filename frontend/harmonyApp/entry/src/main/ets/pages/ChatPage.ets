@@ -2,7 +2,7 @@
  * ChatPage - 聊天页面
  * 使用 ChatStore + WebSocket 进行实时聊天
  */
-import { Message, MessageType } from '../models/Message';
+import { Message, MessageType, MessageCategory, createMessage } from '../models/Message';
 import { Group } from '../models/Group';
 import { MessageBubble } from '../components';
 import { chatStore as globalChatStore, ConnectionState } from '../stores/ChatStore';
@@ -12,7 +12,7 @@ import { router as appRouter } from '../common/Router';
 import { apiClient as globalApiClient } from '../api/ApiClient';
 import pasteboard from '@ohos.pasteboard';
 import promptAction from '@ohos.promptAction';
-import { AlarmService } from '../common/AlarmService';
+import { ClientActionDispatcher } from '../common/ClientActionDispatcher';
 
 @Component
 export struct ChatPage {
@@ -56,6 +56,8 @@ export struct ChatPage {
     globalChatStore.onMessagesChanged = null;
     globalChatStore.onConnectionStateChanged = null;
     globalChatStore.onError = null;
+    globalChatStore.onClientAction = null;
+    ClientActionDispatcher.onActionFailed = null;
     globalChatStore.disconnect();
     this.isInitialized = false;
   }
@@ -99,6 +101,15 @@ export struct ChatPage {
     globalChatStore.onError = (error: string): void => {
       console.error(`聊天连接错误: ${error}`);
       this.showToast(error);
+    };
+
+    // clientAction 分发
+    globalChatStore.onClientAction = (action: string): void => {
+      ClientActionDispatcher.dispatch(action);
+    };
+    // 失败反馈：往聊天中插入错误消息
+    ClientActionDispatcher.onActionFailed = (errorMsg: string): void => {
+      this.addLocalSystemMessage(errorMsg);
     };
 
     globalChatStore.clearMessages();
@@ -168,13 +179,6 @@ export struct ChatPage {
         this.setMessageStatus(sentMessage.id, 'sent');
       }
     }, 1200);
-
-    // 闹钟设定检测
-    if (content.includes('设定闹钟')) {
-      AlarmService.setAlarm(14, 0).then((result) => {
-        this.showToast(result.message);
-      });
-    }
   }
 
   private getMessageStatus(messageId: string): string {
@@ -339,6 +343,17 @@ export struct ChatPage {
     } catch (error) {
       console.error(`Toast failed: ${error}`);
     }
+  }
+
+  private addLocalSystemMessage(content: string): void {
+    const msg = createMessage(
+      `local_${Date.now()}`,
+      'system',
+      'System',
+      content,
+      MessageType.SYSTEM
+    );
+    this.messages = this.messages.concat([msg]);
   }
 
   private handleCopy(content: string): void {

@@ -22,13 +22,13 @@ export class AlarmService {
   /**
    * 设定闹钟 — 自动选择可用方案
    */
-  static async setAlarm(hour: number, minute: number): Promise<AlarmResult> {
+  static async setAlarm(hour: number, minute: number, label?: string): Promise<AlarmResult> {
     const minuteStr = minute < 10 ? `0${minute}` : `${minute}`;
-    Logger.info(TAG, `===== 设定闹钟 ${hour}:${minuteStr} =====`);
+    Logger.info(TAG, `===== 设定闹钟 ${hour}:${minuteStr}${label ? ` (${label})` : ''} =====`);
 
     // 方案1: reminderAgentManager
     Logger.info(TAG, '尝试方案1: reminderAgentManager...');
-    const result1 = await AlarmService.tryReminderAgent(hour, minute);
+    const result1 = await AlarmService.tryReminderAgent(hour, minute, label);
     if (result1.success) {
       return result1;
     }
@@ -36,7 +36,7 @@ export class AlarmService {
 
     // 方案2: calendarManager 写日历事件
     Logger.info(TAG, '尝试方案2: calendarManager...');
-    const result2 = await AlarmService.tryCalendarEvent(hour, minute);
+    const result2 = await AlarmService.tryCalendarEvent(hour, minute, label);
     if (result2.success) {
       return result2;
     }
@@ -52,7 +52,7 @@ export class AlarmService {
   /**
    * 方案1: reminderAgentManager
    */
-  private static async tryReminderAgent(hour: number, minute: number): Promise<AlarmResult> {
+  private static async tryReminderAgent(hour: number, minute: number, label?: string): Promise<AlarmResult> {
     try {
       await reminderAgentManager.cancelAllReminders();
       const alarm: reminderAgentManager.ReminderRequestAlarm = {
@@ -60,7 +60,7 @@ export class AlarmService {
         hour: hour,
         minute: minute,
         daysOfWeek: [],
-        title: 'Silk 闹钟'
+        title: label || 'Silk 闹钟'
       };
       const id = await reminderAgentManager.publishReminder(alarm);
       const minuteStr = minute < 10 ? `0${minute}` : `${minute}`;
@@ -75,7 +75,7 @@ export class AlarmService {
   /**
    * 方案2: calendarManager 创建日历事件 + 提醒
    */
-  private static async tryCalendarEvent(hour: number, minute: number): Promise<AlarmResult> {
+  private static async tryCalendarEvent(hour: number, minute: number, label?: string): Promise<AlarmResult> {
     const context = getGlobalContext();
     if (!context) {
       return { success: false, reminderId: -1, message: 'context 为空' };
@@ -122,11 +122,11 @@ export class AlarmService {
       // 创建事件，reminderTime: [0] 表示事件开始时提醒
       const event: calendarManager.Event = {
         type: calendarManager.EventType.IMPORTANT,
-        title: `Silk 闹钟 ${hour}:${minuteStr}`,
+        title: label ? `${label} (${hour}:${minuteStr})` : `Silk 闹钟 ${hour}:${minuteStr}`,
         startTime: startTime,
         endTime: endTime,
         reminderTime: [0],
-        description: '由 Silk 聊天设定的闹钟提醒'
+        description: label || '由 Silk 聊天设定的闹钟提醒'
       };
 
       Logger.info(TAG, `创建日历事件: ${JSON.stringify(event)}`);

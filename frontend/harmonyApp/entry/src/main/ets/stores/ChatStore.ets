@@ -70,6 +70,7 @@ export class ChatStore {
   public onMessagesChanged: (() => void) | null = null;
   public onConnectionStateChanged: (() => void) | null = null;
   public onError: ((error: string) => void) | null = null;
+  public onClientAction: ((action: string) => void) | null = null;
 
   /**
    * 连接到聊天服务器
@@ -240,6 +241,13 @@ export class ChatStore {
       this._transientMessage = null;
       this._statusMessages = [];
       this.onMessagesChanged?.();
+
+      // 分发客户端侧动作指令
+      if (message.clientActions) {
+        for (const action of message.clientActions) {
+          this.onClientAction?.(action);
+        }
+      }
 
     } catch (e) {
       console.error('解析消息失败:', e);

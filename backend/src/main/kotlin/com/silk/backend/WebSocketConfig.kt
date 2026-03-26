@@ -28,7 +28,8 @@ data class Message(
     val currentStep: Int? = null,      // 当前执行的步骤编号（用于进度条）
     val totalSteps: Int? = null,       // 总步骤数（用于进度条）
     val isIncremental: Boolean = false, // true = 增量消息（前端需拼接），false = 完整消息（前端直接替换）
-    val category: MessageCategory = MessageCategory.NORMAL  // ✅ 消息类别（用于UI显示亮度区分）
+    val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度区分）
+    val clientActions: List<String>? = null  // 客户端侧动作指令列表（JSON 字符串）
 )
 
 @Serializable
@@ -612,7 +613,8 @@ class ChatServer(
                         timestamp = System.currentTimeMillis(),
                         type = MessageType.TEXT,
                         isTransient = false,
-                        isIncremental = false
+                        isIncremental = false,
+                        clientActions = directModelAgent.consumePendingClientActions()
                     )
                     
                     // 检查是否已经在历史中（防止重复）

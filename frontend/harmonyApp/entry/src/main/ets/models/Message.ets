@@ -36,6 +36,7 @@ export interface Message {
   totalSteps?: number;       // 总步骤数
   isIncremental: boolean;    // true = 增量消息（需拼接），false = 完整消息
   category: MessageCategory; // 消息类别
+  clientActions?: string[];  // 客户端侧动作指令列表（JSON 字符串）
 }
 
 /**
@@ -81,7 +82,8 @@ export function parseMessage(json: string): Message {
     currentStep: obj.currentStep,
     totalSteps: obj.totalSteps,
     isIncremental: parsedIsIncremental,
-    category: parsedCategory
+    category: parsedCategory,
+    clientActions: obj.clientActions
   };
 }
 

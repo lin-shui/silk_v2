@@ -47,6 +47,16 @@ class DirectModelAgent(
     
     // 对话历史（保持上下文）
     private val conversationHistory = mutableListOf<Message>()
+
+    // 客户端侧动作指令队列（tool 执行时累积，finalMessage 发送时消费）
+    private val pendingClientActions: MutableList<String> = mutableListOf()
+
+    fun consumePendingClientActions(): List<String>? {
+        if (pendingClientActions.isEmpty()) return null
+        val actions = pendingClientActions.toList()
+        pendingClientActions.clear()
+        return actions
+    }
     
     // Weaviate 搜索客户端（用于搜索已上传的 PDF 等文件），未配置时为 null
     private val weaviateClient: WeaviateClient? = AIConfig.WEAVIATE_URL.takeIf { it.isNotBlank() }?.let { WeaviateClient(it) }
@@ -741,6 +751,31 @@ class DirectModelAgent(
                         put("required", requiredArray())
                     }
                 )
+            ),
+            // 设定闹钟工具（客户端侧执行）
+            Tool(
+                function = ToolDefinition(
+                    name = "set_alarm",
+                    description = "在用户设备上设定闹钟或提醒。当用户要求设闹钟、定时提醒时使用。你需要从用户的话语中解析出具体的小时和分钟。",
+                    parameters = buildJsonObject {
+                        put("type", "object")
+                        put("properties", buildJsonObject {
+                            put("hour", buildJsonObject {
+                                put("type", "integer")
+                                put("description", "闹钟小时（0-23，24小时制）")
+                            })
+                            put("minute", buildJsonObject {
+                                put("type", "integer")
+                                put("description", "闹钟分钟（0-59）")
+                            })
+                            put("label", buildJsonObject {
+                                put("type", "string")
+                                put("description", "闹钟标签/备注（可选），如'早起闹钟'、'开会提醒'")
+                            })
+                        })
+                        put("required", requiredArray("hour", "minute"))
+                    }
+                )
             )
         )
         
@@ -859,6 +894,25 @@ class DirectModelAgent(
                 
                 "get_group_stats" -> {
                     getGroupStats()
+                }
+
+                "set_alarm" -> {
+                    val hour = args["hour"]?.jsonPrimitive?.int ?: 0
+                    val minute = args["minute"]?.jsonPrimitive?.int ?: 0
+                    val label = args["label"]?.jsonPrimitive?.content ?: ""
+                    if (hour !in 0..23 || minute !in 0..59) {
+                        "参数错误：小时应为0-23，分钟应为0-59"
+                    } else {
+                        val minuteStr = if (minute < 10) "0$minute" else "$minute"
+                        val actionJson = buildJsonObject {
+                            put("type", "SET_ALARM")
+                            put("hour", hour)
+                            put("minute", minute)
+                            if (label.isNotEmpty()) put("label", label)
+                        }.toString()
+                        pendingClientActions.add(actionJson)
+                        "✅ 闹钟指令已接受：$hour:$minuteStr${if (label.isNotEmpty()) "（$label）" else ""}。设备将在收到此消息后执行设定。"
+                    }
                 }
                 
                 else -> "未知工具: $toolName"

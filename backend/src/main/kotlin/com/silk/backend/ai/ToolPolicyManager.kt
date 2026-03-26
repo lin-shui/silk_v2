@@ -93,6 +93,11 @@ object ToolPolicyManager {
             permission = ToolPermission.DISABLED,
             safeCommands = listOf("ls", "pwd", "echo", "date", "whoami"),
             description = "执行系统命令（默认禁用，仅允许安全命令）"
+        ),
+        "set_alarm" to ToolPolicy(
+            name = "set_alarm",
+            permission = ToolPermission.ALLOWED,
+            description = "在用户设备上设定闹钟或提醒"
         )
     )
     
