@@ -3,6 +3,7 @@
  * 使用 ChatStore + WebSocket 进行实时聊天
  */
 import { Message, MessageType } from '../models/Message';
+import { UserTodoItem } from '../models/UserTodoItem';
 import { Group } from '../models/Group';
 import { MessageBubble } from '../components';
 import { chatStore as globalChatStore, ConnectionState } from '../stores/ChatStore';
@@ -14,6 +15,7 @@ import { apiClient as globalApiClient } from '../api/ApiClient';
 import pasteboard from '@ohos.pasteboard';
 import promptAction from '@ohos.promptAction';
 import { AlarmService } from '../common/AlarmService';
+import { parseAlarmTimeFromText } from '../common/TodoTimeParser';
 
 @Component
 export struct ChatPage {
@@ -33,6 +35,8 @@ export struct ChatPage {
   @State private isSelectionMode: boolean = false;
   @State private selectedMessageIds: string[] = [];
   @State private isRecalling: boolean = false;
+  @State private todoItems: UserTodoItem[] = [];
+  @State private todoRefreshing: boolean = false;
 
   private groupId: string = 'default_room';
   private userId: string = '';
@@ -105,6 +109,12 @@ export struct ChatPage {
     globalChatStore.clearMessages();
     this.connectionState = ConnectionState.CONNECTING;
     globalChatStore.connect(this.userId, this.userName, this.groupId);
+
+    if (this.isSilkPrivateChat()) {
+      setTimeout((): void => {
+        void this.quietRefreshTodos();
+      }, 1000);
+    }
   }
 
   private syncMessages(): void {
@@ -187,12 +197,6 @@ export struct ChatPage {
       }
     }, 1200);
 
-    // 闹钟设定检测
-    if (content.includes('设定闹钟')) {
-      AlarmService.setAlarm(14, 0).then((result) => {
-        this.showToast(result.message);
-      });
-    }
   }
 
   private getMessageStatus(messageId: string): string {
@@ -593,6 +597,119 @@ export struct ChatPage {
     return this.groupName.startsWith('[Silk]');
   }
 
+  private async quietRefreshTodos(): Promise<void> {
+    if (this.userId === '') {
+      return;
+    }
+    try {
+      await this.apiClient.refreshUserTodos(this.userId);
+    } catch (_) {
+      // 后台预热，忽略错误
+    }
+  }
+
+  private openTodoSheet(): void {
+    this.bottomSheetMode = 'todos';
+    this.showBottomSheet = true;
+    void this.loadTodosSheet();
+  }
+
+  private async loadTodosSheet(): Promise<void> {
+    this.todoRefreshing = true;
+    try {
+      const cached = await this.apiClient.getUserTodos(this.userId);
+      if (cached.success && cached.data) {
+        this.todoItems = cached.data;
+      }
+      const fresh = await this.apiClient.refreshUserTodos(this.userId);
+      if (fresh.success && fresh.data) {
+        this.todoItems = fresh.data;
+      } else if (!fresh.success) {
+        this.showToast(fresh.message ? fresh.message : '同步待办失败');
+      }
+    } finally {
+      this.todoRefreshing = false;
+    }
+  }
+
+  private toggleTodoItem(item: UserTodoItem): void {
+    void this.runToggleTodo(item);
+  }
+
+  /** 仅闹钟/日程且能从文案解析出时间时可点「执行」 */
+  private todoCanExecute(item: UserTodoItem): boolean {
+    if (item.done) {
+      return false;
+    }
+    const at = (item.actionType ? item.actionType : 'none').toLowerCase();
+    if (at !== 'alarm' && at !== 'calendar') {
+      return false;
+    }
+    const blob = `${item.actionDetail ? item.actionDetail : ''} ${item.title}`;
+    return parseAlarmTimeFromText(blob) !== null;
+  }
+
+  /** 标记为闹钟/日程但当前解析不出时间 */
+  private todoNeedsTimeHint(item: UserTodoItem): boolean {
+    if (item.done) {
+      return false;
+    }
+    const at = (item.actionType ? item.actionType : 'none').toLowerCase();
+    if (at !== 'alarm' && at !== 'calendar') {
+      return false;
+    }
+    const blob = `${item.actionDetail ? item.actionDetail : ''} ${item.title}`;
+    return parseAlarmTimeFromText(blob) === null;
+  }
+
+  private async runTodoMainAction(item: UserTodoItem): Promise<void> {
+    if (item.done) {
+      this.showToast('已完成项可在左侧勾选取消');
+      return;
+    }
+    const at = (item.actionType ? item.actionType : 'none').toLowerCase();
+    const blob = `${item.actionDetail ? item.actionDetail : ''} ${item.title}`;
+    const parsed = parseAlarmTimeFromText(blob);
+    if (at === 'alarm') {
+      if (!parsed) {
+        this.showToast('无法解析时间，请确保有待办或详情中含如 7点、07:00');
+        return;
+      }
+      const res = await AlarmService.setAlarmForTodo(parsed.hour, parsed.minute, item.title);
+      this.showToast(res.message);
+      return;
+    }
+    if (at === 'calendar') {
+      if (!parsed) {
+        this.showToast('无法解析日程时间');
+        return;
+      }
+      const res = await AlarmService.setCalendarOnlyForTodo(parsed.hour, parsed.minute, item.title);
+      this.showToast(res.message);
+      return;
+    }
+  }
+
+  private async runToggleTodo(item: UserTodoItem): Promise<void> {
+    const next = !item.done;
+    const res = await this.apiClient.updateUserTodoItem(this.userId, item.id, next);
+    if (res.success && res.data) {
+      this.todoItems = res.data;
+    } else {
+      this.showToast(res.message ? res.message : '更新失败');
+    }
+  }
+
+  private getBottomSheetHeight(): string {
+    if (this.bottomSheetMode === 'forward') {
+      return '55%';
+    }
+    if (this.bottomSheetMode === 'todos') {
+      return '68%';
+    }
+    return '44%';
+  }
+
   private applySilkQuickMention(): void {
     this.messageInput = '@Silk ';
   }
@@ -622,6 +739,17 @@ export struct ChatPage {
           .fontColor(SilkColors.textPrimary)
           .margin({ left: 12 })
           .layoutWeight(1)
+
+        if (this.isSilkPrivateChat()) {
+          Text('待办')
+            .fontSize(15)
+            .fontColor(SilkColors.primary)
+            .fontWeight(FontWeight.Medium)
+            .margin({ right: 16 })
+            .onClick((): void => {
+              this.openTodoSheet();
+            })
+        }
       }
       .width('100%')
       .height(56)
@@ -829,7 +957,7 @@ export struct ChatPage {
     .height('100%')
     .backgroundColor(SilkColors.background)
     .bindSheet($$this.showBottomSheet, this.buildBottomSheet(), {
-      height: this.bottomSheetMode === 'forward' ? '55%' : '44%',
+      height: this.getBottomSheetHeight(),
       backgroundColor: SilkColors.surface
     })
   }
@@ -838,9 +966,115 @@ export struct ChatPage {
   private buildBottomSheet() {
     if (this.bottomSheetMode === 'forward') {
       this.buildForwardSheet();
+    } else if (this.bottomSheetMode === 'todos') {
+      this.buildTodoSheet();
     } else {
       this.buildMessageActionsSheet();
     }
+  }
+
+  @Builder
+  private buildTodoSheet() {
+    Column() {
+      Row() {
+        Text('我的待办')
+          .fontSize(18)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(SilkColors.textPrimary)
+          .layoutWeight(1)
+
+        if (this.todoRefreshing) {
+          LoadingProgress()
+            .width(20)
+            .height(20)
+            .color(SilkColors.primary)
+            .margin({ right: 8 })
+        }
+
+        Text('关闭')
+          .fontSize(14)
+          .fontColor(SilkColors.primary)
+          .onClick((): void => {
+            this.showBottomSheet = false;
+          })
+      }
+      .width('100%')
+      .margin({ bottom: 12 })
+
+      Text('从聊天整理为一事一条。左侧勾选完成；闹钟/日程且时间可识别时右侧点「执行」调用系统能力。')
+        .fontSize(12)
+        .fontColor(SilkColors.textSecondary)
+        .margin({ bottom: 12 })
+
+      if (this.todoItems.length === 0) {
+        Text(this.todoRefreshing ? '正在从各群同步…' : '暂无待办')
+          .fontSize(14)
+          .fontColor(SilkColors.textSecondary)
+      } else {
+        List({ space: 8 }) {
+          ForEach(this.todoItems, (item: UserTodoItem) => {
+            ListItem() {
+              Row() {
+                Text(item.done ? '☑' : '☐')
+                  .fontSize(18)
+                  .fontColor(item.done ? SilkColors.textLight : SilkColors.primary)
+                  .margin({ right: 10 })
+                  .padding({ top: 4 })
+                  .onClick((): void => {
+                    this.toggleTodoItem(item);
+                  })
+
+                Column() {
+                  Text(item.title)
+                    .fontSize(15)
+                    .fontColor(item.done ? SilkColors.textLight : SilkColors.textPrimary)
+                    .maxLines(4)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+
+                  if (this.todoNeedsTimeHint(item)) {
+                    Text('时间未识别，标题或详情需含如 7点、07:00')
+                      .fontSize(11)
+                      .fontColor(SilkColors.textSecondary)
+                      .margin({ top: 4 })
+                  }
+
+                  if (item.sourceGroupName && item.sourceGroupName.length > 0) {
+                    Text(`来自：${item.sourceGroupName}`)
+                      .fontSize(11)
+                      .fontColor(SilkColors.textLight)
+                      .margin({ top: 4 })
+                  }
+                }
+                .layoutWeight(1)
+                .alignItems(HorizontalAlign.Start)
+
+                if (this.todoCanExecute(item)) {
+                  Button('执行')
+                    .height(32)
+                    .fontSize(13)
+                    .padding({ left: 12, right: 12 })
+                    .backgroundColor(SilkColors.primary)
+                    .fontColor(SilkColors.onPrimary)
+                    .borderRadius(8)
+                    .onClick((): void => {
+                      void this.runTodoMainAction(item);
+                    })
+                }
+              }
+              .width('100%')
+              .padding(12)
+              .backgroundColor(SilkColors.background)
+              .borderRadius(10)
+            }
+          }, (item: UserTodoItem) => item.id)
+        }
+        .width('100%')
+        .layoutWeight(1)
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .height('100%')
   }
 
   private getForwardingPreviewParts(): ForwardedMessageParts | null {

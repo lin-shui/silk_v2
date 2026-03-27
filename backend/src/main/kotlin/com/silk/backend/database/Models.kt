@@ -297,6 +297,43 @@ data class SimpleResponse(
 )
 
 /**
+ * 用户跨群待办事项（Harmony 专属 Silk 对话「待办」）
+ */
+@Serializable
+data class UserTodoItemDto(
+    val id: String,
+    val title: String,
+    val sourceGroupId: String? = null,
+    val sourceGroupName: String? = null,
+    /** none | alarm | calendar — 鸿蒙端可对 alarm/calendar 调系统能力 */
+    val actionType: String? = null,
+    /** 附加结构化提示，如 07:00、明天09:30（供客户端解析） */
+    val actionDetail: String? = null,
+    val createdAt: Long = 0L,
+    val updatedAt: Long = 0L,
+    val done: Boolean = false
+)
+
+@Serializable
+data class UserTodosResponse(
+    val success: Boolean,
+    val message: String,
+    val items: List<UserTodoItemDto> = emptyList()
+)
+
+@Serializable
+data class UpdateUserTodoRequest(
+    val userId: String,
+    val itemId: String,
+    val done: Boolean
+)
+
+@Serializable
+data class RefreshUserTodosRequest(
+    val userId: String
+)
+
+/**
  * 群组成员API响应数据（前端使用）
  */
 @Serializable

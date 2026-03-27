@@ -15,6 +15,7 @@ import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import com.silk.backend.database.UnreadRepository
 import com.silk.backend.database.GroupRepository
+import com.silk.backend.todos.GroupTodoExtractionService
 
 @Serializable
 data class Message(
@@ -642,6 +643,16 @@ class ChatServer(
             
             fullResponse = response
             println("🏁 [generateIntelligentResponse-$callId] 函数执行完成，响应长度: ${fullResponse.length}")
+
+            if (userId.isNotBlank() && getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true) {
+                CoroutineScope(Dispatchers.IO).launch {
+                    try {
+                        GroupTodoExtractionService.refreshTodosForUser(userId)
+                    } catch (e: Exception) {
+                        println("⚠️ 专属对话待办提取失败: ${e.message}")
+                    }
+                }
+            }
             
         } catch (e: Exception) {
             println("❌ [generateIntelligentResponse-$callId] 生成AI回答失败: ${e.message}")

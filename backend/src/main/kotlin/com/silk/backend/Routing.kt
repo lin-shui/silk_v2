@@ -947,6 +947,79 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "请求格式错误"))
             }
         }
+
+        // ==================== 跨群待办（[Silk] 专属对话侧边能力） ====================
+        get("/api/user-todos/{userId}") {
+            val userId = call.parameters["userId"] ?: ""
+            val items = com.silk.backend.todos.UserTodoStore.load(userId)
+                .sortedByDescending { it.updatedAt }
+            call.respond(UserTodosResponse(true, "ok", items))
+        }
+
+        /**
+         * 触发跨群待办同步（GET，无请求体，避免部分客户端 POST JSON 序列化不兼容）。
+         */
+        get("/api/user-todos/{userId}/refresh") {
+            val userId = call.parameters["userId"] ?: ""
+            var syncDetail = "ok"
+            try {
+                kotlinx.coroutines.runBlocking {
+                    com.silk.backend.todos.GroupTodoExtractionService.refreshTodosForUser(userId)
+                }
+            } catch (e: Exception) {
+                println("❌ 待办同步异常 userId=${userId.take(8)}…: ${e.message}")
+                e.printStackTrace()
+                syncDetail = "同步异常，已返回已有列表: ${e.message?.take(120)}"
+            }
+            val items = com.silk.backend.todos.UserTodoStore.load(userId)
+                .sortedByDescending { it.updatedAt }
+            call.respond(UserTodosResponse(true, syncDetail, items))
+        }
+
+        put("/api/user-todos/item") {
+            try {
+                val request = call.receive<UpdateUserTodoRequest>()
+                val ok = com.silk.backend.todos.UserTodoStore.setItemDone(
+                    request.userId,
+                    request.itemId,
+                    request.done
+                )
+                val items = com.silk.backend.todos.UserTodoStore.load(request.userId)
+                    .sortedByDescending { it.updatedAt }
+                call.respond(
+                    if (ok) UserTodosResponse(true, "已更新", items)
+                    else UserTodosResponse(false, "待办不存在", items)
+                )
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.BadRequest, UserTodosResponse(false, "请求格式错误"))
+            }
+        }
+
+        post("/api/user-todos/refresh") {
+            val userId = try {
+                call.receive<RefreshUserTodosRequest>().userId
+            } catch (e: Exception) {
+                println("❌ 刷新待办请求体解析失败: ${e.message}")
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    UserTodosResponse(false, "请求格式错误: ${e.message}", emptyList())
+                )
+                return@post
+            }
+            var syncDetail = "已根据各群记录刷新待办"
+            try {
+                kotlinx.coroutines.runBlocking {
+                    com.silk.backend.todos.GroupTodoExtractionService.refreshTodosForUser(userId)
+                }
+            } catch (e: Exception) {
+                println("❌ 待办同步异常: ${e.message}")
+                e.printStackTrace()
+                syncDetail = "同步异常，已返回已有列表: ${e.message?.take(120)}"
+            }
+            val items = com.silk.backend.todos.UserTodoStore.load(userId)
+                .sortedByDescending { it.updatedAt }
+            call.respond(UserTodosResponse(true, syncDetail, items))
+        }
         
         // 文件上传/下载 API
         fileRoutes()

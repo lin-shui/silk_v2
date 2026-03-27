@@ -6,6 +6,7 @@ import http from '@ohos.net.http';
 import { User, LoginResponse, RegisterResponse } from '../models/User';
 import { Group, GroupMember } from '../models/Group';
 import { UserSettings, UserSettingsResponse } from '../models/UserSettings';
+import { UserTodoItem } from '../models/UserTodoItem';
 import { API_BASE_URL, API_TIMEOUT } from '../common/Constants';
 
 /**
@@ -138,6 +139,18 @@ interface LatestVersionInfo {
 interface UnreadCountsResponse {
   success: boolean;
   unreadCounts?: Record<string, number>;
+}
+
+interface UserTodosEnvelope {
+  success: boolean;
+  message: string;
+  items?: UserTodoItem[];
+}
+
+interface UpdateUserTodoItemBody {
+  userId: string;
+  itemId: string;
+  done: boolean;
 }
 
 interface ResponseEnvelope {
@@ -465,6 +478,119 @@ export class ApiClient {
       userId: userId
     };
     return this.post<void>('/api/messages/recall', payload);
+  }
+
+  /**
+   * 获取当前用户的跨群待办列表
+   */
+  async getUserTodos(userId: string): Promise<ApiResponse<UserTodoItem[]>> {
+    const httpRequest = this.createHttpRequest();
+    try {
+      const response = await httpRequest.request(
+        `${this.baseUrl}/api/user-todos/${userId}`,
+        {
+          method: http.RequestMethod.GET,
+          header: {
+            'Content-Type': 'application/json'
+          },
+          connectTimeout: this.timeout,
+          readTimeout: this.timeout
+        }
+      );
+      if (response.responseCode === 200) {
+        const resultText: string = response.result as string;
+        const parsed: UserTodosEnvelope = JSON.parse(resultText) as UserTodosEnvelope;
+        if (parsed.items !== undefined) {
+          return {
+            success: parsed.success,
+            message: parsed.message,
+            data: parsed.items
+          };
+        }
+      }
+      return this.failedResponse<UserTodoItem[]>('加载待办失败');
+    } catch (error) {
+      return this.failedResponse<UserTodoItem[]>(`Request failed: ${this.stringifyError(error)}`);
+    } finally {
+      httpRequest.destroy();
+    }
+  }
+
+  /**
+   * 根据各群聊天记录刷新待办（可能较慢，使用较长读超时）。
+   * 使用 GET + path 参数，避免部分设备上 POST extraData 未按 JSON 发送导致后端 400。
+   */
+  async refreshUserTodos(userId: string): Promise<ApiResponse<UserTodoItem[]>> {
+    const readMs: number = 120000;
+    const httpRequest = this.createHttpRequest();
+    try {
+      const encodedId: string = encodeURIComponent(userId);
+      const response = await httpRequest.request(
+        `${this.baseUrl}/api/user-todos/${encodedId}/refresh`,
+        {
+          method: http.RequestMethod.GET,
+          header: {
+            'Content-Type': 'application/json'
+          },
+          connectTimeout: this.timeout,
+          readTimeout: readMs
+        }
+      );
+      if (response.responseCode === 200) {
+        const resultText: string = response.result as string;
+        const parsed: UserTodosEnvelope = JSON.parse(resultText) as UserTodosEnvelope;
+        if (parsed.items !== undefined) {
+          return {
+            success: parsed.success,
+            message: parsed.message,
+            data: parsed.items
+          };
+        }
+      }
+      return this.failedResponse<UserTodoItem[]>('刷新待办失败');
+    } catch (error) {
+      return this.failedResponse<UserTodoItem[]>(`Request failed: ${this.stringifyError(error)}`);
+    } finally {
+      httpRequest.destroy();
+    }
+  }
+
+  /**
+   * 更新待办完成状态
+   */
+  async updateUserTodoItem(userId: string, itemId: string, done: boolean): Promise<ApiResponse<UserTodoItem[]>> {
+    const httpRequest = this.createHttpRequest();
+    try {
+      const updateBody: UpdateUserTodoItemBody = { userId: userId, itemId: itemId, done: done };
+      const response = await httpRequest.request(
+        `${this.baseUrl}/api/user-todos/item`,
+        {
+          method: http.RequestMethod.PUT,
+          header: {
+            'Content-Type': 'application/json'
+          },
+          extraData: JSON.stringify(updateBody),
+          connectTimeout: this.timeout,
+          readTimeout: this.timeout
+        }
+      );
+      if (response.responseCode === 200) {
+        const resultText: string = response.result as string;
+        const parsed: UserTodosEnvelope = JSON.parse(resultText) as UserTodosEnvelope;
+        if (parsed.items !== undefined) {
+          return {
+            success: parsed.success,
+            message: parsed.message,
+            data: parsed.items
+          };
+        }
+      }
+      return this.failedResponse<UserTodoItem[]>('更新待办失败');
+    } catch (error) {
+      return this.failedResponse<UserTodoItem[]>(`Request failed: ${this.stringifyError(error)}`);
+    } finally {
+      httpRequest.destroy();
+    }
   }
 
   // ==================== 用户设置 API ====================
