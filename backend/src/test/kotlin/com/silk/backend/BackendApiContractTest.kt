@@ -21,9 +21,12 @@ import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.post
-import io.ktor.client.request.put
 import io.ktor.client.request.setBody
+import io.ktor.client.request.forms.formData
+import io.ktor.client.request.forms.submitFormWithBinaryData
+import io.ktor.http.Headers
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
@@ -31,6 +34,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import com.silk.backend.routes.FileListResponse
+import com.silk.backend.routes.FileUploadResponse
 
 class BackendApiContractTest : BackendContractTestBase() {
     @Test
@@ -120,6 +125,24 @@ class BackendApiContractTest : BackendContractTestBase() {
         assertEquals(2, members.members.size)
         assertTrue(members.members.any { it.id == host.id })
         assertTrue(members.members.any { it.id == guest.id })
+    }
+
+    @Test
+    fun joinGroupRejectsInvalidInvitationCode() = testApplication {
+        application {
+            module()
+        }
+        val client = jsonClient()
+
+        val guest = registerUser(client, "invalid_join", "Invalid Join", "13800000013").user!!
+
+        val joined = client.post("/groups/join") {
+            contentType(ContentType.Application.Json)
+            setBody(JoinGroupRequest(userId = guest.id, invitationCode = "BAD999"))
+        }.body<GroupResponse>()
+
+        assertEquals(false, joined.success)
+        assertEquals("邀请码无效", joined.message)
     }
 
     @Test
@@ -254,6 +277,51 @@ class BackendApiContractTest : BackendContractTestBase() {
     }
 
     @Test
+    fun recallMessageRejectsNonAuthor() = testApplication {
+        application {
+            module()
+        }
+        val client = jsonClient()
+
+        val host = registerUser(client, "recall_owner", "Recall Owner", "13800000014").user!!
+        val guest = registerUser(client, "recall_guest", "Recall Guest", "13800000015").user!!
+        val group = createGroupAndJoinGuest(client, host.id, guest.id)
+
+        val sent = client.post("/api/messages/send") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                SendMessageRequest(
+                    groupId = group.id,
+                    userId = host.id,
+                    userName = host.fullName,
+                    content = "owner message"
+                )
+            )
+        }.body<SimpleResponse>()
+        assertTrue(sent.success)
+
+        val historyBeforeRecall = assertNotNull(ChatHistoryManager().loadChatHistory(group.id))
+        val messageId = historyBeforeRecall.messages.single().messageId
+
+        val recalled = client.post("/api/messages/recall") {
+            contentType(ContentType.Application.Json)
+            setBody(
+                RecallMessageRequest(
+                    groupId = group.id,
+                    messageId = messageId,
+                    userId = guest.id
+                )
+            )
+        }.body<SimpleResponse>()
+
+        assertEquals(false, recalled.success)
+        assertEquals("只能撤回自己发送的消息", recalled.message)
+
+        val historyAfterRecall = assertNotNull(ChatHistoryManager().loadChatHistory(group.id))
+        assertEquals(1, historyAfterRecall.messages.size)
+    }
+
+    @Test
     fun nonMemberCannotSendMessage() = testApplication {
         application {
             module()
@@ -281,6 +349,49 @@ class BackendApiContractTest : BackendContractTestBase() {
 
         assertEquals(false, response.success)
         assertEquals("您不是该群组成员", response.message)
+    }
+
+    @Test
+    fun fileUploadAndDownloadRoundTripWorks() = testApplication {
+        application {
+            module()
+        }
+        val client = jsonClient()
+
+        val host = registerUser(client, "file_host", "File Host", "13800000016").user!!
+        val guest = registerUser(client, "file_guest", "File Guest", "13800000017").user!!
+        val group = createGroupAndJoinGuest(client, host.id, guest.id)
+        val fileContent = "contract-file-content"
+
+        val uploadResponse = client.submitFormWithBinaryData(
+            url = "/api/files/upload",
+            formData = formData {
+                append("sessionId", group.id)
+                append("userId", host.id)
+                append(
+                    key = "file",
+                    value = fileContent.toByteArray(),
+                    headers = Headers.build {
+                        append(HttpHeaders.ContentDisposition, "filename=contract.txt")
+                        append(HttpHeaders.ContentType, ContentType.Text.Plain.toString())
+                    }
+                )
+            }
+        )
+
+        assertEquals(HttpStatusCode.OK, uploadResponse.status)
+        val uploaded = uploadResponse.body<FileUploadResponse>()
+        assertTrue(uploaded.success)
+        assertEquals("contract.txt", uploaded.fileName)
+
+        val listed = client.get("/api/files/list/${group.id}").body<FileListResponse>()
+        assertEquals(1, listed.totalCount)
+        assertEquals("contract.txt", listed.files.single().fileName)
+
+        val downloadedResponse = client.get("/api/files/download/${group.id}/${uploaded.fileId}")
+        assertEquals(HttpStatusCode.OK, downloadedResponse.status)
+        val downloadedContent = downloadedResponse.body<ByteArray>().decodeToString()
+        assertEquals(fileContent, downloadedContent)
     }
 
     private suspend fun registerUser(
