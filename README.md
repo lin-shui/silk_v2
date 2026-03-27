@@ -11,6 +11,7 @@ A cross-platform chat application built with Kotlin Multiplatform. It provides a
 - **Android**: Kotlin Multiplatform Android app; APK can be built and served for download.
 - **Vector store**: Weaviate (run via Docker by `silk.sh`). Used for context and file search.
 - **AI**: Any OpenAI-compatible API; configure `API_BASE_URL`, `OPENAI_API_KEY`, and `AI_MODEL` in `.env`.
+- **Testing roadmap**: See [`TESTING_ROADMAP.md`](./TESTING_ROADMAP.md) for the current automation and CI rollout plan.
 
 All day-to-day operations (build, run, stop, logs, Weaviate) are driven by the **`silk.sh`** script in the project root.
 
