@@ -50,6 +50,12 @@ kotlin {
                 implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.4.1")
             }
         }
+
+        val commonTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+            }
+        }
         
         val desktopMain by getting {
             dependencies {
@@ -87,4 +93,3 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 }
-

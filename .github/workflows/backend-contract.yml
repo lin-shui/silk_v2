@@ -1,9 +1,11 @@
-name: Backend Contract Tests
+name: Fast CI
 
 on:
   pull_request:
     paths:
       - "backend/**"
+      - "frontend/shared/**"
+      - "frontend/webApp/**"
       - ".github/workflows/backend-contract.yml"
       - "build.gradle.kts"
       - "settings.gradle.kts"
@@ -13,6 +15,8 @@ on:
   push:
     paths:
       - "backend/**"
+      - "frontend/shared/**"
+      - "frontend/webApp/**"
       - ".github/workflows/backend-contract.yml"
       - "build.gradle.kts"
       - "settings.gradle.kts"
@@ -23,6 +27,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: fast-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend-contract:
@@ -54,3 +62,66 @@ jobs:
           path: |
             backend/build/reports/tests/test
             backend/build/test-results/test
+
+  shared-desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Temurin 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run shared desktop tests
+        run: ./gradlew :frontend:shared:desktopTest --stacktrace
+
+      - name: Upload shared desktop test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-desktop-test-report
+          path: |
+            frontend/shared/build/reports/tests/desktopTest
+            frontend/shared/build/test-results/desktopTest
+
+  web-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Temurin 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run web tests and production bundle build
+        run: ./gradlew :frontend:webApp:browserTest :frontend:webApp:browserProductionWebpack --stacktrace
+
+      - name: Upload web reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-smoke-report
+          path: |
+            frontend/webApp/build/reports/tests/browserTest
+            frontend/webApp/build/test-results/browserTest
+            frontend/webApp/build/distributions

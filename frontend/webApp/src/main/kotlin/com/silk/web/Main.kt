@@ -533,7 +533,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         msg.content.isNotBlank() &&
             msg.currentStep == null &&
             msg.totalSteps == null &&
-            !isLikelyAgentStatusContent(msg.content)
+            !isLikelyAgentStatusMessage(msg.content)
     } == true
     
     // Track if we've sent the default instruction for this session
@@ -977,7 +977,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     message.content.isNotBlank() &&
                     message.currentStep == null &&
                     message.totalSteps == null &&
-                    !isLikelyAgentStatusContent(message.content)
+                    !isLikelyAgentStatusMessage(message.content)
                 ) {
                     // 进入最终答案流阶段后，强制按 AI 正文样式渲染（即使后端 category 仍是 AGENT_STATUS）
                     MessageItem(
@@ -2618,60 +2618,6 @@ private fun ensureMarkdownStylesInjected() {
     document.head?.appendChild(styleElement)
 }
 
-private fun escapeHtml(raw: String): String {
-    return raw
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&#39;")
-}
-
-private data class MathDelimiter(
-    val open: String,
-    val close: String
-)
-
-private val mathDelimiters = listOf(
-    MathDelimiter("$$", "$$"),
-    MathDelimiter("\\[", "\\]"),
-    MathDelimiter("\\(", "\\)")
-)
-
-private fun normalizeMathBlocks(markdown: String): String {
-    val output = StringBuilder()
-    var cursor = 0
-
-    while (cursor < markdown.length) {
-        var matched = false
-
-        for (delimiter in mathDelimiters) {
-            if (!markdown.startsWith(delimiter.open, cursor)) continue
-
-            val contentStart = cursor + delimiter.open.length
-            val closingIndex = markdown.indexOf(delimiter.close, contentStart)
-            if (closingIndex == -1) continue
-
-            val innerContent = markdown.substring(contentStart, closingIndex)
-                // markdown-it 会把数学环境中的 `\\` 吃成 `\`，这里先补一层转义。
-                .replace("\\\\", "\\\\\\\\")
-            output.append(delimiter.open)
-            output.append(innerContent)
-            output.append(delimiter.close)
-            cursor = closingIndex + delimiter.close.length
-            matched = true
-            break
-        }
-
-        if (!matched) {
-            output.append(markdown[cursor])
-            cursor += 1
-        }
-    }
-
-    return output.toString()
-}
-
 private fun highlightCode(code: String, language: String): String {
     val normalizedLanguage = language
         .trim()
@@ -2690,11 +2636,11 @@ private fun highlightCode(code: String, language: String): String {
             HighlightJs.highlightAuto(code).value as String
         }
 
-        val className = if (normalizedLanguage.isNotBlank()) "language-${escapeHtml(normalizedLanguage)}" else ""
+        val className = if (normalizedLanguage.isNotBlank()) "language-${escapeMarkdownHtml(normalizedLanguage)}" else ""
         """<pre class="hljs"><code class="$className">$highlighted</code></pre>"""
     } catch (_: Throwable) {
-        val safeLanguage = if (normalizedLanguage.isNotBlank()) """ class="language-${escapeHtml(normalizedLanguage)}"""" else ""
-        """<pre class="hljs"><code$safeLanguage>${escapeHtml(code)}</code></pre>"""
+        val safeLanguage = if (normalizedLanguage.isNotBlank()) """ class="language-${escapeMarkdownHtml(normalizedLanguage)}"""" else ""
+        """<pre class="hljs"><code$safeLanguage>${escapeMarkdownHtml(code)}</code></pre>"""
     }
 }
 
@@ -2765,7 +2711,7 @@ fun MarkdownContent(content: String) {
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
     val safeHtml = remember(content) {
         DOMPurify.sanitize(
-            markdownEngine.render(normalizeMathBlocks(content)),
+            markdownEngine.render(normalizeMathMarkdownBlocks(content)),
             createSanitizeConfig()
         )
     }
@@ -3568,25 +3514,6 @@ fun formatTime(timestamp: Long): String {
     val seconds = totalSeconds % 60
     
     return "${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
-}
-
-private fun isLikelyAgentStatusContent(content: String): Boolean {
-    val text = content.trim()
-    if (text.isBlank()) return false
-
-    val statusHints = listOf(
-        "正在处理",
-        "思考中",
-        "使用工具",
-        "执行:",
-        "处理中",
-        "检索",
-        "搜索",
-        "🤔",
-        "🔧",
-        "⏳"
-    )
-    return statusHints.any { hint -> text.contains(hint) }
 }
 
 /**

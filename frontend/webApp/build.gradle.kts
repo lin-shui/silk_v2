@@ -69,6 +69,11 @@ kotlin {
                     enabled.set(true)
                 }
             }
+            testTask {
+                useKarma {
+                    useChromeHeadless()
+                }
+            }
             runTask {
                 devServer = devServer?.copy(
                     port = 8005
@@ -102,6 +107,7 @@ dependencies {
     
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-js:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
+    testImplementation(kotlin("test"))
 
     implementation(npm("markdown-it", "^14.1.0"))
     implementation(npm("markdown-it-task-lists", "^2.1.1"))
