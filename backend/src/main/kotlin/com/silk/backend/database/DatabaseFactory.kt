@@ -1,5 +1,6 @@
 package com.silk.backend.database
 
+import com.silk.backend.AppPaths
 import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -9,9 +10,11 @@ import org.jetbrains.exposed.sql.transactions.transaction
  */
 object DatabaseFactory {
     fun init() {
+        val databaseUrl = AppPaths.databaseUrl()
+
         // 使用 SQLite 数据库
         val database = Database.connect(
-            url = "jdbc:sqlite:./silk_database.db",
+            url = databaseUrl,
             driver = "org.sqlite.JDBC"
         )
         
@@ -20,7 +23,6 @@ object DatabaseFactory {
             SchemaUtils.create(Users, Groups, GroupMembers, Contacts, ContactRequests, UserSettingsTable)
         }
         
-        println("✅ 数据库初始化完成")
+        println("✅ 数据库初始化完成: $databaseUrl")
     }
 }
-

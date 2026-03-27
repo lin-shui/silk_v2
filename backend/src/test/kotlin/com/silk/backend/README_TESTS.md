@@ -2,38 +2,33 @@
 
 ## 概述
 
-本目录包含 Silk 后端的自动化测试用例，用于验证核心功能的正确性。
+本目录包含 Silk 后端的自动化测试用例，用于验证核心 API 的正确性。
 
-## 测试文件
+当前测试分为两类：
 
 | 文件 | 描述 |
 |------|------|
-| `ApplicationTest.kt` | 基础应用测试 |
-| `MessageRecallTest.kt` | 消息撤回功能测试 |
-| `MessageForwardTest.kt` | 消息转发功能测试 |
-| `MessageCopyTest.kt` | 消息复制功能测试 |
+| `ApplicationTest.kt` | 基础 smoke test，确认测试框架可运行 |
+| `BackendApiContractTest.kt` | 真实 API contract tests，覆盖认证、群组、联系人、消息发送/撤回、未读数 |
+
+旧的字符串级测试 (`MessageRecallTest.kt` / `MessageForwardTest.kt` / `MessageCopyTest.kt`) 仍然保留，但它们不构成主要回归门禁。
 
 ## 运行测试
 
 ### 使用 Gradle
 
 ```bash
-cd /mi/sfs_turbo/lilin_v1/code/silk-fork
 ./gradlew :backend:test
 ```
 
-### 使用测试脚本
-
-```bash
-cd /mi/sfs_turbo/lilin_v1/code/silk-fork
-./run-tests.sh
-```
+测试会自动为每个用例创建独立的临时数据库和临时 `chat_history` 目录，不会污染仓库根目录。
 
 ## 添加新测试
 
-1. 在 `com.silk.backend` 包下创建新的测试类
-2. 使用 `@Test` 注解标记测试方法
-3. 使用 `kotlin.test` 包中的断言方法
+1. 优先为真实 HTTP 路由添加 contract test，而不是只测字符串或 JSON 片段。
+2. 使用 `testApplication {}` 启动 Ktor 应用。
+3. 使用 `BackendContractTestBase`，让测试自动获得隔离的数据库和文件目录。
+4. 修复 bug 时，优先补 regression test。
 
 ### 测试命名规范
 
@@ -65,8 +60,12 @@ class ExampleTest {
 
 ## 持续集成
 
-建议在以下情况运行测试:
-- 提交代码前
-- 合并分支前
-- 新增功能后
-- 修复 bug 后
+GitHub Actions workflow: `.github/workflows/backend-contract.yml`
+
+当前 fast gate 只跑：
+- `./gradlew :backend:test`
+
+后续可以继续扩展：
+- Web smoke / Playwright
+- `frontend/shared` 纯逻辑测试
+- 夜间运行的 Weaviate / Android / `silk.sh` smoke

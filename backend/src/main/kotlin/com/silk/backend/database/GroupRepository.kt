@@ -1,5 +1,6 @@
 package com.silk.backend.database
 
+import com.silk.backend.AppPaths
 import com.silk.backend.ChatHistoryBackupManager
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
@@ -49,7 +50,7 @@ object GroupRepository {
                 }
                 
                 // 创建群组的聊天历史文件夹
-                val sessionDir = java.io.File("chat_history/group_$groupId")
+                val sessionDir = java.io.File(AppPaths.chatHistoryDir(), "group_$groupId")
                 sessionDir.mkdirs()
                 println("📁 群组聊天历史文件夹已创建: ${sessionDir.path}")
                 
@@ -297,7 +298,7 @@ object GroupRepository {
                 }
                 
                 // 创建聊天历史文件夹
-                val sessionDir = java.io.File("chat_history/group_$groupId")
+                val sessionDir = java.io.File(AppPaths.chatHistoryDir(), "group_$groupId")
                 sessionDir.mkdirs()
                 println("📁 群组聊天历史文件夹已创建: ${sessionDir.path}")
                 
@@ -367,7 +368,7 @@ object GroupRepository {
             }
             
             // 删除聊天历史目录
-            val sessionDir = java.io.File("chat_history/group_$groupId")
+            val sessionDir = java.io.File(AppPaths.chatHistoryDir(), "group_$groupId")
             if (sessionDir.exists()) {
                 // 先备份再删除，避免误删导致历史不可恢复
                 ChatHistoryBackupManager.backupGroupHistory(
@@ -447,5 +448,4 @@ object GroupRepository {
         }
     }
 }
-
 

@@ -26,7 +26,7 @@ object ChatHistoryBackupManager {
         ignoreUnknownKeys = true
     }
     
-    private val backupBaseDir = File("chat_history_backup")
+    private val backupBaseDir = AppPaths.chatHistoryBackupDir()
     private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss")
     
     init {
@@ -52,7 +52,7 @@ object ChatHistoryBackupManager {
      */
     fun backupGroupHistory(groupId: String, backupType: BackupType, reason: String = ""): Boolean {
         return try {
-            val sourceDir = File("chat_history/group_$groupId")
+            val sourceDir = File(AppPaths.chatHistoryDir(), "group_$groupId")
             
             if (!sourceDir.exists()) {
                 println("⚠️ 源目录不存在，无需备份: ${sourceDir.path}")
@@ -204,7 +204,7 @@ object ChatHistoryBackupManager {
             val groupId = targetGroupId ?: metadata.groupId
             
             // 恢复到目标目录
-            val targetDir = File("chat_history/group_$groupId")
+            val targetDir = File(AppPaths.chatHistoryDir(), "group_$groupId")
             if (targetDir.exists()) {
                 // 如果目标已存在，先备份当前版本
                 backupGroupHistory(groupId, BackupType.MANUAL, "恢复前自动备份")

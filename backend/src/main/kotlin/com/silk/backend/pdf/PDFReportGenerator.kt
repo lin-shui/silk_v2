@@ -1,6 +1,7 @@
 package com.silk.backend.pdf
 
 import com.silk.backend.ai.AIStepwiseAgent
+import com.silk.backend.AppPaths
 import com.silk.backend.ChatHistoryManager
 import com.silk.backend.SilkAgent
 import com.itextpdf.io.font.PdfEncodings
@@ -193,7 +194,7 @@ class PDFReportGenerator {
         groupDisplayName: String? = null
     ): Pair<String, String> {
         // 创建 PDF 保存目录
-        val pdfDir = File("chat_history/$sessionName/reports")
+        val pdfDir = File(AppPaths.chatHistoryDir(), "$sessionName/reports")
         pdfDir.mkdirs()
         
         // ✅ 生成文件名：完全避免空格和特殊字符
@@ -1046,4 +1047,3 @@ class PDFReportGenerator {
         document.add(line)
     }
 }
-

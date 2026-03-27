@@ -15,8 +15,6 @@ import io.ktor.http.*
 fun main() {
     // 优先加载 .env（避免用 gradlew 直接启动时读不到配置）
     EnvLoader.load()
-    // 初始化数据库
-    DatabaseFactory.init()
     
     // 添加关闭钩子，清理 Playwright 资源
     Runtime.getRuntime().addShutdownHook(Thread {
@@ -32,6 +30,9 @@ fun main() {
 }
 
 fun Application.module() {
+    EnvLoader.load()
+    DatabaseFactory.init()
+
     // install(CallLoging) // Temporarily disabled
     install(Compression)
     
@@ -78,4 +79,3 @@ fun Application.module() {
     configureWebSockets()
     configureRouting()
 }
-

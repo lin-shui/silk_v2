@@ -96,5 +96,10 @@ object UnreadRepository {
         }
         println("🗑️ [UnreadRepo] 已清理群组 $groupId 的追踪数据")
     }
-}
 
+    internal fun clearForTests() {
+        lastReadTimestamps.clear()
+        latestMessageTimestamps.clear()
+        messageTimestamps.clear()
+    }
+}

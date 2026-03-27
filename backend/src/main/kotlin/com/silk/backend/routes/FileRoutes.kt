@@ -1,5 +1,6 @@
 package com.silk.backend.routes
 
+import com.silk.backend.AppPaths
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.broadcastSystemStatus
 import com.silk.backend.search.WeaviateClient
@@ -102,7 +103,7 @@ fun Route.fileRoutes() {
                 
                 // 创建会话文件夹 - 确保使用 group_ 前缀保持一致
                 val normalizedSessionDir = if (sessionId!!.startsWith("group_")) sessionId else "group_$sessionId"
-                val sessionDir = File("chat_history/$normalizedSessionDir/uploads")
+                val sessionDir = File(AppPaths.chatHistoryDir(), "$normalizedSessionDir/uploads")
                 if (!sessionDir.exists()) {
                     sessionDir.mkdirs()
                 }
@@ -216,7 +217,7 @@ fun Route.fileRoutes() {
             
             // 处理 sessionId - 确保使用正确的目录格式
             val downloadSessionId = if (sessionId.startsWith("group_")) sessionId else "group_$sessionId"
-            val file = File("chat_history/$downloadSessionId/uploads/$fileId")
+            val file = File(AppPaths.chatHistoryDir(), "$downloadSessionId/uploads/$fileId")
             
             if (!file.exists()) {
                 call.respond(HttpStatusCode.NotFound, mapOf("error" to "File not found"))
@@ -249,8 +250,8 @@ fun Route.fileRoutes() {
         get("/app-version") {
             // APK 文件路径 - 按优先级查找
             val possiblePaths = listOf(
-                "static/silk.apk",                              // silk.sh 创建的符号链接（最新版本）
-                "static/downloads/Silk-Android.apk",           // 已部署的稳定版本
+                File(AppPaths.staticDir(), "silk.apk").path,                              // silk.sh 创建的符号链接（最新版本）
+                File(AppPaths.staticDir(), "downloads/Silk-Android.apk").path,           // 已部署的稳定版本
                 "../frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk",  // 构建目录
                 "frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk"
             )
@@ -296,9 +297,8 @@ fun Route.fileRoutes() {
         get("/download-apk") {
             // APK 文件路径 - 优先使用 silk-{version}.apk 或 silk.apk
             val possiblePaths = listOf(
-                "static/silk.apk",                               // 符号链接指向最新版本（优先）
-                "static/downloads/Silk-Android.apk",             // 已部署的稳定版本
-                "static/silk-*.apk",                             // silk-{version}.apk 通配符
+                File(AppPaths.staticDir(), "silk.apk").path,                               // 符号链接指向最新版本（优先）
+                File(AppPaths.staticDir(), "downloads/Silk-Android.apk").path,             // 已部署的稳定版本
                 "../frontend/androidApp/build/outputs/apk/debug/*.apk",  // 构建目录（备用）
                 "frontend/androidApp/build/outputs/apk/debug/*.apk"
             )
@@ -349,7 +349,7 @@ fun Route.fileRoutes() {
             
             // 处理 sessionId - 确保使用正确的目录格式
             val dirSessionId = if (sessionId.startsWith("group_")) sessionId else "group_$sessionId"
-            val uploadsDir = File("chat_history/$dirSessionId/uploads")
+            val uploadsDir = File(AppPaths.chatHistoryDir(), "$dirSessionId/uploads")
             
             // 读取已处理的 URL 清单
             val processedUrlsFile = File(uploadsDir, "processed_urls.txt")
@@ -405,7 +405,8 @@ fun Route.fileRoutes() {
                 return@delete
             }
             
-            val file = File("chat_history/$sessionId/uploads/$fileId")
+            val normalizedSessionId = if (sessionId.startsWith("group_")) sessionId else "group_$sessionId"
+            val file = File(AppPaths.chatHistoryDir(), "$normalizedSessionId/uploads/$fileId")
             
             if (!file.exists()) {
                 call.respond(HttpStatusCode.NotFound, mapOf("error" to "File not found"))
@@ -790,4 +791,3 @@ data class FileInfo(
     val uploadTime: Long,
     val downloadUrl: String
 )
-

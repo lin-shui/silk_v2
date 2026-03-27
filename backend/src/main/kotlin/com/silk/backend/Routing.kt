@@ -77,6 +77,10 @@ suspend fun broadcastFileMessage(
     }
 }
 
+internal fun resetRoutingStateForTests() {
+    groupChatServers.clear()
+}
+
 fun Application.configureRouting() {
     routing {
         get("/") {
@@ -1171,4 +1175,3 @@ fun Application.configureRouting() {
         }
     }
 }
-
