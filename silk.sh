@@ -65,7 +65,7 @@ setup_aapt2_for_arch() {
     local ARM64_AAPT2=""
     for build_tools_dir in "$ANDROID_HOME/build-tools"/*/; do
         if [ -x "${build_tools_dir}aapt2" ]; then
-            local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -oP 'aarch64|ARM aarch64' | head -1)
+            local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -E 'aarch64|ARM aarch64' | head -1)
             if [ -n "$aapt2_arch" ]; then
                 ARM64_AAPT2="${build_tools_dir}aapt2"
                 break
@@ -634,7 +634,7 @@ clean_aapt2_cache() {
     if [ -z "$LOCAL_AAPT2" ] && [ -n "$ANDROID_HOME" ]; then
         for build_tools_dir in "$ANDROID_HOME/build-tools"/*/; do
             if [ -x "${build_tools_dir}aapt2" ]; then
-                local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -oP 'x86-64|aarch64|ARM aarch64' | head -1)
+                local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -E 'x86-64|aarch64|ARM aarch64' | head -1)
                 if [[ "$aapt2_arch" == "aarch64" || "$aapt2_arch" == "ARM aarch64" ]]; then
                     LOCAL_AAPT2="${build_tools_dir}aapt2"
                     break
@@ -647,7 +647,7 @@ clean_aapt2_cache() {
     local REPLACED=false
     while IFS= read -r aapt2_file; do
         if [ -x "$aapt2_file" ]; then
-            local aapt2_arch=$(file "$aapt2_file" 2>/dev/null | grep -oP 'x86-64|aarch64|ARM aarch64' | head -1)
+            local aapt2_arch=$(file "$aapt2_file" 2>/dev/null | grep -E 'x86-64|aarch64|ARM aarch64' | head -1)
             if [ "$aapt2_arch" = "x86-64" ]; then
                 if [ -n "$LOCAL_AAPT2" ]; then
                     echo -e "  ${YELLOW}替换 x86-64 AAPT2 -> ARM64: $(basename $(dirname $(dirname "$aapt2_file")))${NC}"
@@ -698,7 +698,7 @@ build_apk() {
         # 查找本地 ARM64 AAPT2
         for build_tools_dir in "$ANDROID_HOME/build-tools"/*/; do
             if [ -x "${build_tools_dir}aapt2" ]; then
-                local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -oP 'aarch64|ARM aarch64' | head -1)
+                local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -E 'aarch64|ARM aarch64' | head -1)
                 if [ -n "$aapt2_arch" ]; then
                     AAPT2_OVERRIDE_PARAM="-Pandroid.aapt2FromMavenOverride=${build_tools_dir}aapt2"
                     break
@@ -723,7 +723,7 @@ build_apk() {
             # 从生成的 BuildConfig.java 获取版本号
             BUILD_CONFIG="$SILK_DIR/frontend/androidApp/build/generated/source/buildConfig/debug/com/silk/android/BuildConfig.java"
             if [ -f "$BUILD_CONFIG" ]; then
-                APK_VERSION=$(grep "VERSION_NAME" "$BUILD_CONFIG" | grep -oP '"\K[^"]+' | head -1)
+                APK_VERSION=$(grep "VERSION_NAME" "$BUILD_CONFIG" | sed 's/.*"\([^"]*\)".*/\1/' | head -1)
             fi
             # 如果无法获取版本号，使用时间戳
             if [ -z "$APK_VERSION" ]; then

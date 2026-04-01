@@ -6,9 +6,9 @@ export interface UserTodoItem {
   title: string;
   sourceGroupId?: string;
   sourceGroupName?: string;
-  /** none | alarm | calendar */
+  /** none | alarm | calendar | shopping */
   actionType?: string;
-  /** 如 07:00，或带日期的可解析片段 */
+  /** 如 07:00，或带日期的可解析片段；购物时为商品关键词 */
   actionDetail?: string;
   createdAt: number;
   updatedAt: number;

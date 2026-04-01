@@ -183,6 +183,42 @@
     {
       "name": "calendar_write_reason",
       "value": "Silk needs to write calendar to set alarm reminders"
+    },
+    {
+      "name": "reminder_reason",
+      "value": "Silk needs reminder permission to create and manage todo alarms"
+    },
+    {
+      "name": "shopping_action",
+      "value": "Shopping"
+    },
+    {
+      "name": "shopping_reason",
+      "value": "Silk will open shopping platform to help you complete the purchase"
+    },
+    {
+      "name": "shopping_platform_taobao",
+      "value": "Taobao"
+    },
+    {
+      "name": "shopping_platform_jd",
+      "value": "JD"
+    },
+    {
+      "name": "shopping_platform_meituan",
+      "value": "Meituan"
+    },
+    {
+      "name": "shopping_platform_pdd",
+      "value": "Pinduoduo"
+    },
+    {
+      "name": "shopping_opening",
+      "value": "Opening shopping platform"
+    },
+    {
+      "name": "shopping_search",
+      "value": "Searching for items"
     }
   ]
 }

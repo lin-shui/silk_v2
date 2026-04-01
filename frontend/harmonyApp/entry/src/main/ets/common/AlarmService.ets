@@ -78,6 +78,15 @@ export class AlarmService {
     }
     Logger.info(TAG, `方案1 失败: ${result1.message}`);
 
+    const failedOnPermission = result1.message.includes('权限') || result1.message.includes('permission');
+    if (failedOnPermission) {
+      return {
+        success: false,
+        reminderId: -1,
+        message: result1.message
+      };
+    }
+
     Logger.info(TAG, `尝试方案2: calendarManager... (repeatDays=[${repeatDays.join(',')}])`);
     const result2 = await AlarmService.tryCalendarEvent(hour, minute, title, repeatDays);
     if (result2.success) {
@@ -88,7 +97,7 @@ export class AlarmService {
     return {
       success: false,
       reminderId: -1,
-      message: `方案1: ${result1.message} | 方案2: ${result2.message}`
+      message: `闹钟与日历均设定失败。闹钟: ${result1.message}；日历: ${result2.message}`
     };
   }
 
@@ -104,12 +113,19 @@ export class AlarmService {
     repeatDays: number[]
   ): Promise<AlarmResult> {
     try {
+      Logger.info(TAG, 'tryReminderAgent: 申请代理提醒权限...');
       const grant = await AlarmService.requestPermissions(
         ['ohos.permission.PUBLISH_AGENT_REMINDER' as Permissions]
       );
       if (!grant) {
-        return { success: false, reminderId: -1, message: '代理提醒权限被拒绝' };
+        Logger.error(TAG, 'tryReminderAgent: 代理提醒权限被拒绝，无法继续');
+        return {
+          success: false,
+          reminderId: -1,
+          message: '代理提醒权限被拒绝。请前往「设置 > 应用 > Silk > 权限管理」手动开启「代理提醒」权限后重试。'
+        };
       }
+      Logger.info(TAG, 'tryReminderAgent: 权限已获取，准备发布提醒...');
       const alarmTitle = title.length > 60 ? title.substring(0, 57) + '…' : title;
       const minuteStr = minute < 10 ? `0${minute}` : `${minute}`;
 
@@ -123,9 +139,15 @@ export class AlarmService {
           title: alarmTitle,
           content: `每个工作日重复 · ${daysText}`
         };
-        const id = await reminderAgentManager.publishReminder(alarm);
-        Logger.info(TAG, `reminderAgent 重复闹钟成功, id=${id}, days=[${repeatDays.join(',')}], daysText=${daysText}`);
-        return { success: true, reminderId: id, message: `已设定重复闹钟 ${hour}:${minuteStr}（${daysText}，共${repeatDays.length}天）` };
+        try {
+          const id = await reminderAgentManager.publishReminder(alarm);
+          Logger.info(TAG, `reminderAgent 重复闹钟成功, id=${id}, days=[${repeatDays.join(',')}], daysText=${daysText}`);
+          return { success: true, reminderId: id, message: `已设定重复闹钟 ${hour}:${minuteStr}（${daysText}，共${repeatDays.length}天）` };
+        } catch (pubErr) {
+          const pe = pubErr as Record<string, Object>;
+          Logger.error(TAG, `reminderAgent publishReminder(REMINDER_TYPE_ALARM) 失败: code=${pe.code} msg=${pe.message}`);
+          return { success: false, reminderId: -1, message: `发布提醒失败(${pe.code}): ${pe.message}` };
+        }
       }
 
       const now = new Date();
@@ -139,11 +161,18 @@ export class AlarmService {
         triggerTimeInSeconds: seconds,
         title: alarmTitle
       };
-      const id = await reminderAgentManager.publishReminder(timer);
-      Logger.info(TAG, `reminderAgent 一次性提醒成功, id=${id}, ${seconds}s后`);
-      return { success: true, reminderId: id, message: `已设定一次性闹钟 ${hour}:${minuteStr}` };
+      try {
+        const id = await reminderAgentManager.publishReminder(timer);
+        Logger.info(TAG, `reminderAgent 一次性提醒成功, id=${id}, ${seconds}s后`);
+        return { success: true, reminderId: id, message: `已设定一次性闹钟 ${hour}:${minuteStr}` };
+      } catch (pubErr) {
+        const pe = pubErr as Record<string, Object>;
+        Logger.error(TAG, `reminderAgent publishReminder(REMINDER_TYPE_TIMER) 失败: code=${pe.code} msg=${pe.message}`);
+        return { success: false, reminderId: -1, message: `发布提醒失败(${pe.code}): ${pe.message}` };
+      }
     } catch (e) {
       const err = e as Record<string, Object>;
+      Logger.error(TAG, `tryReminderAgent 异常: code=${err.code} msg=${err.message}`);
       return { success: false, reminderId: -1, message: `${err.code} ${err.message}` };
     }
   }
@@ -296,23 +325,25 @@ export class AlarmService {
   private static async requestPermissions(permissions: Permissions[]): Promise<boolean> {
     const context = getGlobalContext();
     if (!context) {
+      Logger.error(TAG, 'requestPermissions: context 为空，无法申请权限');
       return false;
     }
     try {
+      Logger.info(TAG, `requestPermissions: 申请权限 ${JSON.stringify(permissions)}, context type=${typeof context}`);
       const atManager = abilityAccessCtrl.createAtManager();
       const result = await atManager.requestPermissionsFromUser(context, permissions);
       Logger.info(TAG, `权限申请结果: ${JSON.stringify(result.authResults)}`);
-      // authResults: 0 = granted, -1 = denied
       for (let i = 0; i < result.authResults.length; i++) {
         if (result.authResults[i] !== 0) {
-          Logger.error(TAG, `权限 ${permissions[i]} 被拒绝`);
+          Logger.error(TAG, `权限 ${permissions[i]} 被拒绝, authResult=${result.authResults[i]}`);
           return false;
         }
       }
+      Logger.info(TAG, `所有权限申请通过`);
       return true;
     } catch (e) {
       const err = e as Record<string, Object>;
-      Logger.error(TAG, `权限申请异常: ${err.code} ${err.message}`);
+      Logger.error(TAG, `权限申请异常: code=${err.code} msg=${err.message}`);
       return false;
     }
   }

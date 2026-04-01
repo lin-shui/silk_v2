@@ -91,6 +91,10 @@
     {
       "name": "disconnected",
       "value": "Disconnected"
+    },
+    {
+      "name": "reminder_reason",
+      "value": "Silk needs reminder permission to create and manage todo alarms"
     }
   ]
 }

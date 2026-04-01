@@ -13,6 +13,8 @@ import { AlarmService, AlarmResult } from '../common/AlarmService';
 import { parseAlarmTimeFromText } from '../common/TodoTimeParser';
 import { TodoTaskCardRow } from '../components/TodoTaskCardRow';
 import { API_BASE_URL } from '../common/Constants';
+import { ShoppingIntentParser, ShoppingIntent } from '../common/ShoppingIntentParser';
+import { ShoppingLauncher } from '../common/ShoppingLauncher';
 
 @Component
 export struct TodoPage {
@@ -386,10 +388,15 @@ export struct TodoPage {
   }
 
   private todoCanExecute(item: UserTodoItem): boolean {
+    const at = (item.actionType ? item.actionType : 'none').toLowerCase();
+    // 购物类型始终可执行（即使已完成也可重复购买）
+    if (at === 'shopping') {
+      return true;
+    }
+    // 其他类型：已完成则不可执行
     if (item.done) {
       return false;
     }
-    const at = (item.actionType ? item.actionType : 'none').toLowerCase();
     if (at !== 'alarm' && at !== 'calendar' && at !== 'none') {
       return false;
     }
@@ -437,6 +444,13 @@ export struct TodoPage {
       return;
     }
     let at = (item.actionType ? item.actionType : 'none').toLowerCase();
+
+    // 处理购物类型
+    if (at === 'shopping') {
+      await this.executeShopping(item);
+      return;
+    }
+
     if (at === 'none' || at.length === 0) {
       at = 'alarm';
     }
@@ -492,6 +506,95 @@ export struct TodoPage {
         this.applyTodoRunSuccessLocal(item, firstExec, res.reminderId);
       }
     });
+  }
+
+  /**
+   * 执行购物待办：解析意图并跳转到电商平台
+   */
+  private async executeShopping(item: UserTodoItem): Promise<void> {
+    await this.withTodoRowLocked(item.id, async (): Promise<void> => {
+      // 解析购物意图
+      const intent = ShoppingIntentParser.parseShoppingIntent(item.title, item.actionDetail);
+
+      if (!intent.isShopping) {
+        // 如果没有明确购物意图，尝试从标题提取关键词
+        const fallbackIntent: ShoppingIntent = {
+          isShopping: true,
+          keywords: [item.title],
+          platform: 'taobao',
+          searchUrl: `https://s.taobao.com/search?q=${encodeURIComponent(item.title)}`,
+          platformName: '淘宝'
+        };
+        this.showToast(`正在打开购物平台搜索: ${item.title}`);
+        const result = await ShoppingLauncher.launchShopping(fallbackIntent);
+        if (!result.success) {
+          this.showToast(result.message);
+        }
+        return;
+      }
+
+      // 显示提示并跳转
+      this.showToast(`正在打开 ${intent.platformName} 搜索: ${intent.keywords.join(' ')}`);
+
+      const result = await ShoppingLauncher.launchShopping(intent);
+
+      if (result.success) {
+        // 标记为已执行
+        const now = Date.now();
+        const patch: UserTodoPatch = {
+          done: true,
+          executedAt: now,
+          lifecycleState: 'done',
+          closedAt: now
+        };
+        const updateRes = await this.apiClient.updateUserTodoItem(this.userId, item.id, patch);
+        if (updateRes.success && updateRes.data) {
+          this.setTodoItemsData(updateRes.data);
+        } else {
+          this.applyTodoShoppingSuccessLocal(item, now);
+        }
+      } else {
+        this.showToast(result.message);
+      }
+    });
+  }
+
+  /**
+   * 本地更新购物成功状态
+   */
+  private applyTodoShoppingSuccessLocal(item: UserTodoItem, executedAt: number): void {
+    const next: UserTodoItem[] = [];
+    for (let i = 0; i < this.todoItems.length; i++) {
+      const it = this.todoItems[i];
+      if (it.id === item.id) {
+        const merged: UserTodoItem = {
+          id: it.id,
+          title: it.title,
+          createdAt: it.createdAt,
+          updatedAt: Date.now(),
+          done: true,
+          executedAt: executedAt,
+          lifecycleState: 'done',
+          closedAt: executedAt
+        };
+        if (it.sourceGroupId !== undefined) {
+          merged.sourceGroupId = it.sourceGroupId;
+        }
+        if (it.sourceGroupName !== undefined) {
+          merged.sourceGroupName = it.sourceGroupName;
+        }
+        if (it.actionType !== undefined) {
+          merged.actionType = it.actionType;
+        }
+        if (it.actionDetail !== undefined) {
+          merged.actionDetail = it.actionDetail;
+        }
+        next.push(merged);
+      } else {
+        next.push(it);
+      }
+    }
+    this.setTodoItemsData(next);
   }
 
   private async withTodoRowLocked(todoId: string, action: () => Promise<void>): Promise<void> {
@@ -1046,6 +1149,14 @@ export struct TodoPage {
           .fontColor(this.editActionType === 'calendar' ? SilkColors.onPrimary : SilkColors.textPrimary)
           .onClick((): void => {
             this.editActionType = 'calendar';
+          })
+        Button('购物')
+          .height(32)
+          .fontSize(12)
+          .backgroundColor(this.editActionType === 'shopping' ? SilkColors.primary : '#EEE')
+          .fontColor(this.editActionType === 'shopping' ? SilkColors.onPrimary : SilkColors.textPrimary)
+          .onClick((): void => {
+            this.editActionType = 'shopping';
           })
       }
       .margin({ bottom: 12 })

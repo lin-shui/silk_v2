@@ -123,6 +123,10 @@
     {
       "name": "loading",
       "value": "加载中..."
+    },
+    {
+      "name": "reminder_reason",
+      "value": "Silk 需要提醒权限来创建和管理待办闹钟"
     }
   ]
 }

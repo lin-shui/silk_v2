@@ -3,17 +3,22 @@
  * 配置后端 API 地址和其他常量
  */
 import { BACKEND_HOST, BACKEND_HTTP_PORT } from './EnvConfig';
+import deviceInfo from '@ohos.deviceInfo';
 
 /**
  * Web 浏览器上 127.0.0.1 是开发机本机；鸿蒙本地模拟器里 127.0.0.1 指向模拟器自身，请求会失败。
  * 与常见 Android/QEMU 模拟器一致，经 10.0.2.2 访问宿主上的后端（后端需监听 0.0.0.0，本项目已满足）。
- * 真机请使用局域网 IP：在 .env 设置 BACKEND_HOST 或 HARMONY_BACKEND_HOST（由 hvigor 写入 EnvConfig）。
+ * 真机通过 hdc rport 转发时，127.0.0.1 可直接使用；也可在 .env 设置 HARMONY_BACKEND_HOST 为局域网 IP。
  */
 function resolveBackendHostForDevice(rawHost: string): string {
   const trimmed: string = rawHost.trim();
   const lower: string = trimmed.toLowerCase();
   if (lower === '127.0.0.1' || lower === 'localhost' || lower === '::1') {
-    return '10.0.2.2';
+    const dt = deviceInfo.deviceType;
+    if (dt === 'tablet' || dt === '2in1') {
+      return '10.0.2.2';
+    }
+    return trimmed;
   }
   return trimmed;
 }
