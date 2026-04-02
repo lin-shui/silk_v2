@@ -16,6 +16,7 @@ import java.util.concurrent.ConcurrentHashMap
 import com.silk.backend.database.UnreadRepository
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.todos.GroupTodoExtractionService
+import com.silk.backend.claudecode.ClaudeCodeManager
 import org.slf4j.LoggerFactory
 
 @Serializable
@@ -279,6 +280,42 @@ class ChatServer(
             }
         }
         
+        // ==================== Claude Code 模式拦截 ====================
+        if (message.type == MessageType.TEXT && !message.isTransient
+            && message.userId != SilkAgent.AGENT_ID
+            && message.userId != ClaudeCodeManager.CC_AGENT_ID
+        ) {
+            val groupId = sessionName
+            // 构造单用户发送函数（CC 响应只发给触发用户）
+            val userSession = connections[message.userId]
+            if (userSession != null) {
+                val ccBroadcastFn: suspend (Message) -> Unit = { msg ->
+                    try {
+                        // 非 transient 消息需要持久化到聊天历史（重连后可恢复）
+                        if (!msg.isTransient) {
+                            messageHistory.add(msg)
+                            historyManager.addMessage(sessionName, msg)
+                        }
+                        userSession.send(Frame.Text(Json.encodeToString(msg)))
+                    } catch (e: Exception) {
+                        logger.warn("[CC] 发送消息失败: {}", e.message)
+                    }
+                }
+                // 去掉 @silk/@Silk 前缀（群聊中用户需要 @silk 才能触发）
+                val ccText = message.content
+                    .removePrefix("@Silk").removePrefix("@silk")
+                    .trim()
+                val ccHandled = ClaudeCodeManager.handleIfActive(
+                    userId = message.userId,
+                    groupId = groupId,
+                    text = ccText,
+                    userName = message.userName,
+                    broadcastFn = ccBroadcastFn,
+                )
+                if (ccHandled) return
+            }
+        }
+
         // Silk AI 回复逻辑
         // 检查是否是 Silk 专属私聊会话（群组名以 "[Silk]" 开头）
         val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
