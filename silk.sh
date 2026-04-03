@@ -115,6 +115,20 @@ if [ -f "$SILK_DIR/.env" ]; then
     rm -f "$TMP_ENV"
 fi
 
+# Weaviate Schema 初始化用 Python
+# - 系统 python3 可能没有安装 weaviate-client
+# - 优先使用 conda python（如果存在），否则回退到 python3
+SILK_PYTHON_BIN="${SILK_PYTHON_BIN:-}"
+if [ -z "$SILK_PYTHON_BIN" ]; then
+    if [ -x "/home/lilin/anaconda3/bin/python3" ]; then
+        SILK_PYTHON_BIN="/home/lilin/anaconda3/bin/python3"
+    elif [ -x "/home/lilin/anaconda3/bin/python" ]; then
+        SILK_PYTHON_BIN="/home/lilin/anaconda3/bin/python"
+    else
+        SILK_PYTHON_BIN="python3"
+    fi
+fi
+
 # 端口定义：从 .env 读取，未设置时使用默认值
 # BACKEND_PORT 优先跟随 BACKEND_HTTP_PORT（APK 公网访问端口）
 BACKEND_PORT=${BACKEND_HTTP_PORT:-${BACKEND_PORT:-8003}}
@@ -159,13 +173,61 @@ print_status() {
     fi
 }
 
+# Linux 下无 lsof 时：用 /proc/net/tcp* 解析 LISTEN inode，再扫 /proc/*/fd 映射到 PID
+_linux_tcp_listen_inodes_for_port() {
+    local hex
+    hex=$(printf '%04X' "$1")
+    awk -v p="$hex" '$4 == "0A" && $2 ~ ":" p "$" && $10 ~ /^[0-9]+$/ { print $10 }' \
+        /proc/net/tcp /proc/net/tcp6 2>/dev/null | sort -u
+}
+
 check_port() {
-    lsof -i:$1 -sTCP:LISTEN > /dev/null 2>&1
-    return $?
+    local port=$1 hex
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -i:"$port" -sTCP:LISTEN >/dev/null 2>&1
+        return $?
+    fi
+    hex=$(printf '%04X' "$port")
+    if [ "$(uname -s)" = "Linux" ] && [ -r /proc/net/tcp ]; then
+        awk -v p="$hex" 'BEGIN { e=1 } $4 == "0A" && $2 ~ ":" p "$" && $10 ~ /^[0-9]+$/ { e=0; exit } END { exit e }' \
+            /proc/net/tcp /proc/net/tcp6 2>/dev/null
+        return $?
+    fi
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltn "sport = :$port" 2>/dev/null | grep -q LISTEN
+        return $?
+    fi
+    return 1
 }
 
 get_pid_on_port() {
-    lsof -ti:$1 2>/dev/null
+    local port=$1 hex inode pid fd target
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -ti:"$port" -sTCP:LISTEN 2>/dev/null
+        return 0
+    fi
+    if [ "$(uname -s)" = "Linux" ] && [ -r /proc/net/tcp ]; then
+        hex=$(printf '%04X' "$port")
+        {
+            while read -r inode; do
+                [ -n "$inode" ] || continue
+                target="socket:[$inode]"
+                for fd in /proc/[0-9]*/fd/[0-9]*; do
+                    [ -L "$fd" ] || continue
+                    [ "$(readlink "$fd" 2>/dev/null)" = "$target" ] || continue
+                    pid="${fd#/proc/}"
+                    pid="${pid%%/*}"
+                    case "$pid" in '' | *[!0-9]*) continue ;; esac
+                    echo "$pid"
+                done
+            done < <(_linux_tcp_listen_inodes_for_port "$port")
+        } | sort -u
+        return 0
+    fi
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnp "sport = :$port" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u
+    fi
+    return 0
 }
 
 # 仅允许清理由 silk.sh 管理的进程，避免误伤 DevEco/模拟器等外部进程
@@ -186,8 +248,9 @@ is_silk_managed_pid() {
 }
 
 # 自动清理端口占用
-# 第 $4 参数 kill_any=true：deploy 等场景下无条件终止该端口全部监听进程（用于 FRONTEND_PORT：
-# Homebrew Python 在 ps 中常显示为 Python 而非 python3，原有 is_silk_managed_pid 会误判为「非 Silk」）
+# 第 $4 参数 kill_any=true：force 清理时无条件终止该端口全部监听进程。
+# 前端：Homebrew Python 在 ps 中常显示为 Python，is_silk_managed_pid 易漏判。
+# 后端：任意占用 BACKEND_PORT 的进程都应释放，否则新 :backend:run 会 BindException。
 kill_port_process() {
     local port=$1
     local service_name=$2
@@ -273,8 +336,7 @@ kill_all_ports() {
     local force=${1:-false}
     echo -e "${BLUE}检查端口冲突...${NC}"
     
-    kill_port_process $BACKEND_PORT "Silk Backend" $force
-    # 前端端口：deploy 等场景下必须清空，避免旧 Python http.server（进程名可为 Python）占坑导致无法启动
+    kill_port_process $BACKEND_PORT "Silk Backend" $force true
     kill_port_process $FRONTEND_PORT "Silk Frontend" $force true
     
     # 永不清理 Weaviate 端口：若 8008 已有 Weaviate 在跑则直接复用，不停止、不杀进程
@@ -396,8 +458,8 @@ weaviate_start() {
         fi
         docker run -d --name silk-weaviate \
             --restart unless-stopped \
-            -p 127.0.0.1:$WEAVIATE_HTTP_PORT:8080 \
-            -p 127.0.0.1:$WEAVIATE_GRPC_PORT:50051 \
+            -p 0.0.0.0:$WEAVIATE_HTTP_PORT:8080 \
+            -p 0.0.0.0:$WEAVIATE_GRPC_PORT:50051 \
             -v "$SILK_DIR/search/weaviate_data:/var/lib/weaviate" \
             -e QUERY_DEFAULTS_LIMIT=25 \
             -e AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=false \
@@ -490,7 +552,7 @@ weaviate_schema() {
     if [ -f "$SILK_DIR/search/schema.py" ]; then
         cd "$SILK_DIR/search"
         # 传递 WEAVIATE_URL 给 schema.py
-        WEAVIATE_URL="$CHECK_URL" python3 schema.py > /tmp/weaviate_schema.log 2>&1
+        WEAVIATE_URL="$CHECK_URL" "$SILK_PYTHON_BIN" schema.py > /tmp/weaviate_schema.log 2>&1
         if [ $? -eq 0 ]; then
             echo -e "  ${GREEN}✓ Schema 创建成功${NC}"
         else
@@ -1027,14 +1089,14 @@ deploy() {
         return 1
     fi
     
-    # 3. HarmonyOS：ohpm + hvigor sync + assembleHap(entry) + hdc install + aa start(entry)
-    echo ""
-    echo -e "${BLUE}[3/5] 构建并安装鸿蒙应用（ohpm / sync / assembleHap / hdc install / aa start）...${NC}"
-    build_hap
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}❌ 鸿蒙 HAP 构建失败，终止部署${NC}"
-        return 1
-    fi
+    # # 3. HarmonyOS：ohpm + hvigor sync + assembleHap(entry) + hdc install + aa start(entry)
+    # echo ""
+    # echo -e "${BLUE}[3/5] 构建并安装鸿蒙应用（ohpm / sync / assembleHap / hdc install / aa start）...${NC}"
+    # build_hap
+    # if [ $? -ne 0 ]; then
+    #     echo -e "${RED}❌ 鸿蒙 HAP 构建失败，终止部署${NC}"
+    #     return 1
+    # fi
     
     # 4. 启动 Weaviate
     echo ""

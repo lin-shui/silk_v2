@@ -31,5 +31,6 @@ def connect_weaviate():
         http_secure=secure,
         grpc_host=host,
         grpc_port=grpc_port,
+        grpc_secure=secure,
         auth_credentials=auth,
     )
