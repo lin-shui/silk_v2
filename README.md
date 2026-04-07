@@ -50,6 +50,7 @@ Configuration is done via a **`.env`** file in the project root. The script `sil
 1. Copy the example: `cp .env.example .env`
 2. Edit `.env` and set at least:
    - **Backend / public URL**: `BACKEND_HOST`, `BACKEND_HTTP_PORT` (default `8006`)
+   - **Protocol**: set `BACKEND_SCHEME=https` (or directly set `BACKEND_BASE_URL=https://...`)
    - **AI**: `OPENAI_API_KEY`, `API_BASE_URL`, `AI_MODEL`
    - **Weaviate**: `WEAVIATE_URL` (e.g. `http://<host>:8008`)
 3. Optional: external search (e.g. `SERPAPI_KEY`), feature flags. See `.env.example` for comments.
@@ -132,7 +133,7 @@ All commands are run from the project root. `silk.sh` loads `.env` automatically
 | `./silk.sh build-all` | Build WebApp and APK. |
 | `./silk.sh weaviate start\|stop\|status\|schema` | Manage Weaviate (Docker) and schema. |
 
-APK download URL (when backend is up): `http://<BACKEND_HOST>:8006/api/files/download-apk`.
+APK download URL (when backend is up): `https://<BACKEND_HOST>:8006/api/files/download-apk` (or `http://` if `BACKEND_SCHEME=http`).
 
 ---
 

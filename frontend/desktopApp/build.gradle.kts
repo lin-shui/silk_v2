@@ -34,7 +34,15 @@ val envFile = readEnvFile()
 
 val backendHost = envFile["BACKEND_HOST"] ?: System.getenv("BACKEND_HOST") ?: "localhost"
 val backendPort = envFile["BACKEND_HTTP_PORT"] ?: System.getenv("BACKEND_HTTP_PORT") ?: "8003"
-println("🖥️ [desktopApp] BACKEND_HOST = $backendHost, BACKEND_HTTP_PORT = $backendPort")
+val backendBaseUrlFromEnv = envFile["BACKEND_BASE_URL"] ?: System.getenv("BACKEND_BASE_URL")
+val backendScheme = envFile["BACKEND_SCHEME"] ?: System.getenv("BACKEND_SCHEME") ?: "http"
+val backendBaseUrl = backendBaseUrlFromEnv ?: "$backendScheme://$backendHost:$backendPort"
+val backendWsUrl = if (backendBaseUrl.startsWith("https://")) {
+    backendBaseUrl.replaceFirst("https://", "wss://")
+} else {
+    backendBaseUrl.replaceFirst("http://", "ws://")
+}
+println("🖥️ [desktopApp] BACKEND_BASE_URL = $backendBaseUrl")
 
 plugins {
     kotlin("jvm")
@@ -55,8 +63,8 @@ val generateBuildConfig by tasks.registering {
             object BuildConfig {
                 const val BACKEND_HOST = "$backendHost"
                 const val BACKEND_HTTP_PORT = "$backendPort"
-                const val BACKEND_BASE_URL = "http://$backendHost:$backendPort"
-                const val BACKEND_WS_URL = "ws://$backendHost:$backendPort"
+                const val BACKEND_BASE_URL = "$backendBaseUrl"
+                const val BACKEND_WS_URL = "$backendWsUrl"
             }
         """.trimIndent())
     }

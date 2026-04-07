@@ -26,7 +26,9 @@ fun main() {
         println("✅ 服务已关闭")
     })
     
-    val port = EnvLoader.get("BACKEND_HTTP_PORT")?.toIntOrNull() ?: 8003
+    val port = EnvLoader.get("BACKEND_INTERNAL_PORT")?.toIntOrNull()
+        ?: EnvLoader.get("BACKEND_HTTP_PORT")?.toIntOrNull()
+        ?: 8003
     println("🚀 启动后端服务，端口: $port")
     embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
         .start(wait = true)

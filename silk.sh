@@ -130,11 +130,22 @@ if [ -z "$SILK_PYTHON_BIN" ]; then
 fi
 
 # 端口定义：从 .env 读取，未设置时使用默认值
-# BACKEND_PORT 优先跟随 BACKEND_HTTP_PORT（APK 公网访问端口）
-BACKEND_PORT=${BACKEND_HTTP_PORT:-${BACKEND_PORT:-8003}}
-FRONTEND_PORT=${FRONTEND_PORT:-8005}
+# BACKEND_HTTP_PORT 为对外访问端口；BACKEND_INTERNAL_PORT 为后端进程监听端口
+BACKEND_HTTP_PORT=${BACKEND_HTTP_PORT:-8003}
+BACKEND_PORT=${BACKEND_INTERNAL_PORT:-${BACKEND_PORT:-$BACKEND_HTTP_PORT}}
+FRONTEND_HTTP_PORT=${FRONTEND_HTTP_PORT:-${FRONTEND_PORT:-8005}}
+FRONTEND_PORT=${FRONTEND_INTERNAL_PORT:-${FRONTEND_PORT:-$FRONTEND_HTTP_PORT}}
 WEAVIATE_HTTP_PORT=${WEAVIATE_HTTP_PORT:-8008}
 WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-50051}
+if [[ "$BACKEND_BASE_URL" =~ ^https:// ]]; then
+    BACKEND_SCHEME="https"
+elif [[ "$BACKEND_BASE_URL" =~ ^http:// ]]; then
+    BACKEND_SCHEME="http"
+else
+    BACKEND_SCHEME=${BACKEND_SCHEME:-http}
+fi
+FRONTEND_SCHEME=${FRONTEND_SCHEME:-$BACKEND_SCHEME}
+FRONTEND_PUBLIC_PORT=${FRONTEND_PUBLIC_PORT:-$FRONTEND_HTTP_PORT}
 
 # curl 访问 Weaviate 时附加 API Key（与 AUTHENTICATION_APIKEY 一致）
 CURL_WEAVIATE_AUTH=()
@@ -598,7 +609,11 @@ check_status() {
     print_header "🔍 Silk 系统状态检查"
     
     echo ""
-    echo -e "${BLUE}【Silk 后端】${NC} (端口 $BACKEND_PORT)"
+    if [ "$BACKEND_PORT" = "$BACKEND_HTTP_PORT" ]; then
+        echo -e "${BLUE}【Silk 后端】${NC} (端口 $BACKEND_PORT)"
+    else
+        echo -e "${BLUE}【Silk 后端】${NC} (内部端口 $BACKEND_PORT, 公网端口 $BACKEND_HTTP_PORT)"
+    fi
     if check_port $BACKEND_PORT; then
         PID=$(get_pid_on_port $BACKEND_PORT)
         print_status "Silk Backend" "running" "(PID: $PID)"
@@ -613,7 +628,11 @@ check_status() {
     fi
     
     echo ""
-    echo -e "${BLUE}【Silk 前端】${NC} (端口 $FRONTEND_PORT)"
+    if [ "$FRONTEND_PORT" = "$FRONTEND_PUBLIC_PORT" ]; then
+        echo -e "${BLUE}【Silk 前端】${NC} (端口 $FRONTEND_PORT)"
+    else
+        echo -e "${BLUE}【Silk 前端】${NC} (内部端口 $FRONTEND_PORT, 公网端口 $FRONTEND_PUBLIC_PORT)"
+    fi
     if check_port $FRONTEND_PORT; then
         PID=$(get_pid_on_port $FRONTEND_PORT)
         print_status "Silk Frontend" "running" "(PID: $PID)"
@@ -748,9 +767,9 @@ build_apk() {
     if [ -n "$BACKEND_BASE_URL" ]; then
         APK_BACKEND_URL="$BACKEND_BASE_URL"
     elif [ -n "$BACKEND_HOST" ]; then
-        APK_BACKEND_URL="http://${BACKEND_HOST}:${BACKEND_HTTP_PORT:-8003}"
+        APK_BACKEND_URL="${BACKEND_SCHEME}://${BACKEND_HOST}:${BACKEND_HTTP_PORT:-8003}"
     else
-        APK_BACKEND_URL="http://10.0.2.2:${BACKEND_HTTP_PORT:-8003}"
+        APK_BACKEND_URL="${BACKEND_SCHEME}://10.0.2.2:${BACKEND_HTTP_PORT:-8003}"
     fi
     echo -e "  后端地址将注入 APK: ${CYAN}$APK_BACKEND_URL${NC}"
     
@@ -881,9 +900,9 @@ build_hap() {
     if [ -n "$BACKEND_BASE_URL" ]; then
         HAP_BACKEND_URL="$BACKEND_BASE_URL"
     elif [ -n "$BACKEND_HOST" ]; then
-        HAP_BACKEND_URL="http://${BACKEND_HOST}:${BACKEND_HTTP_PORT:-8003}"
+        HAP_BACKEND_URL="${BACKEND_SCHEME}://${BACKEND_HOST}:${BACKEND_HTTP_PORT:-8003}"
     else
-        HAP_BACKEND_URL="http://localhost:${BACKEND_HTTP_PORT:-8003}"
+        HAP_BACKEND_URL="${BACKEND_SCHEME}://localhost:${BACKEND_HTTP_PORT:-8003}"
     fi
     echo -e "  根目录 .env → HAP 后端: ${CYAN}$HAP_BACKEND_URL${NC}（sync 时写入 EnvConfig.ets）"
     
@@ -1150,11 +1169,11 @@ start_services_internal() {
             echo ""
             local HOST="${BACKEND_HOST:-localhost}"
             echo -e "  本机访问:"
-            echo -e "    后端 API: ${GREEN}http://localhost:$BACKEND_PORT${NC}"
-            echo -e "    前端 Web: ${GREEN}http://localhost:$FRONTEND_PORT${NC}"
+            echo -e "    后端 API: ${GREEN}${BACKEND_SCHEME}://localhost:$BACKEND_HTTP_PORT${NC}"
+            echo -e "    前端 Web: ${GREEN}${FRONTEND_SCHEME}://localhost:$FRONTEND_PUBLIC_PORT${NC}"
             echo -e "  ${CYAN}其他设备访问（请用 .env 中 BACKEND_HOST 或本机 IP）:${NC}"
-            echo -e "    前端: ${GREEN}http://$HOST:$FRONTEND_PORT${NC}"
-            echo -e "    APK 下载: ${GREEN}http://$HOST:$BACKEND_PORT/api/files/download-apk${NC}"
+            echo -e "    前端: ${GREEN}${FRONTEND_SCHEME}://$HOST:$FRONTEND_PUBLIC_PORT${NC}"
+            echo -e "    APK 下载: ${GREEN}${BACKEND_SCHEME}://$HOST:$BACKEND_HTTP_PORT/api/files/download-apk${NC}"
             echo -e "  Weaviate: http://localhost:$WEAVIATE_HTTP_PORT"
             echo ""
             if [ "$HOST" = "localhost" ] || [ -z "$BACKEND_HOST" ]; then
@@ -1261,8 +1280,8 @@ start_services() {
             echo ""
             echo -e "${GREEN}✅ 所有服务已就绪！${NC}"
             echo ""
-            echo -e "  后端: ${GREEN}http://localhost:$BACKEND_PORT${NC}"
-            echo -e "  前端: ${GREEN}http://localhost:$FRONTEND_PORT${NC}"
+            echo -e "  后端: ${GREEN}${BACKEND_SCHEME}://localhost:$BACKEND_HTTP_PORT${NC}"
+            echo -e "  前端: ${GREEN}${FRONTEND_SCHEME}://localhost:$FRONTEND_PUBLIC_PORT${NC}"
             echo -e "  Weaviate: ${GREEN}http://localhost:$WEAVIATE_HTTP_PORT${NC}"
             echo ""
             return 0
@@ -1413,8 +1432,8 @@ quick_restart() {
         if check_port $BACKEND_PORT && check_port $FRONTEND_PORT && check_port $WEAVIATE_HTTP_PORT; then
             echo ""
             echo -e "${GREEN}✅ 重启完成！${NC}"
-            echo -e "  后端: http://localhost:$BACKEND_PORT"
-            echo -e "  前端: http://localhost:$FRONTEND_PORT"
+            echo -e "  后端: ${BACKEND_SCHEME}://localhost:$BACKEND_HTTP_PORT"
+            echo -e "  前端: ${FRONTEND_SCHEME}://localhost:$FRONTEND_PUBLIC_PORT"
             echo -e "  Weaviate: http://localhost:$WEAVIATE_HTTP_PORT"
             echo ""
             return 0

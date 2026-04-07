@@ -148,9 +148,9 @@ data class SimpleResponse(
 object ApiClient {
     private val BASE_URL: String
         get() {
-            val hostname = window.location.hostname
-            val protocol = window.location.protocol
-            return "$protocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
+            // 优先走同源（由 nginx 统一代理到后端），避免跨端口 CORS 导致登录卡住。
+            val origin = window.location.origin
+            return if (origin.endsWith("/")) origin.dropLast(1) else origin
         }
     private val jsonParser = Json { ignoreUnknownKeys = true }
     

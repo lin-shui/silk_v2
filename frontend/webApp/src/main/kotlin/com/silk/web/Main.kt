@@ -517,8 +517,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     // 动态生成 WebSocket URL，根据当前页面的协议和主机
     val wsUrl = remember {
         val protocol = if (window.location.protocol == "https:") "wss:" else "ws:"
-        val host = window.location.hostname
-        val url = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}"
+        val host = window.location.host
+        val url = "$protocol//$host"
         console.log("🔌 WebSocket URL: $url")
         url
     }
@@ -628,7 +628,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             console.error("❌ WebSocket连接失败")
             console.error("   错误:", e.toString())
             console.error("   可能原因: 后端未运行或网络问题")
-            console.error("   建议: 检查后端是否在${BuildConfig.BACKEND_HTTP_PORT}端口运行")
+            console.error("   建议: 检查当前站点同源 API 是否可用（/health）")
             // 不再抛出异常，静默失败
         }
     }
@@ -1011,8 +1011,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             val sessionId = group.id
             val userId = user.id
             val protocol = window.location.protocol
-            val host = window.location.hostname
-            val uploadUrl = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}/api/files/upload"
+            val host = window.location.host
+            val uploadUrl = "$protocol//$host/api/files/upload"
             val primaryColor = SilkColors.primary
             
             // Store values in window for JavaScript to access
@@ -1942,9 +1942,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             val sessionId = group.id
             val userId = user.id
             val protocol = window.location.protocol
-            val host = window.location.hostname
-            // 始终使用后端端口 8901
-            val uploadUrl = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}/api/files/upload"
+            val host = window.location.host
+            val uploadUrl = "$protocol//$host/api/files/upload"
             
             js("""
                 (function() {
@@ -1998,9 +1997,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             val sessionId = group.id
             val userId = user.id
             val protocol = window.location.protocol
-            val host = window.location.hostname
-            // 始终使用后端端口 8901
-            val uploadUrl = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}/api/files/upload"
+            val host = window.location.host
+            val uploadUrl = "$protocol//$host/api/files/upload"
             
             js("""
                 (function() {
@@ -2115,8 +2113,8 @@ fun FolderExplorerDialog(
     // 直接使用 fetch 并更新状态（简化逻辑，避免事件时序问题）
     LaunchedEffect(groupId) {
         val protocol = window.location.protocol
-        val host = window.location.hostname
-        val apiUrl = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}/api/files/list/$groupId"
+        val host = window.location.host
+        val apiUrl = "$protocol//$host/api/files/list/$groupId"
         
         window.asDynamic().tempApiUrl = apiUrl
         window.asDynamic().folderLoadCallback = { data: dynamic ->
@@ -2450,9 +2448,8 @@ fun FolderExplorerDialog(
                                 }
                                 onClick {
                                     val protocol = window.location.protocol
-                                    val host = window.location.hostname
-                                    // 始终使用后端端口 8901
-                                    val fullUrl = "$protocol//$host:${BuildConfig.BACKEND_HTTP_PORT}$downloadUrl"
+                                    val host = window.location.host
+                                    val fullUrl = "$protocol//$host$downloadUrl"
                                     window.open(fullUrl, "_blank")
                                 }
                             }) {
@@ -3130,9 +3127,8 @@ fun MessageItem(
                         
                         // 显示下载按钮 - 丝滑绿色
                         if (pdfUrl != null) {
-                            val baseUrl = js("window.location.protocol + '//' + window.location.hostname") as String
-                            val port = BuildConfig.BACKEND_HTTP_PORT
-                            val fullUrl = "$baseUrl:$port$pdfUrl"
+                            val baseUrl = window.location.origin
+                            val fullUrl = "$baseUrl$pdfUrl"
                             
                             Div({
                                 style {
@@ -3348,9 +3344,8 @@ fun MessageItem(
                     }
                     onClick {
                         if (downloadUrl.isNotEmpty()) {
-                            val baseUrl = js("window.location.protocol + '//' + window.location.hostname") as String
-                            val port = BuildConfig.BACKEND_HTTP_PORT
-                            val fullUrl = "$baseUrl:$port$downloadUrl"
+                            val baseUrl = window.location.origin
+                            val fullUrl = "$baseUrl$downloadUrl"
                             console.log("打开文件下载: $fullUrl")
                             
                             // 使用 fetch 下载文件

@@ -2,7 +2,7 @@
  * 应用常量配置
  * 配置后端 API 地址和其他常量
  */
-import { BACKEND_HOST, BACKEND_HTTP_PORT } from './EnvConfig';
+import { BACKEND_HOST, BACKEND_HTTP_PORT, BACKEND_SCHEME } from './EnvConfig';
 import deviceInfo from '@ohos.deviceInfo';
 
 /**
@@ -27,10 +27,11 @@ export class Constants {
   // 后端 API 基础地址 (开发环境，已做模拟器 loopback 映射)
   static readonly DEFAULT_BACKEND_HOST: string = resolveBackendHostForDevice(BACKEND_HOST);
   static readonly DEFAULT_BACKEND_PORT: string = BACKEND_HTTP_PORT;
+  static readonly DEFAULT_BACKEND_SCHEME: string = (BACKEND_SCHEME || 'http').toLowerCase();
   
   // WebSocket 基础地址
-  static readonly WS_PROTOCOL: string = 'ws';
-  static readonly API_BASE_URL: string = `http://${Constants.DEFAULT_BACKEND_HOST}:${Constants.DEFAULT_BACKEND_PORT}`;
+  static readonly WS_PROTOCOL: string = Constants.DEFAULT_BACKEND_SCHEME === 'https' ? 'wss' : 'ws';
+  static readonly API_BASE_URL: string = `${Constants.DEFAULT_BACKEND_SCHEME}://${Constants.DEFAULT_BACKEND_HOST}:${Constants.DEFAULT_BACKEND_PORT}`;
   static readonly WS_BASE_URL: string = `${Constants.WS_PROTOCOL}://${Constants.DEFAULT_BACKEND_HOST}:${Constants.DEFAULT_BACKEND_PORT}`;
   
   // API 超时时间 (毫秒)
