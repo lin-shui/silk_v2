@@ -2,7 +2,7 @@
 
 当前快检分成三类：
 
-- `BackendHttpContractTest`：注册、登录、用户设置、群组创建/加入、Todo HTTP 合同。
+- `BackendHttpContractTest`：注册、登录、用户设置、群组创建/加入、消息撤回、Todo HTTP 合同。
 - `UserTodoStoreTest`：待办去重、重开、模板实例化等核心生命周期逻辑。
 - `claudecode/*Test`：Claude Code stream parser 与 session store 单测。
 

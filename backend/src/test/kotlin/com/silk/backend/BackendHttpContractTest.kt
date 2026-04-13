@@ -4,16 +4,21 @@ import com.silk.backend.database.AuthResponse
 import com.silk.backend.database.CreateGroupRequest
 import com.silk.backend.database.DeleteUserTodoRequest
 import com.silk.backend.database.GroupMembersResponse
+import com.silk.backend.database.GroupRepository
 import com.silk.backend.database.GroupResponse
 import com.silk.backend.database.JoinGroupRequest
 import com.silk.backend.database.Language
 import com.silk.backend.database.LoginRequest
+import com.silk.backend.database.RecallMessageRequest
 import com.silk.backend.database.RegisterRequest
+import com.silk.backend.database.SimpleResponse
 import com.silk.backend.database.UpdateUserSettingsRequest
 import com.silk.backend.database.UpdateUserTodoRequest
 import com.silk.backend.database.UserTodoItemDto
 import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.database.UserSettingsResponse
+import com.silk.backend.models.ChatHistory
+import com.silk.backend.models.ChatHistoryEntry
 import com.silk.backend.todos.UserTodoStore
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
@@ -241,6 +246,151 @@ class BackendHttpContractTest {
         }
     }
 
+    @Test
+    fun `message recall route removes sender message from isolated history`() {
+        TestWorkspace().use { workspace ->
+            val group = createGroupForTest("Recall Route Group")
+            seedGroupHistory(
+                group.id,
+                listOf(
+                    chatEntry(
+                        messageId = "msg-1",
+                        senderId = "recall-owner",
+                        senderName = "Recall Owner",
+                        content = "需要撤回的普通消息",
+                        timestamp = 1_000L
+                    )
+                )
+            )
+
+            testApplication {
+                application { module() }
+
+                val recallResponse = client.post("/api/messages/recall") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            RecallMessageRequest(
+                                groupId = group.id,
+                                messageId = "msg-1",
+                                userId = "recall-owner"
+                            )
+                        )
+                    )
+                }
+                assertEquals(HttpStatusCode.OK, recallResponse.status)
+                val recallBody = recallResponse.decode<SimpleResponse>()
+                assertTrue(recallBody.success)
+                assertEquals("撤回成功", recallBody.message)
+
+                val historyFile = File(workspace.chatHistoryDir, "group_${group.id}/chat_history.json")
+                assertTrue(historyFile.isFile)
+                val remainingMessages = loadGroupHistory(group.id).messages
+                assertTrue(remainingMessages.isEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun `message recall route rejects non sender and keeps message intact`() {
+        TestWorkspace().use {
+            val group = createGroupForTest("Recall Permission Group")
+            seedGroupHistory(
+                group.id,
+                listOf(
+                    chatEntry(
+                        messageId = "msg-2",
+                        senderId = "message-owner",
+                        senderName = "Message Owner",
+                        content = "只有发送者可以撤回",
+                        timestamp = 2_000L
+                    )
+                )
+            )
+
+            testApplication {
+                application { module() }
+
+                val recallResponse = client.post("/api/messages/recall") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            RecallMessageRequest(
+                                groupId = group.id,
+                                messageId = "msg-2",
+                                userId = "other-user"
+                            )
+                        )
+                    )
+                }
+                assertEquals(HttpStatusCode.OK, recallResponse.status)
+                val recallBody = recallResponse.decode<SimpleResponse>()
+                assertFalse(recallBody.success)
+                assertEquals("只能撤回自己发送的消息", recallBody.message)
+
+                val remainingMessages = loadGroupHistory(group.id).messages
+                assertEquals(listOf("msg-2"), remainingMessages.map { it.messageId })
+            }
+        }
+    }
+
+    @Test
+    fun `message recall route also removes silk reply for silk prompt`() {
+        TestWorkspace().use {
+            val group = createGroupForTest("Recall Silk Group")
+            seedGroupHistory(
+                group.id,
+                listOf(
+                    chatEntry(
+                        messageId = "user-msg",
+                        senderId = "silk-caller",
+                        senderName = "Silk Caller",
+                        content = "@silk 帮我总结今天的讨论",
+                        timestamp = 3_000L
+                    ),
+                    chatEntry(
+                        messageId = "silk-reply",
+                        senderId = SilkAgent.AGENT_ID,
+                        senderName = SilkAgent.AGENT_NAME,
+                        content = "这是 Silk 的回复",
+                        timestamp = 3_100L
+                    ),
+                    chatEntry(
+                        messageId = "after-msg",
+                        senderId = "other-user",
+                        senderName = "Other User",
+                        content = "后续正常消息",
+                        timestamp = 3_200L
+                    )
+                )
+            )
+
+            testApplication {
+                application { module() }
+
+                val recallResponse = client.post("/api/messages/recall") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        json.encodeToString(
+                            RecallMessageRequest(
+                                groupId = group.id,
+                                messageId = "user-msg",
+                                userId = "silk-caller"
+                            )
+                        )
+                    )
+                }
+                assertEquals(HttpStatusCode.OK, recallResponse.status)
+                val recallBody = recallResponse.decode<SimpleResponse>()
+                assertTrue(recallBody.success)
+                assertEquals("撤回成功", recallBody.message)
+
+                val remainingMessages = loadGroupHistory(group.id).messages
+                assertEquals(listOf("after-msg"), remainingMessages.map { it.messageId })
+            }
+        }
+    }
+
     private suspend fun io.ktor.server.testing.ApplicationTestBuilder.registerUser(
         loginName: String,
         fullName: String,
@@ -258,6 +408,37 @@ class BackendHttpContractTest {
             )
         )
     }.decode<AuthResponse>().user!!
+
+    private fun createGroupForTest(groupName: String) =
+        assertNotNull(GroupRepository.createGroup(groupName, hostId = "host-user"))
+
+    private fun seedGroupHistory(groupId: String, entries: List<ChatHistoryEntry>) {
+        ChatHistoryManager().saveChatHistory(
+            sessionName = "group_$groupId",
+            chatHistory = ChatHistory(
+                sessionId = "session-$groupId",
+                messages = entries.toMutableList()
+            )
+        )
+    }
+
+    private fun loadGroupHistory(groupId: String) =
+        assertNotNull(ChatHistoryManager().loadChatHistory("group_$groupId"))
+
+    private fun chatEntry(
+        messageId: String,
+        senderId: String,
+        senderName: String,
+        content: String,
+        timestamp: Long
+    ) = ChatHistoryEntry(
+        messageId = messageId,
+        senderId = senderId,
+        senderName = senderName,
+        content = content,
+        timestamp = timestamp,
+        messageType = "TEXT"
+    )
 
     private suspend inline fun <reified T> HttpResponse.decode(): T = json.decodeFromString(bodyAsText())
 }

@@ -17,7 +17,11 @@ import java.nio.file.StandardCopyOption
  * 3. 不自动覆盖：加载失败时不创建新会话，避免覆盖历史数据
  */
 class ChatHistoryManager(
-    private val baseDir: String = "chat_history"
+    private val baseDir: String =
+        System.getProperty("silk.chatHistoryDir")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: "chat_history"
 ) {
     private val json = Json {
         prettyPrint = true
@@ -521,4 +525,3 @@ class ChatHistoryManager(
         return "session_${System.currentTimeMillis()}_${(1000..9999).random()}"
     }
 }
-

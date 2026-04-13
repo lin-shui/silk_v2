@@ -33,6 +33,7 @@ backend 真实快检：
 - [x] 注册 / 登录 / 用户校验 HTTP 合同
 - [x] 用户设置读取 / 更新 HTTP 合同
 - [x] 群组创建 / 入群 / 成员列表 HTTP 合同
+- [x] 消息撤回 HTTP 合同（发送者权限、普通消息撤回、`@silk` 连带回复删除）
 - [x] 用户 Todo 列表 / 更新 / 删除 HTTP 合同
 - [x] Todo 生命周期：done 重开、cancelled 重开门槛、逻辑去重、月度模板实例化
 - [x] Claude Code stream parser 单测
@@ -41,6 +42,7 @@ backend 真实快检：
 ### 本次补齐的点
 
 - 删除了几组只校验字符串/JSON 形状的占位测试，改为真实后端合同测试。
+- 把消息撤回从 JSON 形状占位校验改成真实路由合同测试，并修正了测试环境的 `chat_history` 隔离。
 - 测试现在使用临时 SQLite 和临时 `chat_history` 目录，避免把测试产物写回仓库根目录。
 - 把 `silk.sh` 的基础语法校验和只读 `status` smoke 接进了快检。
 
