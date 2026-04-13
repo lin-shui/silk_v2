@@ -19,7 +19,9 @@
 
 
 # Java Home - 支持 macOS Homebrew 和 Linux
-if [ -d "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" ]; then
+if /usr/libexec/java_home -v 17 >/dev/null 2>&1; then
+    export JAVA_HOME=$(/usr/libexec/java_home -v 17)
+elif [ -d "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" ]; then
     export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
 elif [ -d "/usr/lib/jvm/java-17-openjdk-amd64" ]; then
     export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
@@ -37,8 +39,6 @@ elif [ -d "$HOME/Library/Android/sdk" ]; then
     export ANDROID_HOME="$HOME/Library/Android/sdk"
 elif [ -d "/usr/lib/android-sdk" ]; then
     export ANDROID_HOME=/usr/lib/android-sdk
-elif [ -d "/root/Android/Sdk" ]; then
-    export ANDROID_HOME=/root/Android/Sdk
 elif [ -d "/root/android-sdk" ]; then
     export ANDROID_HOME=/root/android-sdk
 fi
@@ -162,6 +162,22 @@ if [ -n "$WEAVIATE_URL" ] && [[ ! "$WEAVIATE_URL" =~ localhost|127\.0\.0\.1 ]]; 
 fi
 # APK 输出目录
 APK_OUTPUT_DIR="$SILK_DIR/backend/static"
+FRONTEND_STATIC_DIR="$APK_OUTPUT_DIR"
+
+# nginx 运行时目录与日志
+SILK_RUNTIME_DIR="${SILK_RUNTIME_DIR:-$SILK_DIR/.silk-runtime}"
+NGINX_RUNTIME_DIR="$SILK_RUNTIME_DIR/nginx"
+NGINX_TEMP_DIR="$NGINX_RUNTIME_DIR/tmp"
+NGINX_CONF_FILE="$NGINX_RUNTIME_DIR/nginx.conf"
+NGINX_PID_FILE="$NGINX_RUNTIME_DIR/nginx.pid"
+NGINX_ERROR_LOG="${SILK_NGINX_ERROR_LOG:-/tmp/silk_frontend.log}"
+NGINX_ACCESS_LOG="${SILK_NGINX_ACCESS_LOG:-/tmp/silk_frontend_access.log}"
+NGINX_LAUNCH_LOG="${SILK_NGINX_LAUNCH_LOG:-/tmp/silk_frontend_launcher.log}"
+NGINX_CLIENT_MAX_BODY_SIZE="${NGINX_CLIENT_MAX_BODY_SIZE:-100m}"
+NGINX_BIN="${SILK_NGINX_BIN:-}"
+if [ -z "$NGINX_BIN" ]; then
+    NGINX_BIN=$(command -v nginx 2>/dev/null || true)
+fi
 
 # ============================================================
 # 辅助函数
@@ -182,6 +198,282 @@ print_status() {
     else
         echo -e "  $1: ${YELLOW}? 未知${NC}"
     fi
+}
+
+ensure_nginx_available() {
+    if [ -z "$NGINX_BIN" ] || [ ! -x "$NGINX_BIN" ]; then
+        echo -e "  ${RED}❌ 未检测到 nginx，请先安装 nginx，或设置 SILK_NGINX_BIN=/path/to/nginx${NC}"
+        return 1
+    fi
+    return 0
+}
+
+prepare_nginx_runtime() {
+    mkdir -p \
+        "$NGINX_RUNTIME_DIR" \
+        "$NGINX_TEMP_DIR/client_body" \
+        "$NGINX_TEMP_DIR/proxy" \
+        "$NGINX_TEMP_DIR/fastcgi" \
+        "$NGINX_TEMP_DIR/uwsgi" \
+        "$NGINX_TEMP_DIR/scgi"
+}
+
+generate_nginx_config() {
+    prepare_nginx_runtime
+
+    if [ ! -f "$FRONTEND_STATIC_DIR/index.html" ]; then
+        echo -e "  ${RED}❌ 未找到前端静态文件: $FRONTEND_STATIC_DIR/index.html${NC}"
+        echo -e "  ${YELLOW}请先运行 ./silk.sh build 或 ./silk.sh deploy${NC}"
+        return 1
+    fi
+
+    local server_name="${BACKEND_HOST:-_}"
+    local listen_directive="listen ${FRONTEND_PORT};"
+    local ssl_lines=""
+    local forwarded_proto_note=""
+
+    if [ -n "$NGINX_SSL_CERT" ] || [ -n "$NGINX_SSL_KEY" ]; then
+        if [ -z "$NGINX_SSL_CERT" ] || [ -z "$NGINX_SSL_KEY" ]; then
+            echo -e "  ${RED}❌ 启用 nginx HTTPS 需要同时设置 NGINX_SSL_CERT 和 NGINX_SSL_KEY${NC}"
+            return 1
+        fi
+        if [ ! -f "$NGINX_SSL_CERT" ] || [ ! -f "$NGINX_SSL_KEY" ]; then
+            echo -e "  ${RED}❌ nginx 证书或私钥不存在${NC}"
+            echo -e "    cert: $NGINX_SSL_CERT"
+            echo -e "    key : $NGINX_SSL_KEY"
+            return 1
+        fi
+        listen_directive="listen ${FRONTEND_PORT} ssl;"
+        ssl_lines="        ssl_certificate ${NGINX_SSL_CERT};
+        ssl_certificate_key ${NGINX_SSL_KEY};"
+    elif [ "$FRONTEND_SCHEME" = "https" ]; then
+        forwarded_proto_note="  ${YELLOW}⚠ FRONTEND_SCHEME=https 但未配置 nginx 证书，默认假设 HTTPS 由外层反向代理终止${NC}"
+    fi
+
+    cat > "$NGINX_CONF_FILE" <<EOF
+worker_processes  1;
+pid ${NGINX_PID_FILE};
+error_log ${NGINX_ERROR_LOG} info;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    default_type application/octet-stream;
+    charset utf-8;
+    sendfile on;
+    tcp_nopush on;
+    keepalive_timeout 65;
+    client_max_body_size ${NGINX_CLIENT_MAX_BODY_SIZE};
+    access_log ${NGINX_ACCESS_LOG};
+
+    types {
+        text/html html htm shtml;
+        text/css css;
+        text/plain txt;
+        text/xml xml;
+        application/javascript js mjs;
+        application/json json map;
+        application/wasm wasm;
+        image/svg+xml svg svgz;
+        image/png png;
+        image/jpeg jpg jpeg;
+        image/gif gif;
+        image/x-icon ico;
+        font/ttf ttf;
+        font/otf otf;
+        font/woff woff;
+        font/woff2 woff2;
+    }
+
+    map \$http_upgrade \$connection_upgrade {
+        default upgrade;
+        '' close;
+    }
+
+    map \$http_x_forwarded_proto \$forwarded_proto {
+        default \$http_x_forwarded_proto;
+        '' \$scheme;
+    }
+
+    map \$http_x_forwarded_host \$forwarded_host {
+        default \$http_x_forwarded_host;
+        '' \$host;
+    }
+
+    map \$http_x_forwarded_port \$forwarded_port {
+        default \$http_x_forwarded_port;
+        '' \$server_port;
+    }
+
+    client_body_temp_path ${NGINX_TEMP_DIR}/client_body;
+    proxy_temp_path ${NGINX_TEMP_DIR}/proxy;
+    fastcgi_temp_path ${NGINX_TEMP_DIR}/fastcgi;
+    uwsgi_temp_path ${NGINX_TEMP_DIR}/uwsgi;
+    scgi_temp_path ${NGINX_TEMP_DIR}/scgi;
+
+    server {
+        ${listen_directive}
+        server_name ${server_name};
+        root ${FRONTEND_STATIC_DIR};
+        index index.html;
+${ssl_lines}
+        location / {
+            try_files \$uri \$uri/ /index.html;
+        }
+
+        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|otf|eot|map|wasm)$ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+
+        location /api/ {
+            proxy_pass http://127.0.0.1:${BACKEND_PORT};
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$forwarded_proto;
+            proxy_set_header X-Forwarded-Host \$forwarded_host;
+            proxy_set_header X-Forwarded-Port \$forwarded_port;
+        }
+
+        location /auth {
+            proxy_pass http://127.0.0.1:${BACKEND_PORT};
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$forwarded_proto;
+            proxy_set_header X-Forwarded-Host \$forwarded_host;
+            proxy_set_header X-Forwarded-Port \$forwarded_port;
+        }
+
+        location /groups {
+            proxy_pass http://127.0.0.1:${BACKEND_PORT};
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$forwarded_proto;
+            proxy_set_header X-Forwarded-Host \$forwarded_host;
+            proxy_set_header X-Forwarded-Port \$forwarded_port;
+        }
+
+        location /contacts {
+            proxy_pass http://127.0.0.1:${BACKEND_PORT};
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$forwarded_proto;
+            proxy_set_header X-Forwarded-Host \$forwarded_host;
+            proxy_set_header X-Forwarded-Port \$forwarded_port;
+        }
+
+        location /users {
+            proxy_pass http://127.0.0.1:${BACKEND_PORT};
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$forwarded_proto;
+            proxy_set_header X-Forwarded-Host \$forwarded_host;
+            proxy_set_header X-Forwarded-Port \$forwarded_port;
+        }
+
+        location /download {
+            proxy_pass http://127.0.0.1:${BACKEND_PORT};
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$forwarded_proto;
+            proxy_set_header X-Forwarded-Host \$forwarded_host;
+            proxy_set_header X-Forwarded-Port \$forwarded_port;
+        }
+
+        location /health {
+            proxy_pass http://127.0.0.1:${BACKEND_PORT};
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$forwarded_proto;
+            proxy_set_header X-Forwarded-Host \$forwarded_host;
+            proxy_set_header X-Forwarded-Port \$forwarded_port;
+        }
+
+        location /chat {
+            proxy_pass http://127.0.0.1:${BACKEND_PORT};
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade \$http_upgrade;
+            proxy_set_header Connection \$connection_upgrade;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$forwarded_proto;
+            proxy_set_header X-Forwarded-Host \$forwarded_host;
+            proxy_set_header X-Forwarded-Port \$forwarded_port;
+            proxy_read_timeout 86400;
+            proxy_send_timeout 86400;
+        }
+    }
+}
+EOF
+
+    if [ -n "$forwarded_proto_note" ]; then
+        echo -e "$forwarded_proto_note"
+    fi
+
+    return 0
+}
+
+start_frontend_server() {
+    ensure_nginx_available || return 1
+    generate_nginx_config || return 1
+
+    if ! "$NGINX_BIN" -t -p "$NGINX_RUNTIME_DIR" -c "$NGINX_CONF_FILE" > "$NGINX_LAUNCH_LOG" 2>&1; then
+        echo -e "  ${RED}❌ nginx 配置校验失败，请检查 $NGINX_LAUNCH_LOG${NC}"
+        return 1
+    fi
+
+    if ! "$NGINX_BIN" -p "$NGINX_RUNTIME_DIR" -c "$NGINX_CONF_FILE" >> "$NGINX_LAUNCH_LOG" 2>&1; then
+        echo -e "  ${RED}❌ nginx 启动失败，请检查 $NGINX_LAUNCH_LOG${NC}"
+        return 1
+    fi
+
+    echo -e "  ${GREEN}nginx 已启动并托管前端${NC}"
+    echo -e "  配置: $NGINX_CONF_FILE"
+    echo -e "  错误日志: $NGINX_ERROR_LOG"
+    echo -e "  访问日志: $NGINX_ACCESS_LOG"
+    return 0
+}
+
+stop_frontend_server() {
+    local stopped=false
+    local pid=""
+
+    if [ -f "$NGINX_PID_FILE" ]; then
+        pid=$(tr -d '[:space:]' < "$NGINX_PID_FILE" 2>/dev/null)
+        if [ -n "$pid" ] && ps -p "$pid" >/dev/null 2>&1; then
+            if ensure_nginx_available >/dev/null 2>&1; then
+                "$NGINX_BIN" -p "$NGINX_RUNTIME_DIR" -c "$NGINX_CONF_FILE" -s quit >/dev/null 2>&1 || kill -TERM "$pid" 2>/dev/null
+            else
+                kill -TERM "$pid" 2>/dev/null
+            fi
+            sleep 1
+            if ps -p "$pid" >/dev/null 2>&1; then
+                kill -9 "$pid" 2>/dev/null
+            fi
+            stopped=true
+        fi
+        rm -f "$NGINX_PID_FILE"
+    fi
+
+    if check_port $FRONTEND_PORT; then
+        kill_port_process $FRONTEND_PORT "Silk Frontend" true false || return 1
+        stopped=true
+    fi
+
+    if [ "$stopped" = true ]; then
+        return 0
+    fi
+    return 1
 }
 
 # Linux 下无 lsof 时：用 /proc/net/tcp* 解析 LISTEN inode，再扫 /proc/*/fd 映射到 PID
@@ -251,7 +543,7 @@ is_silk_managed_pid() {
     fi
 
     case "$cmdline" in
-        *"$SILK_DIR"*|*":backend:run"*|*"python3 -m http.server $FRONTEND_PORT"*|*"python -m http.server $FRONTEND_PORT"*)
+        *"$SILK_DIR"*|*":backend:run"*|*"python3 -m http.server $FRONTEND_PORT"*|*"python -m http.server $FRONTEND_PORT"*|*"$NGINX_CONF_FILE"*|*"$NGINX_RUNTIME_DIR"*)
             return 0
             ;;
     esac
@@ -260,7 +552,7 @@ is_silk_managed_pid() {
 
 # 自动清理端口占用
 # 第 $4 参数 kill_any=true：force 清理时无条件终止该端口全部监听进程。
-# 前端：Homebrew Python 在 ps 中常显示为 Python，is_silk_managed_pid 易漏判。
+# 前端：deploy 时允许强制释放占用端口的进程，避免 nginx/旧静态服务器残留。
 # 后端：任意占用 BACKEND_PORT 的进程都应释放，否则新 :backend:run 会 BindException。
 kill_port_process() {
     local port=$1
@@ -678,9 +970,10 @@ build_frontend() {
         echo -e "${GREEN}✅ 前端构建成功${NC}"
         echo -e "  输出目录: $SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"
         
-        # 复制到 backend/static 目录
+        # 复制到 backend/static 目录供 nginx/下载接口复用
         echo ""
         echo -e "${BLUE}复制到 backend/static 目录...${NC}"
+        mkdir -p "$FRONTEND_STATIC_DIR"
         cp -r $SILK_DIR/frontend/webApp/build/dist/js/productionExecutable/* $SILK_DIR/backend/static/
         echo -e "${GREEN}✅ 已更新 backend/static${NC}"
     else
@@ -1146,17 +1439,12 @@ start_services_internal() {
     # 启动前端
     echo ""
     echo -e "${BLUE}启动 Silk 前端...${NC}"
-    STATIC_DIR="$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"
     
-    if [ ! -f "$STATIC_DIR/webApp.js" ]; then
+    if [ ! -f "$FRONTEND_STATIC_DIR/index.html" ]; then
         echo -e "  ${YELLOW}前端文件不存在，请先运行: ./silk.sh build${NC}"
         return 1
     fi
-    
-    cd "$STATIC_DIR"
-    nohup python3 -m http.server $FRONTEND_PORT --bind 0.0.0.0 > /tmp/silk_frontend.log 2>&1 &
-    echo -e "  ${GREEN}前端静态服务器已启动${NC}"
-    echo -e "  日志: /tmp/silk_frontend.log"
+    start_frontend_server || return 1
     
     echo ""
     echo -e "${CYAN}等待服务就绪...${NC}"
@@ -1230,18 +1518,17 @@ start_services() {
         echo -e "  日志: /tmp/silk_backend.log"
     fi
     
-    # 启动前端 (使用预编译的生产版本 + Python静态服务器)
+    # 启动前端 (nginx 静态站 + 后端反代)
     echo ""
     echo -e "${BLUE}[3/3] 启动 Silk 前端...${NC}"
     if check_port $FRONTEND_PORT; then
         echo -e "  ${YELLOW}前端已在运行${NC}"
     else
         cd "$SILK_DIR"
-        STATIC_DIR="$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"
         
-        # 检查是否有预编译的文件
-        if [ -f "$STATIC_DIR/webApp.js" ]; then
-            echo -e "  ${GREEN}使用预编译的生产版本${NC}"
+        # 检查是否有预编译且已同步的静态文件
+        if [ -f "$FRONTEND_STATIC_DIR/index.html" ]; then
+            echo -e "  ${GREEN}使用 backend/static 中的前端产物${NC}"
         else
             echo -e "  ${YELLOW}预编译文件不存在，正在构建...${NC}"
             ./gradlew :frontend:webApp:browserProductionWebpack > /tmp/silk_frontend_build.log 2>&1
@@ -1249,14 +1536,11 @@ start_services() {
                 echo -e "  ${RED}前端构建失败，请检查 /tmp/silk_frontend_build.log${NC}"
                 return 1
             fi
+            mkdir -p "$FRONTEND_STATIC_DIR"
+            cp -r $SILK_DIR/frontend/webApp/build/dist/js/productionExecutable/* $FRONTEND_STATIC_DIR/
             echo -e "  ${GREEN}前端构建完成${NC}"
         fi
-        
-        # 使用Python静态服务器提供服务
-        cd "$STATIC_DIR"
-        nohup python3 -m http.server $FRONTEND_PORT --bind 0.0.0.0 > /tmp/silk_frontend.log 2>&1 &
-        echo -e "  ${GREEN}前端静态服务器已启动${NC}"
-        echo -e "  日志: /tmp/silk_frontend.log"
+        start_frontend_server || return 1
     fi
     
     echo ""
@@ -1316,7 +1600,11 @@ stop_services() {
     echo -e "${BLUE}[2/3] 停止 Silk 前端...${NC}"
     if check_port $FRONTEND_PORT; then
         PID=$(get_pid_on_port $FRONTEND_PORT)
-        kill -9 $PID 2>/dev/null
+        stop_frontend_server
+        if check_port $FRONTEND_PORT; then
+            echo -e "  ${RED}❌ 前端停止失败${NC}"
+            return 1
+        fi
         echo -e "  ${GREEN}前端已停止 (PID: $PID)${NC}"
     else
         echo -e "  ${YELLOW}前端未运行${NC}"
@@ -1365,7 +1653,7 @@ show_logs() {
             ;;
         2)
             echo -e "${CYAN}=== 前端日志 ===${NC}"
-            tail -100 /tmp/silk_frontend.log 2>/dev/null || echo "日志文件不存在"
+            tail -100 "$NGINX_ERROR_LOG" "$NGINX_ACCESS_LOG" "$NGINX_LAUNCH_LOG" 2>/dev/null || echo "日志文件不存在"
             ;;
         3)
             echo -e "${CYAN}=== Weaviate 日志 ===${NC}"
@@ -1373,7 +1661,7 @@ show_logs() {
             ;;
         4)
             echo -e "${CYAN}=== 实时日志 (Ctrl+C 退出) ===${NC}"
-            tail -f /tmp/silk_backend.log /tmp/silk_frontend.log 2>/dev/null
+            tail -f /tmp/silk_backend.log "$NGINX_ERROR_LOG" "$NGINX_ACCESS_LOG" "$NGINX_LAUNCH_LOG" 2>/dev/null
             ;;
         *)
             echo "无效选择"
@@ -1395,8 +1683,10 @@ quick_restart() {
     PID=$(get_pid_on_port $BACKEND_PORT)
     [ -n "$PID" ] && kill -9 $PID 2>/dev/null && echo "  后端已停止"
     
-    PID=$(get_pid_on_port $FRONTEND_PORT)
-    [ -n "$PID" ] && kill -9 $PID 2>/dev/null && echo "  前端已停止"
+    if check_port $FRONTEND_PORT; then
+        stop_frontend_server
+        echo "  前端已停止"
+    fi
     
     weaviate_stop
     
@@ -1414,12 +1704,10 @@ quick_restart() {
     nohup ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
     echo "  后端启动中..."
     
-    # 启动前端 (使用预编译的生产版本)
-    STATIC_DIR="$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"
-    if [ -f "$STATIC_DIR/webApp.js" ]; then
-        cd "$STATIC_DIR"
-        nohup python3 -m http.server $FRONTEND_PORT --bind 0.0.0.0 > /tmp/silk_frontend.log 2>&1 &
-        echo "  前端启动中 (静态服务器)..."
+    # 启动前端 (nginx 静态站 + 后端反代)
+    if [ -f "$FRONTEND_STATIC_DIR/index.html" ]; then
+        start_frontend_server || return 1
+        echo "  前端启动中 (nginx)..."
     else
         echo "  ${YELLOW}前端预编译文件不存在，请先运行: ./silk.sh build${NC}"
     fi

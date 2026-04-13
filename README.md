@@ -52,6 +52,7 @@ Configuration is done via a **`.env`** file in the project root. The script `sil
 2. Edit `.env` and set at least:
    - **Backend / public URL**: `BACKEND_HOST`, `BACKEND_HTTP_PORT` (default `8006`)
    - **Protocol**: set `BACKEND_SCHEME=https` (or directly set `BACKEND_BASE_URL=https://...`)
+   - **Optional nginx HTTPS termination**: `NGINX_SSL_CERT`, `NGINX_SSL_KEY`
    - **AI**: `OPENAI_API_KEY`, `API_BASE_URL`, `AI_MODEL`
    - **Weaviate**: `WEAVIATE_URL` (e.g. `http://<host>:8008`)
 3. Optional: external search (e.g. `SERPAPI_KEY`), feature flags. See `.env.example` for comments.
@@ -62,7 +63,7 @@ Do not commit `.env`; it is listed in `.gitignore`.
 
 ## Installation
 
-Follow these steps to get Silk running using `silk.sh`. The script expects **Java 17**, **Python 3**, and (for Weaviate) **Docker**. Gradle is used via the project’s wrapper.
+Follow these steps to get Silk running using `silk.sh`. The script expects **Java 17**, **Python 3**, **nginx** (for the Web frontend and same-origin reverse proxy), and (for Weaviate) **Docker**. Gradle is used via the project’s wrapper.
 
 ### 1. Clone and enter the project
 
@@ -123,12 +124,12 @@ All commands are run from the project root. `silk.sh` loads `.env` automatically
 
 | Command | Description |
 |---------|-------------|
-| `./silk.sh deploy` | Clean ports, build WebApp + APK, start Weaviate, backend, and frontend. |
-| `./silk.sh start` | Start Weaviate, backend, and frontend (builds WebApp if missing). |
+| `./silk.sh deploy` | Clean ports, build WebApp + APK, start Weaviate, backend, and nginx frontend. |
+| `./silk.sh start` | Start Weaviate, backend, and nginx frontend (builds WebApp if missing). |
 | `./silk.sh stop` | Stop backend, frontend, and Weaviate. |
 | `./silk.sh restart` | Stop then start. |
 | `./silk.sh status` | Show status of backend, frontend, Weaviate, and latest APK. |
-| `./silk.sh logs` | Tail backend and frontend logs. |
+| `./silk.sh logs` | Tail backend logs plus nginx error/access logs. |
 | `./silk.sh build` | Build WebApp only; output is copied to `backend/static`. |
 | `./silk.sh build-apk` | Build Android APK; copies to `backend/static` and sets `silk.apk` link. |
 | `./silk.sh build-all` | Build WebApp and APK. |
