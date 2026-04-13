@@ -86,6 +86,23 @@ private fun backendWsOrigin(): String {
     return "$wsProtocol//$host"
 }
 
+private fun downloadAsFile(content: String, fileName: String) {
+    val blob = org.w3c.files.Blob(
+        arrayOf(content),
+        org.w3c.files.BlobPropertyBag(type = "text/markdown;charset=utf-8")
+    )
+    val windowJs = js("window")
+    val objectUrl = windowJs.URL.createObjectURL(blob) as String
+    val anchor = kotlinx.browser.document.createElement("a") as org.w3c.dom.HTMLAnchorElement
+    anchor.style.display = "none"
+    anchor.href = objectUrl
+    anchor.download = fileName
+    kotlinx.browser.document.body?.appendChild(anchor)
+    anchor.click()
+    kotlinx.browser.document.body?.removeChild(anchor)
+    windowJs.URL.revokeObjectURL(objectUrl)
+}
+
 private fun parseFileNameFromContentDisposition(contentDisposition: String?): String? {
     if (contentDisposition.isNullOrBlank()) return null
     val fileNameStar = Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE)
@@ -121,6 +138,8 @@ fun main() {
 @Composable
 fun SilkApp() {
     val appState = remember { WebAppState() }
+    val scope = rememberCoroutineScope()
+
     
     console.log("📍 当前场景:", appState.currentScene.toString())
     console.log("👤 当前用户:", appState.currentUser?.fullName ?: "未登录")
@@ -1029,32 +1048,51 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             isExportingMarkdown = true
                             exportMarkdownHint = "正在导出..."
                             try {
+                                var vaultHandle: dynamic = null
+                                if (ObsidianVaultManager.isSupported()) {
+                                    vaultHandle = ObsidianVaultManager.getCachedHandleIfValid()
+                                    if (vaultHandle == null) {
+                                        exportMarkdownHint = "请选择 Obsidian Vault 目录..."
+                                        vaultHandle = ObsidianVaultManager.pickVaultDirectory()
+                                    }
+                                }
+
+                                exportMarkdownHint = "正在获取聊天记录..."
                                 val result = ApiClient.exportGroupMarkdown(group.id, user.id)
                                 if (!result.success) {
                                     exportMarkdownHint = "导出失败：${result.message}"
                                     window.alert("导出失败：${result.message}")
                                     return@launch
                                 }
-                                val blob = org.w3c.files.Blob(
-                                    arrayOf(result.markdown),
-                                    org.w3c.files.BlobPropertyBag(type = "text/markdown;charset=utf-8")
-                                )
-                                val windowJs = js("window")
-                                val objectUrl = windowJs.URL.createObjectURL(blob) as String
-                                val anchor = document.createElement("a") as HTMLAnchorElement
-                                anchor.style.display = "none"
-                                anchor.href = objectUrl
-                                anchor.download = result.fileName.ifBlank { "silk_group_${group.id}.md" }
-                                document.body?.appendChild(anchor)
-                                anchor.click()
-                                document.body?.removeChild(anchor)
-                                windowJs.URL.revokeObjectURL(objectUrl)
-                                console.log("✅ 聊天记录已导出:", result.fileName)
-                                exportMarkdownHint = "导出成功：${result.fileName}"
-                            } catch (e: Exception) {
-                                console.error("❌ 导出聊天异常:", e)
-                                exportMarkdownHint = "导出异常: ${e.message}"
-                                window.alert("导出失败: ${e.message}")
+                                val fileName = result.fileName.ifBlank { "silk_group_${group.id}.md" }
+
+                                if (vaultHandle != null) {
+                                    exportMarkdownHint = "正在写入 Vault..."
+                                    try {
+                                        val relativePath = ObsidianVaultManager.saveToVault(
+                                            vaultHandle, group.name, result.markdown, fileName
+                                        )
+                                        console.log("✅ 已导出到 Obsidian Vault:", relativePath)
+                                        exportMarkdownHint = "已导出: $relativePath"
+                                    } catch (t: Throwable) {
+                                        console.warn("Vault 写入失败，回退到下载:", t)
+                                        downloadAsFile(result.markdown, fileName)
+                                        exportMarkdownHint = "Vault写入失败，已下载：$fileName"
+                                    }
+                                } else {
+                                    downloadAsFile(result.markdown, fileName)
+                                    console.log("✅ 聊天记录已导出:", fileName)
+                                    exportMarkdownHint = "导出成功：$fileName"
+                                }
+                            } catch (t: Throwable) {
+                                val msg = t.message ?: t.toString()
+                                if (msg.contains("abort", ignoreCase = true)) {
+                                    exportMarkdownHint = "已取消"
+                                } else {
+                                    console.error("❌ 导出异常:", t)
+                                    exportMarkdownHint = "导出异常: $msg"
+                                    window.alert("导出失败: $msg")
+                                }
                             } finally {
                                 isExportingMarkdown = false
                             }
@@ -1076,6 +1114,33 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         title(hint)
                     }) {
                         Text(hint)
+                    }
+                }
+                if (ObsidianVaultManager.isSupported()) {
+                    Span({
+                        style {
+                            fontSize(11.px)
+                            color(Color("rgba(255,255,255,0.6)"))
+                            property("cursor", "pointer")
+                            property("text-decoration", "underline")
+                            property("margin-left", "4px")
+                        }
+                        title("重新选择 Obsidian Vault 目录")
+                        onClick {
+                            scope.launch {
+                                try {
+                                    ObsidianVaultManager.clearCachedHandle()
+                                    ObsidianVaultManager.pickVaultDirectory()
+                                    exportMarkdownHint = "Vault 目录已更新"
+                                } catch (e: Exception) {
+                                    if (e.message?.contains("abort", ignoreCase = true) != true) {
+                                        exportMarkdownHint = "更换目录失败: ${e.message}"
+                                    }
+                                }
+                            }
+                        }
+                    }) {
+                        Text("📂")
                     }
                 }
                 
