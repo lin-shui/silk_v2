@@ -858,6 +858,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         
         // Reset flag when group changes
         hasSentDefaultInstruction = false
+
+        // 切换群组时清空上一个群的消息，避免新旧消息拼接
+        chatClient.clearMessages()
         
         // 加载群成员列表（用于 @ mention 功能）
         try {
