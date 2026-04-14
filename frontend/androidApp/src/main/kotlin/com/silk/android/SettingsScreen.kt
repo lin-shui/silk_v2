@@ -58,6 +58,22 @@ fun SettingsScreen(appState: AppState) {
     var ccShowRegenerateDialog by remember { mutableStateOf(false) }
 
     val context = LocalContext.current
+
+    // Shared logic for generating/regenerating bridge token
+    val doGenerateToken: () -> Unit = {
+        if (!ccIsGenerating) {
+            scope.launch {
+                ccIsGenerating = true
+                val resp = ApiClient.generateBridgeToken(user.id)
+                if (resp.success) {
+                    ccBridgeToken = resp.ccBridgeToken
+                    ccBridgeConnected = resp.bridgeConnected
+                    ccBridgeIp = resp.bridgeIp
+                }
+                ccIsGenerating = false
+            }
+        }
+    }
     
     // Load settings on mount
     LaunchedEffect(Unit) {
@@ -261,20 +277,7 @@ fun SettingsScreen(appState: AppState) {
                                     color = Color.Gray
                                 )
                                 Button(
-                                    onClick = {
-                                        if (!ccIsGenerating) {
-                                            scope.launch {
-                                                ccIsGenerating = true
-                                                val resp = ApiClient.generateBridgeToken(user.id)
-                                                if (resp.success) {
-                                                    ccBridgeToken = resp.ccBridgeToken
-                                                    ccBridgeConnected = resp.bridgeConnected
-                                                    ccBridgeIp = resp.bridgeIp
-                                                }
-                                                ccIsGenerating = false
-                                            }
-                                        }
-                                    },
+                                    onClick = { doGenerateToken() },
                                     enabled = !ccIsGenerating,
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = SilkColors.primary
@@ -433,16 +436,7 @@ fun SettingsScreen(appState: AppState) {
                                 TextButton(
                                     onClick = {
                                         ccShowRegenerateDialog = false
-                                        scope.launch {
-                                            ccIsGenerating = true
-                                            val resp = ApiClient.generateBridgeToken(user.id)
-                                            if (resp.success) {
-                                                ccBridgeToken = resp.ccBridgeToken
-                                                ccBridgeConnected = resp.bridgeConnected
-                                                ccBridgeIp = resp.bridgeIp
-                                            }
-                                            ccIsGenerating = false
-                                        }
+                                        doGenerateToken()
                                     }
                                 ) {
                                     Text(strings.ccGenerateToken, color = Color(0xFFF44336))

@@ -879,7 +879,7 @@ fun ChatScreen(appState: AppState) {
                     }
                 } else {
                     // ✅ reverseLayout=true 时，第一个 item 显示在底部（靠近输入框）
-                    // 所以状态消息要放在最前面，才能显示在最底部
+                    // 所以临时消息（流式回答）放在最前面显示在最底部，状态消息紧随其后显示在回答上方
                     
                     // 1️⃣ 临时消息（AI处理中）- 不支持选择
                     transientMessage?.let { message ->

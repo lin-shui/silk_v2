@@ -410,6 +410,7 @@ object ApiClient {
             val response = get("/users/$userId/cc-settings")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
+            println("获取CC设置失败: $e")
             CcSettingsResponse(false, "网络错误")
         }
     }
@@ -419,6 +420,7 @@ object ApiClient {
             val response = post("/users/$userId/cc-settings/generate-token", "{}")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
+            println("生成Bridge Token失败: $e")
             CcSettingsResponse(false, "网络错误")
         }
     }
@@ -428,6 +430,7 @@ object ApiClient {
             val response = get("/users/$userId/cc-settings/bridge-status")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
+            println("获取Bridge状态失败: $e")
             CcSettingsResponse(false, "网络错误")
         }
     }
