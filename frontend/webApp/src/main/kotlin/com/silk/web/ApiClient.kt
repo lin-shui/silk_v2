@@ -124,14 +124,52 @@ data class AddMemberResponse(
     val message: String
 )
 
+@Serializable
+data class LeaveGroupResponse(
+    val success: Boolean,
+    val message: String,
+    val groupDeleted: Boolean = false
+)
+
+@Serializable
+data class DeleteGroupResponse(
+    val success: Boolean,
+    val message: String
+)
+
+// ==================== 通用响应模型 ====================
+
+@Serializable
+data class SimpleResponse(
+    val success: Boolean,
+    val message: String
+)
+
+@Serializable
+data class ExportMarkdownResponse(
+    val success: Boolean,
+    val message: String,
+    val fileName: String = "",
+    val markdown: String = ""
+)
 object ApiClient {
     private val BASE_URL: String
         get() {
-            // 优先走同源（由 nginx 统一代理到后端），避免跨端口 CORS 导致登录卡住。
-            val origin = window.location.origin
-            return if (origin.endsWith("/")) origin.dropLast(1) else origin
+            // 优先走同源，兼容 nginx 代理；
+            // 仅在本地前端 dev server 直连场景下切到后端端口，避免跨端口登录失效。
+            val protocol = window.location.protocol
+            val hostname = window.location.hostname
+            val origin = window.location.origin.let { if (it.endsWith("/")) it.dropLast(1) else it }
+            val currentPort = window.location.port
+
+            return if (currentPort == BuildConfig.FRONTEND_PORT) {
+                "$protocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
+            } else {
+                origin
+            }
         }
     private val jsonParser = Json { ignoreUnknownKeys = true }
+
     
     suspend fun register(
         loginName: String,
@@ -382,7 +420,7 @@ object ApiClient {
         }
     }
     // ==================== 用户设置相关 API ====================
-    
+
     /**
      * 获取用户设置
      */
@@ -395,7 +433,7 @@ object ApiClient {
             UserSettingsResponse(false, "网络错误")
         }
     }
-    
+
     /**
      * 更新用户设置
      */
@@ -408,6 +446,47 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("更新用户设置失败:", e)
             UserSettingsResponse(false, "网络错误")
+        }
+    }
+
+    // ==================== Claude Code 设置相关 API ====================
+
+    /**
+     * 获取 CC 设置（token + bridge 状态）
+     */
+    suspend fun getCcSettings(userId: String): CcSettingsResponse {
+        return try {
+            val response = get("/users/$userId/cc-settings")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取CC设置失败:", e)
+            CcSettingsResponse(false, "网络错误")
+        }
+    }
+
+    /**
+     * 生成/重新生成 Bridge Token
+     */
+    suspend fun generateBridgeToken(userId: String): CcSettingsResponse {
+        return try {
+            val response = post("/users/$userId/cc-settings/generate-token", "{}")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("生成Bridge Token失败:", e)
+            CcSettingsResponse(false, "网络错误")
+        }
+    }
+
+    /**
+     * 查询 Bridge 在线状态
+     */
+    suspend fun getBridgeStatus(userId: String): CcSettingsResponse {
+        return try {
+            val response = get("/users/$userId/cc-settings/bridge-status")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("查询Bridge状态失败:", e)
+            CcSettingsResponse(false, "网络错误")
         }
     }
     
@@ -449,6 +528,16 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("撤回消息失败:", e)
             SimpleResponse(false, "网络错误")
+        }
+    }
+
+    suspend fun exportGroupMarkdown(groupId: String, userId: String): ExportMarkdownResponse {
+        return try {
+            val response = get("/groups/$groupId?export=obsidian_markdown&userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("导出聊天记录失败:", e)
+            ExportMarkdownResponse(false, "网络错误: ${e.message}")
         }
     }
     

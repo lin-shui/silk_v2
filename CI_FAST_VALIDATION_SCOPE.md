@@ -43,8 +43,7 @@ backend 真实快检：
 - [x] 消息撤回 HTTP 合同（发送者权限、普通消息撤回、`@silk` 连带回复删除）
 - [x] 用户 Todo 列表 / 更新 / 删除 HTTP 合同
 - [x] Todo 生命周期：done 重开、cancelled 重开门槛、逻辑去重、月度模板实例化
-- [x] Claude Code stream parser 单测
-- [x] Claude Code session store 单测
+- [x] Claude Code Bridge 元信息格式化单测
 
 ### 本次补齐的点
 
@@ -53,6 +52,7 @@ backend 真实快检：
 - 测试现在使用临时 SQLite 和临时 `chat_history` 目录，避免把测试产物写回仓库根目录。
 - 新增 WebSocket 合同测试，覆盖群成员鉴权、最近 50 条历史回放、实时广播持久化和未读计数主链路。
 - 新增 AI 工具权限测试，锁定禁用工具暴露面、会话作用域拒绝，以及路径拒绝时的审计结果。
+- Claude Code 已切到 Bridge Agent 架构后，移除了失效的旧 session store / stream parser JVM 单测，保留当前后端仍承担的元信息格式化测试。
 - 把 `silk.sh` 的基础语法校验和只读 `status` smoke 接进了快检。
 
 ### 明确未覆盖

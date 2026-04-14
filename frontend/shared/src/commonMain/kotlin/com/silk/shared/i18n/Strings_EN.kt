@@ -121,4 +121,22 @@ object Strings_EN : Strings {
     // Silk AI Chat
     override val chatWithSilk = "Chat with Silk"
     override val silkChatInputPlaceholder = "Ask Silk anything... (Enter to send)"
+
+    // Claude Code settings
+    override val ccSettingsTitle = "Claude Code"
+    override val ccBridgeTokenLabel = "Bridge Token"
+    override val ccGenerateToken = "Generate Token"
+    override val ccRegenerateToken = "Regenerate Token"
+    override val ccBridgeConnected = "Connected"
+    override val ccBridgeDisconnected = "Not Connected"
+    override val ccCopyToken = "Copy"
+    override val ccBridgeNotConfigured = "No token generated yet. Generate a token, then start Bridge Agent to connect."
+    override val ccBridgeHelp = "1. cd cc_bridge && pip install -r requirements.txt\n2. Create .env (see .env.example) with BRIDGE_SERVER and BRIDGE_TOKEN\n3. ./bridge.sh start"
+    override val ccRegenerateConfirm = "Regenerating will disconnect the current Bridge. Continue?"
+    override val ccTokenCopied = "Token copied to clipboard"
+    override val ccBridgeIpLabel = "Bridge IP:"
+    override val ccRefreshStatus = "Refresh Status"
+    override val ccRefreshingStatus = "Refreshing..."
+    override val ccTestSuccess = "Connection OK"
+    override val ccTestFailed = "Connection Failed"
 }

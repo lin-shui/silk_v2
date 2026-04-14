@@ -6,7 +6,7 @@
 - `BackendWebSocketContractTest`：群组 WebSocket 入群鉴权、历史回放、广播持久化、未读计数链路。
 - `ai/DirectModelAgentToolPolicyTest`：AI 工具暴露面、会话作用域、路径拒绝与审计结果。
 - `UserTodoStoreTest`：待办去重、重开、模板实例化等核心生命周期逻辑。
-- `claudecode/*Test`：Claude Code stream parser 与 session store 单测。
+- `claudecode/StreamParserTest`：Claude Code Bridge 元信息格式化单测。
 
 运行方式：
 
