@@ -75,7 +75,11 @@ suspend fun broadcastFileMessage(
             id = System.currentTimeMillis().toString() + (0..999).random(),
             userId = userId,
             userName = userName,
-            content = """{"fileName":"$fileName","fileSize":$fileSize,"downloadUrl":"$downloadUrl"}""",
+            content = buildFileMessageContent(
+                fileName = fileName,
+                fileSize = fileSize,
+                downloadUrl = downloadUrl
+            ),
             timestamp = System.currentTimeMillis(),
             type = MessageType.FILE
         )

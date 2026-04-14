@@ -458,10 +458,25 @@ class ChatServer(
                     
                     // 保存到文件
                     val savedFile = com.silk.backend.utils.WebPageDownloader.saveToFile(content, uploadDir)
+                    val downloadSessionId = sessionName.removePrefix("group_")
                     
                     // 发送状态消息
                     val fileType = if (content.isPdf) "PDF" else "网页"
                     broadcastSystemStatus("📄 已下载$fileType: ${content.title}")
+                    broadcast(
+                        Message(
+                            id = generateId(),
+                            userId = message.userId,
+                            userName = message.userName,
+                            content = buildFileMessageContent(
+                                fileName = savedFile.name,
+                                fileSize = savedFile.length(),
+                                downloadUrl = "/api/files/download/$downloadSessionId/${savedFile.name}"
+                            ),
+                            timestamp = System.currentTimeMillis(),
+                            type = MessageType.FILE
+                        )
+                    )
                     
                     // 索引到 Weaviate
                     val participants = connections.keys.toList().ifEmpty { listOf(message.userId) }
@@ -1245,4 +1260,3 @@ fun Application.configureWebSockets() {
         masking = false
     }
 }
-

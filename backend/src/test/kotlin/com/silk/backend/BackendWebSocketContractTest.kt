@@ -27,6 +27,7 @@ import io.ktor.websocket.readText
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -169,9 +170,11 @@ class BackendWebSocketContractTest {
     }
 
     @Test
-    fun `chat websocket ingests local html and pdf urls once and persists downloaded artifacts`() {
+    fun `chat websocket ingests local html and pdf urls broadcasts file messages and replays them from history`() {
         TestWorkspace().use { workspace ->
             val group = createGroupForTest("WebSocket URL Ingestion Group")
+            assertTrue(GroupRepository.addUserToGroup(group.id, "guest-user"))
+            assertTrue(GroupRepository.addUserToGroup(group.id, "late-user"))
             val html = """
                 <!DOCTYPE html>
                 <html>
@@ -211,6 +214,11 @@ class BackendWebSocketContractTest {
                         userName = "HostUser",
                         groupId = group.id
                     )
+                    val guestSession = wsClient.connectChat(
+                        userId = "guest-user",
+                        userName = "GuestUser",
+                        groupId = group.id
+                    )
 
                     val urlMessage = Message(
                         id = "url-live-1",
@@ -221,20 +229,35 @@ class BackendWebSocketContractTest {
                     )
                     hostSession.send(Frame.Text(json.encodeToString(urlMessage)))
 
-                    val received = hostSession.receiveMessagesUntil { it.content == "CLEAR_STATUS" }
-                    val receivedContents = received.map { it.content }
-                    assertEquals("url-live-1", received.first().id)
-                    assertContainsInOrder(
-                        actual = receivedContents,
-                        expected = listOf(
-                            urlMessage.content,
-                            "🌐 正在下载: ${localWeb.htmlUrl}",
-                            "📄 已下载网页: CI URL HTML Smoke",
-                            "🌐 正在下载: ${localWeb.pdfUrl}",
-                            "📄 已下载PDF: CI URL PDF Smoke",
-                            "CLEAR_STATUS"
-                        )
+                    val hostReceived = hostSession.receiveMessagesUntil { it.content == "CLEAR_STATUS" }
+                    val guestReceived = guestSession.receiveMessagesUntil { it.content == "CLEAR_STATUS" }
+                    val expectedSequence = listOf(
+                        urlMessage.content,
+                        "🌐 正在下载: ${localWeb.htmlUrl}",
+                        "📄 已下载网页: CI URL HTML Smoke",
+                        "FILE",
+                        "🌐 正在下载: ${localWeb.pdfUrl}",
+                        "📄 已下载PDF: CI URL PDF Smoke",
+                        "FILE",
+                        "CLEAR_STATUS"
                     )
+
+                    assertEquals("url-live-1", hostReceived.first().id)
+                    assertEquals("url-live-1", guestReceived.first().id)
+                    assertContainsInOrder(
+                        actual = hostReceived.map(::messageMarker),
+                        expected = expectedSequence
+                    )
+                    assertContainsInOrder(
+                        actual = guestReceived.map(::messageMarker),
+                        expected = expectedSequence
+                    )
+
+                    val hostFileMessages = hostReceived.filter { it.type == MessageType.FILE }
+                    val guestFileMessages = guestReceived.filter { it.type == MessageType.FILE }
+                    assertEquals(2, hostFileMessages.size)
+                    assertEquals(2, guestFileMessages.size)
+                    assertEquals(hostFileMessages.map { it.id }, guestFileMessages.map { it.id })
 
                     val uploadsDir = File(workspace.chatHistoryDir, "group_${group.id}/uploads")
                     waitForCondition {
@@ -264,6 +287,31 @@ class BackendWebSocketContractTest {
                     val pdfTextFile = assertNotNull(savedFiles.firstOrNull { it.name.endsWith("_text.txt") })
                     assertTrue(pdfTextFile.readText().contains("CI URL PDF smoke content for websocket validation."))
 
+                    val downloadableFiles = savedFiles
+                        .filter { it.extension == "html" || it.extension == "pdf" }
+                        .sortedBy { it.name }
+                    assertEquals(2, downloadableFiles.size)
+
+                    val hostFilePayloads = hostFileMessages
+                        .map(::parseFilePayload)
+                        .sortedBy { it.fileName }
+                    assertEquals(
+                        downloadableFiles.map { it.name },
+                        hostFilePayloads.map { it.fileName }
+                    )
+                    assertEquals(
+                        downloadableFiles.map { it.length() },
+                        hostFilePayloads.map { it.fileSize }
+                    )
+                    assertEquals(
+                        downloadableFiles.map { "/api/files/download/${group.id}/${it.name}" },
+                        hostFilePayloads.map { it.downloadUrl }
+                    )
+                    assertEquals(
+                        hostFilePayloads,
+                        guestFileMessages.map(::parseFilePayload).sortedBy { it.fileName }
+                    )
+
                     val duplicateMessage = Message(
                         id = "url-live-2",
                         userId = "host-user",
@@ -273,10 +321,14 @@ class BackendWebSocketContractTest {
                     )
                     hostSession.send(Frame.Text(json.encodeToString(duplicateMessage)))
 
-                    val duplicateBroadcast = hostSession.receiveMessage()
-                    assertEquals("url-live-2", duplicateBroadcast.id)
-                    assertEquals(duplicateMessage.content, duplicateBroadcast.content)
+                    val duplicateHostBroadcast = hostSession.receiveMessage()
+                    val duplicateGuestBroadcast = guestSession.receiveMessage()
+                    assertEquals("url-live-2", duplicateHostBroadcast.id)
+                    assertEquals("url-live-2", duplicateGuestBroadcast.id)
+                    assertEquals(duplicateMessage.content, duplicateHostBroadcast.content)
+                    assertEquals(duplicateMessage.content, duplicateGuestBroadcast.content)
                     assertNull(hostSession.receiveMessageOrNull(1_000))
+                    assertNull(guestSession.receiveMessageOrNull(1_000))
 
                     delay(300)
                     val filesAfterDuplicate = uploadsDir.listFiles()
@@ -288,6 +340,52 @@ class BackendWebSocketContractTest {
                             .readLines()
                             .filter { it.isNotBlank() }
                             .size > 2
+                    )
+
+                    val persistedHistory = assertNotNull(
+                        ChatHistoryManager().loadChatHistory("group_${group.id}")
+                    )
+                    assertEquals(
+                        listOf(
+                            "url-live-1",
+                            hostFileMessages[0].id,
+                            hostFileMessages[1].id,
+                            "url-live-2"
+                        ),
+                        persistedHistory.messages.takeLast(4).map { it.messageId }
+                    )
+                    assertEquals(
+                        listOf(
+                            MessageType.TEXT.name,
+                            MessageType.FILE.name,
+                            MessageType.FILE.name,
+                            MessageType.TEXT.name
+                        ),
+                        persistedHistory.messages.takeLast(4).map { it.messageType }
+                    )
+
+                    val lateSession = wsClient.connectChat(
+                        userId = "late-user",
+                        userName = "LateUser",
+                        groupId = group.id
+                    )
+                    val lateReplay = lateSession.receiveMessages(4)
+                    assertEquals(
+                        persistedHistory.messages.takeLast(4).map { it.messageId },
+                        lateReplay.map { it.id }
+                    )
+                    assertEquals(
+                        listOf(
+                            MessageType.TEXT,
+                            MessageType.FILE,
+                            MessageType.FILE,
+                            MessageType.TEXT
+                        ),
+                        lateReplay.map { it.type }
+                    )
+                    assertEquals(
+                        hostFileMessages.map(::parseFilePayload),
+                        lateReplay.filter { it.type == MessageType.FILE }.map(::parseFilePayload)
                     )
                 }
             } finally {
@@ -503,6 +601,14 @@ class BackendWebSocketContractTest {
         timestamp = timestamp,
         messageType = "TEXT"
     )
+
+    private fun messageMarker(message: Message): String =
+        if (message.type == MessageType.FILE) "FILE" else message.content
+
+    private fun parseFilePayload(message: Message): FileMessagePayload {
+        assertEquals(MessageType.FILE, message.type)
+        return json.decodeFromString(message.content)
+    }
 
     private suspend fun HttpClient.connectChat(
         userId: String,
