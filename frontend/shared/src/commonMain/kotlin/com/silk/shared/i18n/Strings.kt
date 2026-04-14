@@ -139,6 +139,11 @@ interface Strings {
     val ccBridgeHelp: String  // Help text
     val ccRegenerateConfirm: String  // "Regenerating will disconnect the current bridge. Continue?"
     val ccTokenCopied: String  // "Token copied"
+    val ccBridgeIpLabel: String  // "Bridge IP:"
+    val ccRefreshStatus: String  // "Refresh Status"
+    val ccRefreshingStatus: String  // "Refreshing..."
+    val ccTestSuccess: String  // "Connection OK"
+    val ccTestFailed: String  // "Connection Failed"
 }
 
 /**

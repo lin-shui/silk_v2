@@ -36,6 +36,7 @@ All day-to-day operations (build, run, stop, logs, Weaviate) are driven by the *
 | `.env.example` | Template and documentation for required/optional env vars. |
 | `backend/` | Kotlin backend (Ktor), static files, chat history. |
 | `backend/.../claudecode/` | Claude Code integration module (StreamParser, SessionStore, Runner, Manager). |
+| `cc_bridge/` | CC Bridge Agent: connects an external Claude CLI to Silk via WebSocket. |
 | `frontend/webApp/` | Kotlin/JS web frontend. |
 | `frontend/androidApp/` | Android app; APK output can be copied to `backend/static`. |
 | `frontend/desktopApp/` | Desktop client (optional). |
@@ -140,23 +141,22 @@ APK download URL (when backend is up): `https://<BACKEND_HOST>:8006/api/files/do
 
 ## Claude Code integration
 
-Silk supports a built-in **Claude Code (CC) mode** that lets users interact with a Claude Code CLI subprocess directly from any chat session. This turns Silk into a programming assistant interface — users can ask Claude to read, write, and edit code in the server's filesystem.
+Silk supports a **Claude Code (CC) mode** that lets users interact with a Claude Code CLI from any chat session. This turns Silk into a programming assistant interface — users can ask Claude to read, write, and edit code on the filesystem.
+
+CC mode uses a **Bridge Agent** architecture: the Silk backend does not run the Claude CLI itself. Instead, a separate Python process (`cc_bridge/bridge_agent.py`) connects to the backend via WebSocket, receives commands, and executes the Claude CLI locally. This decouples the backend deployment from the Claude execution environment.
 
 ### Prerequisites
 
-- **Claude CLI** installed on the server and available in PATH (`npm install -g @anthropic-ai/claude-code` or equivalent)
-- A valid Claude API key configured for the CLI (`claude` must be able to run independently)
+- **CC Bridge Agent** running and connected to the Silk backend (see [CC Bridge](#cc-bridge-external-claude-cli) below)
+- **Claude CLI** installed on the machine running the Bridge Agent (`npm install -g @anthropic-ai/claude-code` or equivalent)
 
 ### Configuration
 
-Add the following to `.env` (all optional, defaults shown):
+The following environment variables are used by the **Bridge Agent** (set on the machine running `bridge_agent.py`, not the Silk backend):
 
 ```bash
-# Claude CLI binary path (default: "claude", found via PATH)
+# Claude CLI binary path (default: auto-detected from PATH)
 # CLAUDE_CODE_PATH=claude
-
-# Default working directory for CC sessions
-# CLAUDE_CODE_DEFAULT_DIR=/workspace/your-project
 
 # Max tool-call rounds per execution (default: 100)
 # CLAUDE_CODE_MAX_TURNS=100
@@ -173,7 +173,7 @@ Add the following to `.env` (all optional, defaults shown):
 In any Silk chat (group or private), send `/cc` to enter Claude Code mode:
 
 ```
-/cc              Enter CC mode (activate)
+/cc              Enter CC mode (new session each time)
 <any text>       Send as prompt to Claude Code
 /exit            Exit CC mode, return to normal Silk chat
 ```
@@ -204,21 +204,98 @@ In any Silk chat (group or private), send `/cc` to enter Claude Code mode:
 - **Per-user isolation**: each user has their own CC state per group; one user entering CC mode does not affect others
 - **CC responses are private**: only the user who activated CC sees the responses; other group members see the user's messages but not CC output
 - **Message queue**: if a task is running, new messages are queued (max 10) and auto-executed when the current task finishes
-- **Session persistence**: CC sessions are saved to `chat_history/claude_code_sessions.json`; sessions expire after 7 days of inactivity
+- **Session persistence**: CC sessions are managed by the Bridge Agent (`~/.silk/cc_sessions.json`); sessions expire after 7 days of inactivity
 - **Permission mode**: currently uses `bypassPermissions` (all tool operations are allowed without confirmation)
 
 ### Architecture
 
-CC mode is implemented as an independent backend module in `backend/src/main/kotlin/com/silk/backend/claudecode/`:
+CC mode is implemented in `backend/src/main/kotlin/com/silk/backend/claudecode/`:
 
 | File | Responsibility |
 |------|---------------|
+| `ClaudeCodeManager.kt` | Command routing (`/cc`, `/exit`, `/new`, etc.), per-user state, message queue |
+| `BridgeRegistry.kt` | Manage Bridge WebSocket connections, send commands to bridge, track connection status and IP |
 | `StreamParser.kt` | Parse Claude CLI's `stream-json` JSONL output |
-| `SessionStore.kt` | Persist CC session metadata to JSON |
-| `ClaudeCodeRunner.kt` | Manage `claude` CLI subprocess with PTY allocation |
-| `ClaudeCodeManager.kt` | Command routing, per-user state, message queue |
 
-The integration point is a ~25-line interception block in `ChatServer.broadcast()` (in `WebSocketConfig.kt`) that routes CC-mode messages to `ClaudeCodeManager` before the normal Silk AI logic.
+The integration point is an interception block in `ChatServer.broadcast()` (in `WebSocketConfig.kt`) that routes CC-mode messages to `ClaudeCodeManager` before the normal Silk AI logic.
+
+### CC Bridge (external Claude CLI)
+
+The Claude CLI runs on a separate machine (or the same machine in a different process) via the **CC Bridge Agent**, which connects to Silk via WebSocket. This is useful when:
+
+- The backend runs in a container or VM without Claude CLI installed
+- You want to run Claude CLI on a machine with direct access to your codebase
+- You need to separate the backend deployment from the Claude execution environment
+
+#### How it works
+
+```
+User (browser) ──→ Silk backend ──WebSocket──→ CC Bridge (bridge_agent.py) ──→ Claude CLI
+```
+
+The Bridge Agent (`cc_bridge/bridge_agent.py`) connects to the Silk backend via WebSocket, authenticates with a token, and executes Claude CLI commands on behalf of the user. The Silk backend routes CC-mode messages to the bridge instead of spawning a local CLI process.
+
+#### Setup
+
+1. **Generate a Bridge Token** in the Silk web UI:
+   - Go to **Settings** → **Claude Code** section
+   - Click **Generate Token** (or **Regenerate Token** if one already exists)
+   - Copy the token
+
+2. **Install dependencies** on the machine where you want to run Claude CLI:
+
+   ```bash
+   cd cc_bridge
+   pip install -r requirements.txt   # websockets>=12.0
+   ```
+
+3. **Ensure Claude CLI is available** on that machine:
+
+   ```bash
+   claude --version   # should print the Claude CLI version
+   ```
+
+4. **Configure** — create `cc_bridge/.env`:
+
+   ```bash
+   BRIDGE_SERVER=<silk-backend-host>:8006
+   BRIDGE_TOKEN=<your-token>
+   # BRIDGE_WORKING_DIR=/path/to/workdir  # optional
+   # BRIDGE_LOG_LEVEL=INFO                # optional
+   ```
+
+5. **Start the Bridge Agent**:
+
+   ```bash
+   cd cc_bridge
+   ./bridge.sh start        # background (recommended)
+   # or: python bridge_agent.py --server <host>:8006 --token <token>   # foreground
+   ```
+
+6. **Verify connection** in the Silk web UI:
+   - Settings page should show a green status dot with **Connected**
+   - **Bridge IP** displays the IP address of the machine running bridge_agent.py
+   - Click **Refresh Status** to update the connection status
+
+#### Management (bridge.sh)
+
+| Command | Description |
+|---------|-------------|
+| `./bridge.sh start` | Start bridge in background |
+| `./bridge.sh stop` | Stop bridge (graceful shutdown) |
+| `./bridge.sh restart` | Restart bridge |
+| `./bridge.sh status` | Check running status |
+| `./bridge.sh logs` | Tail the log file |
+
+#### Files
+
+| File | Responsibility |
+|------|---------------|
+| `cc_bridge/bridge.sh` | Management script: start/stop/restart/status/logs |
+| `cc_bridge/bridge_agent.py` | WebSocket client, message routing, authentication |
+| `cc_bridge/executor.py` | Claude CLI subprocess management |
+| `cc_bridge/session_manager.py` | Session persistence and lifecycle |
+| `cc_bridge/requirements.txt` | Python dependencies (`websockets>=12.0`) |
 
 ---
 

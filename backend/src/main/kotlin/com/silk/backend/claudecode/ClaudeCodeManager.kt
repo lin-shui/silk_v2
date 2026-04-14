@@ -87,6 +87,8 @@ object ClaudeCodeManager {
     private suspend fun activate(userId: String, groupId: String, broadcastFn: suspend (Message) -> Unit) {
         val state = getOrCreateState(userId, groupId)
         state.active = true
+        state.sessionId = UUID.randomUUID().toString()
+        state.sessionStarted = false
         logger.info("[CC] 用户激活 CC 模式: userId={}, groupId={}, sessionId={}", userId, groupId, state.sessionId.take(8))
         broadcastFn(systemMessage(buildString {
             appendLine("🤖 Claude Code 已激活")

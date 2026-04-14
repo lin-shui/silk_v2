@@ -131,7 +131,12 @@ object Strings_ZH : Strings {
     override val ccBridgeDisconnected = "未连接"
     override val ccCopyToken = "复制"
     override val ccBridgeNotConfigured = "尚未生成 Token。生成 Token 后启动 Bridge Agent 即可连接。"
-    override val ccBridgeHelp = "安装: pip install websockets\n运行: python bridge.py --server <服务器地址:端口> --token <你的Token>"
+    override val ccBridgeHelp = "1. cd cc_bridge && pip install -r requirements.txt\n2. 创建 .env（参考 .env.example）并填入 BRIDGE_SERVER 和 BRIDGE_TOKEN\n3. ./bridge.sh start"
     override val ccRegenerateConfirm = "重新生成会断开当前 Bridge 连接，确认继续？"
     override val ccTokenCopied = "Token 已复制到剪贴板"
+    override val ccBridgeIpLabel = "Bridge IP："
+    override val ccRefreshStatus = "刷新状态"
+    override val ccRefreshingStatus = "刷新中..."
+    override val ccTestSuccess = "连接正常"
+    override val ccTestFailed = "连接失败"
 }

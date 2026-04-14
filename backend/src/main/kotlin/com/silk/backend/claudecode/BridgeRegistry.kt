@@ -19,6 +19,7 @@ object BridgeRegistry {
     data class BridgeConnection(
         val session: WebSocketSession,
         @field:Volatile var defaultDir: String = "",
+        val remoteIp: String? = null,
     )
 
     // userId → BridgeConnection
@@ -27,15 +28,15 @@ object BridgeRegistry {
     /**
      * 注册 bridge 连接。驱逐同用户旧连接。
      */
-    suspend fun register(userId: String, session: WebSocketSession, defaultDir: String) {
-        val old = bridges.put(userId, BridgeConnection(session, defaultDir))
+    suspend fun register(userId: String, session: WebSocketSession, defaultDir: String, remoteIp: String? = null) {
+        val old = bridges.put(userId, BridgeConnection(session, defaultDir, remoteIp))
         if (old != null && old.session != session) {
             logger.info("[Bridge] 驱逐用户 {} 的旧 bridge 连接", userId)
             try {
                 old.session.close(CloseReason(CloseReason.Codes.NORMAL, "replaced by new bridge"))
             } catch (_: Exception) {}
         }
-        logger.info("[Bridge] 用户 {} 的 bridge 已注册, defaultDir={}", userId, defaultDir)
+        logger.info("[Bridge] 用户 {} 的 bridge 已注册, defaultDir={}, remoteIp={}", userId, defaultDir, remoteIp)
     }
 
     /**
@@ -70,6 +71,19 @@ object BridgeRegistry {
      * 查询 bridge 是否在线
      */
     fun isConnected(userId: String): Boolean = bridges.containsKey(userId)
+
+    /**
+     * 获取 bridge 远端 IP（友好格式）
+     */
+    fun getRemoteIp(userId: String): String? = bridges[userId]?.remoteIp
+        ?.takeIf { it.isNotBlank() }
+        ?.let { normalizeIp(it) }
+
+    private fun normalizeIp(ip: String): String = when (ip) {
+        "0:0:0:0:0:0:0:1", "::1" -> "127.0.0.1 (本机)"
+        "0:0:0:0:0:0:0:0", "::" -> "0.0.0.0"
+        else -> ip
+    }
 
     /**
      * 获取连接信息

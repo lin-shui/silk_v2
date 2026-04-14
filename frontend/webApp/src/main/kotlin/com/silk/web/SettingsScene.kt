@@ -3,6 +3,7 @@ package com.silk.web
 import androidx.compose.runtime.*
 import com.silk.shared.i18n.*
 import com.silk.shared.models.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.browser.document
 import org.jetbrains.compose.web.attributes.InputType
@@ -26,8 +27,12 @@ fun SettingsScene(appState: WebAppState) {
     // CC settings state
     var ccBridgeToken by remember { mutableStateOf<String?>(null) }
     var ccBridgeConnected by remember { mutableStateOf(false) }
+    var ccBridgeIp by remember { mutableStateOf<String?>(null) }
     var ccTokenVisible by remember { mutableStateOf(false) }
     var ccIsGenerating by remember { mutableStateOf(false) }
+    var ccIsTesting by remember { mutableStateOf(false) }
+    var ccTestResult by remember { mutableStateOf<String?>(null) }
+    var ccTestGeneration by remember { mutableStateOf(0) }
     
     // Load settings on mount
     LaunchedEffect(Unit) {
@@ -53,6 +58,7 @@ fun SettingsScene(appState: WebAppState) {
                 if (ccResponse.success) {
                     ccBridgeToken = ccResponse.ccBridgeToken
                     ccBridgeConnected = ccResponse.bridgeConnected
+                    ccBridgeIp = ccResponse.bridgeIp
                 }
             } catch (e: Exception) {
                 console.error("加载设置失败:", e)
@@ -320,7 +326,7 @@ fun SettingsScene(appState: WebAppState) {
                                 display(DisplayStyle.Flex)
                                 alignItems(AlignItems.Center)
                                 gap(8.px)
-                                marginBottom(16.px)
+                                marginBottom(if (ccBridgeConnected && ccBridgeIp != null) 8.px else 16.px)
                             }
                         }) {
                             // Status dot
@@ -329,18 +335,109 @@ fun SettingsScene(appState: WebAppState) {
                                     width(10.px)
                                     height(10.px)
                                     borderRadius(50.percent)
-                                    backgroundColor(if (ccBridgeConnected) Color("#4CAF50") else Color("#9E9E9E"))
+                                    backgroundColor(if (ccBridgeConnected) Color(SilkColors.success) else Color(SilkColors.textLight))
                                     display(DisplayStyle.InlineBlock)
                                 }
                             }) {}
                             Span({
                                 style {
                                     fontSize(14.px)
-                                    color(if (ccBridgeConnected) Color("#4CAF50") else Color(SilkColors.textSecondary))
+                                    color(if (ccBridgeConnected) Color(SilkColors.success) else Color(SilkColors.textSecondary))
                                     property("font-weight", "500")
                                 }
                             }) {
                                 Text(if (ccBridgeConnected) strings.ccBridgeConnected else strings.ccBridgeDisconnected)
+                            }
+                        }
+
+                        // Bridge IP (when connected)
+                        if (ccBridgeConnected && ccBridgeIp != null) {
+                            Div({
+                                style {
+                                    marginBottom(16.px)
+                                    paddingLeft(18.px)
+                                    fontSize(13.px)
+                                    color(Color(SilkColors.textSecondary))
+                                }
+                            }) {
+                                Span({ style { property("font-weight", "500") } }) {
+                                    Text(strings.ccBridgeIpLabel)
+                                }
+                                Span({
+                                    style {
+                                        fontFamily("monospace")
+                                        color(Color(SilkColors.textPrimary))
+                                        marginLeft(4.px)
+                                    }
+                                }) {
+                                    Text(ccBridgeIp!!)
+                                }
+                            }
+                        }
+
+                        // Refresh status button
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                gap(8.px)
+                                marginBottom(16.px)
+                            }
+                        }) {
+                            Button({
+                                style {
+                                    padding(6.px, 14.px)
+                                    backgroundColor(Color(SilkColors.secondary))
+                                    color(Color(SilkColors.textPrimary))
+                                    border {
+                                        width(1.px)
+                                        style(LineStyle.Solid)
+                                        color(Color(SilkColors.border))
+                                    }
+                                    borderRadius(6.px)
+                                    property("cursor", if (ccIsTesting) "not-allowed" else "pointer")
+                                    property("opacity", if (ccIsTesting) "0.6" else "1")
+                                    fontSize(13.px)
+                                }
+                                onClick {
+                                    if (!ccIsTesting) {
+                                        scope.launch {
+                                            ccIsTesting = true
+                                            ccTestResult = null
+                                            val gen = ++ccTestGeneration
+                                            try {
+                                                val resp = ApiClient.getBridgeStatus(user.id)
+                                                ccBridgeConnected = resp.bridgeConnected
+                                                ccBridgeIp = resp.bridgeIp
+                                                ccTestResult = if (resp.bridgeConnected) strings.ccTestSuccess else strings.ccTestFailed
+                                            } catch (e: Exception) {
+                                                console.error("刷新 Bridge 状态失败:", e)
+                                                ccTestResult = strings.ccTestFailed
+                                            } finally {
+                                                ccIsTesting = false
+                                            }
+                                            // 10 秒后自动清除结果（仅当没有更新的点击时）
+                                            delay(10_000)
+                                            if (ccTestGeneration == gen) {
+                                                ccTestResult = null
+                                            }
+                                        }
+                                    }
+                                }
+                            }) {
+                                Text(if (ccIsTesting) strings.ccRefreshingStatus else strings.ccRefreshStatus)
+                            }
+                            // Result text
+                            if (ccTestResult != null) {
+                                Span({
+                                    style {
+                                        fontSize(13.px)
+                                        property("font-weight", "500")
+                                        color(if (ccTestResult == strings.ccTestSuccess) Color(SilkColors.success) else Color(SilkColors.error))
+                                    }
+                                }) {
+                                    Text(ccTestResult!!)
+                                }
                             }
                         }
 
@@ -392,7 +489,7 @@ fun SettingsScene(appState: WebAppState) {
                                     }
                                     onClick {
                                         ccBridgeToken?.let { token ->
-                                            kotlinx.browser.window.navigator.clipboard.writeText(token)
+                                            copyToClipboard(token)
                                             saveMessage = strings.ccTokenCopied
                                         }
                                     }

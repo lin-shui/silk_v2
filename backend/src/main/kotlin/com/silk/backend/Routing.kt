@@ -466,7 +466,8 @@ fun Application.configureRouting() {
             try {
                 val token = UserSettingsRepository.getBridgeToken(userId)
                 val connected = BridgeRegistry.isConnected(userId)
-                call.respond(CcSettingsResponse(true, "ok", token, connected))
+                val bridgeIp = if (connected) BridgeRegistry.getRemoteIp(userId) else null
+                call.respond(CcSettingsResponse(true, "ok", token, connected, bridgeIp))
             } catch (e: Exception) {
                 logger.error("❌ 获取CC设置失败: {}", e.message)
                 call.respond(HttpStatusCode.InternalServerError, CcSettingsResponse(false, "获取失败: ${e.message}"))
@@ -491,7 +492,8 @@ fun Application.configureRouting() {
                     BridgeRegistry.unregister(userId)
                 }
                 val connected = BridgeRegistry.isConnected(userId)
-                call.respond(CcSettingsResponse(true, "Token 已生成", token, connected))
+                val bridgeIp = if (connected) BridgeRegistry.getRemoteIp(userId) else null
+                call.respond(CcSettingsResponse(true, "Token 已生成", token, connected, bridgeIp))
             } catch (e: Exception) {
                 logger.error("❌ 生成Bridge Token失败: {}", e.message)
                 call.respond(HttpStatusCode.InternalServerError, CcSettingsResponse(false, "生成失败: ${e.message}"))
@@ -506,7 +508,8 @@ fun Application.configureRouting() {
                 return@get
             }
             val connected = BridgeRegistry.isConnected(userId)
-            call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected))
+            val bridgeIp = if (connected) BridgeRegistry.getRemoteIp(userId) else null
+            call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected, bridgeIp = bridgeIp))
         }
         
         // PDF 报告下载端点
@@ -1396,7 +1399,8 @@ fun Application.configureRouting() {
             }
 
             logger.info("🔌 Bridge 连接: userId={}", userId)
-            BridgeRegistry.register(userId, this, "")
+            val remoteIp = call.request.local.remoteAddress
+            BridgeRegistry.register(userId, this, "", remoteIp)
             try {
                 incoming.consumeEach { frame ->
                     if (frame is Frame.Text) {

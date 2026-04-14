@@ -50,4 +50,5 @@ data class CcSettingsResponse(
     val message: String,
     val ccBridgeToken: String? = null,
     val bridgeConnected: Boolean = false,
+    val bridgeIp: String? = null,
 )

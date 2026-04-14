@@ -114,9 +114,9 @@ def _die_claude_not_found(system: str, extra: str = "") -> None:
     msg.append("  3. Set the path manually:")
     if system == "Windows":
         msg.append('     set CLAUDE_CODE_PATH=C:\\path\\to\\claude.cmd')
-        msg.append("     python bridge.py --server ... --token ...")
+        msg.append("     python bridge_agent.py --server ... --token ...")
     else:
-        msg.append("     CLAUDE_CODE_PATH=/path/to/claude python bridge.py --server ... --token ...")
+        msg.append("     CLAUDE_CODE_PATH=/path/to/claude python bridge_agent.py --server ... --token ...")
     msg.append("")
     msg.append("=" * 60)
     print("\n".join(msg), flush=True)
