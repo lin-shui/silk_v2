@@ -881,12 +881,25 @@ fun ChatScreen(appState: AppState) {
                     // ✅ reverseLayout=true 时，第一个 item 显示在底部（靠近输入框）
                     // 所以状态消息要放在最前面，才能显示在最底部
                     
-                    // 1️⃣ 状态消息（搜索、索引等过程状态）
-                    // 仅在最终答案尚未开始流式生成前显示
-                    val hasStartedFinalAnswer = transientMessage?.let { msg ->
-                        msg.content.isNotBlank() && msg.currentStep == null && msg.totalSteps == null
-                    } == true
-                    if ((statusMessages.isNotEmpty() || isWaitingForAI) && !hasStartedFinalAnswer) {
+                    // 1️⃣ 临时消息（AI处理中）- 不支持选择
+                    transientMessage?.let { message ->
+                        item(key = "transient_message") {
+                            MessageItem(
+                                message = message,
+                                currentUserId = user.id,
+                                context = context,
+                                isTransient = true,
+                                isSelectionMode = false,
+                                isSelected = false,
+                                onToggleSelection = {},
+                                onUserNameClick = null
+                            )
+                        }
+                    }
+
+                    // 2️⃣ 状态消息（工具调用日志等）
+                    // 与 Web 端一致：显示在临时消息上方，由 ChatClient 在收到最终消息时统一清空
+                    if (statusMessages.isNotEmpty() || isWaitingForAI) {
                         item(key = "status_messages") {
                             Column(
                                 modifier = Modifier
@@ -906,16 +919,25 @@ fun ChatScreen(appState: AppState) {
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier.padding(vertical = 2.dp)
                                     ) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(12.dp),
-                                            strokeWidth = 1.5.dp,
-                                            color = Color.Gray.copy(alpha = 0.6f)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
+                                        val content = statusMsg.content
+                                        // CC Bridge 消息自带 emoji 图标（📖 🔍 💻 🤔 等），无需额外旋转指示器
+                                        val hasToolIcon = content.isNotEmpty() &&
+                                            !Character.isLetterOrDigit(content.codePointAt(0))
+
+                                        if (!hasToolIcon) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(12.dp),
+                                                strokeWidth = 1.5.dp,
+                                                color = Color.Gray.copy(alpha = 0.6f)
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        }
                                         Text(
-                                            text = statusMsg.content,
+                                            text = content,
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = Color.Gray.copy(alpha = 0.7f)
+                                            color = Color.Gray.copy(alpha = 0.7f),
+                                            maxLines = 2,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                         )
                                     }
                                 }
@@ -940,22 +962,6 @@ fun ChatScreen(appState: AppState) {
                                     }
                                 }
                             }
-                        }
-                    }
-
-                    // 2️⃣ 临时消息（AI处理中）- 不支持选择
-                    transientMessage?.let { message ->
-                        item(key = "transient_message") {
-                            MessageItem(
-                                message = message,
-                                currentUserId = user.id,
-                                context = context,
-                                isTransient = true,
-                                isSelectionMode = false,
-                                isSelected = false,
-                                onToggleSelection = {},
-                                onUserNameClick = null
-                            )
                         }
                     }
                     
