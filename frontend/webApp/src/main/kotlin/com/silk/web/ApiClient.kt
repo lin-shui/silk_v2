@@ -152,17 +152,16 @@ data class ExportMarkdownResponse(
     val fileName: String = "",
     val markdown: String = ""
 )
-
 object ApiClient {
     private val BASE_URL: String
         get() {
+            // 优先走同源，兼容 nginx 代理；
+            // 仅在本地前端 dev server 直连场景下切到后端端口，避免跨端口登录失效。
             val protocol = window.location.protocol
             val hostname = window.location.hostname
             val origin = window.location.origin.let { if (it.endsWith("/")) it.dropLast(1) else it }
             val currentPort = window.location.port
 
-            // nginx 同源代理模式下继续走同源；
-            // 本地 silk.sh 分端口模式下，前端(15004)需要直连后端(15003)。
             return if (currentPort == BuildConfig.FRONTEND_PORT) {
                 "$protocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
             } else {
@@ -410,14 +409,14 @@ object ApiClient {
     /**
      * 删除群组（仅群主可操作）
      */
-    suspend fun deleteGroup(groupId: String, userId: String): DeleteGroupResponse {
+    suspend fun deleteGroup(groupId: String, userId: String): SimpleResponse {
         return try {
             val body = """{"userId":"$userId"}"""
             val response = delete("/groups/$groupId", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("删除群组失败:", e)
-            DeleteGroupResponse(false, "网络错误")
+            SimpleResponse(false, "网络错误")
         }
     }
     // ==================== 用户设置相关 API ====================
@@ -590,4 +589,3 @@ object ApiClient {
         return response.text().await()
     }
 }
-

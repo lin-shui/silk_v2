@@ -1,72 +1,22 @@
-# Silk 后端自动化测试框架
+# Backend Tests
 
-## 概述
+当前快检分成三类：
 
-本目录包含 Silk 后端的自动化测试用例，用于验证核心功能的正确性。
+- `BackendHttpContractTest`：注册、登录、用户设置、群组创建/加入、消息撤回、Todo HTTP 合同。
+- `BackendFileContractTest`：文件上传、重名处理、列表、下载、删除合同，上传后 `FILE` 消息 payload 的实时广播/历史回放，以及 `processed_urls.txt` 本地路径分支。
+- `BackendWebSocketContractTest`：群组 WebSocket 入群鉴权、历史回放、广播持久化、未读计数，以及本地 URL/PDF 入口成功分支的文件消息广播/历史回放、404/非支持内容类型、读超时、连接拒绝、损坏 PDF 等失败分支的下载去重、状态回显与落盘 smoke。
+- `ai/DirectModelAgentToolPolicyTest`：AI 工具暴露面、会话作用域、路径拒绝与审计结果。
+- `utils/WebPageDownloaderSmokeTest`：URL 提取去重、本地 HTML/PDF 下载提取与落盘 smoke，不依赖外网。
+- `UserTodoStoreTest`：待办去重、重开、模板实例化等核心生命周期逻辑。
+- `claudecode/StreamParserTest`：Claude Code Bridge 元信息格式化单测。
 
-## 测试文件
-
-| 文件 | 描述 |
-|------|------|
-| `ApplicationTest.kt` | 基础应用测试 |
-| `MessageRecallTest.kt` | 消息撤回功能测试 |
-| `MessageForwardTest.kt` | 消息转发功能测试 |
-| `MessageCopyTest.kt` | 消息复制功能测试 |
-
-## 运行测试
-
-### 使用 Gradle
+运行方式：
 
 ```bash
-cd /mi/sfs_turbo/lilin_v1/code/silk-fork
 ./gradlew :backend:test
 ```
 
-### 使用测试脚本
+新增测试时保持两点：
 
-```bash
-cd /mi/sfs_turbo/lilin_v1/code/silk-fork
-./run-tests.sh
-```
-
-## 添加新测试
-
-1. 在 `com.silk.backend` 包下创建新的测试类
-2. 使用 `@Test` 注解标记测试方法
-3. 使用 `kotlin.test` 包中的断言方法
-
-### 测试命名规范
-
-- 测试类: `{功能名}Test.kt`
-- 测试方法: `test{具体测试场景}`
-
-### 示例
-
-```kotlin
-package com.silk.backend
-
-import org.junit.Test
-import kotlin.test.assertTrue
-
-class ExampleTest {
-    @Test
-    fun testExample() {
-        assertTrue(true, "示例测试应该通过")
-    }
-}
-```
-
-## 测试原则
-
-1. **独立性**: 每个测试应该独立运行，不依赖其他测试
-2. **可重复性**: 测试结果应该可重复
-3. **自验证**: 测试应该自动判断成功或失败
-4. **及时性**: 测试应该快速执行
-
-## 持续集成
-
-建议在以下情况运行测试:
-- 提交代码前
-- 合并分支前
-- 新增功能后
-- 修复 bug 后
+- 优先写能直接拦截回归的真实接口/逻辑测试，避免字符串占位测试。
+- 使用 `TestWorkspace` 隔离 SQLite 与 `chat_history`，不要把测试产物写回仓库根目录。

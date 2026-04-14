@@ -15,6 +15,7 @@ import io.ktor.server.websocket.*
 import io.ktor.websocket.*
 import io.ktor.http.*
 import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -74,7 +75,11 @@ suspend fun broadcastFileMessage(
             id = System.currentTimeMillis().toString() + (0..999).random(),
             userId = userId,
             userName = userName,
-            content = """{"fileName":"$fileName","fileSize":$fileSize,"downloadUrl":"$downloadUrl"}""",
+            content = buildFileMessageContent(
+                fileName = fileName,
+                fileSize = fileSize,
+                downloadUrl = downloadUrl
+            ),
             timestamp = System.currentTimeMillis(),
             type = MessageType.FILE
         )
@@ -1704,6 +1709,8 @@ fun Application.configureRouting() {
                         else -> {}
                     }
                 }
+            } catch (_: CancellationException) {
+                logger.debug("WebSocket 会话正常取消: {} ({})", userName, userId)
             } catch (e: Exception) {
                 logger.error("❌ WebSocket 错误: {}", e.localizedMessage)
             } finally {
@@ -1713,4 +1720,3 @@ fun Application.configureRouting() {
         }
     }
 }
-
