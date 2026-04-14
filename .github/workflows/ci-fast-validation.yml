@@ -48,10 +48,11 @@ jobs:
       - name: Smoke check silk.sh status
         run: ./silk.sh status
 
-      - name: Run backend, web, and desktop fast validation
+      - name: Run backend, packaging, web, and desktop fast validation
         run: |
           ./gradlew $GRADLE_ARGS_COMMON \
             :backend:test \
+            :backend:shadowJar \
             :frontend:webApp:compileProductionExecutableKotlinJs \
             :frontend:desktopApp:compileKotlin
 
@@ -63,6 +64,14 @@ jobs:
           path: |
             backend/build/reports/tests/test
             backend/build/test-results/test
+          if-no-files-found: ignore
+
+      - name: Upload backend shadowJar
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-shadowjar
+          path: backend/build/libs/*-all.jar
           if-no-files-found: ignore
 
   android-compile:

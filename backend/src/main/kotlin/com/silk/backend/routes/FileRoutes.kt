@@ -2,6 +2,7 @@ package com.silk.backend.routes
 
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.broadcastSystemStatus
+import com.silk.backend.database.SimpleResponse
 import com.silk.backend.search.WeaviateClient
 import com.silk.backend.search.IndexDocument
 import io.ktor.http.*
@@ -32,6 +33,19 @@ private val json = Json { ignoreUnknownKeys = true }
 private val weaviateClient by lazy { 
     WeaviateClient(AIConfig.requireWeaviateUrl()) 
 }
+
+private fun chatHistoryRootDir(): File =
+    System.getProperty("silk.chatHistoryDir")
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+        ?.let(::File)
+        ?: File("chat_history")
+
+private fun normalizedSessionDir(sessionId: String): String =
+    if (sessionId.startsWith("group_")) sessionId else "group_$sessionId"
+
+private fun uploadsDirForSession(sessionId: String): File =
+    File(File(chatHistoryRootDir(), normalizedSessionDir(sessionId)), "uploads")
 
 /**
  * APK 版本信息响应
@@ -101,8 +115,7 @@ fun Route.fileRoutes() {
                 }
                 
                 // 创建会话文件夹 - 确保使用 group_ 前缀保持一致
-                val normalizedSessionDir = if (sessionId!!.startsWith("group_")) sessionId else "group_$sessionId"
-                val sessionDir = File("chat_history/$normalizedSessionDir/uploads")
+                val sessionDir = uploadsDirForSession(sessionId!!)
                 if (!sessionDir.exists()) {
                     sessionDir.mkdirs()
                 }
@@ -215,8 +228,7 @@ fun Route.fileRoutes() {
             }
             
             // 处理 sessionId - 确保使用正确的目录格式
-            val downloadSessionId = if (sessionId.startsWith("group_")) sessionId else "group_$sessionId"
-            val file = File("chat_history/$downloadSessionId/uploads/$fileId")
+            val file = File(uploadsDirForSession(sessionId), fileId)
             
             if (!file.exists()) {
                 call.respond(HttpStatusCode.NotFound, mapOf("error" to "File not found"))
@@ -348,8 +360,7 @@ fun Route.fileRoutes() {
             }
             
             // 处理 sessionId - 确保使用正确的目录格式
-            val dirSessionId = if (sessionId.startsWith("group_")) sessionId else "group_$sessionId"
-            val uploadsDir = File("chat_history/$dirSessionId/uploads")
+            val uploadsDir = uploadsDirForSession(sessionId)
             
             // 读取已处理的 URL 清单
             val processedUrlsFile = File(uploadsDir, "processed_urls.txt")
@@ -405,7 +416,7 @@ fun Route.fileRoutes() {
                 return@delete
             }
             
-            val file = File("chat_history/$sessionId/uploads/$fileId")
+            val file = File(uploadsDirForSession(sessionId), fileId)
             
             if (!file.exists()) {
                 call.respond(HttpStatusCode.NotFound, mapOf("error" to "File not found"))
@@ -422,10 +433,13 @@ fun Route.fileRoutes() {
                     logger.warn("从索引删除文件失败: ${e.message}")
                 }
                 
-                call.respond(HttpStatusCode.OK, mapOf(
-                    "success" to true,
-                    "message" to "File deleted"
-                ))
+                call.respond(
+                    HttpStatusCode.OK,
+                    SimpleResponse(
+                        success = true,
+                        message = "File deleted"
+                    )
+                )
             } else {
                 call.respond(HttpStatusCode.InternalServerError, mapOf(
                     "error" to "Failed to delete file"
@@ -446,6 +460,11 @@ private suspend fun indexFileToWeaviate(
     contentType: String?
 ): Boolean = withContext(Dispatchers.IO) {
     try {
+        if (AIConfig.WEAVIATE_URL.isBlank()) {
+            logger.info("⏭️ 未配置 Weaviate，跳过文件索引: {}", originalFileName)
+            return@withContext false
+        }
+
         logger.info("🔍 开始索引文件到 Weaviate: $originalFileName (type: $contentType)")
         
         // 检查 Weaviate 是否可用
@@ -790,4 +809,3 @@ data class FileInfo(
     val uploadTime: Long,
     val downloadUrl: String
 )
-
