@@ -6,6 +6,8 @@ import com.silk.backend.database.SimpleResponse
 import com.silk.backend.database.UnreadCountResponse
 import com.silk.backend.models.ChatHistory
 import com.silk.backend.models.ChatHistoryEntry
+import com.silk.backend.testsupport.HttpOnlyWebPageDownloaderOverride
+import com.silk.backend.testsupport.LocalWebContentServer
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.WebSockets
@@ -22,11 +24,15 @@ import io.ktor.server.testing.testApplication
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -162,8 +168,316 @@ class BackendWebSocketContractTest {
         }
     }
 
+    @Test
+    fun `chat websocket ingests local html and pdf urls once and persists downloaded artifacts`() {
+        TestWorkspace().use { workspace ->
+            val group = createGroupForTest("WebSocket URL Ingestion Group")
+            val html = """
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>CI URL HTML Smoke</title>
+                </head>
+                <body>
+                    <header>ignore this header</header>
+                    <main>
+                        <p>This websocket fast validation smoke covers URL ingestion without any internet dependency.</p>
+                        <p>It verifies the message entry path from chat text to local download, file persistence, and status echo.</p>
+                    </main>
+                </body>
+                </html>
+            """.trimIndent()
+            val pdfBytes = LocalWebContentServer.createPdfBytes(
+                title = "CI URL PDF Smoke",
+                contentLine = "CI URL PDF smoke content for websocket validation."
+            )
+            val localWeb = LocalWebContentServer(
+                html = html,
+                pdfBytes = pdfBytes,
+                htmlPath = "/docs/chat-ci-smoke",
+                pdfPath = "/docs/chat-ci-smoke.pdf"
+            )
+            val httpOnlyDownloader = HttpOnlyWebPageDownloaderOverride()
+
+            try {
+                testApplication {
+                    application { module() }
+
+                    val wsClient = createClient {
+                        install(WebSockets)
+                    }
+                    val hostSession = wsClient.connectChat(
+                        userId = "host-user",
+                        userName = "HostUser",
+                        groupId = group.id
+                    )
+
+                    val urlMessage = Message(
+                        id = "url-live-1",
+                        userId = "host-user",
+                        userName = "HostUser",
+                        content = "Please ingest ${localWeb.htmlUrl} and ${localWeb.pdfUrl}",
+                        timestamp = 20_000L
+                    )
+                    hostSession.send(Frame.Text(json.encodeToString(urlMessage)))
+
+                    val received = hostSession.receiveMessagesUntil { it.content == "CLEAR_STATUS" }
+                    val receivedContents = received.map { it.content }
+                    assertEquals("url-live-1", received.first().id)
+                    assertContainsInOrder(
+                        actual = receivedContents,
+                        expected = listOf(
+                            urlMessage.content,
+                            "🌐 正在下载: ${localWeb.htmlUrl}",
+                            "📄 已下载网页: CI URL HTML Smoke",
+                            "🌐 正在下载: ${localWeb.pdfUrl}",
+                            "📄 已下载PDF: CI URL PDF Smoke",
+                            "CLEAR_STATUS"
+                        )
+                    )
+
+                    val uploadsDir = File(workspace.chatHistoryDir, "group_${group.id}/uploads")
+                    waitForCondition {
+                        val files = uploadsDir.listFiles()?.filter { it.name != "processed_urls.txt" } ?: emptyList()
+                        File(uploadsDir, "processed_urls.txt").isFile && files.size == 3
+                    }
+
+                    val processedUrls = File(uploadsDir, "processed_urls.txt")
+                        .readLines()
+                        .filter { it.isNotBlank() }
+                    assertEquals(
+                        listOf(localWeb.htmlUrl.lowercase(), localWeb.pdfUrl.lowercase()),
+                        processedUrls
+                    )
+
+                    val savedFiles = uploadsDir.listFiles()
+                        ?.filter { it.name != "processed_urls.txt" }
+                        .orEmpty()
+                    assertEquals(3, savedFiles.size)
+
+                    val htmlFile = assertNotNull(savedFiles.firstOrNull { it.extension == "html" })
+                    assertTrue(htmlFile.readText().contains("websocket fast validation smoke covers URL ingestion"))
+
+                    val pdfFile = assertNotNull(savedFiles.firstOrNull { it.extension == "pdf" })
+                    assertEquals(pdfBytes.size, pdfFile.readBytes().size)
+
+                    val pdfTextFile = assertNotNull(savedFiles.firstOrNull { it.name.endsWith("_text.txt") })
+                    assertTrue(pdfTextFile.readText().contains("CI URL PDF smoke content for websocket validation."))
+
+                    val duplicateMessage = Message(
+                        id = "url-live-2",
+                        userId = "host-user",
+                        userName = "HostUser",
+                        content = "Repeat ${localWeb.htmlUrl} and ${localWeb.pdfUrl}",
+                        timestamp = 21_000L
+                    )
+                    hostSession.send(Frame.Text(json.encodeToString(duplicateMessage)))
+
+                    val duplicateBroadcast = hostSession.receiveMessage()
+                    assertEquals("url-live-2", duplicateBroadcast.id)
+                    assertEquals(duplicateMessage.content, duplicateBroadcast.content)
+                    assertNull(hostSession.receiveMessageOrNull(1_000))
+
+                    delay(300)
+                    val filesAfterDuplicate = uploadsDir.listFiles()
+                        ?.filter { it.name != "processed_urls.txt" }
+                        .orEmpty()
+                    assertEquals(3, filesAfterDuplicate.size)
+                    assertFalse(
+                        File(uploadsDir, "processed_urls.txt")
+                            .readLines()
+                            .filter { it.isNotBlank() }
+                            .size > 2
+                    )
+                }
+            } finally {
+                httpOnlyDownloader.close()
+                localWeb.close()
+            }
+        }
+    }
+
+    @Test
+    fun `chat websocket reports local url failures without persisting processed urls or files`() {
+        TestWorkspace().use { workspace ->
+            val group = createGroupForTest("WebSocket URL Failure Group")
+            val localWeb = LocalWebContentServer(
+                html = "<html><head><title>unused</title></head><body>unused</body></html>",
+                pdfBytes = LocalWebContentServer.createPdfBytes()
+            )
+            val httpOnlyDownloader = HttpOnlyWebPageDownloaderOverride()
+
+            try {
+                testApplication {
+                    application { module() }
+
+                    val wsClient = createClient {
+                        install(WebSockets)
+                    }
+                    val hostSession = wsClient.connectChat(
+                        userId = "host-user",
+                        userName = "HostUser",
+                        groupId = group.id
+                    )
+
+                    val failedUrlMessage = Message(
+                        id = "url-fail-1",
+                        userId = "host-user",
+                        userName = "HostUser",
+                        content = "Try ${localWeb.unsupportedUrl} and ${localWeb.missingUrl}",
+                        timestamp = 22_000L
+                    )
+                    hostSession.send(Frame.Text(json.encodeToString(failedUrlMessage)))
+
+                    val received = hostSession.receiveMessagesUntil { it.content == "CLEAR_STATUS" }
+                    val receivedContents = received.map { it.content }
+                    assertEquals("url-fail-1", received.first().id)
+                    assertContainsInOrder(
+                        actual = receivedContents,
+                        expected = listOf(
+                            failedUrlMessage.content,
+                            "🌐 正在下载: ${localWeb.unsupportedUrl}",
+                            "⚠️ 无法下载: ${localWeb.unsupportedUrl}",
+                            "🌐 正在下载: ${localWeb.missingUrl}",
+                            "⚠️ 无法下载: ${localWeb.missingUrl}",
+                            "CLEAR_STATUS"
+                        )
+                    )
+
+                    assertUploadsRemainEmpty(workspace, group.id)
+                }
+            } finally {
+                httpOnlyDownloader.close()
+                localWeb.close()
+            }
+        }
+    }
+
+    @Test
+    fun `chat websocket reports corrupt pdf failure without persisting processed urls or files`() {
+        TestWorkspace().use { workspace ->
+            val group = createGroupForTest("WebSocket Corrupt PDF Failure Group")
+            val localWeb = LocalWebContentServer(
+                html = "<html><head><title>unused</title></head><body>unused</body></html>",
+                pdfBytes = LocalWebContentServer.createPdfBytes()
+            )
+            val httpOnlyDownloader = HttpOnlyWebPageDownloaderOverride()
+
+            try {
+                testApplication {
+                    application { module() }
+
+                    val wsClient = createClient {
+                        install(WebSockets)
+                    }
+                    val hostSession = wsClient.connectChat(
+                        userId = "host-user",
+                        userName = "HostUser",
+                        groupId = group.id
+                    )
+
+                    val failedUrlMessage = Message(
+                        id = "url-fail-2",
+                        userId = "host-user",
+                        userName = "HostUser",
+                        content = "Try ${localWeb.corruptPdfUrl}",
+                        timestamp = 23_000L
+                    )
+                    hostSession.send(Frame.Text(json.encodeToString(failedUrlMessage)))
+
+                    val received = hostSession.receiveMessagesUntil { it.content == "CLEAR_STATUS" }
+                    val receivedContents = received.map { it.content }
+                    assertEquals("url-fail-2", received.first().id)
+                    assertContainsInOrder(
+                        actual = receivedContents,
+                        expected = listOf(
+                            failedUrlMessage.content,
+                            "🌐 正在下载: ${localWeb.corruptPdfUrl}",
+                            "⚠️ 无法下载: ${localWeb.corruptPdfUrl}",
+                            "CLEAR_STATUS"
+                        )
+                    )
+
+                    assertUploadsRemainEmpty(workspace, group.id)
+                }
+            } finally {
+                httpOnlyDownloader.close()
+                localWeb.close()
+            }
+        }
+    }
+
+    @Test
+    fun `chat websocket reports timeout and connection refused without persisting processed urls or files`() {
+        TestWorkspace().use { workspace ->
+            val group = createGroupForTest("WebSocket Timeout Failure Group")
+            val localWeb = LocalWebContentServer(
+                html = "<html><head><title>unused</title></head><body>unused</body></html>",
+                pdfBytes = LocalWebContentServer.createPdfBytes()
+            )
+            val httpOnlyDownloader = HttpOnlyWebPageDownloaderOverride(
+                connectTimeoutMillis = 100,
+                readTimeoutMillis = 100
+            )
+
+            try {
+                testApplication {
+                    application { module() }
+
+                    val wsClient = createClient {
+                        install(WebSockets)
+                    }
+                    val hostSession = wsClient.connectChat(
+                        userId = "host-user",
+                        userName = "HostUser",
+                        groupId = group.id
+                    )
+
+                    val failedUrlMessage = Message(
+                        id = "url-fail-3",
+                        userId = "host-user",
+                        userName = "HostUser",
+                        content = "Try ${localWeb.slowHtmlUrl} and ${localWeb.refusedUrl}",
+                        timestamp = 24_000L
+                    )
+                    hostSession.send(Frame.Text(json.encodeToString(failedUrlMessage)))
+
+                    val received = hostSession.receiveMessagesUntil { it.content == "CLEAR_STATUS" }
+                    val receivedContents = received.map { it.content }
+                    assertEquals("url-fail-3", received.first().id)
+                    assertContainsInOrder(
+                        actual = receivedContents,
+                        expected = listOf(
+                            failedUrlMessage.content,
+                            "🌐 正在下载: ${localWeb.slowHtmlUrl}",
+                            "⚠️ 无法下载: ${localWeb.slowHtmlUrl}",
+                            "🌐 正在下载: ${localWeb.refusedUrl}",
+                            "⚠️ 无法下载: ${localWeb.refusedUrl}",
+                            "CLEAR_STATUS"
+                        )
+                    )
+
+                    assertUploadsRemainEmpty(workspace, group.id)
+                }
+            } finally {
+                httpOnlyDownloader.close()
+                localWeb.close()
+            }
+        }
+    }
+
     private fun createGroupForTest(groupName: String) =
         assertNotNull(GroupRepository.createGroup(groupName, hostId = "host-user"))
+
+    private suspend fun assertUploadsRemainEmpty(workspace: TestWorkspace, groupId: String) {
+        val uploadsDir = File(workspace.chatHistoryDir, "group_$groupId/uploads")
+        delay(300)
+        assertFalse(File(uploadsDir, "processed_urls.txt").exists())
+        val savedFiles = uploadsDir.listFiles()
+            ?.filter { it.name != "processed_urls.txt" }
+            .orEmpty()
+        assertTrue(savedFiles.isEmpty())
+    }
 
     private fun seedGroupHistory(groupId: String, entries: List<ChatHistoryEntry>) {
         ChatHistoryManager().saveChatHistory(
@@ -205,11 +519,56 @@ class BackendWebSocketContractTest {
             }
         }
 
+    private suspend fun DefaultClientWebSocketSession.receiveMessagesUntil(
+        stopWhen: (Message) -> Boolean
+    ): List<Message> = buildList {
+        withTimeout(8_000) {
+            while (true) {
+                val message = receiveMessage()
+                add(message)
+                if (stopWhen(message)) {
+                    break
+                }
+            }
+        }
+    }
+
     private suspend fun DefaultClientWebSocketSession.receiveMessage(): Message {
         val frame = withTimeout(5_000) { incoming.receive() }
         return when (frame) {
             is Frame.Text -> json.decodeFromString(frame.readText())
             else -> error("Expected text frame but received $frame")
+        }
+    }
+
+    private suspend fun DefaultClientWebSocketSession.receiveMessageOrNull(timeoutMillis: Long): Message? {
+        val frame = withTimeoutOrNull(timeoutMillis) { incoming.receive() } ?: return null
+        return when (frame) {
+            is Frame.Text -> json.decodeFromString(frame.readText())
+            else -> error("Expected text frame but received $frame")
+        }
+    }
+
+    private suspend fun waitForCondition(
+        timeoutMillis: Long = 5_000,
+        intervalMillis: Long = 50,
+        condition: () -> Boolean
+    ) {
+        withTimeout(timeoutMillis) {
+            while (!condition()) {
+                delay(intervalMillis)
+            }
+        }
+    }
+
+    private fun assertContainsInOrder(actual: List<String>, expected: List<String>) {
+        var cursor = 0
+        expected.forEach { target ->
+            while (cursor < actual.size && actual[cursor] != target) {
+                cursor++
+            }
+            assertTrue(cursor < actual.size, "Expected '$target' in order within $actual")
+            cursor++
         }
     }
 

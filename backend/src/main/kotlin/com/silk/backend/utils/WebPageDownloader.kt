@@ -31,6 +31,13 @@ import org.slf4j.LoggerFactory
 object WebPageDownloader {
     
     private val logger = LoggerFactory.getLogger(WebPageDownloader::class.java)
+    private const val DISABLE_PLAYWRIGHT_PROPERTY = "silk.webPageDownloader.disablePlaywright"
+    private const val CONNECT_TIMEOUT_PROPERTY = "silk.webPageDownloader.connectTimeoutMillis"
+    private const val READ_TIMEOUT_PROPERTY = "silk.webPageDownloader.readTimeoutMillis"
+    private const val DEFAULT_HTTP_CONNECT_TIMEOUT_MILLIS = 20_000
+    private const val DEFAULT_HTTP_READ_TIMEOUT_MILLIS = 60_000
+    private const val DEFAULT_PDF_CONNECT_TIMEOUT_MILLIS = 15_000
+    private const val DEFAULT_PDF_READ_TIMEOUT_MILLIS = 120_000
 
     // URL 匹配正则表达式
     private val URL_PATTERN = Pattern.compile(
@@ -130,7 +137,10 @@ object WebPageDownloader {
         while (matcher.find()) {
             val url = matcher.group()
             // 清理URL末尾的标点符号
-            val cleanUrl = url.trimEnd('.', ',', '!', '?', ')', ']', '}', ':', ';')
+            val cleanUrl = url.trimEnd(
+                '.', ',', '!', '?', ')', ']', '}', ':', ';',
+                '，', '。', '！', '？', '）', '】', '》', '：', '；', '、'
+            )
             if (isWebPageUrl(cleanUrl)) {
                 urls.add(cleanUrl)
             }
@@ -196,7 +206,7 @@ object WebPageDownloader {
         }
         
         // 网页：优先使用 Playwright
-        if (initPlaywright() && playwrightAvailable) {
+        if (!isPlaywrightDisabled() && initPlaywright() && playwrightAvailable) {
             val result = downloadWithPlaywright(url)
             if (result != null && result.textContent.length > 100) {
                 return result
@@ -207,6 +217,21 @@ object WebPageDownloader {
         // 降级：使用简单 HTTP
         return downloadWithSimpleHttp(url)
     }
+
+    private fun isPlaywrightDisabled(): Boolean =
+        System.getProperty(DISABLE_PLAYWRIGHT_PROPERTY)?.toBoolean() == true
+
+    private fun connectTimeoutMillis(defaultValue: Int): Int =
+        positiveIntProperty(CONNECT_TIMEOUT_PROPERTY) ?: defaultValue
+
+    private fun readTimeoutMillis(defaultValue: Int): Int =
+        positiveIntProperty(READ_TIMEOUT_PROPERTY) ?: defaultValue
+
+    private fun positiveIntProperty(name: String): Int? =
+        System.getProperty(name)
+            ?.trim()
+            ?.toIntOrNull()
+            ?.takeIf { it > 0 }
     
     /**
      * 使用 Playwright 无头浏览器下载网页
@@ -340,8 +365,8 @@ object WebPageDownloader {
             val connection = URL(url).openConnection() as HttpURLConnection
             connection.apply {
                 requestMethod = "GET"
-                connectTimeout = 20000
-                readTimeout = 60000
+                connectTimeout = connectTimeoutMillis(DEFAULT_HTTP_CONNECT_TIMEOUT_MILLIS)
+                readTimeout = readTimeoutMillis(DEFAULT_HTTP_READ_TIMEOUT_MILLIS)
                 // 模拟真实浏览器请求
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
                 setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
@@ -360,6 +385,7 @@ object WebPageDownloader {
             val responseCode = connection.responseCode
             if (responseCode != HttpURLConnection.HTTP_OK) {
                 logger.warn("⚠️ HTTP 下载失败，状态码: {}, URL: {}", responseCode, url)
+                connection.disconnect()
                 return null
             }
             
@@ -374,6 +400,7 @@ object WebPageDownloader {
             // 检查是否是 HTML
             if (!contentType.contains("text/html") && !contentType.contains("text/plain") && !contentType.contains("application/xhtml")) {
                 logger.warn("⚠️ 不支持的内容类型: {}", contentType)
+                connection.disconnect()
                 return null
             }
             
@@ -437,8 +464,8 @@ object WebPageDownloader {
             val connection = URL(url).openConnection() as HttpURLConnection
             connection.apply {
                 requestMethod = "GET"
-                connectTimeout = 15000
-                readTimeout = 120000  // PDF 可能较大
+                connectTimeout = connectTimeoutMillis(DEFAULT_PDF_CONNECT_TIMEOUT_MILLIS)
+                readTimeout = readTimeoutMillis(DEFAULT_PDF_READ_TIMEOUT_MILLIS)  // PDF 可能较大
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 instanceFollowRedirects = true
             }
@@ -446,6 +473,7 @@ object WebPageDownloader {
             val responseCode = connection.responseCode
             if (responseCode != HttpURLConnection.HTTP_OK) {
                 logger.warn("⚠️ PDF 下载失败，状态码: {}", responseCode)
+                connection.disconnect()
                 return null
             }
             
