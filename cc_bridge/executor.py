@@ -418,6 +418,7 @@ class Executor:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT if use_pty else asyncio.subprocess.PIPE,
                 cwd=working_dir,
+                limit=10 * 1024 * 1024,  # 10 MB – CC tool results can exceed the 64 KB default
             )
         except Exception as exc:
             logger.error("[Executor] Failed to start claude CLI: %s", exc)
