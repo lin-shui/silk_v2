@@ -12,6 +12,7 @@ backend/static/index.html
 backend/static/*.woff
 backend/static/*.woff2
 backend/static/*.ttf
+backend/static/*.hap
 
 # IDEA
 .idea/
