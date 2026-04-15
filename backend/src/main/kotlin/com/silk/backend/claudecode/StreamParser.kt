@@ -23,6 +23,7 @@ object StreamParser {
         if (meta.durationMs > 0) parts.add("耗时: %.1fs".format(meta.durationMs / 1000.0))
         if (meta.numTurns > 0) parts.add("轮次: ${meta.numTurns}")
         if (meta.sessionId.isNotBlank()) parts.add("会话: ${meta.sessionId.take(8)}...")
-        return parts.joinToString(" | ")
+        val joined = parts.joinToString(" | ")
+        return if (joined.isNotBlank()) "⏱ $joined" else joined
     }
 }

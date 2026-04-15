@@ -403,6 +403,38 @@ object ApiClient {
         }
     }
     
+    // ==================== CC Bridge 相关 API ====================
+
+    suspend fun getCcSettings(userId: String): CcSettingsResponse = withContext(Dispatchers.IO) {
+        try {
+            val response = get("/users/$userId/cc-settings")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("获取CC设置失败: $e")
+            CcSettingsResponse(false, "网络错误")
+        }
+    }
+
+    suspend fun generateBridgeToken(userId: String): CcSettingsResponse = withContext(Dispatchers.IO) {
+        try {
+            val response = post("/users/$userId/cc-settings/generate-token", "{}")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("生成Bridge Token失败: $e")
+            CcSettingsResponse(false, "网络错误")
+        }
+    }
+
+    suspend fun getBridgeStatus(userId: String): CcSettingsResponse = withContext(Dispatchers.IO) {
+        try {
+            val response = get("/users/$userId/cc-settings/bridge-status")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("获取Bridge状态失败: $e")
+            CcSettingsResponse(false, "网络错误")
+        }
+    }
+
     // ==================== 消息发送 API ====================
     
     /**
