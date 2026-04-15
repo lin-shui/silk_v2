@@ -569,4 +569,115 @@ object ApiClient {
             connection.disconnect()
         }
     }
+
+    private fun delete(endpoint: String): String {
+        val url = URL("$baseUrl$endpoint")
+        val connection = AndroidHttpCompat.openConnection(url)
+        return try {
+            connection.apply {
+                requestMethod = "DELETE"
+                connectTimeout = 10000
+                readTimeout = 10000
+            }
+            connection.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    // ==================== Workflow API ====================
+
+    suspend fun getWorkflows(userId: String): List<WorkflowItem> = withContext(Dispatchers.IO) {
+        try {
+            val response = get("/api/workflows?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("获取工作流失败: $e")
+            emptyList()
+        }
+    }
+
+    suspend fun createWorkflow(name: String, description: String, userId: String): WorkflowItem? = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"userId":"$userId","name":"$name","description":"$description"}"""
+            val response = post("/api/workflows", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("创建工作流失败: $e")
+            null
+        }
+    }
+
+    suspend fun deleteWorkflow(workflowId: String, userId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            delete("/api/workflows/$workflowId?userId=$userId")
+            true
+        } catch (e: Exception) {
+            println("删除工作流失败: $e")
+            false
+        }
+    }
+
+    // ==================== Knowledge Base API ====================
+
+    suspend fun getKBTopics(userId: String): List<KBTopicItem> = withContext(Dispatchers.IO) {
+        try {
+            val response = get("/api/kb/topics?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("获取知识库主题失败: $e")
+            emptyList()
+        }
+    }
+
+    suspend fun createKBTopic(name: String, project: String, userId: String): KBTopicItem? = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"userId":"$userId","name":"$name","project":"$project"}"""
+            val response = post("/api/kb/topics", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("创建知识库主题失败: $e")
+            null
+        }
+    }
+
+    suspend fun getKBEntries(topicId: String, userId: String): List<KBEntryItem> = withContext(Dispatchers.IO) {
+        try {
+            val response = get("/api/kb/entries?topicId=$topicId&userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("获取知识库条目失败: $e")
+            emptyList()
+        }
+    }
+
+    suspend fun createKBEntry(topicId: String, title: String, content: String, tags: List<String>, userId: String): KBEntryItem? = withContext(Dispatchers.IO) {
+        try {
+            val tagsJson = tags.joinToString(",") { "\"$it\"" }
+            val body = """{"userId":"$userId","topicId":"$topicId","title":"$title","content":"$content","tags":[$tagsJson]}"""
+            val response = post("/api/kb/entries", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("创建知识库条目失败: $e")
+            null
+        }
+    }
+
+    suspend fun updateKBEntry(entryId: String, title: String?, content: String?, tags: List<String>?, userId: String): KBEntryItem? = withContext(Dispatchers.IO) {
+        try {
+            val fields = mutableListOf("\"userId\":\"$userId\"")
+            if (title != null) fields.add("\"title\":\"${title.replace("\"", "\\\"")}\"")
+            if (content != null) {
+                val escaped = content.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
+                fields.add("\"content\":\"$escaped\"")
+            }
+            if (tags != null) fields.add("\"tags\":[${tags.joinToString(",") { "\"$it\"" }}]")
+            val body = "{${fields.joinToString(",")}}"
+            val response = put("/api/kb/entries/$entryId", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("更新知识库条目失败: $e")
+            null
+        }
+    }
 }

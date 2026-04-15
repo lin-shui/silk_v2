@@ -4,7 +4,7 @@
  */
 import { router as appRouter, PageName } from '../common/Router';
 import { LoginPage } from './LoginPage';
-import { GroupListPage } from './GroupListPage';
+import { MainPage } from './MainPage';
 import { ChatPage } from './ChatPage';
 import { TodoPage } from './TodoPage';
 import { SettingsPage } from './SettingsPage';
@@ -25,14 +25,16 @@ struct Index {
     Column() {
       if (this.currentPage === PageName.Login) {
         LoginPage();
-      } else if (this.currentPage === PageName.GroupList) {
-        GroupListPage();
+      } else if (this.currentPage === PageName.Main || this.currentPage === PageName.GroupList) {
+        MainPage();
       } else if (this.currentPage === PageName.Chat) {
         ChatPage();
       } else if (this.currentPage === PageName.Todo) {
         TodoPage();
-      } else {
+      } else if (this.currentPage === PageName.Settings) {
         SettingsPage();
+      } else {
+        MainPage();
       }
     }
     .width('100%')

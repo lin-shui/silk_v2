@@ -13,6 +13,12 @@ enum class Scene {
     SETTINGS
 }
 
+enum class NavTab {
+    SILK,
+    WORKFLOW,
+    KNOWLEDGE_BASE
+}
+
 class WebAppState {
     var currentScene by mutableStateOf(Scene.LOGIN)
         private set
@@ -22,6 +28,8 @@ class WebAppState {
     
     var selectedGroup by mutableStateOf<Group?>(null)
         private set
+
+    var currentTab by mutableStateOf(NavTab.SILK)
     
     // 标记用户是否明确请求了退出登录
     private var explicitLogoutRequested = false

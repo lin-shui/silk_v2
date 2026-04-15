@@ -108,6 +108,37 @@ interface BackendCreateGroupRequest {
   groupName: string;
 }
 
+// ==================== Workflow & Knowledge Base interfaces ====================
+
+export interface WorkflowApiItem {
+  id: string;
+  name: string;
+  description: string;
+  ownerId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface KBTopicApiItem {
+  id: string;
+  name: string;
+  project: string;
+  ownerId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface KBEntryApiItem {
+  id: string;
+  topicId: string;
+  title: string;
+  content: string;
+  tags: string[];
+  ownerId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 interface BackendJoinGroupRequest {
   userId: string;
   invitationCode: string;
@@ -672,6 +703,60 @@ export class ApiClient {
     return this.get<User>(`/auth/validate/${userId}`);
   }
 
+  // ==================== Raw HTTP helpers (for direct JSON array responses) ====================
+
+  private async getRaw(endpoint: string): Promise<string> {
+    const httpRequest = this.createHttpRequest();
+    try {
+      const response = await httpRequest.request(
+        `${this.baseUrl}${endpoint}`,
+        { method: http.RequestMethod.GET, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout }
+      );
+      return response.result as string;
+    } finally {
+      httpRequest.destroy();
+    }
+  }
+
+  private async postRaw(endpoint: string, body: string): Promise<string> {
+    const httpRequest = this.createHttpRequest();
+    try {
+      const response = await httpRequest.request(
+        `${this.baseUrl}${endpoint}`,
+        { method: http.RequestMethod.POST, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout }
+      );
+      return response.result as string;
+    } finally {
+      httpRequest.destroy();
+    }
+  }
+
+  private async putRaw(endpoint: string, body: string): Promise<string> {
+    const httpRequest = this.createHttpRequest();
+    try {
+      const response = await httpRequest.request(
+        `${this.baseUrl}${endpoint}`,
+        { method: http.RequestMethod.PUT, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout }
+      );
+      return response.result as string;
+    } finally {
+      httpRequest.destroy();
+    }
+  }
+
+  private async deleteRaw(endpoint: string): Promise<string> {
+    const httpRequest = this.createHttpRequest();
+    try {
+      const response = await httpRequest.request(
+        `${this.baseUrl}${endpoint}`,
+        { method: http.RequestMethod.DELETE, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout }
+      );
+      return response.result as string;
+    } finally {
+      httpRequest.destroy();
+    }
+  }
+
   // ==================== 群组相关 API ====================
 
   /**
@@ -1223,6 +1308,80 @@ export class ApiClient {
    */
   async getLatestVersion(): Promise<ApiResponse<LatestVersionInfo>> {
     return this.get<LatestVersionInfo>('/api/version/latest');
+  }
+
+  // ==================== Workflow API ====================
+
+  async getWorkflows(userId: string): Promise<WorkflowApiItem[]> {
+    try {
+      const result = await this.getRaw(`/api/workflows?userId=${userId}`);
+      return JSON.parse(result) as WorkflowApiItem[];
+    } catch (_) { return []; }
+  }
+
+  async createWorkflow(name: string, description: string, userId: string): Promise<WorkflowApiItem | undefined> {
+    try {
+      const body = JSON.stringify({ userId, name, description });
+      const result = await this.postRaw('/api/workflows', body);
+      return JSON.parse(result) as WorkflowApiItem;
+    } catch (_) { return undefined; }
+  }
+
+  async deleteWorkflow(workflowId: string, userId: string): Promise<boolean> {
+    try {
+      await this.deleteRaw(`/api/workflows/${workflowId}?userId=${userId}`);
+      return true;
+    } catch (_) { return false; }
+  }
+
+  // ==================== Knowledge Base API ====================
+
+  async getKBTopics(userId: string): Promise<KBTopicApiItem[]> {
+    try {
+      const result = await this.getRaw(`/api/kb/topics?userId=${userId}`);
+      return JSON.parse(result) as KBTopicApiItem[];
+    } catch (_) { return []; }
+  }
+
+  async createKBTopic(name: string, project: string, userId: string): Promise<KBTopicApiItem | undefined> {
+    try {
+      const body = JSON.stringify({ userId, name, project });
+      const result = await this.postRaw('/api/kb/topics', body);
+      return JSON.parse(result) as KBTopicApiItem;
+    } catch (_) { return undefined; }
+  }
+
+  async getKBEntries(topicId: string, userId: string): Promise<KBEntryApiItem[]> {
+    try {
+      const result = await this.getRaw(`/api/kb/entries?topicId=${topicId}&userId=${userId}`);
+      return JSON.parse(result) as KBEntryApiItem[];
+    } catch (_) { return []; }
+  }
+
+  async createKBEntry(topicId: string, title: string, content: string, tags: string[], userId: string): Promise<KBEntryApiItem> {
+    const body = JSON.stringify({ userId, topicId, title, content, tags });
+    const result = await this.postRaw('/api/kb/entries', body);
+    return JSON.parse(result) as KBEntryApiItem;
+  }
+
+  async updateKBEntry(entryId: string, title: string | undefined, content: string | undefined, tags: string[] | undefined, userId: string): Promise<KBEntryApiItem | undefined> {
+    try {
+      const parts: string[] = [`"userId":"${userId}"`];
+      if (title !== undefined) {
+        parts.push(`"title":"${title.replace(/"/g, '\\"')}"`);
+      }
+      if (content !== undefined) {
+        const escaped = content.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+        parts.push(`"content":"${escaped}"`);
+      }
+      if (tags !== undefined) {
+        const tagsJson = tags.map((t: string) => `"${t}"`).join(',');
+        parts.push(`"tags":[${tagsJson}]`);
+      }
+      const body = `{${parts.join(',')}}`;
+      const result = await this.putRaw(`/api/kb/entries/${entryId}`, body);
+      return JSON.parse(result) as KBEntryApiItem;
+    } catch (_) { return undefined; }
   }
 
   static getInstance(): ApiClient {

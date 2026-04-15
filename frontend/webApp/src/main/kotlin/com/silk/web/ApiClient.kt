@@ -152,6 +152,50 @@ data class ExportMarkdownResponse(
     val fileName: String = "",
     val markdown: String = ""
 )
+
+// ==================== Workflow models ====================
+
+@Serializable
+data class WorkflowItem(
+    val id: String,
+    val name: String,
+    val description: String = "",
+    val ownerId: String = "",
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0
+)
+
+// ==================== Knowledge Base models ====================
+
+@Serializable
+data class KBTopicItem(
+    val id: String,
+    val name: String,
+    val project: String = "",
+    val ownerId: String = "",
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0
+)
+
+@Serializable
+data class KBEntryItem(
+    val id: String,
+    val topicId: String = "",
+    val title: String,
+    val content: String = "",
+    val tags: List<String> = emptyList(),
+    val ownerId: String = "",
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0
+)
+
+@Serializable
+data class ExportKBResponse(
+    val success: Boolean,
+    val markdown: String = "",
+    val vaultPath: String = "",
+    val fileName: String = ""
+)
 object ApiClient {
     private val BASE_URL: String
         get() {
@@ -587,5 +631,114 @@ object ApiClient {
     private suspend fun get(endpoint: String): String {
         val response = window.fetch("$BASE_URL$endpoint").await()
         return response.text().await()
+    }
+
+    // ==================== Workflow API ====================
+
+    suspend fun getWorkflows(userId: String): List<WorkflowItem> {
+        return try {
+            val response = get("/api/workflows?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取工作流失败:", e)
+            emptyList()
+        }
+    }
+
+    suspend fun createWorkflow(name: String, description: String, userId: String): WorkflowItem? {
+        return try {
+            val body = """{"userId":"$userId","name":"$name","description":"$description"}"""
+            val response = post("/api/workflows", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("创建工作流失败:", e)
+            null
+        }
+    }
+
+    suspend fun deleteWorkflow(workflowId: String, userId: String): Boolean {
+        return try {
+            val response = window.fetch(
+                "$BASE_URL/api/workflows/$workflowId?userId=$userId",
+                RequestInit(method = "DELETE")
+            ).await()
+            response.ok
+        } catch (e: Exception) {
+            console.log("删除工作流失败:", e)
+            false
+        }
+    }
+
+    // ==================== Knowledge Base API ====================
+
+    suspend fun getKBTopics(userId: String): List<KBTopicItem> {
+        return try {
+            val response = get("/api/kb/topics?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取知识库主题失败:", e)
+            emptyList()
+        }
+    }
+
+    suspend fun createKBTopic(name: String, project: String, userId: String): KBTopicItem? {
+        return try {
+            val body = """{"userId":"$userId","name":"$name","project":"$project"}"""
+            val response = post("/api/kb/topics", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("创建知识库主题失败:", e)
+            null
+        }
+    }
+
+    suspend fun getKBEntries(topicId: String, userId: String): List<KBEntryItem> {
+        return try {
+            val response = get("/api/kb/entries?topicId=$topicId&userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取知识库条目失败:", e)
+            emptyList()
+        }
+    }
+
+    suspend fun createKBEntry(topicId: String, title: String, content: String, tags: List<String>, userId: String): KBEntryItem? {
+        return try {
+            val tagsJson = tags.joinToString(",") { "\"$it\"" }
+            val body = """{"userId":"$userId","topicId":"$topicId","title":"$title","content":"$content","tags":[$tagsJson]}"""
+            val response = post("/api/kb/entries", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("创建知识库条目失败:", e)
+            null
+        }
+    }
+
+    suspend fun updateKBEntry(entryId: String, title: String?, content: String?, tags: List<String>?, userId: String): KBEntryItem? {
+        return try {
+            val fields = mutableListOf("\"userId\":\"$userId\"")
+            if (title != null) fields.add("\"title\":\"${title.replace("\"", "\\\"")}\"")
+            if (content != null) {
+                val escaped = content.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
+                fields.add("\"content\":\"$escaped\"")
+            }
+            if (tags != null) fields.add("\"tags\":[${tags.joinToString(",") { "\"$it\"" }}]")
+            val body = "{${fields.joinToString(",")}}"
+            val response = put("/api/kb/entries/$entryId", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("更新知识库条目失败:", e)
+            null
+        }
+    }
+
+    suspend fun exportKBEntry(entryId: String): ExportKBResponse? {
+        return try {
+            val response = get("/api/kb/entries/$entryId/export")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("导出知识库条目失败:", e)
+            null
+        }
     }
 }

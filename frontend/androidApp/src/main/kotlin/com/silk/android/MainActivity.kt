@@ -6,6 +6,10 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountTree
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,6 +19,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
 
 /**
@@ -315,15 +320,86 @@ fun SilkApp(
                 )
             }
         }
+    } else if (appState.currentScene == Scene.LOGIN) {
+        LoginScreen(appState)
     } else {
-        // 根据当前场景显示对应的界面
-        when (appState.currentScene) {
-            Scene.LOGIN -> LoginScreen(appState)
-            Scene.GROUP_LIST -> GroupListScreen(appState)
-            Scene.CONTACTS -> ContactsScreen(appState)
-            Scene.CHAT_ROOM -> ChatScreen(appState)
-            Scene.SETTINGS -> SettingsScreen(appState)
+        Row(modifier = Modifier.fillMaxSize()) {
+            SilkNavigationRail(appState)
+            Box(modifier = Modifier.weight(1f)) {
+                when (appState.currentTab) {
+                    NavTab.SILK -> {
+                        when (appState.currentScene) {
+                            Scene.GROUP_LIST -> GroupListScreen(appState)
+                            Scene.CONTACTS -> ContactsScreen(appState)
+                            Scene.CHAT_ROOM -> ChatScreen(appState)
+                            Scene.SETTINGS -> SettingsScreen(appState)
+                            else -> GroupListScreen(appState)
+                        }
+                    }
+                    NavTab.WORKFLOW -> WorkflowScreen(appState)
+                    NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScreen(appState)
+                }
+            }
         }
+    }
+}
+
+@Composable
+fun SilkNavigationRail(appState: AppState) {
+    NavigationRail(
+        containerColor = SilkColors.primaryDark,
+        contentColor = Color.White,
+        header = {
+            Text(
+                text = "SILK",
+                modifier = Modifier.padding(vertical = 12.dp),
+                color = Color.White,
+                style = MaterialTheme.typography.titleSmall.copy(
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 3.sp
+                )
+            )
+        }
+    ) {
+        NavigationRailItem(
+            selected = appState.currentTab == NavTab.SILK,
+            onClick = { appState.currentTab = NavTab.SILK },
+            icon = { Icon(Icons.Default.Chat, contentDescription = "Silk") },
+            label = { Text("Silk", fontSize = 10.sp) },
+            colors = NavigationRailItemDefaults.colors(
+                selectedIconColor = SilkColors.primaryDark,
+                selectedTextColor = Color.White,
+                unselectedIconColor = Color.White.copy(alpha = 0.7f),
+                unselectedTextColor = Color.White.copy(alpha = 0.7f),
+                indicatorColor = Color.White.copy(alpha = 0.25f)
+            )
+        )
+        NavigationRailItem(
+            selected = appState.currentTab == NavTab.WORKFLOW,
+            onClick = { appState.currentTab = NavTab.WORKFLOW },
+            icon = { Icon(Icons.Default.AccountTree, contentDescription = "工作流") },
+            label = { Text("工作流", fontSize = 10.sp) },
+            colors = NavigationRailItemDefaults.colors(
+                selectedIconColor = SilkColors.primaryDark,
+                selectedTextColor = Color.White,
+                unselectedIconColor = Color.White.copy(alpha = 0.7f),
+                unselectedTextColor = Color.White.copy(alpha = 0.7f),
+                indicatorColor = Color.White.copy(alpha = 0.25f)
+            )
+        )
+        NavigationRailItem(
+            selected = appState.currentTab == NavTab.KNOWLEDGE_BASE,
+            onClick = { appState.currentTab = NavTab.KNOWLEDGE_BASE },
+            icon = { Icon(Icons.Default.MenuBook, contentDescription = "知识库") },
+            label = { Text("知识库", fontSize = 10.sp) },
+            colors = NavigationRailItemDefaults.colors(
+                selectedIconColor = SilkColors.primaryDark,
+                selectedTextColor = Color.White,
+                unselectedIconColor = Color.White.copy(alpha = 0.7f),
+                unselectedTextColor = Color.White.copy(alpha = 0.7f),
+                indicatorColor = Color.White.copy(alpha = 0.25f)
+            )
+        )
     }
 }
 

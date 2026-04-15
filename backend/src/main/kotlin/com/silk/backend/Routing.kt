@@ -4,6 +4,12 @@ import com.silk.backend.auth.AuthService
 import com.silk.backend.auth.GroupService
 import com.silk.backend.database.*
 import com.silk.backend.export.ChatObsidianExporter
+import com.silk.backend.kb.KBObsidianExporter
+import com.silk.backend.kb.KnowledgeBaseManager
+import com.silk.backend.models.KBEntry
+import com.silk.backend.models.KBTopic
+import com.silk.backend.models.Workflow
+import com.silk.backend.workflow.WorkflowManager
 import com.silk.backend.routes.fileRoutes
 import com.silk.backend.claudecode.BridgeRegistry
 import com.silk.backend.claudecode.ClaudeCodeManager
@@ -16,9 +22,7 @@ import io.ktor.websocket.*
 import io.ktor.http.*
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.CancellationException
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
+import kotlinx.serialization.json.*
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -31,6 +35,11 @@ import org.slf4j.LoggerFactory
 // 群组聊天服务器映射（每个群组一个ChatServer实例）
 private val groupChatServers = ConcurrentHashMap<String, ChatServer>()
 private val logger = LoggerFactory.getLogger("Routing")
+private val workflowManager = WorkflowManager()
+private val knowledgeBaseManager = KnowledgeBaseManager()
+
+private fun sanitizeFileName(input: String): String =
+    input.replace(Regex("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]"), "_").take(100)
 
 /**
  * 获取或创建指定群组的ChatServer
@@ -1680,6 +1689,215 @@ fun Application.configureRouting() {
                 logger.info("🔌 Bridge 断开: userId={}", userId)
                 BridgeRegistry.unregister(userId)
             }
+        }
+
+        // ==================== Workflow API ====================
+
+        get("/api/workflows") {
+            val userId = call.request.queryParameters["userId"]
+            if (userId.isNullOrBlank()) {
+                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@get
+            }
+            val list = workflowManager.listWorkflows(userId)
+            call.respondText(
+                Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(Workflow.serializer()), list),
+                ContentType.Application.Json
+            )
+        }
+
+        post("/api/workflows") {
+            val body = call.receiveText()
+            val json = Json { ignoreUnknownKeys = true }
+            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
+            val userId = req["userId"]?.jsonPrimitive?.content
+            val name = req["name"]?.jsonPrimitive?.content
+            if (userId.isNullOrBlank() || name.isNullOrBlank()) {
+                call.respondText("""{"success":false,"message":"Missing userId or name"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@post
+            }
+            val desc = req["description"]?.jsonPrimitive?.content ?: ""
+            val wf = workflowManager.createWorkflow(name, desc, userId)
+            call.respondText(
+                Json.encodeToString(Workflow.serializer(), wf),
+                ContentType.Application.Json,
+                HttpStatusCode.Created
+            )
+        }
+
+        delete("/api/workflows/{workflowId}") {
+            val workflowId = call.parameters["workflowId"] ?: ""
+            val userId = call.request.queryParameters["userId"]
+            if (userId.isNullOrBlank()) {
+                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@delete
+            }
+            val ok = workflowManager.deleteWorkflow(workflowId, userId)
+            call.respondText(
+                """{"success":$ok}""",
+                ContentType.Application.Json,
+                if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
+            )
+        }
+
+        // ==================== Knowledge Base API ====================
+
+        get("/api/kb/topics") {
+            val userId = call.request.queryParameters["userId"]
+            if (userId.isNullOrBlank()) {
+                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@get
+            }
+            val list = knowledgeBaseManager.listTopics(userId)
+            call.respondText(
+                Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBTopic.serializer()), list),
+                ContentType.Application.Json
+            )
+        }
+
+        post("/api/kb/topics") {
+            val body = call.receiveText()
+            val json = Json { ignoreUnknownKeys = true }
+            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
+            val userId = req["userId"]?.jsonPrimitive?.content
+            val name = req["name"]?.jsonPrimitive?.content
+            if (userId.isNullOrBlank() || name.isNullOrBlank()) {
+                call.respondText("""{"success":false,"message":"Missing userId or name"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@post
+            }
+            val project = req["project"]?.jsonPrimitive?.content ?: ""
+            val topic = knowledgeBaseManager.createTopic(name, project, userId)
+            call.respondText(
+                Json.encodeToString(KBTopic.serializer(), topic),
+                ContentType.Application.Json,
+                HttpStatusCode.Created
+            )
+        }
+
+        delete("/api/kb/topics/{topicId}") {
+            val topicId = call.parameters["topicId"] ?: ""
+            val userId = call.request.queryParameters["userId"]
+            if (userId.isNullOrBlank()) {
+                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@delete
+            }
+            val ok = knowledgeBaseManager.deleteTopic(topicId, userId)
+            call.respondText(
+                """{"success":$ok}""",
+                ContentType.Application.Json,
+                if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
+            )
+        }
+
+        get("/api/kb/entries") {
+            val topicId = call.request.queryParameters["topicId"]
+            val userId = call.request.queryParameters["userId"]
+            if (topicId.isNullOrBlank() || userId.isNullOrBlank()) {
+                call.respondText("""{"success":false,"message":"Missing topicId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@get
+            }
+            val list = knowledgeBaseManager.listEntries(topicId, userId)
+            call.respondText(
+                Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBEntry.serializer()), list),
+                ContentType.Application.Json
+            )
+        }
+
+        post("/api/kb/entries") {
+            val body = call.receiveText()
+            val json = Json { ignoreUnknownKeys = true }
+            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
+            val userId = req["userId"]?.jsonPrimitive?.content
+            val topicId = req["topicId"]?.jsonPrimitive?.content
+            val title = req["title"]?.jsonPrimitive?.content
+            if (userId.isNullOrBlank() || topicId.isNullOrBlank() || title.isNullOrBlank()) {
+                call.respondText("""{"success":false,"message":"Missing required fields"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@post
+            }
+            val content = req["content"]?.jsonPrimitive?.content ?: ""
+            val tags = try {
+                req["tags"]?.let { tagsEl ->
+                    tagsEl.jsonArray.map { it.jsonPrimitive.content }
+                }
+            } catch (_: Exception) { null } ?: emptyList()
+            val entry = knowledgeBaseManager.createEntry(topicId, title, content, tags, userId)
+            if (entry == null) {
+                call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            } else {
+                call.respondText(
+                    Json.encodeToString(KBEntry.serializer(), entry),
+                    ContentType.Application.Json,
+                    HttpStatusCode.Created
+                )
+            }
+        }
+
+        put("/api/kb/entries/{entryId}") {
+            val entryId = call.parameters["entryId"] ?: ""
+            val body = call.receiveText()
+            val json = Json { ignoreUnknownKeys = true }
+            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
+            val userId = req["userId"]?.jsonPrimitive?.content
+            if (userId.isNullOrBlank()) {
+                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@put
+            }
+            val title = req["title"]?.jsonPrimitive?.content
+            val content = req["content"]?.jsonPrimitive?.content
+            val tags = try {
+                req["tags"]?.let { tagsEl ->
+                    tagsEl.jsonArray.map { it.jsonPrimitive.content }
+                }
+            } catch (_: Exception) { null }
+            val updated = knowledgeBaseManager.updateEntry(entryId, title, content, tags, userId)
+            if (updated == null) {
+                call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            } else {
+                call.respondText(
+                    Json.encodeToString(KBEntry.serializer(), updated),
+                    ContentType.Application.Json
+                )
+            }
+        }
+
+        delete("/api/kb/entries/{entryId}") {
+            val entryId = call.parameters["entryId"] ?: ""
+            val userId = call.request.queryParameters["userId"]
+            if (userId.isNullOrBlank()) {
+                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@delete
+            }
+            val ok = knowledgeBaseManager.deleteEntry(entryId, userId)
+            call.respondText(
+                """{"success":$ok}""",
+                ContentType.Application.Json,
+                if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
+            )
+        }
+
+        get("/api/kb/entries/{entryId}/export") {
+            val entryId = call.parameters["entryId"] ?: ""
+            val entry = knowledgeBaseManager.getEntry(entryId)
+            if (entry == null) {
+                call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+                return@get
+            }
+            val topic = knowledgeBaseManager.getTopic(entry.topicId)
+            if (topic == null) {
+                call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+                return@get
+            }
+            val markdown = KBObsidianExporter.toMarkdown(topic, entry)
+            val vaultPath = KBObsidianExporter.suggestVaultPath(topic, entry)
+            call.respondText(
+                buildJsonObject {
+                    put("success", true)
+                    put("markdown", markdown)
+                    put("vaultPath", vaultPath)
+                    put("fileName", "${sanitizeFileName(entry.title)}.md")
+                }.toString(),
+                ContentType.Application.Json
+            )
         }
 
         webSocket("/chat") {

@@ -16,6 +16,12 @@ enum class Scene {
     SETTINGS
 }
 
+enum class NavTab {
+    SILK,
+    WORKFLOW,
+    KNOWLEDGE_BASE
+}
+
 class AppState(
     private val context: Context,
     private val scope: CoroutineScope
@@ -31,6 +37,8 @@ class AppState(
     
     var isValidating by mutableStateOf(false)
         private set
+
+    var currentTab by mutableStateOf(NavTab.SILK)
     
     // 标记用户是否明确请求了退出登录
     // 只有当用户点击"登出"按钮时才为 true

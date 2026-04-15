@@ -13,10 +13,13 @@ export enum PageRoute {
 
 export enum PageName {
   Login = 'Login',
+  Main = 'Main',
   GroupList = 'GroupList',
   Chat = 'Chat',
   Todo = 'Todo',
-  Settings = 'Settings'
+  Settings = 'Settings',
+  Workflow = 'Workflow',
+  KnowledgeBase = 'KnowledgeBase'
 }
 
 export class Router {
@@ -54,10 +57,17 @@ export class Router {
   }
   
   /**
+   * 导航到主容器（带侧边栏）
+   */
+  goToMain(): void {
+    this.notifyPageChange(PageName.Main);
+  }
+
+  /**
    * 导航到群组列表
    */
   goToGroupList(): void {
-    this.notifyPageChange(PageName.GroupList);
+    this.notifyPageChange(PageName.Main);
   }
   
   /**

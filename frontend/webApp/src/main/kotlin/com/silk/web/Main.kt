@@ -86,7 +86,7 @@ private fun backendWsOrigin(): String {
     return "$wsProtocol//$host"
 }
 
-private fun downloadAsFile(content: String, fileName: String) {
+internal fun downloadAsFile(content: String, fileName: String) {
     val blob = org.w3c.files.Blob(
         arrayOf(content),
         org.w3c.files.BlobPropertyBag(type = "text/markdown;charset=utf-8")
@@ -140,33 +140,148 @@ fun SilkApp() {
     val appState = remember { WebAppState() }
     val scope = rememberCoroutineScope()
 
-    
-    console.log("📍 当前场景:", appState.currentScene.toString())
-    console.log("👤 当前用户:", appState.currentUser?.fullName ?: "未登录")
-    console.log("👥 选中群组:", appState.selectedGroup?.name ?: "未选择")
-    
-    // 确保只渲染当前场景
+    if (appState.currentScene == Scene.LOGIN) {
+        LoginScene(appState)
+    } else {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                height(100.vh)
+                width(100.vw)
+                property("overflow", "hidden")
+            }
+        }) {
+            SilkNavRail(appState)
+            Div({
+                style {
+                    property("flex", "1")
+                    minWidth(0.px)
+                    height(100.percent)
+                    property("overflow", "hidden")
+                    position(Position.Relative)
+                }
+            }) {
+                key(appState.currentTab) {
+                    when (appState.currentTab) {
+                        NavTab.SILK -> SilkTabContent(appState)
+                        NavTab.WORKFLOW -> WorkflowScene(appState)
+                        NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScene(appState)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SilkNavRail(appState: WebAppState) {
+    Div({
+        style {
+            width(72.px)
+            property("flex-shrink", "0")
+            height(100.vh)
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            alignItems(AlignItems.Center)
+            property("background", "linear-gradient(180deg, ${SilkColors.primaryDark} 0%, ${SilkColors.primary} 100%)")
+            property("border-right", "1px solid ${SilkColors.border}")
+            paddingTop(16.px)
+            paddingBottom(16.px)
+            position(Position.Relative)
+            property("z-index", "10")
+        }
+    }) {
+        // Logo
+        Div({
+            style {
+                paddingBottom(24.px)
+                property("cursor", "default")
+            }
+        }) {
+            Span({
+                style {
+                    fontSize(16.px)
+                    fontWeight("bold")
+                    color(Color.white)
+                    property("letter-spacing", "2px")
+                }
+            }) { Text("SILK") }
+        }
+
+        // Tab items
+        NavRailItem("Silk", appState.currentTab == NavTab.SILK, "\uD83D\uDCAC") {
+            appState.currentTab = NavTab.SILK
+        }
+        NavRailItem("工作流", appState.currentTab == NavTab.WORKFLOW, "\uD83D\uDD17") {
+            appState.currentTab = NavTab.WORKFLOW
+        }
+        NavRailItem("知识库", appState.currentTab == NavTab.KNOWLEDGE_BASE, "\uD83D\uDCDA") {
+            appState.currentTab = NavTab.KNOWLEDGE_BASE
+        }
+
+        // Spacer
+        Div({ style { property("flex", "1") } })
+
+        // Settings
+        Div({
+            style {
+                property("cursor", "pointer")
+                padding(8.px)
+                borderRadius(8.px)
+                property("transition", "background 0.2s")
+            }
+            onClick { appState.navigateTo(Scene.SETTINGS) }
+        }) {
+            Span({
+                style {
+                    fontSize(20.px)
+                    property("filter", "grayscale(1) brightness(2)")
+                }
+            }) { Text("\u2699\uFE0F") }
+        }
+    }
+}
+
+@Composable
+fun NavRailItem(label: String, isActive: Boolean, icon: String, onClick: () -> Unit) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            alignItems(AlignItems.Center)
+            property("cursor", "pointer")
+            padding(8.px)
+            marginBottom(4.px)
+            borderRadius(12.px)
+            width(56.px)
+            if (isActive) {
+                backgroundColor(Color("rgba(255,255,255,0.25)"))
+            }
+            property("transition", "background 0.2s")
+        }
+        onClick { onClick() }
+    }) {
+        Span({ style { fontSize(22.px) } }) { Text(icon) }
+        Span({
+            style {
+                fontSize(10.px)
+                color(Color.white)
+                marginTop(2.px)
+                property("white-space", "nowrap")
+            }
+        }) { Text(label) }
+    }
+}
+
+@Composable
+fun SilkTabContent(appState: WebAppState) {
     when (appState.currentScene) {
-        Scene.LOGIN -> {
-            console.log("🔐 [ONLY] 渲染登录场景")
-            LoginScene(appState)
-        }
-        Scene.GROUP_LIST -> {
-            console.log("📋 [ONLY] 渲染群组列表场景（不连接WebSocket）")
-            GroupListScene(appState)
-            // 确保不会渲染ChatScene
-        }
-        Scene.CONTACTS -> {
-            console.log("👤 [ONLY] 渲染联系人场景")
-            ContactsScene(appState)
-        }
+        Scene.GROUP_LIST -> GroupListScene(appState)
+        Scene.CONTACTS -> ContactsScene(appState)
         Scene.CHAT_ROOM -> {
-            console.log("💬 [ONLY] 渲染聊天室场景（将连接WebSocket）")
-            // 只有在这个场景才渲染ChatScene
             if (appState.selectedGroup != null && appState.currentUser != null) {
                 ChatScene(appState)
             } else {
-                console.error("❌ CHAT_ROOM场景但缺少群组或用户")
                 Div({ style { padding(20.px) } }) {
                     Text("状态错误，请返回重试")
                     Button({ onClick { appState.navigateBack() } }) {
@@ -175,10 +290,8 @@ fun SilkApp() {
                 }
             }
         }
-        Scene.SETTINGS -> {
-            console.log("⚙️ [ONLY] 渲染设置场景")
-            SettingsScene(appState)
-        }
+        Scene.SETTINGS -> SettingsScene(appState)
+        else -> GroupListScene(appState)
     }
 }
 

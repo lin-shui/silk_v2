@@ -66,6 +66,10 @@
 | TODO-M3-001 | pending | 反馈友好 | 待办页状态提示 | 刷新、失败、恢复场景都有可读提示 | 依赖错误归类 |
 | TODO-M4-001 | pending | 降低回归成本 | 端到端验证脚本/清单 | 每次发布可跑固定待办主链验证 | 依赖测试环境可用性 |
 | TODO-FE-001 | done | 可控的 @Silk 回复 | 多端聊天输入区停止按钮；共享 `ChatClient` 发送 `STOP_GENERATE`；后端取消活跃生成协程；`DirectModelAgent` 协作取消 | Web/Android/Desktop/鸿蒙在 Silk 生成中可点「停止」；后端任务被取消；客户端可保留已输出片段并抑制残余流式帧 | 依赖 WebSocket 与 Kotlin 协程取消语义 |
+| TODO-NAV-001 | done | 全局三栏导航 | 三端（Web/Android/HarmonyOS）新增 NavRail + Tab Content shell；登录后左侧固定 Silk/工作流/知识库 三 Tab | 三端登录后展示左侧导航栏，切 Tab 可看到对应内容区 | 窄屏降级为底部导航可后续迭代 |
+| TODO-WF-001 | done | 工作流占位结构 | 后端 Workflow CRUD + 三端工作流列表/创建/删除 UI | 可创建、列出、删除工作流名称；详情区显示"功能开发中" | 编排逻辑留白，由其他开发者补充 |
+| TODO-KB-001 | done | 知识库核心 | 后端 KBTopic/KBEntry CRUD + 三端知识库主题/条目列表 + Markdown 编辑器 | 可创建主题和条目，编辑并保存 Markdown 内容 | 初期 JSON 文件存储，后续可迁移 DB |
+| TODO-KB-002 | done | 知识库 Obsidian 自动归类导出 | 后端 KBObsidianExporter + Web 端 ObsidianVaultManager 写入 | Web 端可导出到 Obsidian vault 目录 `Silk/Knowledge/{project}/{topic}/` | File System Access API 仅 Chrome/Edge 支持 |
 
 ## 5. 执行中（当前会话）
 
@@ -127,6 +131,16 @@
 - 结果：
   - 执行后的待办可手动撤回并再次执行；
   - 工作日模板不再仅按周一到周五粗判，已接入后端法定口径。
+
+### 2026-04-15（TODO-NAV-001 / TODO-WF-001 / TODO-KB-001 / TODO-KB-002 完成）
+- 需求：Silk 产品重构为三栏导航布局（Silk / 工作流 / 知识库）。
+- 实施：
+  - 后端：新增 Workflow CRUD（`WorkflowManager`）、KnowledgeBase CRUD（`KnowledgeBaseManager`）、`KBObsidianExporter`，路由挂载到 `/api/workflows` 和 `/api/kb/*`。
+  - Web（Compose for Web）：`AppState` 新增 `NavTab` 枚举 + `currentTab`；`SilkApp` 重构为 `SilkNavRail` + `SilkTabContent`；新增 `WorkflowScene` 和 `KnowledgeBaseScene`（三列：主题/条目/Markdown 编辑器 + Obsidian 导出）。
+  - Android（Jetpack Compose）：`AppState` 新增 `NavTab` + `currentTab`；`SilkApp` 重构为 Material 3 `NavigationRail` + Content；新增 `WorkflowScreen` 和 `KnowledgeBaseScreen`。
+  - HarmonyOS（ArkUI）：`Router` 新增 `Main` PageName；新增 `MainPage`（Row: NavRail Column + Content）；新增 `WorkflowPage` 和 `KnowledgeBasePage`；`ApiClient` 新增 raw HTTP helpers 和 Workflow/KB API。
+- 结果：三端登录后展示左侧导航栏，可切换 Silk（原有功能）、工作流（列表占位）、知识库（主题-条目-编辑器完整链路）。
+- 残留：工作流编排逻辑留白；窄屏降级为底部导航待后续迭代。
 
 ### 2026-04-15（TODO-FE-001 完成）
 - 需求：`@Silk` 对话在流式生成过程中可停止，后端同步中止生成。
