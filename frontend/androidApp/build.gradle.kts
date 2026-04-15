@@ -39,7 +39,7 @@ val envFile = readEnvFile()
 plugins {
     id("com.android.application")
     kotlin("android")
-    kotlin("plugin.serialization") version "1.9.20"
+    kotlin("plugin.serialization")
     id("org.jetbrains.compose")
 }
 
@@ -165,4 +165,16 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.4.1")
     
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+// Some IDEs request Kotlin import helper tasks on each subproject; with kotlin("android") they may only
+// exist on KMP modules (e.g. :frontend:shared). No-op stubs satisfy IDE/Gradle sync without affecting builds.
+tasks.register("prepareKotlinBuildScriptModel") {
+    group = "ide"
+    description = "Compatibility stub for IDE/Gradle sync (Kotlin build script model)"
+}
+
+tasks.register("prepareKotlinIdeaImport") {
+    group = "ide"
+    description = "Compatibility stub for IDE/Gradle sync (Kotlin IDEA import umbrella)"
 }
