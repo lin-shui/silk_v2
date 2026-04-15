@@ -62,87 +62,75 @@ export struct WorkflowPage {
   }
 
   build() {
-    Row() {
-      // Left: list
-      Column() {
-        Row() {
-          Text('工作流')
-            .fontSize(18)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(SilkColors.textPrimary)
-            .layoutWeight(1)
-          Button('+ 创建')
-            .height(32)
-            .fontSize(12)
-            .backgroundColor(SilkColors.primary)
-            .fontColor(Color.White)
-            .onClick(() => { this.showCreateSheet = true; })
+    Column() {
+      Row() {
+        Text('工作流')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(SilkColors.textPrimary)
+          .layoutWeight(1)
+        Button('+ 创建')
+          .height(32)
+          .fontSize(13)
+          .backgroundColor(SilkColors.primary)
+          .fontColor(Color.White)
+          .onClick(() => { this.showCreateSheet = true; })
+      }
+      .width('100%')
+      .padding(16)
+
+      Divider().color(SilkColors.border)
+
+      if (this.isLoading) {
+        Column() {
+          LoadingProgress().width(32).height(32)
         }
+        .layoutWeight(1)
         .width('100%')
-        .padding(12)
-
-        Divider().color(SilkColors.border)
-
-        if (this.isLoading) {
-          Column() {
-            Text('加载中...')
-              .fontColor(SilkColors.textSecondary)
-          }
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else if (this.workflows.length === 0) {
-          Column() {
-            Text('暂无工作流')
-              .fontColor(SilkColors.textSecondary)
-          }
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-        } else {
-          List({ space: 0 }) {
-            ForEach(this.workflows, (wf: WorkflowApiItem) => {
-              ListItem() {
-                Row() {
-                  Text(wf.name)
-                    .fontSize(14)
-                    .fontColor(SilkColors.textPrimary)
-                    .layoutWeight(1)
-                  Text('删除')
-                    .fontSize(12)
-                    .fontColor(SilkColors.error)
-                    .onClick(() => { void this.deleteWorkflow(wf.id); })
-                }
-                .width('100%')
-                .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-              }
-            }, (wf: WorkflowApiItem) => wf.id)
-          }
-          .layoutWeight(1)
-          .divider({ strokeWidth: 1, color: SilkColors.border })
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      } else if (this.workflows.length === 0) {
+        Column() {
+          Text('🔗')
+            .fontSize(48)
+            .margin({ bottom: 16 })
+          Text('工作流功能开发中')
+            .fontSize(18)
+            .fontColor(SilkColors.textSecondary)
+          Text('可先创建工作流名称，后续将支持多机器人编排')
+            .fontSize(14)
+            .fontColor(SilkColors.textLight)
+            .margin({ top: 8 })
         }
+        .layoutWeight(1)
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      } else {
+        List({ space: 8 }) {
+          ForEach(this.workflows, (wf: WorkflowApiItem) => {
+            ListItem() {
+              Row() {
+                Text(wf.name)
+                  .fontSize(15)
+                  .fontColor(SilkColors.textPrimary)
+                  .layoutWeight(1)
+                Text('删除')
+                  .fontSize(13)
+                  .fontColor(SilkColors.error)
+                  .onClick(() => { void this.deleteWorkflow(wf.id); })
+              }
+              .width('100%')
+              .padding(16)
+              .backgroundColor(SilkColors.surfaceVariant)
+              .borderRadius(12)
+            }
+          }, (wf: WorkflowApiItem) => wf.id)
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 8 })
       }
-      .width(320)
-      .height('100%')
-      .backgroundColor(SilkColors.surface)
-
-      Divider().vertical(true).color(SilkColors.border)
-
-      // Right: placeholder
-      Column() {
-        Text('🔗')
-          .fontSize(48)
-          .margin({ bottom: 16 })
-        Text('工作流功能开发中')
-          .fontSize(18)
-          .fontColor(SilkColors.textSecondary)
-        Text('可在左侧创建工作流名称，后续将支持多机器人编排')
-          .fontSize(14)
-          .fontColor(SilkColors.textLight)
-          .margin({ top: 8 })
-      }
-      .layoutWeight(1)
-      .height('100%')
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
     }
     .width('100%')
     .height('100%')

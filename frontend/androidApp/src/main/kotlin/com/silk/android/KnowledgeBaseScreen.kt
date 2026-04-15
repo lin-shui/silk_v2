@@ -1,12 +1,14 @@
 package com.silk.android
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -42,12 +44,16 @@ data class KBEntryItem(
     val updatedAt: Long = 0
 )
 
+private enum class KBSubPage { TOPICS, ENTRIES, EDITOR }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun KnowledgeBaseScreen(appState: AppState) {
     val user = appState.currentUser ?: return
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    var subPage by remember { mutableStateOf(KBSubPage.TOPICS) }
 
     var topics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
     var selectedTopic by remember { mutableStateOf<KBTopicItem?>(null) }
@@ -71,140 +77,206 @@ fun KnowledgeBaseScreen(appState: AppState) {
         isLoading = false
     }
 
-    Row(modifier = Modifier.fillMaxSize()) {
-        // Left panel: topics + entries
-        Column(
-            modifier = Modifier.width(280.dp).fillMaxHeight()
-        ) {
-            // Topics header
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("知识库", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                IconButton(onClick = { showCreateTopicDialog = true }, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.Add, contentDescription = "创建主题", tint = SilkColors.primary)
-                }
+    BackHandler(enabled = subPage != KBSubPage.TOPICS) {
+        when (subPage) {
+            KBSubPage.EDITOR -> {
+                subPage = KBSubPage.ENTRIES
+                selectedEntry = null
+                editorContent = ""
             }
-            Divider(color = SilkColors.divider)
+            KBSubPage.ENTRIES -> {
+                subPage = KBSubPage.TOPICS
+                selectedTopic = null
+                entries = emptyList()
+            }
+            else -> {}
+        }
+    }
 
-            if (isLoading) {
-                Box(modifier = Modifier.fillMaxWidth().weight(0.4f), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+    when (subPage) {
+        KBSubPage.TOPICS -> {
+            Scaffold(
+                floatingActionButton = {
+                    FloatingActionButton(
+                        onClick = { showCreateTopicDialog = true },
+                        containerColor = SilkColors.primary,
+                        contentColor = Color.White
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "创建主题")
+                    }
                 }
-            } else {
-                LazyColumn(modifier = Modifier.fillMaxWidth().weight(0.4f)) {
-                    items(topics) { topic ->
-                        Surface(
-                            modifier = Modifier.fillMaxWidth().clickable {
-                                selectedTopic = topic; selectedEntry = null; editorContent = ""
-                                scope.launch { entries = ApiClient.getKBEntries(topic.id, user.id) }
-                            },
-                            color = if (selectedTopic?.id == topic.id) SilkColors.primaryLight.copy(alpha = 0.3f) else Color.Transparent
+            ) { padding ->
+                Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("知识库", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                    }
+                    Divider(color = SilkColors.divider)
+
+                    if (isLoading) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    } else if (topics.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text("📚", fontSize = 48.sp)
+                                Spacer(Modifier.height(16.dp))
+                                Text("暂无主题", color = SilkColors.textSecondary, style = MaterialTheme.typography.titleMedium)
+                                Spacer(Modifier.height(8.dp))
+                                Text("点击右下角 + 创建第一个主题", color = SilkColors.textLight, style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(topic.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
-                                if (topic.project.isNotBlank()) {
-                                    Text(topic.project, style = MaterialTheme.typography.bodySmall, color = SilkColors.textLight)
+                            items(topics) { topic ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth().clickable {
+                                        selectedTopic = topic
+                                        scope.launch { entries = ApiClient.getKBEntries(topic.id, user.id) }
+                                        subPage = KBSubPage.ENTRIES
+                                    },
+                                    colors = CardDefaults.cardColors(containerColor = SilkColors.cardBackground)
+                                ) {
+                                    Column(modifier = Modifier.padding(16.dp)) {
+                                        Text(topic.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                                        if (topic.project.isNotBlank()) {
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(topic.project, style = MaterialTheme.typography.bodySmall, color = SilkColors.textLight)
+                                        }
+                                    }
                                 }
                             }
                         }
-                        Divider(color = SilkColors.divider)
-                    }
-                }
-            }
-
-            Divider(thickness = 2.dp, color = SilkColors.border)
-
-            // Entries header
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(selectedTopic?.name ?: "条目", style = MaterialTheme.typography.labelLarge)
-                if (selectedTopic != null) {
-                    IconButton(onClick = { showCreateEntryDialog = true }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Add, contentDescription = "创建条目", tint = SilkColors.primary)
-                    }
-                }
-            }
-
-            LazyColumn(modifier = Modifier.fillMaxWidth().weight(0.6f)) {
-                if (selectedTopic == null) {
-                    item {
-                        Text("请先选择主题", modifier = Modifier.padding(16.dp), color = SilkColors.textLight, style = MaterialTheme.typography.bodySmall)
-                    }
-                } else {
-                    items(entries) { entry ->
-                        Surface(
-                            modifier = Modifier.fillMaxWidth().clickable {
-                                selectedEntry = entry; editorContent = entry.content
-                            },
-                            color = if (selectedEntry?.id == entry.id) SilkColors.primaryLight.copy(alpha = 0.2f) else Color.Transparent
-                        ) {
-                            Text(entry.title, modifier = Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
-                        }
-                        Divider(color = SilkColors.divider)
                     }
                 }
             }
         }
 
-        Divider(
-            color = SilkColors.border,
-            modifier = Modifier.fillMaxHeight().width(1.dp)
-        )
-
-        // Right panel: editor
-        Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-            if (selectedEntry != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(selectedEntry!!.title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                isSaving = true
-                                ApiClient.updateKBEntry(selectedEntry!!.id, null, editorContent, null, user.id)
-                                entries = ApiClient.getKBEntries(selectedTopic!!.id, user.id)
-                                Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
-                                isSaving = false
+        KBSubPage.ENTRIES -> {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text(selectedTopic?.name ?: "条目") },
+                        navigationIcon = {
+                            IconButton(onClick = {
+                                subPage = KBSubPage.TOPICS
+                                selectedTopic = null
+                                entries = emptyList()
+                            }) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "返回")
                             }
                         },
-                        colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
-                        enabled = !isSaving
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = SilkColors.surface,
+                            titleContentColor = SilkColors.textPrimary
+                        )
+                    )
+                },
+                floatingActionButton = {
+                    FloatingActionButton(
+                        onClick = { showCreateEntryDialog = true },
+                        containerColor = SilkColors.primary,
+                        contentColor = Color.White
                     ) {
-                        Icon(Icons.Default.Save, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text(if (isSaving) "保存中..." else "保存")
+                        Icon(Icons.Default.Add, contentDescription = "创建条目")
                     }
                 }
-                Divider(color = SilkColors.divider)
+            ) { padding ->
+                if (entries.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("📝", fontSize = 48.sp)
+                            Spacer(Modifier.height(16.dp))
+                            Text("暂无条目", color = SilkColors.textSecondary)
+                            Spacer(Modifier.height(8.dp))
+                            Text("点击右下角 + 创建条目", color = SilkColors.textLight, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize().padding(padding),
+                        contentPadding = PaddingValues(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(entries) { entry ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth().clickable {
+                                    selectedEntry = entry
+                                    editorContent = entry.content
+                                    subPage = KBSubPage.EDITOR
+                                },
+                                colors = CardDefaults.cardColors(containerColor = SilkColors.cardBackground)
+                            ) {
+                                Text(
+                                    entry.title,
+                                    modifier = Modifier.padding(16.dp),
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        KBSubPage.EDITOR -> {
+            Scaffold(
+                topBar = {
+                    TopAppBar(
+                        title = { Text(selectedEntry?.title ?: "编辑") },
+                        navigationIcon = {
+                            IconButton(onClick = {
+                                subPage = KBSubPage.ENTRIES
+                                selectedEntry = null
+                                editorContent = ""
+                            }) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                            }
+                        },
+                        actions = {
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        isSaving = true
+                                        ApiClient.updateKBEntry(selectedEntry!!.id, null, editorContent, null, user.id)
+                                        entries = ApiClient.getKBEntries(selectedTopic!!.id, user.id)
+                                        Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+                                        isSaving = false
+                                    }
+                                },
+                                enabled = !isSaving
+                            ) {
+                                Icon(
+                                    Icons.Default.Save,
+                                    contentDescription = "保存",
+                                    tint = if (isSaving) SilkColors.textLight else SilkColors.primary
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = SilkColors.surface,
+                            titleContentColor = SilkColors.textPrimary
+                        )
+                    )
+                }
+            ) { padding ->
                 OutlinedTextField(
                     value = editorContent,
                     onValueChange = { editorContent = it },
-                    modifier = Modifier.fillMaxSize().padding(8.dp),
+                    modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 8.dp),
                     placeholder = { Text("在这里输入 Markdown 内容...") },
                     colors = OutlinedTextFieldDefaults.colors(
                         unfocusedBorderColor = Color.Transparent,
                         focusedBorderColor = Color.Transparent
                     )
                 )
-            } else {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("📚", fontSize = 48.sp)
-                        Spacer(Modifier.height(16.dp))
-                        Text("选择或创建条目开始编辑", color = SilkColors.textSecondary)
-                        Spacer(Modifier.height(8.dp))
-                        Text("内容将自动归类到 Obsidian 知识库", color = SilkColors.textLight, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
             }
         }
     }
@@ -249,6 +321,7 @@ fun KnowledgeBaseScreen(appState: AppState) {
                             if (entry != null) {
                                 entries = ApiClient.getKBEntries(selectedTopic!!.id, user.id)
                                 selectedEntry = entry; editorContent = entry.content
+                                subPage = KBSubPage.EDITOR
                             }
                             showCreateEntryDialog = false; newEntryTitle = ""
                         }

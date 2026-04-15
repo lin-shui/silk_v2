@@ -259,50 +259,6 @@ fun SilkApp(
         )
     }
     
-    // ✅ 调试信息：显示当前版本检查状态（可删除）
-    var versionCheckStatus by remember { mutableStateOf("检查中...") }
-    LaunchedEffect(Unit) {
-        // 获取本地版本
-        val packageInfo = try {
-            activity.packageManager.getPackageInfo(activity.packageName, 0)
-        } catch (e: Exception) { null }
-        val localVersion = packageInfo?.let {
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
-                it.longVersionCode.toInt()
-            } else {
-                @Suppress("DEPRECATION")
-                it.versionCode
-            }
-        } ?: 0
-        val localName = packageInfo?.versionName ?: "unknown"
-        
-        // 获取远程版本
-        val remoteVersion = ApiClient.getAppVersion()
-        versionCheckStatus = if (remoteVersion != null) {
-            "本地: v$localName ($localVersion)\n远程: v${remoteVersion.versionName} (${remoteVersion.versionCode})\n${if (remoteVersion.versionCode > localVersion) "🆕 有新版本!" else "✅ 已是最新"}"
-        } else {
-            "本地: v$localName ($localVersion)\n远程: 获取失败"
-        }
-    }
-    
-    // 在屏幕底部显示版本信息（调试用）
-    Box(modifier = Modifier.fillMaxSize()) {
-        Surface(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(8.dp),
-            color = Color.Black.copy(alpha = 0.7f),
-            shape = MaterialTheme.shapes.small
-        ) {
-            Text(
-                text = versionCheckStatus,
-                modifier = Modifier.padding(8.dp),
-                color = Color.White,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-    }
-            
     // 显示验证中的加载界面
     if (appState.isValidating) {
         Box(
@@ -323,9 +279,15 @@ fun SilkApp(
     } else if (appState.currentScene == Scene.LOGIN) {
         LoginScreen(appState)
     } else {
-        Row(modifier = Modifier.fillMaxSize()) {
-            SilkNavigationRail(appState)
-            Box(modifier = Modifier.weight(1f)) {
+        val showBottomNav = appState.currentScene != Scene.CHAT_ROOM
+        Scaffold(
+            bottomBar = {
+                if (showBottomNav) {
+                    SilkBottomNav(appState)
+                }
+            }
+        ) { padding ->
+            Box(modifier = Modifier.fillMaxSize().padding(padding)) {
                 when (appState.currentTab) {
                     NavTab.SILK -> {
                         when (appState.currentScene) {
@@ -345,59 +307,49 @@ fun SilkApp(
 }
 
 @Composable
-fun SilkNavigationRail(appState: AppState) {
-    NavigationRail(
-        containerColor = SilkColors.primaryDark,
-        contentColor = Color.White,
-        header = {
-            Text(
-                text = "SILK",
-                modifier = Modifier.padding(vertical = 12.dp),
-                color = Color.White,
-                style = MaterialTheme.typography.titleSmall.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 3.sp
-                )
-            )
-        }
+fun SilkBottomNav(appState: AppState) {
+    NavigationBar(
+        containerColor = SilkColors.surface,
+        contentColor = SilkColors.textPrimary,
+        tonalElevation = 2.dp
     ) {
-        NavigationRailItem(
+        NavigationBarItem(
             selected = appState.currentTab == NavTab.SILK,
             onClick = { appState.currentTab = NavTab.SILK },
             icon = { Icon(Icons.Default.Chat, contentDescription = "Silk") },
-            label = { Text("Silk", fontSize = 10.sp) },
-            colors = NavigationRailItemDefaults.colors(
-                selectedIconColor = SilkColors.primaryDark,
-                selectedTextColor = Color.White,
-                unselectedIconColor = Color.White.copy(alpha = 0.7f),
-                unselectedTextColor = Color.White.copy(alpha = 0.7f),
-                indicatorColor = Color.White.copy(alpha = 0.25f)
+            label = { Text("Silk", fontSize = 11.sp) },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = SilkColors.primary,
+                selectedTextColor = SilkColors.primary,
+                unselectedIconColor = SilkColors.textLight,
+                unselectedTextColor = SilkColors.textLight,
+                indicatorColor = SilkColors.primaryLight.copy(alpha = 0.3f)
             )
         )
-        NavigationRailItem(
+        NavigationBarItem(
             selected = appState.currentTab == NavTab.WORKFLOW,
             onClick = { appState.currentTab = NavTab.WORKFLOW },
             icon = { Icon(Icons.Default.AccountTree, contentDescription = "工作流") },
-            label = { Text("工作流", fontSize = 10.sp) },
-            colors = NavigationRailItemDefaults.colors(
-                selectedIconColor = SilkColors.primaryDark,
-                selectedTextColor = Color.White,
-                unselectedIconColor = Color.White.copy(alpha = 0.7f),
-                unselectedTextColor = Color.White.copy(alpha = 0.7f),
-                indicatorColor = Color.White.copy(alpha = 0.25f)
+            label = { Text("工作流", fontSize = 11.sp) },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = SilkColors.primary,
+                selectedTextColor = SilkColors.primary,
+                unselectedIconColor = SilkColors.textLight,
+                unselectedTextColor = SilkColors.textLight,
+                indicatorColor = SilkColors.primaryLight.copy(alpha = 0.3f)
             )
         )
-        NavigationRailItem(
+        NavigationBarItem(
             selected = appState.currentTab == NavTab.KNOWLEDGE_BASE,
             onClick = { appState.currentTab = NavTab.KNOWLEDGE_BASE },
             icon = { Icon(Icons.Default.MenuBook, contentDescription = "知识库") },
-            label = { Text("知识库", fontSize = 10.sp) },
-            colors = NavigationRailItemDefaults.colors(
-                selectedIconColor = SilkColors.primaryDark,
-                selectedTextColor = Color.White,
-                unselectedIconColor = Color.White.copy(alpha = 0.7f),
-                unselectedTextColor = Color.White.copy(alpha = 0.7f),
-                indicatorColor = Color.White.copy(alpha = 0.25f)
+            label = { Text("知识库", fontSize = 11.sp) },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = SilkColors.primary,
+                selectedTextColor = SilkColors.primary,
+                unselectedIconColor = SilkColors.textLight,
+                unselectedTextColor = SilkColors.textLight,
+                indicatorColor = SilkColors.primaryLight.copy(alpha = 0.3f)
             )
         )
     }

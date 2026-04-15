@@ -6,12 +6,14 @@ import promptAction from '@ohos.promptAction';
 @Component
 export struct KnowledgeBasePage {
   @State topics: KBTopicApiItem[] = [];
-  @State selectedTopicId: string = '';
+  @State selectedTopic: KBTopicApiItem | null = null;
   @State entries: KBEntryApiItem[] = [];
-  @State selectedEntryId: string = '';
+  @State selectedEntry: KBEntryApiItem | null = null;
   @State editorContent: string = '';
   @State isLoading: boolean = false;
   @State isSaving: boolean = false;
+
+  @State subPage: string = 'topics';
 
   @State showCreateTopicSheet: boolean = false;
   @State newTopicName: string = '';
@@ -41,29 +43,33 @@ export struct KnowledgeBasePage {
     finally { this.isLoading = false; }
   }
 
-  async selectTopic(topic: KBTopicApiItem): Promise<void> {
-    this.selectedTopicId = topic.id;
-    this.selectedEntryId = '';
+  async onSelectTopic(topic: KBTopicApiItem): Promise<void> {
+    this.selectedTopic = topic;
+    this.selectedEntry = null;
     this.editorContent = '';
     const userId = this.getUserId();
     if (!userId) return;
     try {
       this.entries = await this.apiClient.getKBEntries(topic.id, userId);
     } catch (_) { /* silent */ }
+    this.subPage = 'entries';
   }
 
-  selectEntry(entry: KBEntryApiItem): void {
-    this.selectedEntryId = entry.id;
+  onSelectEntry(entry: KBEntryApiItem): void {
+    this.selectedEntry = entry;
     this.editorContent = entry.content;
+    this.subPage = 'editor';
   }
 
   async saveEntry(): Promise<void> {
     const userId = this.getUserId();
-    if (!userId || !this.selectedEntryId) return;
+    if (!userId || !this.selectedEntry) return;
     this.isSaving = true;
     try {
-      await this.apiClient.updateKBEntry(this.selectedEntryId, undefined, this.editorContent, undefined, userId);
-      this.entries = await this.apiClient.getKBEntries(this.selectedTopicId, userId);
+      await this.apiClient.updateKBEntry(this.selectedEntry.id, undefined, this.editorContent, undefined, userId);
+      if (this.selectedTopic) {
+        this.entries = await this.apiClient.getKBEntries(this.selectedTopic.id, userId);
+      }
       this.showToast('已保存');
     } catch (_) {
       this.showToast('保存失败');
@@ -90,15 +96,27 @@ export struct KnowledgeBasePage {
   async createEntry(): Promise<void> {
     const userId = this.getUserId();
     const title = this.newEntryTitle.trim();
-    if (!userId || !this.selectedTopicId || !title) return;
+    if (!userId || !this.selectedTopic || !title) return;
     try {
-      const entry: KBEntryApiItem = await this.apiClient.createKBEntry(this.selectedTopicId, title, '', [], userId);
+      const entry: KBEntryApiItem = await this.apiClient.createKBEntry(this.selectedTopic.id, title, '', [], userId);
       this.showCreateEntrySheet = false;
       this.newEntryTitle = '';
-      this.entries = await this.apiClient.getKBEntries(this.selectedTopicId, userId);
-      this.selectEntry(entry);
+      this.entries = await this.apiClient.getKBEntries(this.selectedTopic.id, userId);
+      this.onSelectEntry(entry);
     } catch (_) {
       this.showToast('创建失败');
+    }
+  }
+
+  goBack(): void {
+    if (this.subPage === 'editor') {
+      this.subPage = 'entries';
+      this.selectedEntry = null;
+      this.editorContent = '';
+    } else if (this.subPage === 'entries') {
+      this.subPage = 'topics';
+      this.selectedTopic = null;
+      this.entries = [];
     }
   }
 
@@ -106,179 +124,19 @@ export struct KnowledgeBasePage {
     try { promptAction.showToast({ message, duration: 1200 }); } catch (_) { /* ignore */ }
   }
 
-  private getSelectedEntry(): KBEntryApiItem | undefined {
-    for (let i = 0; i < this.entries.length; i++) {
-      if (this.entries[i].id === this.selectedEntryId) return this.entries[i];
-    }
-    return undefined;
-  }
-
   build() {
-    Row() {
-      // Left: topics
-      Column() {
-        Row() {
-          Text('主题')
-            .fontSize(16)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(SilkColors.textPrimary)
-            .layoutWeight(1)
-          Button('+')
-            .height(28)
-            .fontSize(12)
-            .backgroundColor(SilkColors.primary)
-            .fontColor(Color.White)
-            .onClick(() => { this.showCreateTopicSheet = true; })
-        }
-        .width('100%')
-        .padding(10)
-
-        Divider().color(SilkColors.border)
-
-        if (this.isLoading) {
-          Column() {
-            Text('加载中...').fontColor(SilkColors.textSecondary)
-          }.layoutWeight(1).justifyContent(FlexAlign.Center)
-        } else {
-          List({ space: 0 }) {
-            ForEach(this.topics, (topic: KBTopicApiItem) => {
-              ListItem() {
-                Column() {
-                  Text(topic.name)
-                    .fontSize(14)
-                    .fontColor(SilkColors.textPrimary)
-                    .fontWeight(this.selectedTopicId === topic.id ? FontWeight.Bold : FontWeight.Normal)
-                  if (topic.project) {
-                    Text(topic.project)
-                      .fontSize(11)
-                      .fontColor(SilkColors.textLight)
-                      .margin({ top: 2 })
-                  }
-                }
-                .width('100%')
-                .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-                .backgroundColor(this.selectedTopicId === topic.id ? '#1AC9A86C' : '#00000000')
-                .onClick(() => { void this.selectTopic(topic); })
-              }
-            }, (topic: KBTopicApiItem) => topic.id)
-          }
-          .layoutWeight(1)
-          .divider({ strokeWidth: 1, color: SilkColors.border })
-        }
+    Column() {
+      if (this.subPage === 'topics') {
+        this.buildTopicsView()
+      } else if (this.subPage === 'entries') {
+        this.buildEntriesView()
+      } else {
+        this.buildEditorView()
       }
-      .width(180)
-      .height('100%')
-      .backgroundColor(SilkColors.surface)
-
-      Divider().vertical(true).color(SilkColors.border)
-
-      // Middle: entries
-      Column() {
-        Row() {
-          Text(this.getSelectedTopicName())
-            .fontSize(14)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(SilkColors.textPrimary)
-            .layoutWeight(1)
-          if (this.selectedTopicId) {
-            Button('+')
-              .height(28)
-              .fontSize(12)
-              .backgroundColor(SilkColors.primary)
-              .fontColor(Color.White)
-              .onClick(() => { this.showCreateEntrySheet = true; })
-          }
-        }
-        .width('100%')
-        .padding(10)
-
-        Divider().color(SilkColors.border)
-
-        if (!this.selectedTopicId) {
-          Column() {
-            Text('请先选择主题').fontColor(SilkColors.textLight).fontSize(13)
-          }.layoutWeight(1).justifyContent(FlexAlign.Center)
-        } else if (this.entries.length === 0) {
-          Column() {
-            Text('暂无条目').fontColor(SilkColors.textLight).fontSize(13)
-          }.layoutWeight(1).justifyContent(FlexAlign.Center)
-        } else {
-          List({ space: 0 }) {
-            ForEach(this.entries, (entry: KBEntryApiItem) => {
-              ListItem() {
-                Text(entry.title)
-                  .fontSize(13)
-                  .fontColor(SilkColors.textPrimary)
-                  .fontWeight(this.selectedEntryId === entry.id ? FontWeight.Bold : FontWeight.Normal)
-                  .width('100%')
-                  .padding({ left: 14, right: 14, top: 10, bottom: 10 })
-                  .backgroundColor(this.selectedEntryId === entry.id ? '#14C9A86C' : '#00000000')
-                  .onClick(() => { this.selectEntry(entry); })
-              }
-            }, (entry: KBEntryApiItem) => entry.id)
-          }
-          .layoutWeight(1)
-          .divider({ strokeWidth: 1, color: SilkColors.border })
-        }
-      }
-      .width(200)
-      .height('100%')
-      .backgroundColor(SilkColors.surfaceVariant)
-
-      Divider().vertical(true).color(SilkColors.border)
-
-      // Right: editor
-      Column() {
-        if (this.selectedEntryId) {
-          Row() {
-            Text(this.getSelectedEntry()?.title ?? '')
-              .fontSize(16)
-              .fontWeight(FontWeight.Bold)
-              .fontColor(SilkColors.textPrimary)
-              .layoutWeight(1)
-            Button(this.isSaving ? '保存中...' : '保存')
-              .height(32)
-              .fontSize(13)
-              .backgroundColor(SilkColors.primary)
-              .fontColor(Color.White)
-              .enabled(!this.isSaving)
-              .onClick(() => { void this.saveEntry(); })
-          }
-          .width('100%')
-          .padding(12)
-
-          Divider().color(SilkColors.border)
-
-          TextArea({ text: $$this.editorContent, placeholder: '在这里输入 Markdown 内容...' })
-            .width('100%')
-            .layoutWeight(1)
-            .fontSize(14)
-            .backgroundColor(SilkColors.background)
-            .onChange((value: string) => { this.editorContent = value; })
-        } else {
-          Column() {
-            Text('📚')
-              .fontSize(48)
-              .margin({ bottom: 16 })
-            Text('选择或创建条目开始编辑')
-              .fontSize(18)
-              .fontColor(SilkColors.textSecondary)
-            Text('内容将自动归类到 Obsidian 知识库')
-              .fontSize(14)
-              .fontColor(SilkColors.textLight)
-              .margin({ top: 8 })
-          }
-          .layoutWeight(1)
-          .justifyContent(FlexAlign.Center)
-          .alignItems(HorizontalAlign.Center)
-        }
-      }
-      .layoutWeight(1)
-      .height('100%')
-      .backgroundColor(SilkColors.background)
     }
     .width('100%')
     .height('100%')
+    .backgroundColor(SilkColors.background)
     .bindSheet($$this.showCreateTopicSheet, this.buildCreateTopicSheet(), {
       height: 280,
       backgroundColor: SilkColors.surface
@@ -289,11 +147,190 @@ export struct KnowledgeBasePage {
     })
   }
 
-  private getSelectedTopicName(): string {
-    for (let i = 0; i < this.topics.length; i++) {
-      if (this.topics[i].id === this.selectedTopicId) return this.topics[i].name;
+  @Builder
+  buildTopicsView() {
+    Column() {
+      Row() {
+        Text('知识库')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(SilkColors.textPrimary)
+          .layoutWeight(1)
+        Button('+ 创建')
+          .height(32)
+          .fontSize(13)
+          .backgroundColor(SilkColors.primary)
+          .fontColor(Color.White)
+          .onClick(() => { this.showCreateTopicSheet = true; })
+      }
+      .width('100%')
+      .padding(16)
+
+      Divider().color(SilkColors.border)
+
+      if (this.isLoading) {
+        Column() {
+          LoadingProgress().width(32).height(32)
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      } else if (this.topics.length === 0) {
+        Column() {
+          Text('📚')
+            .fontSize(48)
+            .margin({ bottom: 16 })
+          Text('暂无主题')
+            .fontSize(18)
+            .fontColor(SilkColors.textSecondary)
+          Text('点击右上角 + 创建第一个主题')
+            .fontSize(14)
+            .fontColor(SilkColors.textLight)
+            .margin({ top: 8 })
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      } else {
+        List({ space: 8 }) {
+          ForEach(this.topics, (topic: KBTopicApiItem) => {
+            ListItem() {
+              Column() {
+                Text(topic.name)
+                  .fontSize(15)
+                  .fontColor(SilkColors.textPrimary)
+                  .fontWeight(FontWeight.Medium)
+                if (topic.project) {
+                  Text(topic.project)
+                    .fontSize(12)
+                    .fontColor(SilkColors.textLight)
+                    .margin({ top: 4 })
+                }
+              }
+              .width('100%')
+              .padding(16)
+              .backgroundColor(SilkColors.surfaceVariant)
+              .borderRadius(12)
+              .alignItems(HorizontalAlign.Start)
+              .onClick(() => { void this.onSelectTopic(topic); })
+            }
+          }, (topic: KBTopicApiItem) => topic.id)
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 8 })
+      }
     }
-    return '条目';
+    .width('100%')
+    .height('100%')
+  }
+
+  @Builder
+  buildEntriesView() {
+    Column() {
+      Row() {
+        Text('←')
+          .fontSize(22)
+          .fontColor(SilkColors.textPrimary)
+          .padding({ right: 12 })
+          .onClick(() => { this.goBack(); })
+        Text(this.selectedTopic?.name ?? '条目')
+          .fontSize(18)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(SilkColors.textPrimary)
+          .layoutWeight(1)
+        Button('+ 创建')
+          .height(32)
+          .fontSize(13)
+          .backgroundColor(SilkColors.primary)
+          .fontColor(Color.White)
+          .onClick(() => { this.showCreateEntrySheet = true; })
+      }
+      .width('100%')
+      .padding(16)
+
+      Divider().color(SilkColors.border)
+
+      if (this.entries.length === 0) {
+        Column() {
+          Text('📝')
+            .fontSize(48)
+            .margin({ bottom: 16 })
+          Text('暂无条目')
+            .fontSize(18)
+            .fontColor(SilkColors.textSecondary)
+          Text('点击右上角 + 创建条目')
+            .fontSize(14)
+            .fontColor(SilkColors.textLight)
+            .margin({ top: 8 })
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      } else {
+        List({ space: 8 }) {
+          ForEach(this.entries, (entry: KBEntryApiItem) => {
+            ListItem() {
+              Text(entry.title)
+                .fontSize(15)
+                .fontColor(SilkColors.textPrimary)
+                .width('100%')
+                .padding(16)
+                .backgroundColor(SilkColors.surfaceVariant)
+                .borderRadius(12)
+                .onClick(() => { this.onSelectEntry(entry); })
+            }
+          }, (entry: KBEntryApiItem) => entry.id)
+        }
+        .layoutWeight(1)
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 8 })
+      }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  @Builder
+  buildEditorView() {
+    Column() {
+      Row() {
+        Text('←')
+          .fontSize(22)
+          .fontColor(SilkColors.textPrimary)
+          .padding({ right: 12 })
+          .onClick(() => { this.goBack(); })
+        Text(this.selectedEntry?.title ?? '编辑')
+          .fontSize(18)
+          .fontWeight(FontWeight.Bold)
+          .fontColor(SilkColors.textPrimary)
+          .layoutWeight(1)
+        Button(this.isSaving ? '保存中...' : '保存')
+          .height(32)
+          .fontSize(13)
+          .backgroundColor(SilkColors.primary)
+          .fontColor(Color.White)
+          .enabled(!this.isSaving)
+          .onClick(() => { void this.saveEntry(); })
+      }
+      .width('100%')
+      .padding(16)
+
+      Divider().color(SilkColors.border)
+
+      TextArea({ text: $$this.editorContent, placeholder: '在这里输入 Markdown 内容...' })
+        .width('100%')
+        .layoutWeight(1)
+        .fontSize(14)
+        .padding(12)
+        .backgroundColor(SilkColors.background)
+        .onChange((value: string) => { this.editorContent = value; })
+    }
+    .width('100%')
+    .height('100%')
   }
 
   @Builder
