@@ -107,6 +107,7 @@ fun ChatScreen(appState: AppState) {
     val messages by chatClient.messages.collectAsState()
     val transientMessage by chatClient.transientMessage.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
+    val isGenerating by chatClient.isGenerating.collectAsState()
     val scope = rememberCoroutineScope()
     
     // Track if we've sent the default instruction for this session
@@ -278,20 +279,32 @@ fun ChatScreen(appState: AppState) {
                         )
                     }
                     
-                    // 发送按钮
-                    Button(
-                        onClick = {
-                            if (messageText.isNotBlank()) {
-                                scope.launch {
-                                    chatClient.sendMessage(user.id, user.fullName, messageText)
-                                    messageText = ""
-                                }
-                            }
-                        },
-                        enabled = connectionState == ConnectionState.CONNECTED && messageText.isNotBlank()
-                    ) {
-                        Icon(Icons.Default.Send, contentDescription = "发送")
+                    if (isGenerating) {
+                        Button(
+                            onClick = {
+                                chatClient.stopGeneration(user.id, user.fullName)
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = androidx.compose.ui.graphics.Color(0xFFFF4D4F)
+                            )
+                        ) {
+                            Text("停止", color = androidx.compose.ui.graphics.Color.White)
                         }
+                    } else {
+                        Button(
+                            onClick = {
+                                if (messageText.isNotBlank()) {
+                                    scope.launch {
+                                        chatClient.sendMessage(user.id, user.fullName, messageText)
+                                        messageText = ""
+                                    }
+                                }
+                            },
+                            enabled = connectionState == ConnectionState.CONNECTED && messageText.isNotBlank()
+                        ) {
+                            Icon(Icons.Default.Send, contentDescription = "发送")
+                        }
+                    }
                     }
                 }
             }

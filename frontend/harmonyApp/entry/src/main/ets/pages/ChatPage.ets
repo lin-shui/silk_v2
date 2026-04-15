@@ -48,6 +48,7 @@ export struct ChatPage {
   @State private editActionDetail: string = '';
   @State private deletingTodoId: string = '';
   @State private todoMenuTarget: UserTodoItem | null = null;
+  @State private isAiGenerating: boolean = false;
 
   private groupId: string = 'default_room';
   private userId: string = '';
@@ -155,6 +156,7 @@ export struct ChatPage {
 
     const prevCount = this.lastSyncedMessageCount;
     this.messages = result;
+    this.isAiGenerating = globalChatStore.isGenerating;
     this.markMessagesAsSent(confirmedOwnIds);
     const newCount = result.length;
     const shouldScrollToEnd = newCount > 0 && (!this.didInitialScroll || newCount > prevCount);
@@ -204,13 +206,16 @@ export struct ChatPage {
       return;
     }
     this.setMessageStatus(sentMessage.id, 'sending');
-    // Harmony 端目前无独立 ACK 事件，短延时后切换为已发送，断线时会转失败
+
+    if (this.isSilkPrivateChat() || content.startsWith('@Silk') || content.startsWith('@silk')) {
+      this.isAiGenerating = true;
+    }
+
     setTimeout(() => {
       if (this.getMessageStatus(sentMessage.id) === 'sending') {
         this.setMessageStatus(sentMessage.id, 'sent');
       }
     }, 1200);
-
   }
 
   private getMessageStatus(messageId: string): string {
@@ -1371,18 +1376,32 @@ export struct ChatPage {
             .placeholderColor(SilkColors.textLight)
             .fontSize(16)
 
-          Button('发送')
-            .width(60)
-            .height(44)
-            .backgroundColor(this.messageInput.trim() ? SilkColors.primary : SilkColors.border)
-            .fontColor(SilkColors.onPrimary)
-            .borderRadius(22)
-            .margin({ left: 8 })
-            .enabled(this.messageInput.trim().length > 0)
-            .onClick((): void => {
-              this.handleSend(this.messageInput);
-              this.messageInput = '';
-            })
+          if (this.isAiGenerating) {
+            Button('停止')
+              .width(60)
+              .height(44)
+              .backgroundColor('#FF4D4F')
+              .fontColor('#FFFFFF')
+              .borderRadius(22)
+              .margin({ left: 8 })
+              .onClick((): void => {
+                globalChatStore.stopGeneration();
+                this.isAiGenerating = false;
+              })
+          } else {
+            Button('发送')
+              .width(60)
+              .height(44)
+              .backgroundColor(this.messageInput.trim() ? SilkColors.primary : SilkColors.border)
+              .fontColor(SilkColors.onPrimary)
+              .borderRadius(22)
+              .margin({ left: 8 })
+              .enabled(this.messageInput.trim().length > 0)
+              .onClick((): void => {
+                this.handleSend(this.messageInput);
+                this.messageInput = '';
+              })
+          }
         }
         .width('100%')
       }

@@ -7,7 +7,8 @@ export enum MessageType {
   LEAVE = 'LEAVE',
   SYSTEM = 'SYSTEM',
   FILE = 'FILE',
-  RECALL = 'RECALL'
+  RECALL = 'RECALL',
+  STOP_GENERATE = 'STOP_GENERATE'
 }
 
 /**

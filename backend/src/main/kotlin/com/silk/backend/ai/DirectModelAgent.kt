@@ -4,8 +4,11 @@ import com.silk.backend.search.WeaviateClient
 import com.silk.backend.search.SearchMode
 import com.silk.backend.ai.ToolPolicyManager.ToolPermission
 import com.silk.backend.ai.ToolPolicyManager.ToolPolicy
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.runBlocking
+import kotlin.coroutines.coroutineContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
@@ -42,6 +45,9 @@ class DirectModelAgent(
         // vLLM/OpenAI tool calling requires fields like `tool_calls[].type`.
         // kotlinx.serialization omits default-valued fields unless encodeDefaults=true.
         encodeDefaults = true
+        // llama-server chat-template parser rejects null where it expects a string;
+        // skip serialising nullable fields that are null (e.g. tool_call_id, tool_calls).
+        explicitNulls = false
         prettyPrint = true
     }
     
@@ -285,18 +291,23 @@ class DirectModelAgent(
         
         while (iteration < maxIterations) {
             iteration++
+            coroutineContext.ensureActive()
             
             callback("thinking", "🤔 思考中...", false)
             
             // ✅ 从一开始就使用流式API检测 tool_calls 并实时输出
             val result = try {
                 callModelStreamingWithToolDetection(callback)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 if (e.message?.contains("400") == true) {
                     logger.warn("⚠️ 流式API返回400，清理历史后重试一次")
                     sanitizeConversationHistory()
                     try {
                         callModelStreamingWithToolDetection(callback)
+                    } catch (retryEx: CancellationException) {
+                        throw retryEx
                     } catch (retryEx: Exception) {
                         callback("error", "❌ API调用失败: ${retryEx.message}", true)
                         return "抱歉，处理您的问题时发生了错误。"
@@ -320,6 +331,7 @@ class DirectModelAgent(
                 
                 // 执行所有 tool_calls
                 for (toolCall in result.toolCalls) {
+                    coroutineContext.ensureActive()
                     val toolResult = if (toolCall.function.name == "search_context" && searchContextCalledThisTurn) {
                         "【仅执行一次】已执行过文档搜索。请根据上方已有的搜索结果直接回答用户，不要再次调用本工具。"
                     } else {
@@ -440,6 +452,7 @@ class DirectModelAgent(
                 var line: String? = reader.readLine()
                 
                 while (line != null) {
+                    coroutineContext.ensureActive()
                     // SSE 格式：data: {...}
                     if (line.startsWith("data: ")) {
                         val data = line.removePrefix("data: ").trim()

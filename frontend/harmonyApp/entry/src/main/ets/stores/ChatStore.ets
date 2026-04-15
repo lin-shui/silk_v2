@@ -58,6 +58,15 @@ export class ChatStore {
     return this._connectionState;
   }
 
+  // AI 正在生成回复
+  private _isGenerating: boolean = false;
+  get isGenerating(): boolean {
+    return this._isGenerating;
+  }
+
+  // 停止后抑制残余流式消息
+  private _suppressTransient: boolean = false;
+
   // WebSocket 客户端
   private wsClient: WebSocketClient | null = null;
   private wsListener: ConnectionListener | null = null;
@@ -111,6 +120,8 @@ export class ChatStore {
       this.wsListener = null;
     }
     this._connectionState = ConnectionState.DISCONNECTED;
+    this._isGenerating = false;
+    this._suppressTransient = false;
     this.onConnectionStateChanged?.();
   }
 
@@ -122,6 +133,8 @@ export class ChatStore {
       this.onError?.('未连接到服务器');
       return null;
     }
+
+    this._suppressTransient = false;
 
     const message: Message = {
       id: this.generateId(),
@@ -149,6 +162,52 @@ export class ChatStore {
   }
 
   /**
+   * 停止 AI 生成：保留已流式输出的内容，发送停止信号给后端
+   */
+  stopGeneration(): void {
+    if (!this.wsClient || this._connectionState !== ConnectionState.CONNECTED) {
+      return;
+    }
+
+    // 保留已流式输出的部分内容为正式消息
+    const transient = this._transientMessage;
+    if (transient && transient.content.length > 0) {
+      const partialMessage: Message = {
+        id: transient.id,
+        userId: transient.userId,
+        userName: transient.userName,
+        content: transient.content + '\n\n*(已停止生成)*',
+        timestamp: transient.timestamp,
+        type: transient.type,
+        isTransient: false,
+        isIncremental: false,
+        category: transient.category
+      };
+      this._messages = this._messages.concat([partialMessage]);
+    }
+
+    // 发送停止信号给后端
+    const stopMessage: Message = {
+      id: this.generateId(),
+      userId: this.currentUserId,
+      userName: this.currentUserName,
+      content: '',
+      timestamp: Date.now(),
+      type: MessageType.STOP_GENERATE,
+      isTransient: true,
+      isIncremental: false,
+      category: MessageCategory.NORMAL
+    };
+    this.wsClient.send(stopMessage);
+
+    this._suppressTransient = true;
+    this._isGenerating = false;
+    this._transientMessage = null;
+    this._statusMessages = [];
+    this.onMessagesChanged?.();
+  }
+
+  /**
    * 重试发送已存在的消息
    */
   retryMessage(message: Message): boolean {
@@ -165,6 +224,17 @@ export class ChatStore {
   private handleMessage(data: string | Message): void {
     try {
       const message: Message = typeof data === 'string' ? parseMessage(data) : data;
+      const isSilkAi: boolean = message.userId === 'silk_ai_agent';
+
+      // 停止后抑制残余流式消息（允许 CLEAR_STATUS 通过）
+      if (this._suppressTransient && isSilkAi && message.isTransient) {
+        if (message.category === MessageCategory.AGENT_STATUS &&
+          message.content.startsWith('CLEAR_STATUS')) {
+          this._statusMessages = [];
+          this.onMessagesChanged?.();
+        }
+        return;
+      }
 
       // 撤回消息
       if (message.type === MessageType.RECALL) {
@@ -183,7 +253,9 @@ export class ChatStore {
         if (message.content.startsWith('CLEAR_STATUS')) {
           this._statusMessages = [];
         } else {
-          // 替换相同 ID 的状态消息（工具结果覆盖工具开始，空闲状态原地刷新）
+          if (isSilkAi) {
+            this._isGenerating = true;
+          }
           const withoutExisting: Message[] = this._statusMessages.filter(msg => msg.id !== message.id);
           const nextStatusMessages: Message[] = withoutExisting.concat([message]);
           if (nextStatusMessages.length > 10) {
@@ -203,6 +275,9 @@ export class ChatStore {
 
       // 增量临时消息
       if (message.isTransient && message.isIncremental) {
+        if (isSilkAi) {
+          this._isGenerating = true;
+        }
         const existing = this._transientMessage;
         if (existing && existing.userId === message.userId && existing.type === message.type) {
           const mergedMessage: Message = {
@@ -233,13 +308,15 @@ export class ChatStore {
         return;
       }
 
-      // 普通消息
+      // 普通消息（非临时）
       const exists = this._messages.some(msg => msg.id === message.id);
       if (!exists) {
         this._messages = this._messages.concat([message]);
       }
       this._transientMessage = null;
       this._statusMessages = [];
+      this._isGenerating = false;
+      this._suppressTransient = false;
       this.onMessagesChanged?.();
 
     } catch (e) {
@@ -269,6 +346,8 @@ export class ChatStore {
     this._messages = [];
     this._transientMessage = null;
     this._statusMessages = [];
+    this._isGenerating = false;
+    this._suppressTransient = false;
     this.onMessagesChanged?.();
   }
 

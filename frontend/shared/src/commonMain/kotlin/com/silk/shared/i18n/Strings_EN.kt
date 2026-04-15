@@ -61,6 +61,7 @@ object Strings_EN : Strings {
     override val connecting = "Connecting..."
     override val disconnected = "Disconnected"
     override val sendButton = "Send"
+    override val stopButton = "Stop"
     override val messageInputPlaceholder = "Type message... (@silk to ask AI, Enter to send)"
     override val noMatchingUsers = "No matching users"
     

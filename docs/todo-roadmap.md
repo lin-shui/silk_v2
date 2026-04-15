@@ -65,6 +65,7 @@
 | TODO-M2-006 | done | 法定工作日准确判定 | 前后端工作日查询与执行前校验 | 工作日模板按中国法定节假日/调休判断，不再仅周一到周五 | 依赖 HolidayCalendarCn 与 API 可用性 |
 | TODO-M3-001 | pending | 反馈友好 | 待办页状态提示 | 刷新、失败、恢复场景都有可读提示 | 依赖错误归类 |
 | TODO-M4-001 | pending | 降低回归成本 | 端到端验证脚本/清单 | 每次发布可跑固定待办主链验证 | 依赖测试环境可用性 |
+| TODO-FE-001 | done | 可控的 @Silk 回复 | 多端聊天输入区停止按钮；共享 `ChatClient` 发送 `STOP_GENERATE`；后端取消活跃生成协程；`DirectModelAgent` 协作取消 | Web/Android/Desktop/鸿蒙在 Silk 生成中可点「停止」；后端任务被取消；客户端可保留已输出片段并抑制残余流式帧 | 依赖 WebSocket 与 Kotlin 协程取消语义 |
 
 ## 5. 执行中（当前会话）
 
@@ -126,3 +127,13 @@
 - 结果：
   - 执行后的待办可手动撤回并再次执行；
   - 工作日模板不再仅按周一到周五粗判，已接入后端法定口径。
+
+### 2026-04-15（TODO-FE-001 完成）
+- 需求：`@Silk` 对话在流式生成过程中可停止，后端同步中止生成。
+- 实施：
+  - 后端：`MessageType.STOP_GENERATE`、`ChatServer` 跟踪 `activeAiJob` 并取消；`DirectModelAgent` 增加 `ensureActive()` 与取消传播。
+  - 共享：`MessageType.STOP_GENERATE`、`ChatClient` 的 `isGenerating`、`stopGeneration()` 与停止后 transient 抑制。
+  - Web/Android/Desktop：生成中显示停止按钮并调用 `stopGeneration()`；鸿蒙沿用 `ChatStore`/`ChatPage`。
+  - i18n：Web 使用 `strings.stopButton`（中/英）。
+- 结果：多端编译通过；停止路径与后端已有处理对齐。
+- 验证：本地 `./gradlew` 编译 `webApp`/`androidApp`/`desktopApp`/`backend` 通过（设备端流式行为建议再手测）。

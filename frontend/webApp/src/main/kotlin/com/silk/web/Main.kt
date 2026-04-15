@@ -784,6 +784,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val transientMessage by chatClient.transientMessage.collectAsState()
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
+    val isGenerating by chatClient.isGenerating.collectAsState()
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
     
@@ -1865,12 +1866,32 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         Text(if (isUploading) "⏳" else "📎")
                     }
                     
-                    // 发送按钮
-                    Button({
-                        classes(SilkStylesheet.button)
-                        onClick { sendMessage() }
-                    }) {
-                        Text(strings.sendButton)
+                    if (isGenerating) {
+                        Button({
+                            style {
+                                padding(12.px, 24.px)
+                                backgroundColor(Color("#FF4D4F"))
+                                color(Color.white)
+                                border { width(0.px) }
+                                borderRadius(8.px)
+                                property("cursor", "pointer")
+                                fontSize(14.px)
+                                property("font-weight", "600")
+                                property("transition", "all 0.2s ease")
+                            }
+                            onClick {
+                                chatClient.stopGeneration(user.id, user.fullName)
+                            }
+                        }) {
+                            Text(strings.stopButton)
+                        }
+                    } else {
+                        Button({
+                            classes(SilkStylesheet.button)
+                            onClick { sendMessage() }
+                        }) {
+                            Text(strings.sendButton)
+                        }
                     }
                 }
             }
@@ -3800,8 +3821,8 @@ fun MessageItem(
             }
         }
         MessageType.RECALL -> {
-            // 撤回消息通知 - 不显示在消息列表中
-            // 客户端通过 ChatClient 自动处理撤回，这里不需要显示
+        }
+        MessageType.STOP_GENERATE -> {
         }
     }
 }

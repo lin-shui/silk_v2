@@ -55,6 +55,11 @@ class ChatClient(
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
     
+    private val _isGenerating = MutableStateFlow(false)
+    val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
+    
+    private var suppressTransient: Boolean = false
+    
     private var webSocket: PlatformWebSocket? = null
     private var currentUserId: String = ""
     private var currentUserName: String = ""
@@ -95,11 +100,21 @@ class ChatClient(
             val message = Json.decodeFromString<Message>(text)
             log("✅ [ChatClient] 解析成功: ${message.type}, 用户: ${message.userName}, category: ${message.category}")
             
+            val isSilkAi = message.userId == "silk_ai_agent"
+            
+            // 停止后抑制残余流式消息（允许 CLEAR_STATUS 通过）
+            if (suppressTransient && isSilkAi && message.isTransient) {
+                if (message.category == MessageCategory.AGENT_STATUS &&
+                    message.content.startsWith("CLEAR_STATUS")) {
+                    _statusMessages.value = emptyList()
+                }
+                return
+            }
+            
             when {
                 // 撤回消息：从列表中移除指定消息
                 message.type == MessageType.RECALL -> {
                     log("🗑️ [ChatClient] 收到撤回消息: ${message.content}")
-                    // content 包含要撤回的消息ID，可能是多个ID（用逗号分隔）
                     val messageIdsToRemove = message.content.split(",").map { it.trim() }
                     _messages.value = _messages.value.filter { msg -> 
                         msg.id !in messageIdsToRemove 
@@ -108,16 +123,14 @@ class ChatClient(
                 }
                 // Agent 状态消息：添加到状态消息列表（灰色显示）
                 message.category == MessageCategory.AGENT_STATUS -> {
-                    // 特殊处理：如果内容以 "CLEAR_STATUS" 开头，清空状态列表
                     if (message.content.startsWith("CLEAR_STATUS")) {
                         log("🧹 [ChatClient] 清除状态消息")
                         _statusMessages.value = emptyList()
                     } else {
                         log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
-                        // 替换相同 ID 的状态消息（工具结果覆盖工具开始，空闲状态原地刷新）
+                        if (isSilkAi) _isGenerating.value = true
                         val existingIndex = _statusMessages.value.indexOfFirst { it.id == message.id }
                         val updated = if (existingIndex >= 0) {
-                            // 原地替换，保持位置不变
                             _statusMessages.value.toMutableList().apply { set(existingIndex, message) }
                         } else {
                             (_statusMessages.value + message).takeLast(10)
@@ -128,6 +141,7 @@ class ChatClient(
                 // 增量临时消息：拼接到已有内容尾部
                 message.isTransient && message.isIncremental -> {
                     log("📝 [ChatClient] 增量临时消息")
+                    if (isSilkAi) _isGenerating.value = true
                     val existing = _transientMessage.value
                     if (existing != null &&
                         existing.userId == message.userId &&
@@ -145,11 +159,11 @@ class ChatClient(
                 // 完整临时消息：直接替换
                 message.isTransient -> {
                     log("📝 [ChatClient] 完整临时消息")
+                    if (isSilkAi) _isGenerating.value = true
                     _transientMessage.value = message
                 }
                 // 普通消息：添加到消息列表（如果不存在）
                 else -> {
-                    // ✅ 防止重复：检查消息是否已存在（可能是自己发送的消息）
                     val exists = _messages.value.any { it.id == message.id }
                     if (!exists) {
                         log("💬 [ChatClient] 普通消息，添加到列表")
@@ -158,8 +172,9 @@ class ChatClient(
                         log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
                     }
                     _transientMessage.value = null
-                    // 收到最终消息后清空状态消息
                     _statusMessages.value = emptyList()
+                    _isGenerating.value = false
+                    suppressTransient = false
                 }
             }
         } catch (e: Exception) {
@@ -167,7 +182,44 @@ class ChatClient(
         }
     }
     
+    fun stopGeneration(userId: String, userName: String) {
+        if (webSocket == null || _connectionState.value != ConnectionState.CONNECTED) return
+        log("🛑 [ChatClient] 停止 AI 生成")
+        
+        val transient = _transientMessage.value
+        if (transient != null && transient.content.isNotEmpty()) {
+            val partialMessage = transient.copy(
+                isTransient = false,
+                isIncremental = false,
+                content = transient.content + "\n\n*(已停止生成)*"
+            )
+            _messages.value = _messages.value + partialMessage
+        }
+        
+        val stopMessage = Message(
+            id = generateId(),
+            userId = userId,
+            userName = userName,
+            content = "",
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+            type = MessageType.STOP_GENERATE
+        )
+        try {
+            val jsonMessage = Json.encodeToString(stopMessage)
+            webSocket?.send(jsonMessage)
+        } catch (e: Exception) {
+            log("❌ [ChatClient] 发送停止信号失败: ${e.message}")
+        }
+        
+        suppressTransient = true
+        _isGenerating.value = false
+        _transientMessage.value = null
+        _statusMessages.value = emptyList()
+    }
+    
     suspend fun sendMessage(userId: String, userName: String, content: String) {
+        suppressTransient = false
+        
         val message = Message(
             id = generateId(),
             userId = userId,
@@ -177,7 +229,6 @@ class ChatClient(
             type = MessageType.TEXT
         )
         
-        // ✅ 立即在本地显示消息（乐观更新）
         _messages.value = _messages.value + message
         log("📝 [ChatClient] 消息已添加到本地列表")
         
@@ -188,7 +239,6 @@ class ChatClient(
             log("✅ [ChatClient] 消息已发送到服务器")
         } catch (e: Exception) {
             log("❌ [ChatClient] 发送消息失败: ${e.message}")
-            // 发送失败时可以考虑移除消息或标记为失败，这里暂时保留显示
         }
     }
     
@@ -197,6 +247,8 @@ class ChatClient(
             webSocket?.disconnect()
             webSocket = null
             _connectionState.value = ConnectionState.DISCONNECTED
+            _isGenerating.value = false
+            suppressTransient = false
             log("✅ [ChatClient] 已断开连接")
         } catch (e: Exception) {
             log("⚠️ [ChatClient] 断开连接: ${e.message}")
@@ -208,6 +260,8 @@ class ChatClient(
         log("🗑️ [ChatClient] 清空所有消息")
         _messages.value = emptyList()
         _transientMessage.value = null
+        _isGenerating.value = false
+        suppressTransient = false
     }
     
     fun clearTransientOnly() {

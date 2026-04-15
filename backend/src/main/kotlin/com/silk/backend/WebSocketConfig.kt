@@ -6,6 +6,8 @@ import io.ktor.websocket.*
 import java.time.Duration
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.Serializable
@@ -37,7 +39,7 @@ data class Message(
 
 @Serializable
 enum class MessageType {
-    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL
+    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE
 }
 
 @Serializable
@@ -69,6 +71,9 @@ class ChatServer(
     private val directModelAgent = com.silk.backend.ai.DirectModelAgent(sessionId = sessionName)
     private var messagesSinceAgentResponse = 0
     private var isAgentJoined = false
+    
+    @Volatile
+    private var activeAiJob: Job? = null
     
     // 已处理的URL缓存，避免重复下载（从持久化文件恢复）
     private val processedUrls = Collections.synchronizedSet(mutableSetOf<String>())
@@ -215,6 +220,12 @@ class ChatServer(
     }
     
     suspend fun broadcast(message: Message) {
+        // 🛑 停止生成：立即取消活跃的 AI 任务并通知客户端
+        if (message.type == MessageType.STOP_GENERATE) {
+            handleStopGeneration()
+            return
+        }
+        
         // ✅ 添加调试日志
         logger.debug("📨 [broadcast] 收到消息: ID={}, User={}, IsTransient={}, Content={}...", message.id, message.userName, message.isTransient, message.content.take(30))
         
@@ -385,22 +396,33 @@ class ChatServer(
                     historyManager.updateRolePrompt(sessionName, silkContent)
                     logger.debug("🎭 [broadcast] 角色已设置: {}", silkContent)
                     
-                    CoroutineScope(Dispatchers.IO).launch {
-                        sendAgentStatus("🎭 角色已设置")
-                        // 以新角色回复确认
-                        generateIntelligentResponse("请简短地自我介绍（1-2句话）", message.userId)
+                    activeAiJob?.cancel()
+                    activeAiJob = CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            sendAgentStatus("🎭 角色已设置")
+                            generateIntelligentResponse("请简短地自我介绍（1-2句话）", message.userId)
+                        } catch (e: CancellationException) {
+                            logger.info("🛑 角色确认生成已被取消")
+                        } finally {
+                            activeAiJob = null
+                        }
                     }
                 } else {
                     // 普通问题 - 使用搜索 + AI 回复
                     val logPrefix = if (isSilkPrivateChat) "[Silk私聊]" else "[@silk]"
                     logger.debug("💬 [broadcast] {} 问题: {}...", logPrefix, silkContent.take(50))
                     
-                    CoroutineScope(Dispatchers.IO).launch {
+                    activeAiJob?.cancel()
+                    activeAiJob = CoroutineScope(Dispatchers.IO).launch {
                         try {
                             generateIntelligentResponse(silkContent, message.userId)
+                        } catch (e: CancellationException) {
+                            logger.info("🛑 AI 生成已被用户取消")
                         } catch (e: Exception) {
                             logger.error("❌ 生成AI回答异常: {}", e.message)
                             e.printStackTrace()
+                        } finally {
+                            activeAiJob = null
                         }
                     }
                 }
@@ -570,6 +592,20 @@ class ChatServer(
     }
     
     /**
+     * 处理停止生成请求：取消活跃 AI 任务并清理客户端状态
+     */
+    private suspend fun handleStopGeneration() {
+        logger.info("🛑 收到停止生成请求")
+        val job = activeAiJob
+        if (job != null && job.isActive) {
+            job.cancel()
+            activeAiJob = null
+            logger.info("🛑 已取消活跃的 AI 任务")
+        }
+        broadcastSystemStatus("CLEAR_STATUS")
+    }
+    
+    /**
      * 生成智能回答 - 简化流程
      * 
      * 直接调用模型，让模型使用其内置的 tool 能力（搜索文件、浏览器等）
@@ -728,6 +764,9 @@ class ChatServer(
                 }
             }
 
+        } catch (e: CancellationException) {
+            logger.info("🛑 [generateIntelligentResponse-{}] 生成被取消", callId)
+            throw e
         } catch (e: Exception) {
             logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败: {}", callId, e.message)
             e.printStackTrace()

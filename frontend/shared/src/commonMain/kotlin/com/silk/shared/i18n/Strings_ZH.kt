@@ -61,6 +61,7 @@ object Strings_ZH : Strings {
     override val connecting = "连接中..."
     override val disconnected = "未连接"
     override val sendButton = "发送"
+    override val stopButton = "停止"
     override val messageInputPlaceholder = "输入消息... (@silk 提问AI, Enter发送)"
     override val noMatchingUsers = "无匹配用户"
     

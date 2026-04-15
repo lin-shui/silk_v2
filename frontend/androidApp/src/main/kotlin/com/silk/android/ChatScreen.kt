@@ -122,6 +122,7 @@ fun ChatScreen(appState: AppState) {
     val transientMessage by chatClient.transientMessage.collectAsState()
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
+    val isGenerating by chatClient.isGenerating.collectAsState()
     
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
@@ -1221,33 +1222,47 @@ fun ChatScreen(appState: AppState) {
                                         maxLines = 3
                                     )
                                     
-                                    // 发送按钮
-                                    Button(
-                                        onClick = {
-                                            if (messageText.text.isNotBlank()) {
-                                                val msgContent = messageText.text
-                                                addLog("📤 发送消息: ${msgContent.take(20)}...")
-                                                
-                                                // 如果是 @silk 消息，立即显示等待状态
-                                                if (msgContent.lowercase().startsWith("@silk")) {
-                                                    isWaitingForAI = true
-                                                    addLog("⏳ 开始等待 AI 响应...")
+                                    val showStopButton = isGenerating || isWaitingForAI
+                                    if (showStopButton) {
+                                        Button(
+                                            onClick = {
+                                                chatClient.stopGeneration(user.id, user.fullName)
+                                                isWaitingForAI = false
+                                            },
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = Color(0xFFFF4D4F)
+                                            ),
+                                            modifier = Modifier.height(56.dp)
+                                        ) {
+                                            Text("停止", color = Color.White)
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = {
+                                                if (messageText.text.isNotBlank()) {
+                                                    val msgContent = messageText.text
+                                                    addLog("📤 发送消息: ${msgContent.take(20)}...")
+                                                    
+                                                    if (msgContent.lowercase().startsWith("@silk") || isSilkPrivateChat) {
+                                                        isWaitingForAI = true
+                                                        addLog("⏳ 开始等待 AI 响应...")
+                                                    }
+                                                    
+                                                    scope.launch {
+                                                        chatClient.sendMessage(user.id, user.fullName, msgContent)
+                                                        addLog("✅ 消息已发送")
+                                                        messageText = TextFieldValue("")
+                                                    }
                                                 }
-                                                
-                                                scope.launch {
-                                                    chatClient.sendMessage(user.id, user.fullName, msgContent)
-                                                    addLog("✅ 消息已发送")
-                                                    messageText = TextFieldValue("")
-                                                }
-                                            }
-                                        },
-                                        enabled = messageText.text.isNotBlank(),
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = SilkColors.primary
-                                        ),
-                                        modifier = Modifier.height(56.dp)  // 匹配输入框高度
-                                    ) {
-                                        Icon(Icons.Default.Send, contentDescription = "发送")
+                                            },
+                                            enabled = messageText.text.isNotBlank(),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = SilkColors.primary
+                                            ),
+                                            modifier = Modifier.height(56.dp)
+                                        ) {
+                                            Icon(Icons.Default.Send, contentDescription = "发送")
+                                        }
                                     }
                                 }
                             }

@@ -66,6 +66,7 @@ interface Strings {
     val connecting: String
     val disconnected: String
     val sendButton: String
+    val stopButton: String
     val messageInputPlaceholder: String
     val noMatchingUsers: String
     
