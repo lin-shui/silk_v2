@@ -86,6 +86,16 @@ private fun backendWsOrigin(): String {
     return "$wsProtocol//$host"
 }
 
+// ==================== 安全的 JS 互操作辅助函数（避免在 js("...") 中引用 Kotlin 变量） ====================
+
+private val jsGetUserMedia = js("(function() { return navigator.mediaDevices.getUserMedia({audio: true}); })")
+private val jsNewArray = js("(function() { return []; })")
+private val jsCreateRecorder = js("(function(stream) { var opts = {mimeType: 'audio/webm;codecs=opus'}; try { return new MediaRecorder(stream, opts); } catch(e) { return new MediaRecorder(stream); } })")
+private val jsCreateBlob = js("(function(chunks) { return new Blob(chunks, {type: 'audio/webm'}); })")
+private val jsBlobToArrayBuffer = js("(function(blob) { return blob.arrayBuffer(); })")
+private val jsArrayBufferToBase64 = js("(function(ab) { var u8 = new Uint8Array(ab); var b = ''; for (var i = 0; i < u8.length; i++) b += String.fromCharCode(u8[i]); return btoa(b); })")
+private val jsStopTracks = js("(function(stream) { if (stream && stream.getTracks) { stream.getTracks().forEach(function(t) { t.stop(); }); } })")
+
 internal fun downloadAsFile(content: String, fileName: String) {
     val blob = org.w3c.files.Blob(
         arrayOf(content),
@@ -360,8 +370,8 @@ fun ChatScene(appState: WebAppState) {
     Div({
         style {
             display(DisplayStyle.Flex)
-            height(100.vh)
-            width(100.vw)
+            height(100.percent)
+            width(100.percent)
             property("overflow", "hidden")
             property("background", SilkColors.backgroundGradient)
         }
@@ -513,9 +523,10 @@ fun ChatScene(appState: WebAppState) {
             style {
                 property("flex", "1")
                 minWidth(0.px)
+                height(100.percent)
+                property("overflow", "hidden")
             }
         }) {
-            // 右侧仍复用原有聊天逻辑
             ChatAppWithGroup(user, group, appState)
         }
     }
@@ -526,13 +537,14 @@ object SilkStylesheet : StyleSheet() {
     val container by style {
         display(DisplayStyle.Flex)
         flexDirection(FlexDirection.Column)
-        height(100.vh)
+        height(100.percent)
         fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
         property("overflow", "hidden")
         property("background", SilkColors.backgroundGradient)
     }
     
     val header by style {
+        property("flex-shrink", "0")
         property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
         color(Color.white)
         padding(16.px)
@@ -543,6 +555,7 @@ object SilkStylesheet : StyleSheet() {
     }
     
     val statusBar by style {
+        property("flex-shrink", "0")
         padding(8.px, 16.px)
         display(DisplayStyle.Flex)
         property("justify-content", "space-between")
@@ -553,6 +566,7 @@ object SilkStylesheet : StyleSheet() {
     
     val messagesContainer by style {
         property("flex", "1")
+        property("min-height", "0")
         property("overflow-y", "auto")
         padding(16.px)
         property("background", SilkColors.backgroundGradient)
@@ -596,6 +610,7 @@ object SilkStylesheet : StyleSheet() {
     
     val inputContainer by style {
         display(DisplayStyle.Flex)
+        property("flex-shrink", "0")
         padding(16.px)
         backgroundColor(Color(SilkColors.surfaceElevated))
         property("border-top", "1px solid ${SilkColors.border}")
@@ -912,6 +927,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     
     // Drag-and-drop state
     var isDraggingOver by remember { mutableStateOf(false) }
+
+    // ASR 语音输入状态
+    var isVoiceRecording by remember { mutableStateOf(false) }
+    var isTranscribing by remember { mutableStateOf(false) }
+    var mediaRecorderJs by remember { mutableStateOf<dynamic>(null) }
+    var audioChunksJs by remember { mutableStateOf<dynamic>(null) }
     
     // 添加成员到群组相关状态
     var showAddMemberDialog by remember { mutableStateOf(false) }
@@ -1977,6 +1998,119 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }) {
                         Text(if (isUploading) "⏳" else "📎")
+                    }
+
+                    // 🎤 语音输入按钮
+                    if (isTranscribing) {
+                        Button({
+                            style {
+                                padding(12.px, 14.px)
+                                backgroundColor(Color(SilkColors.secondary))
+                                color(Color(SilkColors.textSecondary))
+                                border { width(0.px) }
+                                borderRadius(8.px)
+                                fontSize(14.px)
+                                property("cursor", "not-allowed")
+                                property("opacity", "0.7")
+                            }
+                        }) {
+                            Text("识别中...")
+                        }
+                    } else if (isVoiceRecording) {
+                        Button({
+                            style {
+                                padding(12.px, 14.px)
+                                backgroundColor(Color("#FF4D4F"))
+                                color(Color.white)
+                                border { width(0.px) }
+                                borderRadius(8.px)
+                                property("cursor", "pointer")
+                                fontSize(14.px)
+                                property("font-weight", "600")
+                                property("transition", "all 0.2s ease")
+                            }
+                            attr("title", "停止录音并识别")
+                            onClick {
+                                isVoiceRecording = false
+                                try {
+                                    val recorder = mediaRecorderJs
+                                    if (recorder != null) {
+                                        recorder.stop()
+                                    }
+                                } catch (e: dynamic) {
+                                    console.log("停止录音失败:", e)
+                                    isTranscribing = false
+                                }
+                            }
+                        }) {
+                            Text("⏹ 停止")
+                        }
+                    } else {
+                        Button({
+                            style {
+                                padding(12.px, 14.px)
+                                backgroundColor(Color(SilkColors.secondary))
+                                color(Color(SilkColors.textPrimary))
+                                border { width(0.px) }
+                                borderRadius(8.px)
+                                property("cursor", "pointer")
+                                fontSize(18.px)
+                                property("transition", "all 0.2s ease")
+                            }
+                            attr("title", "语音输入")
+                            onClick {
+                                scope.launch {
+                                    try {
+                                        console.log("[ASR] 请求麦克风...")
+                                        val stream = jsGetUserMedia()
+                                            .unsafeCast<kotlin.js.Promise<dynamic>>().await()
+                                        console.log("[ASR] 获取到音频流")
+                                        val chunks = jsNewArray()
+                                        audioChunksJs = chunks
+                                        val recorder = jsCreateRecorder(stream)
+                                        recorder.ondataavailable = { event: dynamic ->
+                                            chunks.push(event.data)
+                                            Unit
+                                        }
+                                        recorder.onstop = {
+                                            console.log("[ASR] 录音已停止，开始转写...")
+                                            isTranscribing = true
+                                            scope.launch {
+                                                try {
+                                                    val blob = jsCreateBlob(chunks)
+                                                    val arrayBuffer = jsBlobToArrayBuffer(blob)
+                                                        .unsafeCast<kotlin.js.Promise<dynamic>>().await()
+                                                    val base64 = jsArrayBufferToBase64(arrayBuffer) as String
+                                                    console.log("[ASR] base64 长度:", base64.length)
+                                                    val result = ApiClient.transcribeAudio(base64, "webm")
+                                                    console.log("[ASR] 结果: success=${result.success}, text=${result.text.take(50)}")
+                                                    if (result.success && result.text.isNotBlank()) {
+                                                        messageText = if (messageText.isNotBlank()) "$messageText ${result.text}" else result.text
+                                                    } else {
+                                                        console.log("[ASR] 失败:", result.error ?: "未知错误")
+                                                    }
+                                                } catch (t: Throwable) {
+                                                    console.log("[ASR] 识别出错:", t)
+                                                } finally {
+                                                    isTranscribing = false
+                                                    try { jsStopTracks(stream) } catch (_: dynamic) {}
+                                                    console.log("[ASR] 流程结束")
+                                                }
+                                            }
+                                            Unit
+                                        }
+                                        mediaRecorderJs = recorder
+                                        recorder.start()
+                                        isVoiceRecording = true
+                                        console.log("[ASR] 开始录音")
+                                    } catch (e: dynamic) {
+                                        console.log("[ASR] 无法启动录音:", e)
+                                    }
+                                }
+                            }
+                        }) {
+                            Text("🎤")
+                        }
                     }
                     
                     if (isGenerating) {

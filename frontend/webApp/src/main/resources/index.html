@@ -34,17 +34,25 @@
             background: linear-gradient(135deg, #FDF8F0 0%, #F5EDE0 50%, #EDE4D3 100%);
         }
         
-        /* 隐藏webkit浏览器的滚动条 */
+        /* 细滚动条（仅内容区域可见，不影响全局） */
         ::-webkit-scrollbar {
-            width: 0px;
-            height: 0px;
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
             background: transparent;
         }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(169, 137, 77, 0.25);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(169, 137, 77, 0.45);
+        }
         
-        /* 隐藏Firefox的滚动条 */
         html {
-            scrollbar-width: none;
-            -ms-overflow-style: none;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(169, 137, 77, 0.25) transparent;
         }
         
         #root {

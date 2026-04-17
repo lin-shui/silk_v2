@@ -5,6 +5,10 @@ import kotlinx.browser.window
 import kotlinx.coroutines.await
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import org.w3c.fetch.RequestInit
@@ -741,4 +745,23 @@ object ApiClient {
             null
         }
     }
+
+    // ==================== ASR 语音识别 API ====================
+
+    suspend fun transcribeAudio(audioBase64: String, format: String = "webm"): AsrResult {
+        return try {
+            val body = """{"audio":"$audioBase64","format":"$format"}"""
+            val responseText = post("/api/asr/transcribe", body)
+            val json = jsonParser.parseToJsonElement(responseText).jsonObject
+            val success = json["success"]?.jsonPrimitive?.booleanOrNull ?: false
+            val text = json["text"]?.jsonPrimitive?.contentOrNull ?: ""
+            val error = json["error"]?.jsonPrimitive?.contentOrNull
+            AsrResult(success, text, error)
+        } catch (e: Exception) {
+            console.log("语音识别请求失败:", e)
+            AsrResult(false, "", "语音识别失败: ${e.message}")
+        }
+    }
 }
+
+data class AsrResult(val success: Boolean, val text: String, val error: String? = null)

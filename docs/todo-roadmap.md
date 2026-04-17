@@ -70,6 +70,7 @@
 | TODO-WF-001 | done | 工作流占位结构 | 后端 Workflow CRUD + 三端工作流列表/创建/删除 UI | 可创建、列出、删除工作流名称；详情区显示"功能开发中" | 编排逻辑留白，由其他开发者补充 |
 | TODO-KB-001 | done | 知识库核心 | 后端 KBTopic/KBEntry CRUD + 三端知识库主题/条目列表 + Markdown 编辑器 | 可创建主题和条目，编辑并保存 Markdown 内容 | 初期 JSON 文件存储，后续可迁移 DB |
 | TODO-KB-002 | done | 知识库 Obsidian 自动归类导出 | 后端 KBObsidianExporter + Web 端 ObsidianVaultManager 写入 | Web 端可导出到 Obsidian vault 目录 `Silk/Knowledge/{project}/{topic}/` | File System Access API 仅 Chrome/Edge 支持 |
+| TODO-ASR-001 | done | 语音输入（ASR） | 鸿蒙聊天页麦克风录音 + 后端代理 vLLM Qwen3-ASR 转写 + 文本回填输入框 | 点击麦克风录音→停止→后端调用本地 vLLM ASR→转写文本填入聊天输入框并可发送 | 依赖本地 vLLM 服务可用；模拟器可能不支持麦克风 |
 
 ## 5. 执行中（当前会话）
 
@@ -159,3 +160,35 @@
   - i18n：Web 使用 `strings.stopButton`（中/英）。
 - 结果：多端编译通过；停止路径与后端已有处理对齐。
 - 验证：本地 `./gradlew` 编译 `webApp`/`androidApp`/`desktopApp`/`backend` 通过（设备端流式行为建议再手测）。
+
+### 2026-04-17（TODO-ASR-001 完成）
+- 需求：鸿蒙聊天页支持语音输入，录音后调用本地 vLLM Qwen3-ASR 进行语音转文字。
+- 实施：
+  - 后端：`AIConfig` 新增 `ASR_VLLM_URL`/`ASR_MODEL`；新增 `AsrRoutes.kt`（`POST /api/asr/transcribe`），接收 base64 音频 JSON，解码后以 multipart 转发至 vLLM `/v1/audio/transcriptions`，返回识别文本。
+  - 鸿蒙：`AudioRecorderService.ets` 封装 AVRecorder（M4A/AAC 16kHz 单声道，最长 60 秒）；`ApiClient.ets` 新增 `transcribeAudio()`；`ChatPage.ets` 输入栏新增麦克风按钮，三态 UI（默认/录音中/识别中），运行时申请 `MICROPHONE` 权限。
+  - 配置：`module.json5` 添加 `ohos.permission.MICROPHONE`；`.env.example` 添加 `ASR_VLLM_URL`/`ASR_MODEL` 文档。
+- 结果：鸿蒙 HAP 编译通过；用户点击麦克风录音→点击停止→音频上传后端→vLLM ASR 转写→文本回填聊天输入框。
+- 残留：需真机测试麦克风录音；模拟器可能不支持麦克风；vLLM 服务需用户自行启动。
+
+### 2026-04-17（TODO-ASR-001 Android+Web 端补齐）
+- 需求：Android 和 Web 端同步支持语音输入 ASR，与鸿蒙端对齐；修复 Web 端页面显示问题。
+- 实施：
+  - Android：`AndroidManifest.xml` 添加 `RECORD_AUDIO` 权限；`ApiClient.kt` 新增 `transcribeAudio()` 方法（base64 JSON -> `/api/asr/transcribe`）；`ChatScreen.kt` 输入栏新增麦克风按钮，三态 UI（默认/录音中/识别中），运行时 `MediaRecorder` 录制 M4A/AAC 16kHz 单声道。
+  - Web：`ApiClient.kt` 新增 `transcribeAudio()` 方法；`Main.kt` 输入按钮区新增麦克风按钮，使用浏览器 `MediaRecorder` API 录制 WebM/Opus，base64 编码后上传转写。
+  - Web 显示修复：`ChatScene` 外层容器从 `100vh/100vw` 改为 `100%`（避免嵌套在导航栏布局内溢出）；`SilkStylesheet.container` 同步修正；`index.html` 滚动条从完全隐藏改为半透明细滚动条，改善长消息列表可浏览性。
+- 结果：Android APK 编译通过；Web JS bundle 编译通过。
+
+### 2026-04-17（TODO-ASR-001 mlx_audio 兼容）
+- 问题：mlx_audio 使用 miniaudio 解码，`/v1/audio/transcriptions` 对 WebM/M4A 等报 `DecodeError: unsupported file format`。
+- 实施：后端 `AsrRoutes` 在转发前默认用 **ffmpeg** 将非 WAV 音频转码为 16kHz 单声道 PCM WAV；`AIConfig` 新增 `ASR_TRANSCODE_TO_WAV`（默认 true）、`ASR_FFMPEG_PATH`；`.env.example` 补充说明。
+- 依赖：运行 Silk 后端的机器需安装 ffmpeg 并在 PATH 中可用。
+
+### 2026-04-17（TODO-ASR-001 Web 识别中卡住）
+- 问题：mlx 已 200，但 Web 端一直显示「识别中」。
+- 原因：`Main.kt` 中 base64 的 `js("""...""")` 未把 `ArrayBuffer` 传入 JS，运行时引用未定义的 `uint8`；JS 异常在 Kotlin/JS 中未必是 `Exception`，`catch (Exception)` 捕不到，`isTranscribing` 未复位。
+- 实施：新增 `arrayBufferToBase64(arrayBuffer)` 正确传入 `ArrayBuffer`；`catch (Throwable)` + `finally { isTranscribing = false }`。
+
+### 2026-04-17（TODO-ASR-001 后端响应序列化修复）
+- 问题：`POST /api/asr/transcribe` 返回 500，`LinkedHashMap` 无法被 Ktor Content Negotiation 的多态序列化写出。
+- 实施：`AsrRoutes` 中所有 `call.respond(mapOf(...))` 改为 `call.respondText(buildJsonObject { ... }.toString(), ContentType.Application.Json, ...)`，与项目中其他路由的 JSON 响应方式一致。
+- 结果：转写成功/失败均返回合法 JSON，客户端可正常解析。

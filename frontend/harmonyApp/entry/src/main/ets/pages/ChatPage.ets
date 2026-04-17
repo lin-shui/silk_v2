@@ -14,8 +14,12 @@ import { router as appRouter } from '../common/Router';
 import { apiClient as globalApiClient, UserTodoPatch, GroupMemberProfile } from '../api/ApiClient';
 import pasteboard from '@ohos.pasteboard';
 import promptAction from '@ohos.promptAction';
+import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl';
+import { buffer } from '@kit.ArkTS';
 import { AlarmService, AlarmResult } from '../common/AlarmService';
 import { parseAlarmTimeFromText } from '../common/TodoTimeParser';
+import { AudioRecorderService } from '../common/AudioRecorderService';
+import { getGlobalContext } from '../entryability/EntryAbility';
 
 @Component
 export struct ChatPage {
@@ -49,12 +53,15 @@ export struct ChatPage {
   @State private deletingTodoId: string = '';
   @State private todoMenuTarget: UserTodoItem | null = null;
   @State private isAiGenerating: boolean = false;
+  @State private isVoiceRecording: boolean = false;
+  @State private isTranscribing: boolean = false;
 
   private groupId: string = 'default_room';
   private userId: string = '';
   private userName: string = '';
   private isInitialized: boolean = false;
   private readonly apiClient = globalApiClient;
+  private readonly audioRecorder = new AudioRecorderService();
   private listScroller: Scroller = new Scroller();
   private didInitialScroll: boolean = false;
   private lastSyncedMessageCount: number = 0;
@@ -216,6 +223,72 @@ export struct ChatPage {
         this.setMessageStatus(sentMessage.id, 'sent');
       }
     }, 1200);
+  }
+
+  private async requestMicrophonePermission(): Promise<boolean> {
+    try {
+      const atManager = abilityAccessCtrl.createAtManager();
+      const ctx = getGlobalContext();
+      if (!ctx) {
+        return false;
+      }
+      const result = await atManager.requestPermissionsFromUser(ctx,
+        ['ohos.permission.MICROPHONE'] as Permissions[]);
+      return result.authResults[0] === 0;
+    } catch (_e) {
+      return false;
+    }
+  }
+
+  private async handleVoiceToggle(): Promise<void> {
+    if (this.isTranscribing) {
+      return;
+    }
+
+    if (this.isVoiceRecording) {
+      this.isVoiceRecording = false;
+      this.isTranscribing = true;
+      try {
+        const filePath = await this.audioRecorder.stopRecording();
+        if (filePath === '') {
+          this.isTranscribing = false;
+          return;
+        }
+        const audioData = this.audioRecorder.readFileAsArrayBuffer(filePath);
+        const base64Str = buffer.from(audioData).toString('base64');
+        this.audioRecorder.cleanupFile(filePath);
+
+        const resp = await this.apiClient.transcribeAudio(base64Str, 'm4a');
+        if (resp.success && resp.data) {
+          const text = resp.data.trim();
+          if (text.length > 0) {
+            this.messageInput = this.messageInput ? `${this.messageInput} ${text}` : text;
+          }
+        } else {
+          promptAction.showToast({ message: resp.message || '语音识别失败', duration: 2000 });
+        }
+      } catch (e) {
+        promptAction.showToast({ message: '语音识别出错', duration: 2000 });
+      }
+      this.isTranscribing = false;
+    } else {
+      const granted = await this.requestMicrophonePermission();
+      if (!granted) {
+        promptAction.showToast({ message: '需要麦克风权限才能使用语音输入', duration: 2000 });
+        return;
+      }
+      try {
+        const ctx = getGlobalContext();
+        const cacheDir = ctx ? ctx.cacheDir : '/data/storage/el2/base/cache';
+        await this.audioRecorder.startRecording(cacheDir, () => {
+          this.isVoiceRecording = false;
+          this.handleVoiceToggle();
+        });
+        this.isVoiceRecording = true;
+      } catch (e) {
+        promptAction.showToast({ message: '无法启动录音', duration: 2000 });
+      }
+    }
   }
 
   private getMessageStatus(messageId: string): string {
@@ -1365,18 +1438,15 @@ export struct ChatPage {
           .margin({ bottom: 6 })
         }
 
-        Row() {
-          TextInput({ placeholder: this.getMessageInputPlaceholder(), text: $$this.messageInput })
-            .layoutWeight(1)
-            .height(44)
-            .backgroundColor(SilkColors.surface)
-            .borderRadius(22)
-            .padding({ left: 16, right: 16 })
-            .fontColor(SilkColors.textPrimary)
-            .placeholderColor(SilkColors.textLight)
-            .fontSize(16)
+        if (this.isVoiceRecording) {
+          Row() {
+            Text('录音中...')
+              .fontSize(16)
+              .fontColor('#FF4D4F')
+              .fontWeight(FontWeight.Medium)
+              .layoutWeight(1)
+              .textAlign(TextAlign.Center)
 
-          if (this.isAiGenerating) {
             Button('停止')
               .width(60)
               .height(44)
@@ -1385,25 +1455,77 @@ export struct ChatPage {
               .borderRadius(22)
               .margin({ left: 8 })
               .onClick((): void => {
-                globalChatStore.stopGeneration();
-                this.isAiGenerating = false;
-              })
-          } else {
-            Button('发送')
-              .width(60)
-              .height(44)
-              .backgroundColor(this.messageInput.trim() ? SilkColors.primary : SilkColors.border)
-              .fontColor(SilkColors.onPrimary)
-              .borderRadius(22)
-              .margin({ left: 8 })
-              .enabled(this.messageInput.trim().length > 0)
-              .onClick((): void => {
-                this.handleSend(this.messageInput);
-                this.messageInput = '';
+                this.handleVoiceToggle();
               })
           }
+          .width('100%')
+          .height(44)
+        } else if (this.isTranscribing) {
+          Row() {
+            LoadingProgress()
+              .width(24)
+              .height(24)
+              .color(SilkColors.primary)
+            Text('识别中...')
+              .fontSize(14)
+              .fontColor(SilkColors.textSecondary)
+              .margin({ left: 8 })
+          }
+          .width('100%')
+          .height(44)
+          .justifyContent(FlexAlign.Center)
+        } else {
+          Row() {
+            TextInput({ placeholder: this.getMessageInputPlaceholder(), text: $$this.messageInput })
+              .layoutWeight(1)
+              .height(44)
+              .backgroundColor(SilkColors.surface)
+              .borderRadius(22)
+              .padding({ left: 16, right: 16 })
+              .fontColor(SilkColors.textPrimary)
+              .placeholderColor(SilkColors.textLight)
+              .fontSize(16)
+
+            Button('🎤')
+              .width(44)
+              .height(44)
+              .backgroundColor(SilkColors.surface)
+              .borderRadius(22)
+              .margin({ left: 6 })
+              .fontSize(20)
+              .onClick((): void => {
+                this.handleVoiceToggle();
+              })
+
+            if (this.isAiGenerating) {
+              Button('停止')
+                .width(60)
+                .height(44)
+                .backgroundColor('#FF4D4F')
+                .fontColor('#FFFFFF')
+                .borderRadius(22)
+                .margin({ left: 6 })
+                .onClick((): void => {
+                  globalChatStore.stopGeneration();
+                  this.isAiGenerating = false;
+                })
+            } else {
+              Button('发送')
+                .width(60)
+                .height(44)
+                .backgroundColor(this.messageInput.trim() ? SilkColors.primary : SilkColors.border)
+                .fontColor(SilkColors.onPrimary)
+                .borderRadius(22)
+                .margin({ left: 6 })
+                .enabled(this.messageInput.trim().length > 0)
+                .onClick((): void => {
+                  this.handleSend(this.messageInput);
+                  this.messageInput = '';
+                })
+            }
+          }
+          .width('100%')
         }
-        .width('100%')
       }
       .width('100%')
       .padding({ left: 12, right: 12, top: 8, bottom: 8 })

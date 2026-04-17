@@ -127,6 +127,10 @@
     {
       "name": "reminder_reason",
       "value": "Silk 需要提醒权限来创建和管理待办闹钟"
+    },
+    {
+      "name": "microphone_reason",
+      "value": "Silk 需要麦克风权限以支持语音输入"
     }
   ]
 }

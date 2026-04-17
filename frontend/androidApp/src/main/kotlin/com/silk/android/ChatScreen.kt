@@ -71,9 +71,15 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
 import org.json.JSONObject
+import android.Manifest
+import android.content.pm.PackageManager
+import android.media.MediaRecorder
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 
 // Web版的 collectAsState 实现
 @Composable
@@ -134,6 +140,18 @@ fun ChatScreen(appState: AppState) {
     
     // AI 响应等待状态 - 必须在 LaunchedEffect 之前定义
     var isWaitingForAI by remember { mutableStateOf(false) }
+
+    // ASR 语音输入状态
+    var isVoiceRecording by remember { mutableStateOf(false) }
+    var isTranscribing by remember { mutableStateOf(false) }
+    val mediaRecorderRef = remember { mutableStateOf<MediaRecorder?>(null) }
+    val audioFilePathRef = remember { mutableStateOf("") }
+    val micPermissionGranted = remember { mutableStateOf(
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    ) }
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> micPermissionGranted.value = granted }
     
     // 监控消息列表变化
     LaunchedEffect(messages.size) {
@@ -1178,19 +1196,81 @@ fun ChatScreen(appState: AppState) {
                                 }
                                 
                                 // 输入框和发送按钮在同一行
+                                if (isVoiceRecording) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            "录音中...",
+                                            color = Color(0xFFFF4D4F),
+                                            fontWeight = FontWeight.Medium,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Button(
+                                            onClick = {
+                                                isVoiceRecording = false
+                                                isTranscribing = true
+                                                val recorder = mediaRecorderRef.value
+                                                val filePath = audioFilePathRef.value
+                                                try { recorder?.stop() } catch (_: Exception) {}
+                                                try { recorder?.release() } catch (_: Exception) {}
+                                                mediaRecorderRef.value = null
+                                                scope.launch {
+                                                    try {
+                                                        val file = java.io.File(filePath)
+                                                        if (file.exists()) {
+                                                            val bytes = file.readBytes()
+                                                            val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                                                            val result = ApiClient.transcribeAudio(base64, "m4a")
+                                                            if (result.success && result.text.isNotBlank()) {
+                                                                val current = messageText.text
+                                                                val newText = if (current.isNotBlank()) "$current ${result.text}" else result.text
+                                                                messageText = TextFieldValue(newText, TextRange(newText.length))
+                                                            } else {
+                                                                addLog("ASR 失败: ${result.error ?: "未知错误"}")
+                                                            }
+                                                            file.delete()
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        addLog("语音识别出错: ${e.message}")
+                                                    }
+                                                    isTranscribing = false
+                                                }
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4D4F)),
+                                            modifier = Modifier.height(56.dp)
+                                        ) {
+                                            Icon(Icons.Default.Stop, contentDescription = "停止录音", tint = Color.White)
+                                        }
+                                    }
+                                } else if (isTranscribing) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                            strokeWidth = 2.dp,
+                                            color = SilkColors.primary
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("识别中...", color = Color.Gray)
+                                    }
+                                } else {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    // 输入框
                                     OutlinedTextField(
                                         value = messageText,
                                         onValueChange = { newValue ->
                                             val oldText = messageText.text
                                             messageText = newValue
                                             val newText = newValue.text
-                                            // 检测刚输入的 @
                                             if (newText.length > oldText.length) {
                                                 val lastChar = newText.getOrNull(newText.length - 1)
                                                 if (lastChar == '@') {
@@ -1200,7 +1280,6 @@ fun ChatScreen(appState: AppState) {
                                                     return@OutlinedTextField
                                                 }
                                             }
-                                            // 处于 @ 提及模式时，更新搜索或遇空格/删除@时关闭
                                             if (showMentionMenu && mentionStartIndex >= 0) {
                                                 if (mentionStartIndex >= newText.length || newText.getOrNull(mentionStartIndex) != '@') {
                                                     showMentionMenu = false
@@ -1221,6 +1300,42 @@ fun ChatScreen(appState: AppState) {
                                         placeholder = { Text(if (group.name.startsWith("[Silk]")) "直接输入消息与 Silk 对话..." else "输入消息... @ 提及成员 / @silk 提问AI") },
                                         maxLines = 3
                                     )
+
+                                    // 麦克风按钮
+                                    IconButton(
+                                        onClick = {
+                                            if (!micPermissionGranted.value) {
+                                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                                return@IconButton
+                                            }
+                                            try {
+                                                val filePath = "${context.cacheDir.absolutePath}/silk_voice_${System.currentTimeMillis()}.m4a"
+                                                audioFilePathRef.value = filePath
+                                                @Suppress("DEPRECATION")
+                                                val recorder = MediaRecorder().apply {
+                                                    setAudioSource(MediaRecorder.AudioSource.MIC)
+                                                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                                                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                                                    setAudioSamplingRate(16000)
+                                                    setAudioChannels(1)
+                                                    setOutputFile(filePath)
+                                                    prepare()
+                                                    start()
+                                                }
+                                                mediaRecorderRef.value = recorder
+                                                isVoiceRecording = true
+                                            } catch (e: Exception) {
+                                                addLog("无法启动录音: ${e.message}")
+                                            }
+                                        },
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Mic,
+                                            contentDescription = "语音输入",
+                                            tint = Color.Gray
+                                        )
+                                    }
                                     
                                     val showStopButton = isGenerating || isWaitingForAI
                                     if (showStopButton) {
@@ -1264,6 +1379,7 @@ fun ChatScreen(appState: AppState) {
                                             Icon(Icons.Default.Send, contentDescription = "发送")
                                         }
                                     }
+                                }
                                 }
                             }
                         }

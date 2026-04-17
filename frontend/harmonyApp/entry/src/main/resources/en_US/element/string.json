@@ -95,6 +95,10 @@
     {
       "name": "reminder_reason",
       "value": "Silk needs reminder permission to create and manage todo alarms"
+    },
+    {
+      "name": "microphone_reason",
+      "value": "Silk needs microphone access for voice input in chat"
     }
   ]
 }

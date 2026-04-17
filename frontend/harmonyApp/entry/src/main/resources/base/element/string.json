@@ -219,6 +219,10 @@
     {
       "name": "shopping_search",
       "value": "Searching for items"
+    },
+    {
+      "name": "microphone_reason",
+      "value": "Silk needs microphone access for voice input in chat"
     }
   ]
 }

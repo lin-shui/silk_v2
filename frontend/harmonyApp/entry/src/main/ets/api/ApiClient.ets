@@ -72,6 +72,12 @@ export interface GroupMemberProfile {
   phone?: string;
 }
 
+interface AsrTranscribeResponse {
+  success: boolean;
+  text?: string;
+  error?: string;
+}
+
 interface LoginPayload {
   loginName: string;
   password: string;
@@ -1382,6 +1388,40 @@ export class ApiClient {
       const result = await this.putRaw(`/api/kb/entries/${entryId}`, body);
       return JSON.parse(result) as KBEntryApiItem;
     } catch (_) { return undefined; }
+  }
+
+  // ==================== ASR 语音识别 API ====================
+
+  async transcribeAudio(audioBase64: string, format: string = 'm4a'): Promise<ApiResponse<string>> {
+    const httpRequest = this.createHttpRequest();
+    try {
+      const body = JSON.stringify({ audio: audioBase64, format: format });
+      const response = await httpRequest.request(
+        `${this.baseUrl}/api/asr/transcribe`,
+        {
+          method: http.RequestMethod.POST,
+          header: { 'Content-Type': 'application/json' },
+          extraData: body,
+          connectTimeout: this.timeout,
+          readTimeout: 120_000,
+        }
+      );
+      if (response.responseCode === 200) {
+        const result = JSON.parse(response.result as string) as AsrTranscribeResponse;
+        if (result.success && result.text !== undefined) {
+          return { success: true, message: 'ok', data: result.text };
+        }
+        return this.failedResponse<string>(result.error || '语音识别失败');
+      }
+      if (response.responseCode === 503) {
+        return this.failedResponse<string>('语音识别服务不可用，请确认 vLLM ASR 已启动');
+      }
+      return this.failedResponse<string>(`语音识别失败 (HTTP ${response.responseCode})`);
+    } catch (error) {
+      return this.failedResponse<string>(`语音识别请求失败: ${this.stringifyError(error)}`);
+    } finally {
+      httpRequest.destroy();
+    }
   }
 
   static getInstance(): ApiClient {

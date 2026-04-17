@@ -5,6 +5,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import java.net.HttpURLConnection
@@ -680,4 +684,39 @@ object ApiClient {
             null
         }
     }
+
+    // ==================== ASR 语音识别 API ====================
+
+    suspend fun transcribeAudio(audioBase64: String, format: String = "m4a"): AsrResult = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"audio":"$audioBase64","format":"$format"}"""
+            val url = URL("$baseUrl/api/asr/transcribe")
+            val connection = AndroidHttpCompat.openConnection(url)
+            val responseText = try {
+                connection.apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json")
+                    connectTimeout = 10000
+                    readTimeout = 120000
+                }
+                connection.outputStream.use { os -> os.write(body.toByteArray()) }
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                connection.disconnect()
+            }
+            val json = jsonParser.parseToJsonElement(responseText).jsonObject
+            val success = json["success"]?.jsonPrimitive?.booleanOrNull ?: false
+            val text = json["text"]?.jsonPrimitive?.contentOrNull ?: ""
+            val error = json["error"]?.jsonPrimitive?.contentOrNull
+            AsrResult(success, text, error)
+        } catch (e: java.net.ConnectException) {
+            AsrResult(false, "", "语音识别服务不可用，请确认 vLLM ASR 已启动")
+        } catch (e: Exception) {
+            println("语音识别请求失败: $e")
+            AsrResult(false, "", "语音识别失败: ${e.message}")
+        }
+    }
 }
+
+data class AsrResult(val success: Boolean, val text: String, val error: String? = null)

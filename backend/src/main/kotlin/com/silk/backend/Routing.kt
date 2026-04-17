@@ -10,6 +10,7 @@ import com.silk.backend.models.KBEntry
 import com.silk.backend.models.KBTopic
 import com.silk.backend.models.Workflow
 import com.silk.backend.workflow.WorkflowManager
+import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
 import com.silk.backend.claudecode.BridgeRegistry
 import com.silk.backend.claudecode.ClaudeCodeManager
@@ -1423,6 +1424,9 @@ fun Application.configureRouting() {
         
         // 文件上传/下载 API
         fileRoutes()
+
+        // 语音识别 (ASR) API
+        asrRoutes()
         
         // ==================== 与 Silk 直接对话 API ====================
         post("/api/silk-private-chat") {

@@ -17,6 +17,17 @@ object AIConfig {
     const val TIMEOUT = 60000L  // 60秒超时
     const val MAX_RETRIES = 3
 
+    // ASR (Speech-to-Text) via vLLM / mlx_audio 等 OpenAI 兼容服务
+    val ASR_VLLM_URL: String get() = env("ASR_VLLM_URL") ?: "http://localhost:8100"
+    val ASR_MODEL: String get() = env("ASR_MODEL") ?: "Qwen/Qwen3-ASR-1.7B"
+
+    /**
+     * 将客户端上传的音频用 ffmpeg 转为 16kHz mono PCM WAV 再转发。
+     * mlx_audio 等使用 miniaudio 解码，常不支持 WebM/M4A，需转码。需本机 PATH 中有 ffmpeg。
+     */
+    val ASR_TRANSCODE_TO_WAV: Boolean get() = env("ASR_TRANSCODE_TO_WAV")?.toBoolean() ?: true
+    val ASR_FFMPEG_PATH: String get() = env("ASR_FFMPEG_PATH")?.trim()?.takeIf { it.isNotEmpty() } ?: "ffmpeg"
+
     // Weaviate 向量库地址
     val WEAVIATE_URL: String get() = env("WEAVIATE_URL") ?: ""
 
