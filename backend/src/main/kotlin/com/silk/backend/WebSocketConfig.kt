@@ -179,6 +179,19 @@ class ChatServer(
                 session.send(Frame.Text(Json.encodeToString(msg)))
             }
         }
+
+        // 发送历史加载完成标记，客户端据此一次性渲染消息列表
+        session.send(Frame.Text(Json.encodeToString(
+            Message(
+                id = "history_end",
+                userId = "system",
+                userName = "system",
+                content = "__history_end__",
+                timestamp = System.currentTimeMillis(),
+                type = MessageType.SYSTEM,
+                isTransient = true
+            )
+        )))
         
         // 不发送加入消息到聊天室（避免产生无意义的历史记录）
         // 用户加入已经通过会话管理记录

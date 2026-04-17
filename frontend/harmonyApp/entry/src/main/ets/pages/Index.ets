@@ -5,7 +5,6 @@
 import { router as appRouter, PageName } from '../common/Router';
 import { LoginPage } from './LoginPage';
 import { MainPage } from './MainPage';
-import { ChatPage } from './ChatPage';
 import { TodoPage } from './TodoPage';
 import { SettingsPage } from './SettingsPage';
 
@@ -27,8 +26,6 @@ struct Index {
         LoginPage();
       } else if (this.currentPage === PageName.Main || this.currentPage === PageName.GroupList) {
         MainPage();
-      } else if (this.currentPage === PageName.Chat) {
-        ChatPage();
       } else if (this.currentPage === PageName.Todo) {
         TodoPage();
       } else if (this.currentPage === PageName.Settings) {

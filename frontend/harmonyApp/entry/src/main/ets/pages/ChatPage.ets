@@ -20,9 +20,11 @@ import { AlarmService, AlarmResult } from '../common/AlarmService';
 import { parseAlarmTimeFromText } from '../common/TodoTimeParser';
 import { AudioRecorderService } from '../common/AudioRecorderService';
 import { getGlobalContext } from '../entryability/EntryAbility';
+import { router, KeyboardAvoidMode } from '@kit.ArkUI';
 
+@Entry
 @Component
-export struct ChatPage {
+struct ChatPage {
   @State private connectionState: ConnectionState = ConnectionState.DISCONNECTED;
   @State private messageInput: string = '';
   @State private groupName: string = '项目会话';
@@ -55,6 +57,7 @@ export struct ChatPage {
   @State private isAiGenerating: boolean = false;
   @State private isVoiceRecording: boolean = false;
   @State private isTranscribing: boolean = false;
+  @State private isHistoryLoading: boolean = true;
 
   private groupId: string = 'default_room';
   private userId: string = '';
@@ -66,7 +69,15 @@ export struct ChatPage {
   private didInitialScroll: boolean = false;
   private lastSyncedMessageCount: number = 0;
 
+  onBackPress(): boolean | void {
+    this.aboutToDisappear();
+    router.back();
+    return true;
+  }
+
   aboutToAppear(): void {
+    // RESIZE 让系统缩减可用高度，顶栏保持可见；输入框紧贴键盘
+    this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
     if (this.isInitialized) {
       return;
     }
@@ -78,6 +89,7 @@ export struct ChatPage {
 
   aboutToDisappear(): void {
     globalChatStore.onMessagesChanged = null;
+    globalChatStore.onHistoryLoaded = null;
     globalChatStore.onConnectionStateChanged = null;
     globalChatStore.onError = null;
     globalChatStore.disconnect();
@@ -102,6 +114,9 @@ export struct ChatPage {
 
     if (this.userId === '') {
       appRouter.goToLogin();
+      router.replaceUrl({ url: 'pages/Index' }).catch((err: Error) => {
+        console.error('[ChatPage] replaceUrl Index failed:', err.message);
+      });
       return;
     }
 
@@ -113,9 +128,14 @@ export struct ChatPage {
 
     this.didInitialScroll = false;
     this.lastSyncedMessageCount = 0;
+    this.isHistoryLoading = true;
 
     globalChatStore.onMessagesChanged = (): void => {
       this.syncMessages();
+    };
+    globalChatStore.onHistoryLoaded = (): void => {
+      this.isHistoryLoading = false;
+      this.scheduleScrollToEnd();
     };
     globalChatStore.onConnectionStateChanged = (): void => {
       this.connectionState = globalChatStore.connectionState;
@@ -140,6 +160,7 @@ export struct ChatPage {
   }
 
   private syncMessages(): void {
+    this.isHistoryLoading = globalChatStore.isHistoryLoading;
     const source: Message[] = globalChatStore.messages;
     const result: Message[] = [];
     const confirmedOwnIds: string[] = [];
@@ -1258,12 +1279,13 @@ export struct ChatPage {
     Column() {
       // 顶部导航栏
       Row() {
-        Text('<')
-          .fontSize(22)
-          .fontColor(SilkColors.textPrimary)
+        SymbolGlyph($r('sys.symbol.chevron_left'))
+          .fontSize(24)
+          .fontColor([SilkColors.textPrimary])
           .margin({ left: 16 })
+          .width(40)
           .onClick((): void => {
-            appRouter.goToGroupList();
+            router.back();
           })
 
         Text(this.groupName)
@@ -1272,6 +1294,8 @@ export struct ChatPage {
           .fontColor(SilkColors.textPrimary)
           .margin({ left: 12 })
           .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         if (!this.isSilkPrivateChat()) {
           Text('邀请码')
@@ -1295,6 +1319,8 @@ export struct ChatPage {
       }
       .width('100%')
       .height(56)
+      .flexShrink(0)
+      .alignItems(VerticalAlign.Center)
       .backgroundColor(SilkColors.surface)
 
       // 连接状态条
@@ -1345,7 +1371,21 @@ export struct ChatPage {
         .backgroundColor('#F3EFE6')
       }
 
-      if (this.messages.length === 0) {
+      if (this.isHistoryLoading && this.messages.length === 0) {
+        Column() {
+          LoadingProgress()
+            .width(36)
+            .height(36)
+            .color(SilkColors.primary)
+          Text('加载历史消息...')
+            .fontSize(14)
+            .fontColor(SilkColors.textSecondary)
+            .margin({ top: 8 })
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+      } else if (this.messages.length === 0) {
         Column() {
           Text('暂无消息，开始聊天吧')
             .fontSize(14)
@@ -1440,26 +1480,32 @@ export struct ChatPage {
 
         if (this.isVoiceRecording) {
           Row() {
-            Text('录音中...')
+            SymbolGlyph($r('sys.symbol.ohos_mic'))
+              .fontSize(22)
+              .fontColor(['#FF4D4F'])
+              .margin({ right: 8 })
+            Text('录音中…')
               .fontSize(16)
               .fontColor('#FF4D4F')
               .fontWeight(FontWeight.Medium)
               .layoutWeight(1)
-              .textAlign(TextAlign.Center)
 
-            Button('停止')
-              .width(60)
+            Button() {
+              SymbolGlyph($r('sys.symbol.square_fill'))
+                .fontSize(18)
+                .fontColor([Color.White])
+            }
+              .width(44)
               .height(44)
+              .type(ButtonType.Circle)
               .backgroundColor('#FF4D4F')
-              .fontColor('#FFFFFF')
-              .borderRadius(22)
-              .margin({ left: 8 })
               .onClick((): void => {
                 this.handleVoiceToggle();
               })
           }
           .width('100%')
           .height(44)
+          .alignItems(VerticalAlign.Center)
         } else if (this.isTranscribing) {
           Row() {
             LoadingProgress()
@@ -1486,13 +1532,16 @@ export struct ChatPage {
               .placeholderColor(SilkColors.textLight)
               .fontSize(16)
 
-            Button('🎤')
+            Button() {
+              SymbolGlyph($r('sys.symbol.ohos_mic'))
+                .fontSize(22)
+                .fontColor([SilkColors.textPrimary])
+            }
               .width(44)
               .height(44)
+              .type(ButtonType.Circle)
               .backgroundColor(SilkColors.surface)
-              .borderRadius(22)
               .margin({ left: 6 })
-              .fontSize(20)
               .onClick((): void => {
                 this.handleVoiceToggle();
               })
@@ -1528,6 +1577,7 @@ export struct ChatPage {
         }
       }
       .width('100%')
+      .flexShrink(0)
       .padding({ left: 12, right: 12, top: 8, bottom: 8 })
       .backgroundColor(SilkColors.background)
 

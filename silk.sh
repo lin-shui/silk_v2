@@ -1039,6 +1039,21 @@ build_hap() {
     echo -e "${GREEN}✅ HAP 构建成功${NC}"
     echo -e "  大小: $HAP_SIZE"
     echo -e "  路径: $HAP_FILE"
+
+    local HAP_IS_UNSIGNED=0
+    if [[ "$(basename "$HAP_FILE")" == *unsigned* ]] || [[ "$(basename "$HAP_FILE")" == *-unsigned.* ]]; then
+        HAP_IS_UNSIGNED=1
+        echo ""
+        echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+        echo -e "${YELLOW}  当前产物为未签名 HAP，真机/多数设备上 ${RED}hdc install${YELLOW} 会失败${NC}"
+        echo -e "${YELLOW}  （错误码 9568320: no signature file）${NC}"
+        echo ""
+        echo -e "  ${CYAN}请用 DevEco Studio 打开:${NC} $HARMONY_DIR"
+        echo -e "  ${CYAN}文件 → 项目结构 → Signing Configs → 勾选自动签名 / Apply${NC}"
+        echo -e "  使 ${CYAN}build-profile.json5${NC} 中出现非空的 ${CYAN}signingConfigs${NC} 后重新构建。"
+        echo -e "  详见: ${CYAN}frontend/harmonyApp/README.md${NC}（鸿蒙签名与安装）"
+        echo -e "${YELLOW}════════════════════════════════════════════════════════════${NC}"
+    fi
     
     echo ""
     echo -e "${BLUE}复制到 backend/static 目录供下载...${NC}"
@@ -1064,6 +1079,12 @@ build_hap() {
     if [ -z "$HDC_CMD" ] || [ ! -x "$HDC_CMD" ]; then
         echo ""
         echo -e "${YELLOW}⚠ 未检测到 hdc，跳过安装启动。可设置环境变量 ${CYAN}HDC${NC} 为 hdc 可执行文件路径。${NC}"
+        return 0
+    fi
+
+    if [ "$HAP_IS_UNSIGNED" = "1" ] && [ -z "${SILK_ALLOW_UNSIGNED_HAP:-}" ]; then
+        echo ""
+        echo -e "${YELLOW}已跳过 hdc 安装（未签名 HAP）。配置签名后重构建，或 ${CYAN}SILK_ALLOW_UNSIGNED_HAP=1${YELLOW} 强制尝试安装。${NC}"
         return 0
     fi
     

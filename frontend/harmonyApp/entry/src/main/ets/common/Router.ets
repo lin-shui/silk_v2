@@ -2,6 +2,7 @@
  * 简单的路由管理器
  * 用于页面导航
  */
+import { router as pageRouter } from '@kit.ArkUI';
 
 export enum PageRoute {
   LOGIN = 'pages/LoginPage',
@@ -71,12 +72,15 @@ export class Router {
   }
   
   /**
-   * 导航到聊天页面
-   * @param groupId 群组ID
-   * @param groupName 群组名称
+   * 导航到聊天页面（系统页面栈 pushUrl，侧滑/返回键关闭聊天而非退出应用）
+   * 入参已由调用方写入 AppStorage（currentGroupId 等）
    */
   goToChat(_groupId: string, _groupName: string): void {
-    this.notifyPageChange(PageName.Chat);
+    void _groupId;
+    void _groupName;
+    pageRouter.pushUrl({ url: 'pages/ChatPage' }).catch((err: Error) => {
+      console.error('[Router] pushUrl ChatPage failed:', err.message);
+    });
   }
 
   /**

@@ -358,48 +358,39 @@ fun ChatScreen(appState: AppState) {
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
     }
     
-    // ✅ 跟踪是否是首次加载（历史消息加载中）
-    var isHistoryLoading by remember { mutableStateOf(true) }
+    // 历史消息加载状态：由 ChatClient 缓冲完成后一次性刷入
+    val isHistoryLoading by chatClient.isLoadingHistory.collectAsState()
     var lastMessageCount by remember { mutableStateOf(0) }
-    
-    // ✅ 检测历史消息加载完成：10ms 后显示
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty() && isHistoryLoading) {
-            lastMessageCount = messages.size
-            kotlinx.coroutines.delay(10)  // 等待 10ms
-            if (lastMessageCount == messages.size) {
-                isHistoryLoading = false
-                listState.scrollToItem(0)  // 直接跳转到底部，无动画
-            }
-        } else if (!isHistoryLoading && messages.size > lastMessageCount) {
-            // 历史加载完成后的新消息，使用动画滚动
-            lastMessageCount = messages.size
-            listState.animateScrollToItem(0)
+
+    // 历史加载完成后跳转到底部（reverseLayout 下 index 0 = 最新）
+    LaunchedEffect(isHistoryLoading) {
+        if (!isHistoryLoading && messages.isNotEmpty()) {
+            listState.scrollToItem(0)
         }
     }
+
+    // 新消息到达时动画滚动到底部
+    LaunchedEffect(messages.size) {
+        if (!isHistoryLoading && messages.size > lastMessageCount && lastMessageCount > 0) {
+            listState.animateScrollToItem(0)
+        }
+        lastMessageCount = messages.size
+    }
     
-    // ✅ 首次出现临时消息时，确保显示在底部
+    // 首次出现临时消息时，确保显示在底部
     val hasTransient = transientMessage != null
     LaunchedEffect(hasTransient) {
         if (hasTransient && messages.isNotEmpty()) {
-            kotlinx.coroutines.delay(100)  // 短暂延迟确保UI已渲染
-            listState.scrollToItem(0)  // 直接跳转，无动画
-        }
-    }
-    
-    // 重新连接后显示最新消息
-    LaunchedEffect(connectionState) {
-        if (connectionState == ConnectionState.CONNECTED && messages.isNotEmpty()) {
-            kotlinx.coroutines.delay(300)
-            listState.scrollToItem(0)  // 直接跳转，无动画
+            kotlinx.coroutines.delay(100)
+            listState.scrollToItem(0)
         }
     }
     
     // 等待 AI 响应时确保显示等待状态
     LaunchedEffect(isWaitingForAI) {
         if (isWaitingForAI) {
-            kotlinx.coroutines.delay(100)  // 等待 UI 更新
-            listState.scrollToItem(0)  // 直接跳转，无动画
+            kotlinx.coroutines.delay(100)
+            listState.scrollToItem(0)
         }
     }
     
@@ -857,7 +848,7 @@ fun ChatScreen(appState: AppState) {
             ) {
                 // ✅ 使用 Crossfade 实现平滑过渡动画
                 Crossfade(
-                    targetState = isHistoryLoading && messages.isNotEmpty(),
+                    targetState = isHistoryLoading,
                     animationSpec = tween(durationMillis = 300),
                     label = "history_loading"
                 ) { loading ->

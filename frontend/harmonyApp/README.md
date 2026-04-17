@@ -84,10 +84,28 @@ export class Constants {
 
 ## 构建与运行
 
+### 鸿蒙签名（真机 / hdc 安装必需）
+
+仓库里的 `build-profile.json5` 默认 **未配置** `signingConfigs`，命令行 `hvigor assembleHap` 会产出 **`entry-default-unsigned.hap`**。此类包在设备上安装时常见：
+
+- **错误码 9568320**：`no signature file` / 无签名文件
+
+**推荐做法（调试签名，本地一次即可）：**
+
+1. 用 **DevEco Studio** 打开本目录 `frontend/harmonyApp`
+2. 菜单 **File（文件）→ Project Structure…（项目结构）→ Signing Configs（签名配置）**
+3. 勾选 **Automatically generate signature（自动签名）** 或按向导创建调试证书，点击 **Apply / OK**
+4. 确认项目根目录 `build-profile.json5` 中已出现 **`signingConfigs`** 数组（含 `material` 等字段）；**勿将密码、私钥提交到 Git**（可仅本地保留该改动，或使用个人分支）
+5. 重新 **Build → Build Hap(s)** 或执行 `./silk.sh build-hap`，产物名应不再带 `unsigned`（或为已签名路径）
+
+仅使用 **DevEco 的 Run** 时，IDE 有时也会自动处理签名；**纯命令行**构建在未配置签名前会一直得到未签名包。
+
+`silk.sh build-hap` 若检测到 `*unsigned*.hap`，会**跳过 `hdc install`** 并打印上述说明；若仍要尝试安装可设置：`SILK_ALLOW_UNSIGNED_HAP=1 ./silk.sh build-hap`。
+
 ### 方式一: 使用 silk.sh 脚本
 
 ```bash
-# 构建 HAP 包
+# 构建 HAP 包（需先完成上方签名配置，否则为 unsigned 且默认不安装）
 ./silk.sh build-hap
 
 # 或使用简写
@@ -98,12 +116,14 @@ export class Constants {
 
 1. 用 DevEco Studio 打开 `frontend/harmonyApp` 目录
 2. 等待项目索引完成
-3. 点击 Run 按钮或使用快捷键运行
+3. 配置签名（见上文「鸿蒙签名」）
+4. 点击 Run 按钮或使用快捷键运行
 
 ### 构建输出
 
-- Debug HAP: `entry/build/default/outputs/default/entry-default-*.hap`
-- Release HAP: `entry/build/default/outputs/default/entry-default-release-*.hap`
+- 未签名 Debug HAP: `entry/build/default/outputs/default/entry-default-unsigned.hap`（设备安装通常失败）
+- 已签名 Debug HAP: 以 DevEco / `signingConfigs` 为准，文件名可能为 `entry-default-signed.hap` 或 `entry/build/.../app/entry-default.hap` 等
+- Release HAP: `entry/build/default/outputs/default/entry-default-release-*.hap`（需正式证书与 Profile）
 
 ## 后端 API 对接
 

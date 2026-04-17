@@ -58,6 +58,11 @@ class ChatClient(
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
     
+    private val _isLoadingHistory = MutableStateFlow(false)
+    val isLoadingHistory: StateFlow<Boolean> = _isLoadingHistory.asStateFlow()
+    private val historyBuffer = mutableListOf<Message>()
+    private var historyLoadStartMs: Long = 0
+    
     private var suppressTransient: Boolean = false
     
     private var webSocket: PlatformWebSocket? = null
@@ -68,6 +73,10 @@ class ChatClient(
         log("🚀 [ChatClient] connect() 开始执行")
         currentUserId = userId
         currentUserName = userName
+        
+        historyBuffer.clear()
+        historyLoadStartMs = Clock.System.now().toEpochMilliseconds()
+        _isLoadingHistory.value = true
         
         _connectionState.value = ConnectionState.CONNECTING
         
@@ -94,11 +103,42 @@ class ChatClient(
         webSocket?.connect(userId, userName, groupId)
     }
     
+    private fun flushHistoryBuffer() {
+        if (historyBuffer.isNotEmpty()) {
+            log("📜 [ChatClient] 一次性刷入 ${historyBuffer.size} 条历史消息")
+            _messages.value = historyBuffer.toList()
+            historyBuffer.clear()
+        }
+        _isLoadingHistory.value = false
+    }
+
     private fun handleMessage(text: String) {
         log("📨 [ChatClient] 收到消息: ${text.take(100)}...")
         try {
             val message = Json.decodeFromString<Message>(text)
             log("✅ [ChatClient] 解析成功: ${message.type}, 用户: ${message.userName}, category: ${message.category}")
+
+            // 历史加载完成标记
+            if (message.isTransient && message.type == MessageType.SYSTEM && message.content == "__history_end__") {
+                log("📜 [ChatClient] 收到 history_end 标记")
+                flushHistoryBuffer()
+                return
+            }
+
+            // 安全超时：超过 3 秒仍在缓冲则强制刷入
+            if (_isLoadingHistory.value) {
+                val elapsed = Clock.System.now().toEpochMilliseconds() - historyLoadStartMs
+                if (elapsed > 3000) {
+                    log("⏰ [ChatClient] 历史加载超时，强制刷入")
+                    flushHistoryBuffer()
+                }
+            }
+
+            // 历史加载期间：缓冲普通消息，不逐条更新 UI
+            if (_isLoadingHistory.value && !message.isTransient && message.category != MessageCategory.AGENT_STATUS && message.type != MessageType.RECALL) {
+                historyBuffer.add(message)
+                return
+            }
             
             val isSilkAi = message.userId == "silk_ai_agent"
             
@@ -261,6 +301,8 @@ class ChatClient(
         _messages.value = emptyList()
         _transientMessage.value = null
         _isGenerating.value = false
+        _isLoadingHistory.value = false
+        historyBuffer.clear()
         suppressTransient = false
     }
     

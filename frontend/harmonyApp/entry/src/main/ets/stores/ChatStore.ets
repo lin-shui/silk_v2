@@ -67,6 +67,14 @@ export class ChatStore {
   // 停止后抑制残余流式消息
   private _suppressTransient: boolean = false;
 
+  // 历史消息加载缓冲
+  private _isHistoryLoading: boolean = false;
+  get isHistoryLoading(): boolean {
+    return this._isHistoryLoading;
+  }
+  private _historyBuffer: Message[] = [];
+  private _historyTimeoutId: number = -1;
+
   // WebSocket 客户端
   private wsClient: WebSocketClient | null = null;
   private wsListener: ConnectionListener | null = null;
@@ -77,6 +85,7 @@ export class ChatStore {
 
   // 回调函数
   public onMessagesChanged: (() => void) | null = null;
+  public onHistoryLoaded: (() => void) | null = null;
   public onConnectionStateChanged: (() => void) | null = null;
   public onError: ((error: string) => void) | null = null;
 
@@ -89,6 +98,19 @@ export class ChatStore {
 
     // 断开现有连接
     this.disconnect();
+
+    // 初始化历史缓冲
+    this._historyBuffer = [];
+    this._isHistoryLoading = true;
+    if (this._historyTimeoutId !== -1) {
+      clearTimeout(this._historyTimeoutId);
+    }
+    this._historyTimeoutId = setTimeout((): void => {
+      if (this._isHistoryLoading) {
+        console.info('[ChatStore] 历史加载超时，强制刷入');
+        this.flushHistoryBuffer();
+      }
+    }, 3000);
 
     // 创建新的 WebSocket 客户端
     const wsUrl: string = Constants.WS_BASE_URL;
@@ -218,12 +240,43 @@ export class ChatStore {
     return this.wsClient.send(message);
   }
 
+  private flushHistoryBuffer(): void {
+    if (this._historyTimeoutId !== -1) {
+      clearTimeout(this._historyTimeoutId);
+      this._historyTimeoutId = -1;
+    }
+    if (this._historyBuffer.length > 0) {
+      console.info(`[ChatStore] 一次性刷入 ${this._historyBuffer.length} 条历史消息`);
+      this._messages = this._historyBuffer.slice();
+    }
+    this._historyBuffer = [];
+    this._isHistoryLoading = false;
+    this.onMessagesChanged?.();
+    this.onHistoryLoaded?.();
+  }
+
   /**
    * 处理收到的消息
    */
   private handleMessage(data: string | Message): void {
     try {
       const message: Message = typeof data === 'string' ? parseMessage(data) : data;
+
+      // 历史加载完成标记
+      if (message.isTransient && message.type === MessageType.SYSTEM && message.content === '__history_end__') {
+        console.info('[ChatStore] 收到 history_end 标记');
+        this.flushHistoryBuffer();
+        return;
+      }
+
+      // 历史加载期间：缓冲普通消息
+      if (this._isHistoryLoading && !message.isTransient &&
+        message.category !== MessageCategory.AGENT_STATUS &&
+        message.type !== MessageType.RECALL) {
+        this._historyBuffer.push(message);
+        return;
+      }
+
       const isSilkAi: boolean = message.userId === 'silk_ai_agent';
 
       // 停止后抑制残余流式消息（允许 CLEAR_STATUS 通过）
@@ -348,6 +401,12 @@ export class ChatStore {
     this._statusMessages = [];
     this._isGenerating = false;
     this._suppressTransient = false;
+    this._isHistoryLoading = false;
+    this._historyBuffer = [];
+    if (this._historyTimeoutId !== -1) {
+      clearTimeout(this._historyTimeoutId);
+      this._historyTimeoutId = -1;
+    }
     this.onMessagesChanged?.();
   }
 
