@@ -14,7 +14,18 @@ object AIConfig {
     val API_KEY: String get() = env("OPENAI_API_KEY") ?: ""
     val API_BASE_URL: String get() = env("API_BASE_URL") ?: ""
     val MODEL: String get() = env("AI_MODEL") ?: ""
-    const val TIMEOUT = 60000L  // 60秒超时
+
+    /**
+     * 调用大模型（OpenAI 兼容）时的 HTTP 超时（毫秒）。
+     * 对 [java.net.http.HttpClient] 而言，在流式响应下主要约束「建立连接 + 收到响应头」的耗时；
+     * 本地 llama-server 在大上下文 / tools / 冷启动时首包可能超过 1 分钟，默认与常见 curl -m 300 对齐。
+     * 可通过环境变量 [AI_HTTP_TIMEOUT_MS] 覆盖。
+     */
+    val TIMEOUT: Long
+        get() {
+            val raw = env("AI_HTTP_TIMEOUT_MS") ?: return 300_000L
+            return raw.trim().toLongOrNull()?.takeIf { it > 0 } ?: 300_000L
+        }
     const val MAX_RETRIES = 3
 
     // ASR (Speech-to-Text) via vLLM / mlx_audio 等 OpenAI 兼容服务
