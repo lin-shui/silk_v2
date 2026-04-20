@@ -267,20 +267,38 @@ class BackendFileContractTest {
         }
 
     private suspend fun DefaultClientWebSocketSession.receiveMessage(): Message {
-        val frame = withTimeout(5_000) { incoming.receive() }
-        return when (frame) {
-            is Frame.Text -> json.decodeFromString(frame.readText())
-            else -> error("Expected text frame but received $frame")
+        while (true) {
+            val frame = withTimeout(5_000) { incoming.receive() }
+            val message = when (frame) {
+                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
+                else -> error("Expected text frame but received $frame")
+            }
+            if (!message.isHistoryEndMarker()) {
+                return message
+            }
         }
     }
 
     private suspend fun DefaultClientWebSocketSession.receiveMessageOrNull(timeoutMillis: Long): Message? {
-        val frame = withTimeoutOrNull(timeoutMillis) { incoming.receive() } ?: return null
-        return when (frame) {
-            is Frame.Text -> json.decodeFromString(frame.readText())
-            else -> error("Expected text frame but received $frame")
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (true) {
+            val remainingMillis = deadline - System.currentTimeMillis()
+            if (remainingMillis <= 0) {
+                return null
+            }
+            val frame = withTimeoutOrNull(remainingMillis) { incoming.receive() } ?: return null
+            val message = when (frame) {
+                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
+                else -> error("Expected text frame but received $frame")
+            }
+            if (!message.isHistoryEndMarker()) {
+                return message
+            }
         }
     }
+
+    private fun Message.isHistoryEndMarker(): Boolean =
+        isTransient && type == MessageType.SYSTEM && content == "__history_end__"
 
     private fun parseFilePayload(message: Message): FileMessagePayload {
         assertEquals(MessageType.FILE, message.type)
