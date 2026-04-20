@@ -206,20 +206,22 @@ class ChatClient(
                 }
                 // 增量临时消息：拼接到已有内容尾部
                 message.isTransient && message.isIncremental -> {
-                    log("📝 [ChatClient] 增量临时消息")
                     if (isSilkAi) _isGenerating.value = true
                     val existing = _transientMessage.value
                     if (existing != null &&
                         existing.userId == message.userId &&
                         existing.type == message.type) {
+                        val newContent = existing.content + message.content
                         _transientMessage.value = existing.copy(
-                            content = existing.content + message.content,
+                            content = newContent,
                             timestamp = message.timestamp,
                             currentStep = message.currentStep,
                             totalSteps = message.totalSteps
                         )
+                        log("📝 [ChatClient] 增量拼接: +${message.content.length}字 -> 总${newContent.length}字")
                     } else {
                         _transientMessage.value = message
+                        log("📝 [ChatClient] 增量首帧: ${message.content.length}字")
                     }
                 }
                 // 完整临时消息：直接替换
