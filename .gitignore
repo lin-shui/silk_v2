@@ -50,8 +50,7 @@ xcuserdata/
 *.pid
 
 # Kotlin
-kotlin-js-store/*
-!kotlin-js-store/yarn.lock
+kotlin-js-store/
 node_modules/
 
 # Chat History (runtime data)
