@@ -65,13 +65,11 @@ import com.silk.shared.utils.formatMessageTimestamp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.decodeFromString
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
-import org.json.JSONObject
 import android.Manifest
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
@@ -3353,36 +3351,10 @@ fun MessageItem(
     
     // ✅ 文件消息特殊处理
     if (isFileMessage) {
-        // 解析文件信息：content 格式为 JSON {"fileName":"xxx","fileSize":123,"downloadUrl":"xxx"}
-        // 兼容旧格式 "fileName|fileSize|downloadUrl"
-        val fileName: String
-        val fileSize: Long
-        val downloadUrl: String
-        
-        if (message.content.startsWith("{")) {
-            // JSON 格式
-            val json = try {
-                org.json.JSONObject(message.content)
-            } catch (e: Exception) {
-                println("⚠️ 解析文件消息JSON失败: ${e.message}")
-                null
-            }
-            if (json != null) {
-                fileName = json.optString("fileName", "未知文件")
-                fileSize = json.optLong("fileSize", 0L)
-                downloadUrl = json.optString("downloadUrl", "")
-            } else {
-                fileName = "解析失败"
-                fileSize = 0L
-                downloadUrl = ""
-            }
-        } else {
-            // 兼容旧的 | 分隔符格式
-            val parts = message.content.split("|")
-            fileName = parts.getOrNull(0) ?: "未知文件"
-            fileSize = parts.getOrNull(1)?.toLongOrNull() ?: 0L
-            downloadUrl = parts.getOrNull(2) ?: ""
-        }
+        val fileContent = parseAndroidFileMessageContent(message.content)
+        val fileName = fileContent.fileName
+        val fileSize = fileContent.fileSize
+        val downloadUrl = fileContent.downloadUrl
         
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -3427,19 +3399,8 @@ fun MessageItem(
                     modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 文件图标
-                    val icon = when (fileName.substringAfterLast(".").lowercase()) {
-                        "pdf" -> "📄"
-                        "doc", "docx" -> "📝"
-                        "xls", "xlsx" -> "📊"
-                        "jpg", "jpeg", "png", "gif" -> "🖼️"
-                        "mp4", "avi", "mov" -> "🎬"
-                        "mp3", "wav" -> "🎵"
-                        "zip", "rar" -> "📦"
-                        else -> "📎"
-                    }
                     Text(
-                        text = icon,
+                        text = androidFileIconForName(fileName),
                         fontSize = 32.sp,
                         modifier = Modifier.padding(end = 12.dp)
                     )
@@ -4324,20 +4285,6 @@ data class FilesAndUrls(
     val processedUrls: List<String>
 )
 
-@kotlinx.serialization.Serializable
-private data class FileListApiResponse(
-    val files: List<FileListApiItem> = emptyList(),
-    val processedUrls: List<String> = emptyList()
-)
-
-@kotlinx.serialization.Serializable
-private data class FileListApiItem(
-    val fileName: String,
-    val size: Long = 0,
-    val uploadTime: Long = 0,
-    val downloadUrl: String = ""
-)
-
 /**
  * 加载群组文件列表和已处理的 URL
  */
@@ -4360,32 +4307,6 @@ suspend fun loadGroupFilesAndUrls(groupId: String): FilesAndUrls = withContext(D
         e.printStackTrace()
         FilesAndUrls(emptyList(), emptyList())
     }
-}
-
-/**
- * 解析文件列表和 URL 清单 JSON
- * 后端返回格式: {"sessionId":"...", "files":[...], "totalCount":1, "processedUrls":["url1", "url2"]}
- */
-fun parseFileListAndUrls(json: String): FilesAndUrls {
-    try {
-        val response = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            .decodeFromString<FileListApiResponse>(json)
-        return FilesAndUrls(
-            files = response.files.map { file ->
-                FileItem(
-                    name = file.fileName,
-                    size = file.size,
-                    uploadTime = file.uploadTime,
-                    uploadedBy = "",
-                    downloadUrl = file.downloadUrl
-                )
-            },
-            processedUrls = response.processedUrls
-        )
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
-    return FilesAndUrls(emptyList(), emptyList())
 }
 
 /**

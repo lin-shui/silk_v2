@@ -77,6 +77,13 @@ kotlin {
                 )
             }
         }
+        nodejs {
+            testTask {
+                useMocha {
+                    timeout = "30s"
+                }
+            }
+        }
         binaries.executable()
         
         compilations.all {
@@ -101,6 +108,7 @@ dependencies {
     implementation(project(":frontend:shared"))
     implementation(compose.html.core)
     implementation(compose.runtime)
+    testImplementation(kotlin("test"))
     
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core-js:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
