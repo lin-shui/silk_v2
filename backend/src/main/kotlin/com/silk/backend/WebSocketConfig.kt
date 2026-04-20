@@ -506,7 +506,7 @@ class ChatServer(
                             content = buildFileMessageContent(
                                 fileName = savedFile.name,
                                 fileSize = savedFile.length(),
-                                downloadUrl = "/api/files/download/$downloadSessionId/${savedFile.name}"
+                                downloadUrl = buildFileDownloadUrl(downloadSessionId, savedFile.name)
                             ),
                             timestamp = System.currentTimeMillis(),
                             type = MessageType.FILE

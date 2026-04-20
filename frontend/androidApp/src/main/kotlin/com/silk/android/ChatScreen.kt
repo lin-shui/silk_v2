@@ -65,6 +65,7 @@ import com.silk.shared.utils.formatMessageTimestamp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -1630,9 +1631,13 @@ fun ChatScreen(appState: AppState) {
             isLoading = isLoadingFiles,
             onDismiss = { showFolderExplorer = false },
             onFileClick = { file ->
-                // 打开文件下载链接
-                val downloadUrl = "${BackendUrlHolder.getBaseUrl()}/api/files/download/${group.id}/${file.name}"
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl))
+                val relativeDownloadUrl = file.downloadUrl.ifEmpty {
+                    "/api/files/download/${Uri.encode(group.id)}/${Uri.encode(file.name)}"
+                }
+                val intent = Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse("${BackendUrlHolder.getBaseUrl()}$relativeDownloadUrl")
+                )
                 context.startActivity(intent)
             },
             onUrlClick = { url ->
@@ -3926,7 +3931,8 @@ data class FileItem(
     val name: String,
     val size: Long,
     val uploadTime: Long,
-    val uploadedBy: String
+    val uploadedBy: String,
+    val downloadUrl: String = ""
 )
 
 /**
@@ -4318,6 +4324,20 @@ data class FilesAndUrls(
     val processedUrls: List<String>
 )
 
+@kotlinx.serialization.Serializable
+private data class FileListApiResponse(
+    val files: List<FileListApiItem> = emptyList(),
+    val processedUrls: List<String> = emptyList()
+)
+
+@kotlinx.serialization.Serializable
+private data class FileListApiItem(
+    val fileName: String,
+    val size: Long = 0,
+    val uploadTime: Long = 0,
+    val downloadUrl: String = ""
+)
+
 /**
  * 加载群组文件列表和已处理的 URL
  */
@@ -4347,41 +4367,25 @@ suspend fun loadGroupFilesAndUrls(groupId: String): FilesAndUrls = withContext(D
  * 后端返回格式: {"sessionId":"...", "files":[...], "totalCount":1, "processedUrls":["url1", "url2"]}
  */
 fun parseFileListAndUrls(json: String): FilesAndUrls {
-    val files = mutableListOf<FileItem>()
-    val urls = mutableListOf<String>()
     try {
-        // 使用简单正则提取文件信息 - 匹配后端 API 格式
-        val fileNamePattern = """"fileName"\s*:\s*"([^"]+)"""".toRegex()
-        val sizePattern = """"size"\s*:\s*(\d+)""".toRegex()
-        val timePattern = """"uploadTime"\s*:\s*(\d+)""".toRegex()
-        
-        val names = fileNamePattern.findAll(json).map { it.groupValues[1] }.toList()
-        val sizes = sizePattern.findAll(json).map { it.groupValues[1].toLongOrNull() ?: 0L }.toList()
-        val times = timePattern.findAll(json).map { it.groupValues[1].toLongOrNull() ?: 0L }.toList()
-        
-        for (i in names.indices) {
-            files.add(FileItem(
-                name = names[i],
-                size = sizes.getOrElse(i) { 0L },
-                uploadTime = times.getOrElse(i) { 0L },
-                uploadedBy = ""  // 后端不返回此字段
-            ))
-        }
-        
-        // 解析 processedUrls 数组
-        val urlsPattern = """"processedUrls"\s*:\s*\[([^\]]*)\]""".toRegex()
-        val urlsMatch = urlsPattern.find(json)
-        if (urlsMatch != null) {
-            val urlsContent = urlsMatch.groupValues[1]
-            val singleUrlPattern = """"([^"]+)"""".toRegex()
-            singleUrlPattern.findAll(urlsContent).forEach { match ->
-                urls.add(match.groupValues[1])
-            }
-        }
+        val response = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+            .decodeFromString<FileListApiResponse>(json)
+        return FilesAndUrls(
+            files = response.files.map { file ->
+                FileItem(
+                    name = file.fileName,
+                    size = file.size,
+                    uploadTime = file.uploadTime,
+                    uploadedBy = "",
+                    downloadUrl = file.downloadUrl
+                )
+            },
+            processedUrls = response.processedUrls
+        )
     } catch (e: Exception) {
         e.printStackTrace()
     }
-    return FilesAndUrls(files, urls)
+    return FilesAndUrls(emptyList(), emptyList())
 }
 
 /**

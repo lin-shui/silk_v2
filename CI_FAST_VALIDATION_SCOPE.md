@@ -12,7 +12,7 @@
 
 不把它做成全量发布流水线；慢、重、依赖专用环境的项放到后续专用 CI。
 
-## 当前基线（2026-04-14）
+## 当前基线（2026-04-20）
 
 工作流文件：`.github/workflows/ci-fast-validation.yml`
 
@@ -36,6 +36,7 @@ backend 真实快检：
 - [x] 群组创建 / 入群 / 成员列表 HTTP 合同
 - [x] 文件上传 / 重名处理 / 列表 / 下载 / 删除 HTTP 合同
 - [x] 上传文件 `FILE` 消息 payload 广播与历史回放合同
+- [x] `FILE` 消息特殊字符文件名 JSON 转义与 URL 编码合同
 - [x] URL 提取去重与非网页资源过滤
 - [x] 本地 HTML 下载提取与落盘 smoke
 - [x] 本地 PDF 下载提取与落盘 smoke
@@ -63,6 +64,7 @@ backend 真实快检：
 - 文件路由改为尊重 `silk.chatHistoryDir`，并在未配置 Weaviate 时直接跳过索引，避免快检被外部配置缺失拖垮。
 - 新增文件路由合同测试，覆盖上传、重名处理、列表、下载、删除，以及 `processed_urls.txt` 本地路径分支。
 - 新增上传文件 `FILE` 消息合同测试，锁定 `fileName` / `fileSize` / `downloadUrl` payload、实时广播和后加入成员历史回放。
+- 新增 `FILE` 消息特殊字符文件名合同测试，覆盖空格、`#`、`?`、引号场景，锁定 JSON 转义、URL 编码、实时广播、历史回放和文件列表 `downloadUrl` 输出。
 - 新增 `WebPageDownloader` 本地 smoke，使用进程内 HTTP server 覆盖 URL 提取、HTML/PDF 下载提取与落盘，不依赖外网和外部服务。
 - 新增 WebSocket 合同测试，覆盖群成员鉴权、最近 50 条历史回放、实时广播持久化和未读计数主链路。
 - 新增 WebSocket URL 入口 smoke，覆盖“聊天消息带本地 HTML/PDF 链接 -> 下载提取 -> `processed_urls.txt` 去重 -> 状态消息回显 -> 文件落盘”主链路。
@@ -73,6 +75,7 @@ backend 真实快检：
 - Claude Code 已切到 Bridge Agent 架构后，移除了失效的旧 session store / stream parser JVM 单测，保留当前后端仍承担的元信息格式化测试。
 - 把 `silk.sh` 的基础语法校验和只读 `status` smoke 接进了快检。
 - 把 `:backend:shadowJar` 和产物 artifact 上传接进快检，补上交付装配层拦截。
+- Android 文件夹浏览改为按 JSON 解析文件列表并直接使用后端返回的 `downloadUrl`，避免正则解析和手拼 URL 在特殊字符文件名下失真。
 
 ### 明确未覆盖
 
@@ -95,7 +98,7 @@ backend 真实快检：
 
 ## 下一步建议
 
-1. 给 `FILE` 消息 payload 再补一组特殊字符文件名 fixture，锁定 JSON 转义和前端卡片兼容性。
+1. 给 Android/Web 文件列表和文件卡片各补一层轻量解析测试，避免特殊字符文件名回归只在运行时暴露。
 2. AI 端到端另起一层可选 smoke，专门验证模型 tool-calling 回路，不阻塞基础快检。
 3. Harmony HAP 另起独立 workflow，放到自托管或预置 DevEco/hvigor 环境的 runner。
 4. `silk.sh build/start/deploy` 另起脚本级 smoke，验证交付脚本而不是只验只读 `status`。

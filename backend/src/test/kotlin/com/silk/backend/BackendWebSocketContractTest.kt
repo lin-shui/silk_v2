@@ -304,7 +304,7 @@ class BackendWebSocketContractTest {
                         hostFilePayloads.map { it.fileSize }
                     )
                     assertEquals(
-                        downloadableFiles.map { "/api/files/download/${group.id}/${it.name}" },
+                        downloadableFiles.map { buildFileDownloadUrl(group.id, it.name) },
                         hostFilePayloads.map { it.downloadUrl }
                     )
                     assertEquals(
