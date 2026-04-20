@@ -326,33 +326,27 @@ fun ChatScreen(appState: AppState) {
         addLog("   群组ID: ${group.id}")
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
         
-        // 加载群成员列表（用于 @ mention 功能）
-        try {
-            val membersResponse = ApiClient.getGroupMembers(group.id)
-            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-            addLog("✅ 群成员列表已加载，共 ${groupMembers.size} 人")
-        } catch (e: Exception) {
-            addLog("❌ 加载群成员列表失败: ${e.message}")
-        }
-        
-        // 在单独的协程中保持连接
+        // 并行：加载群成员 + 建立 WebSocket，互不阻塞
         launch {
             try {
-                addLog("⏳ 启动 chatClient.connect()...")
-                addLog("⚠️ 注意：此调用会持续运行直到断开连接")
-                chatClient.connect(user.id, user.fullName, group.id)
-                addLog("⚠️ connect() 返回了（连接已关闭）")
+                val membersResponse = ApiClient.getGroupMembers(group.id)
+                groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                addLog("✅ 群成员列表已加载，共 ${groupMembers.size} 人")
             } catch (e: Exception) {
-                addLog("❌ connect() 抛出异常!")
-                addLog("   错误: ${e.message}")
-                addLog("   类型: ${e::class.simpleName}")
-                addLog("   Cause: ${e.cause?.message}")
-                e.printStackTrace()
+                addLog("❌ 加载群成员列表失败: ${e.message}")
             }
         }
         
-        // 等待一下让日志有序
-        kotlinx.coroutines.delay(100)
+        launch {
+            try {
+                addLog("⏳ 启动 chatClient.connect()...")
+                chatClient.connect(user.id, user.fullName, group.id)
+                addLog("⚠️ connect() 返回了（连接已关闭）")
+            } catch (e: Exception) {
+                addLog("❌ connect() 抛出异常: ${e.message}")
+                e.printStackTrace()
+            }
+        }
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
         addLog("✅ WebSocket 连接协程已启动")
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")

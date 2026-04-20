@@ -66,13 +66,17 @@ actual class PlatformWebSocket actual constructor(
         get() = session != null && !isExplicitlyDisconnected.get()
     
     actual fun connect(userId: String, userName: String, groupId: String) {
-        // 防止重复连接
-        if (isConnecting.getAndSet(true)) {
-            log("⚠️ [WebSocket] 已有连接正在进行中，跳过")
-            return
+        // 切群场景：先清理旧连接，不做重复连接判断
+        val wasConnecting = isConnecting.getAndSet(true)
+        if (wasConnecting || session != null) {
+            log("🔄 [WebSocket] 清理旧连接...")
+            keepAliveJob?.cancel()
+            job?.cancel()
+            session = null
         }
         
         isExplicitlyDisconnected.set(false)
+        reconnectAttempts = 0
         
         val safeUserName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")
         val safeGroupId = groupId.replace(" ", "_").replace("&", "_").replace("=", "_")

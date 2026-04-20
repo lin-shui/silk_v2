@@ -986,69 +986,42 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     
     LaunchedEffect(group.id) {
         console.log("🔌 准备建立WebSocket连接...")
-        console.log("   用户ID:", user.id)
-        console.log("   用户名:", user.fullName)
-        console.log("   群组ID:", group.id)
-        console.log("   群组名:", group.name)
+        console.log("   群组ID:", group.id, "群组名:", group.name)
         
-        // Reset flag when group changes
         hasSentDefaultInstruction = false
-
-        // 切换群组时清空上一个群的消息，避免新旧消息拼接
         chatClient.clearMessages()
         
-        // 加载群成员列表（用于 @ mention 功能）
-        try {
-            val membersResponse = ApiClient.getGroupMembers(group.id)
-            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-            console.log("✅ 群成员列表已加载，共 ${groupMembers.size} 人")
-        } catch (e: dynamic) {
-            console.error("❌ 加载群成员列表失败:", e.toString())
+        // 并行：加载群成员 + 建立 WebSocket，互不阻塞
+        launch {
+            try {
+                val membersResponse = ApiClient.getGroupMembers(group.id)
+                groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                console.log("✅ 群成员列表已加载，共 ${groupMembers.size} 人")
+            } catch (e: dynamic) {
+                console.error("❌ 加载群成员列表失败:", e.toString())
+            }
         }
-        
-        // 延迟1秒，确保页面已完全渲染
-        kotlinx.coroutines.delay(1000)
         
         try {
             console.log("🔌 开始连接WebSocket...")
             chatClient.connect(user.id, user.fullName, group.id)
             console.log("✅ WebSocket连接成功")
         } catch (e: dynamic) {
-            console.error("❌ WebSocket连接失败")
-            console.error("   错误:", e.toString())
-            console.error("   可能原因: 后端未运行或网络问题")
-            console.error("   建议: 检查当前站点同源 API 是否可用（/health）")
-            // 不再抛出异常，静默失败
+            console.error("❌ WebSocket连接失败:", e.toString())
         }
     }
     
     DisposableEffect(group.id) {
         onDispose {
-            console.log("🧹 组件清理 - 确保WebSocket已断开")
-            // 使用try-catch包装整个清理逻辑
+            // connect() 内部会静默断开旧连接，此处只负责标记已读
             try {
                 scope.launch {
                     try {
-                        chatClient.disconnect()
-                        console.log("✅ 清理：WebSocket已断开")
-                    } catch (e: dynamic) {
-                        // 完全静默，可能已经在返回按钮中断开了
-                    }
-                    
-                    // 等待服务器处理完成
-                    kotlinx.coroutines.delay(200)
-                    
-                    // 最后标记已读，确保时间戳晚于所有消息
-                    try {
                         ApiClient.markGroupAsRead(user.id, group.id)
                         console.log("✅ 清理：已标记群组为已读")
-                    } catch (e: dynamic) {
-                        // 静默处理
-                    }
+                    } catch (_: dynamic) {}
                 }
-            } catch (e: dynamic) {
-                // 完全忽略所有错误
-            }
+            } catch (_: dynamic) {}
         }
     }
     

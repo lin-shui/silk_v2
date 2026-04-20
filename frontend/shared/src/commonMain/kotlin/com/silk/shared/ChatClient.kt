@@ -66,6 +66,7 @@ class ChatClient(
     private var suppressTransient: Boolean = false
     
     private var webSocket: PlatformWebSocket? = null
+    private var connectionGen: Int = 0
     private var currentUserId: String = ""
     private var currentUserName: String = ""
     
@@ -73,12 +74,23 @@ class ChatClient(
         log("🚀 [ChatClient] connect() 开始执行")
         currentUserId = userId
         currentUserName = userName
+
+        // 静默断开旧连接 —— 不触发 DISCONNECTED 状态，避免切群时红色"已断开"闪烁
+        val oldWs = webSocket
+        if (oldWs != null) {
+            log("🔄 [ChatClient] 静默关闭旧连接")
+            webSocket = null
+            try { oldWs.disconnect() } catch (_: Exception) {}
+        }
         
         historyBuffer.clear()
         historyLoadStartMs = Clock.System.now().toEpochMilliseconds()
         _isLoadingHistory.value = true
         
         _connectionState.value = ConnectionState.CONNECTING
+        
+        // 用自增 token 标识本次连接，回调中比对以判断是否仍为活跃实例
+        val connectToken = ++connectionGen
         
         webSocket = PlatformWebSocket(
             serverUrl = serverUrl,
@@ -91,11 +103,15 @@ class ChatClient(
             },
             onDisconnected = {
                 log("🔌 [ChatClient] WebSocket 已断开")
-                _connectionState.value = ConnectionState.DISCONNECTED
+                if (connectionGen == connectToken) {
+                    _connectionState.value = ConnectionState.DISCONNECTED
+                }
             },
             onError = { error ->
                 log("❌ [ChatClient] WebSocket 错误: $error")
-                _connectionState.value = ConnectionState.DISCONNECTED
+                if (connectionGen == connectToken) {
+                    _connectionState.value = ConnectionState.DISCONNECTED
+                }
             },
             onLog = onLog
         )
@@ -113,10 +129,20 @@ class ChatClient(
     }
 
     private fun handleMessage(text: String) {
-        log("📨 [ChatClient] 收到消息: ${text.take(100)}...")
+        // 批量历史帧：服务端将最多 50 条消息编码为 JSON 数组一次性发送
+        if (_isLoadingHistory.value && text.startsWith("[")) {
+            try {
+                val batch = Json.decodeFromString<List<Message>>(text)
+                historyBuffer.addAll(batch)
+                log("📜 [ChatClient] 收到批量历史: ${batch.size} 条")
+                return
+            } catch (_: Exception) {
+                log("⚠️ [ChatClient] 批量解析失败，回退单条解析")
+            }
+        }
+
         try {
             val message = Json.decodeFromString<Message>(text)
-            log("✅ [ChatClient] 解析成功: ${message.type}, 用户: ${message.userName}, category: ${message.category}")
 
             // 历史加载完成标记
             if (message.isTransient && message.type == MessageType.SYSTEM && message.content == "__history_end__") {

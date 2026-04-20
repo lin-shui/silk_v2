@@ -96,8 +96,16 @@ export class ChatStore {
     this.currentUserId = userId;
     this.currentUserName = userName;
 
-    // 断开现有连接
-    this.disconnect();
+    // 静默清理旧连接（不触发 DISCONNECTED 状态闪烁）
+    if (this.wsClient) {
+      if (this.wsListener) {
+        this.wsClient.removeListener(this.wsListener);
+      }
+      this.wsClient = null;
+      this.wsListener = null;
+    }
+    this._isGenerating = false;
+    this._suppressTransient = false;
 
     // 初始化历史缓冲
     this._historyBuffer = [];
@@ -120,7 +128,7 @@ export class ChatStore {
     this.wsListener = listener;
     this.wsClient.addListener(listener);
 
-    // 开始连接
+    // 直接进入 CONNECTING（跳过 DISCONNECTED）
     this._connectionState = ConnectionState.CONNECTING;
     this.onConnectionStateChanged?.();
     this.wsClient.connect(wsUrl, userId, userName, groupId)

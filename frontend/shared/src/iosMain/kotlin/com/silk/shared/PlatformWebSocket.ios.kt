@@ -34,6 +34,10 @@ actual class PlatformWebSocket actual constructor(
         get() = session != null
     
     actual fun connect(userId: String, userName: String, groupId: String) {
+        job?.cancel()
+        try { session?.close(CloseReason(CloseReason.Codes.NORMAL, "Switching group")) } catch (_: Exception) {}
+        session = null
+
         val safeUserName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")
         val safeGroupId = groupId.replace(" ", "_").replace("&", "_").replace("=", "_")
         val fullUrl = "$serverUrl/chat?userId=$userId&userName=$safeUserName&groupId=$safeGroupId"

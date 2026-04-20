@@ -95,9 +95,10 @@ class ChatServer(
                 logger.debug("📋 已从缓存恢复 {} 个已处理的URL", processedUrls.size)
             } catch (e: Exception) {
                 logger.warn("⚠️ 读取URL缓存失败: {}", e.message)
+            }
         }
         
-        // ✅ 从持久化存储加载历史消息到内存（用于消息撤回等功能）
+        // 从持久化存储加载历史消息到内存（用于消息撤回等功能）
         try {
             val chatHistory = historyManager.loadChatHistory(sessionName)
             if (chatHistory != null && chatHistory.messages.isNotEmpty()) {
@@ -120,7 +121,6 @@ class ChatServer(
             }
         } catch (e: Exception) {
             logger.warn("⚠️ 加载历史消息到内存失败: {}", e.message)
-            }
         }
     }
     
@@ -158,29 +158,18 @@ class ChatServer(
         // 添加成员到会话记录
         historyManager.addMember(sessionName, userId, userName)
         
-        // 加载并发送历史消息给新用户
-        val chatHistory = historyManager.loadChatHistory(sessionName)
-        if (chatHistory != null) {
-            chatHistory.messages.takeLast(50).forEach { entry ->
-                val msg = Message(
-                    id = entry.messageId,
-                    userId = entry.senderId,
-                    userName = entry.senderName,
-                    content = entry.content,
-                    timestamp = entry.timestamp,
-                    type = MessageType.valueOf(entry.messageType)
-                )
-                session.send(Frame.Text(Json.encodeToString(msg)))
-            }
-            logger.debug("📜 已发送 {} 条历史消息给 {}", chatHistory.messages.size.coerceAtMost(50), userName)
-        } else {
-            // 如果没有历史记录，发送内存中的消息
-            messageHistory.takeLast(50).forEach { msg ->
-                session.send(Frame.Text(Json.encodeToString(msg)))
-            }
+        // 从内存发送历史消息（init 已从磁盘加载，无需重复 I/O）
+        val recentMessages = messageHistory.takeLast(50)
+        if (recentMessages.isNotEmpty()) {
+            val batch = Json.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(Message.serializer()),
+                recentMessages
+            )
+            session.send(Frame.Text(batch))
+            logger.debug("📜 批量发送 {} 条历史消息给 {}", recentMessages.size, userName)
         }
 
-        // 发送历史加载完成标记，客户端据此一次性渲染消息列表
+        // 历史加载完成标记，客户端据此一次性渲染消息列表
         session.send(Frame.Text(Json.encodeToString(
             Message(
                 id = "history_end",

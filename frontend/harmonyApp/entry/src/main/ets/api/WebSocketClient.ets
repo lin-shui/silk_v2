@@ -81,15 +81,12 @@ export class WebSocketClient {
    */
   connect(serverUrl: string, userId: string, userName: string, groupId: string = 'default_room'): Promise<boolean> {
     return new Promise<boolean>((resolve, reject) => {
-      if (this.connectionState === ConnectionState.CONNECTING) {
-        this.log('⚠️ [WebSocket] 已有连接正在进行中');
-        resolve(false);
-        return;
-      }
-
-      if (this.connectionState === ConnectionState.CONNECTED) {
-        this.log('⚠️ [WebSocket] 已经连接，先断开再重连');
-        this.disconnect();
+      // 静默关闭旧连接 —— 不触发 DISCONNECTED 状态，避免切群时 UI 闪烁
+      this.stopKeepAlive();
+      this.stopReconnectTimer();
+      if (this.ws) {
+        try { this.ws.close(() => {}); } catch (_) {}
+        this.ws = null;
       }
 
       // 保存连接信息
@@ -149,8 +146,18 @@ export class WebSocketClient {
 
       const data = value as string;
       this.log(`📨 [WebSocket] 收到消息: ${data.substring(0, 100)}...`);
-      
+
       try {
+        // 批量历史帧：服务端将消息编码为 JSON 数组一次性发送
+        if (data.startsWith('[')) {
+          const arr: Object[] = JSON.parse(data) as Object[];
+          this.log(`📜 [WebSocket] 批量历史: ${arr.length} 条`);
+          for (const obj of arr) {
+            const msg = parseMessage(JSON.stringify(obj));
+            this.notifyMessageReceived(msg);
+          }
+          return;
+        }
         const message = parseMessage(data);
         this.notifyMessageReceived(message);
       } catch (e) {

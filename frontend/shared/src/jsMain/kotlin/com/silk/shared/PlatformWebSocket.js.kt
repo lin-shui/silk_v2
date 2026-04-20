@@ -25,6 +25,15 @@ actual class PlatformWebSocket actual constructor(
     
     actual fun connect(userId: String, userName: String, groupId: String) {
         try {
+            // 关闭旧连接（静默，不触发 onclose 回调）
+            ws?.let { old ->
+                old.onclose = null
+                old.onerror = null
+                old.onmessage = null
+                old.onopen = null
+                try { old.close(1000, "Switching group") } catch (_: dynamic) {}
+            }
+
             val safeUserName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")
             val safeGroupId = groupId.replace(" ", "_").replace("&", "_").replace("=", "_")
             

@@ -136,11 +136,11 @@ class BackendFileContractTest {
                     userName = lateUser.fullName,
                     groupId = group.id
                 )
-                val lateReplay = lateSession.receiveMessageUntilType(MessageType.FILE)
+                val lateHistory = lateSession.receiveHistory()
+                val lateReplay = assertNotNull(lateHistory.firstOrNull { it.type == MessageType.FILE })
                 assertEquals(hostFileMessage.id, lateReplay.id)
                 assertEquals(expectedPayload, parseFilePayload(lateReplay))
                 assertEquals(host.fullName, lateReplay.userName)
-                assertNull(lateSession.receiveMessageOrNull(500))
             }
         }
     }
@@ -255,6 +255,16 @@ class BackendFileContractTest {
         url("/chat?userId=$userId&userName=$userName&groupId=$groupId")
     }
 
+    private suspend fun DefaultClientWebSocketSession.receiveHistory(): List<Message> = buildList {
+        withTimeout(5_000) {
+            while (true) {
+                val msg = receiveMessage()
+                if (msg.isTransient && msg.type == MessageType.SYSTEM && msg.content == "__history_end__") break
+                add(msg)
+            }
+        }
+    }
+
     private suspend fun DefaultClientWebSocketSession.receiveMessageUntilType(type: MessageType): Message =
         withTimeout(5_000) {
             while (true) {
@@ -266,18 +276,42 @@ class BackendFileContractTest {
             error("unreachable")
         }
 
+    private val frameBuffer = ArrayDeque<Message>()
+
     private suspend fun DefaultClientWebSocketSession.receiveMessage(): Message {
+        if (frameBuffer.isNotEmpty()) return frameBuffer.removeFirst()
         val frame = withTimeout(5_000) { incoming.receive() }
         return when (frame) {
-            is Frame.Text -> json.decodeFromString(frame.readText())
+            is Frame.Text -> {
+                val text = frame.readText()
+                if (text.startsWith("[")) {
+                    val batch: List<Message> = json.decodeFromString(text)
+                    if (batch.isEmpty()) error("Empty batch frame")
+                    batch.drop(1).forEach { frameBuffer.addLast(it) }
+                    batch.first()
+                } else {
+                    json.decodeFromString(text)
+                }
+            }
             else -> error("Expected text frame but received $frame")
         }
     }
 
     private suspend fun DefaultClientWebSocketSession.receiveMessageOrNull(timeoutMillis: Long): Message? {
+        if (frameBuffer.isNotEmpty()) return frameBuffer.removeFirst()
         val frame = withTimeoutOrNull(timeoutMillis) { incoming.receive() } ?: return null
         return when (frame) {
-            is Frame.Text -> json.decodeFromString(frame.readText())
+            is Frame.Text -> {
+                val text = frame.readText()
+                if (text.startsWith("[")) {
+                    val batch: List<Message> = json.decodeFromString(text)
+                    if (batch.isEmpty()) return null
+                    batch.drop(1).forEach { frameBuffer.addLast(it) }
+                    batch.first()
+                } else {
+                    json.decodeFromString(text)
+                }
+            }
             else -> error("Expected text frame but received $frame")
         }
     }

@@ -77,8 +77,8 @@ class BackendWebSocketContractTest {
                     groupId = group.id
                 )
 
-                val hostReplay = hostSession.receiveMessages(50)
-                val guestReplay = guestSession.receiveMessages(50)
+                val hostReplay = hostSession.receiveHistory()
+                val guestReplay = guestSession.receiveHistory()
                 val expectedReplayIds = (3..52).map { "history-$it" }
                 assertEquals(expectedReplayIds, hostReplay.map { it.id })
                 assertEquals(expectedReplayIds, guestReplay.map { it.id })
@@ -219,6 +219,8 @@ class BackendWebSocketContractTest {
                         userName = "GuestUser",
                         groupId = group.id
                     )
+                    hostSession.receiveHistory()
+                    guestSession.receiveHistory()
 
                     val urlMessage = Message(
                         id = "url-live-1",
@@ -369,7 +371,7 @@ class BackendWebSocketContractTest {
                         userName = "LateUser",
                         groupId = group.id
                     )
-                    val lateReplay = lateSession.receiveMessages(4)
+                    val lateReplay = lateSession.receiveHistory()
                     assertEquals(
                         persistedHistory.messages.takeLast(4).map { it.messageId },
                         lateReplay.map { it.id }
@@ -417,6 +419,7 @@ class BackendWebSocketContractTest {
                         userName = "HostUser",
                         groupId = group.id
                     )
+                    hostSession.receiveHistory()
 
                     val failedUrlMessage = Message(
                         id = "url-fail-1",
@@ -473,6 +476,7 @@ class BackendWebSocketContractTest {
                         userName = "HostUser",
                         groupId = group.id
                     )
+                    hostSession.receiveHistory()
 
                     val failedUrlMessage = Message(
                         id = "url-fail-2",
@@ -530,6 +534,7 @@ class BackendWebSocketContractTest {
                         userName = "HostUser",
                         groupId = group.id
                     )
+                    hostSession.receiveHistory()
 
                     val failedUrlMessage = Message(
                         id = "url-fail-3",
@@ -618,6 +623,8 @@ class BackendWebSocketContractTest {
         url("/chat?userId=$userId&userName=$userName&groupId=$groupId")
     }
 
+    private val frameBuffer = ArrayDeque<Message>()
+
     private suspend fun DefaultClientWebSocketSession.receiveMessages(count: Int): List<Message> =
         buildList(count) {
             repeat(count) {
@@ -639,18 +646,50 @@ class BackendWebSocketContractTest {
         }
     }
 
+    private suspend fun DefaultClientWebSocketSession.receiveHistory(): List<Message> = buildList {
+        withTimeout(5_000) {
+            while (true) {
+                val msg = receiveMessage()
+                if (msg.isTransient && msg.type == MessageType.SYSTEM && msg.content == "__history_end__") break
+                add(msg)
+            }
+        }
+    }
+
     private suspend fun DefaultClientWebSocketSession.receiveMessage(): Message {
+        if (frameBuffer.isNotEmpty()) return frameBuffer.removeFirst()
         val frame = withTimeout(5_000) { incoming.receive() }
         return when (frame) {
-            is Frame.Text -> json.decodeFromString(frame.readText())
+            is Frame.Text -> {
+                val text = frame.readText()
+                if (text.startsWith("[")) {
+                    val batch: List<Message> = json.decodeFromString(text)
+                    if (batch.isEmpty()) error("Empty batch frame")
+                    batch.drop(1).forEach { frameBuffer.addLast(it) }
+                    batch.first()
+                } else {
+                    json.decodeFromString(text)
+                }
+            }
             else -> error("Expected text frame but received $frame")
         }
     }
 
     private suspend fun DefaultClientWebSocketSession.receiveMessageOrNull(timeoutMillis: Long): Message? {
+        if (frameBuffer.isNotEmpty()) return frameBuffer.removeFirst()
         val frame = withTimeoutOrNull(timeoutMillis) { incoming.receive() } ?: return null
         return when (frame) {
-            is Frame.Text -> json.decodeFromString(frame.readText())
+            is Frame.Text -> {
+                val text = frame.readText()
+                if (text.startsWith("[")) {
+                    val batch: List<Message> = json.decodeFromString(text)
+                    if (batch.isEmpty()) return null
+                    batch.drop(1).forEach { frameBuffer.addLast(it) }
+                    batch.first()
+                } else {
+                    json.decodeFromString(text)
+                }
+            }
             else -> error("Expected text frame but received $frame")
         }
     }
