@@ -84,6 +84,18 @@ object ClaudeCodeManager {
         return true
     }
 
+    /**
+     * 工作流自动激活 CC 模式（静默激活，不发送提示消息）。
+     * 如果已经激活则不重复操作。
+     */
+    fun autoActivateForWorkflow(userId: String, groupId: String) {
+        val state = getOrCreateState(userId, groupId)
+        if (state.active) return
+        state.active = true
+        // 保留已有的 sessionId，不重置
+        logger.info("[CC] 工作流自动激活: userId={}, groupId={}", userId, groupId)
+    }
+
     private suspend fun activate(userId: String, groupId: String, broadcastFn: suspend (Message) -> Unit) {
         val state = getOrCreateState(userId, groupId)
         state.active = true

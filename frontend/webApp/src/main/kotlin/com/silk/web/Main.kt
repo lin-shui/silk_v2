@@ -75,7 +75,7 @@ private fun backendHttpOrigin(): String {
     }
 }
 
-private fun backendWsOrigin(): String {
+internal fun backendWsOrigin(): String {
     val wsProtocol = if (window.location.protocol == "https:") "wss:" else "ws:"
     val currentPort = window.location.port
     val host = if (currentPort == BuildConfig.FRONTEND_PORT) {
@@ -4233,7 +4233,7 @@ private fun shanghaiDate(timestamp: Long): ShanghaiDateParts {
 
 private fun Int.twoDigits(): String = toString().padStart(2, '0')
 
-private fun isLikelyAgentStatusContent(content: String): Boolean {
+internal fun isLikelyAgentStatusContent(content: String): Boolean {
     val text = content.trim()
     if (text.isBlank()) return false
 
