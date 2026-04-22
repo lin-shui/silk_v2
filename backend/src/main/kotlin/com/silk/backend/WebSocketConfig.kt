@@ -235,7 +235,7 @@ class ChatServer(
     suspend fun broadcast(message: Message) {
         // 🛑 停止生成：立即取消活跃的 AI 任务并通知客户端
         if (message.type == MessageType.STOP_GENERATE) {
-            handleStopGeneration()
+            handleStopGeneration(message.userId)
             return
         }
         
@@ -605,10 +605,36 @@ class ChatServer(
     }
     
     /**
-     * 处理停止生成请求：取消活跃 AI 任务并清理客户端状态
+     * 处理停止生成请求：取消活跃 AI 任务并清理客户端状态。
+     * 同时支持 Silk 普通会话（取消协程）和 Claude Code 模式（委托 Bridge 取消）。
      */
-    private suspend fun handleStopGeneration() {
-        logger.info("🛑 收到停止生成请求")
+    private suspend fun handleStopGeneration(userId: String) {
+        logger.info("🛑 收到停止生成请求 (userId={})", userId)
+
+        // 1. CC 模式：委托 ClaudeCodeManager 取消
+        val groupId = sessionName
+        val userSessions = connections[userId]
+        if (userSessions != null && userSessions.isNotEmpty()) {
+            val ccBroadcastFn: suspend (Message) -> Unit = { msg ->
+                if (!msg.isTransient) {
+                    messageHistory.add(msg)
+                    historyManager.addMessage(sessionName, msg)
+                }
+                val msgJson = Json.encodeToString(msg)
+                val currentSessions = connections[userId] ?: emptyList()
+                currentSessions.forEach { session ->
+                    try { session.send(Frame.Text(msgJson)) } catch (_: Exception) {}
+                }
+            }
+            val ccCancelled = ClaudeCodeManager.cancelIfActive(userId, groupId, ccBroadcastFn)
+            if (ccCancelled) {
+                logger.info("🛑 已通过 ClaudeCodeManager 取消 CC 任务")
+                broadcastSystemStatus("CLEAR_STATUS")
+                return
+            }
+        }
+
+        // 2. Silk 普通会话：取消协程
         val job = activeAiJob
         if (job != null && job.isActive) {
             job.cancel()

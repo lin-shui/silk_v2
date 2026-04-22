@@ -456,24 +456,6 @@ private fun WorkflowChatPanel(
             property("gap", "10px")
         }
     }) {
-        // Stop button when generating
-        if (isGenerating) {
-            Button({
-                style {
-                    backgroundColor(Color("#FF5722"))
-                    color(Color.white)
-                    border(0.px)
-                    borderRadius(6.px)
-                    padding(8.px, 14.px)
-                    property("cursor", "pointer")
-                    fontSize(13.px)
-                }
-                onClick {
-                    scope.launch { chatClient.stopGeneration(userId, userName) }
-                }
-            }) { Text("⏹ 停止") }
-        }
-
         Input(InputType.Text) {
             value(messageText)
             onInput { messageText = it.value }
@@ -500,27 +482,46 @@ private fun WorkflowChatPanel(
             }
         }
 
-        Button({
-            style {
-                backgroundColor(
-                    if (messageText.isNotBlank()) Color(SilkColors.primary) else Color(SilkColors.primaryLight)
-                )
-                color(Color.white)
-                border(0.px)
-                borderRadius(8.px)
-                padding(8.px, 16.px)
-                property("cursor", if (messageText.isNotBlank()) "pointer" else "default")
-                fontSize(14.px)
-            }
-            onClick {
-                if (messageText.isNotBlank()) {
-                    val text = messageText.trim()
-                    messageText = ""
-                    scope.launch {
-                        chatClient.sendMessage(userId, userName, text)
+        if (isGenerating) {
+            Button({
+                style {
+                    backgroundColor(Color("#FF4D4F"))
+                    color(Color.white)
+                    border(0.px)
+                    borderRadius(8.px)
+                    padding(8.px, 16.px)
+                    property("cursor", "pointer")
+                    fontSize(14.px)
+                    property("font-weight", "600")
+                    property("transition", "all 0.2s ease")
+                }
+                onClick {
+                    scope.launch { chatClient.stopGeneration(userId, userName) }
+                }
+            }) { Text("停止") }
+        } else {
+            Button({
+                style {
+                    backgroundColor(
+                        if (messageText.isNotBlank()) Color(SilkColors.primary) else Color(SilkColors.primaryLight)
+                    )
+                    color(Color.white)
+                    border(0.px)
+                    borderRadius(8.px)
+                    padding(8.px, 16.px)
+                    property("cursor", if (messageText.isNotBlank()) "pointer" else "default")
+                    fontSize(14.px)
+                }
+                onClick {
+                    if (messageText.isNotBlank()) {
+                        val text = messageText.trim()
+                        messageText = ""
+                        scope.launch {
+                            chatClient.sendMessage(userId, userName, text)
+                        }
                     }
                 }
-            }
-        }) { Text("发送") }
+            }) { Text("发送") }
+        }
     }
 }
