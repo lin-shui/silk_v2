@@ -166,6 +166,8 @@ class ChatClient(
                     if (message.content.startsWith("CLEAR_STATUS")) {
                         log("🧹 [ChatClient] 清除状态消息")
                         _statusMessages.value = emptyList()
+                        _isGenerating.value = false
+                        suppressTransient = false
                     } else {
                         log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
                         if (isSilkAi) _isGenerating.value = true

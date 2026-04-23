@@ -1,27 +1,53 @@
-name: CI Fast Validation
+name: CI Script Smoke
 
 on:
   push:
+    paths:
+      - ".github/workflows/ci-fast-validation.yml"
+      - ".github/workflows/ci-script-smoke.yml"
+      - ".env.example"
+      - "backend/build.gradle.kts"
+      - "build.gradle.kts"
+      - "frontend/androidApp/**"
+      - "frontend/shared/**"
+      - "frontend/webApp/**"
+      - "gradle/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - "settings.gradle.kts"
+      - "silk.sh"
   pull_request:
-  merge_group:
+    paths:
+      - ".github/workflows/ci-fast-validation.yml"
+      - ".github/workflows/ci-script-smoke.yml"
+      - ".env.example"
+      - "backend/build.gradle.kts"
+      - "build.gradle.kts"
+      - "frontend/androidApp/**"
+      - "frontend/shared/**"
+      - "frontend/webApp/**"
+      - "gradle/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - "settings.gradle.kts"
+      - "silk.sh"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-fast-validation-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-script-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
   JAVA_VERSION: "17"
-  GRADLE_ARGS_COMMON: --no-daemon --stacktrace --warning-mode all
 
 jobs:
-  gradle-fast:
-    name: Backend + Web + Desktop
+  web-script-build:
+    name: silk.sh build
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Check out repository
@@ -42,64 +68,29 @@ jobs:
       - name: Set up Gradle cache
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Validate silk.sh syntax
-        run: bash -n silk.sh
+      - name: Run silk.sh build smoke
+        run: ./silk.sh build
 
-      - name: Smoke check silk.sh status
-        run: ./silk.sh status
-
-      - name: Run backend, packaging, web, and desktop fast validation
+      - name: Verify Web build was copied into backend/static
         run: |
-          ./gradlew $GRADLE_ARGS_COMMON \
-            :backend:test \
-            :backend:shadowJar \
-            :frontend:webApp:nodeTest \
-            :frontend:webApp:compileProductionExecutableKotlinJs \
-            :frontend:desktopApp:test \
-            :frontend:desktopApp:compileKotlin
+          test -f frontend/webApp/build/dist/js/productionExecutable/index.html
+          test -f backend/static/index.html
+          cmp frontend/webApp/build/dist/js/productionExecutable/index.html backend/static/index.html
 
-      - name: Upload backend test reports
+      - name: Upload Web script build outputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: backend-test-report
+          name: web-script-build-output
           path: |
-            backend/build/reports/tests/test
-            backend/build/test-results/test
+            frontend/webApp/build/dist/js/productionExecutable
+            backend/static/index.html
           if-no-files-found: ignore
 
-      - name: Upload web test reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-js-test-report
-          path: |
-            frontend/webApp/build/reports/tests/nodeTest
-            frontend/webApp/build/test-results/nodeTest
-          if-no-files-found: ignore
-
-      - name: Upload desktop test reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-test-report
-          path: |
-            frontend/desktopApp/build/reports/tests/test
-            frontend/desktopApp/build/test-results/test
-          if-no-files-found: ignore
-
-      - name: Upload backend shadowJar
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-shadowjar
-          path: backend/build/libs/*-all.jar
-          if-no-files-found: ignore
-
-  android-compile:
-    name: Android Debug Kotlin Compile
+  android-script-build:
+    name: silk.sh build-apk
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -138,18 +129,24 @@ jobs:
           fi
           printf 'sdk.dir=%s\n' "$SDK_DIR" > local.properties
 
-      - name: Run Android fast validation
-        run: |
-          ./gradlew $GRADLE_ARGS_COMMON \
-            :frontend:androidApp:testDebugUnitTest \
-            :frontend:androidApp:compileDebugKotlin
+      - name: Run silk.sh build-apk smoke
+        run: ./silk.sh build-apk
 
-      - name: Upload Android unit test reports
+      - name: Verify APK was copied into backend/static
+        run: |
+          APK_FILE=$(find frontend/androidApp/build/outputs/apk/debug -maxdepth 1 -name '*.apk' | head -1)
+          test -n "$APK_FILE"
+          test -f backend/static/files/androidApp-debug.apk
+          test -L backend/static/silk.apk
+          test -f "$(readlink backend/static/silk.apk)"
+
+      - name: Upload Android script build outputs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-unit-test-report
+          name: android-script-build-output
           path: |
-            frontend/androidApp/build/reports/tests/testDebugUnitTest
-            frontend/androidApp/build/test-results/testDebugUnitTest
+            frontend/androidApp/build/outputs/apk/debug/*.apk
+            backend/static/files/androidApp-debug.apk
+            backend/static/silk-*.apk
           if-no-files-found: ignore

@@ -37,9 +37,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
-import java.net.URL
 import java.nio.file.Files
-import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 
 fun main() = application {
@@ -334,9 +332,9 @@ fun MessageBubble(
         }.format(Date(message.timestamp))
     }
     
-    // 检测是否为PDF下载消息
-    val isPdfMessage = message.content.contains("/download/report/") && 
-                      message.content.contains(".pdf")
+    val pdfReportContent = remember(message.content) {
+        parseDesktopPdfReportContent(message.content)
+    }
     
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -363,77 +361,79 @@ fun MessageBubble(
                         MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier.widthIn(max = 600.dp)
                 ) {
-                    if (isPdfMessage) {
-                        PDFDownloadMessage(message, scope)
-                    } else {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            // 临时消息标识
-                            if (isTransient) {
-                                Text(
-                                    text = "AI 处理中...",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                            }
-                            
-                            // 进度条（如果有）
-                            ProgressIndicator(
-                                currentStep = message.currentStep,
-                                totalSteps = message.totalSteps
-                            )
-                            if (message.currentStep != null && message.totalSteps != null) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                            }
-                            
-                            // 检查是否包含诊断按钮提示，如果有则高亮图标
-                            if (message.content.contains("医院按钮") || message.content.contains("Silk按钮")) {
-                                val content = message.content
+                    when {
+                        message.type == MessageType.FILE -> FileDownloadMessage(message, scope)
+                        pdfReportContent != null -> PDFDownloadMessage(pdfReportContent, scope)
+                        else -> {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                // 临时消息标识
+                                if (isTransient) {
+                                    Text(
+                                        text = "AI 处理中...",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.secondary
+                                    )
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                }
                                 
-                                // 高亮🏥和🤖图标
-                                Text(
-                                    text = buildAnnotatedString {
-                                        var i = 0
-                                        while (i < content.length) {
-                                            val remaining = content.substring(i)
-                                            
-                                            when {
-                                                remaining.startsWith("🏥") -> {
-                                                    withStyle(
-                                                        style = SpanStyle(
-                                                            color = MaterialTheme.colorScheme.tertiary,
-                                                            fontWeight = FontWeight.Bold
-                                                        )
-                                                    ) {
-                                                        append("🏥")
+                                // 进度条（如果有）
+                                ProgressIndicator(
+                                    currentStep = message.currentStep,
+                                    totalSteps = message.totalSteps
+                                )
+                                if (message.currentStep != null && message.totalSteps != null) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                }
+                                
+                                // 检查是否包含诊断按钮提示，如果有则高亮图标
+                                if (message.content.contains("医院按钮") || message.content.contains("Silk按钮")) {
+                                    val content = message.content
+                                    
+                                    // 高亮🏥和🤖图标
+                                    Text(
+                                        text = buildAnnotatedString {
+                                            var i = 0
+                                            while (i < content.length) {
+                                                val remaining = content.substring(i)
+                                                
+                                                when {
+                                                    remaining.startsWith("🏥") -> {
+                                                        withStyle(
+                                                            style = SpanStyle(
+                                                                color = MaterialTheme.colorScheme.tertiary,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                        ) {
+                                                            append("🏥")
+                                                        }
+                                                        i += "🏥".length
                                                     }
-                                                    i += "🏥".length
-                                                }
-                                                remaining.startsWith("🤖") -> {
-                                                    withStyle(
-                                                        style = SpanStyle(
-                                                            color = MaterialTheme.colorScheme.secondary,
-                                                            fontWeight = FontWeight.Bold
-                                                        )
-                                                    ) {
-                                                        append("🤖")
+                                                    remaining.startsWith("🤖") -> {
+                                                        withStyle(
+                                                            style = SpanStyle(
+                                                                color = MaterialTheme.colorScheme.secondary,
+                                                                fontWeight = FontWeight.Bold
+                                                            )
+                                                        ) {
+                                                            append("🤖")
+                                                        }
+                                                        i += "🤖".length
                                                     }
-                                                    i += "🤖".length
-                                                }
-                                                else -> {
-                                                    append(content[i])
-                                                    i++
+                                                    else -> {
+                                                        append(content[i])
+                                                        i++
+                                                    }
                                                 }
                                             }
-                                        }
-                                    },
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            } else {
-                                Text(
-                                    text = message.content,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
+                                        },
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                } else {
+                                    Text(
+                                        text = message.content,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
                             }
                         }
                     }
@@ -486,57 +486,91 @@ fun ProgressIndicator(currentStep: Int?, totalSteps: Int?) {
 }
 
 @Composable
-fun PDFDownloadMessage(message: Message, scope: kotlinx.coroutines.CoroutineScope) {
-    // 提取下载URL（相对路径）
-    val downloadUrl = remember(message.content) {
-        // 使用更精确的正则表达式，只在换行符处停止
-        val urlPattern = Regex("/download/report/[^\\r\\n]+\\.pdf")
-        val matchedUrl = urlPattern.find(message.content)?.value ?: ""
-        // 清理可能的尾部空白字符
-        matchedUrl.trim()
+fun PDFDownloadMessage(pdfReport: DesktopPdfReportContent, scope: kotlinx.coroutines.CoroutineScope) {
+    RemoteDownloadMessage(
+        title = "📄 PDF 诊断报告已生成",
+        fileName = pdfReport.fileName,
+        downloadUrl = pdfReport.downloadUrl,
+        scope = scope,
+        buttonText = "📥 打开/下载诊断报告",
+        saveDialogTitle = "保存诊断报告到...",
+        requiredExtension = "pdf"
+    )
+}
+
+@Composable
+fun FileDownloadMessage(message: Message, scope: kotlinx.coroutines.CoroutineScope) {
+    val fileContent = remember(message.content) {
+        parseDesktopFileMessageContent(message.content)
     }
-    
-    // 提取文件名（需要 URL 解码并清理）
-    val fileName = remember(downloadUrl) {
-        val encodedFileName = downloadUrl.substringAfterLast("/")
-        
-        // URL 解码，处理 %20 等编码字符
-        try {
-            val decodedFileName = java.net.URLDecoder.decode(encodedFileName, "UTF-8")
-            // 清理文件名：去除换行符、回车符等不可见字符
-            decodedFileName.replace(Regex("[\\r\\n\\t]"), "").trim()
-        } catch (e: Exception) {
-            println("❌ URL 解码失败: ${e.message}")
-            encodedFileName.replace(Regex("[\\r\\n\\t]"), "").trim()  // 如果解码失败，也要清理原始文件名
-        }
-    }
-    
+
+    RemoteDownloadMessage(
+        title = "📎 文件消息",
+        fileName = fileContent.fileName,
+        downloadUrl = fileContent.downloadUrl,
+        fileSize = fileContent.fileSize.takeIf { it > 0L },
+        scope = scope,
+        buttonText = "📥 下载文件",
+        saveDialogTitle = "保存文件到..."
+    )
+}
+
+@Composable
+fun RemoteDownloadMessage(
+    title: String,
+    fileName: String,
+    downloadUrl: String,
+    scope: kotlinx.coroutines.CoroutineScope,
+    buttonText: String,
+    saveDialogTitle: String,
+    fileSize: Long? = null,
+    requiredExtension: String? = null
+) {
     var isDownloading by remember { mutableStateOf(false) }
     var downloadStatus by remember { mutableStateOf("") }
-    
+    val detailText = buildString {
+        append("文件名：$fileName")
+        fileSize?.let { append("\n大小：${formatDesktopFileSize(it)}") }
+    }
+
     Column(modifier = Modifier.padding(12.dp)) {
         Text(
-            text = "📄 PDF 诊断报告已生成\n",
+            text = title,
             style = MaterialTheme.typography.bodyMedium
         )
-        
-        Text(
-            text = "文件名：$fileName\n",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        
+
         Spacer(modifier = Modifier.height(8.dp))
-        
-        // 可点击的下载/打开按钮
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                text = desktopFileIconForName(fileName),
+                fontSize = 32.sp
+            )
+            Text(
+                text = detailText,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         Button(
             onClick = {
                 scope.launch {
                     isDownloading = true
                     downloadStatus = "正在从服务器下载..."
-                    
-                    val result = openOrDownloadPDF(downloadUrl, fileName)
-                    
+
+                    val result = downloadRemoteFile(
+                        downloadUrl = downloadUrl,
+                        defaultFileName = fileName,
+                        saveDialogTitle = saveDialogTitle,
+                        requiredExtension = requiredExtension
+                    )
+
                     isDownloading = false
                     downloadStatus = when (result) {
                         DownloadResult.SUCCESS -> "✅ 下载成功！"
@@ -550,16 +584,16 @@ fun PDFDownloadMessage(message: Message, scope: kotlinx.coroutines.CoroutineScop
         ) {
             Icon(
                 imageVector = Icons.Default.Download,
-                contentDescription = "打开",
+                contentDescription = "下载",
                 modifier = Modifier.size(20.dp)
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = if (isDownloading) "处理中..." else "📥 打开/下载诊断报告",
+                text = if (isDownloading) "处理中..." else buttonText,
                 style = MaterialTheme.typography.bodyMedium
             )
         }
-        
+
         if (downloadStatus.isNotEmpty()) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
@@ -585,9 +619,14 @@ enum class DownloadResult {
 }
 
 /**
- * 打开或下载PDF文件（从远程服务器下载）
+ * 打开或下载远程文件
  */
-suspend fun openOrDownloadPDF(downloadUrl: String, defaultFileName: String): DownloadResult {
+suspend fun downloadRemoteFile(
+    downloadUrl: String,
+    defaultFileName: String,
+    saveDialogTitle: String,
+    requiredExtension: String? = null
+): DownloadResult {
     return try {
         // 构建完整的下载URL
         val fullUrl = "${BuildConfig.BACKEND_BASE_URL}$downloadUrl"
@@ -598,7 +637,11 @@ suspend fun openOrDownloadPDF(downloadUrl: String, defaultFileName: String): Dow
         
         // 从服务器下载PDF到临时文件
         val tempFile = withContext(Dispatchers.IO) {
-            val tempFile = java.io.File.createTempFile("silk_report_", ".pdf")
+            val tempSuffix = defaultFileName.substringAfterLast('.', "bin")
+                .takeIf { it.isNotBlank() }
+                ?.let { ".$it" }
+                ?: ".bin"
+            val tempFile = java.io.File.createTempFile("silk_download_", tempSuffix)
             
             println("⏳ 正在从服务器下载...")
             
@@ -640,15 +683,12 @@ suspend fun openOrDownloadPDF(downloadUrl: String, defaultFileName: String): Dow
         // 使用 AWT FileDialog（macOS 原生对话框）而不是 JFileChooser
         // 原生对话框对中文字符的显示支持更好
         val selectedFile = withContext(Dispatchers.Main) {
-            val fileDialog = java.awt.FileDialog(null as java.awt.Frame?, "保存诊断报告到...", java.awt.FileDialog.SAVE)
+            val fileDialog = java.awt.FileDialog(null as java.awt.Frame?, saveDialogTitle, java.awt.FileDialog.SAVE)
             
             // 设置默认目录和文件名
             val downloadsDir = java.io.File(System.getProperty("user.home"), "Downloads")
             fileDialog.directory = downloadsDir.absolutePath
             fileDialog.file = defaultFileName
-            
-            // 设置文件过滤器（只显示 PDF 文件）
-            fileDialog.setFilenameFilter { _, name -> name.lowercase().endsWith(".pdf") }
             
             // 显示对话框
             fileDialog.isVisible = true
@@ -665,12 +705,13 @@ suspend fun openOrDownloadPDF(downloadUrl: String, defaultFileName: String): Dow
             // 用户选择了保存位置，在 IO 线程复制文件
             try {
                 withContext(Dispatchers.IO) {
-                    // 确保文件扩展名为 .pdf
-                    val finalFile = if (!selectedFile.name.endsWith(".pdf")) {
-                        java.io.File(selectedFile.absolutePath + ".pdf")
-                    } else {
-                        selectedFile
-                    }
+                    val finalFile = java.io.File(
+                        resolveDownloadTargetFileName(
+                            selectedFilePath = selectedFile.absolutePath,
+                            defaultFileName = defaultFileName,
+                            requiredExtension = requiredExtension
+                        )
+                    )
                     
                     // 复制临时文件到目标位置
                     Files.copy(
@@ -712,4 +753,3 @@ suspend fun openOrDownloadPDF(downloadUrl: String, defaultFileName: String): Dow
         DownloadResult.FAILED
     }
 }
-

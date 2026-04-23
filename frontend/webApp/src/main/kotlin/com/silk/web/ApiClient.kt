@@ -165,6 +165,8 @@ data class WorkflowItem(
     val name: String,
     val description: String = "",
     val ownerId: String = "",
+    val groupId: String = "",
+    val agentType: String = "claude_code",
     val createdAt: Long = 0,
     val updatedAt: Long = 0
 )

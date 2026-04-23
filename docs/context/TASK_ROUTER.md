@@ -87,5 +87,6 @@
 ## CI / Validation / Tooling
 
 - 先读：`quality/INDEX.md`、`quality/CI_FAST_VALIDATION_SCOPE.md`
+- 若改 `silk.sh` / 装配 smoke：再读 `quality/CI_SCRIPT_SMOKE_SCOPE.md`
 - 再看代码：`.github/workflows/ci-fast-validation.yml`、`backend/src/test/.../README_TESTS.md`
 - 默认验证：优先复用 CI 中已有的窄检查，不凭空创造一套新的重流程

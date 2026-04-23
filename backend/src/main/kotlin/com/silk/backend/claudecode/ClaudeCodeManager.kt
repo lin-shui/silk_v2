@@ -57,6 +57,17 @@ object ClaudeCodeManager {
     }
 
     /**
+     * 被 ChatServer.handleStopGeneration() 调用。
+     * 如果该用户处于 CC 模式且有运行中任务，则执行取消并返回 true。
+     */
+    suspend fun cancelIfActive(userId: String, groupId: String, broadcastFn: suspend (Message) -> Unit): Boolean {
+        val state = states[key(userId, groupId)] ?: return false
+        if (!state.active) return false
+        handleCancel(userId, state, broadcastFn)
+        return true
+    }
+
+    /**
      * 被 ChatServer.broadcast() 调用的入口。
      * 返回 true 表示消息已被 CC 处理，ChatServer 不应再走 Silk AI 逻辑。
      */
@@ -82,6 +93,18 @@ object ClaudeCodeManager {
         // CC 模式下的消息路由
         routeMessage(userId, groupId, userName, trimmed, state, broadcastFn)
         return true
+    }
+
+    /**
+     * 工作流自动激活 CC 模式（静默激活，不发送提示消息）。
+     * 如果已经激活则不重复操作。
+     */
+    fun autoActivateForWorkflow(userId: String, groupId: String) {
+        val state = getOrCreateState(userId, groupId)
+        if (state.active) return
+        state.active = true
+        // 保留已有的 sessionId，不重置
+        logger.info("[CC] 工作流自动激活: userId={}, groupId={}", userId, groupId)
     }
 
     private suspend fun activate(userId: String, groupId: String, broadcastFn: suspend (Message) -> Unit) {
@@ -407,8 +430,11 @@ object ClaudeCodeManager {
                 }
                 val effectiveMeta = (meta ?: StreamParser.ResultMeta()).copy(durationMs = wallClockMs)
                 val metaStr = StreamParser.formatMeta(effectiveMeta)
+                // 先清除状态消息（tool_log 等），重置前端 isGenerating
+                broadcastFn(statusMessage("CLEAR_STATUS"))
+                // 再发 meta 信息作为永久消息（不会触发 isGenerating）
                 if (metaStr.isNotBlank()) {
-                    broadcastFn(statusMessage(metaStr))
+                    broadcastFn(systemMessage(metaStr))
                 }
                 if (meta?.sessionId?.isNotBlank() == true) {
                     state.sessionId = meta.sessionId

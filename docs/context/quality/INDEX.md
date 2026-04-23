@@ -3,8 +3,10 @@
 ## Primary Files
 
 - 快检范围： [CI_FAST_VALIDATION_SCOPE.md](CI_FAST_VALIDATION_SCOPE.md)
+- 脚本 smoke 范围： [CI_SCRIPT_SMOKE_SCOPE.md](CI_SCRIPT_SMOKE_SCOPE.md)
 - 变更到验证映射： [TEST_MATRIX.md](TEST_MATRIX.md)
 - CI workflow： `../../../.github/workflows/ci-fast-validation.yml`
+- 脚本 smoke workflow： `../../../.github/workflows/ci-script-smoke.yml`
 - Backend 测试说明： `../../../backend/src/test/kotlin/com/silk/backend/README_TESTS.md`
 
 ## Default Principle

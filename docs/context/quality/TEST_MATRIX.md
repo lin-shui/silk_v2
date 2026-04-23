@@ -56,6 +56,8 @@
 - Commands:
   - `bash -n silk.sh`
   - `./silk.sh status`
+- CI supplement:
+  - `.github/workflows/ci-script-smoke.yml` 覆盖 `./silk.sh build` 与 `./silk.sh build-apk`
 
 ## When Payloads Change
 

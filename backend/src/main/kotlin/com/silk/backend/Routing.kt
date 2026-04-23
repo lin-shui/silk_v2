@@ -1721,7 +1721,16 @@ fun Application.configureRouting() {
                 return@post
             }
             val desc = req["description"]?.jsonPrimitive?.content ?: ""
-            val wf = workflowManager.createWorkflow(name, desc, userId)
+
+            // 自动创建关联群组（工作流私聊）
+            val groupName = "wf_${sanitizeFileName(name)}_${System.currentTimeMillis()}"
+            val group = com.silk.backend.database.GroupRepository.createGroup(groupName, userId)
+            if (group == null) {
+                call.respondText("""{"success":false,"message":"Failed to create workflow group"}""", ContentType.Application.Json, HttpStatusCode.InternalServerError)
+                return@post
+            }
+
+            val wf = workflowManager.createWorkflow(name, desc, userId, group.id)
             call.respondText(
                 Json.encodeToString(Workflow.serializer(), wf),
                 ContentType.Application.Json,
@@ -1736,7 +1745,13 @@ fun Application.configureRouting() {
                 call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
                 return@delete
             }
+            // 删除前查出关联的 groupId，用于清理群组和 ChatServer
+            val workflow = workflowManager.getWorkflow(workflowId, userId)
             val ok = workflowManager.deleteWorkflow(workflowId, userId)
+            if (ok && workflow != null && workflow.groupId.isNotBlank()) {
+                groupChatServers.remove(workflow.groupId)
+                com.silk.backend.database.GroupRepository.deleteGroup(workflow.groupId)
+            }
             call.respondText(
                 """{"success":$ok}""",
                 ContentType.Application.Json,
@@ -1908,12 +1923,17 @@ fun Application.configureRouting() {
             val userId = call.parameters["userId"] ?: UUID.randomUUID().toString()
             val userName = call.parameters["userName"] ?: "User_${userId.take(6)}"
             val groupId = call.parameters["groupId"] ?: "default_room"
-            
+
             logger.info("👤 用户连接: {} ({}) -> 群组: {}", userName, userId, groupId)
-            
+
             // 为每个群组获取或创建独立的ChatServer
             val groupChatServer = getGroupChatServer(groupId)
-            
+
+            // 工作流群组自动激活 CC 模式
+            if (workflowManager.getWorkflowByGroupId(groupId) != null) {
+                ClaudeCodeManager.autoActivateForWorkflow(userId, "group_$groupId")
+            }
+
             try {
                 groupChatServer.join(userId, userName, this)
                 
