@@ -1,0 +1,152 @@
+name: CI Script Smoke
+
+on:
+  push:
+    paths:
+      - ".github/workflows/ci-fast-validation.yml"
+      - ".github/workflows/ci-script-smoke.yml"
+      - ".env.example"
+      - "backend/build.gradle.kts"
+      - "build.gradle.kts"
+      - "frontend/androidApp/**"
+      - "frontend/shared/**"
+      - "frontend/webApp/**"
+      - "gradle/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - "settings.gradle.kts"
+      - "silk.sh"
+  pull_request:
+    paths:
+      - ".github/workflows/ci-fast-validation.yml"
+      - ".github/workflows/ci-script-smoke.yml"
+      - ".env.example"
+      - "backend/build.gradle.kts"
+      - "build.gradle.kts"
+      - "frontend/androidApp/**"
+      - "frontend/shared/**"
+      - "frontend/webApp/**"
+      - "gradle/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - "settings.gradle.kts"
+      - "silk.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-script-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: "17"
+
+jobs:
+  web-script-build:
+    name: silk.sh build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Use official Gradle distribution on GitHub-hosted runner
+        run: |
+          if grep -q 'mirrors.cloud.tencent.com' gradle/wrapper/gradle-wrapper.properties; then
+            sed -i 's#https\\://mirrors.cloud.tencent.com/gradle/gradle-8.4-bin.zip#https\\://services.gradle.org/distributions/gradle-8.4-bin.zip#' gradle/wrapper/gradle-wrapper.properties
+          fi
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run silk.sh build smoke
+        run: ./silk.sh build
+
+      - name: Verify Web build was copied into backend/static
+        run: |
+          test -f frontend/webApp/build/dist/js/productionExecutable/index.html
+          test -f backend/static/index.html
+          cmp frontend/webApp/build/dist/js/productionExecutable/index.html backend/static/index.html
+
+      - name: Upload Web script build outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-script-build-output
+          path: |
+            frontend/webApp/build/dist/js/productionExecutable
+            backend/static/index.html
+          if-no-files-found: ignore
+
+  android-script-build:
+    name: silk.sh build-apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Use official Gradle distribution on GitHub-hosted runner
+        run: |
+          if grep -q 'mirrors.cloud.tencent.com' gradle/wrapper/gradle-wrapper.properties; then
+            sed -i 's#https\\://mirrors.cloud.tencent.com/gradle/gradle-8.4-bin.zip#https\\://services.gradle.org/distributions/gradle-8.4-bin.zip#' gradle/wrapper/gradle-wrapper.properties
+          fi
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null
+
+      - name: Install Android SDK packages
+        run: sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      - name: Write local.properties for Android plugin evaluation
+        run: |
+          SDK_DIR="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          if [ -z "$SDK_DIR" ]; then
+            echo "Android SDK path is unavailable after setup-android" >&2
+            exit 1
+          fi
+          printf 'sdk.dir=%s\n' "$SDK_DIR" > local.properties
+
+      - name: Run silk.sh build-apk smoke
+        run: ./silk.sh build-apk
+
+      - name: Verify APK was copied into backend/static
+        run: |
+          APK_FILE=$(find frontend/androidApp/build/outputs/apk/debug -maxdepth 1 -name '*.apk' | head -1)
+          test -n "$APK_FILE"
+          test -f backend/static/files/androidApp-debug.apk
+          test -L backend/static/silk.apk
+          test -f "$(readlink backend/static/silk.apk)"
+
+      - name: Upload Android script build outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-script-build-output
+          path: |
+            frontend/androidApp/build/outputs/apk/debug/*.apk
+            backend/static/files/androidApp-debug.apk
+            backend/static/silk-*.apk
+          if-no-files-found: ignore
