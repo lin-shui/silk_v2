@@ -11,6 +11,7 @@ A cross-platform chat application built with Kotlin Multiplatform. It provides a
 - **Android**: Kotlin Multiplatform Android app; APK can be built and served for download.
 - **Vector store**: Weaviate (run via Docker by `silk.sh`). Used for context and file search.
 - **AI**: Any OpenAI-compatible API; configure `API_BASE_URL`, `OPENAI_API_KEY`, and `AI_MODEL` in `.env`.
+- **Workflow**: Named, persistent Claude Code agent sessions. Each workflow creates a dedicated chat room with CC mode always active — no need to type `/cc`.
 
 ## Todo Roadmap Governance
 
@@ -41,6 +42,7 @@ All day-to-day operations (build, run, stop, logs, Weaviate) are driven by the *
 | `frontend/androidApp/` | Android app; APK output can be copied to `backend/static`. |
 | `frontend/desktopApp/` | Desktop client (optional). |
 | `frontend/shared/` | Shared KMP code for frontends. |
+| `backend/workflows/` | Workflow data store (`workflow_store.json`). |
 | `search/` | Weaviate schema and indexing (e.g. `schema.py`). |
 
 ---
@@ -136,6 +138,39 @@ All commands are run from the project root. `silk.sh` loads `.env` automatically
 | `./silk.sh weaviate start\|stop\|status\|schema` | Manage Weaviate (Docker) and schema. |
 
 APK download URL (when backend is up): `https://<BACKEND_HOST>:8006/api/files/download-apk` (or `http://` if `BACKEND_SCHEME=http`).
+
+---
+
+## Workflow
+
+Workflows give each user a dedicated Claude Code programming session with its own persistent chat history. Unlike regular chats where you type `/cc` to enter CC mode, a workflow chat has CC mode **always on** — every message goes directly to the Claude Code agent.
+
+### Quick start
+
+1. Open the **Workflow** tab in the left navigation bar.
+2. Click **+ 创建**, enter a name, and confirm.
+3. Select the workflow to open its chat panel — Claude Code is ready immediately.
+4. Type any programming task; Claude Code will read, write, and edit files via the Bridge Agent.
+5. Use standard CC commands (`/new`, `/cancel`, `/status`, `/cd`, `/session`, `/compact`, `/help`) inside the workflow chat.
+
+### How it works
+
+- Creating a workflow automatically creates a chat group behind the scenes and links them together.
+- When you open a workflow, the WebSocket connection detects it and silently activates CC mode — no `/cc` needed.
+- Workflows are per-user; each user's workflow list and sessions are isolated.
+- Workflow data is stored in `backend/workflows/workflow_store.json`.
+
+### API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/workflows?userId=...` | List workflows |
+| POST | `/api/workflows` | Create workflow (`{userId, name, description}`) |
+| DELETE | `/api/workflows/{id}?userId=...` | Delete workflow |
+
+### Prerequisites
+
+Workflows require a running **CC Bridge Agent** — see [CC Bridge](#cc-bridge-external-claude-cli) below.
 
 ---
 

@@ -8,6 +8,8 @@ data class Workflow(
     val name: String,
     val description: String = "",
     val ownerId: String,
+    val groupId: String = "",
+    val agentType: String = "claude_code",
     val createdAt: Long,
     val updatedAt: Long
 )
