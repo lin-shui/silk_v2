@@ -165,6 +165,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-datetime:0.4.1")
     
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
 }
 
 // Some IDEs request Kotlin import helper tasks on each subproject; with kotlin("android") they may only

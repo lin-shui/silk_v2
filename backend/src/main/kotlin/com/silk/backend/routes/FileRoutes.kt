@@ -2,6 +2,7 @@ package com.silk.backend.routes
 
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.broadcastSystemStatus
+import com.silk.backend.buildFileDownloadUrl
 import com.silk.backend.database.SimpleResponse
 import com.silk.backend.search.WeaviateClient
 import com.silk.backend.search.IndexDocument
@@ -157,7 +158,7 @@ fun Route.fileRoutes() {
                     fileId = safeFileName,
                     fileName = fileName!!,
                     filePath = targetFile.absolutePath,
-                    downloadUrl = "/api/files/download/$sessionId/$safeFileName",
+                    downloadUrl = buildFileDownloadUrl(sessionId!!, safeFileName),
                     timestamp = timestamp,
                     indexed = false, // 先返回 false，异步索引完成后通过 WebSocket 通知
                     message = "文件已上传，正在索引..."
@@ -180,7 +181,7 @@ fun Route.fileRoutes() {
                             userName = finalUserName,
                             fileName = finalFileName,
                             fileSize = fileSize,
-                            downloadUrl = "/api/files/download/$finalSessionId/$finalSafeFileName"
+                            downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
                         )
                         
                         // 发送开始索引状态
@@ -391,7 +392,7 @@ fun Route.fileRoutes() {
                         size = file.length(),
                         contentType = Files.probeContentType(file.toPath()) ?: "application/octet-stream",
                         uploadTime = file.lastModified(),
-                        downloadUrl = "/api/files/download/$sessionId/${file.name}"
+                        downloadUrl = buildFileDownloadUrl(sessionId, file.name)
                     )
                 }?.sortedByDescending { it.uploadTime } ?: emptyList()
             

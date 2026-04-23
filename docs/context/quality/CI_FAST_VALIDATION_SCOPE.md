@@ -12,7 +12,7 @@
 
 不把它做成全量发布流水线；慢、重、依赖专用环境的项放到后续专用 CI。
 
-## 当前基线（2026-04-14）
+## 当前基线（2026-04-20）
 
 工作流文件：`.github/workflows/ci-fast-validation.yml`
 
@@ -23,8 +23,11 @@
 - [x] Gradle 根工程可配置
 - [x] `:backend:test`
 - [x] `:backend:shadowJar`
+- [x] `:frontend:webApp:nodeTest`
 - [x] `:frontend:webApp:compileProductionExecutableKotlinJs`
+- [x] `:frontend:desktopApp:test`
 - [x] `:frontend:desktopApp:compileKotlin`
+- [x] `:frontend:androidApp:testDebugUnitTest`
 - [x] `:frontend:androidApp:compileDebugKotlin`
 - [x] `bash -n silk.sh`
 - [x] `./silk.sh status` smoke
@@ -36,6 +39,7 @@ backend 真实快检：
 - [x] 群组创建 / 入群 / 成员列表 HTTP 合同
 - [x] 文件上传 / 重名处理 / 列表 / 下载 / 删除 HTTP 合同
 - [x] 上传文件 `FILE` 消息 payload 广播与历史回放合同
+- [x] `FILE` 消息特殊字符文件名 JSON 转义与 URL 编码合同
 - [x] URL 提取去重与非网页资源过滤
 - [x] 本地 HTML 下载提取与落盘 smoke
 - [x] 本地 PDF 下载提取与落盘 smoke
@@ -55,6 +59,14 @@ backend 真实快检：
 - [x] Todo 生命周期：done 重开、cancelled 重开门槛、逻辑去重、月度模板实例化
 - [x] Claude Code Bridge 元信息格式化单测
 
+frontend 轻量快检：
+
+- [x] Android 文件列表 JSON 解析与 `downloadUrl` 透传单测
+- [x] Android `FILE` 消息 payload 解析（JSON / 旧 `|` 格式）单测
+- [x] Desktop 文件卡片 payload 解析与下载文件名提取单测
+- [x] Web 文件列表 JSON 解析与 `downloadUrl` 透传单测
+- [x] Web `FILE` 消息 payload 解析（JSON / 旧 `|` 格式）单测
+
 ### 本次补齐的点
 
 - 删除了几组只校验字符串/JSON 形状的占位测试，改为真实后端合同测试。
@@ -63,6 +75,7 @@ backend 真实快检：
 - 文件路由改为尊重 `silk.chatHistoryDir`，并在未配置 Weaviate 时直接跳过索引，避免快检被外部配置缺失拖垮。
 - 新增文件路由合同测试，覆盖上传、重名处理、列表、下载、删除，以及 `processed_urls.txt` 本地路径分支。
 - 新增上传文件 `FILE` 消息合同测试，锁定 `fileName` / `fileSize` / `downloadUrl` payload、实时广播和后加入成员历史回放。
+- 新增 `FILE` 消息特殊字符文件名合同测试，覆盖空格、`#`、`?`、引号场景，锁定 JSON 转义、URL 编码、实时广播、历史回放和文件列表 `downloadUrl` 输出。
 - 新增 `WebPageDownloader` 本地 smoke，使用进程内 HTTP server 覆盖 URL 提取、HTML/PDF 下载提取与落盘，不依赖外网和外部服务。
 - 新增 WebSocket 合同测试，覆盖群成员鉴权、最近 50 条历史回放、实时广播持久化和未读计数主链路。
 - 新增 WebSocket URL 入口 smoke，覆盖“聊天消息带本地 HTML/PDF 链接 -> 下载提取 -> `processed_urls.txt` 去重 -> 状态消息回显 -> 文件落盘”主链路。
@@ -73,6 +86,13 @@ backend 真实快检：
 - Claude Code 已切到 Bridge Agent 架构后，移除了失效的旧 session store / stream parser JVM 单测，保留当前后端仍承担的元信息格式化测试。
 - 把 `silk.sh` 的基础语法校验和只读 `status` smoke 接进了快检。
 - 把 `:backend:shadowJar` 和产物 artifact 上传接进快检，补上交付装配层拦截。
+- Android 文件夹浏览改为按 JSON 解析文件列表并直接使用后端返回的 `downloadUrl`，避免正则解析和手拼 URL 在特殊字符文件名下失真。
+- Web 文件列表加载改为显式 JSON 解析，直接锁定后端返回的 `fileName` / `downloadUrl` / `processedUrls` 合同，不再靠动态对象读字段。
+- Web `FILE` 消息卡片解析抽成纯函数，并补上旧 `fileName|fileSize|downloadUrl` 历史 payload 兼容，避免前端 UI 解析逻辑只能在运行时兜底。
+- Android `FILE` 消息卡片解析抽成纯函数，补齐 JSON / 旧 `|` payload 轻量单测，避免历史消息格式回归只在真机上暴露。
+- Desktop 补上 `MessageType.FILE` 卡片解析与下载入口，PDF 报告下载文件名提取也抽成纯函数，避免桌面端继续靠字符串扫 `/download/report/...pdf` 和内联 URL 解码硬扛。
+- 快检工作流新增 `:frontend:webApp:nodeTest` 与 `:frontend:androidApp:testDebugUnitTest`，并上传 Web/Android 测试报告 artifact，方便直接定位前端解析回归。
+- 快检工作流再加入 `:frontend:desktopApp:test` 和 desktop 测试报告 artifact，把三端文件消息解析都放进基础拦截。
 
 ### 明确未覆盖
 
@@ -80,7 +100,7 @@ backend 真实快检：
 - [ ] AI 工具完整端到端 tool-calling（真实模型响应、外部搜索、Weaviate）
 - [ ] 外部真实站点 URL/PDF 抓取、异常响应处理，以及 Weaviate 索引链路
 - [ ] Harmony HAP 构建
-- [ ] `silk.sh build/start/deploy` 级别的完整脚本 smoke
+- [ ] `silk.sh start/deploy` 级别的运行态脚本 smoke（`build` / `build-apk` 已拆到 `ci-script-smoke.yml`）
 
 ## 运行备注
 
@@ -92,10 +112,15 @@ backend 真实快检：
 - WebSocket URL 入口 smoke 同样固定走本地 HTTP 路径，并使用进程内 HTTP server 提供 HTML/PDF，避免外网和浏览器环境波动影响快检稳定性。
 - WebSocket URL 失败分支也走同一套本地 fixture，确保失败行为校验的是业务分支，不是外部网络抖动。
 - 下载超时在测试里通过系统属性显式缩短，避免为了验证超时分支把 CI 挂成几十秒。
+- Web 轻量单测固定跑 `nodeTest`，只校验纯解析逻辑，不引入浏览器/Karma 依赖，避免前端快检被 UI 运行时环境拖慢或拖垮。
+- Kotlin/JS 依赖锁文件需要随仓库保存 `kotlin-js-store/yarn.lock`；否则 `nodeTest` 在干净 runner 上会被 `kotlinStoreYarnLock` 直接拦下。
+- Desktop 轻量单测跑 JVM `test`，锁定文件卡片 payload、PDF 下载文件名提取和默认扩展名补齐逻辑，不依赖 GUI 自动化。
+- Android 轻量单测跑本地 `testDebugUnitTest`，只覆盖纯解析函数，不引入模拟器或设备依赖。
+- `silk.sh build` / `build-apk` 已拆到独立 `.github/workflows/ci-script-smoke.yml`；快检继续只保留 `bash -n` 与只读 `status`，避免把装配层耗时塞回基础拦截。
 
 ## 下一步建议
 
-1. 给 `FILE` 消息 payload 再补一组特殊字符文件名 fixture，锁定 JSON 转义和前端卡片兼容性。
+1. Desktop/Android/Web 的文件下载动作还没做真正 UI 自动化；如果后续文件交互继续增量，建议单独补一层组件级 smoke。
 2. AI 端到端另起一层可选 smoke，专门验证模型 tool-calling 回路，不阻塞基础快检。
 3. Harmony HAP 另起独立 workflow，放到自托管或预置 DevEco/hvigor 环境的 runner。
-4. `silk.sh build/start/deploy` 另起脚本级 smoke，验证交付脚本而不是只验只读 `status`。
+4. `silk.sh start/deploy` 另起运行态 smoke，补端口清理、服务启动和 Weaviate 协同，而不是只验只读 `status`。
