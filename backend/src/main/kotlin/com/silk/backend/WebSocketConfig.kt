@@ -169,6 +169,10 @@ class ChatServer(
             logger.debug("📜 批量发送 {} 条历史消息给 {}", recentMessages.size, userName)
         }
 
+        // 短暂延迟确保批量历史帧先于 history_end 标记到达客户端
+        // 避免客户端因帧乱序而错过历史消息
+        kotlinx.coroutines.delay(100)
+
         // 历史加载完成标记，客户端据此一次性渲染消息列表
         session.send(Frame.Text(Json.encodeToString(
             Message(
@@ -221,6 +225,25 @@ class ChatServer(
         logger.debug("👋 用户已离开聊天室: {} ({})", userName, userId)
     }
     
+    /**
+     * 获取会话的参与者列表（优先从 SQL 群组成员获取，fallback 到 WebSocket 连接）
+     */
+    private fun getSessionParticipants(userId: String): List<String> {
+        if (sessionName.startsWith("group_")) {
+            val groupId = sessionName.removePrefix("group_")
+            try {
+                val members = com.silk.backend.database.GroupRepository.getGroupMembers(groupId)
+                if (members.isNotEmpty()) {
+                    return members.map { it.userId }
+                }
+            } catch (e: Exception) {
+                logger.warn("⚠️ 获取群组成员失败，回退到连接列表: {}", e.message)
+            }
+        }
+        // 非群组或获取失败时，从 WebSocket 连接获取
+        return connections.keys.toList().ifEmpty { listOf(userId) }
+    }
+
     suspend fun broadcast(message: Message) {
         // 🛑 停止生成：立即取消活跃的 AI 任务并通知客户端
         if (message.type == MessageType.STOP_GENERATE) {
@@ -263,8 +286,8 @@ class ChatServer(
                         timestamp = message.timestamp,
                         messageType = message.type.name
                     )
-                    // 获取会话参与者（从连接列表中提取）
-                    val participants = connections.keys.toList().ifEmpty { listOf(message.userId) }
+                    // 获取会话参与者（优先从 SQL 群组成员获取）
+                    val participants = getSessionParticipants(message.userId)
                     
                     val indexed = silkAgent.indexMessageToSearch(historyEntry, participants)
                     if (indexed) {
@@ -503,7 +526,7 @@ class ChatServer(
                     )
                     
                     // 索引到 Weaviate
-                    val participants = connections.keys.toList().ifEmpty { listOf(message.userId) }
+                    val participants = getSessionParticipants(message.userId)
                     
                     // 创建一个代表内容的历史条目
                     val webPageEntry = com.silk.backend.models.ChatHistoryEntry(

@@ -130,11 +130,18 @@ class ChatClient(
 
     private fun handleMessage(text: String) {
         // 批量历史帧：服务端将最多 50 条消息编码为 JSON 数组一次性发送
-        if (_isLoadingHistory.value && text.startsWith("[")) {
+        // 不依赖 _isLoadingHistory 状态，防止超时后历史消息被丢弃
+        if (text.startsWith("[")) {
             try {
                 val batch = Json.decodeFromString<List<Message>>(text)
-                historyBuffer.addAll(batch)
-                log("📜 [ChatClient] 收到批量历史: ${batch.size} 条")
+                if (_isLoadingHistory.value) {
+                    historyBuffer.addAll(batch)
+                    log("📜 [ChatClient] 收到批量历史: ${batch.size} 条")
+                } else {
+                    // 历史加载已完成但批量历史晚到：直接写入消息列表
+                    log("📜 [ChatClient] 历史加载已完成，直接写入 ${batch.size} 条历史消息")
+                    _messages.value = (_messages.value + batch).distinctBy { it.id }
+                }
                 return
             } catch (_: Exception) {
                 log("⚠️ [ChatClient] 批量解析失败，回退单条解析")
@@ -151,11 +158,11 @@ class ChatClient(
                 return
             }
 
-            // 安全超时：超过 3 秒仍在缓冲则强制刷入
+            // 安全超时：超过 30 秒仍在缓冲则强制刷入
             if (_isLoadingHistory.value) {
                 val elapsed = Clock.System.now().toEpochMilliseconds() - historyLoadStartMs
-                if (elapsed > 3000) {
-                    log("⏰ [ChatClient] 历史加载超时，强制刷入")
+                if (elapsed > 30000) {
+                    log("⏰ [ChatClient] 历史加载超时 (30s)，强制刷入")
                     flushHistoryBuffer()
                 }
             }

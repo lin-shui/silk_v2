@@ -42,6 +42,27 @@ import org.slf4j.LoggerFactory
 class WeaviateClient(
     private val baseUrl: String = AIConfig.requireWeaviateUrl()
 ) {
+    companion object {
+        private var _instance: WeaviateClient? = null
+        
+        /**
+         * 获取全局单例实例（延迟初始化）
+         */
+        fun getInstance(): WeaviateClient {
+            if (_instance == null) {
+                _instance = WeaviateClient()
+            }
+            return _instance!!
+        }
+        
+        /**
+         * 重置单例（主要用于测试，或 Weaviate URL 变更时）
+         */
+        fun resetInstance() {
+            _instance?.close()
+            _instance = null
+        }
+    }
     private val httpClient = HttpClient(CIO) {
         install(ContentNegotiation) {
             json(Json { 

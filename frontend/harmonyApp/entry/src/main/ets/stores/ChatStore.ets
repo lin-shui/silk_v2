@@ -19,6 +19,10 @@ class ChatStoreConnectionListener implements ConnectionListener {
     this.owner.handleSocketMessage(message);
   }
 
+  onRawDataReceived(data: string): void {
+    this.owner.handleRawData(data);
+  }
+
   onConnectionStateChanged(state: string): void {
     this.owner.handleSocketState(state);
   }
@@ -115,10 +119,10 @@ export class ChatStore {
     }
     this._historyTimeoutId = setTimeout((): void => {
       if (this._isHistoryLoading) {
-        console.info('[ChatStore] 历史加载超时，强制刷入');
+        console.info('[ChatStore] 历史加载超时 (30s)，强制刷入');
         this.flushHistoryBuffer();
       }
-    }, 3000);
+    }, 30000);
 
     // 创建新的 WebSocket 客户端
     const wsUrl: string = Constants.WS_BASE_URL;
@@ -387,6 +391,46 @@ export class ChatStore {
 
   handleSocketMessage(message: Message): void {
     this.handleMessage(message);
+  }
+
+  /**
+   * 处理 WebSocket 原始数据（用于批量历史等场景）
+   */
+  handleRawData(data: string): void {
+    // 批量历史帧：不依赖 _isHistoryLoading 状态，防止超时后历史消息被丢弃
+    if (data.startsWith('[')) {
+      try {
+        const arr: Object[] = JSON.parse(data) as Object[];
+        console.info(`[ChatStore] 收到批量历史: ${arr.length} 条`);
+        if (this._isHistoryLoading) {
+          for (const obj of arr) {
+            const msg = parseMessage(JSON.stringify(obj));
+            this._historyBuffer.push(msg);
+          }
+        } else {
+          // 历史加载已完成但批量历史晚到：直接写入消息列表
+          const existingIds = new Set(this._messages.map(m => m.id));
+          for (const obj of arr) {
+            const msg = parseMessage(JSON.stringify(obj));
+            if (!existingIds.has(msg.id)) {
+              this._messages = this._messages.concat([msg]);
+            }
+          }
+          this.onMessagesChanged?.();
+        }
+      } catch (e) {
+        console.error('[ChatStore] 批量历史解析失败:', e);
+      }
+      return;
+    }
+
+    // 非批量数据：尝试解析为单条消息
+    try {
+      const message = parseMessage(data);
+      this.handleMessage(message);
+    } catch (e) {
+      console.error('[ChatStore] 解析消息失败:', e);
+    }
   }
 
   handleSocketState(state: string): void {

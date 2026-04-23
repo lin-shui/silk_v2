@@ -55,12 +55,12 @@ fun GroupListScene(appState: WebAppState) {
         }
     }
     
-    // 加载群组列表和未读数
-    LaunchedEffect(Unit) {
-        console.log("📋 GroupListScene - 开始加载群组...")
-        console.log("   当前用户:", appState.currentUser?.fullName)
-        
-        scope.launch {
+    // 加载群组列表和未读数（每次进入 GROUP_LIST 场景时刷新）
+    LaunchedEffect(appState.currentScene) {
+        if (appState.currentScene == Scene.GROUP_LIST) {
+            console.log("📋 GroupListScene - 开始加载群组...")
+            console.log("   当前用户:", appState.currentUser?.fullName)
+            
             isLoading = true
             try {
                 val response = appState.currentUser?.let { user ->

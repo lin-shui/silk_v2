@@ -1,6 +1,8 @@
 package com.silk.backend
 
 import com.silk.backend.database.DatabaseFactory
+import com.silk.backend.database.GroupRepository
+import com.silk.backend.search.WeaviateClient
 import com.silk.backend.utils.WebPageDownloader
 import io.ktor.server.application.*
 import io.ktor.server.engine.*
@@ -11,6 +13,7 @@ import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.http.*
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 
@@ -30,6 +33,13 @@ fun main() {
     // 初始化数据库
     DatabaseFactory.init()
 
+    // 启动后同步所有群组到 Weaviate SilkSession
+    try {
+        syncGroupsToWeaviate(logger)
+    } catch (e: Exception) {
+        logger.warn("⚠️ 启动时同步群组到 Weaviate 失败: {}", e.message)
+    }
+
     // 添加关闭钩子，清理 Playwright 资源
     Runtime.getRuntime().addShutdownHook(Thread {
         logger.info("🔄 正在关闭服务...")
@@ -42,6 +52,48 @@ fun main() {
     logger.info("🚀 启动后端服务，端口: {}", port)
     embeddedServer(Netty, port = port, host = "0.0.0.0", module = Application::module)
         .start(wait = true)
+}
+
+/**
+ * 同步所有 SQL 群组到 Weaviate SilkSession（在 deploy 或重启后恢复上下文关联）
+ */
+private fun syncGroupsToWeaviate(logger: org.slf4j.Logger) {
+    val weaviate = WeaviateClient.getInstance()
+    if (!runBlocking { weaviate.isReady() }) {
+        logger.warn("⚠️ Weaviate 不可用，跳过群组同步")
+        return
+    }
+
+    val groups = GroupRepository.getAllGroups()
+    if (groups.isEmpty()) {
+        logger.info("ℹ️ 没有需要同步的群组")
+        return
+    }
+
+    var synced = 0
+    var failed = 0
+    for (group in groups) {
+        try {
+            val members = GroupRepository.getGroupMembers(group.id)
+            val participantIds = members.map { it.userId }
+            runBlocking {
+                weaviate.upsertSession(
+                    com.silk.backend.search.SessionInfo(
+                        sessionId = group.id,
+                        sessionName = group.name,
+                        participants = participantIds.distinct(),
+                        ownerId = group.hostId
+                    )
+                )
+            }
+            synced++
+            logger.debug("✅ 已同步群组 {} ({}) - {} 名参与者", group.name, group.id, participantIds.size)
+        } catch (e: Exception) {
+            failed++
+            logger.warn("⚠️ 同步群组 {} 失败: {}", group.id, e.message)
+        }
+    }
+    logger.info("✅ 启动时群组同步完成: 成功 {} / 失败 {}", synced, failed)
 }
 
 fun Application.module() {

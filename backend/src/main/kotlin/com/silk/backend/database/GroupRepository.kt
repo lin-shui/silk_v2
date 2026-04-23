@@ -1,6 +1,9 @@
 package com.silk.backend.database
 
 import com.silk.backend.ChatHistoryBackupManager
+import com.silk.backend.search.SessionInfo
+import com.silk.backend.search.WeaviateClient
+import kotlinx.coroutines.runBlocking
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -14,6 +17,40 @@ import kotlin.random.Random
  */
 object GroupRepository {
     private val logger = LoggerFactory.getLogger(GroupRepository::class.java)
+
+    /**
+     * 同步群组到 Weaviate SilkSession（注册会话和参与者）
+     */
+    private fun syncGroupToWeaviate(groupId: String, groupName: String, hostId: String, participants: List<String>) {
+        try {
+            val weaviate = WeaviateClient.getInstance()
+            runBlocking {
+                weaviate.upsertSession(SessionInfo(
+                    sessionId = groupId,
+                    sessionName = groupName,
+                    participants = participants.distinct(),
+                    ownerId = hostId
+                ))
+            }
+            logger.info("✅ 群组会话已同步到 Weaviate: {} ({}), 参与者: {}", groupName, groupId, participants.size)
+        } catch (e: Exception) {
+            logger.warn("⚠️ 同步群组到 Weaviate 失败: {}", e.message)
+        }
+    }
+
+    /**
+     * 同步群组所有成员到 Weaviate（从 SQL 读取当前成员列表）
+     */
+    private fun syncGroupMembersToWeaviate(groupId: String) {
+        try {
+            val group = findGroupById(groupId) ?: return
+            val members = getGroupMembers(groupId)
+            val participantIds = members.map { it.userId }
+            syncGroupToWeaviate(groupId, group.name, group.hostId, participantIds)
+        } catch (e: Exception) {
+            logger.warn("⚠️ 同步群组成员到 Weaviate 失败: {}", e.message)
+        }
+    }
 
     private fun groupSessionDir(groupId: String): File {
         val configuredRoot = System.getProperty("silk.chatHistoryDir")
@@ -66,6 +103,9 @@ object GroupRepository {
                 logger.info("📁 群组聊天历史文件夹已创建: {}", sessionDir.path)
 
                 findGroupById(groupId)
+            }?.also { group ->
+                // 同步到 Weaviate SilkSession
+                syncGroupToWeaviate(groupId = group.id, groupName = group.name, hostId = hostId, participants = listOf(hostId))
             }
         } catch (e: Exception) {
             logger.error("❌ 创建群组失败: {}", e.message)
@@ -151,7 +191,7 @@ object GroupRepository {
      * 将用户添加到群组
      */
     fun addUserToGroup(groupId: String, userId: String, role: MemberRole = MemberRole.GUEST): Boolean {
-        return try {
+        val inserted = try {
             transaction {
                 GroupMembers.insert {
                     it[GroupMembers.groupId] = groupId
@@ -164,6 +204,13 @@ object GroupRepository {
             logger.error("❌ 添加用户到群组失败: {}", e.message)
             false
         }
+        
+        if (inserted) {
+            // 同步到 Weaviate SilkSession
+            syncGroupMembersToWeaviate(groupId)
+        }
+        
+        return inserted
     }
     
     /**
@@ -314,6 +361,9 @@ object GroupRepository {
                 logger.info("📁 群组聊天历史文件夹已创建: {}", sessionDir.path)
 
                 findGroupById(groupId)
+            }?.also { group ->
+                // 同步到 Weaviate SilkSession
+                syncGroupToWeaviate(groupId = group.id, groupName = group.name, hostId = user1Id, participants = listOf(user1Id, user2Id))
             }
         } catch (e: Exception) {
             logger.error("❌ 创建群组失败: {}", e.message)
@@ -328,7 +378,7 @@ object GroupRepository {
      * 返回值：Pair<是否成功, 群组是否被删除>
      */
     fun leaveGroup(groupId: String, userId: String): Pair<Boolean, Boolean> {
-        return try {
+        val result = try {
             transaction {
                 // 检查用户是否在群组中
                 val isMember = GroupMembers.select { 
@@ -361,6 +411,13 @@ object GroupRepository {
             logger.error("❌ 退出群组失败: {}", e.message)
             Pair(false, false)
         }
+        
+        if (result.first && !result.second) {
+            // 群组未被删除，同步剩余成员到 Weaviate
+            syncGroupMembersToWeaviate(groupId)
+        }
+        
+        return result
     }
     
     /**
@@ -456,6 +513,25 @@ object GroupRepository {
     fun getGroupMemberCount(groupId: String): Long {
         return transaction {
             GroupMembers.select { GroupMembers.groupId eq groupId }.count()
+        }
+    }
+
+    /**
+     * 获取所有群组（用于启动时同步到 Weaviate）
+     */
+    fun getAllGroups(): List<Group> {
+        return transaction {
+            Groups.selectAll().mapNotNull { row ->
+                val hostUser = UserRepository.findUserById(row[Groups.hostId])
+                Group(
+                    id = row[Groups.id],
+                    name = row[Groups.name],
+                    invitationCode = row[Groups.invitationCode],
+                    hostId = row[Groups.hostId],
+                    hostName = hostUser?.fullName ?: "",
+                    createdAt = row[Groups.createdAt].toString()
+                )
+            }
         }
     }
 }

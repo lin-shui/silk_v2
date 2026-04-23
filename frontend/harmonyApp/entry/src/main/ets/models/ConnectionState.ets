@@ -8,4 +8,5 @@ export interface ConnectionLogger {
 export interface ConnectionListener {
   onConnectionStateChanged?(state: string): void;
   onMessageReceived?(message: Message): void;
+  onRawDataReceived?(data: string): void;
 }

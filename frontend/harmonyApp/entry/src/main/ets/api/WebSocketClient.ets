@@ -149,13 +149,10 @@ export class WebSocketClient {
 
       try {
         // 批量历史帧：服务端将消息编码为 JSON 数组一次性发送
+        // 不在此处拆解，而是将原始数据传给 ChatStore 统一处理，确保 history buffer 机制正常工作
         if (data.startsWith('[')) {
-          const arr: Object[] = JSON.parse(data) as Object[];
-          this.log(`📜 [WebSocket] 批量历史: ${arr.length} 条`);
-          for (const obj of arr) {
-            const msg = parseMessage(JSON.stringify(obj));
-            this.notifyMessageReceived(msg);
-          }
+          this.log(`📜 [WebSocket] 批量历史原始数据`);
+          this.notifyRawDataReceived(data);
           return;
         }
         const message = parseMessage(data);
@@ -331,6 +328,17 @@ export class WebSocketClient {
     for (const listener of this.listeners) {
       if (listener.onMessageReceived) {
         listener.onMessageReceived(message);
+      }
+    }
+  }
+
+  /**
+   * 通知收到原始数据（用于批量历史等场景）
+   */
+  private notifyRawDataReceived(data: string): void {
+    for (const listener of this.listeners) {
+      if (listener.onRawDataReceived) {
+        listener.onRawDataReceived(data);
       }
     }
   }

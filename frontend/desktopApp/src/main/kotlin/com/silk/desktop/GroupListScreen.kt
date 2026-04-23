@@ -58,27 +58,29 @@ fun GroupListScreen(appState: AppState) {
     
     val strings = getStrings(userLanguage)
     
-    // 加载群组列表
-    LaunchedEffect(Unit) {
-        scope.launch {
-            isLoading = true
-            try {
-                val response = withContext(Dispatchers.IO) {
-                    appState.currentUser?.let { user ->
-                        ApiClient.getUserGroups(user.id)
+    // 加载群组列表（每次进入 GROUP_LIST 场景时刷新）
+    LaunchedEffect(appState.currentScene) {
+        if (appState.currentScene == com.silk.desktop.Scene.GROUP_LIST) {
+            scope.launch {
+                isLoading = true
+                try {
+                    val response = withContext(Dispatchers.IO) {
+                        appState.currentUser?.let { user ->
+                            ApiClient.getUserGroups(user.id)
+                        }
                     }
+                    
+                    if (response != null && response.success) {
+                        groups = response.groups ?: emptyList()
+                        println("✅ 加载了 ${groups.size} 个群组")
+                    } else {
+                        println("❌ 加载群组失败: ${response?.message}")
+                    }
+                } catch (e: Exception) {
+                    println("❌ 加载群组异常: ${e.message}")
+                } finally {
+                    isLoading = false
                 }
-                
-                if (response != null && response.success) {
-                    groups = response.groups ?: emptyList()
-                    println("✅ 加载了 ${groups.size} 个群组")
-                } else {
-                    println("❌ 加载群组失败: ${response?.message}")
-                }
-            } catch (e: Exception) {
-                println("❌ 加载群组异常: ${e.message}")
-            } finally {
-                isLoading = false
             }
         }
     }

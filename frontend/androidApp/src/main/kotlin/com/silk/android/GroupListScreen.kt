@@ -85,32 +85,34 @@ fun GroupListScreen(appState: AppState) {
     
     val strings = getStrings(userLanguage)
     
-    // 加载群组列表和未读数
-    LaunchedEffect(Unit) {
-        scope.launch {
-            isLoading = true
-            try {
-                val response = appState.currentUser?.let { user ->
-                    ApiClient.getUserGroups(user.id)
-                }
-                
-                if (response != null && response.success) {
-                    groups = response.groups ?: emptyList()
-                    println("✅ 加载了 ${groups.size} 个群组")
+    // 加载群组列表和未读数（每次进入 GROUP_LIST 场景时刷新）
+    LaunchedEffect(appState.currentScene) {
+        if (appState.currentScene == Scene.GROUP_LIST) {
+            scope.launch {
+                isLoading = true
+                try {
+                    val response = appState.currentUser?.let { user ->
+                        ApiClient.getUserGroups(user.id)
+                    }
                     
-                    // 加载未读消息数
-                    appState.currentUser?.let { user ->
-                        val unreadResponse = ApiClient.getUnreadCounts(user.id)
-                        if (unreadResponse.success) {
-                            unreadCounts = unreadResponse.unreadCounts
-                            println("✅ 未读消息: $unreadCounts")
+                    if (response != null && response.success) {
+                        groups = response.groups ?: emptyList()
+                        println("✅ 加载了 ${groups.size} 个群组")
+                        
+                        // 加载未读消息数
+                        appState.currentUser?.let { user ->
+                            val unreadResponse = ApiClient.getUnreadCounts(user.id)
+                            if (unreadResponse.success) {
+                                unreadCounts = unreadResponse.unreadCounts
+                                println("✅ 未读消息: $unreadCounts")
+                            }
                         }
                     }
+                } catch (e: Exception) {
+                    println("❌ 加载群组异常: ${e.message}")
+                } finally {
+                    isLoading = false
                 }
-            } catch (e: Exception) {
-                println("❌ 加载群组异常: ${e.message}")
-            } finally {
-                isLoading = false
             }
         }
     }
