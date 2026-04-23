@@ -16,10 +16,6 @@ import kotlinx.browser.window
 import kotlinx.browser.document
 import kotlin.js.Date
 import kotlin.random.Random
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import org.w3c.dom.HTMLAnchorElement
 import org.w3c.dom.HTMLElement
 
@@ -2737,46 +2733,32 @@ fun FolderExplorerDialog(
     strings: com.silk.shared.i18n.Strings,
     onDismiss: () -> Unit
 ) {
-    var files by remember { mutableStateOf<List<dynamic>>(emptyList()) }
+    var files by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var processedUrls by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     
-    // 直接使用 fetch 并更新状态（简化逻辑，避免事件时序问题）
     LaunchedEffect(groupId) {
         val apiUrl = "${backendHttpOrigin()}/api/files/list/$groupId"
-        
-        window.asDynamic().tempApiUrl = apiUrl
-        window.asDynamic().folderLoadCallback = { data: dynamic ->
-            val filesArray = data.files as? Array<dynamic>
-            files = filesArray?.toList() ?: emptyList()
-            val urlsArray = data.processedUrls as? Array<dynamic>
-            processedUrls = urlsArray?.map { it.toString() } ?: emptyList()
+        isLoading = true
+        errorMessage = null
+        try {
+            console.log("📁 请求文件列表:", apiUrl)
+            val response = window.fetch(apiUrl).await()
+            if (!response.ok) {
+                throw IllegalStateException("HTTP ${response.status}")
+            }
+            val body = response.text().await()
+            val parsed = parseWebFolderContents(body)
+            files = parsed.files
+            processedUrls = parsed.processedUrls
+            console.log("📁 加载完成:", files.size, "文件,", processedUrls.size, "URL")
+        } catch (t: Throwable) {
+            console.error("❌ 获取文件列表失败:", t)
+            errorMessage = t.message ?: "获取失败"
+        } finally {
             isLoading = false
-            println("📁 加载完成: ${files.size} 文件, ${processedUrls.size} URL")
         }
-        window.asDynamic().folderErrorCallback = { error: dynamic ->
-            errorMessage = error.toString()
-            isLoading = false
-        }
-        
-        js("""
-            (function() {
-                var url = window.tempApiUrl;
-                console.log('📁 请求文件列表:', url);
-                fetch(url)
-                    .then(function(response) { return response.json(); })
-                    .then(function(data) {
-                        console.log('📁 文件列表响应:', data);
-                        console.log('📁 processedUrls:', data.processedUrls);
-                        window.folderLoadCallback(data);
-                    })
-                    .catch(function(error) {
-                        console.error('❌ 获取文件列表失败:', error);
-                        window.folderErrorCallback(error.message || '获取失败');
-                    });
-            })();
-        """)
     }
     
     // 对话框背景遮罩
@@ -2994,9 +2976,9 @@ fun FolderExplorerDialog(
                     
                     // 显示文件列表
                     files.forEach { file ->
-                        val fileName = (file.fileName ?: file.name) as? String ?: strings.unknownFile
-                        val fileSize = (file.size as? Number)?.toLong() ?: 0L
-                        val downloadUrl = file.downloadUrl as? String ?: ""
+                        val fileName = file.name.ifBlank { strings.unknownFile }
+                        val fileSize = file.size
+                        val downloadUrl = file.downloadUrl
                         
                         Div({
                             style {
@@ -3025,16 +3007,7 @@ fun FolderExplorerDialog(
                                         fontSize(24.px)
                                     }
                                 }) {
-                                    val icon = when {
-                                        fileName.endsWith(".pdf") -> "📄"
-                                        fileName.endsWith(".doc") || fileName.endsWith(".docx") -> "📝"
-                                        fileName.endsWith(".xls") || fileName.endsWith(".xlsx") -> "📊"
-                                        fileName.endsWith(".png") || fileName.endsWith(".jpg") || fileName.endsWith(".jpeg") || fileName.endsWith(".gif") -> "🖼️"
-                                        fileName.endsWith(".zip") || fileName.endsWith(".rar") -> "📦"
-                                        fileName.endsWith(".txt") || fileName.endsWith(".md") -> "📃"
-                                        else -> "📎"
-                                    }
-                                    Text(icon)
+                                    Text(webFileIconForName(fileName))
                                 }
                                 
                                 Div {
@@ -3053,12 +3026,7 @@ fun FolderExplorerDialog(
                                             marginTop(2.px)
                                         }
                                     }) {
-                                        val sizeStr = when {
-                                            fileSize < 1024 -> "${fileSize} B"
-                                            fileSize < 1024 * 1024 -> "${fileSize / 1024} KB"
-                                            else -> "${fileSize / (1024 * 1024)} MB"
-                                        }
-                                        Text(sizeStr)
+                                        Text(formatWebFileSize(fileSize))
                                     }
                                 }
                             }
@@ -3077,8 +3045,10 @@ fun FolderExplorerDialog(
                                     property("transition", "all 0.2s ease")
                                 }
                                 onClick {
-                                    val fullUrl = "${backendHttpOrigin()}$downloadUrl"
-                                    window.open(fullUrl, "_blank")
+                                    if (downloadUrl.isNotBlank()) {
+                                        val fullUrl = "${backendHttpOrigin()}$downloadUrl"
+                                        window.open(fullUrl, "_blank")
+                                    }
                                 }
                             }) {
                                 Text("⬇️ ${strings.download}")
@@ -3896,56 +3866,15 @@ fun MessageItem(
             }
         }
         MessageType.FILE -> {
-            // 文件消息 - 显示文件卡片，点击可下载
-            // 解析文件信息 JSON
-            val fileInfoJson = message.content
-            var fileName by remember { mutableStateOf("") }
-            var fileSize by remember { mutableStateOf(0L) }
-            var downloadUrl by remember { mutableStateOf("") }
-            var fileExt by remember { mutableStateOf("") }
-            
-            // 解析 JSON
-            try {
-                val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-                val obj = json.parseToJsonElement(fileInfoJson) as kotlinx.serialization.json.JsonObject
-                fileName = obj["fileName"]?.jsonPrimitive?.content ?: "未知文件"
-                fileSize = obj["fileSize"]?.jsonPrimitive?.longOrNull ?: 0L
-                downloadUrl = obj["downloadUrl"]?.jsonPrimitive?.content ?: ""
-                fileExt = fileName.substringAfterLast(".", "").uppercase()
-            } catch (e: Exception) {
-                console.error("解析文件信息失败:", e)
-                fileName = "文件"
-                downloadUrl = ""
+            val fileInfo = remember(message.content) {
+                parseWebFileMessageContent(message.content)
             }
-            
-            // 文件图标
-            val fileIcon = when (fileExt.lowercase()) {
-                "pdf" -> "📄"
-                "doc", "docx" -> "📝"
-                "xls", "xlsx" -> "📊"
-                "ppt", "pptx" -> "📽"
-                "jpg", "jpeg", "png", "gif", "webp" -> "🖼"
-                "mp3", "wav", "ogg" -> "🎵"
-                "mp4", "avi", "mov", "mkv" -> "🎬"
-                "zip", "rar", "7z", "tar", "gz" -> "📦"
-                "txt", "md", "log" -> "📃"
-                "json", "xml", "yaml", "yml" -> "⚙"
-                else -> "📎"
-            }
-            
-            // 格式化文件大小
-            fun formatFileSize(size: Long): String {
-                val kb = 1024.0
-                val mb = kb * 1024
-                val gb = mb * 1024
-                return when {
-                    size < 1024 -> "$size B"
-                    size < mb -> "${(size / kb * 10).toInt() / 10.0} KB"
-                    size < gb -> "${(size / mb * 10).toInt() / 10.0} MB"
-                    else -> "${(size / gb * 10).toInt() / 10.0} GB"
-                }
-            }
-            val fileSizeStr = formatFileSize(fileSize)
+            val fileName = fileInfo.fileName
+            val fileSize = fileInfo.fileSize
+            val downloadUrl = fileInfo.downloadUrl
+            val fileIcon = webFileIconForName(fileName)
+            val fileSizeStr = formatWebFileSize(fileSize)
+            val fileExtLabel = fileName.substringAfterLast(".", "").uppercase().ifBlank { "FILE" }
             
             Div({ classes(SilkStylesheet.messageCard) }) {
                 Div({ classes(SilkStylesheet.messageHeader) }) {
@@ -4045,7 +3974,7 @@ fun MessageItem(
                                 color(Color(SilkColors.textSecondary))
                             }
                         }) {
-                            Text("$fileSizeStr • $fileExt")
+                            Text("$fileSizeStr • $fileExtLabel")
                         }
                     }
                     

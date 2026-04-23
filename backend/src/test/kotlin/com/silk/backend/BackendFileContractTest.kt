@@ -110,7 +110,7 @@ class BackendFileContractTest {
                 val expectedPayload = FileMessagePayload(
                     fileName = "release notes.md",
                     fileSize = "payload from upload contract".toByteArray().size.toLong(),
-                    downloadUrl = "/api/files/download/${group.id}/${uploadBody.fileId}"
+                    downloadUrl = buildFileDownloadUrl(group.id, uploadBody.fileId)
                 )
                 assertEquals(expectedPayload, parseFilePayload(hostFileMessage))
                 assertEquals(expectedPayload, parseFilePayload(guestFileMessage))
@@ -146,6 +146,114 @@ class BackendFileContractTest {
     }
 
     @Test
+    fun `file payload preserves special characters and exposes encoded download urls`() {
+        TestWorkspace().use { workspace ->
+            val host = assertNotNull(
+                UserRepository.createUser(
+                    loginName = "file-special-host",
+                    fullName = "File Special Host",
+                    phoneNumber = "13800000211",
+                    passwordHash = "hash"
+                )
+            )
+            val guest = assertNotNull(
+                UserRepository.createUser(
+                    loginName = "file-special-guest",
+                    fullName = "File Special Guest",
+                    phoneNumber = "13800000212",
+                    passwordHash = "hash"
+                )
+            )
+            val lateUser = assertNotNull(
+                UserRepository.createUser(
+                    loginName = "file-special-late",
+                    fullName = "File Special Late",
+                    phoneNumber = "13800000213",
+                    passwordHash = "hash"
+                )
+            )
+            val group = assertNotNull(
+                GroupRepository.createGroup(
+                    name = "File Special Character Group",
+                    hostId = host.id
+                )
+            )
+            assertTrue(GroupRepository.addUserToGroup(group.id, guest.id))
+            assertTrue(GroupRepository.addUserToGroup(group.id, lateUser.id))
+
+            testApplication {
+                application { module() }
+
+                val wsClient = createClient {
+                    install(WebSockets)
+                }
+                val hostSession = wsClient.connectChat(
+                    userId = host.id,
+                    userName = host.fullName,
+                    groupId = group.id
+                )
+                val guestSession = wsClient.connectChat(
+                    userId = guest.id,
+                    userName = guest.fullName,
+                    groupId = group.id
+                )
+
+                val specialFileName = """care plan #1 ? "final".txt"""
+                val uploadResponse = uploadFile(
+                    sessionId = group.id,
+                    userId = host.id,
+                    fileName = specialFileName,
+                    content = "special filename payload"
+                )
+                assertEquals(HttpStatusCode.OK, uploadResponse.status)
+                val uploadBody = uploadResponse.decode<FileUploadResponse>()
+                val expectedDownloadUrl = buildFileDownloadUrl(group.id, uploadBody.fileId)
+                assertEquals(specialFileName, uploadBody.fileId)
+                assertEquals(expectedDownloadUrl, uploadBody.downloadUrl)
+
+                val hostFileMessage = hostSession.receiveMessageUntilType(MessageType.FILE)
+                val guestFileMessage = guestSession.receiveMessageUntilType(MessageType.FILE)
+                val expectedPayload = FileMessagePayload(
+                    fileName = specialFileName,
+                    fileSize = "special filename payload".toByteArray().size.toLong(),
+                    downloadUrl = expectedDownloadUrl
+                )
+                assertEquals(expectedPayload, parseFilePayload(hostFileMessage))
+                assertEquals(expectedPayload, parseFilePayload(guestFileMessage))
+                assertTrue(hostFileMessage.content.contains("\\\"final\\\""))
+                assertTrue(hostFileMessage.content.contains("%23"))
+                assertTrue(hostFileMessage.content.contains("%3F"))
+
+                val persistedFile = File(
+                    workspace.chatHistoryDir,
+                    "group_${group.id}/uploads/${uploadBody.fileId}"
+                )
+                assertTrue(persistedFile.isFile)
+                assertEquals("special filename payload", persistedFile.readText())
+
+                val listBody = client.get("/api/files/list/${group.id}")
+                    .decode<FileListResponse>()
+                assertEquals(listOf(uploadBody.fileId), listBody.files.map { it.fileId })
+                assertEquals(listOf(expectedDownloadUrl), listBody.files.map { it.downloadUrl })
+
+                val downloadResponse = client.get(uploadBody.downloadUrl)
+                assertEquals(HttpStatusCode.OK, downloadResponse.status)
+                assertEquals("special filename payload", downloadResponse.bodyAsText())
+
+                val lateSession = wsClient.connectChat(
+                    userId = lateUser.id,
+                    userName = lateUser.fullName,
+                    groupId = group.id
+                )
+                val lateReplay = lateSession.receiveMessageUntilType(MessageType.FILE)
+                assertEquals(expectedPayload, parseFilePayload(lateReplay))
+                assertEquals(hostFileMessage.id, lateReplay.id)
+                assertNull(lateSession.receiveMessageOrNull(500))
+            }
+        }
+    }
+
+    @Test
     fun `file routes preserve upload list download and delete contract in isolated workspace`() {
         TestWorkspace().use { workspace ->
             testApplication {
@@ -163,7 +271,7 @@ class BackendFileContractTest {
                 val firstBody = firstUpload.decode<FileUploadResponse>()
                 assertTrue(firstBody.success)
                 assertEquals("release-notes.txt", firstBody.fileId)
-                assertEquals("/api/files/download/$sessionId/release-notes.txt", firstBody.downloadUrl)
+                assertEquals(buildFileDownloadUrl(sessionId, "release-notes.txt"), firstBody.downloadUrl)
                 assertTrue(firstBody.filePath.startsWith(workspace.chatHistoryDir.absolutePath))
 
                 val secondUpload = uploadFile(
@@ -202,7 +310,7 @@ class BackendFileContractTest {
                     listBody.processedUrls
                 )
 
-                val downloadResponse = client.get("/api/files/download/$sessionId/${firstBody.fileId}")
+                val downloadResponse = client.get(firstBody.downloadUrl)
                 assertEquals(HttpStatusCode.OK, downloadResponse.status)
                 assertEquals("first file content", downloadResponse.bodyAsText())
                 val contentDisposition = assertNotNull(
@@ -241,7 +349,10 @@ class BackendFileContractTest {
                 value = content.toByteArray(),
                 headers = Headers.build {
                     append(HttpHeaders.ContentType, ContentType.Text.Plain.toString())
-                    append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
+                    append(
+                        HttpHeaders.ContentDisposition,
+                        "filename=\"${fileName.escapeMultipartHeaderValue()}\""
+                    )
                 }
             )
         }
@@ -267,25 +378,46 @@ class BackendFileContractTest {
         }
 
     private suspend fun DefaultClientWebSocketSession.receiveMessage(): Message {
-        val frame = withTimeout(5_000) { incoming.receive() }
-        return when (frame) {
-            is Frame.Text -> json.decodeFromString(frame.readText())
-            else -> error("Expected text frame but received $frame")
+        while (true) {
+            val frame = withTimeout(5_000) { incoming.receive() }
+            val message = when (frame) {
+                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
+                else -> error("Expected text frame but received $frame")
+            }
+            if (!message.isHistoryEndMarker()) {
+                return message
+            }
         }
     }
 
     private suspend fun DefaultClientWebSocketSession.receiveMessageOrNull(timeoutMillis: Long): Message? {
-        val frame = withTimeoutOrNull(timeoutMillis) { incoming.receive() } ?: return null
-        return when (frame) {
-            is Frame.Text -> json.decodeFromString(frame.readText())
-            else -> error("Expected text frame but received $frame")
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (true) {
+            val remainingMillis = deadline - System.currentTimeMillis()
+            if (remainingMillis <= 0) {
+                return null
+            }
+            val frame = withTimeoutOrNull(remainingMillis) { incoming.receive() } ?: return null
+            val message = when (frame) {
+                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
+                else -> error("Expected text frame but received $frame")
+            }
+            if (!message.isHistoryEndMarker()) {
+                return message
+            }
         }
     }
+
+    private fun Message.isHistoryEndMarker(): Boolean =
+        isTransient && type == MessageType.SYSTEM && content == "__history_end__"
 
     private fun parseFilePayload(message: Message): FileMessagePayload {
         assertEquals(MessageType.FILE, message.type)
         return json.decodeFromString(message.content)
     }
+
+    private fun String.escapeMultipartHeaderValue(): String =
+        replace("\\", "\\\\").replace("\"", "\\\"")
 
     private suspend inline fun <reified T> HttpResponse.decode(): T =
         json.decodeFromString(bodyAsText())

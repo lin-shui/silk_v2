@@ -53,7 +53,9 @@ jobs:
           ./gradlew $GRADLE_ARGS_COMMON \
             :backend:test \
             :backend:shadowJar \
+            :frontend:webApp:nodeTest \
             :frontend:webApp:compileProductionExecutableKotlinJs \
+            :frontend:desktopApp:test \
             :frontend:desktopApp:compileKotlin
 
       - name: Upload backend test reports
@@ -64,6 +66,26 @@ jobs:
           path: |
             backend/build/reports/tests/test
             backend/build/test-results/test
+          if-no-files-found: ignore
+
+      - name: Upload web test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-js-test-report
+          path: |
+            frontend/webApp/build/reports/tests/nodeTest
+            frontend/webApp/build/test-results/nodeTest
+          if-no-files-found: ignore
+
+      - name: Upload desktop test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-test-report
+          path: |
+            frontend/desktopApp/build/reports/tests/test
+            frontend/desktopApp/build/test-results/test
           if-no-files-found: ignore
 
       - name: Upload backend shadowJar
@@ -117,4 +139,17 @@ jobs:
           printf 'sdk.dir=%s\n' "$SDK_DIR" > local.properties
 
       - name: Run Android fast validation
-        run: ./gradlew $GRADLE_ARGS_COMMON :frontend:androidApp:compileDebugKotlin
+        run: |
+          ./gradlew $GRADLE_ARGS_COMMON \
+            :frontend:androidApp:testDebugUnitTest \
+            :frontend:androidApp:compileDebugKotlin
+
+      - name: Upload Android unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-unit-test-report
+          path: |
+            frontend/androidApp/build/reports/tests/testDebugUnitTest
+            frontend/androidApp/build/test-results/testDebugUnitTest
+          if-no-files-found: ignore

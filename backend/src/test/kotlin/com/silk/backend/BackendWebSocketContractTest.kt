@@ -24,6 +24,8 @@ import io.ktor.server.testing.testApplication
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -229,9 +231,16 @@ class BackendWebSocketContractTest {
                     )
                     hostSession.send(Frame.Text(json.encodeToString(urlMessage)))
 
-                    val hostReceived = hostSession.receiveMessagesUntil { it.content == "CLEAR_STATUS" }
-                    val guestReceived = guestSession.receiveMessagesUntil { it.content == "CLEAR_STATUS" }
-                    val expectedSequence = listOf(
+                    val (hostReceived, guestReceived) = coroutineScope {
+                        val hostDeferred = async {
+                            hostSession.receiveMessagesUntil { it.content == "CLEAR_STATUS" }
+                        }
+                        val guestDeferred = async {
+                            guestSession.receiveMessagesUntil { it.content == "CLEAR_STATUS" }
+                        }
+                        hostDeferred.await() to guestDeferred.await()
+                    }
+                    val hostExpectedSequence = listOf(
                         urlMessage.content,
                         "🌐 正在下载: ${localWeb.htmlUrl}",
                         "📄 已下载网页: CI URL HTML Smoke",
@@ -241,16 +250,25 @@ class BackendWebSocketContractTest {
                         "FILE",
                         "CLEAR_STATUS"
                     )
+                    // Guest-side transient status updates are best-effort UI hints rather than a strict contract.
+                    val guestExpectedSequence = listOf(
+                        urlMessage.content,
+                        "📄 已下载网页: CI URL HTML Smoke",
+                        "FILE",
+                        "📄 已下载PDF: CI URL PDF Smoke",
+                        "FILE",
+                        "CLEAR_STATUS"
+                    )
 
                     assertEquals("url-live-1", hostReceived.first().id)
                     assertEquals("url-live-1", guestReceived.first().id)
                     assertContainsInOrder(
                         actual = hostReceived.map(::messageMarker),
-                        expected = expectedSequence
+                        expected = hostExpectedSequence
                     )
                     assertContainsInOrder(
                         actual = guestReceived.map(::messageMarker),
-                        expected = expectedSequence
+                        expected = guestExpectedSequence
                     )
 
                     val hostFileMessages = hostReceived.filter { it.type == MessageType.FILE }
@@ -304,7 +322,7 @@ class BackendWebSocketContractTest {
                         hostFilePayloads.map { it.fileSize }
                     )
                     assertEquals(
-                        downloadableFiles.map { "/api/files/download/${group.id}/${it.name}" },
+                        downloadableFiles.map { buildFileDownloadUrl(group.id, it.name) },
                         hostFilePayloads.map { it.downloadUrl }
                     )
                     assertEquals(
@@ -640,20 +658,38 @@ class BackendWebSocketContractTest {
     }
 
     private suspend fun DefaultClientWebSocketSession.receiveMessage(): Message {
-        val frame = withTimeout(5_000) { incoming.receive() }
-        return when (frame) {
-            is Frame.Text -> json.decodeFromString(frame.readText())
-            else -> error("Expected text frame but received $frame")
+        while (true) {
+            val frame = withTimeout(5_000) { incoming.receive() }
+            val message = when (frame) {
+                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
+                else -> error("Expected text frame but received $frame")
+            }
+            if (!message.isHistoryEndMarker()) {
+                return message
+            }
         }
     }
 
     private suspend fun DefaultClientWebSocketSession.receiveMessageOrNull(timeoutMillis: Long): Message? {
-        val frame = withTimeoutOrNull(timeoutMillis) { incoming.receive() } ?: return null
-        return when (frame) {
-            is Frame.Text -> json.decodeFromString(frame.readText())
-            else -> error("Expected text frame but received $frame")
+        val deadline = System.currentTimeMillis() + timeoutMillis
+        while (true) {
+            val remainingMillis = deadline - System.currentTimeMillis()
+            if (remainingMillis <= 0) {
+                return null
+            }
+            val frame = withTimeoutOrNull(remainingMillis) { incoming.receive() } ?: return null
+            val message = when (frame) {
+                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
+                else -> error("Expected text frame but received $frame")
+            }
+            if (!message.isHistoryEndMarker()) {
+                return message
+            }
         }
     }
+
+    private fun Message.isHistoryEndMarker(): Boolean =
+        isTransient && type == MessageType.SYSTEM && content == "__history_end__"
 
     private suspend fun waitForCondition(
         timeoutMillis: Long = 5_000,

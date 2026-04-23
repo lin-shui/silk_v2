@@ -70,7 +70,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
-import org.json.JSONObject
 import android.Manifest
 import android.content.pm.PackageManager
 import android.media.MediaRecorder
@@ -1630,9 +1629,13 @@ fun ChatScreen(appState: AppState) {
             isLoading = isLoadingFiles,
             onDismiss = { showFolderExplorer = false },
             onFileClick = { file ->
-                // 打开文件下载链接
-                val downloadUrl = "${BackendUrlHolder.getBaseUrl()}/api/files/download/${group.id}/${file.name}"
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl))
+                val relativeDownloadUrl = file.downloadUrl.ifEmpty {
+                    "/api/files/download/${Uri.encode(group.id)}/${Uri.encode(file.name)}"
+                }
+                val intent = Intent(
+                    Intent.ACTION_VIEW,
+                    Uri.parse("${BackendUrlHolder.getBaseUrl()}$relativeDownloadUrl")
+                )
                 context.startActivity(intent)
             },
             onUrlClick = { url ->
@@ -3348,36 +3351,10 @@ fun MessageItem(
     
     // ✅ 文件消息特殊处理
     if (isFileMessage) {
-        // 解析文件信息：content 格式为 JSON {"fileName":"xxx","fileSize":123,"downloadUrl":"xxx"}
-        // 兼容旧格式 "fileName|fileSize|downloadUrl"
-        val fileName: String
-        val fileSize: Long
-        val downloadUrl: String
-        
-        if (message.content.startsWith("{")) {
-            // JSON 格式
-            val json = try {
-                org.json.JSONObject(message.content)
-            } catch (e: Exception) {
-                println("⚠️ 解析文件消息JSON失败: ${e.message}")
-                null
-            }
-            if (json != null) {
-                fileName = json.optString("fileName", "未知文件")
-                fileSize = json.optLong("fileSize", 0L)
-                downloadUrl = json.optString("downloadUrl", "")
-            } else {
-                fileName = "解析失败"
-                fileSize = 0L
-                downloadUrl = ""
-            }
-        } else {
-            // 兼容旧的 | 分隔符格式
-            val parts = message.content.split("|")
-            fileName = parts.getOrNull(0) ?: "未知文件"
-            fileSize = parts.getOrNull(1)?.toLongOrNull() ?: 0L
-            downloadUrl = parts.getOrNull(2) ?: ""
-        }
+        val fileContent = parseAndroidFileMessageContent(message.content)
+        val fileName = fileContent.fileName
+        val fileSize = fileContent.fileSize
+        val downloadUrl = fileContent.downloadUrl
         
         Column(
             modifier = Modifier.fillMaxWidth(),
@@ -3422,19 +3399,8 @@ fun MessageItem(
                     modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 文件图标
-                    val icon = when (fileName.substringAfterLast(".").lowercase()) {
-                        "pdf" -> "📄"
-                        "doc", "docx" -> "📝"
-                        "xls", "xlsx" -> "📊"
-                        "jpg", "jpeg", "png", "gif" -> "🖼️"
-                        "mp4", "avi", "mov" -> "🎬"
-                        "mp3", "wav" -> "🎵"
-                        "zip", "rar" -> "📦"
-                        else -> "📎"
-                    }
                     Text(
-                        text = icon,
+                        text = androidFileIconForName(fileName),
                         fontSize = 32.sp,
                         modifier = Modifier.padding(end = 12.dp)
                     )
@@ -3926,7 +3892,8 @@ data class FileItem(
     val name: String,
     val size: Long,
     val uploadTime: Long,
-    val uploadedBy: String
+    val uploadedBy: String,
+    val downloadUrl: String = ""
 )
 
 /**
@@ -4340,48 +4307,6 @@ suspend fun loadGroupFilesAndUrls(groupId: String): FilesAndUrls = withContext(D
         e.printStackTrace()
         FilesAndUrls(emptyList(), emptyList())
     }
-}
-
-/**
- * 解析文件列表和 URL 清单 JSON
- * 后端返回格式: {"sessionId":"...", "files":[...], "totalCount":1, "processedUrls":["url1", "url2"]}
- */
-fun parseFileListAndUrls(json: String): FilesAndUrls {
-    val files = mutableListOf<FileItem>()
-    val urls = mutableListOf<String>()
-    try {
-        // 使用简单正则提取文件信息 - 匹配后端 API 格式
-        val fileNamePattern = """"fileName"\s*:\s*"([^"]+)"""".toRegex()
-        val sizePattern = """"size"\s*:\s*(\d+)""".toRegex()
-        val timePattern = """"uploadTime"\s*:\s*(\d+)""".toRegex()
-        
-        val names = fileNamePattern.findAll(json).map { it.groupValues[1] }.toList()
-        val sizes = sizePattern.findAll(json).map { it.groupValues[1].toLongOrNull() ?: 0L }.toList()
-        val times = timePattern.findAll(json).map { it.groupValues[1].toLongOrNull() ?: 0L }.toList()
-        
-        for (i in names.indices) {
-            files.add(FileItem(
-                name = names[i],
-                size = sizes.getOrElse(i) { 0L },
-                uploadTime = times.getOrElse(i) { 0L },
-                uploadedBy = ""  // 后端不返回此字段
-            ))
-        }
-        
-        // 解析 processedUrls 数组
-        val urlsPattern = """"processedUrls"\s*:\s*\[([^\]]*)\]""".toRegex()
-        val urlsMatch = urlsPattern.find(json)
-        if (urlsMatch != null) {
-            val urlsContent = urlsMatch.groupValues[1]
-            val singleUrlPattern = """"([^"]+)"""".toRegex()
-            singleUrlPattern.findAll(urlsContent).forEach { match ->
-                urls.add(match.groupValues[1])
-            }
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
-    return FilesAndUrls(files, urls)
 }
 
 /**
