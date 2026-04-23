@@ -77,6 +77,12 @@ class WebAppState {
         }
         currentScene = scene
     }
+
+    /** Switch top-level tab; if the Settings overlay is open, dismiss it first. */
+    fun selectTab(tab: NavTab) {
+        if (currentScene == Scene.SETTINGS) navigateBack()
+        currentTab = tab
+    }
     
     fun navigateBack(): Boolean {
         return if (sceneHistory.isNotEmpty()) {

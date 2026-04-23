@@ -167,11 +167,15 @@ fun SilkApp() {
                     position(Position.Relative)
                 }
             }) {
-                key(appState.currentTab) {
-                    when (appState.currentTab) {
-                        NavTab.SILK -> SilkTabContent(appState)
-                        NavTab.WORKFLOW -> WorkflowScene(appState)
-                        NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScene(appState)
+                if (appState.currentScene == Scene.SETTINGS) {
+                    SettingsScene(appState)
+                } else {
+                    key(appState.currentTab) {
+                        when (appState.currentTab) {
+                            NavTab.SILK -> SilkTabContent(appState)
+                            NavTab.WORKFLOW -> WorkflowScene(appState)
+                            NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScene(appState)
+                        }
                     }
                 }
             }
@@ -216,13 +220,13 @@ fun SilkNavRail(appState: WebAppState) {
 
         // Tab items
         NavRailItem("Silk", appState.currentTab == NavTab.SILK, "\uD83D\uDCAC") {
-            appState.currentTab = NavTab.SILK
+            appState.selectTab(NavTab.SILK)
         }
         NavRailItem("工作流", appState.currentTab == NavTab.WORKFLOW, "\uD83D\uDD17") {
-            appState.currentTab = NavTab.WORKFLOW
+            appState.selectTab(NavTab.WORKFLOW)
         }
         NavRailItem("知识库", appState.currentTab == NavTab.KNOWLEDGE_BASE, "\uD83D\uDCDA") {
-            appState.currentTab = NavTab.KNOWLEDGE_BASE
+            appState.selectTab(NavTab.KNOWLEDGE_BASE)
         }
 
         // Spacer
@@ -296,7 +300,6 @@ fun SilkTabContent(appState: WebAppState) {
                 }
             }
         }
-        Scene.SETTINGS -> SettingsScene(appState)
         else -> GroupListScene(appState)
     }
 }
