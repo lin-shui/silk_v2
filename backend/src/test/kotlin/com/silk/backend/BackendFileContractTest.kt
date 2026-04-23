@@ -29,6 +29,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -38,6 +39,7 @@ import kotlin.test.assertTrue
 
 class BackendFileContractTest {
     private val json = Json { ignoreUnknownKeys = true }
+    private val frameBuffers = ConcurrentHashMap<DefaultClientWebSocketSession, ArrayDeque<Message>>()
 
     @Test
     fun `file upload broadcasts stable file payload to live chat and history replay`() {
@@ -369,9 +371,9 @@ class BackendFileContractTest {
     private suspend fun DefaultClientWebSocketSession.receiveHistory(): List<Message> = buildList {
         withTimeout(5_000) {
             while (true) {
-                val msg = receiveMessage()
-                if (msg.isTransient && msg.type == MessageType.SYSTEM && msg.content == "__history_end__") break
-                add(msg)
+                val message = receiveRawMessage(5_000) ?: error("Timed out waiting for history replay")
+                if (message.isHistoryEndMarker()) break
+                add(message)
             }
         }
     }
@@ -389,11 +391,7 @@ class BackendFileContractTest {
 
     private suspend fun DefaultClientWebSocketSession.receiveMessage(): Message {
         while (true) {
-            val frame = withTimeout(5_000) { incoming.receive() }
-            val message = when (frame) {
-                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
-                else -> error("Expected text frame but received $frame")
-            }
+            val message = receiveRawMessage(5_000) ?: error("Timed out waiting for websocket message")
             if (!message.isHistoryEndMarker()) {
                 return message
             }
@@ -407,15 +405,42 @@ class BackendFileContractTest {
             if (remainingMillis <= 0) {
                 return null
             }
-            val frame = withTimeoutOrNull(remainingMillis) { incoming.receive() } ?: return null
-            val message = when (frame) {
-                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
-                else -> error("Expected text frame but received $frame")
-            }
+            val message = receiveRawMessage(remainingMillis) ?: return null
             if (!message.isHistoryEndMarker()) {
                 return message
             }
         }
+    }
+
+    private suspend fun DefaultClientWebSocketSession.receiveRawMessage(timeoutMillis: Long): Message? {
+        val frameBuffer = frameBuffers.getOrPut(this) { ArrayDeque() }
+        if (frameBuffer.isNotEmpty()) {
+            return frameBuffer.removeFirst()
+        }
+
+        val frame = withTimeoutOrNull(timeoutMillis) { incoming.receive() } ?: return null
+        return when (frame) {
+            is Frame.Text -> parseFrameText(this, frame.readText())
+            else -> error("Expected text frame but received $frame")
+        }
+    }
+
+    private fun parseFrameText(
+        session: DefaultClientWebSocketSession,
+        text: String
+    ): Message {
+        if (!text.startsWith("[")) {
+            return json.decodeFromString(text)
+        }
+
+        val batch: List<Message> = json.decodeFromString(text)
+        if (batch.isEmpty()) {
+            error("Empty batch frame")
+        }
+
+        val frameBuffer = frameBuffers.getOrPut(session) { ArrayDeque() }
+        batch.drop(1).forEach(frameBuffer::addLast)
+        return batch.first()
     }
 
     private fun Message.isHistoryEndMarker(): Boolean =
