@@ -617,7 +617,10 @@ struct ChatPage {
 
     try {
       const response = await this.apiClient.getGroups(this.userId);
-      const groups = response.data ? response.data : [];
+      // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），不允许转发到工作流私聊群组
+      const groups = response.data
+        ? response.data.filter((g: Group) => !g.name.startsWith('wf_'))
+        : [];
       const result: Group[] = [];
       for (let i = 0; i < groups.length; i++) {
         const group = groups[i];

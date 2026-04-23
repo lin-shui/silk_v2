@@ -334,7 +334,7 @@ fun ChatScene(appState: WebAppState) {
         try {
             val groupsResponse = ApiClient.getUserGroups(user.id)
             if (groupsResponse.success) {
-                userGroups = groupsResponse.groups ?: emptyList()
+                userGroups = (groupsResponse.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
             }
             val unreadResponse = ApiClient.getUnreadCounts(user.id)
             if (unreadResponse.success) {
@@ -1410,7 +1410,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         scope.launch {
                             isLoadingGroups = true
                             val response = ApiClient.getUserGroups(user.id)
-                            userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
+                            userGroups = response.groups?.filter { it.id != group.id && !it.name.startsWith("wf_") } ?: emptyList()
                             isLoadingGroups = false
                             showForwardDialog = true
                         }
@@ -1470,7 +1470,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             scope.launch {
                                 isLoadingGroups = true
                                 val response = ApiClient.getUserGroups(user.id)
-                                userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
+                                userGroups = response.groups?.filter { it.id != group.id && !it.name.startsWith("wf_") } ?: emptyList()
                                 isLoadingGroups = false
                                 showForwardDialog = true
                             }

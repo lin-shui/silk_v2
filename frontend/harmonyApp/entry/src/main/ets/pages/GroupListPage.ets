@@ -62,7 +62,10 @@ export struct GroupListPage {
       const response = await this.apiClient.getGroups(userId);
       const unreadCounts = await this.apiClient.getUnreadCounts(userId);
 
-      const sourceGroups: Group[] = response.data ? response.data : [];
+      // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀）
+      const sourceGroups: Group[] = response.data
+        ? response.data.filter((g: Group) => !g.name.startsWith('wf_'))
+        : [];
       const nextGroups: Group[] = [];
       for (let i = 0; i < sourceGroups.length; i++) {
         const group = sourceGroups[i];
@@ -196,7 +199,10 @@ export struct GroupListPage {
 
     try {
       const response = await this.apiClient.getGroups(userId);
-      const sourceGroups: Group[] = response.data ? response.data : [];
+      // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀）
+      const sourceGroups: Group[] = response.data
+        ? response.data.filter((g: Group) => !g.name.startsWith('wf_'))
+        : [];
       const unreadCounts = await this.apiClient.getUnreadCounts(userId);
       const refreshed: Group[] = [];
       for (let i = 0; i < sourceGroups.length; i++) {

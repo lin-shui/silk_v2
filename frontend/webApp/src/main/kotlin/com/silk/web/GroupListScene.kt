@@ -69,7 +69,9 @@ fun GroupListScene(appState: WebAppState) {
                 }
                 
                 if (response != null && response.success) {
-                    groups = response.groups ?: emptyList()
+                    // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
+                    // 它们应该只通过工作流 Tab 访问，不在 Silk 群组列表中显示
+                    groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
                     console.log("✅ 加载了${groups.size}个群组")
                     groups.forEach { group ->
                         console.log("   - ${group.name} (${group.invitationCode})")
