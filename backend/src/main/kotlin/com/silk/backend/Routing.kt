@@ -1664,6 +1664,36 @@ fun Application.configureRouting() {
             }
         }
         
+        // ==================== 消息删除 API ====================
+        post("/api/messages/delete") {
+            try {
+                val request = call.receive<RecallMessageRequest>()
+                
+                val group = GroupRepository.findGroupById(request.groupId)
+                if (group == null) {
+                    call.respond(SimpleResponse(false, "群组不存在"))
+                    return@post
+                }
+                
+                val groupChatServer = getGroupChatServer(request.groupId)
+                val result = groupChatServer.deleteMessage(
+                    messageId = request.messageId,
+                    userId = request.userId
+                )
+                
+                if (result.success) {
+                    logger.info("🗑️ 消息已删除: {} by {}", request.messageId, request.userId)
+                    call.respond(SimpleResponse(true, result.message))
+                } else {
+                    call.respond(SimpleResponse(false, result.message))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 删除消息失败: {}", e.message)
+                e.printStackTrace()
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "删除失败: ${e.message}"))
+            }
+        }
+        
         // ==================== CC Bridge WebSocket ====================
 
         webSocket("/cc-bridge") {

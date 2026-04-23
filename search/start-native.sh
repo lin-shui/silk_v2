@@ -65,10 +65,15 @@ start_weaviate() {
     print_status "启动 Weaviate (端口: $WEAVIATE_PORT)..."
 
     # 设置环境变量并启动 Weaviate
-    # 注意：原生运行时，向量化由客户端或外部API完成
+    # 使用 API Key 认证（与 Docker 启动方式和后端 WeaviateClient 一致）
     export PERSISTENCE_DATA_PATH="$DATA_DIR"
     export QUERY_DEFAULTS_LIMIT=25
-    export AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true
+    export AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=false
+    export AUTHENTICATION_APIKEY_ENABLED=true
+    export AUTHENTICATION_APIKEY_ALLOWED_KEYS="$WEAVIATE_API_KEY"
+    export AUTHENTICATION_APIKEY_USERS=silk-weaviate-admin
+    export AUTHORIZATION_ADMINLIST_ENABLED=true
+    export AUTHORIZATION_ADMINLIST_USERS=silk-weaviate-admin
     export DEFAULT_VECTORIZER_MODULE=none
     export CLUSTER_HOSTNAME=node1
     export LOG_LEVEL=info

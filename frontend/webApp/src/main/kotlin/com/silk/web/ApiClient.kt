@@ -580,6 +580,17 @@ object ApiClient {
             SimpleResponse(false, "网络错误")
         }
     }
+    
+    suspend fun deleteMessage(groupId: String, messageId: String, userId: String): SimpleResponse {
+        return try {
+            val body = """{"groupId":"$groupId","messageId":"$messageId","userId":"$userId"}"""
+            val response = post("/api/messages/delete", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("删除消息失败:", e)
+            SimpleResponse(false, "网络错误")
+        }
+    }
 
     suspend fun exportGroupMarkdown(groupId: String, userId: String): ExportMarkdownResponse {
         return try {

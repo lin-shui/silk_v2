@@ -262,16 +262,90 @@ class DirectModelAgent(
         accessibleSessionIds: List<String> = listOf(sessionId),
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
-        // 添加用户消息到历史
+        // 0. 自动搜索相关上下文（通过 Weaviate），注入到 system prompt
+        val enhancedSystemPrompt = autoEnhanceSystemPrompt(userInput, systemPrompt, requestUserId, accessibleSessionIds)
+
+        // 1. 添加用户消息到历史
         conversationHistory.add(Message(role = "user", content = userInput))
         
-        // 如果是首次对话，添加系统提示
-        if (conversationHistory.size == 1 && systemPrompt != null) {
-            conversationHistory.add(0, Message(role = "system", content = systemPrompt))
+        // 2. 如果是首次对话，添加系统提示
+        if (conversationHistory.size == 1 && enhancedSystemPrompt != null) {
+            conversationHistory.add(0, Message(role = "system", content = enhancedSystemPrompt))
         }
         
-        // 直接调用模型（支持 tool calling）
+        // 3. 直接调用模型（支持 tool calling）
         return chatWithTools(callback, requestUserId, accessibleSessionIds)
+    }
+
+    /**
+     * 自动增强 system prompt：通过 Weaviate 搜索与用户问题相关的历史上下文并注入
+     * 这样 @silk 不需要主动调 search_context 工具就能知道最近聊了什么
+     */
+    private suspend fun autoEnhanceSystemPrompt(
+        userInput: String,
+        systemPrompt: String?,
+        requestUserId: String,
+        accessibleSessionIds: List<String>
+    ): String? {
+        if (weaviateClient == null || accessibleSessionIds.isEmpty()) {
+            return systemPrompt
+        }
+
+        val context = autoSearchContext(userInput, requestUserId, accessibleSessionIds)
+        if (context == null) {
+            return systemPrompt
+        }
+
+        return buildString {
+            appendLine(systemPrompt ?: "你是 Silk，一个智能助手。")
+            appendLine()
+            appendLine("## 近期聊天上下文")
+            appendLine("以下是当前会话中与用户问题相关的历史聊天记录（通过语义搜索获得）：")
+            appendLine(context)
+            appendLine()
+            appendLine("请根据以上上下文信息回答用户的问题。如果上下文不相关或不足以回答问题，请如实告知用户。")
+        }
+    }
+
+    /**
+     * 通过 Weaviate 搜索与用户问题相关的历史聊天记录
+     * @return 格式化后的上下文文本，或 null（无结果/搜索失败）
+     */
+    private suspend fun autoSearchContext(
+        userInput: String,
+        requestUserId: String,
+        accessibleSessionIds: List<String>
+    ): String? {
+        if (weaviateClient == null || accessibleSessionIds.isEmpty()) return null
+
+        return try {
+            // 搜索当前会话中的相关聊天记录（FOREGROUND_ONLY = 仅当前会话）
+            val results = weaviateClient!!.isolatedSearch(
+                query = userInput,
+                userId = requestUserId,
+                currentSessionId = accessibleSessionIds.first(),
+                mode = SearchMode.FOREGROUND_ONLY,
+                foregroundLimit = 10,
+                alpha = 0.5f
+            )
+
+            val docs = results.foreground.documents
+            if (docs.isEmpty()) return null
+
+            val sb = StringBuilder()
+            docs.forEachIndexed { index, doc ->
+                sb.appendLine("---")
+                val author = doc.authorName ?: doc.authorId ?: "未知用户"
+                val title = doc.title ?: "消息"
+                sb.appendLine("${index + 1}. [$author] $title")
+                sb.appendLine("   内容: ${doc.content.take(500)}")
+            }
+
+            sb.toString()
+        } catch (e: Exception) {
+            logger.warn("⚠️ 自动搜索上下文失败: ${e.message}")
+            null
+        }
     }
     
     /**

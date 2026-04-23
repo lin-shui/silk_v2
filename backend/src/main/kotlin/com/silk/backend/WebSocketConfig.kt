@@ -1302,6 +1302,46 @@ class ChatServer(
     }
     
     /**
+     * 删除消息
+     * 权限：1) 自己的消息可删  2) Silk回复自己@silk触发的消息可删  3) 群主可删任意消息
+     */
+    suspend fun deleteMessage(messageId: String, userId: String): RecallResult {
+        logger.debug("🗑️ [deleteMessage] 删除消息: {} by user {}", messageId, userId)
+        
+        val chatHistory = historyManager.loadChatHistory(sessionName)
+        val messageEntry = chatHistory?.messages?.find { it.messageId == messageId }
+        
+        if (messageEntry == null) {
+            return RecallResult(false, "消息不存在", emptyList())
+        }
+        
+        val isOwnMessage = messageEntry.senderId == userId
+        val hostId = getGroupHostId(sessionName)
+        val isGroupHost = hostId == userId
+        
+        val isSilkReplyToMe = if (messageEntry.senderId == SilkAgent.AGENT_ID) {
+            val msgIndex = chatHistory.messages.indexOf(messageEntry)
+            val precedingMsg = chatHistory.messages
+                .take(msgIndex)
+                .lastOrNull { it.senderId != SilkAgent.AGENT_ID }
+            precedingMsg?.senderId == userId &&
+                (precedingMsg.content.startsWith("@Silk") || precedingMsg.content.startsWith("@silk"))
+        } else false
+        
+        if (!isOwnMessage && !isGroupHost && !isSilkReplyToMe) {
+            return RecallResult(false, "无权删除此消息", emptyList())
+        }
+        
+        historyManager.deleteMessages(sessionName, listOf(messageId))
+        messageHistory.removeIf { it.id == messageId }
+        broadcastRecallNotification(listOf(messageId))
+        
+        logger.info("🗑️ [deleteMessage] 消息已删除: {} by {} (own={}, host={}, silkReply={})",
+            messageId, userId, isOwnMessage, isGroupHost, isSilkReplyToMe)
+        return RecallResult(true, "删除成功", listOf(messageId))
+    }
+    
+    /**
      * 广播撤回通知给所有连接的客户端
      */
     private suspend fun broadcastRecallNotification(messageIds: List<String>) {
