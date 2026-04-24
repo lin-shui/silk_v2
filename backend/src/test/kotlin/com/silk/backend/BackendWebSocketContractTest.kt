@@ -33,6 +33,7 @@ import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -42,6 +43,7 @@ import kotlin.test.assertTrue
 
 class BackendWebSocketContractTest {
     private val json = Json { ignoreUnknownKeys = true }
+    private val frameBuffers = ConcurrentHashMap<DefaultClientWebSocketSession, ArrayDeque<Message>>()
 
     @Test
     fun `chat websocket replays recent history broadcasts live messages and updates unread flow`() {
@@ -641,13 +643,35 @@ class BackendWebSocketContractTest {
         url("/chat?userId=$userId&userName=$userName&groupId=$groupId")
     }
 
+    private suspend fun DefaultClientWebSocketSession.receiveMessagesUntil(
+        stopWhen: (Message) -> Boolean
+    ): List<Message> = buildList {
+        withTimeout(8_000) {
+            while (true) {
+                val message = receiveMessage()
+                add(message)
+                if (stopWhen(message)) {
+                    break
+                }
+            }
+        }
+    }
+
+    private suspend fun DefaultClientWebSocketSession.receiveHistory(): List<Message> = buildList {
+        withTimeout(5_000) {
+            while (true) {
+                val message = receiveRawMessage(5_000) ?: error("Timed out waiting for history replay")
+                if (message.isHistoryEndMarker()) {
+                    break
+                }
+                add(message)
+            }
+        }
+    }
+
     private suspend fun DefaultClientWebSocketSession.receiveMessage(): Message {
         while (true) {
-            val frame = withTimeout(5_000) { incoming.receive() }
-            val message = when (frame) {
-                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
-                else -> error("Expected text frame but received $frame")
-            }
+            val message = receiveRawMessage(5_000) ?: error("Timed out waiting for websocket message")
             if (!message.isHistoryEndMarker()) {
                 return message
             }
@@ -661,15 +685,42 @@ class BackendWebSocketContractTest {
             if (remainingMillis <= 0) {
                 return null
             }
-            val frame = withTimeoutOrNull(remainingMillis) { incoming.receive() } ?: return null
-            val message = when (frame) {
-                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
-                else -> error("Expected text frame but received $frame")
-            }
+            val message = receiveRawMessage(remainingMillis) ?: return null
             if (!message.isHistoryEndMarker()) {
                 return message
             }
         }
+    }
+
+    private suspend fun DefaultClientWebSocketSession.receiveRawMessage(timeoutMillis: Long): Message? {
+        val frameBuffer = frameBuffers.getOrPut(this) { ArrayDeque() }
+        if (frameBuffer.isNotEmpty()) {
+            return frameBuffer.removeFirst()
+        }
+
+        val frame = withTimeoutOrNull(timeoutMillis) { incoming.receive() } ?: return null
+        return when (frame) {
+            is Frame.Text -> parseFrameText(this, frame.readText())
+            else -> error("Expected text frame but received $frame")
+        }
+    }
+
+    private fun parseFrameText(
+        session: DefaultClientWebSocketSession,
+        text: String
+    ): Message {
+        if (!text.startsWith("[")) {
+            return json.decodeFromString(text)
+        }
+
+        val batch: List<Message> = json.decodeFromString(text)
+        if (batch.isEmpty()) {
+            error("Empty batch frame")
+        }
+
+        val frameBuffer = frameBuffers.getOrPut(session) { ArrayDeque() }
+        batch.drop(1).forEach(frameBuffer::addLast)
+        return batch.first()
     }
 
     private fun Message.isHistoryEndMarker(): Boolean =

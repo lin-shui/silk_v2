@@ -5,6 +5,7 @@ import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
+import java.util.concurrent.atomic.AtomicInteger
 
 actual class PlatformWebSocket actual constructor(
     private val serverUrl: String,
@@ -23,6 +24,7 @@ actual class PlatformWebSocket actual constructor(
     private var session: DefaultClientWebSocketSession? = null
     private var job: Job? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val connectionGen = AtomicInteger(0)
     
     private fun log(message: String) {
         println(message)
@@ -33,10 +35,25 @@ actual class PlatformWebSocket actual constructor(
         get() = session != null
     
     actual fun connect(userId: String, userName: String, groupId: String) {
-        // 清理旧连接（静默，不额外触发 onDisconnected）
+        val connectToken = connectionGen.incrementAndGet()
+
+        // 切群时先让旧连接失效，避免旧协程 finally 把新连接状态清空。
+        val previousSession = session
         job?.cancel()
-        try { session?.close(CloseReason(CloseReason.Codes.NORMAL, "Switching group")) } catch (_: Exception) {}
         session = null
+        job = null
+
+        previousSession?.let { oldSession ->
+            scope.launch {
+                try {
+                    oldSession.close(CloseReason(CloseReason.Codes.NORMAL, "Switching group"))
+                } catch (_: CancellationException) {
+                    // Normal cancellation while replacing the socket.
+                } catch (e: Exception) {
+                    log("⚠️ [WebSocket] 旧连接关闭异常: ${e.message}")
+                }
+            }
+        }
 
         val safeUserName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")
         val safeGroupId = groupId.replace(" ", "_").replace("&", "_").replace("=", "_")
@@ -47,6 +64,10 @@ actual class PlatformWebSocket actual constructor(
         job = scope.launch {
             try {
                 client.webSocket(urlString = fullUrl) {
+                    if (connectionGen.get() != connectToken) {
+                        close(CloseReason(CloseReason.Codes.NORMAL, "Stale connection"))
+                        return@webSocket
+                    }
                     session = this
                     log("✅ [WebSocket] 连接已打开")
                     onConnected()
@@ -64,15 +85,24 @@ actual class PlatformWebSocket actual constructor(
                     } catch (e: CancellationException) {
                         // Normal cancellation
                     } catch (e: Exception) {
-                        log("❌ [WebSocket] 接收错误: ${e.message}")
+                        if (connectionGen.get() == connectToken) {
+                            log("❌ [WebSocket] 接收错误: ${e.message}")
+                        }
                     }
                 }
+            } catch (_: CancellationException) {
+                // Normal cancellation while reconnecting or disconnecting.
             } catch (e: Exception) {
-                log("❌ [WebSocket] 连接失败: ${e.message}")
-                onError(e.message ?: "Unknown error")
+                if (connectionGen.get() == connectToken) {
+                    log("❌ [WebSocket] 连接失败: ${e.message}")
+                    onError(e.message ?: "Unknown error")
+                }
             } finally {
-                session = null
-                onDisconnected()
+                if (connectionGen.get() == connectToken) {
+                    session = null
+                    job = null
+                    onDisconnected()
+                }
             }
         }
     }
@@ -88,15 +118,24 @@ actual class PlatformWebSocket actual constructor(
     }
     
     actual fun disconnect() {
+        val disconnectToken = connectionGen.incrementAndGet()
+        val currentSession = session
+        val currentJob = job
+        session = null
+        job = null
+
         scope.launch {
             try {
-                session?.close(CloseReason(CloseReason.Codes.NORMAL, "Client disconnecting"))
+                currentSession?.close(CloseReason(CloseReason.Codes.NORMAL, "Client disconnecting"))
+            } catch (_: CancellationException) {
+                // Normal cancellation while disconnecting.
             } catch (e: Exception) {
                 log("⚠️ [WebSocket] 关闭异常: ${e.message}")
             }
-            job?.cancel()
-            session = null
+            currentJob?.cancel()
+            if (connectionGen.get() == disconnectToken) {
+                onDisconnected()
+            }
         }
     }
 }
-
