@@ -12,7 +12,7 @@
 
 不把它做成全量发布流水线；慢、重、依赖专用环境的项放到后续专用 CI。
 
-## 当前基线（2026-04-20）
+## 当前基线（2026-04-24）
 
 工作流文件：`.github/workflows/ci-fast-validation.yml`
 
@@ -51,6 +51,8 @@ backend 真实快检：
 - [x] WebSocket URL 下载异常分支（读超时 / 连接拒绝 / 损坏 PDF）状态回显与“不落盘”约束
 - [x] WebSocket URL 下载产物文件消息广播与历史回放
 - [x] 未读计数与 `mark-read` 链路
+- [x] 旧 SQLite 初始化不丢登录、用户设置、Bridge token、群组与成员关系
+- [x] 聊天历史重启恢复元数据、追加消息不覆盖旧记录、坏历史文件拒绝覆盖并保留备份
 - [x] AI 工具暴露面过滤（禁用工具不暴露给模型）
 - [x] AI 工具会话作用域拒绝（空作用域 / 非当前会话）
 - [x] AI 工具路径拒绝与审计结果一致
@@ -93,6 +95,9 @@ frontend 轻量快检：
 - Desktop 补上 `MessageType.FILE` 卡片解析与下载入口，PDF 报告下载文件名提取也抽成纯函数，避免桌面端继续靠字符串扫 `/download/report/...pdf` 和内联 URL 解码硬扛。
 - 快检工作流新增 `:frontend:webApp:nodeTest` 与 `:frontend:androidApp:testDebugUnitTest`，并上传 Web/Android 测试报告 artifact，方便直接定位前端解析回归。
 - 快检工作流再加入 `:frontend:desktopApp:test` 和 desktop 测试报告 artifact，把三端文件消息解析都放进基础拦截。
+- 新增后端持久化合同测试，覆盖旧 SQLite 经 `DatabaseFactory.init()` 初始化后仍可登录、保留设置/群组，并验证 `ChatHistoryManager` 不会在缺失元数据或坏历史文件时覆盖已有聊天记录。
+- `DatabaseFactory` 支持 `-Dsilk.databasePath=...`，测试可走真实初始化入口，不再只能绕过生产初始化路径手动连临时 SQLite。
+- 修复后端 WebSocket/File 合同测试 helper 对 `__history_end__` 的处理，历史回放测试现在能正确消费结束标记，避免快检在历史回放阶段挂起。
 
 ### 明确未覆盖
 

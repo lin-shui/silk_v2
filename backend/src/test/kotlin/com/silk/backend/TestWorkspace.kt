@@ -19,6 +19,7 @@ internal class TestWorkspace : AutoCloseable {
     val userTodoDir = File(chatHistoryDir, "user_todos")
 
     init {
+        System.setProperty("silk.databasePath", dbFile.absolutePath)
         System.setProperty("silk.chatHistoryDir", chatHistoryDir.absolutePath)
         System.setProperty("silk.userTodoBaseDir", userTodoDir.absolutePath)
 
@@ -32,6 +33,7 @@ internal class TestWorkspace : AutoCloseable {
     }
 
     override fun close() {
+        System.clearProperty("silk.databasePath")
         System.clearProperty("silk.chatHistoryDir")
         System.clearProperty("silk.userTodoBaseDir")
         rootDir.deleteRecursively()

@@ -10,7 +10,7 @@
 - 未读计数
 - 用户设置（含 Claude Code bridge token）
 
-SQLite 数据库固定在 `./silk_database.db`。
+SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可用 `-Dsilk.databasePath=...` 覆盖。
 
 ## File-Backed Domains
 

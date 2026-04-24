@@ -7,6 +7,7 @@
   - `BackendHttpContractTest`
   - `BackendFileContractTest`
   - `BackendWebSocketContractTest`
+  - `BackendPersistenceContractTest`
 
 ## AI Tool Policy / Search / URL Download
 

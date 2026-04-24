@@ -13,7 +13,7 @@
 
 | Store | Path / Override | Used By |
 | --- | --- | --- |
-| SQLite | `./silk_database.db` | 用户、群组、联系人、未读、设置 |
+| SQLite | `./silk_database.db` or `-Dsilk.databasePath=...` | 用户、群组、联系人、未读、设置 |
 | Chat history root | `chat_history/` or `-Dsilk.chatHistoryDir=...` | `ChatHistoryManager`, 文件上传、URL 缓存 |
 | Session history | `chat_history/<session>/session.json`, `chat_history.json` | WebSocket 历史回放 |
 | Uploaded files | `chat_history/<session>/uploads/` | 文件消息、下载 |
