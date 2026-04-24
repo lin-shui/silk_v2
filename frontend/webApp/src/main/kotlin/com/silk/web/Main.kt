@@ -543,20 +543,20 @@ object SilkStylesheet : StyleSheet() {
         property("flex-shrink", "0")
         property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
         color(Color.white)
-        padding(16.px)
-        fontSize(24.px)
+        padding(8.px, 16.px)
+        fontSize(18.px)
         property("font-weight", "600")
         property("letter-spacing", "2px")
-        property("box-shadow", "0 2px 12px rgba(169, 137, 77, 0.3)")
+        property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.2)")
     }
     
     val statusBar by style {
         property("flex-shrink", "0")
-        padding(8.px, 16.px)
+        padding(4.px, 16.px)
         display(DisplayStyle.Flex)
         property("justify-content", "space-between")
         property("align-items", "center")
-        property("font-size", "13px")
+        property("font-size", "12px")
         property("letter-spacing", "1px")
     }
     
@@ -564,7 +564,9 @@ object SilkStylesheet : StyleSheet() {
         property("flex", "1")
         property("min-height", "0")
         property("overflow-y", "auto")
-        padding(16.px)
+        display(DisplayStyle.Flex)
+        flexDirection(FlexDirection.Column)
+        padding(12.px)
         property("background", SilkColors.backgroundGradient)
     }
     
@@ -607,16 +609,16 @@ object SilkStylesheet : StyleSheet() {
     val inputContainer by style {
         display(DisplayStyle.Flex)
         property("flex-shrink", "0")
-        padding(16.px)
+        padding(8.px, 16.px)
         backgroundColor(Color(SilkColors.surfaceElevated))
         property("border-top", "1px solid ${SilkColors.border}")
-        property("gap", "10px")
-        property("box-shadow", "0 -2px 12px rgba(169, 137, 77, 0.05)")
+        property("gap", "8px")
+        property("box-shadow", "0 -2px 8px rgba(169, 137, 77, 0.05)")
     }
     
     val input by style {
         property("flex", "1")
-        padding(14.px)
+        padding(10.px)
         border {
             width(1.px)
             style(LineStyle.Solid)
@@ -631,7 +633,7 @@ object SilkStylesheet : StyleSheet() {
     }
     
     val button by style {
-        padding(12.px, 24.px)
+        padding(8.px, 20.px)
         property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
         color(Color.white)
         border { width(0.px) }
@@ -1063,13 +1065,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             // 返回按钮
             Button({
                 style {
-                    padding(10.px, 14.px)
+                    padding(6.px, 12.px)
                     backgroundColor(Color("rgba(255,255,255,0.15)"))
                     color(Color.white)
                     border { width(0.px) }
                     borderRadius(8.px)
                     property("cursor", "pointer")
-                    fontSize(18.px)
+                    fontSize(16.px)
                     property("backdrop-filter", "blur(4px)")
                     property("transition", "all 0.2s ease")
                 }
@@ -1451,45 +1453,48 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             } // close else (non-selection mode)
         }
         
-        // Status Bar - 丝滑渐变状态
-        Div({ 
-            classes(SilkStylesheet.statusBar)
-            style {
-                property("background", when (connectionState) {
-                    ConnectionState.CONNECTED -> "linear-gradient(90deg, ${SilkColors.success}, #8DBE7C)"
-                    ConnectionState.CONNECTING -> "linear-gradient(90deg, ${SilkColors.warning}, #ECC88C)"
-                    ConnectionState.DISCONNECTED -> "linear-gradient(90deg, ${SilkColors.error}, #E99B9B)"
-                })
-                color(Color.white)
-            }
-        }) {
-            Span {
-                Text(when (connectionState) {
-                    ConnectionState.CONNECTED -> "✓ ${strings.connected}"
-                    ConnectionState.CONNECTING -> "⟳ ${strings.connecting}"
-                    ConnectionState.DISCONNECTED -> "✗ ${strings.disconnected}"
-                })
-            }
-            
-            if (connectionState == ConnectionState.DISCONNECTED) {
-                Button({
-                    classes(SilkStylesheet.button)
-                    style { 
-                        padding(8.px, 16.px)
-                        fontSize(12.px)
-                    }
-                    onClick {
-                        scope.launch {
-                            chatClient.connect(user.id, user.fullName, group.id)
+        // Status Bar - only show when not connected
+        if (connectionState != ConnectionState.CONNECTED) {
+            Div({ 
+                classes(SilkStylesheet.statusBar)
+                style {
+                    property("background", when (connectionState) {
+                        ConnectionState.CONNECTED -> "linear-gradient(90deg, ${SilkColors.success}, #8DBE7C)"
+                        ConnectionState.CONNECTING -> "linear-gradient(90deg, ${SilkColors.warning}, #ECC88C)"
+                        ConnectionState.DISCONNECTED -> "linear-gradient(90deg, ${SilkColors.error}, #E99B9B)"
+                    })
+                    color(Color.white)
+                }
+            }) {
+                Span {
+                    Text(when (connectionState) {
+                        ConnectionState.CONNECTING -> "⟳ ${strings.connecting}"
+                        ConnectionState.DISCONNECTED -> "✗ ${strings.disconnected}"
+                        else -> ""
+                    })
+                }
+                
+                if (connectionState == ConnectionState.DISCONNECTED) {
+                    Button({
+                        classes(SilkStylesheet.button)
+                        style { 
+                            padding(8.px, 16.px)
+                            fontSize(12.px)
                         }
+                        onClick {
+                            scope.launch {
+                                chatClient.connect(user.id, user.fullName, group.id)
+                            }
+                        }
+                    }) {
+                        Text(strings.reconnecting)
                     }
-                }) {
-                    Text(strings.reconnecting)
                 }
             }
         }
         
         // Messages container with drag-and-drop support
+        // flex: 1 spacer pushes content to bottom; overflow-y: auto enables scroll
         Div({ 
             classes(SilkStylesheet.messagesContainer)
             id("messages")
@@ -1498,6 +1503,42 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 property("transition", "all 0.2s ease")
             }
         }) {
+            // Spacer: flex: 1 pushes all subsequent content to the visual bottom
+            Div({
+                style {
+                    property("flex", "1")
+                }
+            }) {}
+
+            // 显示系统状态消息（灰色）
+            if (statusMessages.isNotEmpty()) {
+                Div({
+                    style {
+                        backgroundColor(Color("#F5F5F5"))
+                        borderRadius(8.px)
+                        padding(10.px, 14.px)
+                        marginBottom(8.px)
+                        property("border-left", "3px solid #9E9E9E")
+                    }
+                }) {
+                    statusMessages.forEach { status ->
+                        Div({
+                            style {
+                                color(Color("#757575"))
+                                fontSize(13.px)
+                                fontStyle("italic")
+                                marginBottom(4.px)
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                property("gap", "8px")
+                            }
+                        }) {
+                            Text(status.content)
+                        }
+                    }
+                }
+            }
+
             // 显示所有普通消息
             messages.forEach { message ->
                 MessageItem(
@@ -1566,35 +1607,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 )
             }
 
-            // 显示系统状态消息（灰色）- 放在普通消息之后、临时消息之前
-            if (statusMessages.isNotEmpty()) {
-                Div({
-                    style {
-                        backgroundColor(Color("#F5F5F5"))
-                        borderRadius(8.px)
-                        padding(10.px, 14.px)
-                        marginBottom(8.px)
-                        property("border-left", "3px solid #9E9E9E")
-                    }
-                }) {
-                    statusMessages.forEach { status ->
-                        Div({
-                            style {
-                                color(Color("#757575"))
-                                fontSize(13.px)
-                                fontStyle("italic")
-                                marginBottom(4.px)
-                                display(DisplayStyle.Flex)
-                                alignItems(AlignItems.Center)
-                                property("gap", "8px")
-                            }
-                        }) {
-                            Text(status.content)
-                        }
-                    }
-                }
-            }
-
             // 显示临时消息（如果有）
             transientMessage?.let { message ->
                 if (
@@ -1603,7 +1615,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     message.totalSteps == null &&
                     !isLikelyAgentStatusContent(message.content)
                 ) {
-                    // 进入最终答案流阶段后，强制按 AI 正文样式渲染（即使后端 category 仍是 AGENT_STATUS）
                     MessageItem(
                         message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                         isTransient = true,
@@ -1625,7 +1636,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     )
                 } else {
-                    // 处理中阶段（含工具调用与步骤）按临时状态样式显示
                     TransientMessageItem(message)
                 }
             }
@@ -3590,6 +3600,10 @@ fun AIMessageCard(
                 property("outline", "2px solid ${SilkColors.primary}")
                 backgroundColor(Color("rgba(76, 175, 80, 0.05)"))
             }
+            if (isLongContent && effectiveExpanded && !isTransient) {
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+            }
         }
     }) {
         // AI 头部标识
@@ -3599,6 +3613,9 @@ fun AIMessageCard(
                 alignItems(AlignItems.Center)
                 property("gap", "10px")
                 marginBottom(12.px)
+                if (isLongContent && effectiveExpanded && !isTransient) {
+                    property("flex-shrink", "0")
+                }
             }
         }) {
             // AI 图标
@@ -3667,7 +3684,8 @@ fun AIMessageCard(
                 Div({
                     classes(SilkStylesheet.aiMessageContent)
                     style {
-                        maxHeight(360.px)
+                        property("flex", "1")
+                        property("min-height", "0")
                         property("overflow-y", "auto")
                     }
                 }) {
@@ -3704,6 +3722,9 @@ fun AIMessageCard(
                     marginTop(12.px)
                     paddingTop(8.px)
                     property("border-top", "1px solid rgba(232, 224, 212, 0.5)")
+                    if (isLongContent && effectiveExpanded && !isTransient) {
+                        property("flex-shrink", "0")
+                    }
                 }
             }) {
                 Span({

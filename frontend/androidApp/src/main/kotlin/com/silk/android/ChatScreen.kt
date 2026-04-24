@@ -38,6 +38,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -515,25 +516,29 @@ fun ChatScreen(appState: AppState) {
         }
     }
     
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    
     Scaffold(
+        modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
                 title = {
-                    Column(modifier = Modifier.fillMaxWidth()) {  // 不限制宽度
+                    Column(modifier = Modifier.fillMaxWidth()) {
                         Text(
                             text = group.name,
-                            style = MaterialTheme.typography.bodySmall,  // 缩小字体
-                            maxLines = 1,  // 单行显示
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis  // 超出显示省略号
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                         )
                         Text(
                             text = "${messages.size} 条消息",
-                            style = MaterialTheme.typography.labelSmall,  // 更小的字体
+                            style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 },
+                scrollBehavior = scrollBehavior,
                 navigationIcon = {
                     IconButton(
                         onClick = {
