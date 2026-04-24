@@ -96,7 +96,9 @@ fun GroupListScreen(appState: AppState) {
                     }
                     
                     if (response != null && response.success) {
-                        groups = response.groups ?: emptyList()
+                        // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
+                        // 它们只通过工作流 Tab 访问，不在 Silk 群组列表中显示
+                        groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
                         println("✅ 加载了 ${groups.size} 个群组")
                         
                         // 加载未读消息数
@@ -215,7 +217,7 @@ fun GroupListScreen(appState: AppState) {
                                                     // 刷新群组列表
                                                     val response = ApiClient.getUserGroups(userId)
                                                     if (response.success) {
-                                                        groups = response.groups ?: emptyList()
+                                                        groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
                                                     }
                                                     
                                                     isDeleting = false

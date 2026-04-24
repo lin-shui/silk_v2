@@ -352,26 +352,26 @@ private fun WorkflowChatPanel(
                 property("flex", "1")
             }
         }) { Text(workflowName) }
-        // Connection status indicator
-        Span({
-            style {
-                fontSize(12.px)
-                color(
+        // Connection status indicator - only show when not connected
+        if (connectionState != ConnectionState.CONNECTED) {
+            Span({
+                style {
+                    fontSize(12.px)
+                    color(
+                        when (connectionState) {
+                            ConnectionState.CONNECTING -> Color("#FF9800")
+                            else -> Color("#F44336")
+                        }
+                    )
+                }
+            }) {
+                Text(
                     when (connectionState) {
-                        ConnectionState.CONNECTED -> Color("#4CAF50")
-                        ConnectionState.CONNECTING -> Color("#FF9800")
-                        else -> Color("#9E9E9E")
+                        ConnectionState.CONNECTING -> "● 连接中..."
+                        else -> "● 会话连接失败"
                     }
                 )
             }
-        }) {
-            Text(
-                when (connectionState) {
-                    ConnectionState.CONNECTED -> "● 已连接"
-                    ConnectionState.CONNECTING -> "● 连接中..."
-                    else -> "● 未连接"
-                }
-            )
         }
     }
 
