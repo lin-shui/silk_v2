@@ -25,7 +25,7 @@
 | `search/` | Weaviate schema / indexing / startup 脚本 | `schema.py`, `indexer.py`, `start.sh` |
 | `cc_bridge/` | Claude CLI bridge | `bridge_agent.py`, `executor.py`, `session_manager.py` |
 | `feishu_bot/` | 飞书网关 | `main.py`, `silk_client.py`, `feishu_handler.py` |
-| `docs/` | 现有项目文档 | `todo-roadmap.md`, `context/` |
+| `docs/` | 现有项目文档与 agent workflow skill | `todo-roadmap.md`, `context/`, `skills/` |
 
 ## Backend Packages
 

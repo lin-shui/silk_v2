@@ -28,3 +28,4 @@
 - 任务路由： [docs/context/TASK_ROUTER.md](docs/context/TASK_ROUTER.md)
 - 项目启动/运行面： [docs/context/project/BOOTSTRAP.md](docs/context/project/BOOTSTRAP.md)
 - 已知文档偏差： [docs/context/project/KNOWN_DRIFT.md](docs/context/project/KNOWN_DRIFT.md)
+- 本地提交/Push/PR 规范： [docs/skills/local-change-submit/SKILL.md](docs/skills/local-change-submit/SKILL.md)

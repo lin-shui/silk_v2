@@ -12,6 +12,13 @@
 - 发现代码和文档事实不一致但本轮不修：更新 `project/KNOWN_DRIFT.md`
 - Todo roadmap 例外：默认只读 `docs/todo-roadmap.md`，计划和记录写入 `planning/exec-plans/`
 
+## Commit / Push / PR
+
+- 先读：`../skills/local-change-submit/SKILL.md`
+- 再看：`git status --short --branch`、目标 base、当前分支是否属于已有 PR
+- 默认验证：按实际改动运行最窄验证，并跑 `git diff --check`
+- 规则：只提交本轮相关路径；push/PR 前确认文档同步门禁、命名规范与 PR body 信息齐全
+
 ## Backend HTTP / Route
 
 - 先读：`ARCHITECTURE.md`、`modules/backend/INDEX.md`、`modules/backend/CHAT_AND_ROUTING.md`

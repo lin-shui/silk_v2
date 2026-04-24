@@ -61,3 +61,4 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - 辅助集成： [docs/context/integrations/CLAUDE_CODE_AND_BRIDGES.md](docs/context/integrations/CLAUDE_CODE_AND_BRIDGES.md)
 - 质量门禁： [docs/context/quality/INDEX.md](docs/context/quality/INDEX.md)
 - 规划治理： [docs/context/planning/INDEX.md](docs/context/planning/INDEX.md)
+- Agent 提交/PR workflow skill： [docs/skills/local-change-submit/SKILL.md](docs/skills/local-change-submit/SKILL.md)
