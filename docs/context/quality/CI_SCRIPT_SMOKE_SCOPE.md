@@ -17,7 +17,7 @@
 - `push` / `pull_request` 只在脚本、Gradle 配置、Web / Android 相关目录变更时触发，避免无关改动也跑装配 smoke。
 - 这里不复用 `ci-fast-validation.yml` 的触发矩阵；它的职责仍然是快速拦截。
 
-## 当前覆盖（2026-04-21）
+## 当前覆盖（2026-04-24）
 
 ### Web 脚本链路
 
@@ -34,6 +34,13 @@
 - [x] APK 复制到 `backend/static/files/androidApp-debug.apk`
 - [x] `backend/static/silk-*.apk` 与 `silk.apk` 链接更新
 
+### Build-all 编排链路
+
+- [x] `./silk.sh build-all` 顺序编排 smoke
+- [x] 临时 Gradle stub 锁定 Web 构建先于 Android APK 构建
+- [x] 验证 Web 产物复制、APK 复制和 `silk.apk` 链接更新
+- [x] 不重复执行真实 Web / Android 构建，真实构建仍由上面两个 job 覆盖
+
 ### Artifact
 
 - [x] 上传 Web 生产构建目录
@@ -41,7 +48,6 @@
 
 ## 明确未覆盖
 
-- [ ] `./silk.sh build-all` 的顺序编排本身
 - [ ] `./silk.sh start` 的服务启动 smoke
 - [ ] `./silk.sh deploy` 的端口清理、Weaviate、启动全链路
 - [ ] `./silk.sh build-hap` / Harmony HAP 构建
@@ -50,10 +56,10 @@
 
 - Web job 不上传整个 `backend/static/`，避免把仓库已有静态文件和历史 APK 一并打包成超大 artifact。
 - Android job 复用快检里的 SDK 安装方式，并显式写入 `local.properties`，避免 `silk.sh build-apk` 只在本地开发机可用。
+- `build-all` job 使用 CI 内临时 `gradlew` stub，只验证脚本编排与复制/链接逻辑，避免与真实 Web / Android 构建 job 重复耗时。
 - 这层 smoke 的重点是“脚本能否把装配动作串起来并把产物放到交付目录”，不是替代快检里的单测和编译门禁。
 
 ## 下一步建议
 
-1. 如果后续需要验证脚本编排顺序而不是单个子命令，可再补一个 `build-all` job，但不要和现有两个 job 重复上传大产物。
-2. 若要覆盖 `start` / `deploy`，单独准备临时端口、后台进程清理和 Weaviate mock/skip 策略，避免把 runner 弄成状态机。
-3. Harmony 仍应保留为独立 workflow，放到具备 DevEco / hvigor / hdc 的 runner。
+1. 若要覆盖 `start` / `deploy`，单独准备临时端口、后台进程清理和 Weaviate mock/skip 策略，避免把 runner 弄成状态机。
+2. Harmony 仍应保留为独立 workflow，放到具备 DevEco / hvigor / hdc 的 runner。

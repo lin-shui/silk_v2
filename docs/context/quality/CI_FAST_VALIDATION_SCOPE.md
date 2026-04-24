@@ -105,7 +105,7 @@ frontend 轻量快检：
 - [ ] AI 工具完整端到端 tool-calling（真实模型响应、外部搜索、Weaviate）
 - [ ] 外部真实站点 URL/PDF 抓取、异常响应处理，以及 Weaviate 索引链路
 - [ ] Harmony HAP 构建
-- [ ] `silk.sh start/deploy` 级别的运行态脚本 smoke（`build` / `build-apk` 已拆到 `ci-script-smoke.yml`）
+- [ ] `silk.sh start/deploy` 级别的运行态脚本 smoke（`build` / `build-apk` / `build-all` 编排已拆到 `ci-script-smoke.yml`）
 
 ## 运行备注
 
@@ -121,7 +121,7 @@ frontend 轻量快检：
 - Kotlin/JS 依赖锁文件需要随仓库保存 `kotlin-js-store/yarn.lock`；否则 `nodeTest` 在干净 runner 上会被 `kotlinStoreYarnLock` 直接拦下。
 - Desktop 轻量单测跑 JVM `test`，锁定文件卡片 payload、PDF 下载文件名提取和默认扩展名补齐逻辑，不依赖 GUI 自动化。
 - Android 轻量单测跑本地 `testDebugUnitTest`，只覆盖纯解析函数，不引入模拟器或设备依赖。
-- `silk.sh build` / `build-apk` 已拆到独立 `.github/workflows/ci-script-smoke.yml`；快检继续只保留 `bash -n` 与只读 `status`，避免把装配层耗时塞回基础拦截。
+- `silk.sh build` / `build-apk` / `build-all` 编排已拆到独立 `.github/workflows/ci-script-smoke.yml`；快检继续只保留 `bash -n` 与只读 `status`，避免把装配层耗时塞回基础拦截。
 
 ## 下一步建议
 

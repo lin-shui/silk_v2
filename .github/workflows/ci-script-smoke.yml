@@ -150,3 +150,81 @@ jobs:
             backend/static/files/androidApp-debug.apk
             backend/static/silk-*.apk
           if-no-files-found: ignore
+
+  build-all-orchestration:
+    name: silk.sh build-all orchestration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Smoke check build-all command ordering
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CALL_LOG="$PWD/.ci-build-all-gradlew-calls"
+          mv gradlew gradlew.real
+          cat > gradlew <<'STUB'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          printf '%s\n' "$*" >> "${SILK_GRADLEW_CALL_LOG:?}"
+
+          case " $* " in
+            *" :frontend:webApp:browserProductionWebpack "*)
+              mkdir -p frontend/webApp/build/dist/js/productionExecutable
+              printf '%s\n' '<!doctype html><title>Silk CI build-all smoke</title>' \
+                > frontend/webApp/build/dist/js/productionExecutable/index.html
+              printf '%s\n' 'console.log("Silk CI build-all smoke");' \
+                > frontend/webApp/build/dist/js/productionExecutable/webApp.js
+              ;;
+            *" :frontend:androidApp:assembleDebug "*)
+              mkdir -p frontend/androidApp/build/outputs/apk/debug
+              mkdir -p frontend/androidApp/build/generated/source/buildConfig/debug/com/silk/android
+              printf '%s\n' 'stub apk' \
+                > frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk
+              printf '%s\n' \
+                'package com.silk.android;' \
+                'public final class BuildConfig {' \
+                '  public static final String VERSION_NAME = "ci-smoke";' \
+                '}' \
+                > frontend/androidApp/build/generated/source/buildConfig/debug/com/silk/android/BuildConfig.java
+              ;;
+            *)
+              echo "Unexpected Gradle invocation: $*" >&2
+              exit 1
+              ;;
+          esac
+          STUB
+          chmod +x gradlew
+
+          SILK_GRADLEW_CALL_LOG="$CALL_LOG" ./silk.sh build-all
+
+          call_count=$(wc -l < "$CALL_LOG" | tr -d ' ')
+          test "$call_count" -eq 2
+          first_call=$(sed -n '1p' "$CALL_LOG")
+          second_call=$(sed -n '2p' "$CALL_LOG")
+          case "$first_call" in
+            *":frontend:webApp:browserProductionWebpack"*) ;;
+            *)
+              echo "Expected browserProductionWebpack as first Gradle call, got: $first_call" >&2
+              exit 1
+              ;;
+          esac
+          case "$second_call" in
+            *":frontend:androidApp:assembleDebug"*) ;;
+            *)
+              echo "Expected assembleDebug as second Gradle call, got: $second_call" >&2
+              exit 1
+              ;;
+          esac
+
+          test -f backend/static/index.html
+          cmp frontend/webApp/build/dist/js/productionExecutable/index.html backend/static/index.html
+          test -f backend/static/silk-ci-smoke.apk
+          test -f backend/static/files/androidApp-debug.apk
+          test -L backend/static/silk.apk
+          test "$(readlink backend/static/silk.apk)" = "$PWD/backend/static/silk-ci-smoke.apk"

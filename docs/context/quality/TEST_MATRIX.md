@@ -58,7 +58,7 @@
   - `bash -n silk.sh`
   - `./silk.sh status`
 - CI supplement:
-  - `.github/workflows/ci-script-smoke.yml` 覆盖 `./silk.sh build` 与 `./silk.sh build-apk`
+  - `.github/workflows/ci-script-smoke.yml` 覆盖 `./silk.sh build`、`./silk.sh build-apk` 与 `./silk.sh build-all` 编排 smoke
 
 ## When Payloads Change
 
