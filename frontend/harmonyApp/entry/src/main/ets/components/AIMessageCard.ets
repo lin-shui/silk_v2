@@ -28,11 +28,20 @@ export struct AIMessageCard {
     return content.length > 220 ? content.substring(0, 220) + '...' : content;
   }
 
+  private getDisplayName(): string {
+    const raw = this.message.userName ? this.message.userName : '';
+    const cleaned = raw.replace(/^[\s\u{1F900}-\u{1FAFF}\u{2600}-\u{27BF}\u{1F300}-\u{1F6FF}]+/u, '').trim();
+    if (!cleaned || cleaned === 'Silk') {
+      return 'Silk AI';
+    }
+    return cleaned;
+  }
+
   build() {
     Row() {
       Column() {
         Row() {
-          Text('🤖 Silk AI')
+          Text('🤖 ' + this.getDisplayName())
             .fontSize(13)
             .fontWeight(FontWeight.Medium)
             .fontColor(Theme.colors.primary)

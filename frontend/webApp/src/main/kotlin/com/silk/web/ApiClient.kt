@@ -168,7 +168,9 @@ data class WorkflowItem(
     val groupId: String = "",
     val agentType: String = "claude_code",
     val createdAt: Long = 0,
-    val updatedAt: Long = 0
+    val updatedAt: Long = 0,
+    /** 仅 POST /api/workflows 创建响应可能带：初始目录切换失败的原因。其他场景始终为 null */
+    val initialDirError: String? = null,
 )
 
 // ==================== Knowledge Base models ====================
@@ -539,6 +541,60 @@ object ApiClient {
             CcSettingsResponse(false, "网络错误")
         }
     }
+
+    /**
+     * 查询 user+group 在 CC 模式下的当前状态（含工作目录），用于工作流前端显示
+     */
+    suspend fun getCcState(userId: String, groupId: String): CcStateResponse {
+        return try {
+            val response = get("/users/$userId/cc-state/$groupId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("查询CC状态失败:", e)
+            CcStateResponse(success = false)
+        }
+    }
+
+    /**
+     * 列出 Bridge 机器上指定路径下的子目录（用于 Folder Picker）
+     */
+    suspend fun listCcDir(userId: String, path: String? = null, showHidden: Boolean = false): DirListingResponse {
+        return try {
+            val query = buildString {
+                append("?showHidden=$showHidden")
+                if (!path.isNullOrBlank()) {
+                    append("&path=")
+                    append(encodeUri(path))
+                }
+            }
+            val response = get("/users/$userId/cc-fs/list$query")
+            jsonParser.decodeFromString(response)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 协程取消必须原样往上抛，否则上层 Job.cancel() 无法真正中断加载
+            throw e
+        } catch (e: Exception) {
+            console.log("列目录失败:", e)
+            DirListingResponse(success = false, error = e.message ?: "网络错误")
+        }
+    }
+
+    /**
+     * 直接为 user+group 切换 Bridge 工作目录（不发聊天消息，不出现 /cd 气泡）。
+     * groupId 可传 raw（如 "abc"）或已带前缀（如 "group_abc"），后端会兼容处理。
+     */
+    suspend fun cdCcDir(userId: String, groupId: String, path: String): CcStateResponse {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("groupId", kotlinx.serialization.json.JsonPrimitive(groupId))
+                put("path", kotlinx.serialization.json.JsonPrimitive(path))
+            }.toString()
+            val response = post("/users/$userId/cc-fs/cd", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("切换目录失败:", e)
+            CcStateResponse(success = false)
+        }
+    }
     
     // ==================== 消息撤回相关 API ====================
     
@@ -639,6 +695,9 @@ object ApiClient {
         return response.text().await()
     }
 
+    /** URL-encode a string via JS's encodeURIComponent. */
+    private fun encodeUri(s: String): String = js("encodeURIComponent")(s).unsafeCast<String>()
+
     // ==================== Workflow API ====================
 
     suspend fun getWorkflows(userId: String): List<WorkflowItem> {
@@ -651,10 +710,23 @@ object ApiClient {
         }
     }
 
-    suspend fun createWorkflow(name: String, description: String, userId: String): WorkflowItem? {
+    suspend fun createWorkflow(
+        name: String,
+        description: String,
+        userId: String,
+        initialDir: String = "",
+    ): WorkflowItem? {
         return try {
-            val body = """{"userId":"$userId","name":"$name","description":"$description"}"""
-            val response = post("/api/workflows", body)
+            // 构造 JSON，使用 JsonObject 安全编码避免手动转义
+            val obj = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("name", kotlinx.serialization.json.JsonPrimitive(name))
+                put("description", kotlinx.serialization.json.JsonPrimitive(description))
+                if (initialDir.isNotBlank()) {
+                    put("initialDir", kotlinx.serialization.json.JsonPrimitive(initialDir))
+                }
+            }
+            val response = post("/api/workflows", obj.toString())
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("创建工作流失败:", e)
