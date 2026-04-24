@@ -685,9 +685,11 @@ class ChatServer(
             appendLine("你可以使用工具来搜索文件、搜索互联网、读取文件等。请根据用户的问题选择合适的工具。")
         }
         
-        // 加载聊天历史并设置到 Agent（用于群组统计等功能）
+        // 加载聊天历史并设置到 Agent（用于群组统计等功能 + 近期上下文）
         val chatHistory = historyManager.loadChatHistory(sessionName)
-        directModelAgent.setGroupChatHistory(chatHistory?.messages ?: emptyList())
+        val historyMessages = chatHistory?.messages ?: emptyList()
+        directModelAgent.setGroupChatHistory(historyMessages)
+        directModelAgent.loadRecentHistory(historyMessages, SilkAgent.AGENT_ID)
         
         // 获取群组成员列表并设置到 Agent（用于统计所有成员）
         if (sessionName.startsWith("group_")) {

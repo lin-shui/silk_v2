@@ -76,6 +76,27 @@ class DirectModelAgent(
     fun setGroupMembersList(members: List<Pair<String, String>>) {
         groupMembersList = members
     }
+
+    /**
+     * 将持久化的近期聊天历史注入 conversationHistory，
+     * 仅在 conversationHistory 为空时执行（deploy/重启后首次调用）。
+     */
+    fun loadRecentHistory(entries: List<com.silk.backend.models.ChatHistoryEntry>, agentId: String) {
+        if (conversationHistory.isNotEmpty()) return
+        val recent = entries.filter { it.messageType == "TEXT" }.takeLast(20)
+        if (recent.isEmpty()) return
+
+        for (entry in recent) {
+            val role = if (entry.senderId == agentId) "assistant" else "user"
+            val content = if (role == "user") {
+                "[${entry.senderName}] ${entry.content}"
+            } else {
+                entry.content
+            }
+            conversationHistory.add(Message(role = role, content = content))
+        }
+        logger.info("📜 已注入 {} 条近期历史到 conversationHistory (session: {})", recent.size, sessionId)
+    }
     
     /**
      * OpenAI 兼容的消息格式
@@ -268,9 +289,14 @@ class DirectModelAgent(
         // 1. 添加用户消息到历史
         conversationHistory.add(Message(role = "user", content = userInput))
         
-        // 2. 如果是首次对话，添加系统提示
-        if (conversationHistory.size == 1 && enhancedSystemPrompt != null) {
-            conversationHistory.add(0, Message(role = "system", content = enhancedSystemPrompt))
+        // 2. 每轮更新 system prompt（含 Weaviate 上下文）
+        if (enhancedSystemPrompt != null) {
+            val existingSystemIndex = conversationHistory.indexOfFirst { it.role == "system" }
+            if (existingSystemIndex >= 0) {
+                conversationHistory[existingSystemIndex] = Message(role = "system", content = enhancedSystemPrompt)
+            } else {
+                conversationHistory.add(0, Message(role = "system", content = enhancedSystemPrompt))
+            }
         }
         
         // 3. 直接调用模型（支持 tool calling）
