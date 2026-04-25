@@ -169,8 +169,6 @@ data class WorkflowItem(
     val agentType: String = "claude_code",
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
-    /** 仅 POST /api/workflows 创建响应可能带：初始目录切换失败的原因。其他场景始终为 null */
-    val initialDirError: String? = null,
 )
 
 // ==================== Knowledge Base models ====================
@@ -710,12 +708,18 @@ object ApiClient {
         }
     }
 
+    /** 创建工作流的结果。Ok 携带后端落库后的 workflow；Err 携带可展示给用户的错误消息。 */
+    sealed class CreateWorkflowResult {
+        data class Ok(val workflow: WorkflowItem) : CreateWorkflowResult()
+        data class Err(val message: String) : CreateWorkflowResult()
+    }
+
     suspend fun createWorkflow(
         name: String,
         description: String,
         userId: String,
         initialDir: String = "",
-    ): WorkflowItem? {
+    ): CreateWorkflowResult {
         return try {
             // 构造 JSON，使用 JsonObject 安全编码避免手动转义
             val obj = kotlinx.serialization.json.buildJsonObject {
@@ -727,10 +731,25 @@ object ApiClient {
                 }
             }
             val response = post("/api/workflows", obj.toString())
-            jsonParser.decodeFromString(response)
+            // 先尝试当 WorkflowItem 解析；失败则当错误信封 {"success":false,"message":"..."} 解析
+            val parsed = try {
+                jsonParser.decodeFromString<WorkflowItem>(response)
+            } catch (_: Exception) {
+                null
+            }
+            if (parsed != null) {
+                CreateWorkflowResult.Ok(parsed)
+            } else {
+                val obj2 = try {
+                    kotlinx.serialization.json.Json.parseToJsonElement(response).jsonObject
+                } catch (_: Exception) { null }
+                val msg = obj2?.get("message")?.jsonPrimitive?.contentOrNull
+                    ?: "服务器返回了无法识别的响应"
+                CreateWorkflowResult.Err(msg)
+            }
         } catch (e: Exception) {
             console.log("创建工作流失败:", e)
-            null
+            CreateWorkflowResult.Err(e.message ?: "网络错误")
         }
     }
 

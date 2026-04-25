@@ -22,8 +22,9 @@ fun WorkflowScene(appState: WebAppState) {
     var newInitialDir by remember { mutableStateOf("") }
     var showCreatePicker by remember { mutableStateOf(false) }
     var selectedWorkflow by remember { mutableStateOf<WorkflowItem?>(null) }
-    // 创建工作流后若 initialDir 切换失败，在面板顶部展示一段提示，用户可手动关闭
-    var initDirWarning by remember { mutableStateOf<String?>(null) }
+    // 创建对话框中"加载默认目录"的失败原因（一般是 Bridge 未连接）。
+    // Bridge 离线时整个创建流程都会失败（后端拒绝），所以这里也用作"是否禁用创建按钮"的依据。
+    var dirLoadError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(user.id) {
         isLoading = true
@@ -171,33 +172,6 @@ fun WorkflowScene(appState: WebAppState) {
                 property("overflow", "hidden")
             }
         }) {
-            // 初始目录切换失败的提示条（可关闭）
-            initDirWarning?.let { warn ->
-                Div({
-                    style {
-                        padding(10.px, 16.px)
-                        backgroundColor(Color("rgba(255, 152, 0, 0.15)"))
-                        property("border-bottom", "1px solid rgba(255, 152, 0, 0.3)")
-                        color(Color("#B35C00"))
-                        fontSize(13.px)
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "10px")
-                    }
-                }) {
-                    Span({ style { property("flex", "1") } }) {
-                        Text("⚠ 工作流已创建，但初始目录切换失败：$warn。可使用「更改」按钮再次选择。")
-                    }
-                    Span({
-                        style {
-                            property("cursor", "pointer")
-                            fontSize(16.px)
-                            color(Color("#B35C00"))
-                        }
-                        onClick { initDirWarning = null }
-                    }) { Text("×") }
-                }
-            }
             val wf = selectedWorkflow
             if (wf == null || wf.groupId.isBlank()) {
                 // Placeholder
@@ -232,12 +206,16 @@ fun WorkflowScene(appState: WebAppState) {
 
     // Create dialog
     if (showCreateDialog) {
-        // 打开时若 newInitialDir 为空，拉一次 bridge 默认目录作为初始值
+        // 打开时若 newInitialDir 为空，拉一次 bridge 默认目录作为初始值；
+        // 失败时记下原因，UI 切换提示，并禁用创建按钮（避免拿到 backend 服务器进程的 cwd 当兜底）
         LaunchedEffect(showCreateDialog) {
             if (newInitialDir.isBlank()) {
+                dirLoadError = null
                 val resp = ApiClient.listCcDir(user.id, null)
                 if (resp.success && resp.path.isNotBlank()) {
                     newInitialDir = resp.path
+                } else {
+                    dirLoadError = resp.error ?: "无法获取默认目录"
                 }
             }
         }
@@ -248,6 +226,7 @@ fun WorkflowScene(appState: WebAppState) {
                 showCreateDialog = false
                 newName = ""
                 newInitialDir = ""
+                dirLoadError = null
             },
             zIndex = 1000,
         ) {
@@ -291,13 +270,21 @@ fun WorkflowScene(appState: WebAppState) {
                     style {
                         display(DisplayStyle.Flex)
                         property("gap", "8px")
-                        marginBottom(16.px)
+                        marginBottom(if (dirLoadError != null) 6.px else 16.px)
                     }
                 }) {
                     Input(InputType.Text) {
                         value(newInitialDir)
                         onInput { newInitialDir = it.value }
-                        attr("placeholder", "加载默认目录中…")
+                        // Bridge 离线时整个创建流程都会失败（后端会拒绝），输入路径也无意义，
+                        // 因此明确引导用户先去解决 Bridge 问题，不再鼓励手动输入
+                        attr(
+                            "placeholder",
+                            if (dirLoadError != null) "Bridge 未连接，请先启动 Bridge"
+                            else "加载默认目录中…",
+                        )
+                        // Bridge 离线时禁用输入框，避免用户白费功夫
+                        if (dirLoadError != null) attr("disabled", "")
                         style {
                             property("flex", "1")
                             height(40.px)
@@ -307,22 +294,42 @@ fun WorkflowScene(appState: WebAppState) {
                             fontSize(13.px)
                             fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
                             property("box-sizing", "border-box")
+                            if (dirLoadError != null) {
+                                backgroundColor(Color(SilkColors.surface))
+                                color(Color(SilkColors.textLight))
+                            }
                         }
                     }
                     Button({
+                        // Bridge 离线时浏览器肯定也用不了，提前禁用更友好
+                        val pickerDisabled = dirLoadError != null
+                        if (pickerDisabled) attr("disabled", "")
                         style {
                             backgroundColor(Color("transparent"))
-                            color(Color(SilkColors.primary))
+                            color(
+                                if (pickerDisabled) Color(SilkColors.textLight)
+                                else Color(SilkColors.primary)
+                            )
                             border(1.px, LineStyle.Solid, Color(SilkColors.border))
                             borderRadius(6.px)
                             padding(6.px, 10.px)
-                            property("cursor", "pointer")
+                            property("cursor", if (pickerDisabled) "not-allowed" else "pointer")
                             fontSize(13.px)
                             property("white-space", "nowrap")
                         }
                         attr("title", "浏览选择目录（需 Bridge 在线）")
-                        onClick { showCreatePicker = true }
+                        onClick { if (!pickerDisabled) showCreatePicker = true }
                     }) { Text("\uD83D\uDCC2 选择…") }
+                }
+                // 加载失败时的小提示行
+                if (dirLoadError != null) {
+                    Div({
+                        style {
+                            fontSize(12.px)
+                            color(Color(SilkColors.error))
+                            marginBottom(16.px)
+                        }
+                    }) { Text("⚠ ${dirLoadError}。请先启动 Bridge Agent 再创建工作流。") }
                 }
                 Div({
                     style {
@@ -340,33 +347,57 @@ fun WorkflowScene(appState: WebAppState) {
                             padding(8.px, 16.px)
                             property("cursor", "pointer")
                         }
-                        onClick { showCreateDialog = false; newName = ""; newInitialDir = "" }
+                        onClick {
+                            showCreateDialog = false
+                            newName = ""
+                            newInitialDir = ""
+                            dirLoadError = null
+                        }
                     }) { Text("取消") }
                     Button({
+                        // Bridge 离线时直接禁用创建（后端也会拒绝，提前挡在前端更及时）
+                        val canCreate = dirLoadError == null && newName.isNotBlank() && newInitialDir.isNotBlank()
+                        if (!canCreate) attr("disabled", "")
                         style {
-                            backgroundColor(Color(SilkColors.primary))
+                            backgroundColor(
+                                if (canCreate) Color(SilkColors.primary)
+                                else Color(SilkColors.primaryLight)
+                            )
                             color(Color.white)
                             border(0.px)
                             borderRadius(6.px)
                             padding(8.px, 16.px)
-                            property("cursor", "pointer")
+                            property("cursor", if (canCreate) "pointer" else "not-allowed")
                         }
+                        attr(
+                            "title",
+                            when {
+                                dirLoadError != null -> "Bridge 未连接，无法创建"
+                                newName.isBlank() -> "请输入工作流名称"
+                                newInitialDir.isBlank() -> "请填写或选择工作目录"
+                                else -> "创建工作流"
+                            },
+                        )
                         onClick {
-                            if (newName.isNotBlank()) {
-                                val initDir = newInitialDir.trim()
-                                scope.launch {
-                                    val created = ApiClient.createWorkflow(
-                                        newName.trim(), "", user.id, initDir,
-                                    )
-                                    workflows = ApiClient.getWorkflows(user.id)
-                                    if (created != null) {
-                                        selectedWorkflow = created
-                                        // 后端 cdSync 失败时把错误通过 initialDirError 字段返回，这里暴露给用户
-                                        initDirWarning = created.initialDirError
+                            if (!canCreate) return@onClick
+                            val initDir = newInitialDir.trim()
+                            scope.launch {
+                                val result = ApiClient.createWorkflow(
+                                    newName.trim(), "", user.id, initDir,
+                                )
+                                workflows = ApiClient.getWorkflows(user.id)
+                                when (result) {
+                                    is ApiClient.CreateWorkflowResult.Ok -> {
+                                        selectedWorkflow = result.workflow
+                                        showCreateDialog = false
+                                        newName = ""
+                                        newInitialDir = ""
+                                        dirLoadError = null
                                     }
-                                    showCreateDialog = false
-                                    newName = ""
-                                    newInitialDir = ""
+                                    is ApiClient.CreateWorkflowResult.Err -> {
+                                        // 保留用户输入，把后端错误以浏览器 alert 呈现
+                                        kotlinx.browser.window.alert("创建工作流失败：${result.message}")
+                                    }
                                 }
                             }
                         }

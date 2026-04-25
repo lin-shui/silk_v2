@@ -1857,6 +1857,23 @@ fun Application.configureRouting() {
             val desc = req["description"]?.jsonPrimitive?.content ?: ""
             val initialDir = req["initialDir"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
 
+            // 工作目录是工作流的硬约束：必须由 bridge 验证过的合法路径才能创建。
+            // 这样可避免出现"workflow 创建成功但工作目录是 backend 进程的 cwd"这种半生不熟的状态。
+            if (initialDir.isEmpty()) {
+                call.respondText(
+                    """{"success":false,"message":"工作目录不能为空"}""",
+                    ContentType.Application.Json, HttpStatusCode.BadRequest,
+                )
+                return@post
+            }
+            if (!BridgeRegistry.isConnected(userId)) {
+                call.respondText(
+                    """{"success":false,"message":"Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。"}""",
+                    ContentType.Application.Json, HttpStatusCode.Conflict,
+                )
+                return@post
+            }
+
             // 自动创建关联群组（工作流私聊）
             val groupName = "wf_${sanitizeFileName(name)}_${System.currentTimeMillis()}"
             val group = com.silk.backend.database.GroupRepository.createGroup(groupName, userId)
@@ -1867,36 +1884,34 @@ fun Application.configureRouting() {
 
             val wf = workflowManager.createWorkflow(name, desc, userId, group.id)
 
-            // 如果调用方提供了 initialDir，在返回前同步切到该目录；
-            // 失败时不阻断 workflow 创建，但通过响应里的 initialDirError 字段让前端可感知。
-            var initialDirError: String? = null
-            if (initialDir.isNotEmpty()) {
-                try {
-                    when (val r = ClaudeCodeManager.cdSync(userId, "group_${group.id}", initialDir)) {
-                        is ClaudeCodeManager.CdResult.Ok -> {}
-                        is ClaudeCodeManager.CdResult.Err -> {
-                            logger.warn("⚠️ 工作流 {} 初始 /cd 失败: {}", wf.id, r.reason)
-                            initialDirError = r.reason
-                        }
-                    }
-                } catch (e: Exception) {
-                    logger.warn("⚠️ 工作流 {} 初始 /cd 异常: {}", wf.id, e.message)
-                    initialDirError = e.message ?: "初始目录切换异常"
+            // cdSync 必须成功才能算创建完成；失败时回滚 group + workflow，避免遗留无效记录
+            val cdErr: String? = try {
+                when (val r = ClaudeCodeManager.cdSync(userId, "group_${group.id}", initialDir)) {
+                    is ClaudeCodeManager.CdResult.Ok -> null
+                    is ClaudeCodeManager.CdResult.Err -> r.reason
                 }
+            } catch (e: Exception) {
+                e.message ?: "初始目录切换异常"
+            }
+            if (cdErr != null) {
+                logger.warn("⚠️ 工作流 {} 初始 /cd 失败，回滚 group + workflow: {}", wf.id, cdErr)
+                try { workflowManager.deleteWorkflow(wf.id, userId) } catch (e: Exception) {
+                    logger.warn("回滚 workflow 失败: {}", e.message)
+                }
+                try { com.silk.backend.database.GroupRepository.deleteGroup(group.id) } catch (e: Exception) {
+                    logger.warn("回滚 group 失败: {}", e.message)
+                }
+                call.respondText(
+                    """{"success":false,"message":"工作目录设置失败：$cdErr"}""",
+                    ContentType.Application.Json, HttpStatusCode.Conflict,
+                )
+                return@post
             }
 
-            // 构造响应：在 Workflow 字段基础上附加可选 initialDirError。
-            // 老客户端用 ignoreUnknownKeys=true 解析仍得到正确 Workflow，新前端可读 initialDirError。
-            val wfJson = Json.encodeToJsonElement(Workflow.serializer(), wf).jsonObject
-            val respJson = kotlinx.serialization.json.JsonObject(
-                wfJson + if (initialDirError != null) {
-                    mapOf("initialDirError" to kotlinx.serialization.json.JsonPrimitive(initialDirError))
-                } else emptyMap()
-            )
             call.respondText(
-                respJson.toString(),
+                Json.encodeToString(Workflow.serializer(), wf),
                 ContentType.Application.Json,
-                HttpStatusCode.Created
+                HttpStatusCode.Created,
             )
         }
 
