@@ -19,6 +19,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import com.silk.backend.database.UnreadRepository
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.todos.GroupTodoExtractionService
+import com.silk.backend.ai.AIConfig
 import com.silk.backend.claudecode.ClaudeCodeManager
 import org.slf4j.LoggerFactory
 
@@ -683,6 +684,13 @@ class ChatServer(
             }
             appendLine()
             appendLine("你可以使用工具来搜索文件、搜索互联网、读取文件等。请根据用户的问题选择合适的工具。")
+            if (AIConfig.AUTOCLI_ENABLED) {
+                appendLine()
+                appendLine("【重要】你拥有 autocli 工具，可以从 55+ 个网站获取实时结构化数据（JSON），包括：")
+                appendLine("微博(weibo hot/search)、知乎(zhihu hot/search)、B站(bilibili hot/search)、小红书(xiaohongshu search/feed)、豆瓣(douban movie-hot/top250/search)、抖音等社交平台，")
+                appendLine("以及 hackernews、reddit、twitter、youtube、arxiv、bbc、bloomberg 等国际站点。")
+                appendLine("当用户询问这些平台的热门内容、热搜、排行榜或搜索特定话题时，请优先使用 autocli 工具而非 search_web。")
+            }
         }
         
         // 加载聊天历史并设置到 Agent（用于群组统计等功能 + 近期上下文）
