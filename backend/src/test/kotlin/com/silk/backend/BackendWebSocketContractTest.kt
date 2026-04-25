@@ -672,6 +672,31 @@ class BackendWebSocketContractTest {
         }
     }
 
+    private suspend fun DefaultClientWebSocketSession.receiveHistory(): List<Message> = buildList {
+        withTimeout(5_000) {
+            while (true) {
+                val msg = receiveMessage()
+                if (msg.isHistoryEndMarker()) break
+                add(msg)
+            }
+        }
+    }
+
+    /**
+     * 连续读取消息直到 [predicate] 为 true（包含满足条件的那一条），用于 URL 下载流程等多步推送。
+     */
+    private suspend fun DefaultClientWebSocketSession.receiveMessagesUntil(
+        predicate: (Message) -> Boolean
+    ): List<Message> = buildList {
+        withTimeout(120_000) {
+            while (true) {
+                val msg = receiveMessage()
+                add(msg)
+                if (predicate(msg)) break
+            }
+        }
+    }
+
     private fun Message.isHistoryEndMarker(): Boolean =
         isTransient && type == MessageType.SYSTEM && content == "__history_end__"
 
