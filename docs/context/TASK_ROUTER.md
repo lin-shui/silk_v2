@@ -2,6 +2,23 @@
 
 按任务加载最小上下文，不要默认把所有文档都读一遍。
 
+## Closeout Pass
+
+完成实现后，按实际改动路径检查是否需要同步文档：
+
+- 新增、移动或删除主要入口/模块：更新 `ARCHITECTURE.md`、`generated/REPO_MAP.md` 或对应 `modules/**/INDEX.md`
+- 改 HTTP/WebSocket/payload 合同：更新 backend/frontend 相关 context，并确认 `quality/TEST_MATRIX.md` 的验证映射仍正确
+- 改 `silk.sh`、环境变量、CI workflow 或构建命令：更新 `project/BOOTSTRAP.md` 与 `quality/*`
+- 发现代码和文档事实不一致但本轮不修：更新 `project/KNOWN_DRIFT.md`
+- Todo roadmap 例外：默认只读 `docs/todo-roadmap.md`，计划和记录写入 `planning/exec-plans/`
+
+## Commit / Push / PR
+
+- 先读：`../skills/local-change-submit/SKILL.md`
+- 再看：`git status --short --branch`、目标 base、当前分支是否属于已有 PR
+- 默认验证：按实际改动运行最窄验证，并跑 `git diff --check`
+- 规则：只提交本轮相关路径；push/PR 前确认文档同步门禁、命名规范与 PR body 信息齐全
+
 ## Backend HTTP / Route
 
 - 先读：`ARCHITECTURE.md`、`modules/backend/INDEX.md`、`modules/backend/CHAT_AND_ROUTING.md`
