@@ -489,6 +489,10 @@ data class CcSettingsResponse(
     val bridgeIp: String? = null,
 )
 
+// CcStateResponse / DirEntry / DirListingResponse 已迁移到 :frontend:shared 模块
+// （com.silk.shared.models），前后端共用一份定义，避免字段漂移。
+// 需要这些类型的文件直接 `import com.silk.shared.models.*`。
+
 // ==================== 消息撤回相关模型 ====================
 
 /**

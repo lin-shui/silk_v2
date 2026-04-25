@@ -25,7 +25,8 @@ SQLite 数据库固定在 `./silk_database.db`。
   - 重开、去重、模板实例化
 - `workflow/WorkflowManager.kt`:
   - `workflows/workflow_store.json`
-  - 目前是基础 CRUD，占位结构
+  - 基础 CRUD + 工作流 CC 状态持久化（`workingDir` / `sessionId` / `sessionStarted`），用于后端重启后无感恢复用户的工作目录与对话历史
+  - `updateWorkingDir(groupId, workingDir)` / `updateSessionState(groupId, sessionId, sessionStarted)` 由 `ClaudeCodeManager` 通过 `WorkflowPersistence` 回调驱动；写入会跳过等值无变化以省 I/O
 - `kb/KnowledgeBaseManager.kt`:
   - `knowledge_base/kb_store.json`
   - Topic / Entry CRUD

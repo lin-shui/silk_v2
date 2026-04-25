@@ -52,3 +52,43 @@ data class CcSettingsResponse(
     val bridgeConnected: Boolean = false,
     val bridgeIp: String? = null,
 )
+
+/**
+ * CC 当前 user+group 状态（含工作目录），用于工作流前端展示
+ */
+@Serializable
+data class CcStateResponse(
+    val success: Boolean,
+    val active: Boolean = false,
+    val running: Boolean = false,
+    val workingDir: String = "",
+    val sessionId: String = "",
+    val sessionStarted: Boolean = false,
+    val bridgeConnected: Boolean = false,
+    val error: String? = null,
+)
+
+/**
+ * 目录浏览条目（只包含目录）
+ */
+@Serializable
+data class DirEntry(
+    val name: String,
+    val isDir: Boolean = true,
+)
+
+/**
+ * 目录浏览响应（由 Bridge 提供磁盘列表）
+ */
+@Serializable
+data class DirListingResponse(
+    val success: Boolean,
+    val path: String = "",
+    val parent: String? = null,
+    val segments: List<String> = emptyList(),
+    /** 该平台的路径分隔符，Unix 为 "/"，Windows 为 "\\"。兼容老响应时默认 "/"。 */
+    val separator: String = "/",
+    val entries: List<DirEntry> = emptyList(),
+    val truncated: Boolean = false,
+    val error: String? = null,
+)

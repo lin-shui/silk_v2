@@ -98,13 +98,23 @@ async def handle_cd(
     if not path:
         path = working_dir_holder[0]
 
-    resolved = os.path.realpath(os.path.expanduser(path))
+    try:
+        resolved = os.path.realpath(os.path.expanduser(path))
+    except OSError as exc:
+        # realpath 会检测循环符号链接并抛 ELOOP；给用户一个人话
+        await ws_send(ws, {
+            "type": "cd_result",
+            "requestId": request_id,
+            "success": False,
+            "error": f"解析路径失败: {exc.strerror or exc}（可能包含循环符号链接或无权访问）",
+        })
+        return
     if not os.path.isdir(resolved):
         await ws_send(ws, {
             "type": "cd_result",
             "requestId": request_id,
             "success": False,
-            "error": f"\u76ee\u5f55\u4e0d\u5b58\u5728: {resolved}",
+            "error": f"目录不存在: {resolved}",
         })
         return
 
@@ -172,6 +182,137 @@ async def handle_resume_session(
 # Message dispatcher
 # ---------------------------------------------------------------------------
 
+async def handle_list_dir(
+    ws: websockets.WebSocketClientProtocol,
+    msg: dict[str, Any],
+    working_dir_holder: list[str],
+) -> None:
+    """Handle ``list_dir`` command: return subdirectories under ``path``.
+
+    Response shape::
+
+        {
+          "type": "dir_listing",
+          "requestId": str,
+          "success": bool,
+          "path": str,               # resolved absolute path
+          "parent": str | None,      # parent path or None if at root
+          "segments": [str, ...],   # path components, first is "/" on unix or drive on windows
+          "entries": [{"name": str, "isDir": true}, ...],
+          "truncated": bool,
+          "error": str | None,
+        }
+    """
+    request_id = msg.get("requestId", "")
+    path = msg.get("path", "") or working_dir_holder[0]
+    show_hidden = bool(msg.get("showHidden", False))
+    max_entries = 500
+
+    try:
+        resolved = os.path.realpath(os.path.expanduser(path))
+    except OSError as exc:
+        # realpath 在符号链接循环 (ELOOP) 等情况下抛 OSError，给用户人话的错误
+        await ws_send(ws, {
+            "type": "dir_listing",
+            "requestId": request_id,
+            "success": False,
+            "path": path,
+            "error": f"解析路径失败: {exc.strerror or exc}（可能包含循环符号链接或无权访问）",
+        })
+        return
+    except Exception as exc:
+        await ws_send(ws, {
+            "type": "dir_listing",
+            "requestId": request_id,
+            "success": False,
+            "path": path,
+            "error": f"解析路径失败: {exc}",
+        })
+        return
+
+    if not os.path.isdir(resolved):
+        await ws_send(ws, {
+            "type": "dir_listing",
+            "requestId": request_id,
+            "success": False,
+            "path": resolved,
+            "error": f"目录不存在: {resolved}",
+        })
+        return
+
+    try:
+        names = os.listdir(resolved)
+    except PermissionError as exc:
+        await ws_send(ws, {
+            "type": "dir_listing",
+            "requestId": request_id,
+            "success": False,
+            "path": resolved,
+            "error": f"权限不足: {exc}",
+        })
+        return
+    except OSError as exc:
+        await ws_send(ws, {
+            "type": "dir_listing",
+            "requestId": request_id,
+            "success": False,
+            "path": resolved,
+            "error": f"读取目录失败: {exc}",
+        })
+        return
+
+    entries: list[dict[str, Any]] = []
+    for name in names:
+        if not show_hidden and name.startswith("."):
+            continue
+        full = os.path.join(resolved, name)
+        try:
+            if os.path.isdir(full):
+                entries.append({"name": name, "isDir": True})
+        except OSError:
+            continue
+
+    entries.sort(key=lambda e: e["name"].lower())
+    truncated = len(entries) > max_entries
+    if truncated:
+        entries = entries[:max_entries]
+
+    # Parent
+    parent = os.path.dirname(resolved)
+    if parent == resolved:
+        parent_out: str | None = None
+    else:
+        parent_out = parent
+
+    # Segments: split path into components, keep leading "/" as first segment on unix
+    # and drive letter on windows (e.g. "C:\").
+    segments: list[str] = []
+    if os.name == "nt":
+        drive, rest = os.path.splitdrive(resolved)
+        if drive:
+            segments.append(drive + os.sep)
+        segments.extend([p for p in rest.split(os.sep) if p])
+    else:
+        segments.append("/")
+        segments.extend([p for p in resolved.split("/") if p])
+
+    await ws_send(ws, {
+        "type": "dir_listing",
+        "requestId": request_id,
+        "success": True,
+        "path": resolved,
+        "parent": parent_out,
+        "segments": segments,
+        "separator": os.sep,
+        "entries": entries,
+        "truncated": truncated,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Message dispatcher
+# ---------------------------------------------------------------------------
+
 async def dispatch(
     ws: websockets.WebSocketClientProtocol,
     raw: str,
@@ -213,6 +354,9 @@ async def dispatch(
 
     elif msg_type == "resume_session":
         await handle_resume_session(ws, msg)
+
+    elif msg_type == "list_dir":
+        await handle_list_dir(ws, msg, working_dir_holder)
 
     else:
         logger.debug("[Bridge] Unknown message type: %s", msg_type)

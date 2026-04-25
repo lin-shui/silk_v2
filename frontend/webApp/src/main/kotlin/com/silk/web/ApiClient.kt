@@ -168,7 +168,7 @@ data class WorkflowItem(
     val groupId: String = "",
     val agentType: String = "claude_code",
     val createdAt: Long = 0,
-    val updatedAt: Long = 0
+    val updatedAt: Long = 0,
 )
 
 // ==================== Knowledge Base models ====================
@@ -539,6 +539,60 @@ object ApiClient {
             CcSettingsResponse(false, "网络错误")
         }
     }
+
+    /**
+     * 查询 user+group 在 CC 模式下的当前状态（含工作目录），用于工作流前端显示
+     */
+    suspend fun getCcState(userId: String, groupId: String): CcStateResponse {
+        return try {
+            val response = get("/users/$userId/cc-state/$groupId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("查询CC状态失败:", e)
+            CcStateResponse(success = false)
+        }
+    }
+
+    /**
+     * 列出 Bridge 机器上指定路径下的子目录（用于 Folder Picker）
+     */
+    suspend fun listCcDir(userId: String, path: String? = null, showHidden: Boolean = false): DirListingResponse {
+        return try {
+            val query = buildString {
+                append("?showHidden=$showHidden")
+                if (!path.isNullOrBlank()) {
+                    append("&path=")
+                    append(encodeUri(path))
+                }
+            }
+            val response = get("/users/$userId/cc-fs/list$query")
+            jsonParser.decodeFromString(response)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 协程取消必须原样往上抛，否则上层 Job.cancel() 无法真正中断加载
+            throw e
+        } catch (e: Exception) {
+            console.log("列目录失败:", e)
+            DirListingResponse(success = false, error = e.message ?: "网络错误")
+        }
+    }
+
+    /**
+     * 直接为 user+group 切换 Bridge 工作目录（不发聊天消息，不出现 /cd 气泡）。
+     * groupId 可传 raw（如 "abc"）或已带前缀（如 "group_abc"），后端会兼容处理。
+     */
+    suspend fun cdCcDir(userId: String, groupId: String, path: String): CcStateResponse {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("groupId", kotlinx.serialization.json.JsonPrimitive(groupId))
+                put("path", kotlinx.serialization.json.JsonPrimitive(path))
+            }.toString()
+            val response = post("/users/$userId/cc-fs/cd", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("切换目录失败:", e)
+            CcStateResponse(success = false)
+        }
+    }
     
     // ==================== 消息撤回相关 API ====================
     
@@ -639,6 +693,9 @@ object ApiClient {
         return response.text().await()
     }
 
+    /** URL-encode a string via JS's encodeURIComponent. */
+    private fun encodeUri(s: String): String = js("encodeURIComponent")(s).unsafeCast<String>()
+
     // ==================== Workflow API ====================
 
     suspend fun getWorkflows(userId: String): List<WorkflowItem> {
@@ -651,14 +708,55 @@ object ApiClient {
         }
     }
 
-    suspend fun createWorkflow(name: String, description: String, userId: String): WorkflowItem? {
+    /** 创建工作流的结果。Ok 携带后端落库后的 workflow；Err 携带可展示给用户的错误消息。 */
+    sealed class CreateWorkflowResult {
+        data class Ok(val workflow: WorkflowItem) : CreateWorkflowResult()
+        data class Err(val message: String) : CreateWorkflowResult()
+    }
+
+    suspend fun createWorkflow(
+        name: String,
+        description: String,
+        userId: String,
+        initialDir: String = "",
+    ): CreateWorkflowResult {
         return try {
-            val body = """{"userId":"$userId","name":"$name","description":"$description"}"""
-            val response = post("/api/workflows", body)
-            jsonParser.decodeFromString(response)
+            // 构造 JSON，使用 JsonObject 安全编码避免手动转义
+            val obj = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("name", kotlinx.serialization.json.JsonPrimitive(name))
+                put("description", kotlinx.serialization.json.JsonPrimitive(description))
+                if (initialDir.isNotBlank()) {
+                    put("initialDir", kotlinx.serialization.json.JsonPrimitive(initialDir))
+                }
+            }
+            val response = post("/api/workflows", obj.toString())
+            // 响应有两种形状：
+            //   成功：Workflow 对象（有 id/groupId 等字段，无 success 字段）
+            //   失败：错误信封 {"success": false, "message": "..."}
+            // 优先用 success 字段区分，避免"错误响应恰好含 id 字段"这种 ignoreUnknownKeys 陷阱
+            val parsed = try {
+                kotlinx.serialization.json.Json.parseToJsonElement(response).jsonObject
+            } catch (_: Exception) { null }
+            if (parsed == null) {
+                CreateWorkflowResult.Err("服务器返回了无法识别的响应")
+            } else {
+                val success = parsed["success"]?.jsonPrimitive?.booleanOrNull
+                // success 字段存在且为 false → 错误信封；未出现 success 字段 → 视为 Workflow 对象
+                if (success == false) {
+                    val msg = parsed["message"]?.jsonPrimitive?.contentOrNull ?: "创建失败"
+                    CreateWorkflowResult.Err(msg)
+                } else {
+                    try {
+                        CreateWorkflowResult.Ok(jsonParser.decodeFromString<WorkflowItem>(response))
+                    } catch (_: Exception) {
+                        CreateWorkflowResult.Err("解析创建结果失败")
+                    }
+                }
+            }
         } catch (e: Exception) {
             console.log("创建工作流失败:", e)
-            null
+            CreateWorkflowResult.Err(e.message ?: "网络错误")
         }
     }
 

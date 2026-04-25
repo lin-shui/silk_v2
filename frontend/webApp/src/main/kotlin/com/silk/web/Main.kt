@@ -3430,7 +3430,9 @@ fun AIMessageCard(
                         property("letter-spacing", "0.5px")
                     }
                 }) {
-                    Text("Silk AI")
+                    val aiDisplayName = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
+                        .let { if (it.isBlank() || it == "Silk") "Silk AI" else it }
+                    Text(aiDisplayName)
                 }
                 Span({
                     style {

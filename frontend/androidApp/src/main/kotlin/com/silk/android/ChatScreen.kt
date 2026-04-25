@@ -1900,7 +1900,8 @@ fun AIMessageCardAndroid(
                 
                 // 名称和时间
                 Text(
-                    text = "Silk AI",
+                    text = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
+                        .let { if (it.isBlank() || it == "Silk") "Silk AI" else it },
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFFC9A86C)  // 金色

@@ -1,6 +1,8 @@
 package com.silk.backend.claudecode
 
 import io.ktor.websocket.*
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -99,16 +101,22 @@ object BridgeRegistry {
 }
 
 /**
- * Silk → Bridge 的命令消息
+ * Silk → Bridge 的命令消息。
+ *
+ * 所有非 `type` 字段都是可选的，不同命令只用到其中几个。加 @EncodeDefault(NEVER)
+ * 让等于默认值的字段不序列化，避免每条消息都带一堆无关字段（例如 execute 消息
+ * 不会包含 path/showHidden/sessionIdPrefix 等）。
  */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class BridgeRequest(
     val type: String,
-    val requestId: String = "",
-    val prompt: String = "",
-    val sessionId: String = "",
-    val workingDir: String = "",
-    val resume: Boolean = false,
-    val path: String = "",
-    val sessionIdPrefix: String = "",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val requestId: String = "",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val prompt: String = "",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val sessionId: String = "",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val workingDir: String = "",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val resume: Boolean = false,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val path: String = "",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val sessionIdPrefix: String = "",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val showHidden: Boolean = false,
 )

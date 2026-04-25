@@ -14,6 +14,9 @@ import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
 import com.silk.backend.claudecode.BridgeRegistry
 import com.silk.backend.claudecode.ClaudeCodeManager
+import com.silk.shared.models.CcStateResponse
+import com.silk.shared.models.DirEntry
+import com.silk.shared.models.DirListingResponse
 import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
@@ -101,6 +104,28 @@ suspend fun broadcastFileMessage(
 }
 
 fun Application.configureRouting() {
+    // 把 ClaudeCodeManager 的状态持久化绑定到 WorkflowManager：
+    // - workingDir / sessionId / sessionStarted 改动时写盘到 workflow_store.json
+    // - autoActivateForWorkflow 首次激活时根据已有记录 seed state（重启后续会话的关键）
+    ClaudeCodeManager.setWorkflowPersistence(object : ClaudeCodeManager.WorkflowPersistence {
+        override fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean =
+            workflowManager.updateWorkingDir(rawGroupId, workingDir)
+
+        override fun persistSessionState(rawGroupId: String, sessionId: String, sessionStarted: Boolean): Boolean =
+            workflowManager.updateSessionState(rawGroupId, sessionId, sessionStarted)
+
+        override fun loadSeed(rawGroupId: String): ClaudeCodeManager.WorkflowSeed? {
+            val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
+            // 全部都默认值（空 dir + 空 sessionId）也没必要 seed
+            if (wf.workingDir.isBlank() && wf.sessionId.isBlank()) return null
+            return ClaudeCodeManager.WorkflowSeed(
+                workingDir = wf.workingDir,
+                sessionId = wf.sessionId,
+                sessionStarted = wf.sessionStarted,
+            )
+        }
+    })
+
     routing {
         get("/") {
             val html = """
@@ -529,7 +554,138 @@ fun Application.configureRouting() {
             val bridgeIp = if (connected) BridgeRegistry.getRemoteIp(userId) else null
             call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected, bridgeIp = bridgeIp))
         }
-        
+
+        // 查询 user+group 的 CC 当前状态（含工作目录），供工作流前端显示
+        get("/users/{userId}/cc-state/{groupId}") {
+            val userId = call.parameters["userId"] ?: ""
+            val rawGroupId = call.parameters["groupId"] ?: ""
+            if (userId.isBlank() || rawGroupId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, CcStateResponse(success = false))
+                return@get
+            }
+            // CC 状态 key 使用 sessionName 格式 "group_{groupId}"（见 autoActivateForWorkflow 调用点）
+            // 兼容：前端可能传 raw 或已带前缀
+            val candidateIds = listOf(
+                if (rawGroupId.startsWith("group_")) rawGroupId else "group_$rawGroupId",
+                rawGroupId,
+            ).distinct()
+            val snap = candidateIds.firstNotNullOfOrNull { gid ->
+                ClaudeCodeManager.snapshotState(userId, gid)
+            }
+            val bridgeConnected = BridgeRegistry.isConnected(userId)
+            if (snap == null) {
+                call.respond(CcStateResponse(success = true, bridgeConnected = bridgeConnected))
+            } else {
+                call.respond(
+                    CcStateResponse(
+                        success = true,
+                        active = snap.active,
+                        running = snap.running,
+                        workingDir = snap.workingDir,
+                        sessionId = snap.sessionId,
+                        sessionStarted = snap.sessionStarted,
+                        bridgeConnected = bridgeConnected,
+                    )
+                )
+            }
+        }
+
+        // 列出 Bridge 所在机器上某路径下的子目录（用于工作流 Folder Picker）
+        // path 为空表示使用 bridge 当前 workingDir 起点
+        get("/users/{userId}/cc-fs/list") {
+            val userId = call.parameters["userId"] ?: ""
+            val path = call.request.queryParameters["path"]
+            val showHidden = call.request.queryParameters["showHidden"]?.toBoolean() ?: false
+            if (userId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, DirListingResponse(success = false, error = "userId 为空"))
+                return@get
+            }
+            if (!BridgeRegistry.isConnected(userId)) {
+                call.respond(HttpStatusCode.Conflict, DirListingResponse(success = false, error = "Bridge 未连接"))
+                return@get
+            }
+            val raw = ClaudeCodeManager.listDirectory(userId, path, showHidden)
+            if (raw == null) {
+                call.respond(HttpStatusCode.GatewayTimeout, DirListingResponse(success = false, error = "Bridge 未响应或超时"))
+                return@get
+            }
+            try {
+                val resp = DirListingResponse(
+                    success = raw["success"]?.jsonPrimitive?.booleanOrNull ?: false,
+                    path = raw["path"]?.jsonPrimitive?.contentOrNull ?: "",
+                    parent = raw["parent"]?.jsonPrimitive?.contentOrNull,
+                    segments = raw["segments"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
+                    separator = raw["separator"]?.jsonPrimitive?.contentOrNull ?: "/",
+                    entries = raw["entries"]?.jsonArray?.mapNotNull { el ->
+                        val obj = el.jsonObject
+                        val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                        DirEntry(
+                            name = name,
+                            isDir = obj["isDir"]?.jsonPrimitive?.booleanOrNull ?: true,
+                        )
+                    } ?: emptyList(),
+                    truncated = raw["truncated"]?.jsonPrimitive?.booleanOrNull ?: false,
+                    error = raw["error"]?.jsonPrimitive?.contentOrNull,
+                )
+                call.respond(resp)
+            } catch (e: Exception) {
+                logger.error("❌ 解析 Bridge dir_listing 失败: {}", e.message)
+                call.respond(
+                    HttpStatusCode.InternalServerError,
+                    DirListingResponse(success = false, error = "解析响应失败: ${e.message}")
+                )
+            }
+        }
+
+        // 直接切换 user+group 的工作目录（不经过聊天消息流，避免 /cd 在聊天中显示气泡）。
+        // 请求体（JSON）：{ "groupId": "...", "path": "..." }
+        post("/users/{userId}/cc-fs/cd") {
+            val userId = call.parameters["userId"] ?: ""
+            val reqJson = try {
+                Json.parseToJsonElement(call.receiveText()).jsonObject
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    CcStateResponse(success = false, error = "请求体非法 JSON: ${e.message}")
+                )
+                return@post
+            }
+            val groupId = reqJson["groupId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val rawPath = reqJson["path"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (userId.isBlank() || groupId.isBlank() || rawPath.isBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    CcStateResponse(success = false, error = "userId / groupId / path 不能为空")
+                )
+                return@post
+            }
+            // 与 autoActivateForWorkflow 一致使用 "group_<id>" 形式作为 CC state key
+            val ccGroupId = if (groupId.startsWith("group_")) groupId else "group_$groupId"
+            when (val result = ClaudeCodeManager.cdSync(userId, ccGroupId, rawPath)) {
+                is ClaudeCodeManager.CdResult.Err -> {
+                    call.respond(
+                        HttpStatusCode.Conflict,
+                        CcStateResponse(success = false, error = result.reason)
+                    )
+                }
+                is ClaudeCodeManager.CdResult.Ok -> {
+                    val snap = ClaudeCodeManager.snapshotState(userId, ccGroupId)
+                    val bridgeConnected = BridgeRegistry.isConnected(userId)
+                    call.respond(
+                        CcStateResponse(
+                            success = true,
+                            active = snap?.active ?: true,
+                            running = snap?.running ?: false,
+                            workingDir = result.resolvedPath,
+                            sessionId = snap?.sessionId ?: "",
+                            sessionStarted = snap?.sessionStarted ?: false,
+                            bridgeConnected = bridgeConnected,
+                        )
+                    )
+                }
+            }
+        }
+
         // PDF 报告下载端点
         get("/download/report/{sessionName}/{fileName...}") {
             val sessionName = call.parameters["sessionName"] ?: "default_room"
@@ -1711,30 +1867,75 @@ fun Application.configureRouting() {
         }
 
         post("/api/workflows") {
+            // 错误响应统一用 JsonObject 安全编码，避免外部字符串里的引号/反斜杠破坏 JSON 结构
+            suspend fun respondError(status: HttpStatusCode, message: String) {
+                val payload = kotlinx.serialization.json.buildJsonObject {
+                    put("success", kotlinx.serialization.json.JsonPrimitive(false))
+                    put("message", kotlinx.serialization.json.JsonPrimitive(message))
+                }
+                call.respondText(payload.toString(), ContentType.Application.Json, status)
+            }
+
             val body = call.receiveText()
             val json = Json { ignoreUnknownKeys = true }
             val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
             val userId = req["userId"]?.jsonPrimitive?.content
             val name = req["name"]?.jsonPrimitive?.content
             if (userId.isNullOrBlank() || name.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId or name"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                respondError(HttpStatusCode.BadRequest, "Missing userId or name")
                 return@post
             }
             val desc = req["description"]?.jsonPrimitive?.content ?: ""
+            val initialDir = req["initialDir"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+
+            // 工作目录是工作流的硬约束：必须由 bridge 验证过的合法路径才能创建。
+            // 这样可避免出现"workflow 创建成功但工作目录是 backend 进程的 cwd"这种半生不熟的状态。
+            if (initialDir.isEmpty()) {
+                respondError(HttpStatusCode.BadRequest, "工作目录不能为空")
+                return@post
+            }
+            if (!BridgeRegistry.isConnected(userId)) {
+                respondError(HttpStatusCode.Conflict, "Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
+                return@post
+            }
 
             // 自动创建关联群组（工作流私聊）
             val groupName = "wf_${sanitizeFileName(name)}_${System.currentTimeMillis()}"
             val group = com.silk.backend.database.GroupRepository.createGroup(groupName, userId)
             if (group == null) {
-                call.respondText("""{"success":false,"message":"Failed to create workflow group"}""", ContentType.Application.Json, HttpStatusCode.InternalServerError)
+                respondError(HttpStatusCode.InternalServerError, "Failed to create workflow group")
                 return@post
             }
 
             val wf = workflowManager.createWorkflow(name, desc, userId, group.id)
+
+            // cdSync 必须成功才能算创建完成；失败时回滚 group + workflow + CC state，避免遗留无效记录
+            val cdResult: ClaudeCodeManager.CdResult = try {
+                ClaudeCodeManager.cdSync(userId, "group_${group.id}", initialDir)
+            } catch (e: Exception) {
+                ClaudeCodeManager.CdResult.Err(e.message ?: "初始目录切换异常")
+            }
+            if (cdResult is ClaudeCodeManager.CdResult.Err) {
+                logger.warn("⚠️ 工作流 {} 初始 /cd 失败，回滚 group + workflow: {}", wf.id, cdResult.reason)
+                // 删 workflow（WorkflowManager 自己处理内部异常，这里不再二层捕获污染日志）
+                workflowManager.deleteWorkflow(wf.id, userId)
+                // 删 group（同上，GroupRepository.deleteGroup 内部捕获异常返回 false）
+                com.silk.backend.database.GroupRepository.deleteGroup(group.id)
+                // 同时清理 ClaudeCodeManager 里因 getOrCreateState 而产生的孤儿 state
+                ClaudeCodeManager.cleanupState(userId, "group_${group.id}")
+                respondError(HttpStatusCode.Conflict, "工作目录设置失败：${cdResult.reason}")
+                return@post
+            }
+            // 同步把 workingDir 写到 workflow record，确保返回给前端的 wf 对象包含真实路径
+            // （cdSync 内部已 fire-and-forget 异步持久化一次，但同步写一次保证 race-free 返回）
+            val resolvedPath = (cdResult as ClaudeCodeManager.CdResult.Ok).resolvedPath
+            workflowManager.updateWorkingDir(group.id, resolvedPath)
+            val wfWithDir = wf.copy(workingDir = resolvedPath, updatedAt = System.currentTimeMillis())
+
             call.respondText(
-                Json.encodeToString(Workflow.serializer(), wf),
+                Json.encodeToString(Workflow.serializer(), wfWithDir),
                 ContentType.Application.Json,
-                HttpStatusCode.Created
+                HttpStatusCode.Created,
             )
         }
 

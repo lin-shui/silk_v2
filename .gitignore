@@ -55,6 +55,7 @@ node_modules/
 
 # Chat History (runtime data)
 chat_history/
+chat_history_backup/
 *.pdf
 backend.log
 backend.pid

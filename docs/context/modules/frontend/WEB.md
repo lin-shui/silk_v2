@@ -29,3 +29,8 @@
 
 - 改文件消息/下载逻辑时，优先看 `FileContracts.kt` / `FileContractsTest.kt`
 - 改布局壳层时，确认 `AppState.kt` 与 `Main.kt` 的 scene/tab 状态流
+- 工作流面板（`WorkflowScene.kt`）含 Folder Picker：
+  - header 显示 agent 名（取自 `Message.userName`）和当前工作目录
+  - "更改" 链接 / 创建工作流的"选择…" 按钮 → `FolderPickerDialog`（面包屑 + `..` + 子目录 + 手动输入）
+  - 切目录走 HTTP `cdCcDir`（不发聊天 `/cd` 气泡）；FolderPicker 内部用 `loadJob` 取消旧请求避免 stale 覆盖
+  - 共用 `ModalOverlay` composable；后端 `DirListingResponse.separator` 字段决定路径拼接，前端不猜 Unix vs Windows

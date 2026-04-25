@@ -23,6 +23,11 @@ tasks.shadowJar {
 }
 
 dependencies {
+    // 共享协议模型（CcStateResponse / DirListingResponse 等），消除前后端双份维护
+    // :frontend:shared 实际上是"前后端共享合同"模块，不是前端 UI 代码。
+    // Kotlin Multiplatform 模块，此处消费它的 desktop (JVM) target。
+    implementation(project(":frontend:shared"))
+
     // Ktor Server
     implementation("io.ktor:ktor-server-core:2.3.6")
     implementation("io.ktor:ktor-server-netty:2.3.6")

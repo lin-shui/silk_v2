@@ -28,6 +28,10 @@
 - `/api/messages/*`
 - `/api/workflows`
 - `/api/kb/*`
+- `/users/{userId}/cc-settings*`
+- `/users/{userId}/cc-state/{groupId}`
+- `/users/{userId}/cc-fs/list` (GET, query: path/showHidden)
+- `/users/{userId}/cc-fs/cd` (POST, JSON body: groupId/path)
 - `/chat` WebSocket
 - `/cc-bridge` WebSocket
 
@@ -61,6 +65,7 @@
 - WebSocket 消息模型同时存在于：
   - 后端 `WebSocketConfig.kt`
   - 共享前端 `frontend/shared/.../models/Message.kt`
+- HTTP 响应/请求 DTO 中的 CC 模块（`CcStateResponse` / `DirEntry` / `DirListingResponse`）只在 `frontend/shared/.../models/UserSettings.kt` 一处定义；backend 通过 `implementation(project(":frontend:shared"))` 直接 import。新增字段改一处即可。
 - 文件消息 payload 同时影响：
   - `routes/FileRoutes.kt`
   - `backend/BackendFileContractTest.kt`
