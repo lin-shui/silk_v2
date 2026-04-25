@@ -46,3 +46,4 @@
 - `silk.sh` 会自动加载项目根 `.env`
 - Web / Android / Desktop 的 build 脚本都会从 `.env` 注入后端地址
 - 端口与公网/内网分离时，需要特别注意 `BACKEND_HTTP_PORT` 与 `BACKEND_INTERNAL_PORT`
+- Backend SQLite 默认使用 `./silk_database.db`；测试或隔离运行可通过 JVM 参数 `-Dsilk.databasePath=...` 覆盖
