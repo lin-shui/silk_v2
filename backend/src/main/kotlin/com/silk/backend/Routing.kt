@@ -671,6 +671,18 @@ fun Application.configureRouting() {
                 is ClaudeCodeManager.CdResult.Ok -> {
                     val snap = ClaudeCodeManager.snapshotState(userId, ccGroupId)
                     val bridgeConnected = BridgeRegistry.isConnected(userId)
+                    // 切目录会重置 sessionId/sessionStarted/messageQueue（等价于 /new），
+                    // 在聊天里广播一条提示，让用户能感知"会话被重置了"，与 /new 命令体验一致
+                    val rawGid = if (ccGroupId.startsWith("group_")) ccGroupId.removePrefix("group_") else ccGroupId
+                    try {
+                        getGroupChatServer(rawGid).broadcast(
+                            ClaudeCodeManager.systemMessage(
+                                "工作目录已切换至：${result.resolvedPath} 会话已重置"
+                            )
+                        )
+                    } catch (e: Exception) {
+                        logger.warn("广播切目录提示失败: {}", e.message)
+                    }
                     call.respond(
                         CcStateResponse(
                             success = true,
