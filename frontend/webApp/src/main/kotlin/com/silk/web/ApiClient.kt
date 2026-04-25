@@ -773,6 +773,48 @@ object ApiClient {
         }
     }
 
+    // ==================== Trusted Directory API ====================
+
+    sealed class TrustCheckResult {
+        data class Trusted(val bridgeId: String?) : TrustCheckResult()
+        data class NotTrusted(val bridgeId: String?) : TrustCheckResult()
+        object BridgeDisconnected : TrustCheckResult()
+        data class Error(val message: String) : TrustCheckResult()
+    }
+
+    suspend fun checkTrustedDir(userId: String, path: String): TrustCheckResult {
+        return try {
+            val query = "?path=${encodeUri(path)}"
+            val response = get("/users/$userId/trusted-dirs/check$query")
+            val parsed = jsonParser.decodeFromString<TrustedDirCheckResponse>(response)
+            when {
+                !parsed.bridgeConnected -> TrustCheckResult.BridgeDisconnected
+                parsed.trusted -> TrustCheckResult.Trusted(parsed.bridgeId)
+                else -> TrustCheckResult.NotTrusted(parsed.bridgeId)
+            }
+        } catch (e: kotlinx.serialization.SerializationException) {
+            console.log("解析信任目录检查响应失败:", e)
+            TrustCheckResult.Error("服务器返回了无法识别的响应")
+        } catch (e: Exception) {
+            console.log("检查信任目录失败:", e)
+            TrustCheckResult.Error("网络错误: ${e.message}")
+        }
+    }
+
+    suspend fun addTrustedDir(userId: String, path: String): Boolean {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("path", kotlinx.serialization.json.JsonPrimitive(path))
+            }.toString()
+            val response = post("/users/$userId/trusted-dirs", body)
+            val json = jsonParser.parseToJsonElement(response).jsonObject
+            json["success"]?.jsonPrimitive?.booleanOrNull ?: false
+        } catch (e: Exception) {
+            console.log("添加信任目录失败:", e)
+            false
+        }
+    }
+
     // ==================== Knowledge Base API ====================
 
     suspend fun getKBTopics(userId: String): List<KBTopicItem> {

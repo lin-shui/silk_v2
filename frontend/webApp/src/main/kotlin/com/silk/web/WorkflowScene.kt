@@ -386,6 +386,39 @@ fun WorkflowScene(appState: WebAppState) {
                             if (!canCreate) return@onClick
                             val initDir = newInitialDir.trim()
                             scope.launch {
+                                // 1. 信任目录检查
+                                val trustCheck = ApiClient.checkTrustedDir(user.id, initDir)
+                                when (trustCheck) {
+                                    is ApiClient.TrustCheckResult.BridgeDisconnected -> {
+                                        kotlinx.browser.window.alert("Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
+                                        return@launch
+                                    }
+                                    is ApiClient.TrustCheckResult.NotTrusted -> {
+                                        val bridgeLabel = trustCheck.bridgeId ?: "未知机器"
+                                        val confirmed = kotlinx.browser.window.confirm(
+                                            "您选择了工作目录：$initDir\n" +
+                                            "Bridge 机器：$bridgeLabel\n\n" +
+                                            "是否信任并授权该目录及其子目录的读写执行权限？\n" +
+                                            "信任后，下次在该机器上选择此目录或其子目录时将不再询问。"
+                                        )
+                                        if (confirmed) {
+                                            val added = ApiClient.addTrustedDir(user.id, initDir)
+                                            if (!added) {
+                                                kotlinx.browser.window.alert("添加信任记录失败，请重试。")
+                                                return@launch
+                                            }
+                                        } else {
+                                            return@launch
+                                        }
+                                    }
+                                    is ApiClient.TrustCheckResult.Error -> {
+                                        kotlinx.browser.window.alert("检查信任状态失败：${trustCheck.message}")
+                                        return@launch
+                                    }
+                                    else -> {} // 已信任，继续
+                                }
+
+                                // 2. 创建 workflow
                                 val result = ApiClient.createWorkflow(
                                     newName.trim(), "", user.id, initDir,
                                 )
@@ -754,10 +787,47 @@ private fun WorkflowChatPanel(
             onConfirm = { selectedPath ->
                 showFolderPicker = false
                 scope.launch {
-                    // HTTP 切目录，不发聊天 /cd 气泡
+                    // 1. 信任目录检查
+                    val trustCheck = ApiClient.checkTrustedDir(userId, selectedPath)
+                    when (trustCheck) {
+                        is ApiClient.TrustCheckResult.BridgeDisconnected -> {
+                            kotlinx.browser.window.alert("Bridge 未连接，无法切换目录。")
+                            return@launch
+                        }
+                        is ApiClient.TrustCheckResult.NotTrusted -> {
+                            val bridgeLabel = trustCheck.bridgeId ?: "未知机器"
+                            val confirmed = kotlinx.browser.window.confirm(
+                                "您选择了工作目录：$selectedPath\n" +
+                                "Bridge 机器：$bridgeLabel\n\n" +
+                                "是否信任并授权该目录及其子目录的读写执行权限？\n" +
+                                "信任后，下次在该机器上选择此目录或其子目录时将不再询问。"
+                            )
+                            if (confirmed) {
+                                val added = ApiClient.addTrustedDir(userId, selectedPath)
+                                if (!added) {
+                                    kotlinx.browser.window.alert("添加信任记录失败，请重试。")
+                                    return@launch
+                                }
+                            } else {
+                                return@launch
+                            }
+                        }
+                        is ApiClient.TrustCheckResult.Error -> {
+                            kotlinx.browser.window.alert("检查信任状态失败：${trustCheck.message}")
+                            return@launch
+                        }
+                        else -> {} // 已信任，继续
+                    }
+
+                    // 2. 执行 cd
                     val resp = ApiClient.cdCcDir(userId, groupId, selectedPath)
                     if (resp.success) {
                         workingDir = resp.workingDir
+                    } else {
+                        val err = resp.error
+                        if (err != null) {
+                            kotlinx.browser.window.alert("切换目录失败：$err")
+                        }
                     }
                 }
             },
