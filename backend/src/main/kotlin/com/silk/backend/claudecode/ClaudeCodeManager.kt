@@ -32,6 +32,62 @@ object ClaudeCodeManager {
 
     private val states = ConcurrentHashMap<String, UserCCState>()
 
+    /**
+     * 工作流持久化回调：state 变化时（workingDir / sessionId / sessionStarted）
+     * 把数据写回 workflow_store.json，让重启后能恢复对话。
+     *
+     * 由 [Application]/[configureRouting] 在启动时通过 [setWorkflowPersistence] 注入；
+     * 不注入或非 workflow 群组则跳过持久化（向后兼容普通群聊场景）。
+     *
+     * groupId 形如 "group_<rawId>"——和 CC state key 的尾部一致；持久化层据此找到对应的
+     * workflow record（其 raw groupId 可由 stripGroupPrefix 提取）。
+     */
+    interface WorkflowPersistence {
+        /** 持久化新的 workingDir。返回是否真的写盘了；非 workflow 群组返回 false 即可。 */
+        fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean
+        /** 持久化 bridge sessionId 与 sessionStarted；返回值同上。 */
+        fun persistSessionState(rawGroupId: String, sessionId: String, sessionStarted: Boolean): Boolean
+        /** 启动 / 首次激活时根据 workflow record 提供 seed；返回 null 表示不是 workflow group 或无值可 seed。 */
+        fun loadSeed(rawGroupId: String): WorkflowSeed?
+    }
+
+    /** 用于 seed 一个新创建的 [UserCCState]，只在重启后第一次激活时有意义 */
+    data class WorkflowSeed(
+        val workingDir: String,
+        val sessionId: String,
+        val sessionStarted: Boolean,
+    )
+
+    @Volatile private var persistence: WorkflowPersistence? = null
+
+    fun setWorkflowPersistence(p: WorkflowPersistence) {
+        persistence = p
+    }
+
+    /** group_xxx → xxx；非 group_ 前缀原样返回 */
+    private fun stripGroupPrefix(groupId: String): String =
+        if (groupId.startsWith("group_")) groupId.removePrefix("group_") else groupId
+
+    /** 异步把 workingDir 写盘（不阻塞调用方协程，避免 I/O 拖慢热路径） */
+    private fun persistWorkingDirAsync(groupId: String, workingDir: String) {
+        val p = persistence ?: return
+        CoroutineScope(Dispatchers.IO).launch {
+            try { p.persistWorkingDir(stripGroupPrefix(groupId), workingDir) } catch (e: Exception) {
+                logger.warn("[CC] 持久化 workingDir 失败: {}", e.message)
+            }
+        }
+    }
+
+    /** 异步把 sessionId/sessionStarted 写盘 */
+    private fun persistSessionStateAsync(groupId: String, sessionId: String, sessionStarted: Boolean) {
+        val p = persistence ?: return
+        CoroutineScope(Dispatchers.IO).launch {
+            try { p.persistSessionState(stripGroupPrefix(groupId), sessionId, sessionStarted) } catch (e: Exception) {
+                logger.warn("[CC] 持久化 session state 失败: {}", e.message)
+            }
+        }
+    }
+
     /** requestId → 回调上下文，用于 bridge 响应路由 */
     data class RequestContext(
         val userId: String,
@@ -129,7 +185,7 @@ object ClaudeCodeManager {
         }
         val resolved = raw["path"]?.jsonPrimitive?.contentOrNull ?: path
         // 复合状态变更在 mutex 保护下完成（和 chat 路径的 executePrompt/finishQueue 互斥）
-        return state.withLock { h ->
+        val result = state.withLock { h ->
             // 二次校验：在 rpcCall 过程中可能有其他操作把 running 置为 true
             if (h.running) {
                 return@withLock CdResult.Err("任务运行中，请先 /cancel 再 /cd")
@@ -141,6 +197,12 @@ object ClaudeCodeManager {
             h.active = true  // 确保 CC 已激活，便于后续聊天命令路由
             CdResult.Ok(resolved)
         }
+        // 持久化新 workingDir + 重置后的 sessionId/sessionStarted（cdSync 等价于换工作上下文，旧 session 不再续）
+        if (result is CdResult.Ok) {
+            persistWorkingDirAsync(groupId, resolved)
+            persistSessionStateAsync(groupId, "", false)  // sessionId 留空、sessionStarted=false：让重启后从 fresh 开始而不是 resume 一个废 id
+        }
+        return result
     }
 
     /**
@@ -277,6 +339,16 @@ object ClaudeCodeManager {
     }
 
     /**
+     * 删除某 user+group 的 CC state（用于 workflow 创建失败时回滚孤儿 state）。
+     * 调用方应保证此 state 已不可能被并发访问（典型场景：刚 cdSync 失败，workflow/group 已被删）。
+     */
+    fun cleanupState(userId: String, groupId: String) {
+        states.remove(key(userId, groupId))?.also {
+            logger.info("[CC] 清理 state: userId={}, groupId={}", userId, groupId)
+        }
+    }
+
+    /**
      * 被 ChatServer.handleStopGeneration() 调用。
      * 如果该用户处于 CC 模式且有运行中任务，则执行取消并返回 true。
      */
@@ -318,29 +390,55 @@ object ClaudeCodeManager {
     /**
      * 工作流自动激活 CC 模式（静默激活，不发送提示消息）。
      * 如果已经激活则不重复操作。
+     *
+     * 首次激活时（state map 里还没这个 group 的 entry）会查 workflow record 拿持久化的
+     * workingDir / sessionId / sessionStarted，seed 进新 state——这样后端重启后用户进入
+     * 工作流仍然看到原来的工作目录，且下次 prompt 用 resume=true 续上原对话。
      */
     suspend fun autoActivateForWorkflow(userId: String, groupId: String) {
+        // 检查是否需要 seed：只有从未在 map 里出现过这个 key 时才考虑读 workflow record
+        val key = key(userId, groupId)
+        val existed = states.containsKey(key)
         val state = getOrCreateState(userId, groupId)
+        if (!existed) {
+            val seed = try {
+                persistence?.loadSeed(stripGroupPrefix(groupId))
+            } catch (e: Exception) {
+                logger.warn("[CC] 读取 workflow seed 失败: {}", e.message); null
+            }
+            if (seed != null) {
+                state.withLock { h ->
+                    if (seed.workingDir.isNotBlank()) h.workingDir = seed.workingDir
+                    if (seed.sessionId.isNotBlank()) {
+                        h.sessionId = seed.sessionId
+                        h.sessionStarted = seed.sessionStarted
+                    }
+                }
+                logger.info("[CC] 工作流 seed 已恢复: groupId={}, workingDir={}, sessionId={}, sessionStarted={}",
+                    groupId, seed.workingDir, seed.sessionId.take(8), seed.sessionStarted)
+            }
+        }
         state.withLock { h ->
             if (h.active) return@withLock
             h.active = true
-            // 保留已有的 sessionId，不重置
+            // 保留 seed 后的 sessionId / workingDir，不重置
             logger.info("[CC] 工作流自动激活: userId={}, groupId={}", userId, groupId)
         }
     }
 
     private suspend fun activate(userId: String, groupId: String, broadcastFn: suspend (Message) -> Unit) {
         val state = getOrCreateState(userId, groupId)
-        val newSessionId = state.withLock { h ->
+        // 在同一个 withLock 里读写，保证消息里的 sessionId 和 workingDir 来自同一时刻的 state
+        val (newSessionId, currentDir) = state.withLock { h ->
             h.active = true
             h.sessionId = UUID.randomUUID().toString()
             h.sessionStarted = false
-            h.sessionId
+            h.sessionId to h.workingDir
         }
         logger.info("[CC] 用户激活 CC 模式: userId={}, groupId={}, sessionId={}", userId, groupId, newSessionId.take(8))
         broadcastFn(systemMessage(buildString {
             appendLine("🤖 Claude Code 已激活")
-            appendLine("会话: ${newSessionId.take(8)}... | 目录: ${state.workingDir}")
+            appendLine("会话: ${newSessionId.take(8)}... | 目录: $currentDir")
             append("发送消息开始编程，/help 查看命令，/exit 退出")
         }))
     }
@@ -390,6 +488,8 @@ object ClaudeCodeManager {
             h.running = false
             h.messageQueue.clear()
         }
+        // /exit 等价于放弃当前 CC 会话；清空持久化的 session 让下次重启不会盲目 resume 一个已废 session
+        persistSessionStateAsync(groupId, "", false)
         logger.info("[CC] 用户退出 CC 模式: userId={}", userId)
         broadcastFn(systemMessage("已退出 Claude Code 模式"))
     }
@@ -434,13 +534,15 @@ object ClaudeCodeManager {
     }
 
     private suspend fun handleStatus(state: UserCCState, broadcastFn: suspend (Message) -> Unit) {
+        // 一次性快照，避免字段间撕裂（如 sessionId 和 running 属于不同时刻）
+        val s = state.snapshot()
         broadcastFn(systemMessage(buildString {
             appendLine("📊 Claude Code 状态")
-            appendLine("会话: ${state.sessionId.take(8)}...")
-            appendLine("目录: ${state.workingDir}")
-            appendLine("状态: ${if (state.running) "运行中" else "空闲"}")
-            if (state.messageQueue.isNotEmpty()) {
-                append("队列: ${state.messageQueue.size} 条")
+            appendLine("会话: ${s.sessionId.take(8)}...")
+            appendLine("目录: ${s.workingDir}")
+            appendLine("状态: ${if (s.running) "运行中" else "空闲"}")
+            if (s.queueSize > 0) {
+                append("队列: ${s.queueSize} 条")
             }
         }))
     }
@@ -694,6 +796,11 @@ object ClaudeCodeManager {
                     }
                     h.sessionStarted = true
                 }
+                // 持久化新的 sessionId/sessionStarted，让重启后能续会话
+                run {
+                    val s = state.snapshot()
+                    persistSessionStateAsync(ctx.groupId, s.sessionId, s.sessionStarted)
+                }
                 activeRequests.remove(requestId)
                 finishAndProcessQueue(ctx.userId, ctx.groupId, state, broadcastFn)
             }
@@ -708,6 +815,10 @@ object ClaudeCodeManager {
                 }
                 broadcastFn(systemMessage(msg))
                 state.withLock { h -> h.sessionStarted = true }
+                run {
+                    val s = state.snapshot()
+                    persistSessionStateAsync(ctx.groupId, s.sessionId, s.sessionStarted)
+                }
                 activeRequests.remove(requestId)
                 finishAndProcessQueue(ctx.userId, ctx.groupId, state, broadcastFn)
             }
@@ -750,6 +861,9 @@ object ClaudeCodeManager {
                     h.messageQueue.clear()
                     resumedDir
                 }
+                // 持久化恢复后的 sessionId/workingDir，让下次重启接着续
+                persistSessionStateAsync(ctx.groupId, resumedId, true)
+                persistWorkingDirAsync(ctx.groupId, finalDir)
                 broadcastFn(systemMessage("已恢复会话 ${resumedId.take(8)}...\n目录: $finalDir\n发送消息继续"))
             }
             "new_session" -> {
@@ -761,6 +875,8 @@ object ClaudeCodeManager {
                     h.messageQueue.clear()
                     h.workingDir
                 }
+                // /new 等价于"放弃旧 session 重开"，持久化新 sessionId + sessionStarted=false
+                persistSessionStateAsync(ctx.groupId, newSessionId, false)
                 broadcastFn(systemMessage("会话已重置\n新会话: ${newSessionId.take(8)}... | 目录: $dir"))
             }
         }

@@ -731,21 +731,28 @@ object ApiClient {
                 }
             }
             val response = post("/api/workflows", obj.toString())
-            // 先尝试当 WorkflowItem 解析；失败则当错误信封 {"success":false,"message":"..."} 解析
+            // 响应有两种形状：
+            //   成功：Workflow 对象（有 id/groupId 等字段，无 success 字段）
+            //   失败：错误信封 {"success": false, "message": "..."}
+            // 优先用 success 字段区分，避免"错误响应恰好含 id 字段"这种 ignoreUnknownKeys 陷阱
             val parsed = try {
-                jsonParser.decodeFromString<WorkflowItem>(response)
-            } catch (_: Exception) {
-                null
-            }
-            if (parsed != null) {
-                CreateWorkflowResult.Ok(parsed)
+                kotlinx.serialization.json.Json.parseToJsonElement(response).jsonObject
+            } catch (_: Exception) { null }
+            if (parsed == null) {
+                CreateWorkflowResult.Err("服务器返回了无法识别的响应")
             } else {
-                val obj2 = try {
-                    kotlinx.serialization.json.Json.parseToJsonElement(response).jsonObject
-                } catch (_: Exception) { null }
-                val msg = obj2?.get("message")?.jsonPrimitive?.contentOrNull
-                    ?: "服务器返回了无法识别的响应"
-                CreateWorkflowResult.Err(msg)
+                val success = parsed["success"]?.jsonPrimitive?.booleanOrNull
+                // success 字段存在且为 false → 错误信封；未出现 success 字段 → 视为 Workflow 对象
+                if (success == false) {
+                    val msg = parsed["message"]?.jsonPrimitive?.contentOrNull ?: "创建失败"
+                    CreateWorkflowResult.Err(msg)
+                } else {
+                    try {
+                        CreateWorkflowResult.Ok(jsonParser.decodeFromString<WorkflowItem>(response))
+                    } catch (_: Exception) {
+                        CreateWorkflowResult.Err("解析创建结果失败")
+                    }
+                }
             }
         } catch (e: Exception) {
             console.log("创建工作流失败:", e)

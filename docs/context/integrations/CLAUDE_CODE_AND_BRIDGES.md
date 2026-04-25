@@ -17,6 +17,11 @@
   - 历史的聊天 `/cd` 命令已废弃，`routeMessage` 命中后只回一条引导提示
 - 目录浏览：HTTP `GET /users/{userId}/cc-fs/list?path=&showHidden=` → `listDirectory()` 通过 RPC 让 bridge 跑 `handle_list_dir`
 - RPC 通用机制：`pendingRpc: Map<requestId, CompletableDeferred>`，bridge 响应在 `handleBridgeMessage` 顶部优先 complete Deferred；超时 5s（withTimeout）
+- 工作流持久化（"无感重启"）：`Workflow` 数据类带 `workingDir` / `sessionId` / `sessionStarted` 字段，与运行时 `UserCCState` 镜像。
+  - `WorkflowPersistence` 接口由 `Routing.kt#configureRouting` 启动时注入；callback 委托给 `WorkflowManager` 的 `updateWorkingDir` / `updateSessionState`
+  - 写入入口：`cdSync` 成功、`complete`/`error`/`session_resumed`/`new_session`、`handleExit` 都会异步落盘
+  - 读出入口：`autoActivateForWorkflow` 在 `states` map 首次创建 entry 时调 `loadSeed(rawGroupId)`，把记录里的字段 seed 进新 state——重启后用户进入工作流仍看到原工作目录，下次 prompt 用 `resume=true` 续上原 session
+  - 失败兜底：bridge 端 `~/.silk/cc_sessions.json` 若已不含此 sessionId，bridge 会回 error；用户 `/new` 即可重置
 
 ## `cc_bridge/`
 
@@ -58,3 +63,4 @@
 - 新增 state 修改入口：必须走 `UserCCState.withLock { h -> ... }`（字段 setter 是 private，编译期会强制）
 - 新增 bridge 命令类型：同时改 `BridgeRequest`（@EncodeDefault NEVER 默认值省略） + bridge_agent.py dispatcher
 - 新增 RPC 风格响应：在 `handleBridgeMessage` 走 `pendingRpc.complete()` 路径，不要新建 broadcastFn 上下文
+- 新增需要持久化的 CC state 字段：在 `Workflow` 加字段 + `WorkflowManager` 加 update 方法 + `WorkflowPersistence` 回调 + `loadSeed` 取出 + `autoActivateForWorkflow` seed，否则重启后会丢

@@ -104,6 +104,28 @@ suspend fun broadcastFileMessage(
 }
 
 fun Application.configureRouting() {
+    // 把 ClaudeCodeManager 的状态持久化绑定到 WorkflowManager：
+    // - workingDir / sessionId / sessionStarted 改动时写盘到 workflow_store.json
+    // - autoActivateForWorkflow 首次激活时根据已有记录 seed state（重启后续会话的关键）
+    ClaudeCodeManager.setWorkflowPersistence(object : ClaudeCodeManager.WorkflowPersistence {
+        override fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean =
+            workflowManager.updateWorkingDir(rawGroupId, workingDir)
+
+        override fun persistSessionState(rawGroupId: String, sessionId: String, sessionStarted: Boolean): Boolean =
+            workflowManager.updateSessionState(rawGroupId, sessionId, sessionStarted)
+
+        override fun loadSeed(rawGroupId: String): ClaudeCodeManager.WorkflowSeed? {
+            val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
+            // 全部都默认值（空 dir + 空 sessionId）也没必要 seed
+            if (wf.workingDir.isBlank() && wf.sessionId.isBlank()) return null
+            return ClaudeCodeManager.WorkflowSeed(
+                workingDir = wf.workingDir,
+                sessionId = wf.sessionId,
+                sessionStarted = wf.sessionStarted,
+            )
+        }
+    })
+
     routing {
         get("/") {
             val html = """
@@ -1845,13 +1867,22 @@ fun Application.configureRouting() {
         }
 
         post("/api/workflows") {
+            // 错误响应统一用 JsonObject 安全编码，避免外部字符串里的引号/反斜杠破坏 JSON 结构
+            suspend fun respondError(status: HttpStatusCode, message: String) {
+                val payload = kotlinx.serialization.json.buildJsonObject {
+                    put("success", kotlinx.serialization.json.JsonPrimitive(false))
+                    put("message", kotlinx.serialization.json.JsonPrimitive(message))
+                }
+                call.respondText(payload.toString(), ContentType.Application.Json, status)
+            }
+
             val body = call.receiveText()
             val json = Json { ignoreUnknownKeys = true }
             val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
             val userId = req["userId"]?.jsonPrimitive?.content
             val name = req["name"]?.jsonPrimitive?.content
             if (userId.isNullOrBlank() || name.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId or name"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                respondError(HttpStatusCode.BadRequest, "Missing userId or name")
                 return@post
             }
             val desc = req["description"]?.jsonPrimitive?.content ?: ""
@@ -1860,17 +1891,11 @@ fun Application.configureRouting() {
             // 工作目录是工作流的硬约束：必须由 bridge 验证过的合法路径才能创建。
             // 这样可避免出现"workflow 创建成功但工作目录是 backend 进程的 cwd"这种半生不熟的状态。
             if (initialDir.isEmpty()) {
-                call.respondText(
-                    """{"success":false,"message":"工作目录不能为空"}""",
-                    ContentType.Application.Json, HttpStatusCode.BadRequest,
-                )
+                respondError(HttpStatusCode.BadRequest, "工作目录不能为空")
                 return@post
             }
             if (!BridgeRegistry.isConnected(userId)) {
-                call.respondText(
-                    """{"success":false,"message":"Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。"}""",
-                    ContentType.Application.Json, HttpStatusCode.Conflict,
-                )
+                respondError(HttpStatusCode.Conflict, "Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
                 return@post
             }
 
@@ -1878,38 +1903,37 @@ fun Application.configureRouting() {
             val groupName = "wf_${sanitizeFileName(name)}_${System.currentTimeMillis()}"
             val group = com.silk.backend.database.GroupRepository.createGroup(groupName, userId)
             if (group == null) {
-                call.respondText("""{"success":false,"message":"Failed to create workflow group"}""", ContentType.Application.Json, HttpStatusCode.InternalServerError)
+                respondError(HttpStatusCode.InternalServerError, "Failed to create workflow group")
                 return@post
             }
 
             val wf = workflowManager.createWorkflow(name, desc, userId, group.id)
 
-            // cdSync 必须成功才能算创建完成；失败时回滚 group + workflow，避免遗留无效记录
-            val cdErr: String? = try {
-                when (val r = ClaudeCodeManager.cdSync(userId, "group_${group.id}", initialDir)) {
-                    is ClaudeCodeManager.CdResult.Ok -> null
-                    is ClaudeCodeManager.CdResult.Err -> r.reason
-                }
+            // cdSync 必须成功才能算创建完成；失败时回滚 group + workflow + CC state，避免遗留无效记录
+            val cdResult: ClaudeCodeManager.CdResult = try {
+                ClaudeCodeManager.cdSync(userId, "group_${group.id}", initialDir)
             } catch (e: Exception) {
-                e.message ?: "初始目录切换异常"
+                ClaudeCodeManager.CdResult.Err(e.message ?: "初始目录切换异常")
             }
-            if (cdErr != null) {
-                logger.warn("⚠️ 工作流 {} 初始 /cd 失败，回滚 group + workflow: {}", wf.id, cdErr)
-                try { workflowManager.deleteWorkflow(wf.id, userId) } catch (e: Exception) {
-                    logger.warn("回滚 workflow 失败: {}", e.message)
-                }
-                try { com.silk.backend.database.GroupRepository.deleteGroup(group.id) } catch (e: Exception) {
-                    logger.warn("回滚 group 失败: {}", e.message)
-                }
-                call.respondText(
-                    """{"success":false,"message":"工作目录设置失败：$cdErr"}""",
-                    ContentType.Application.Json, HttpStatusCode.Conflict,
-                )
+            if (cdResult is ClaudeCodeManager.CdResult.Err) {
+                logger.warn("⚠️ 工作流 {} 初始 /cd 失败，回滚 group + workflow: {}", wf.id, cdResult.reason)
+                // 删 workflow（WorkflowManager 自己处理内部异常，这里不再二层捕获污染日志）
+                workflowManager.deleteWorkflow(wf.id, userId)
+                // 删 group（同上，GroupRepository.deleteGroup 内部捕获异常返回 false）
+                com.silk.backend.database.GroupRepository.deleteGroup(group.id)
+                // 同时清理 ClaudeCodeManager 里因 getOrCreateState 而产生的孤儿 state
+                ClaudeCodeManager.cleanupState(userId, "group_${group.id}")
+                respondError(HttpStatusCode.Conflict, "工作目录设置失败：${cdResult.reason}")
                 return@post
             }
+            // 同步把 workingDir 写到 workflow record，确保返回给前端的 wf 对象包含真实路径
+            // （cdSync 内部已 fire-and-forget 异步持久化一次，但同步写一次保证 race-free 返回）
+            val resolvedPath = (cdResult as ClaudeCodeManager.CdResult.Ok).resolvedPath
+            workflowManager.updateWorkingDir(group.id, resolvedPath)
+            val wfWithDir = wf.copy(workingDir = resolvedPath, updatedAt = System.currentTimeMillis())
 
             call.respondText(
-                Json.encodeToString(Workflow.serializer(), wf),
+                Json.encodeToString(Workflow.serializer(), wfWithDir),
                 ContentType.Application.Json,
                 HttpStatusCode.Created,
             )

@@ -208,7 +208,11 @@ fun WorkflowScene(appState: WebAppState) {
     if (showCreateDialog) {
         // 打开时若 newInitialDir 为空，拉一次 bridge 默认目录作为初始值；
         // 失败时记下原因，UI 切换提示，并禁用创建按钮（避免拿到 backend 服务器进程的 cwd 当兜底）
-        LaunchedEffect(showCreateDialog) {
+        //
+        // key 用 Unit 表达"每次对话框打开只执行一次"：外层 if (showCreateDialog) 决定
+        // 这个 LaunchedEffect 是否进入组合，一旦进入就跑一次；用 showCreateDialog 做 key
+        // 在"key 始终为 true"的情况下会造成阅读歧义，所以改用 Unit 更贴合语义
+        LaunchedEffect(Unit) {
             if (newInitialDir.isBlank()) {
                 dirLoadError = null
                 val resp = ApiClient.listCcDir(user.id, null)
@@ -397,6 +401,9 @@ fun WorkflowScene(appState: WebAppState) {
                                     is ApiClient.CreateWorkflowResult.Err -> {
                                         // 保留用户输入，把后端错误以浏览器 alert 呈现
                                         kotlinx.browser.window.alert("创建工作流失败：${result.message}")
+                                        // 创建期间 bridge 可能刚断了；重探一次状态，让按钮/输入框 UI 正确反映
+                                        val probe = ApiClient.listCcDir(user.id, null)
+                                        dirLoadError = if (probe.success) null else (probe.error ?: "无法获取默认目录")
                                     }
                                 }
                             }

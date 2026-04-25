@@ -73,6 +73,47 @@ class WorkflowManager(
     fun getWorkflowByGroupId(groupId: String): Workflow? =
         load().workflows.find { it.groupId == groupId }
 
+    /**
+     * 持久化用户为工作流设置的工作目录（创建时的 initialDir 或运行时的「更改」按钮）。
+     * 后端重启后据此 seed CC state 的 workingDir。返回是否真的写盘了（无变化时跳过 I/O）。
+     */
+    @Synchronized
+    fun updateWorkingDir(groupId: String, workingDir: String): Boolean {
+        val store = load()
+        val idx = store.workflows.indexOfFirst { it.groupId == groupId }
+        if (idx < 0) return false
+        val old = store.workflows[idx]
+        if (old.workingDir == workingDir) return false
+        store.workflows[idx] = old.copy(
+            workingDir = workingDir,
+            updatedAt = System.currentTimeMillis(),
+        )
+        save(store)
+        logger.info("Workflow {} workingDir 持久化: {}", old.id, workingDir)
+        return true
+    }
+
+    /**
+     * 持久化 bridge 上一次的 sessionId + sessionStarted。后端重启后据此发起 resume，
+     * 让用户续上之前的对话历史（前提：bridge 端的 ~/.silk/cc_sessions.json 还有这个 session）。
+     * 跳过无变化的写入，避免 prompt 高频持久化时的 I/O 抖动。
+     */
+    @Synchronized
+    fun updateSessionState(groupId: String, sessionId: String, sessionStarted: Boolean): Boolean {
+        val store = load()
+        val idx = store.workflows.indexOfFirst { it.groupId == groupId }
+        if (idx < 0) return false
+        val old = store.workflows[idx]
+        if (old.sessionId == sessionId && old.sessionStarted == sessionStarted) return false
+        store.workflows[idx] = old.copy(
+            sessionId = sessionId,
+            sessionStarted = sessionStarted,
+            updatedAt = System.currentTimeMillis(),
+        )
+        save(store)
+        return true
+    }
+
     @Synchronized
     fun deleteWorkflow(workflowId: String, userId: String): Boolean {
         val store = load()
