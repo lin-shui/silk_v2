@@ -3328,6 +3328,25 @@ private val silkMarkdownRuntimeCss = """
     .silk-markdown.markdown-body img {
         max-width: 100%;
     }
+    .silk-citation-chip {
+        display: inline-block;
+        padding: 1px 6px;
+        margin: 0 2px;
+        background-color: #FFF8ED;
+        border: 1px solid #E8D5B5;
+        border-radius: 4px;
+        font-size: 12px;
+        color: #C9A86C;
+        text-decoration: none;
+        cursor: pointer;
+        font-weight: 500;
+        line-height: 1.4;
+        vertical-align: baseline;
+    }
+    .silk-citation-chip:hover {
+        background-color: #FFF0D5;
+        border-color: #C9A86C;
+    }
 """.trimIndent()
 
 @Suppress("UNUSED_EXPRESSION")
@@ -3485,17 +3504,48 @@ private fun rememberMarkdownEngine(): MarkdownIt {
     return remember { createMarkdownEngine() }
 }
 
+private fun linkCitationMarkers(
+    html: String,
+    references: List<com.silk.shared.models.MessageReference>,
+    anchorPrefix: String
+): String {
+    if (references.isEmpty()) return html
+    val pattern = Regex("""\[(citation|available):(\d+)\]""")
+    return pattern.replace(html) { match ->
+        val kind = match.groupValues[1]
+        val idx = match.groupValues[2].toIntOrNull() ?: return@replace match.value
+        val ref = references.find { it.kind == kind && it.index == idx }
+        if (ref != null) {
+            val label = if (kind == "citation") "来源 $idx" else "资料 $idx"
+            val href = ref.url ?: "#${anchorPrefix}ref-$idx"
+            val target = if (ref.url != null) " target=\"_blank\" rel=\"noopener noreferrer\"" else ""
+            "<a href=\"$href\"$target class=\"silk-citation-chip\">$label</a>"
+        } else {
+            match.value
+        }
+    }
+}
+
 @Composable
-fun MarkdownContent(content: String) {
+fun MarkdownContent(
+    content: String,
+    references: List<com.silk.shared.models.MessageReference> = emptyList(),
+    referenceAnchorPrefix: String = ""
+) {
     ensureMarkdownStylesInjected()
 
     val markdownEngine = rememberMarkdownEngine()
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
-    val safeHtml = remember(content) {
-        DOMPurify.sanitize(
-            markdownEngine.render(normalizeMathBlocks(content)),
-            createSanitizeConfig()
+    val safeHtml = remember(content, references) {
+        val linked = linkCitationMarkers(
+            DOMPurify.sanitize(
+                markdownEngine.render(normalizeMathBlocks(content)),
+                createSanitizeConfig()
+            ),
+            references,
+            referenceAnchorPrefix
         )
+        linked
     }
 
     Div({
@@ -3524,6 +3574,121 @@ fun MarkdownContent(content: String) {
 
         onDispose {
             element?.innerHTML = ""
+        }
+    }
+}
+
+@Composable
+fun ReferenceSourcesList(
+    references: List<com.silk.shared.models.MessageReference>,
+    anchorPrefix: String = ""
+) {
+    if (references.isEmpty()) return
+
+    var isExpanded by remember { mutableStateOf(false) }
+
+    Div({
+        style {
+            property("margin-top", "8px")
+            property("border", "1px solid #E8E0D4")
+            property("border-radius", "8px")
+            property("background-color", "#FFFBF0")
+            property("overflow", "hidden")
+        }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                property("padding", "8px 12px")
+                property("cursor", "pointer")
+                property("user-select", "none")
+            }
+            onClick { isExpanded = !isExpanded }
+        }) {
+            Span({ style { property("margin-right", "6px") } }) { Text("\uD83D\uDCDA") }
+            Span({
+                style {
+                    fontSize(13.px)
+                    color(Color("#8B7355"))
+                    fontWeight("500")
+                    property("flex", "1")
+                }
+            }) { Text("参考来源 (${references.size})") }
+            Span({
+                style {
+                    fontSize(12.px)
+                    color(Color("#C9A86C"))
+                    fontWeight("500")
+                }
+            }) { Text(if (isExpanded) "收起 ▲" else "展开 ▼") }
+        }
+
+        if (isExpanded) {
+            Div({
+                style {
+                    property("border-top", "1px solid #E8E0D4")
+                    property("padding", "4px 12px")
+                }
+            }) {
+                references.forEachIndexed { index, ref ->
+                    Div({
+                        id("${anchorPrefix}ref-${ref.index}")
+                        style {
+                            display(DisplayStyle.Flex)
+                            property("gap", "8px")
+                            property("padding", "6px 0")
+                            if (index < references.size - 1) {
+                                property("border-bottom", "1px solid #F0EBE0")
+                            }
+                        }
+                    }) {
+                        Span({
+                            style {
+                                fontSize(12.px)
+                                color(Color("#C9A86C"))
+                                fontWeight("500")
+                                property("white-space", "nowrap")
+                            }
+                        }) {
+                            Text(if (ref.kind == "citation") "来源 ${ref.index}" else "资料 ${ref.index}")
+                        }
+                        Div({ style { property("flex", "1"); property("min-width", "0") } }) {
+                            if (ref.url != null) {
+                                A(href = ref.url, {
+                                    attr("target", "_blank")
+                                    attr("rel", "noopener noreferrer")
+                                    style {
+                                        fontSize(13.px)
+                                        color(Color("#2F80B7"))
+                                        property("text-decoration", "none")
+                                        property("word-break", "break-all")
+                                    }
+                                }) { Text(ref.title) }
+                            } else {
+                                Span({
+                                    style { fontSize(13.px); color(Color("#333")) }
+                                }) { Text(ref.title) }
+                            }
+                            val snippet = ref.snippet
+                            if (snippet != null && snippet.isNotBlank()) {
+                                Div({
+                                    style {
+                                        fontSize(12.px)
+                                        color(Color("#999"))
+                                        marginTop(2.px)
+                                        property("overflow", "hidden")
+                                        property("text-overflow", "ellipsis")
+                                        property("display", "-webkit-box")
+                                        property("-webkit-line-clamp", "2")
+                                        property("-webkit-box-orient", "vertical")
+                                    }
+                                }) { Text(snippet) }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -3689,14 +3854,29 @@ fun AIMessageCard(
                         property("overflow-y", "auto")
                     }
                 }) {
-                    MarkdownContent(message.content)
+                    MarkdownContent(
+                        content = message.content,
+                        references = message.references,
+                        referenceAnchorPrefix = "msg-${message.id}-"
+                    )
+                    ReferenceSourcesList(
+                        references = message.references,
+                        anchorPrefix = "msg-${message.id}-"
+                    )
                 }
             } else {
                 Div({
                     classes(SilkStylesheet.aiMessageContent)
                 }) {
-                    // 使用 Markdown 渲染
-                    MarkdownContent(message.content)
+                    MarkdownContent(
+                        content = message.content,
+                        references = message.references,
+                        referenceAnchorPrefix = "msg-${message.id}-"
+                    )
+                    ReferenceSourcesList(
+                        references = message.references,
+                        anchorPrefix = "msg-${message.id}-"
+                    )
                 }
             }
         } else {

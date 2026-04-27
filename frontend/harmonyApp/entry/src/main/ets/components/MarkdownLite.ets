@@ -544,7 +544,15 @@ export struct MarkdownLite {
     cleaned = cleaned.replace(/`([^`]+)`/g, '$1');
     cleaned = cleaned.replace(/\$([^$\n]+)\$/g, (_match: string, expr: string) => `⟮${this.normalizeMathExpression(expr)}⟯`);
     cleaned = cleaned.replace(/\\\(([^)]+)\\\)/g, (_match: string, expr: string) => `⟮${this.normalizeMathExpression(expr)}⟯`);
+    cleaned = this.displayInlineCitations(cleaned);
     return cleaned;
+  }
+
+  private displayInlineCitations(text: string): string {
+    let result = text ? text : '';
+    result = result.replace(/\[citation:(\d+)\]/g, (_m: string, n: string) => `[来源 ${n}]`);
+    result = result.replace(/\[available:(\d+)\]/g, (_m: string, n: string) => `[资料 ${n}]`);
+    return result;
   }
 
   private estimateMathWebHeight(latex: string): number {

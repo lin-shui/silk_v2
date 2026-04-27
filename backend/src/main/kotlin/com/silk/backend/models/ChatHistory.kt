@@ -26,6 +26,19 @@ data class SessionMember(
 )
 
 /**
+ * 引用来源（网络搜索 / 本地资源）
+ */
+@Serializable
+data class MessageReference(
+    val kind: String,       // "citation" = 网络搜索, "available" = 本地资源
+    val index: Int,
+    val title: String,
+    val url: String? = null,
+    val snippet: String? = null,
+    val path: String? = null
+)
+
+/**
  * 聊天历史条目 - 保存在 chat_history.json
  */
 @Serializable
@@ -35,7 +48,8 @@ data class ChatHistoryEntry(
     val senderName: String,
     val content: String,
     val timestamp: Long,
-    val messageType: String // TEXT, JOIN, LEAVE, SYSTEM
+    val messageType: String, // TEXT, JOIN, LEAVE, SYSTEM
+    val references: List<MessageReference> = emptyList()
 )
 
 /**

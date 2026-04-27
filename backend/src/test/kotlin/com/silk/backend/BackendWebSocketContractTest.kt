@@ -641,15 +641,31 @@ class BackendWebSocketContractTest {
         url("/chat?userId=$userId&userName=$userName&groupId=$groupId")
     }
 
+    private val pendingMessages = ArrayDeque<Message>()
+
+    private fun parseFrameToMessages(text: String): List<Message> {
+        val trimmed = text.trimStart()
+        return if (trimmed.startsWith("[")) {
+            json.decodeFromString<List<Message>>(trimmed)
+        } else {
+            listOf(json.decodeFromString<Message>(trimmed))
+        }
+    }
+
     private suspend fun DefaultClientWebSocketSession.receiveMessage(): Message {
         while (true) {
-            val frame = withTimeout(5_000) { incoming.receive() }
-            val message = when (frame) {
-                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
-                else -> error("Expected text frame but received $frame")
+            if (pendingMessages.isNotEmpty()) {
+                val msg = pendingMessages.removeFirst()
+                if (!msg.isHistoryEndMarker()) return msg
+                continue
             }
-            if (!message.isHistoryEndMarker()) {
-                return message
+            val frame = withTimeout(5_000) { incoming.receive() }
+            when (frame) {
+                is Frame.Text -> {
+                    val messages = parseFrameToMessages(frame.readText())
+                    pendingMessages.addAll(messages)
+                }
+                else -> error("Expected text frame but received $frame")
             }
         }
     }
@@ -657,17 +673,20 @@ class BackendWebSocketContractTest {
     private suspend fun DefaultClientWebSocketSession.receiveMessageOrNull(timeoutMillis: Long): Message? {
         val deadline = System.currentTimeMillis() + timeoutMillis
         while (true) {
+            if (pendingMessages.isNotEmpty()) {
+                val msg = pendingMessages.removeFirst()
+                if (!msg.isHistoryEndMarker()) return msg
+                continue
+            }
             val remainingMillis = deadline - System.currentTimeMillis()
-            if (remainingMillis <= 0) {
-                return null
-            }
+            if (remainingMillis <= 0) return null
             val frame = withTimeoutOrNull(remainingMillis) { incoming.receive() } ?: return null
-            val message = when (frame) {
-                is Frame.Text -> json.decodeFromString<Message>(frame.readText())
+            when (frame) {
+                is Frame.Text -> {
+                    val messages = parseFrameToMessages(frame.readText())
+                    pendingMessages.addAll(messages)
+                }
                 else -> error("Expected text frame but received $frame")
-            }
-            if (!message.isHistoryEndMarker()) {
-                return message
             }
         }
     }

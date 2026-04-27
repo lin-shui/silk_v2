@@ -74,7 +74,10 @@ class DirectModelAgentAutoCliTest {
             fail("AutoCLI 调用失败（网络或服务）: ${result.take(500)}")
         }
         assertTrue(result.contains("AutoCLI 结果"), "应包含成功前缀: ${result.take(200)}")
-        assertTrue(result.contains("rank") || result.contains("\"title\""), "应含 JSON 字段: ${result.take(400)}")
+        assertTrue(
+            result.contains("[citation:") || result.contains("\"title\"") || result.contains("rank"),
+            "应含 citation 标记或 JSON 字段: ${result.take(400)}"
+        )
     }
 
     @Test

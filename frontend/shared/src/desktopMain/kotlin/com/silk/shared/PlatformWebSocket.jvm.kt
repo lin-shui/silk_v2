@@ -5,6 +5,7 @@ import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.runBlocking
 
 actual class PlatformWebSocket actual constructor(
     private val serverUrl: String,
@@ -35,7 +36,7 @@ actual class PlatformWebSocket actual constructor(
     actual fun connect(userId: String, userName: String, groupId: String) {
         // 清理旧连接（静默，不额外触发 onDisconnected）
         job?.cancel()
-        try { session?.close(CloseReason(CloseReason.Codes.NORMAL, "Switching group")) } catch (_: Exception) {}
+        try { runBlocking { session?.close(CloseReason(CloseReason.Codes.NORMAL, "Switching group")) } } catch (_: Exception) {}
         session = null
 
         val safeUserName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")

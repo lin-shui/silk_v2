@@ -302,7 +302,8 @@ class ChatHistoryManager(
             senderName = message.userName,
             content = message.content,
             timestamp = message.timestamp,
-            messageType = message.type.name
+            messageType = message.type.name,
+            references = message.references
         )
         
         chatHistory.messages.add(entry)

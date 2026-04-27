@@ -3,9 +3,10 @@
  * 用于在聊天界面显示单条消息
  * 严格对标 Android 端 ChatScreen.kt 的 MessageItem 逻辑
  */
-import { Message, MessageType, MessageCategory } from '../models/Message';
+import { Message, MessageType, MessageCategory, Reference } from '../models/Message';
 import { Theme, SilkColors } from '../common/Theme';
 import { MarkdownLite } from './MarkdownLite';
+import { ReferenceList } from './ReferenceList';
 import {
   parseForwardedMessageContent,
   ForwardedMessageParts,
@@ -324,6 +325,9 @@ export struct MessageBubble {
           MarkdownLite({
             content: this.getSafeAIContent()
           })
+          ReferenceList({
+            references: this.message.references ? this.message.references : []
+          })
         } else if (!this.isAIExpanded) {
           Column() {
             Text(this.getAIPreview())
@@ -355,6 +359,9 @@ export struct MessageBubble {
           Column() {
             MarkdownLite({
               content: this.getSafeAIContent()
+            })
+            ReferenceList({
+              references: this.message.references ? this.message.references : []
             })
             Row() {
               Text('收起')

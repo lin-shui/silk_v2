@@ -35,7 +35,8 @@ data class Message(
     val currentStep: Int? = null,      // 当前执行的步骤编号（用于进度条）
     val totalSteps: Int? = null,       // 总步骤数（用于进度条）
     val isIncremental: Boolean = false, // true = 增量消息（前端需拼接），false = 完整消息（前端直接替换）
-    val category: MessageCategory = MessageCategory.NORMAL  // ✅ 消息类别（用于UI显示亮度区分）
+    val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度区分）
+    val references: List<com.silk.backend.models.MessageReference> = emptyList()
 )
 
 @Serializable
@@ -114,7 +115,8 @@ class ChatServer(
                             MessageType.valueOf(entry.messageType)
                         } catch (e: Exception) {
                             MessageType.TEXT
-                        }
+                        },
+                        references = entry.references
                     )
                     messageHistory.add(msg)
                 }
@@ -725,6 +727,7 @@ class ChatServer(
         
         // 使用 DirectModelAgent 直接调用模型
         var fullResponse = ""
+        var agentReferences: List<com.silk.backend.models.MessageReference> = emptyList()
         try {
             val response = directModelAgent.processInput(
                 userInput = userMessage,
@@ -763,6 +766,7 @@ class ChatServer(
                     }
                     "complete" -> {
                         fullResponse = content
+                        agentReferences = directModelAgent.lastAgentResponse?.references ?: emptyList()
                     }
                     "error" -> {
                         sendAgentStatus("❌ $content")
@@ -785,7 +789,8 @@ class ChatServer(
                         timestamp = System.currentTimeMillis(),
                         type = MessageType.TEXT,
                         isTransient = false,
-                        isIncremental = false
+                        isIncremental = false,
+                        references = agentReferences
                     )
                     
                     // 检查是否已经在历史中（防止重复）
@@ -813,8 +818,14 @@ class ChatServer(
                 }
             }
             
-            fullResponse = response
-            logger.debug("🏁 [generateIntelligentResponse-{}] 函数执行完成，响应长度: {}", callId, fullResponse.length)
+            val agentResponse = directModelAgent.lastAgentResponse
+            if (agentResponse != null) {
+                fullResponse = agentResponse.content
+                agentReferences = agentResponse.references
+            } else {
+                fullResponse = response
+            }
+            logger.debug("🏁 [generateIntelligentResponse-{}] 函数执行完成，响应长度: {}, 引用数: {}", callId, fullResponse.length, agentReferences.size)
 
             if (userId.isNotBlank() && getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true) {
                 CoroutineScope(Dispatchers.IO).launch {
