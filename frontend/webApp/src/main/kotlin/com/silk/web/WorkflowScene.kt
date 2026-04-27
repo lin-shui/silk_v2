@@ -25,6 +25,32 @@ fun WorkflowScene(appState: WebAppState) {
     // 创建对话框中"加载默认目录"的失败原因（一般是 Bridge 未连接）。
     // Bridge 离线时整个创建流程都会失败（后端拒绝），所以这里也用作"是否禁用创建按钮"的依据。
     var dirLoadError by remember { mutableStateOf<String?>(null) }
+    // 信任确认弹窗状态（替代浏览器原生 confirm）
+    var showTrustConfirm by remember { mutableStateOf(false) }
+    var trustConfirmPath by remember { mutableStateOf("") }
+    var trustConfirmBridgeId by remember { mutableStateOf<String?>(null) }
+
+    // 提取创建 workflow 的 suspend 函数，供信任弹窗回调复用
+    suspend fun performCreateWorkflow() {
+        val result = ApiClient.createWorkflow(
+            newName.trim(), "", user.id, newInitialDir.trim(),
+        )
+        workflows = ApiClient.getWorkflows(user.id)
+        when (result) {
+            is ApiClient.CreateWorkflowResult.Ok -> {
+                selectedWorkflow = result.workflow
+                showCreateDialog = false
+                newName = ""
+                newInitialDir = ""
+                dirLoadError = null
+            }
+            is ApiClient.CreateWorkflowResult.Err -> {
+                kotlinx.browser.window.alert("创建工作流失败：${result.message}")
+                val probe = ApiClient.listCcDir(user.id, null)
+                dirLoadError = if (probe.success) null else (probe.error ?: "无法获取默认目录")
+            }
+        }
+    }
 
     LaunchedEffect(user.id) {
         isLoading = true
@@ -386,26 +412,28 @@ fun WorkflowScene(appState: WebAppState) {
                             if (!canCreate) return@onClick
                             val initDir = newInitialDir.trim()
                             scope.launch {
-                                val result = ApiClient.createWorkflow(
-                                    newName.trim(), "", user.id, initDir,
-                                )
-                                workflows = ApiClient.getWorkflows(user.id)
-                                when (result) {
-                                    is ApiClient.CreateWorkflowResult.Ok -> {
-                                        selectedWorkflow = result.workflow
-                                        showCreateDialog = false
-                                        newName = ""
-                                        newInitialDir = ""
-                                        dirLoadError = null
+                                // 1. 信任目录检查
+                                val trustCheck = ApiClient.checkTrustedDir(user.id, initDir)
+                                when (trustCheck) {
+                                    is ApiClient.TrustCheckResult.BridgeDisconnected -> {
+                                        kotlinx.browser.window.alert("Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
+                                        return@launch
                                     }
-                                    is ApiClient.CreateWorkflowResult.Err -> {
-                                        // 保留用户输入，把后端错误以浏览器 alert 呈现
-                                        kotlinx.browser.window.alert("创建工作流失败：${result.message}")
-                                        // 创建期间 bridge 可能刚断了；重探一次状态，让按钮/输入框 UI 正确反映
-                                        val probe = ApiClient.listCcDir(user.id, null)
-                                        dirLoadError = if (probe.success) null else (probe.error ?: "无法获取默认目录")
+                                    is ApiClient.TrustCheckResult.NotTrusted -> {
+                                        trustConfirmPath = initDir
+                                        trustConfirmBridgeId = trustCheck.bridgeId
+                                        showTrustConfirm = true
+                                        return@launch
                                     }
+                                    is ApiClient.TrustCheckResult.Error -> {
+                                        kotlinx.browser.window.alert("检查信任状态失败：${trustCheck.message}")
+                                        return@launch
+                                    }
+                                    else -> {} // 已信任，继续
                                 }
+
+                                // 2. 创建 workflow
+                                performCreateWorkflow()
                             }
                         }
                     }) { Text("创建") }
@@ -423,6 +451,26 @@ fun WorkflowScene(appState: WebAppState) {
             onConfirm = { selectedPath ->
                 newInitialDir = selectedPath
                 showCreatePicker = false
+            },
+        )
+    }
+
+    // 信任确认弹窗（Silk 风格，替代浏览器原生 confirm）
+    if (showTrustConfirm) {
+        TrustConfirmDialog(
+            path = trustConfirmPath,
+            bridgeId = trustConfirmBridgeId,
+            onDismiss = { showTrustConfirm = false },
+            onTrust = {
+                scope.launch {
+                    val added = ApiClient.addTrustedDir(user.id, trustConfirmPath)
+                    if (added) {
+                        showTrustConfirm = false
+                        performCreateWorkflow()
+                    } else {
+                        kotlinx.browser.window.alert("添加信任记录失败，请重试。")
+                    }
+                }
             },
         )
     }
@@ -446,6 +494,23 @@ private fun WorkflowChatPanel(
     var messageText by remember(groupId) { mutableStateOf("") }
     var workingDir by remember(groupId) { mutableStateOf("") }
     var showFolderPicker by remember(groupId) { mutableStateOf(false) }
+    // 信任确认弹窗状态（替代浏览器原生 confirm）
+    var showTrustConfirm by remember(groupId) { mutableStateOf(false) }
+    var trustConfirmPath by remember(groupId) { mutableStateOf("") }
+    var trustConfirmBridgeId by remember(groupId) { mutableStateOf<String?>(null) }
+
+    // 提取执行 cd 的 suspend 函数，供信任弹窗回调复用
+    suspend fun performCd(path: String) {
+        val resp = ApiClient.cdCcDir(userId, groupId, path)
+        if (resp.success) {
+            workingDir = resp.workingDir
+        } else {
+            val err = resp.error
+            if (err != null) {
+                kotlinx.browser.window.alert("切换目录失败：$err")
+            }
+        }
+    }
 
     // 拉取当前 CC 工作目录：
     // - groupId 变化时（切换工作流）
@@ -754,10 +819,47 @@ private fun WorkflowChatPanel(
             onConfirm = { selectedPath ->
                 showFolderPicker = false
                 scope.launch {
-                    // HTTP 切目录，不发聊天 /cd 气泡
-                    val resp = ApiClient.cdCcDir(userId, groupId, selectedPath)
-                    if (resp.success) {
-                        workingDir = resp.workingDir
+                    // 1. 信任目录检查
+                    val trustCheck = ApiClient.checkTrustedDir(userId, selectedPath)
+                    when (trustCheck) {
+                        is ApiClient.TrustCheckResult.BridgeDisconnected -> {
+                            kotlinx.browser.window.alert("Bridge 未连接，无法切换目录。")
+                            return@launch
+                        }
+                        is ApiClient.TrustCheckResult.NotTrusted -> {
+                            trustConfirmPath = selectedPath
+                            trustConfirmBridgeId = trustCheck.bridgeId
+                            showTrustConfirm = true
+                            return@launch
+                        }
+                        is ApiClient.TrustCheckResult.Error -> {
+                            kotlinx.browser.window.alert("检查信任状态失败：${trustCheck.message}")
+                            return@launch
+                        }
+                        else -> {} // 已信任，继续
+                    }
+
+                    // 2. 执行 cd
+                    performCd(selectedPath)
+                }
+            },
+        )
+    }
+
+    // 信任确认弹窗（Silk 风格，替代浏览器原生 confirm）
+    if (showTrustConfirm) {
+        TrustConfirmDialog(
+            path = trustConfirmPath,
+            bridgeId = trustConfirmBridgeId,
+            onDismiss = { showTrustConfirm = false },
+            onTrust = {
+                scope.launch {
+                    val added = ApiClient.addTrustedDir(userId, trustConfirmPath)
+                    if (added) {
+                        showTrustConfirm = false
+                        performCd(trustConfirmPath)
+                    } else {
+                        kotlinx.browser.window.alert("添加信任记录失败，请重试。")
                     }
                 }
             },
@@ -1118,4 +1220,95 @@ private fun buildBreadcrumbPath(segments: List<String>, upToIndex: Int, separato
 private fun joinPath(parent: String, child: String, separator: String): String {
     if (parent.isEmpty()) return child
     return if (parent.endsWith(separator)) parent + child else parent + separator + child
+}
+
+/**
+ * 信任目录确认弹窗（Silk 风格，替代浏览器原生 confirm）。
+ * 使用 ModalOverlay 遮罩层 + 自定义样式按钮，与整体 UI 一致。
+ */
+@Composable
+private fun TrustConfirmDialog(
+    path: String,
+    bridgeId: String?,
+    onDismiss: () -> Unit,
+    onTrust: () -> Unit,
+) {
+    val bridgeLabel = bridgeId ?: "未知机器"
+    ModalOverlay(onDismiss = onDismiss, zIndex = 3000) {
+        Div({
+            style {
+                backgroundColor(Color.white)
+                borderRadius(12.px)
+                padding(24.px)
+                width(420.px)
+                property("max-width", "90vw")
+                property("box-shadow", "0 8px 32px rgba(0,0,0,0.15)")
+            }
+        }) {
+            H3({ style { marginTop(0.px); color(Color(SilkColors.textPrimary)) } }) { Text("⚠️  信任目录确认") }
+            Div({
+                style {
+                    marginTop(16.px)
+                    marginBottom(24.px)
+                    fontSize(14.px)
+                    color(Color(SilkColors.textPrimary))
+                    property("line-height", "1.6")
+                }
+            }) {
+                Text("您选择了工作目录：")
+                Div({
+                    style {
+                        fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
+                        marginTop(4.px)
+                        marginBottom(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        fontSize(13.px)
+                    }
+                }) { Text(path) }
+                Text("Bridge 机器：$bridgeLabel")
+                Div({ style { marginTop(12.px) } }) {
+                    Text("是否信任并授权该目录及其子目录的读写执行权限？")
+                }
+                Div({
+                    style {
+                        marginTop(4.px)
+                        fontSize(12.px)
+                        color(Color(SilkColors.textLight))
+                    }
+                }) {
+                    Text("信任后，下次在该机器上选择此目录或其子目录时将不再询问。")
+                }
+            }
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.FlexEnd)
+                    property("gap", "8px")
+                }
+            }) {
+                Button({
+                    style {
+                        backgroundColor(Color(SilkColors.surface))
+                        color(Color(SilkColors.textSecondary))
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(6.px)
+                        padding(8.px, 16.px)
+                        property("cursor", "pointer")
+                    }
+                    onClick { onDismiss() }
+                }) { Text("取消") }
+                Button({
+                    style {
+                        backgroundColor(Color(SilkColors.primary))
+                        color(Color.white)
+                        border(0.px)
+                        borderRadius(6.px)
+                        padding(8.px, 16.px)
+                        property("cursor", "pointer")
+                    }
+                    onClick { onTrust() }
+                }) { Text("信任并授权") }
+            }
+        }
+    }
 }

@@ -14,9 +14,14 @@ import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
 import com.silk.backend.claudecode.BridgeRegistry
 import com.silk.backend.claudecode.ClaudeCodeManager
+import com.silk.backend.trust.TrustedDirManager
 import com.silk.shared.models.CcStateResponse
 import com.silk.shared.models.DirEntry
 import com.silk.shared.models.DirListingResponse
+import com.silk.shared.models.TrustedDirCheckResponse
+import com.silk.shared.models.AddTrustRequest
+import com.silk.shared.models.TrustedDirRecordDto
+import com.silk.shared.models.TrustedDirListResponse
 import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
@@ -40,6 +45,7 @@ import org.slf4j.LoggerFactory
 private val groupChatServers = ConcurrentHashMap<String, ChatServer>()
 private val logger = LoggerFactory.getLogger("Routing")
 private val workflowManager = WorkflowManager()
+private val trustedDirManager = TrustedDirManager()
 private val knowledgeBaseManager = KnowledgeBaseManager()
 
 private fun sanitizeFileName(input: String): String =
@@ -659,6 +665,18 @@ fun Application.configureRouting() {
                 )
                 return@post
             }
+            // 信任目录检查
+            val bridgeId = BridgeRegistry.getRemoteIp(userId)?.let { "ip:$it" } ?: "unknown"
+            if (!trustedDirManager.isTrusted(userId, bridgeId, rawPath)) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    CcStateResponse(
+                        success = false,
+                        error = "目录 $rawPath 未被信任。请先确认信任该目录。",
+                    )
+                )
+                return@post
+            }
             // 与 autoActivateForWorkflow 一致使用 "group_<id>" 形式作为 CC state key
             val ccGroupId = if (groupId.startsWith("group_")) groupId else "group_$groupId"
             when (val result = ClaudeCodeManager.cdSync(userId, ccGroupId, rawPath)) {
@@ -671,6 +689,18 @@ fun Application.configureRouting() {
                 is ClaudeCodeManager.CdResult.Ok -> {
                     val snap = ClaudeCodeManager.snapshotState(userId, ccGroupId)
                     val bridgeConnected = BridgeRegistry.isConnected(userId)
+                    // 切目录会重置 sessionId/sessionStarted/messageQueue（等价于 /new），
+                    // 在聊天里广播一条提示，让用户能感知"会话被重置了"，与 /new 命令体验一致
+                    val rawGid = if (ccGroupId.startsWith("group_")) ccGroupId.removePrefix("group_") else ccGroupId
+                    try {
+                        getGroupChatServer(rawGid).broadcast(
+                            ClaudeCodeManager.systemMessage(
+                                "工作目录已切换至：${result.resolvedPath} 会话已重置"
+                            )
+                        )
+                    } catch (e: Exception) {
+                        logger.warn("广播切目录提示失败: {}", e.message)
+                    }
                     call.respond(
                         CcStateResponse(
                             success = true,
@@ -684,6 +714,101 @@ fun Application.configureRouting() {
                     )
                 }
             }
+        }
+
+        // ==================== Trusted Directory API ====================
+
+        get("/users/{userId}/trusted-dirs/check") {
+            val userId = call.parameters["userId"] ?: ""
+            val path = call.request.queryParameters["path"] ?: ""
+            if (userId.isBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    TrustedDirCheckResponse(trusted = false, bridgeConnected = false)
+                )
+                return@get
+            }
+            val bridgeConnected = BridgeRegistry.isConnected(userId)
+            val bridgeId = if (bridgeConnected) {
+                BridgeRegistry.getRemoteIp(userId)?.let { "ip:$it" } ?: "unknown"
+            } else null
+            val trusted = if (bridgeConnected && path.isNotBlank() && bridgeId != null) {
+                trustedDirManager.isTrusted(userId, bridgeId, path)
+            } else false
+            call.respond(
+                TrustedDirCheckResponse(
+                    trusted = trusted,
+                    bridgeConnected = bridgeConnected,
+                    bridgeId = bridgeId,
+                )
+            )
+        }
+
+        post("/users/{userId}/trusted-dirs") {
+            val userId = call.parameters["userId"] ?: ""
+            val req = try {
+                Json.decodeFromString<AddTrustRequest>(call.receiveText())
+            } catch (e: Exception) {
+                call.respondText(
+                    """{"success":false,"message":"请求体非法 JSON"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest
+                )
+                return@post
+            }
+            if (userId.isBlank() || req.path.isBlank()) {
+                call.respondText(
+                    """{"success":false,"message":"userId 和 path 不能为空"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest
+                )
+                return@post
+            }
+            val bridgeId = BridgeRegistry.getRemoteIp(userId)?.let { "ip:$it" } ?: "unknown"
+            val added = trustedDirManager.addTrust(userId, bridgeId, req.path)
+            call.respondText(
+                """{"success":true,"added":$added}""",
+                ContentType.Application.Json,
+                if (added) HttpStatusCode.Created else HttpStatusCode.OK
+            )
+        }
+
+        delete("/users/{userId}/trusted-dirs") {
+            val userId = call.parameters["userId"] ?: ""
+            val req = try {
+                Json.decodeFromString<AddTrustRequest>(call.receiveText())
+            } catch (e: Exception) {
+                call.respondText(
+                    """{"success":false,"message":"请求体非法 JSON"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest
+                )
+                return@delete
+            }
+            if (userId.isBlank() || req.path.isBlank()) {
+                call.respondText(
+                    """{"success":false,"message":"userId 和 path 不能为空"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest
+                )
+                return@delete
+            }
+            val bridgeId = BridgeRegistry.getRemoteIp(userId)?.let { "ip:$it" } ?: "unknown"
+            val removed = trustedDirManager.removeTrust(userId, bridgeId, req.path)
+            call.respondText(
+                """{"success":$removed}""",
+                ContentType.Application.Json,
+                if (removed) HttpStatusCode.OK else HttpStatusCode.NotFound
+            )
+        }
+
+        get("/users/{userId}/trusted-dirs") {
+            val userId = call.parameters["userId"] ?: ""
+            val bridgeId = call.request.queryParameters["bridgeId"]
+            val entries = trustedDirManager.listTrusts(userId, bridgeId).map {
+                TrustedDirRecordDto(it.bridgeId, it.path, it.trustedAt)
+            }
+            call.respond(TrustedDirListResponse(entries))
         }
 
         // PDF 报告下载端点
@@ -1926,6 +2051,20 @@ fun Application.configureRouting() {
             }
             if (!BridgeRegistry.isConnected(userId)) {
                 respondError(HttpStatusCode.Conflict, "Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
+                return@post
+            }
+
+            // 信任目录检查
+            val bridgeId = BridgeRegistry.getRemoteIp(userId)?.let { "ip:$it" } ?: "unknown"
+            if (!trustedDirManager.isTrusted(userId, bridgeId, initialDir)) {
+                val payload = kotlinx.serialization.json.buildJsonObject {
+                    put("success", kotlinx.serialization.json.JsonPrimitive(false))
+                    put("errorCode", kotlinx.serialization.json.JsonPrimitive("DIRECTORY_NOT_TRUSTED"))
+                    put("message", kotlinx.serialization.json.JsonPrimitive("目录 $initialDir 未被信任。请先确认信任该目录。"))
+                    put("path", kotlinx.serialization.json.JsonPrimitive(initialDir))
+                    put("bridgeId", kotlinx.serialization.json.JsonPrimitive(bridgeId))
+                }
+                call.respondText(payload.toString(), ContentType.Application.Json, HttpStatusCode.BadRequest)
                 return@post
             }
 
