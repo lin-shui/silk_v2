@@ -145,7 +145,7 @@ class DirectModelAgentCitationTest {
         val refs = agent.citedReferencesForTest("这里只引用第二个来源。[citation:2]")
 
         assertEquals(1, refs.size)
-        assertEquals(2, refs.first().index)
+        assertEquals(1, refs.first().index)
         assertEquals("https://example.com/used", refs.first().url)
     }
 

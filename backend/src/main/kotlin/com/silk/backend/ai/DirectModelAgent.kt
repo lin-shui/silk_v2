@@ -2187,10 +2187,11 @@ douban(movie-hot)、bbc(news)、bloomberg(news) 等。
     )
     
     private fun removeInvalidCitationMarkers(content: String): String {
-        val maxIndex = currentResponseReferences.size
         return content.replace(Regex("\\[(citation|available):(\\d+)\\]")) { match ->
+            val kind = match.groupValues[1]
             val idx = match.groupValues[2].toIntOrNull() ?: 0
-            if (idx in 1..maxIndex) match.value else ""
+            val exists = currentResponseReferences.any { it.kind == kind && it.index == idx }
+            if (exists) match.value else ""
         }
     }
 
@@ -2213,21 +2214,26 @@ douban(movie-hot)、bbc(news)、bloomberg(news) 等。
 
     private fun normalizeCitedReferences(content: String): FinalCitationResult {
         val citedPattern = Regex("\\[(citation|available):(\\d+)\\]")
-        val citedIndices = citedPattern.findAll(content)
-            .map { it.groupValues[2].toInt() }
+        val citedKeys = citedPattern.findAll(content)
+            .mapNotNull { match ->
+                val kind = match.groupValues[1]
+                val idx = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+                "$kind:$idx"
+            }
             .distinct()
-            .sorted()
             .toList()
 
-        if (citedIndices.isEmpty()) {
+        if (citedKeys.isEmpty()) {
             return FinalCitationResult(content, emptyList())
         }
 
-        val citedRefs = citedIndices.mapNotNull { idx ->
-            currentResponseReferences.find { it.index == idx }
+        val citedRefs = citedKeys.mapNotNull { key ->
+            val kind = key.substringBefore(":")
+            val idx = key.substringAfter(":").toIntOrNull() ?: return@mapNotNull null
+            currentResponseReferences.find { it.kind == kind && it.index == idx }
         }
 
-        val reindexMap = mutableMapOf<Int, Int>()
+        val reindexMap = mutableMapOf<String, Int>()
         val newRefs = mutableListOf<com.silk.backend.models.MessageReference>()
         var citationCounter = 0
         var availableCounter = 0
@@ -2238,14 +2244,14 @@ douban(movie-hot)、bbc(news)、bloomberg(news) 等。
             } else {
                 ++availableCounter
             }
-            reindexMap[ref.index] = newIndex
+            reindexMap["${ref.kind}:${ref.index}"] = newIndex
             newRefs.add(ref.copy(index = newIndex))
         }
 
         val newContent = citedPattern.replace(content) { match ->
             val kind = match.groupValues[1]
             val oldIdx = match.groupValues[2].toInt()
-            val newIdx = reindexMap[oldIdx] ?: oldIdx
+            val newIdx = reindexMap["$kind:$oldIdx"] ?: oldIdx
             "[$kind:$newIdx]"
         }
 
