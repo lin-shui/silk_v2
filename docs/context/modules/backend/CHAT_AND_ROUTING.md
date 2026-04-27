@@ -26,12 +26,14 @@
 - `/api/calendar/workday/*`
 - `/api/user-todos/*`
 - `/api/messages/*`
-- `/api/workflows`
+- `/api/workflows` (POST **requires directory trust**)
 - `/api/kb/*`
 - `/users/{userId}/cc-settings*`
 - `/users/{userId}/cc-state/{groupId}`
 - `/users/{userId}/cc-fs/list` (GET, query: path/showHidden)
-- `/users/{userId}/cc-fs/cd` (POST, JSON body: groupId/path)
+- `/users/{userId}/cc-fs/cd` (POST, JSON body: groupId/path; **rejects untrusted directories**)
+- `/users/{userId}/trusted-dirs/check` (GET, query: path)
+- `/users/{userId}/trusted-dirs` (POST, DELETE, GET)
 - `/chat` WebSocket
 - `/cc-bridge` WebSocket
 

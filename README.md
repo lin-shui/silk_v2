@@ -165,8 +165,19 @@ Workflows give each user a dedicated Claude Code programming session with its ow
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/workflows?userId=...` | List workflows |
-| POST | `/api/workflows` | Create workflow (`{userId, name, description}`) |
+| POST | `/api/workflows` | Create workflow (`{userId, name, description, initialDir}`); requires directory trust |
 | DELETE | `/api/workflows/{id}?userId=...` | Delete workflow |
+
+### Trusted Directories
+
+Before creating a workflow or changing its working directory, the selected directory must be explicitly trusted for the current bridge machine. Trust records are per-user and per-bridge (strict v1: exact bridge ID match). Trusted parent directories automatically cover their children.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/users/{userId}/trusted-dirs/check?path=...` | Check if a directory is trusted on the current bridge |
+| POST | `/users/{userId}/trusted-dirs` | Add trust for a directory (`{path}`) |
+| DELETE | `/users/{userId}/trusted-dirs` | Remove trust for a directory (`{path}`) |
+| GET | `/users/{userId}/trusted-dirs` | List all trusted directories for the user |
 
 ### Prerequisites
 

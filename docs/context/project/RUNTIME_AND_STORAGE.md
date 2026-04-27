@@ -20,6 +20,7 @@
 | URL dedupe | `chat_history/<session>/uploads/processed_urls.txt` | URL/PDF 下载去重 |
 | User todos | `chat_history/user_todos/*.json` or `-Dsilk.userTodoBaseDir=...` | `UserTodoStore` |
 | Workflow store | `workflows/workflow_store.json` or `-Dsilk.workflowDir=...` | `WorkflowManager` |
+| Trusted directories | `workflows/trusted_dirs.json` (co-located with workflow store) | `TrustedDirManager` |
 | KB store | `knowledge_base/kb_store.json` or `-Dsilk.kbDir=...` | `KnowledgeBaseManager` |
 | Web static / APK | `backend/static/` | 后端静态分发 |
 | Bridge sessions | `~/.silk/cc_sessions.json` | `cc_bridge/session_manager.py` |

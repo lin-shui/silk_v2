@@ -13,7 +13,7 @@
 - `ChatServer.broadcast()` 会先拦截 CC 模式消息
 - `UserCCState` 字段私有，外部只能通过 `state.withLock { h -> ... }` 修改：所有多字段写入强制走 Mutex 保护，避免 chat WebSocket 路径与 HTTP `/cc-fs/*` 入口的并发 race。`snapshot()` 提供无锁只读快照
 - 切目录有两种入口：
-  - HTTP `POST /users/{userId}/cc-fs/cd`（UI"更改"按钮 + 创建工作流时的 initialDir）→ `ClaudeCodeManager.cdSync()` 走 RPC 等 bridge `cd_result` 完成，原子更新 state，返回 `CdResult.Ok | CdResult.Err`
+  - HTTP `POST /users/{userId}/cc-fs/cd`（UI"更改"按钮 + 创建工作流时的 initialDir）→ 先经 `TrustedDirManager.isTrusted()` 验证目录信任状态，未信任则返回 `400 DIRECTORY_NOT_TRUSTED`；通过后再调 `ClaudeCodeManager.cdSync()` 走 RPC 等 bridge `cd_result` 完成，原子更新 state，返回 `CdResult.Ok | CdResult.Err`
   - 历史的聊天 `/cd` 命令已废弃，`routeMessage` 命中后只回一条引导提示
 - 目录浏览：HTTP `GET /users/{userId}/cc-fs/list?path=&showHidden=` → `listDirectory()` 通过 RPC 让 bridge 跑 `handle_list_dir`
 - RPC 通用机制：`pendingRpc: Map<requestId, CompletableDeferred>`，bridge 响应在 `handleBridgeMessage` 顶部优先 complete Deferred；超时 5s（withTimeout）

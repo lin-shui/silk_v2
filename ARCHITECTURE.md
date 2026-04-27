@@ -31,6 +31,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - URL 去重缓存：`processed_urls.txt`
 - 用户 Todo：`chat_history/user_todos/<user>.json`
 - Workflow：`workflows/workflow_store.json`
+- TrustedDir：`workflows/trusted_dirs.json`
 - Knowledge Base：`knowledge_base/kb_store.json`
 - Web 静态产物/APK 分发：`backend/static/`
 
