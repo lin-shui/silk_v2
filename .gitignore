@@ -61,6 +61,9 @@ backend.log
 backend.pid
 backend_test.log
 
+# Workflow runtime persistence (per-user data, should not be tracked)
+backend/workflows/
+
 # Large binary files (download separately)
 search/weaviate
 search/weaviate.zip
