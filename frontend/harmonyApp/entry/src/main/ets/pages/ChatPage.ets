@@ -22,6 +22,39 @@ import { AudioRecorderService } from '../common/AudioRecorderService';
 import { getGlobalContext } from '../entryability/EntryAbility';
 import { router, KeyboardAvoidMode } from '@kit.ArkUI';
 
+class MessageDataSource implements IDataSource {
+  private data: Message[] = [];
+  private listeners: DataChangeListener[] = [];
+
+  totalCount(): number {
+    return this.data.length;
+  }
+
+  getData(index: number): Message {
+    return this.data[index];
+  }
+
+  registerDataChangeListener(listener: DataChangeListener): void {
+    if (this.listeners.indexOf(listener) < 0) {
+      this.listeners.push(listener);
+    }
+  }
+
+  unregisterDataChangeListener(listener: DataChangeListener): void {
+    const pos = this.listeners.indexOf(listener);
+    if (pos >= 0) {
+      this.listeners.splice(pos, 1);
+    }
+  }
+
+  setData(newData: Message[]): void {
+    this.data = newData;
+    for (const listener of this.listeners) {
+      listener.onDataReloaded();
+    }
+  }
+}
+
 @Entry
 @Component
 struct ChatPage {
@@ -66,6 +99,7 @@ struct ChatPage {
   private readonly apiClient = globalApiClient;
   private readonly audioRecorder = new AudioRecorderService();
   private listScroller: Scroller = new Scroller();
+  private messageDataSource: MessageDataSource = new MessageDataSource();
   private didInitialScroll: boolean = false;
   private lastSyncedMessageCount: number = 0;
 
@@ -184,6 +218,7 @@ struct ChatPage {
 
     const prevCount = this.lastSyncedMessageCount;
     this.messages = result;
+    this.messageDataSource.setData(result);
     this.isAiGenerating = globalChatStore.isGenerating;
     this.markMessagesAsSent(confirmedOwnIds);
     const newCount = result.length;
@@ -1283,45 +1318,45 @@ struct ChatPage {
       // 顶部导航栏
       Row() {
         SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(24)
+          .fontSize(22)
           .fontColor([SilkColors.textPrimary])
-          .margin({ left: 16 })
-          .width(40)
+          .margin({ left: 12 })
+          .width(36)
           .onClick((): void => {
             router.back();
           })
 
         Text(this.groupName)
-          .fontSize(18)
+          .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor(SilkColors.textPrimary)
-          .margin({ left: 12 })
+          .margin({ left: 8 })
           .layoutWeight(1)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         if (!this.isSilkPrivateChat()) {
           Text('邀请码')
-            .fontSize(14)
+            .fontSize(13)
             .fontColor(SilkColors.primary)
             .fontWeight(FontWeight.Medium)
-            .margin({ right: 12 })
+            .margin({ right: 10 })
             .onClick((): void => {
               this.openInvitationSheet();
             })
 
           Text('成员')
-            .fontSize(14)
+            .fontSize(13)
             .fontColor(SilkColors.primary)
             .fontWeight(FontWeight.Medium)
-            .margin({ right: 16 })
+            .margin({ right: 12 })
             .onClick((): void => {
               void this.openMembersSheet();
             })
         }
       }
       .width('100%')
-      .height(56)
+      .height(44)
       .flexShrink(0)
       .alignItems(VerticalAlign.Center)
       .backgroundColor(SilkColors.surface)
@@ -1330,27 +1365,27 @@ struct ChatPage {
       if (this.connectionState !== ConnectionState.CONNECTED) {
         Row() {
           LoadingProgress()
-            .width(16)
-            .height(16)
+            .width(14)
+            .height(14)
             .color(SilkColors.primary)
 
           Text(this.connectionState === ConnectionState.CONNECTING ? '连接中...' : '连接断开')
-            .fontSize(12)
+            .fontSize(11)
             .fontColor(SilkColors.textSecondary)
-            .margin({ left: 8 })
+            .margin({ left: 6 })
 
           if (this.connectionState === ConnectionState.DISCONNECTED) {
             Button('重连')
-              .height(24)
-              .fontSize(12)
+              .height(22)
+              .fontSize(11)
               .backgroundColor(SilkColors.primary)
               .fontColor(SilkColors.onPrimary)
-              .margin({ left: 12 })
+              .margin({ left: 10 })
               .onClick((): void => this.reconnect())
           }
         }
         .width('100%')
-        .height(32)
+        .height(28)
         .justifyContent(FlexAlign.Center)
         .backgroundColor('#FDF3E0')
       }
@@ -1398,11 +1433,11 @@ struct ChatPage {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        List({ space: 4, scroller: this.listScroller }) {
-          ForEach(this.messages, (message: Message, index?: number) => {
+        List({ space: 4, scroller: this.listScroller, initialIndex: Math.max(0, this.messages.length - 1) }) {
+          LazyForEach(this.messageDataSource, (message: Message, index: number) => {
             ListItem() {
               Column() {
-                if (this.shouldShowMessageTime(index !== undefined ? index : 0)) {
+                if (this.shouldShowMessageTime(index)) {
                   Row() {
                     Text(this.formatMessageTimeDivider(message.timestamp))
                       .fontSize(11)
@@ -1461,45 +1496,27 @@ struct ChatPage {
         .padding({ top: 8, bottom: 8 })
       }
 
-      // 输入区域（普通群显示 @Silk 快捷填入；[Silk] 专属私聊与多选模式不显示）
+      // 输入区域 - compact single-row with inline @Silk chip
       Column() {
-        if (!this.isSilkPrivateChat() && !this.isSelectionMode) {
-          Row() {
-            Text('@Silk')
-              .fontSize(14)
-              .fontColor(SilkColors.primary)
-              .fontWeight(FontWeight.Medium)
-              .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-              .backgroundColor('#26C9A86C')
-              .borderRadius(8)
-              .onClick((): void => {
-                this.applySilkQuickMention();
-              })
-          }
-          .width('100%')
-          .justifyContent(FlexAlign.Start)
-          .margin({ bottom: 6 })
-        }
-
         if (this.isVoiceRecording) {
           Row() {
             SymbolGlyph($r('sys.symbol.ohos_mic'))
-              .fontSize(22)
+              .fontSize(20)
               .fontColor(['#FF4D4F'])
               .margin({ right: 8 })
             Text('录音中…')
-              .fontSize(16)
+              .fontSize(15)
               .fontColor('#FF4D4F')
               .fontWeight(FontWeight.Medium)
               .layoutWeight(1)
 
             Button() {
               SymbolGlyph($r('sys.symbol.square_fill'))
-                .fontSize(18)
+                .fontSize(16)
                 .fontColor([Color.White])
             }
-              .width(44)
-              .height(44)
+              .width(38)
+              .height(38)
               .type(ButtonType.Circle)
               .backgroundColor('#FF4D4F')
               .onClick((): void => {
@@ -1507,41 +1524,55 @@ struct ChatPage {
               })
           }
           .width('100%')
-          .height(44)
+          .height(40)
           .alignItems(VerticalAlign.Center)
         } else if (this.isTranscribing) {
           Row() {
             LoadingProgress()
-              .width(24)
-              .height(24)
+              .width(20)
+              .height(20)
               .color(SilkColors.primary)
             Text('识别中...')
-              .fontSize(14)
+              .fontSize(13)
               .fontColor(SilkColors.textSecondary)
               .margin({ left: 8 })
           }
           .width('100%')
-          .height(44)
+          .height(38)
           .justifyContent(FlexAlign.Center)
         } else {
           Row() {
+            if (!this.isSilkPrivateChat() && !this.isSelectionMode) {
+              Text('@Silk')
+                .fontSize(12)
+                .fontColor(SilkColors.primary)
+                .fontWeight(FontWeight.Medium)
+                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                .backgroundColor('#26C9A86C')
+                .borderRadius(14)
+                .margin({ right: 6 })
+                .onClick((): void => {
+                  this.applySilkQuickMention();
+                })
+            }
+
             TextInput({ placeholder: this.getMessageInputPlaceholder(), text: $$this.messageInput })
               .layoutWeight(1)
-              .height(44)
+              .height(38)
               .backgroundColor(SilkColors.surface)
-              .borderRadius(22)
-              .padding({ left: 16, right: 16 })
+              .borderRadius(19)
+              .padding({ left: 14, right: 14 })
               .fontColor(SilkColors.textPrimary)
               .placeholderColor(SilkColors.textLight)
-              .fontSize(16)
+              .fontSize(15)
 
             Button() {
               SymbolGlyph($r('sys.symbol.ohos_mic'))
-                .fontSize(22)
+                .fontSize(20)
                 .fontColor([SilkColors.textPrimary])
             }
-              .width(44)
-              .height(44)
+              .width(38)
+              .height(38)
               .type(ButtonType.Circle)
               .backgroundColor(SilkColors.surface)
               .margin({ left: 6 })
@@ -1551,11 +1582,12 @@ struct ChatPage {
 
             if (this.isAiGenerating) {
               Button('停止')
-                .width(60)
-                .height(44)
+                .width(54)
+                .height(38)
                 .backgroundColor('#FF4D4F')
                 .fontColor('#FFFFFF')
-                .borderRadius(22)
+                .borderRadius(19)
+                .fontSize(14)
                 .margin({ left: 6 })
                 .onClick((): void => {
                   globalChatStore.stopGeneration();
@@ -1563,11 +1595,12 @@ struct ChatPage {
                 })
             } else {
               Button('发送')
-                .width(60)
-                .height(44)
+                .width(54)
+                .height(38)
                 .backgroundColor(this.messageInput.trim() ? SilkColors.primary : SilkColors.border)
                 .fontColor(SilkColors.onPrimary)
-                .borderRadius(22)
+                .borderRadius(19)
+                .fontSize(14)
                 .margin({ left: 6 })
                 .enabled(this.messageInput.trim().length > 0)
                 .onClick((): void => {
@@ -1577,11 +1610,12 @@ struct ChatPage {
             }
           }
           .width('100%')
+          .alignItems(VerticalAlign.Center)
         }
       }
       .width('100%')
       .flexShrink(0)
-      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
       .backgroundColor(SilkColors.background)
 
       if (this.isSelectionMode) {

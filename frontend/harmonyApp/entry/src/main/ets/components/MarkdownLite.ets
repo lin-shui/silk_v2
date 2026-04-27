@@ -4,6 +4,13 @@
  */
 import { Theme } from '../common/Theme';
 import { MathKatexWeb } from './MathKatexWeb';
+import common from '@ohos.app.ability.common';
+import promptAction from '@ohos.promptAction';
+
+interface MarkdownLink {
+  label: string;
+  url: string;
+}
 
 interface MarkdownBlock {
   kind: string; // heading | bullet | ordered | quote | code | divider | text | empty | task | table | table_grid | math
@@ -12,6 +19,7 @@ interface MarkdownBlock {
   marker: string;
   tableRow?: string[];
   tableData?: string[][];
+  links?: MarkdownLink[];
 }
 
 interface CodeToken {
@@ -144,7 +152,8 @@ export struct MarkdownLite {
       if (headingMatch) {
         const marks = headingMatch[1];
         const title = headingMatch[2];
-        blocks.push({ kind: 'heading', text: this.cleanInlineMarkdown(title), level: marks.length, marker: '' });
+        const hLinks = this.extractLinks(title);
+        blocks.push({ kind: 'heading', text: this.cleanInlineMarkdown(title), level: marks.length, marker: '', links: hLinks.length > 0 ? hLinks : undefined });
         continue;
       }
 
@@ -199,17 +208,20 @@ export struct MarkdownLite {
       const bulletMatch = trimmed.match(/^[-*+]\s+(.+)$/);
       if (bulletMatch) {
         const itemText = bulletMatch[1];
-        blocks.push({ kind: 'bullet', text: this.cleanInlineMarkdown(itemText), level: 0, marker: '•' });
+        const bLinks = this.extractLinks(itemText);
+        blocks.push({ kind: 'bullet', text: this.cleanInlineMarkdown(itemText), level: 0, marker: '•', links: bLinks.length > 0 ? bLinks : undefined });
         continue;
       }
 
       const orderedMatch = trimmed.match(/^(\d+)\.\s+(.+)$/);
       if (orderedMatch) {
+        const oLinks = this.extractLinks(orderedMatch[2]);
         blocks.push({
           kind: 'ordered',
           text: this.cleanInlineMarkdown(orderedMatch[2]),
           level: 0,
-          marker: `${orderedMatch[1]}.`
+          marker: `${orderedMatch[1]}.`,
+          links: oLinks.length > 0 ? oLinks : undefined
         });
         continue;
       }
@@ -232,7 +244,8 @@ export struct MarkdownLite {
         continue;
       }
 
-      blocks.push({ kind: 'text', text: this.cleanInlineMarkdown(line), level: 0, marker: '' });
+      const tLinks = this.extractLinks(line);
+      blocks.push({ kind: 'text', text: this.cleanInlineMarkdown(line), level: 0, marker: '', links: tLinks.length > 0 ? tLinks : undefined });
     }
 
     if (inCodeBlock && codeBuffer.length > 0) {
@@ -533,10 +546,56 @@ export struct MarkdownLite {
     return fallback.length > 0 ? fallback : '[公式]';
   }
 
+  private extractLinks(rawText: string): MarkdownLink[] {
+    const links: MarkdownLink[] = [];
+    const text = rawText ? rawText : '';
+    const noImages = text.replace(/!\[[^\]]*\]\([^)]+\)/g, '');
+    const regex = /\[([^\]]+)\]\(([^)]+)\)/g;
+    let match: RegExpExecArray | null = regex.exec(noImages);
+    while (match !== null) {
+      links.push({ label: match[1], url: match[2] });
+      match = regex.exec(noImages);
+    }
+    return links;
+  }
+
+  private openLinkUrl(rawUrl: string): void {
+    let url = rawUrl.trim();
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = `https://${url}`;
+    }
+    const displayUrl = url;
+    try {
+      const ctx = getContext(this) as common.UIAbilityContext;
+      ctx.startAbility({
+        action: 'ohos.want.action.viewData',
+        uri: url
+      }).then(() => {
+      }).catch((_err: Error) => {
+        try {
+          promptAction.showToast({ message: displayUrl, duration: 2000 });
+        } catch (_e) {
+        }
+      });
+    } catch (_) {
+      try {
+        promptAction.showToast({ message: displayUrl, duration: 2000 });
+      } catch (_e) {
+      }
+    }
+  }
+
   private cleanInlineMarkdown(text: string): string {
     let cleaned = text ? text : '';
     cleaned = cleaned.replace(/!\[([^\]]*)\]\([^)]+\)/g, '[图片]');
-    cleaned = cleaned.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)');
+    cleaned = cleaned.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m: string, label: string) => {
+      const normalized = label.trim();
+      // 引用标签由下方可点击 chip 展示，避免“来源 n”在正文重复出现两次
+      if (/^(来源|资料)\s*\d+$/.test(normalized)) {
+        return '';
+      }
+      return `🔗${normalized}`;
+    });
     cleaned = cleaned.replace(/\*\*(.*?)\*\*/g, '$1');
     cleaned = cleaned.replace(/__(.*?)__/g, '$1');
     cleaned = cleaned.replace(/\*(.*?)\*/g, '$1');
@@ -544,7 +603,15 @@ export struct MarkdownLite {
     cleaned = cleaned.replace(/`([^`]+)`/g, '$1');
     cleaned = cleaned.replace(/\$([^$\n]+)\$/g, (_match: string, expr: string) => `⟮${this.normalizeMathExpression(expr)}⟯`);
     cleaned = cleaned.replace(/\\\(([^)]+)\\\)/g, (_match: string, expr: string) => `⟮${this.normalizeMathExpression(expr)}⟯`);
+    cleaned = this.displayInlineCitations(cleaned);
     return cleaned;
+  }
+
+  private displayInlineCitations(text: string): string {
+    let result = text ? text : '';
+    result = result.replace(/\[citation:(\d+)\]/g, (_m: string, n: string) => `[来源 ${n}]`);
+    result = result.replace(/\[available:(\d+)\]/g, (_m: string, n: string) => `[资料 ${n}]`);
+    return result;
   }
 
   private estimateMathWebHeight(latex: string): number {
@@ -585,6 +652,25 @@ export struct MarkdownLite {
       return '>> ';
     }
     return '>>> ';
+  }
+
+  @Builder
+  private renderLinkChips(blockLinks: MarkdownLink[]) {
+    Flex({ wrap: FlexWrap.Wrap }) {
+      ForEach(blockLinks, (lnk: MarkdownLink, lnkIdx?: number) => {
+        Text(`🔗 ${lnk.label}`)
+          .fontSize(12)
+          .fontColor('#2F80B7')
+          .backgroundColor('#F0F7FF')
+          .borderRadius(12)
+          .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+          .margin({ right: 6, top: 3, bottom: 2 })
+          .onClick(() => {
+            this.openLinkUrl(lnk.url);
+          })
+      }, (lnk: MarkdownLink, lnkIdx?: number) => `lc_${lnkIdx !== undefined ? lnkIdx : 0}_${lnk.url.length}`)
+    }
+    .width('100%')
   }
 
   @Builder
@@ -740,6 +826,9 @@ export struct MarkdownLite {
     Column() {
       ForEach(this.getBlocks(), (block: MarkdownBlock, index?: number) => {
         this.renderBlock(block);
+        if (block.links !== undefined && block.links.length > 0) {
+          this.renderLinkChips(block.links);
+        }
       }, (block: MarkdownBlock, index?: number) => {
         const idx = index !== undefined ? index : 0;
         if (block.kind === 'math') {

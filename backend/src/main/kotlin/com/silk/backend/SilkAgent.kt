@@ -1,5 +1,6 @@
 package com.silk.backend
 
+import com.silk.backend.ai.AIConfig
 import com.silk.backend.ai.AIStepwiseAgent
 import com.silk.backend.ai.SearchDrivenAgent
 import com.silk.backend.ai.DirectModelAgent
@@ -36,9 +37,10 @@ class SilkAgent {
     
     fun initializeAgent(sessionName: String) {
         currentSessionId = sessionName
-        // ✅ 使用简化的 DirectModelAgent
         directAgent = DirectModelAgent(sessionId = sessionName)
-        // 旧 agent 初始化移除，不再需要复杂的搜索流程
+        if (AIConfig.WEAVIATE_URL.isNotBlank()) {
+            searchAgent = SearchDrivenAgent(sessionId = sessionName, userId = "system")
+        }
     }
     
     private val greetings = listOf(

@@ -14,7 +14,8 @@ data class Message(
     val currentStep: Int? = null,      // 当前执行的步骤编号（1-11）
     val totalSteps: Int? = null,       // 总步骤数（11）
     val isIncremental: Boolean = false, // true = 增量消息（需拼接），false = 完整消息（直接替换）
-    val category: MessageCategory = MessageCategory.NORMAL  // ✅ 消息类别（用于UI显示亮度）
+    val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度）
+    val references: List<MessageReference> = emptyList()
 )
 
 @Serializable
@@ -30,6 +31,16 @@ enum class MessageCategory {
     FINAL_REPORT,     // 最终诊断报告（高亮度）
     AGENT_STATUS      // Agent 工作状态（灰色，低亮度）
 }
+
+@Serializable
+data class MessageReference(
+    val kind: String,       // "citation" = 网络搜索, "available" = 本地资源
+    val index: Int,
+    val title: String,
+    val url: String? = null,
+    val snippet: String? = null,
+    val path: String? = null
+)
 
 @Serializable
 data class User(

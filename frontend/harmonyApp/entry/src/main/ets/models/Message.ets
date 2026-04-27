@@ -23,6 +23,18 @@ export enum MessageCategory {
 }
 
 /**
+ * 引用来源（网络搜索 / 本地资源）
+ */
+export interface Reference {
+  kind: string;       // "citation" = 网络搜索, "available" = 本地资源
+  index: number;
+  title: string;
+  url?: string;
+  snippet?: string;
+  path?: string;
+}
+
+/**
  * 消息数据模型
  */
 export interface Message {
@@ -37,6 +49,7 @@ export interface Message {
   totalSteps?: number;       // 总步骤数
   isIncremental: boolean;    // true = 增量消息（需拼接），false = 完整消息
   category: MessageCategory; // 消息类别
+  references?: Reference[];  // 引用来源列表（可选）
 }
 
 /**
@@ -58,7 +71,8 @@ export function createMessage(
     type,
     isTransient: false,
     isIncremental: false,
-    category: MessageCategory.NORMAL
+    category: MessageCategory.NORMAL,
+    references: []
   };
 }
 
@@ -71,6 +85,7 @@ export function parseMessage(json: string): Message {
   const parsedCategory: MessageCategory = obj.category ? obj.category as MessageCategory : MessageCategory.NORMAL;
   const parsedIsTransient: boolean = obj.isTransient ? obj.isTransient : false;
   const parsedIsIncremental: boolean = obj.isIncremental ? obj.isIncremental : false;
+  const parsedReferences: Reference[] = obj.references ? obj.references : [];
   return {
     id: obj.id,
     userId: obj.userId,
@@ -82,7 +97,8 @@ export function parseMessage(json: string): Message {
     currentStep: obj.currentStep,
     totalSteps: obj.totalSteps,
     isIncremental: parsedIsIncremental,
-    category: parsedCategory
+    category: parsedCategory,
+    references: parsedReferences
   };
 }
 

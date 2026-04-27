@@ -475,9 +475,17 @@ weaviate_start() {
             sleep 1
         fi
 
+        # 原生 Weaviate 使用与 Docker 一致的 API Key 认证配置
+        # 确保与后端 WeaviateClient 发送的 Authorization: Bearer 头部一致
+        local API_KEY="${WEAVIATE_API_KEY:-fd4c43d3ce24da0726d54f6baca225ee0e4c9cb1d681bd67}"
         PERSISTENCE_DATA_PATH="$DATA_DIR" \
         QUERY_DEFAULTS_LIMIT=25 \
-        AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=true \
+        AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED=false \
+        AUTHENTICATION_APIKEY_ENABLED=true \
+        AUTHENTICATION_APIKEY_ALLOWED_KEYS="$API_KEY" \
+        AUTHENTICATION_APIKEY_USERS=silk-weaviate-admin \
+        AUTHORIZATION_ADMINLIST_ENABLED=true \
+        AUTHORIZATION_ADMINLIST_USERS=silk-weaviate-admin \
         DEFAULT_VECTORIZER_MODULE=none \
         CLUSTER_HOSTNAME=node1 \
         LOG_LEVEL=info \
@@ -488,10 +496,13 @@ weaviate_start() {
             > "$LOG_FILE" 2>&1 &
         echo $! > "$PID_FILE"
 
+        # 原生 Weaviate 的 ready 端点可能返回空响应（非标准行为），
+        # 因此同时检查 ready 端点和 meta 端点
         for i in {1..20}; do
             sleep 1
             local READY=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/.well-known/ready" 2>/dev/null)
-            if [ "$READY" == "200" ]; then
+            local META_OK=$(curl -s -o /dev/null -w "%{http_code}" "${CURL_WEAVIATE_AUTH[@]}" "http://localhost:$WEAVIATE_HTTP_PORT/v1/meta" 2>/dev/null)
+            if [ "$READY" == "200" ] || [ "$META_OK" == "200" ]; then
                 echo -e "  ${GREEN}✓ Weaviate (原生) 就绪！${NC}"
                 weaviate_schema
                 return 0

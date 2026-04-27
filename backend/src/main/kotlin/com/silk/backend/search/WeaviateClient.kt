@@ -84,13 +84,31 @@ class WeaviateClient(
 
     /**
      * 检查 Weaviate 是否可用
+     * 兼容原生 Weaviate 二进制（ready 端点可能返回空响应导致连接异常）和 Docker Weaviate
      */
     suspend fun isReady(): Boolean {
-        return try {
-            logger.debug("🔍 [Weaviate] 检查连接: {}", baseUrl)
+        logger.debug("🔍 [Weaviate] 检查连接: {}", baseUrl)
+
+        // 先尝试 ready 端点（Docker Weaviate 返回 200 OK）
+        val readyOk = try {
             val response = httpClient.get("$baseUrl/v1/.well-known/ready")
-            val isOk = response.status == HttpStatusCode.OK
-            logger.debug("🔍 [Weaviate] 连接状态: {}", if (isOk) "✅ 可用" else "❌ 不可用 (${response.status})")
+            response.status == HttpStatusCode.OK
+        } catch (e: Exception) {
+            logger.debug("🔍 [Weaviate] ready 端点异常 (常见于原生二进制): {}", e.message)
+            false
+        }
+        if (readyOk) {
+            logger.debug("🔍 [Weaviate] 连接状态: ✅ 可用 (ready)")
+            return true
+        }
+
+        // 某些原生 Weaviate 二进制版本中 ready 端点返回空响应，
+        // 此时尝试调用 meta 端点作为备用检查
+        return try {
+            logger.debug("🔍 [Weaviate] 尝试 meta 端点...")
+            val metaResponse = httpClient.get("$baseUrl/v1/meta")
+            val isOk = metaResponse.status == HttpStatusCode.OK
+            logger.debug("🔍 [Weaviate] meta 端点状态: {}", if (isOk) "✅ 可用" else "❌ 不可用 (${metaResponse.status})")
             isOk
         } catch (e: Exception) {
             logger.error("❌ [Weaviate] 连接失败: {}", e.message)

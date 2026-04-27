@@ -643,20 +643,6 @@ class BackendWebSocketContractTest {
         url("/chat?userId=$userId&userName=$userName&groupId=$groupId")
     }
 
-    private suspend fun DefaultClientWebSocketSession.receiveMessagesUntil(
-        stopWhen: (Message) -> Boolean
-    ): List<Message> = buildList {
-        withTimeout(8_000) {
-            while (true) {
-                val message = receiveMessage()
-                add(message)
-                if (stopWhen(message)) {
-                    break
-                }
-            }
-        }
-    }
-
     private suspend fun DefaultClientWebSocketSession.receiveHistory(): List<Message> = buildList {
         withTimeout(5_000) {
             while (true) {
@@ -688,6 +674,21 @@ class BackendWebSocketContractTest {
             val message = receiveRawMessage(remainingMillis) ?: return null
             if (!message.isHistoryEndMarker()) {
                 return message
+            }
+        }
+    }
+
+    /**
+     * 连续读取消息直到 [predicate] 为 true（包含满足条件的那一条），用于 URL 下载流程等多步推送。
+     */
+    private suspend fun DefaultClientWebSocketSession.receiveMessagesUntil(
+        predicate: (Message) -> Boolean
+    ): List<Message> = buildList {
+        withTimeout(120_000) {
+            while (true) {
+                val msg = receiveMessage()
+                add(msg)
+                if (predicate(msg)) break
             }
         }
     }

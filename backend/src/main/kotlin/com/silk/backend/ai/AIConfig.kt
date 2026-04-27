@@ -57,6 +57,21 @@ object AIConfig {
     val SERPAPI_KEY: String get() = env("SERPAPI_KEY") ?: ""
     val BRAVE_API_KEY: String get() = env("BRAVE_API_KEY") ?: ""
     val BING_API_KEY: String get() = env("BING_API_KEY") ?: ""
+
+    // SearXNG 自托管搜索引擎地址（如 http://localhost:8080）
+    val SEARXNG_URL: String get() = env("SEARXNG_URL") ?: ""
+
+    // AutoCLI (nashsu/AutoCLI) 集成
+    val AUTOCLI_ENABLED: Boolean get() = env("AUTOCLI_ENABLED")?.toBoolean() ?: false
+    val AUTOCLI_PATH: String get() = env("AUTOCLI_PATH")?.trim()?.takeIf { it.isNotEmpty() } ?: "autocli"
+    val AUTOCLI_TIMEOUT: Long get() = env("AUTOCLI_TIMEOUT")?.toLongOrNull()?.takeIf { it > 0 } ?: 60
+
+    /**
+     * 单条 tool 角色消息写入聊天上下文时的最大字符数。
+     * 过大易导致上游（代理 / vLLM / DeepSeek 兼容网关）返回 400 或截断失败。
+     */
+    val MAX_TOOL_MESSAGE_CHARS: Int get() = env("MAX_TOOL_MESSAGE_CHARS")?.toIntOrNull()?.takeIf { it in 512..200_000 } ?: 10_000
+
     val ENABLE_EXTERNAL_SEARCH: Boolean get() = env("ENABLE_EXTERNAL_SEARCH")?.toBoolean() ?: true
 
     // 工具调用模式配置

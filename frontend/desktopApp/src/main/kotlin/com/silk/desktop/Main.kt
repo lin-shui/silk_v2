@@ -124,11 +124,10 @@ fun ChatScreen(appState: AppState) {
         }
     }
         
-    // 自动滚动到最新消息
+    // reverseLayout=true: index 0 = visual bottom (newest). Scroll to 0 shows latest.
     LaunchedEffect(messages.size, transientMessage) {
         if (messages.isNotEmpty() || transientMessage != null) {
-            val targetIndex = if (transientMessage != null) messages.size else messages.size - 1
-            listState.animateScrollToItem(maxOf(0, targetIndex))
+            listState.animateScrollToItem(0)
         }
     }
     
@@ -191,105 +190,98 @@ fun ChatScreen(appState: AppState) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
             
-            // 消息列表
-            LazyColumn(
+            // 消息列表 - reverseLayout: newest at visual bottom near input
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                state = listState,
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                contentAlignment = Alignment.BottomCenter
             ) {
-                items(messages) { message ->
-                    MessageBubble(message, scope, user.id)
-                }
-                
-                // 临时消息（AI处理中的消息）
-                transientMessage?.let { message ->
-                    item {
-                        MessageBubble(message, scope, user.id, isTransient = true)
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth(),
+                    state = listState,
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    reverseLayout = true
+                ) {
+                    // reverseLayout: item index 0 appears at the visual bottom
+                    transientMessage?.let { message ->
+                        item(key = "transient") {
+                            MessageBubble(message, scope, user.id, isTransient = true)
+                        }
+                    }
+                    
+                    items(messages.reversed(), key = { it.id }) { message ->
+                        MessageBubble(message, scope, user.id)
                     }
                 }
             }
             
-            // 输入框
+            // 输入框 - single-row: text field + action buttons inline
             Surface(
-                shadowElevation = 8.dp
+                shadowElevation = 4.dp
             ) {
-                Column(
+                var showDiagMenu by remember { mutableStateOf(false) }
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // 第一行：输入框占据整行
                     OutlinedTextField(
                         value = messageText,
                         onValueChange = { messageText = it },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.weight(1f),
                         placeholder = { Text("输入消息...") },
                         maxLines = 3,
                         enabled = connectionState == ConnectionState.CONNECTED
                     )
                     
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    // 第二行：按钮组靠右对齐
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                    // 医院按钮（完整11步诊断）
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                chatClient.sendMessage(user.id, user.fullName, "@完整诊断")
-                            }
-                        },
-                        enabled = connectionState == ConnectionState.CONNECTED,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.tertiary
-                        )
-                    ) {
-                        Icon(
-                            Icons.Default.LocalHospital,
-                            contentDescription = "完整诊断",
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    
-                    // Silk诊断按钮（智能诊断）
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                chatClient.sendMessage(user.id, user.fullName, "@诊断")
-                            }
-                        },
-                        enabled = connectionState == ConnectionState.CONNECTED,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondary
-                        )
-                    ) {
-                        Icon(
-                            Icons.Default.SmartToy,
-                            contentDescription = "智能诊断",
-                            modifier = Modifier.size(20.dp)
-                        )
+                    // Diagnostic shortcuts in a dropdown
+                    Box {
+                        IconButton(
+                            onClick = { showDiagMenu = true },
+                            enabled = connectionState == ConnectionState.CONNECTED
+                        ) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "快捷诊断")
+                        }
+                        DropdownMenu(
+                            expanded = showDiagMenu,
+                            onDismissRequest = { showDiagMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("完整诊断") },
+                                leadingIcon = { Icon(Icons.Default.LocalHospital, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                                onClick = {
+                                    showDiagMenu = false
+                                    scope.launch { chatClient.sendMessage(user.id, user.fullName, "@完整诊断") }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("智能诊断") },
+                                leadingIcon = { Icon(Icons.Default.SmartToy, contentDescription = null, modifier = Modifier.size(20.dp)) },
+                                onClick = {
+                                    showDiagMenu = false
+                                    scope.launch { chatClient.sendMessage(user.id, user.fullName, "@诊断") }
+                                }
+                            )
+                        }
                     }
                     
                     if (isGenerating) {
-                        Button(
-                            onClick = {
-                                chatClient.stopGeneration(user.id, user.fullName)
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = androidx.compose.ui.graphics.Color(0xFFFF4D4F)
-                            )
+                        IconButton(
+                            onClick = { chatClient.stopGeneration(user.id, user.fullName) }
                         ) {
-                            Text("停止", color = androidx.compose.ui.graphics.Color.White)
+                            Icon(
+                                Icons.Default.Stop,
+                                contentDescription = "停止",
+                                tint = androidx.compose.ui.graphics.Color(0xFFFF4D4F)
+                            )
                         }
                     } else {
-                        Button(
+                        IconButton(
                             onClick = {
                                 if (messageText.isNotBlank()) {
                                     scope.launch {
@@ -302,7 +294,6 @@ fun ChatScreen(appState: AppState) {
                         ) {
                             Icon(Icons.Default.Send, contentDescription = "发送")
                         }
-                    }
                     }
                 }
             }

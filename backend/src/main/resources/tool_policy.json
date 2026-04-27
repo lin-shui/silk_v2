@@ -35,6 +35,19 @@
       "allowedPaths": [],
       "deniedPaths": [],
       "description": "执行系统命令（已禁用）"
+    },
+    "autocli": {
+      "permission": "SANDBOXED",
+      "allowedPaths": [],
+      "deniedPaths": [],
+      "safeCommands": [
+        "hackernews", "devto", "lobsters", "arxiv", "bbc", "bloomberg",
+        "producthunt", "techcrunch", "reuters", "hf",
+        "bilibili", "zhihu", "douban", "weibo", "xiaohongshu",
+        "twitter", "reddit", "youtube", "facebook", "instagram",
+        "google", "coupang", "ctrip"
+      ],
+      "description": "通过 AutoCLI 从网站获取结构化数据（沙箱模式）"
     }
   },
   "_comment": {

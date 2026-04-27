@@ -3,9 +3,10 @@
  * 用于在聊天界面显示单条消息
  * 严格对标 Android 端 ChatScreen.kt 的 MessageItem 逻辑
  */
-import { Message, MessageType, MessageCategory } from '../models/Message';
+import { Message, MessageType, MessageCategory, Reference } from '../models/Message';
 import { Theme, SilkColors } from '../common/Theme';
 import { MarkdownLite } from './MarkdownLite';
+import { ReferenceList } from './ReferenceList';
 import {
   parseForwardedMessageContent,
   ForwardedMessageParts,
@@ -58,7 +59,24 @@ export struct MessageBubble {
   }
 
   private getSafeAIContent(): string {
-    return this.message.content ? this.message.content : '';
+    const raw = this.message.content ? this.message.content : '';
+    return this.renderCitationMarkersAsLinks(raw);
+  }
+
+  private renderCitationMarkersAsLinks(content: string): string {
+    const refs: Reference[] = this.message.references ? this.message.references : [];
+    if (refs.length === 0 || content.length === 0) {
+      return content;
+    }
+    return content.replace(/\[(citation|available):(\d+)\]/g, (_m: string, kind: string, idxText: string) => {
+      const idx = Number(idxText);
+      const ref = refs.find((r: Reference) => r.kind === kind && r.index === idx);
+      const label = kind === 'citation' ? `来源 ${idx}` : `资料 ${idx}`;
+      if (!ref || !ref.url || ref.url.trim().length === 0) {
+        return `[${label}]`;
+      }
+      return `[${label}](${ref.url.trim()})`;
+    });
   }
 
   private isLongAIContent(): boolean {
@@ -324,6 +342,9 @@ export struct MessageBubble {
           MarkdownLite({
             content: this.getSafeAIContent()
           })
+          ReferenceList({
+            references: this.message.references ? this.message.references : []
+          })
         } else if (!this.isAIExpanded) {
           Column() {
             Text(this.getAIPreview())
@@ -355,6 +376,9 @@ export struct MessageBubble {
           Column() {
             MarkdownLite({
               content: this.getSafeAIContent()
+            })
+            ReferenceList({
+              references: this.message.references ? this.message.references : []
             })
             Row() {
               Text('收起')

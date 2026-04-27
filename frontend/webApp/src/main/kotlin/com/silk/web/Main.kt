@@ -546,20 +546,20 @@ object SilkStylesheet : StyleSheet() {
         property("flex-shrink", "0")
         property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
         color(Color.white)
-        padding(16.px)
-        fontSize(24.px)
+        padding(8.px, 16.px)
+        fontSize(18.px)
         property("font-weight", "600")
         property("letter-spacing", "2px")
-        property("box-shadow", "0 2px 12px rgba(169, 137, 77, 0.3)")
+        property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.2)")
     }
     
     val statusBar by style {
         property("flex-shrink", "0")
-        padding(8.px, 16.px)
+        padding(4.px, 16.px)
         display(DisplayStyle.Flex)
         property("justify-content", "space-between")
         property("align-items", "center")
-        property("font-size", "13px")
+        property("font-size", "12px")
         property("letter-spacing", "1px")
     }
     
@@ -567,7 +567,9 @@ object SilkStylesheet : StyleSheet() {
         property("flex", "1")
         property("min-height", "0")
         property("overflow-y", "auto")
-        padding(16.px)
+        display(DisplayStyle.Flex)
+        flexDirection(FlexDirection.Column)
+        padding(12.px)
         property("background", SilkColors.backgroundGradient)
     }
     
@@ -610,16 +612,16 @@ object SilkStylesheet : StyleSheet() {
     val inputContainer by style {
         display(DisplayStyle.Flex)
         property("flex-shrink", "0")
-        padding(16.px)
+        padding(8.px, 16.px)
         backgroundColor(Color(SilkColors.surfaceElevated))
         property("border-top", "1px solid ${SilkColors.border}")
-        property("gap", "10px")
-        property("box-shadow", "0 -2px 12px rgba(169, 137, 77, 0.05)")
+        property("gap", "8px")
+        property("box-shadow", "0 -2px 8px rgba(169, 137, 77, 0.05)")
     }
     
     val input by style {
         property("flex", "1")
-        padding(14.px)
+        padding(10.px)
         border {
             width(1.px)
             style(LineStyle.Solid)
@@ -634,7 +636,7 @@ object SilkStylesheet : StyleSheet() {
     }
     
     val button by style {
-        padding(12.px, 24.px)
+        padding(8.px, 20.px)
         property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
         color(Color.white)
         border { width(0.px) }
@@ -955,6 +957,23 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     // 消息撤回相关状态：正在撤回中的消息ID集合，防止重复点击
     var recallingMessageIds by remember { mutableStateOf(setOf<String>()) }
     
+    // 消息选择模式状态
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedMessageIds by remember { mutableStateOf(setOf<String>()) }
+    
+    // Escape 键退出选择模式
+    DisposableEffect(Unit) {
+        val handler: (org.w3c.dom.events.Event) -> Unit = { event ->
+            val key = event.asDynamic().key as? String
+            if (key == "Escape" && isSelectionMode) {
+                isSelectionMode = false
+                selectedMessageIds = emptySet()
+            }
+        }
+        window.addEventListener("keydown", handler)
+        onDispose { window.removeEventListener("keydown", handler) }
+    }
+    
     // 消息转发相关状态
     var showForwardDialog by remember { mutableStateOf(false) }
     var messageToForward by remember { mutableStateOf<Message?>(null) }
@@ -1049,13 +1068,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             // 返回按钮
             Button({
                 style {
-                    padding(10.px, 14.px)
+                    padding(6.px, 12.px)
                     backgroundColor(Color("rgba(255,255,255,0.15)"))
                     color(Color.white)
                     border { width(0.px) }
                     borderRadius(8.px)
                     property("cursor", "pointer")
-                    fontSize(18.px)
+                    fontSize(16.px)
                     property("backdrop-filter", "blur(4px)")
                     property("transition", "all 0.2s ease")
                 }
@@ -1102,6 +1121,115 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             }
             
             // 右侧按钮组
+            if (isSelectionMode) {
+                // 选择模式工具栏
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        property("gap", "10px")
+                        alignItems(AlignItems.Center)
+                    }
+                }) {
+                    Span({
+                        style {
+                            fontSize(13.px)
+                            color(Color.white)
+                            property("opacity", "0.9")
+                        }
+                    }) {
+                        Text("已选择 ${selectedMessageIds.size} 条")
+                    }
+                    
+                    // 复制选中消息
+                    Button({
+                        style {
+                            padding(8.px, 14.px)
+                            backgroundColor(Color(if (selectedMessageIds.isNotEmpty()) "rgba(255,255,255,0.25)" else "rgba(255,255,255,0.10)"))
+                            color(Color.white)
+                            border { width(0.px) }
+                            borderRadius(8.px)
+                            property("cursor", if (selectedMessageIds.isNotEmpty()) "pointer" else "default")
+                            fontSize(13.px)
+                            property("transition", "all 0.2s ease")
+                        }
+                        if (selectedMessageIds.isNotEmpty()) {
+                            onClick {
+                                val selectedContent = messages
+                                    .filter { it.id in selectedMessageIds }
+                                    .sortedBy { it.timestamp }
+                                    .joinToString("\n\n") { "${it.userName}:\n${it.content}" }
+                                if (selectedContent.isNotEmpty()) {
+                                    copyTextToClipboard(selectedContent)
+                                }
+                                isSelectionMode = false
+                                selectedMessageIds = emptySet()
+                            }
+                        }
+                    }) {
+                        Text("📋复制")
+                    }
+                    
+                    // 转发选中消息
+                    Button({
+                        style {
+                            padding(8.px, 14.px)
+                            backgroundColor(Color(if (selectedMessageIds.isNotEmpty()) "rgba(255,255,255,0.25)" else "rgba(255,255,255,0.10)"))
+                            color(Color.white)
+                            border { width(0.px) }
+                            borderRadius(8.px)
+                            property("cursor", if (selectedMessageIds.isNotEmpty()) "pointer" else "default")
+                            fontSize(13.px)
+                            property("transition", "all 0.2s ease")
+                        }
+                        if (selectedMessageIds.isNotEmpty()) {
+                            onClick {
+                                val selectedContent = messages
+                                    .filter { it.id in selectedMessageIds }
+                                    .sortedBy { it.timestamp }
+                                    .joinToString("\n\n") { "[${it.userName}] ${it.content}" }
+                                val syntheticMsg = Message(
+                                    id = "forward-multi",
+                                    userId = user.id,
+                                    userName = user.fullName,
+                                    content = selectedContent,
+                                    type = MessageType.TEXT,
+                                    timestamp = js("Date.now()").unsafeCast<Double>().toLong()
+                                )
+                                messageToForward = syntheticMsg
+                                scope.launch {
+                                    isLoadingGroups = true
+                                    val response = ApiClient.getUserGroups(user.id)
+                                    userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
+                                    isLoadingGroups = false
+                                    showForwardDialog = true
+                                }
+                            }
+                        }
+                    }) {
+                        Text("↗转发")
+                    }
+                    
+                    // 取消选择
+                    Button({
+                        style {
+                            padding(8.px, 14.px)
+                            backgroundColor(Color("rgba(255,255,255,0.15)"))
+                            color(Color.white)
+                            border { width(0.px) }
+                            borderRadius(8.px)
+                            property("cursor", "pointer")
+                            fontSize(13.px)
+                            property("transition", "all 0.2s ease")
+                        }
+                        onClick {
+                            isSelectionMode = false
+                            selectedMessageIds = emptySet()
+                        }
+                    }) {
+                        Text("✕ 取消")
+                    }
+                }
+            } else {
             Div({
                 style {
                     display(DisplayStyle.Flex)
@@ -1325,47 +1453,51 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     Text(strings.membersButton)
                 }
             }
+            } // close else (non-selection mode)
         }
         
-        // Status Bar - 丝滑渐变状态
-        Div({ 
-            classes(SilkStylesheet.statusBar)
-            style {
-                property("background", when (connectionState) {
-                    ConnectionState.CONNECTED -> "linear-gradient(90deg, ${SilkColors.success}, #8DBE7C)"
-                    ConnectionState.CONNECTING -> "linear-gradient(90deg, ${SilkColors.warning}, #ECC88C)"
-                    ConnectionState.DISCONNECTED -> "linear-gradient(90deg, ${SilkColors.error}, #E99B9B)"
-                })
-                color(Color.white)
-            }
-        }) {
-            Span {
-                Text(when (connectionState) {
-                    ConnectionState.CONNECTED -> "✓ ${strings.connected}"
-                    ConnectionState.CONNECTING -> "⟳ ${strings.connecting}"
-                    ConnectionState.DISCONNECTED -> "✗ ${strings.disconnected}"
-                })
-            }
-            
-            if (connectionState == ConnectionState.DISCONNECTED) {
-                Button({
-                    classes(SilkStylesheet.button)
-                    style { 
-                        padding(8.px, 16.px)
-                        fontSize(12.px)
-                    }
-                    onClick {
-                        scope.launch {
-                            chatClient.connect(user.id, user.fullName, group.id)
+        // Status Bar - only show when not connected
+        if (connectionState != ConnectionState.CONNECTED) {
+            Div({ 
+                classes(SilkStylesheet.statusBar)
+                style {
+                    property("background", when (connectionState) {
+                        ConnectionState.CONNECTED -> "linear-gradient(90deg, ${SilkColors.success}, #8DBE7C)"
+                        ConnectionState.CONNECTING -> "linear-gradient(90deg, ${SilkColors.warning}, #ECC88C)"
+                        ConnectionState.DISCONNECTED -> "linear-gradient(90deg, ${SilkColors.error}, #E99B9B)"
+                    })
+                    color(Color.white)
+                }
+            }) {
+                Span {
+                    Text(when (connectionState) {
+                        ConnectionState.CONNECTING -> "⟳ ${strings.connecting}"
+                        ConnectionState.DISCONNECTED -> "✗ ${strings.disconnected}"
+                        else -> ""
+                    })
+                }
+                
+                if (connectionState == ConnectionState.DISCONNECTED) {
+                    Button({
+                        classes(SilkStylesheet.button)
+                        style { 
+                            padding(8.px, 16.px)
+                            fontSize(12.px)
                         }
+                        onClick {
+                            scope.launch {
+                                chatClient.connect(user.id, user.fullName, group.id)
+                            }
+                        }
+                    }) {
+                        Text(strings.reconnecting)
                     }
-                }) {
-                    Text(strings.reconnecting)
                 }
             }
         }
         
         // Messages container with drag-and-drop support
+        // flex: 1 spacer pushes content to bottom; overflow-y: auto enables scroll
         Div({ 
             classes(SilkStylesheet.messagesContainer)
             id("messages")
@@ -1374,6 +1506,42 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 property("transition", "all 0.2s ease")
             }
         }) {
+            // Spacer: flex: 1 pushes all subsequent content to the visual bottom
+            Div({
+                style {
+                    property("flex", "1")
+                }
+            }) {}
+
+            // 显示系统状态消息（灰色）
+            if (statusMessages.isNotEmpty()) {
+                Div({
+                    style {
+                        backgroundColor(Color("#F5F5F5"))
+                        borderRadius(8.px)
+                        padding(10.px, 14.px)
+                        marginBottom(8.px)
+                        property("border-left", "3px solid #9E9E9E")
+                    }
+                }) {
+                    statusMessages.forEach { status ->
+                        Div({
+                            style {
+                                color(Color("#757575"))
+                                fontSize(13.px)
+                                fontStyle("italic")
+                                marginBottom(4.px)
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                property("gap", "8px")
+                            }
+                        }) {
+                            Text(status.content)
+                        }
+                    }
+                }
+            }
+
             // 显示所有普通消息
             messages.forEach { message ->
                 MessageItem(
@@ -1405,7 +1573,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         console.log("✅ 消息已复制到剪贴板")
                     },
                     onForward = { msg ->
-                        // 设置转发消息并显示转发对话框
                         messageToForward = msg
                         scope.launch {
                             isLoadingGroups = true
@@ -1414,37 +1581,33 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             isLoadingGroups = false
                             showForwardDialog = true
                         }
+                    },
+                    onDelete = { messageId ->
+                        scope.launch {
+                            try {
+                                val response = ApiClient.deleteMessage(group.id, messageId, user.id)
+                                if (!response.success) {
+                                    window.alert("删除失败: ${response.message}")
+                                }
+                            } catch (e: Exception) {
+                                console.error("❌ 删除消息失败:", e)
+                                window.alert("删除失败: ${e.message}")
+                            }
+                        }
+                    },
+                    isSelectionMode = isSelectionMode,
+                    isSelected = message.id in selectedMessageIds,
+                    onToggleSelection = { id ->
+                        selectedMessageIds = if (id in selectedMessageIds)
+                            selectedMessageIds - id
+                        else
+                            selectedMessageIds + id
+                    },
+                    onEnterSelectionMode = { id ->
+                        isSelectionMode = true
+                        selectedMessageIds = setOf(id)
                     }
                 )
-            }
-
-            // 显示系统状态消息（灰色）- 放在普通消息之后、临时消息之前
-            if (statusMessages.isNotEmpty()) {
-                Div({
-                    style {
-                        backgroundColor(Color("#F5F5F5"))
-                        borderRadius(8.px)
-                        padding(10.px, 14.px)
-                        marginBottom(8.px)
-                        property("border-left", "3px solid #9E9E9E")
-                    }
-                }) {
-                    statusMessages.forEach { status ->
-                        Div({
-                            style {
-                                color(Color("#757575"))
-                                fontSize(13.px)
-                                fontStyle("italic")
-                                marginBottom(4.px)
-                                display(DisplayStyle.Flex)
-                                alignItems(AlignItems.Center)
-                                property("gap", "8px")
-                            }
-                        }) {
-                            Text(status.content)
-                        }
-                    }
-                }
             }
 
             // 显示临时消息（如果有）
@@ -1455,7 +1618,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     message.totalSteps == null &&
                     !isLikelyAgentStatusContent(message.content)
                 ) {
-                    // 进入最终答案流阶段后，强制按 AI 正文样式渲染（即使后端 category 仍是 AGENT_STATUS）
                     MessageItem(
                         message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                         isTransient = true,
@@ -1477,7 +1639,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     )
                 } else {
-                    // 处理中阶段（含工具调用与步骤）按临时状态样式显示
                     TransientMessageItem(message)
                 }
             }
@@ -3170,6 +3331,25 @@ private val silkMarkdownRuntimeCss = """
     .silk-markdown.markdown-body img {
         max-width: 100%;
     }
+    .silk-citation-chip {
+        display: inline-block;
+        padding: 1px 6px;
+        margin: 0 2px;
+        background-color: #FFF8ED;
+        border: 1px solid #E8D5B5;
+        border-radius: 4px;
+        font-size: 12px;
+        color: #C9A86C;
+        text-decoration: none;
+        cursor: pointer;
+        font-weight: 500;
+        line-height: 1.4;
+        vertical-align: baseline;
+    }
+    .silk-citation-chip:hover {
+        background-color: #FFF0D5;
+        border-color: #C9A86C;
+    }
 """.trimIndent()
 
 @Suppress("UNUSED_EXPRESSION")
@@ -3327,17 +3507,48 @@ private fun rememberMarkdownEngine(): MarkdownIt {
     return remember { createMarkdownEngine() }
 }
 
+private fun linkCitationMarkers(
+    html: String,
+    references: List<com.silk.shared.models.MessageReference>,
+    anchorPrefix: String
+): String {
+    if (references.isEmpty()) return html
+    val pattern = Regex("""\[(citation|available):(\d+)\]""")
+    return pattern.replace(html) { match ->
+        val kind = match.groupValues[1]
+        val idx = match.groupValues[2].toIntOrNull() ?: return@replace match.value
+        val ref = references.find { it.kind == kind && it.index == idx }
+        if (ref != null) {
+            val label = if (kind == "citation") "来源 $idx" else "资料 $idx"
+            val href = ref.url ?: "#${anchorPrefix}ref-$idx"
+            val target = if (ref.url != null) " target=\"_blank\" rel=\"noopener noreferrer\"" else ""
+            "<a href=\"$href\"$target class=\"silk-citation-chip\">$label</a>"
+        } else {
+            match.value
+        }
+    }
+}
+
 @Composable
-fun MarkdownContent(content: String) {
+fun MarkdownContent(
+    content: String,
+    references: List<com.silk.shared.models.MessageReference> = emptyList(),
+    referenceAnchorPrefix: String = ""
+) {
     ensureMarkdownStylesInjected()
 
     val markdownEngine = rememberMarkdownEngine()
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
-    val safeHtml = remember(content) {
-        DOMPurify.sanitize(
-            markdownEngine.render(normalizeMathBlocks(content)),
-            createSanitizeConfig()
+    val safeHtml = remember(content, references) {
+        val linked = linkCitationMarkers(
+            DOMPurify.sanitize(
+                markdownEngine.render(normalizeMathBlocks(content)),
+                createSanitizeConfig()
+            ),
+            references,
+            referenceAnchorPrefix
         )
+        linked
     }
 
     Div({
@@ -3370,6 +3581,121 @@ fun MarkdownContent(content: String) {
     }
 }
 
+@Composable
+fun ReferenceSourcesList(
+    references: List<com.silk.shared.models.MessageReference>,
+    anchorPrefix: String = ""
+) {
+    if (references.isEmpty()) return
+
+    var isExpanded by remember { mutableStateOf(false) }
+
+    Div({
+        style {
+            property("margin-top", "8px")
+            property("border", "1px solid #E8E0D4")
+            property("border-radius", "8px")
+            property("background-color", "#FFFBF0")
+            property("overflow", "hidden")
+        }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                property("padding", "8px 12px")
+                property("cursor", "pointer")
+                property("user-select", "none")
+            }
+            onClick { isExpanded = !isExpanded }
+        }) {
+            Span({ style { property("margin-right", "6px") } }) { Text("\uD83D\uDCDA") }
+            Span({
+                style {
+                    fontSize(13.px)
+                    color(Color("#8B7355"))
+                    fontWeight("500")
+                    property("flex", "1")
+                }
+            }) { Text("参考来源 (${references.size})") }
+            Span({
+                style {
+                    fontSize(12.px)
+                    color(Color("#C9A86C"))
+                    fontWeight("500")
+                }
+            }) { Text(if (isExpanded) "收起 ▲" else "展开 ▼") }
+        }
+
+        if (isExpanded) {
+            Div({
+                style {
+                    property("border-top", "1px solid #E8E0D4")
+                    property("padding", "4px 12px")
+                }
+            }) {
+                references.forEachIndexed { index, ref ->
+                    Div({
+                        id("${anchorPrefix}ref-${ref.index}")
+                        style {
+                            display(DisplayStyle.Flex)
+                            property("gap", "8px")
+                            property("padding", "6px 0")
+                            if (index < references.size - 1) {
+                                property("border-bottom", "1px solid #F0EBE0")
+                            }
+                        }
+                    }) {
+                        Span({
+                            style {
+                                fontSize(12.px)
+                                color(Color("#C9A86C"))
+                                fontWeight("500")
+                                property("white-space", "nowrap")
+                            }
+                        }) {
+                            Text(if (ref.kind == "citation") "来源 ${ref.index}" else "资料 ${ref.index}")
+                        }
+                        Div({ style { property("flex", "1"); property("min-width", "0") } }) {
+                            if (ref.url != null) {
+                                A(href = ref.url, {
+                                    attr("target", "_blank")
+                                    attr("rel", "noopener noreferrer")
+                                    style {
+                                        fontSize(13.px)
+                                        color(Color("#2F80B7"))
+                                        property("text-decoration", "none")
+                                        property("word-break", "break-all")
+                                    }
+                                }) { Text(ref.title) }
+                            } else {
+                                Span({
+                                    style { fontSize(13.px); color(Color("#333")) }
+                                }) { Text(ref.title) }
+                            }
+                            val snippet = ref.snippet
+                            if (snippet != null && snippet.isNotBlank()) {
+                                Div({
+                                    style {
+                                        fontSize(12.px)
+                                        color(Color("#999"))
+                                        marginTop(2.px)
+                                        property("overflow", "hidden")
+                                        property("text-overflow", "ellipsis")
+                                        property("display", "-webkit-box")
+                                        property("-webkit-line-clamp", "2")
+                                        property("-webkit-box-orient", "vertical")
+                                    }
+                                }) { Text(snippet) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ==================== AI 消息卡片组件 ====================
 
 /**
@@ -3386,7 +3712,12 @@ fun AIMessageCard(
     timeString: String,
     isTransient: Boolean = false,
     onCopy: (String) -> Unit = {},
-    onForward: (Message) -> Unit = {}
+    onForward: (Message) -> Unit = {},
+    onDelete: (String) -> Unit = {},
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelection: (String) -> Unit = {},
+    onEnterSelectionMode: (String) -> Unit = {}
 ) {
     var isExpanded by remember { mutableStateOf(false) }  // 默认收起
     val isLongContent = message.content.length > 500
@@ -3396,7 +3727,52 @@ fun AIMessageCard(
     }
     
     Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.FlexStart)
+            property("gap", "8px")
+            if (isSelectionMode) property("cursor", "pointer")
+        }
+        if (isSelectionMode) {
+            onClick { onToggleSelection(message.id) }
+        }
+    }) {
+        if (isSelectionMode) {
+            Div({
+                style {
+                    width(20.px)
+                    height(20.px)
+                    borderRadius(4.px)
+                    property("border", "2px solid ${if (isSelected) SilkColors.primary else SilkColors.border}")
+                    backgroundColor(Color(if (isSelected) SilkColors.primary else "transparent"))
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("justify-content", "center")
+                    property("flex-shrink", "0")
+                    marginTop(12.px)
+                    property("transition", "all 0.2s")
+                    color(Color.white)
+                    fontSize(12.px)
+                }
+            }) {
+                if (isSelected) Text("✓")
+            }
+        }
+        
+    Div({
         classes(SilkStylesheet.aiMessageCard)
+        style {
+            property("flex", "1")
+            property("min-width", "0")
+            if (isSelected) {
+                property("outline", "2px solid ${SilkColors.primary}")
+                backgroundColor(Color("rgba(76, 175, 80, 0.05)"))
+            }
+            if (isLongContent && effectiveExpanded && !isTransient) {
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+            }
+        }
     }) {
         // AI 头部标识
         Div({
@@ -3405,6 +3781,9 @@ fun AIMessageCard(
                 alignItems(AlignItems.Center)
                 property("gap", "10px")
                 marginBottom(12.px)
+                if (isLongContent && effectiveExpanded && !isTransient) {
+                    property("flex-shrink", "0")
+                }
             }
         }) {
             // AI 图标
@@ -3475,18 +3854,34 @@ fun AIMessageCard(
                 Div({
                     classes(SilkStylesheet.aiMessageContent)
                     style {
-                        maxHeight(360.px)
+                        property("flex", "1")
+                        property("min-height", "0")
                         property("overflow-y", "auto")
                     }
                 }) {
-                    MarkdownContent(message.content)
+                    MarkdownContent(
+                        content = message.content,
+                        references = message.references,
+                        referenceAnchorPrefix = "msg-${message.id}-"
+                    )
+                    ReferenceSourcesList(
+                        references = message.references,
+                        anchorPrefix = "msg-${message.id}-"
+                    )
                 }
             } else {
                 Div({
                     classes(SilkStylesheet.aiMessageContent)
                 }) {
-                    // 使用 Markdown 渲染
-                    MarkdownContent(message.content)
+                    MarkdownContent(
+                        content = message.content,
+                        references = message.references,
+                        referenceAnchorPrefix = "msg-${message.id}-"
+                    )
+                    ReferenceSourcesList(
+                        references = message.references,
+                        anchorPrefix = "msg-${message.id}-"
+                    )
                 }
             }
         } else {
@@ -3503,18 +3898,20 @@ fun AIMessageCard(
         }
         
         // 底部操作栏
-        if (!isTransient) {
+        if (!isTransient && !isSelectionMode) {
             Div({
                 style {
                     display(DisplayStyle.Flex)
                     property("justify-content", "flex-end")
-                    property("gap", "12px")
+                    property("gap", "6px")
                     marginTop(12.px)
                     paddingTop(8.px)
                     property("border-top", "1px solid rgba(232, 224, 212, 0.5)")
+                    if (isLongContent && effectiveExpanded && !isTransient) {
+                        property("flex-shrink", "0")
+                    }
                 }
             }) {
-                // 复制按钮
                 Span({
                     style {
                         fontSize(11.px)
@@ -3533,7 +3930,6 @@ fun AIMessageCard(
                     Text("复制")
                 }
                 
-                // 转发按钮
                 Span({
                     style {
                         fontSize(11.px)
@@ -3550,6 +3946,46 @@ fun AIMessageCard(
                 }) {
                     Text("↗")
                     Text("转发")
+                }
+                
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color("#E57373"))
+                        property("cursor", "pointer")
+                        padding(4.px, 10.px)
+                        borderRadius(4.px)
+                        property("transition", "all 0.2s")
+                        display(DisplayStyle.Flex)
+                        alignItems(AlignItems.Center)
+                        property("gap", "4px")
+                    }
+                    onClick {
+                        if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
+                            onDelete(message.id)
+                        }
+                    }
+                }) {
+                    Text("🗑")
+                    Text("删除")
+                }
+                
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("cursor", "pointer")
+                        padding(4.px, 10.px)
+                        borderRadius(4.px)
+                        property("transition", "all 0.2s")
+                        display(DisplayStyle.Flex)
+                        alignItems(AlignItems.Center)
+                        property("gap", "4px")
+                    }
+                    onClick { onEnterSelectionMode(message.id) }
+                }) {
+                    Text("☑")
+                    Text("多选")
                 }
             }
         }
@@ -3571,6 +4007,7 @@ fun AIMessageCard(
             }
         }
     }
+    } // close outer selection wrapper
 }
 
 @Composable
@@ -3582,7 +4019,12 @@ fun MessageItem(
     isRecalling: Boolean = false,
     onRecall: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
-    onForward: (Message) -> Unit = {}
+    onForward: (Message) -> Unit = {},
+    onDelete: (String) -> Unit = {},
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelection: (String) -> Unit = {},
+    onEnterSelectionMode: (String) -> Unit = {}
 ) {
     val timeString = remember(message.timestamp) {
         formatMessageTimestampForWeb(message.timestamp)
@@ -3598,7 +4040,12 @@ fun MessageItem(
             timeString = timeString,
             isTransient = isTransient,
             onCopy = onCopy,
-            onForward = onForward
+            onForward = onForward,
+            onDelete = onDelete,
+            isSelectionMode = isSelectionMode,
+            isSelected = isSelected,
+            onToggleSelection = onToggleSelection,
+            onEnterSelectionMode = onEnterSelectionMode
         )
         return
     }
@@ -3637,35 +4084,60 @@ fun MessageItem(
             // 检测PDF下载链接
             val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
             
-            Div({ classes(SilkStylesheet.messageCard) }) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "8px")
+                }
+            }) {
+                if (isSelectionMode) {
+                    Div({
+                        style {
+                            width(24.px)
+                            height(24.px)
+                            borderRadius(4.px)
+                            property("border", if (isSelected) "none" else "2px solid ${SilkColors.border}")
+                            backgroundColor(Color(if (isSelected) SilkColors.primary else "transparent"))
+                            display(DisplayStyle.Flex)
+                            alignItems(AlignItems.Center)
+                            property("justify-content", "center")
+                            property("cursor", "pointer")
+                            property("flex-shrink", "0")
+                            property("transition", "all 0.15s ease")
+                        }
+                        onClick { onToggleSelection(message.id) }
+                    }) {
+                        if (isSelected) {
+                            Span({ style { color(Color.white); fontSize(14.px); property("font-weight", "bold") } }) {
+                                Text("\u2713")
+                            }
+                        }
+                    }
+                }
+            Div({
+                classes(SilkStylesheet.messageCard)
+                style {
+                    property("flex", "1")
+                    property("min-width", "0")
+                    if (isSelected) {
+                        backgroundColor(Color("rgba(76, 175, 80, 0.10)"))
+                        property("outline", "2px solid ${SilkColors.primary}")
+                    }
+                    if (isSelectionMode) {
+                        property("cursor", "pointer")
+                    }
+                }
+                if (isSelectionMode) {
+                    onClick { onToggleSelection(message.id) }
+                }
+            }) {
                 Div({ classes(SilkStylesheet.messageHeader) }) {
                     Span({ classes(SilkStylesheet.userName) }) {
                         Text(message.userName)
                     }
                     Span({ classes(SilkStylesheet.timestamp) }) {
                         Text(timeString)
-                    }
-                    if (canRecall) {
-                        Span({
-                            style {
-                                marginLeft(8.px)
-                                fontSize(11.px)
-                                color(Color(if (isRecalling) "#BDBDBD" else SilkColors.textLight))
-                                property("cursor", if (isRecalling) "default" else "pointer")
-                                property("opacity", if (isRecalling) "0.4" else "0.6")
-                                property("transition", "opacity 0.2s")
-                                if (!isRecalling) property("text-decoration", "underline")
-                            }
-                            if (!isRecalling) {
-                                onClick {
-                                    if (window.confirm("确定要撤回这条消息吗？")) {
-                                        onRecall(message.id)
-                                    }
-                                }
-                            }
-                        }) {
-                            Text(if (isRecalling) "撤回中..." else "撤回")
-                        }
                     }
                 }
                 Div({
@@ -3793,19 +4265,18 @@ fun MessageItem(
                     }
                 }
                 
-                // 消息操作按钮行（复制、转发等）
-                if (!isTransient && message.type == MessageType.TEXT) {
+                // 消息操作按钮行
+                if (showActions && !isSelectionMode) {
                     Div({
                         style {
                             display(DisplayStyle.Flex)
                             property("justify-content", "flex-end")
-                            property("gap", "8px")
+                            property("gap", "6px")
                             marginTop(8.px)
-                            property("opacity", "0.6")
+                            property("opacity", "0.5")
                             property("transition", "opacity 0.2s")
                         }
                     }) {
-                        // 复制按钮
                         Span({
                             style {
                                 fontSize(11.px)
@@ -3815,15 +4286,55 @@ fun MessageItem(
                                 property("border-radius", "4px")
                                 property("transition", "all 0.2s")
                             }
-                            onClick {
-                                // 复制消息内容到剪贴板
-                                copyTextToClipboard(message.content)
+                            onClick { copyTextToClipboard(message.content) }
+                        }) { Text("📋复制") }
+                        
+                        Span({
+                            style {
+                                fontSize(11.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("cursor", "pointer")
+                                property("padding", "2px 6px")
+                                property("border-radius", "4px")
+                                property("transition", "all 0.2s")
                             }
-                        }) {
-                            Text("📋复制")
+                            onClick { onForward(message) }
+                        }) { Text("↗转发") }
+                        
+                        if (canRecall && !isRecalling) {
+                            Span({
+                                style {
+                                    fontSize(11.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    property("cursor", "pointer")
+                                    property("padding", "2px 6px")
+                                    property("border-radius", "4px")
+                                    property("transition", "all 0.2s")
+                                }
+                                onClick {
+                                    if (window.confirm("确定要撤回这条消息吗？")) {
+                                        onRecall(message.id)
+                                    }
+                                }
+                            }) { Text("↩撤回") }
                         }
                         
-                        // 转发按钮
+                        Span({
+                            style {
+                                fontSize(11.px)
+                                color(Color("#E57373"))
+                                property("cursor", "pointer")
+                                property("padding", "2px 6px")
+                                property("border-radius", "4px")
+                                property("transition", "all 0.2s")
+                            }
+                            onClick {
+                                if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
+                                    onDelete(message.id)
+                                }
+                            }
+                        }) { Text("🗑删除") }
+                        
                         Span({
                             style {
                                 fontSize(11.px)
@@ -3833,15 +4344,12 @@ fun MessageItem(
                                 property("border-radius", "4px")
                                 property("transition", "all 0.2s")
                             }
-                            onClick {
-                                onForward(message)
-                            }
-                        }) {
-                            Text("↗转发")
-                        }
+                            onClick { onEnterSelectionMode(message.id) }
+                        }) { Text("☑多选") }
                     }
                 }
             }
+            } // close selection wrapper Div
         }
         MessageType.FILE -> {
             val fileInfo = remember(message.content) {
@@ -3854,7 +4362,54 @@ fun MessageItem(
             val fileSizeStr = formatWebFileSize(fileSize)
             val fileExtLabel = fileName.substringAfterLast(".", "").uppercase().ifBlank { "FILE" }
             
-            Div({ classes(SilkStylesheet.messageCard) }) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "8px")
+                }
+            }) {
+                if (isSelectionMode) {
+                    Div({
+                        style {
+                            width(24.px)
+                            height(24.px)
+                            borderRadius(4.px)
+                            property("border", if (isSelected) "none" else "2px solid ${SilkColors.border}")
+                            backgroundColor(Color(if (isSelected) SilkColors.primary else "transparent"))
+                            display(DisplayStyle.Flex)
+                            alignItems(AlignItems.Center)
+                            property("justify-content", "center")
+                            property("cursor", "pointer")
+                            property("flex-shrink", "0")
+                            property("transition", "all 0.15s ease")
+                        }
+                        onClick { onToggleSelection(message.id) }
+                    }) {
+                        if (isSelected) {
+                            Span({ style { color(Color.white); fontSize(14.px); property("font-weight", "bold") } }) {
+                                Text("\u2713")
+                            }
+                        }
+                    }
+                }
+            Div({
+                classes(SilkStylesheet.messageCard)
+                style {
+                    property("flex", "1")
+                    property("min-width", "0")
+                    if (isSelected) {
+                        backgroundColor(Color("rgba(76, 175, 80, 0.10)"))
+                        property("outline", "2px solid ${SilkColors.primary}")
+                    }
+                    if (isSelectionMode) {
+                        property("cursor", "pointer")
+                    }
+                }
+                if (isSelectionMode) {
+                    onClick { onToggleSelection(message.id) }
+                }
+            }) {
                 Div({ classes(SilkStylesheet.messageHeader) }) {
                     Span({ classes(SilkStylesheet.userName) }) {
                         Text(message.userName)
@@ -3967,7 +4522,62 @@ fun MessageItem(
                         Text("⬇")
                     }
                 }
+                
+                // 文件消息操作按钮行
+                if (!isTransient && !isSelectionMode) {
+                    Div({
+                        style {
+                            display(DisplayStyle.Flex)
+                            property("justify-content", "flex-end")
+                            property("gap", "6px")
+                            marginTop(8.px)
+                            property("opacity", "0.5")
+                            property("transition", "opacity 0.2s")
+                        }
+                    }) {
+                        Span({
+                            style {
+                                fontSize(11.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("cursor", "pointer")
+                                property("padding", "2px 6px")
+                                property("border-radius", "4px")
+                                property("transition", "all 0.2s")
+                            }
+                            onClick { onForward(message) }
+                        }) { Text("↗转发") }
+                        
+                        Span({
+                            style {
+                                fontSize(11.px)
+                                color(Color("#E57373"))
+                                property("cursor", "pointer")
+                                property("padding", "2px 6px")
+                                property("border-radius", "4px")
+                                property("transition", "all 0.2s")
+                            }
+                            onClick {
+                                if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
+                                    onDelete(message.id)
+                                }
+                            }
+                        }) { Text("🗑删除") }
+                        
+                        Span({
+                            style {
+                                fontSize(11.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("cursor", "pointer")
+                                property("padding", "2px 6px")
+                                property("border-radius", "4px")
+                                property("transition", "all 0.2s")
+                            }
+                            onClick { onEnterSelectionMode(message.id) }
+                        }) { Text("☑多选") }
+                    }
+                }
             }
+            } // close selection wrapper Div
         }
         MessageType.JOIN, MessageType.LEAVE, MessageType.SYSTEM -> {
             Div({ classes(SilkStylesheet.systemMessage) }) {

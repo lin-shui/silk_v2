@@ -46,6 +46,7 @@ class ExternalSearchService {
         // 搜索 API Key 统一从 AIConfig 读取（AIConfig 从 .env 加载）
         private val BING_API_KEY: String get() = AIConfig.BING_API_KEY
         private val SERPAPI_KEY: String get() = AIConfig.SERPAPI_KEY
+        private val SEARXNG_URL: String get() = AIConfig.SEARXNG_URL
         val BING_SEARCH_URL: String = "https://api.bing.microsoft.com/v7.0/search"
         val SERPAPI_URL: String = "https://serpapi.com/search"
         
@@ -56,26 +57,41 @@ class ExternalSearchService {
         // DuckDuckGo Instant Answer API（无需 API Key，但国内可能不通）
         val DUCKDUCKGO_URL: String = "https://api.duckduckgo.com/"
         
-        // 搜索超时 - 缩短以提升响应速度
-        const val SEARCH_TIMEOUT_MS = 5000L  // 5秒超时，避免用户等待太久
+        // 搜索超时 - SearXNG 聚合多个引擎可能需要更长时间
+        const val SEARCH_TIMEOUT_MS = 15000L  // 15秒超时，SearXNG 聚合多引擎需等待
         const val MAX_RESULTS = 5
     }
     
     /**
      * 执行外部搜索
-     * 优先级（SerpAPI 优先）：
-     * 1. SerpAPI (Google 结果，最高优先级)
-     * 2. Bing (需API Key，国内可访问)
-     * 3. Wikipedia (免费，国内稳定)
-     * 4. DuckDuckGo (免费，可能超时)
+     * 优先级（SearXNG 优先）：
+     * 1. SearXNG (自托管，最高优先级)
+     * 2. SerpAPI (Google 结果)
+     * 3. Bing (需API Key，国内可访问)
+     * 4. Wikipedia (免费，国内稳定)
+     * 5. DuckDuckGo (免费，可能超时)
      */
     suspend fun search(query: String, limit: Int = MAX_RESULTS): ExternalSearchResults {
         val startTime = System.currentTimeMillis()
         
         return try {
-            // 1. 优先使用 SerpAPI（Google 搜索结果）
+            // 1. 优先使用 SearXNG（自托管搜索引擎）
+            if (SEARXNG_URL.isNotBlank()) {
+                logger.info("🔍 [1/5] 尝试 SearXNG (自托管) - 最高优先级")
+                try {
+                    val searxngResult = searchWithSearXNG(query, limit)
+                    if (searxngResult.success && searxngResult.results.isNotEmpty()) {
+                        logger.info("✅ SearXNG 搜索成功 (${System.currentTimeMillis() - startTime}ms)")
+                        return searxngResult
+                    }
+                } catch (e: Exception) {
+                    logger.warn("⚠️ SearXNG 失败: ${e.message?.take(50)}")
+                }
+            }
+
+            // 2. 优先使用 SerpAPI（Google 搜索结果）
             if (SERPAPI_KEY.isNotBlank()) {
-                logger.info("🔍 [1/4] 尝试 SerpAPI (Google 搜索) - 最高优先级")
+                logger.info("🔍 [2/5] 尝试 SerpAPI (Google 搜索)")
                 try {
                     val serpResult = searchWithSerpAPI(query, limit)
                     if (serpResult.success && serpResult.results.isNotEmpty()) {
@@ -87,9 +103,9 @@ class ExternalSearchService {
                 }
             }
             
-            // 2. 尝试 Bing（如果有 API Key，国内可访问）
+            // 3. 尝试 Bing（如果有 API Key，国内可访问）
             if (BING_API_KEY.isNotBlank()) {
-                logger.info("🔍 [2/4] 尝试 Bing Search API")
+                logger.info("🔍 [3/5] 尝试 Bing Search API")
                 try {
                     val bingResult = searchWithBing(query, limit)
                     if (bingResult.success && bingResult.results.isNotEmpty()) {
@@ -101,8 +117,8 @@ class ExternalSearchService {
                 }
             }
 
-            // 3. 使用 Wikipedia（免费，国内稳定可访问）
-            logger.info("🔍 [3/4] 尝试 Wikipedia API（免费，稳定）")
+            // 4. 使用 Wikipedia（免费，国内稳定可访问）
+            logger.info("🔍 [4/5] 尝试 Wikipedia API（免费，稳定）")
             try {
                 val wikiResult = searchWithWikipedia(query, limit)
                 if (wikiResult.success && wikiResult.results.isNotEmpty()) {
@@ -113,8 +129,8 @@ class ExternalSearchService {
                 logger.warn("⚠️ Wikipedia 失败: ${e.message?.take(50)}")
             }
             
-            // 4. 尝试 DuckDuckGo（免费，但国内可能超时）
-            logger.info("🔍 [4/4] 尝试 DuckDuckGo API（免费）")
+            // 5. 尝试 DuckDuckGo（免费，但国内可能超时）
+            logger.info("🔍 [5/5] 尝试 DuckDuckGo API（免费）")
             try {
                 val ddgResult = searchWithDuckDuckGo(query, limit)
                 if (ddgResult.success && ddgResult.results.isNotEmpty()) {
@@ -356,6 +372,59 @@ class ExternalSearchService {
     }
     
     /**
+     * 使用 SearXNG 搜索（自托管搜索引擎，最高优先级）
+     * SearXNG JSON API: GET {searxng_url}/search?q=QUERY&format=json&categories=general
+     */
+    private suspend fun searchWithSearXNG(query: String, limit: Int): ExternalSearchResults {
+        val startTime = System.currentTimeMillis()
+        
+        return withTimeout(SEARCH_TIMEOUT_MS) {
+            try {
+                val searchUrl = "${SEARXNG_URL.trimEnd('/')}/search"
+                logger.info("🔍 [SearXNG] 搜索: $query (url=$searchUrl)")
+                
+                val response = client.get(searchUrl) {
+                    parameter("q", query)
+                    parameter("format", "json")
+                    parameter("categories", "general")
+                    parameter("language", "zh-CN")
+                    parameter("pageno", "1")
+                }
+                
+                val body = response.bodyAsText()
+                val searxngResult = json.decodeFromString<SearXNGResponse>(body)
+                
+                val results = searxngResult.results?.take(limit)?.map { item ->
+                    ExternalSearchResult(
+                        title = item.title ?: "无标题",
+                        snippet = item.content ?: item.snippet ?: "",
+                        url = item.url ?: "",
+                        source = "SearXNG (${item.engine ?: "unknown"})"
+                    )
+                } ?: emptyList()
+                
+                logger.info("🔍 [SearXNG] 搜索成功: 找到 ${results.size} 条结果")
+                
+                ExternalSearchResults(
+                    success = results.isNotEmpty(),
+                    source = "SearXNG",
+                    results = results,
+                    searchTimeMs = System.currentTimeMillis() - startTime
+                )
+            } catch (e: Exception) {
+                logger.error("❌ [SearXNG] 搜索失败: ${e.message}")
+                ExternalSearchResults(
+                    success = false,
+                    source = "SearXNG",
+                    results = emptyList(),
+                    searchTimeMs = System.currentTimeMillis() - startTime,
+                    error = e.message
+                )
+            }
+        }
+    }
+    
+    /**
      * 使用 DuckDuckGo Instant Answer API（免费）
      */
     private suspend fun searchWithDuckDuckGo(query: String, limit: Int): ExternalSearchResults {
@@ -511,6 +580,27 @@ data class BingWebPage(
     val url: String? = null,
     val snippet: String? = null,
     val displayUrl: String? = null
+)
+
+/**
+ * SearXNG JSON API 响应
+ * API: GET /search?q=QUERY&format=json
+ */
+@Serializable
+data class SearXNGResponse(
+    val query: String? = null,
+    val number_of_results: Int? = null,
+    val results: List<SearXNGResult>? = null
+)
+
+@Serializable
+data class SearXNGResult(
+    val title: String? = null,
+    val url: String? = null,
+    val content: String? = null,
+    val snippet: String? = null,
+    val engine: String? = null,
+    val score: Double? = null
 )
 
 

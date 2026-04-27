@@ -62,6 +62,17 @@ class DirectModelAgent(
     // 群组成员列表（用于统计所有成员）
     private var groupMembersList: List<Pair<String, String>> = emptyList() // (id, name)
 
+    private val currentResponseReferences = mutableListOf<com.silk.backend.models.MessageReference>()
+
+    var lastAgentResponse: AgentResponse? = null
+        private set
+
+    private val spamSourcePatterns = listOf(
+        "TG电报", "TG飞机", "@AK", "代投", "开户", "SEO优化", "霸屏",
+        "facebook ads", "google ads", "广告投放", "刷单", "兼职日结",
+        "加微信", "加QQ群", "免费领取", "点击领取"
+    )
+
     
     /**
      * 设置群聊历史记录（用于统计成员发言等）
@@ -76,6 +87,27 @@ class DirectModelAgent(
     fun setGroupMembersList(members: List<Pair<String, String>>) {
         groupMembersList = members
     }
+
+    /**
+     * 将持久化的近期聊天历史注入 conversationHistory，
+     * 仅在 conversationHistory 为空时执行（deploy/重启后首次调用）。
+     */
+    fun loadRecentHistory(entries: List<com.silk.backend.models.ChatHistoryEntry>, agentId: String) {
+        if (conversationHistory.isNotEmpty()) return
+        val recent = entries.filter { it.messageType == "TEXT" }.takeLast(20)
+        if (recent.isEmpty()) return
+
+        for (entry in recent) {
+            val role = if (entry.senderId == agentId) "assistant" else "user"
+            val content = if (role == "user") {
+                "[${entry.senderName}] ${entry.content}"
+            } else {
+                entry.content
+            }
+            conversationHistory.add(Message(role = role, content = content))
+        }
+        logger.info("📜 已注入 {} 条近期历史到 conversationHistory (session: {})", recent.size, sessionId)
+    }
     
     /**
      * OpenAI 兼容的消息格式
@@ -85,7 +117,8 @@ class DirectModelAgent(
         val role: String,
         val content: String? = null,
         val tool_calls: List<ToolCall>? = null,
-        val tool_call_id: String? = null
+        val tool_call_id: String? = null,
+        val reasoning_content: String? = null
     )
     
     /**
@@ -225,7 +258,8 @@ class DirectModelAgent(
     data class StreamDeltaWithTools(
         val content: String? = null,
         val role: String? = null,
-        val tool_calls: List<StreamToolCall>? = null
+        val tool_calls: List<StreamToolCall>? = null,
+        val reasoning_content: String? = null
     )
 
     @Serializable
@@ -246,8 +280,29 @@ class DirectModelAgent(
      */
     private data class StreamingResult(
         val content: String,
-        val toolCalls: List<ToolCall>? = null
+        val toolCalls: List<ToolCall>? = null,
+        val reasoningContent: String? = null
     )
+
+    data class EvidenceChunk(
+        val sourceName: String,
+        val title: String,
+        val snippet: String,
+        val url: String? = null,
+        val path: String? = null,
+        val relevance: Double = 0.0
+    )
+
+    data class AgentResponse(
+        val content: String,
+        val references: List<com.silk.backend.models.MessageReference> = emptyList()
+    )
+
+    private data class FinalCitationResult(
+        val content: String,
+        val references: List<com.silk.backend.models.MessageReference>
+    )
+
     /**
      * 处理用户输入
      * @param userInput 用户输入
@@ -262,18 +317,250 @@ class DirectModelAgent(
         accessibleSessionIds: List<String> = listOf(sessionId),
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
-        // 添加用户消息到历史
+        currentResponseReferences.clear()
+        lastAgentResponse = null
+
+        // 0. 自动搜索相关上下文（通过 Weaviate），注入到 system prompt
+        val enhancedSystemPrompt = withCitationGuidelines(autoEnhanceSystemPrompt(userInput, systemPrompt, requestUserId, accessibleSessionIds))
+
+        // 1. 添加用户消息到历史
         conversationHistory.add(Message(role = "user", content = userInput))
         
-        // 如果是首次对话，添加系统提示
-        if (conversationHistory.size == 1 && systemPrompt != null) {
-            conversationHistory.add(0, Message(role = "system", content = systemPrompt))
+        // 2. 每轮更新 system prompt（含 Weaviate 上下文）
+        if (enhancedSystemPrompt != null) {
+            val existingSystemIndex = conversationHistory.indexOfFirst { it.role == "system" }
+            if (existingSystemIndex >= 0) {
+                conversationHistory[existingSystemIndex] = Message(role = "system", content = enhancedSystemPrompt)
+            } else {
+                conversationHistory.add(0, Message(role = "system", content = enhancedSystemPrompt))
+            }
         }
         
-        // 直接调用模型（支持 tool calling）
-        return chatWithTools(callback, requestUserId, accessibleSessionIds)
+        // 3. 直接调用模型（支持 tool calling）
+        val wrappedCallback: suspend (String, String, Boolean) -> Unit = { stepType, content, isComplete ->
+            if (stepType == "complete" && isComplete) {
+                val finalized = finalizeAgentResponse(content)
+                lastAgentResponse = AgentResponse(content = finalized.content, references = finalized.references)
+                callback(stepType, finalized.content, isComplete)
+            } else {
+                callback(stepType, content, isComplete)
+            }
+        }
+        val rawResponse = chatWithTools(wrappedCallback, requestUserId, accessibleSessionIds)
+        if (lastAgentResponse == null) {
+            val finalized = finalizeAgentResponse(rawResponse)
+            lastAgentResponse = AgentResponse(content = finalized.content, references = finalized.references)
+        }
+        return lastAgentResponse!!.content
     }
-    
+
+    /**
+     * 自动增强 system prompt：通过 Weaviate 搜索与用户问题相关的历史上下文并注入
+     * 这样 @silk 不需要主动调 search_context 工具就能知道最近聊了什么
+     */
+    private suspend fun autoEnhanceSystemPrompt(
+        userInput: String,
+        systemPrompt: String?,
+        requestUserId: String,
+        accessibleSessionIds: List<String>
+    ): String? {
+        if (weaviateClient == null || accessibleSessionIds.isEmpty()) {
+            return systemPrompt
+        }
+
+        val context = autoSearchContext(userInput, requestUserId, accessibleSessionIds)
+        if (context == null) {
+            return systemPrompt
+        }
+
+        return buildString {
+            appendLine(systemPrompt ?: "你是 Silk，一个智能助手。")
+            appendLine()
+            appendLine("## 近期聊天上下文")
+            appendLine("以下是当前会话中与用户问题相关的历史聊天记录（通过语义搜索获得）：")
+            appendLine(context)
+            appendLine()
+            appendLine("请根据以上上下文信息回答用户的问题。如果上下文不相关或不足以回答问题，请如实告知用户。")
+        }
+    }
+
+    /**
+     * 通过 Weaviate 搜索与用户问题相关的历史聊天记录
+     * @return 格式化后的上下文文本，或 null（无结果/搜索失败）
+     */
+    private suspend fun autoSearchContext(
+        userInput: String,
+        requestUserId: String,
+        accessibleSessionIds: List<String>
+    ): String? {
+        if (weaviateClient == null || accessibleSessionIds.isEmpty()) return null
+
+        return try {
+            // 搜索当前会话中的相关聊天记录（FOREGROUND_ONLY = 仅当前会话）
+            val results = weaviateClient!!.isolatedSearch(
+                query = userInput,
+                userId = requestUserId,
+                currentSessionId = accessibleSessionIds.first(),
+                mode = SearchMode.FOREGROUND_ONLY,
+                foregroundLimit = 10,
+                alpha = 0.5f
+            )
+
+            val docs = results.foreground.documents
+            if (docs.isEmpty()) return null
+
+            val sb = StringBuilder()
+            docs.forEachIndexed { index, doc ->
+                sb.appendLine("---")
+                val author = doc.authorName ?: doc.authorId ?: "未知用户"
+                val title = doc.title ?: "消息"
+                sb.appendLine("${index + 1}. [$author] $title")
+                sb.appendLine("   内容: ${doc.content.take(500)}")
+            }
+
+            sb.toString()
+        } catch (e: Exception) {
+            logger.warn("⚠️ 自动搜索上下文失败: ${e.message}")
+            null
+        }
+    }
+
+    private fun withCitationGuidelines(systemPrompt: String?): String {
+        val base = systemPrompt ?: "你是 Silk，一个智能助手。"
+        return buildString {
+            appendLine(base)
+            appendLine()
+            appendLine("## 引用规则")
+            appendLine("请使用以下引用格式：")
+            appendLine("- 引用网络搜索结果时使用 [citation:数字]")
+            appendLine("- 引用本地可用资源时使用 [available:数字]")
+            appendLine("- 引用标记必须放在相关内容的句末或段末")
+            appendLine("- 每个观点通常只需引用2-3个最相关的来源")
+            appendLine("- 禁止堆砌大量引用标记")
+            appendLine("- 只能基于证据回答，不要凭空捏造来源编号")
+        }
+    }
+
+    private fun registerReference(
+        kind: String,
+        title: String,
+        url: String? = null,
+        snippet: String? = null,
+        path: String? = null
+    ): Int {
+        val index = currentResponseReferences.size + 1
+        currentResponseReferences.add(
+            com.silk.backend.models.MessageReference(
+                kind = kind,
+                index = index,
+                title = title,
+                url = url,
+                snippet = snippet,
+                path = path
+            )
+        )
+        return index
+    }
+
+    private fun formatEvidenceForModel(
+        evidenceChunks: List<EvidenceChunk>,
+        query: String,
+        sourceLabel: String
+    ): String {
+        val filtered = filterAndRankEvidence(evidenceChunks, query)
+        if (filtered.isEmpty()) return ""
+
+        val sb = StringBuilder()
+        sb.appendLine("🔍 **搜索结果: $query** ($sourceLabel)\n")
+
+        for ((i, chunk) in filtered.withIndex()) {
+            val refIndex = registerReference(
+                kind = if (chunk.path != null) "available" else "citation",
+                title = chunk.title,
+                url = chunk.url,
+                snippet = chunk.snippet.take(200),
+                path = chunk.path
+            )
+            val marker = if (chunk.path != null) "[available:$refIndex]" else "[citation:$refIndex]"
+            sb.appendLine("**${i + 1}. ${chunk.title}** $marker")
+            if (chunk.snippet.isNotEmpty()) {
+                sb.appendLine("   ${chunk.snippet.take(500)}")
+            }
+            if (chunk.url != null) {
+                sb.appendLine("   📎 ${chunk.url}")
+            }
+            sb.appendLine()
+        }
+        return sb.toString()
+    }
+
+    private fun filterAndRankEvidence(chunks: List<EvidenceChunk>, query: String): List<EvidenceChunk> {
+        return chunks
+            .filter { isUsefulEvidence(it) }
+            .sortedByDescending { relevanceScore(it, query) }
+            .take(8)
+    }
+
+    private fun isUsefulEvidence(chunk: EvidenceChunk): Boolean {
+        val combined = "${chunk.title} ${chunk.snippet}".lowercase()
+        return spamSourcePatterns.none { pattern -> combined.contains(pattern.lowercase()) }
+    }
+
+    private fun relevanceScore(chunk: EvidenceChunk, query: String): Double {
+        val tokens = tokenizeForRelevance(query)
+        val text = "${chunk.title} ${chunk.snippet}".lowercase()
+        val matchCount = tokens.count { text.contains(it) }
+        val tokenScore = if (tokens.isNotEmpty()) matchCount.toDouble() / tokens.size else 0.0
+        return tokenScore + sourceWeight(chunk) + chunk.relevance
+    }
+
+    private fun tokenizeForRelevance(text: String): List<String> {
+        return text.lowercase().split(Regex("[\\s,;.!?，。！？；、]+")).filter { it.length >= 2 }
+    }
+
+    private fun sourceWeight(chunk: EvidenceChunk): Double {
+        val url = chunk.url?.lowercase() ?: return 0.1
+        return if (isTrustedSource(url)) 0.3 else 0.1
+    }
+
+    private fun isTrustedSource(url: String): Boolean {
+        val trusted = listOf("wikipedia.org", "zhihu.com", "bilibili.com", "github.com", "arxiv.org",
+            "baike.baidu.com", "gov.cn", "edu.cn", "bbc.com", "reuters.com")
+        val domain = normalizedDomain(url)
+        return trusted.any { domain.contains(it) }
+    }
+
+    private fun normalizedDomain(url: String): String {
+        return try {
+            java.net.URI(url).host?.lowercase() ?: url.lowercase()
+        } catch (_: Exception) {
+            url.lowercase()
+        }
+    }
+
+    private fun parseAutoCliEvidenceChunks(rawJson: String): List<EvidenceChunk> {
+        return try {
+            val arr = json.parseToJsonElement(rawJson.trim()).jsonArray
+            arr.mapNotNull { element ->
+                val obj = element.jsonObject
+                val title = obj["title"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                val snippet = obj["snippet"]?.jsonPrimitive?.content
+                    ?: obj["content"]?.jsonPrimitive?.content
+                    ?: obj["description"]?.jsonPrimitive?.content ?: ""
+                val url = obj["url"]?.jsonPrimitive?.content
+                    ?: obj["link"]?.jsonPrimitive?.content
+                EvidenceChunk(sourceName = "AutoCLI", title = title, snippet = snippet, url = url)
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun extractFirstUrlFromJsonText(text: String): String? {
+        val urlRegex = Regex("\"(?:url|link)\"\\s*:\\s*\"(https?://[^\"]+)\"")
+        return urlRegex.find(text)?.groupValues?.get(1)
+    }
+
     /**
      * 调用模型（支持 tool calling + 流式输出）
      * 循环处理：调用模型 -> 检查 tool_call -> 执行 tool -> 返回结果 -> 再次调用
@@ -288,7 +575,9 @@ class DirectModelAgent(
         var iteration = 0
         // 每轮用户对话只执行一次 search_context（向量检索一次即可，避免模型反复调工具）
         var searchContextCalledThisTurn = false
-        
+        // 同轮内多次 search_web 易堆叠过长上下文，导致上游流式 API 400；与 search_context 策略对齐
+        var searchWebCalledThisTurn = false
+
         while (iteration < maxIterations) {
             iteration++
             coroutineContext.ensureActive()
@@ -323,26 +612,34 @@ class DirectModelAgent(
                 callback("tool", "🔧 使用工具处理...", false)
                 
                 // 添加 assistant 消息（包含 tool_calls）到历史
+                // 部分上游要求带 tool_calls 的 assistant 消息显式带空字符串 content，避免省略字段触发 400
+                val assistantContentForTools = result.content.ifEmpty { "" }
                 conversationHistory.add(Message(
                     role = "assistant",
-                    content = result.content,
-                    tool_calls = result.toolCalls
+                    content = assistantContentForTools,
+                    tool_calls = result.toolCalls,
+                    reasoning_content = result.reasoningContent
                 ))
                 
                 // 执行所有 tool_calls
                 for (toolCall in result.toolCalls) {
                     coroutineContext.ensureActive()
-                    val toolResult = if (toolCall.function.name == "search_context" && searchContextCalledThisTurn) {
-                        "【仅执行一次】已执行过文档搜索。请根据上方已有的搜索结果直接回答用户，不要再次调用本工具。"
-                    } else {
-                        if (toolCall.function.name == "search_context") searchContextCalledThisTurn = true
-                        executeTool(toolCall, callback, requestUserId, accessibleSessionIds)
+                    val toolResult = when {
+                        toolCall.function.name == "search_context" && searchContextCalledThisTurn ->
+                            "【仅执行一次】已执行过文档搜索。请根据上方已有的搜索结果直接回答用户，不要再次调用本工具。"
+                        toolCall.function.name == "search_web" && searchWebCalledThisTurn ->
+                            "【仅执行一次】已执行过互联网搜索（search_web）。请根据上方已有搜索结果直接回答用户，不要再次调用 search_web；若需其他来源可说明局限。"
+                        else -> {
+                            if (toolCall.function.name == "search_context") searchContextCalledThisTurn = true
+                            if (toolCall.function.name == "search_web") searchWebCalledThisTurn = true
+                            executeTool(toolCall, callback, requestUserId, accessibleSessionIds)
+                        }
                     }
                     
                     // 添加 tool 结果到历史
                     conversationHistory.add(Message(
                         role = "tool",
-                        content = toolResult,
+                        content = sanitizeToolPayloadForLlm(toolResult),
                         tool_call_id = toolCall.id
                     ))
                 }
@@ -353,7 +650,13 @@ class DirectModelAgent(
             
             // 没有 tool_calls，流式输出已完成
             // 添加 assistant 消息到历史
-            conversationHistory.add(Message(role = "assistant", content = result.content))
+            conversationHistory.add(
+                Message(
+                    role = "assistant",
+                    content = result.content,
+                    reasoning_content = result.reasoningContent
+                )
+            )
             
             callback("complete", result.content, true)
             return result.content
@@ -429,7 +732,7 @@ class DirectModelAgent(
         val response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream())
 
         if (response.statusCode() != 200) {
-            val errorBody = try { response.body().bufferedReader().readText().take(500) } catch (_: Exception) { "" }
+            val errorBody = try { response.body().bufferedReader().readText().take(2000) } catch (_: Exception) { "" }
             logger.error("❌ 流式API调用失败: ${response.statusCode()}, body=$errorBody")
             if (response.statusCode() == 400 && errorBody.contains("json", ignoreCase = true)) {
                 logger.warn("⚠️ 可能是对话历史中包含无效的 tool_call arguments JSON，尝试清理历史后重试")
@@ -439,6 +742,7 @@ class DirectModelAgent(
         }
 
         val fullText = StringBuilder()
+        val reasoningText = StringBuilder()
         var lastSentLength = 0
         val sendThreshold = 30  // 每30字符发送一次增量（更频繁的流式体验）
         
@@ -480,6 +784,11 @@ class DirectModelAgent(
                                     callback("streaming_incremental", incrementalContent, false)
                                     lastSentLength = fullText.length
                                 }
+                            }
+
+                            val reasoning = delta?.reasoning_content
+                            if (reasoning != null) {
+                                reasoningText.append(reasoning)
                             }
                             
                             // 处理 tool_calls
@@ -563,7 +872,8 @@ class DirectModelAgent(
         
         return StreamingResult(
             content = fullText.toString(),
-            toolCalls = finalToolCalls
+            toolCalls = finalToolCalls,
+            reasoningContent = reasoningText.toString().ifEmpty { null }
         )
     }
 
@@ -701,9 +1011,10 @@ class DirectModelAgent(
      */
     private fun sanitizeConversationHistory() {
         for (i in conversationHistory.indices) {
-            val msg = conversationHistory[i]
-            if (msg.tool_calls != null) {
-                val sanitized = msg.tool_calls.map { tc ->
+            var msg = conversationHistory[i]
+            val existingToolCalls = msg.tool_calls
+            if (existingToolCalls != null) {
+                val sanitizedCalls = existingToolCalls.map { tc ->
                     val raw = tc.function.arguments
                     val valid = try {
                         json.parseToJsonElement(raw); raw
@@ -712,10 +1023,38 @@ class DirectModelAgent(
                     }
                     tc.copy(function = tc.function.copy(arguments = valid))
                 }
-                conversationHistory[i] = msg.copy(tool_calls = sanitized)
+                msg = msg.copy(tool_calls = sanitizedCalls)
+                conversationHistory[i] = msg
+            }
+            if (msg.role == "tool" && msg.content != null) {
+                val t = sanitizeToolPayloadForLlm(msg.content!!)
+                if (t != msg.content) {
+                    conversationHistory[i] = msg.copy(content = t)
+                }
             }
         }
         logger.info("✅ 对话历史已清理 (共 ${conversationHistory.size} 条消息)")
+    }
+
+    /**
+     * 写入大模型请求前处理 tool 消息：去掉非法控制字符、限制长度，降低上游 400 / 解析失败概率。
+     */
+    private fun sanitizeToolPayloadForLlm(raw: String): String {
+        val max = AIConfig.MAX_TOOL_MESSAGE_CHARS
+        val cleaned = buildString(raw.length) {
+            for (ch in raw) {
+                val c = ch.code
+                when {
+                    c == 0x0A || c == 0x0D || c == 0x09 -> append(ch)
+                    c < 0x20 -> append(' ')
+                    c in 0xD800..0xDFFF -> { }
+                    else -> append(ch)
+                }
+            }
+        }
+        if (cleaned.length <= max) return cleaned
+        val cut = cleaned.take(max)
+        return "$cut\n\n... (tool 输出已截断，原始约 ${cleaned.length} 字符，可在 .env 调整 MAX_TOOL_MESSAGE_CHARS)"
     }
 
     /**
@@ -776,8 +1115,7 @@ class DirectModelAgent(
             return JsonArray(items.map { JsonPrimitive(it) })
         }
         
-        // 定义所有工具
-        val allTools = listOf(
+        val baseTools = listOf(
             // 上下文搜索工具（搜索已上传的PDF文件和聊天记录）
             Tool(
                 function = ToolDefinition(
@@ -820,7 +1158,7 @@ class DirectModelAgent(
             Tool(
                 function = ToolDefinition(
                     name = "search_web",
-                    description = "在互联网上搜索信息。当需要查找外部信息、最新资讯或实时数据时使用。",
+                    description = "在互联网上搜索信息。当需要查找外部信息、最新资讯或实时数据时使用。每轮用户问题至多调用一次；不要并行或连续多次调用 search_web。",
                     parameters = buildJsonObject {
                         put("type", "object")
                         put("properties", buildJsonObject {
@@ -885,6 +1223,36 @@ class DirectModelAgent(
                 )
             )
         )
+
+        val conditionalTools = mutableListOf<Tool>()
+
+        if (AIConfig.AUTOCLI_ENABLED) {
+            conditionalTools.add(
+                Tool(
+                    function = ToolDefinition(
+                        name = "autocli",
+                        description = """从 55+ 个网站获取实时结构化数据（JSON 格式）。
+支持的平台举例：hackernews(top/new/best/search)、devto(top/latest)、lobsters(hot/newest)、arxiv(search)、
+bilibili(hot/search)、zhihu(hot/search)、twitter(search/trending)、reddit(hot/search)、youtube(search)、
+douban(movie-hot)、bbc(news)、bloomberg(news) 等。
+调用格式：site + command，如 "hackernews top --limit 5"、"arxiv search --keyword 'LLM' --limit 3"。
+注意：部分平台（标记为 Browser 模式）需要 Chrome 浏览器登录后才能使用。""",
+                        parameters = buildJsonObject {
+                            put("type", "object")
+                            put("properties", buildJsonObject {
+                                put("command", buildJsonObject {
+                                    put("type", "string")
+                                    put("description", "autocli 命令参数，如 'hackernews top --limit 5' 或 'arxiv search --keyword LLM'")
+                                })
+                            })
+                            put("required", requiredArray("command"))
+                        }
+                    )
+                )
+            )
+        }
+
+        val allTools = baseTools + conditionalTools
         
         // ✅ 过滤掉被禁用的工具，模型无法看到或调用这些工具
         return allTools.filter { tool ->
@@ -1015,6 +1383,15 @@ class DirectModelAgent(
                     ToolExecutionOutcome(
                         content = getGroupStats(),
                         auditResult = defaultAuditResult(policy.permission)
+                    )
+                }
+
+                "autocli" -> {
+                    val command = args["command"]?.jsonPrimitive?.content ?: ""
+                    val result = executeAutoCli(command, policy)
+                    ToolExecutionOutcome(
+                        content = result,
+                        auditResult = if (result.startsWith("⛔") || result.startsWith("⚠️")) "DENIED" else defaultAuditResult(policy.permission)
                     )
                 }
                 
@@ -1214,10 +1591,18 @@ class DirectModelAgent(
     }
     
     /**
-     * 网页搜索 (优先使用 SerpAPI，备选 Brave Search)
+     * 网页搜索 (优先 SearXNG，次选 SerpAPI，备选 Brave Search)
      */
     private fun searchWeb(query: String): String {
-        // 优先使用 SerpAPI
+        // 1. 优先使用 SearXNG（自托管搜索引擎）
+        if (AIConfig.SEARXNG_URL.isNotEmpty()) {
+            val searxngResult = searchWithSearXNG(query)
+            if (searxngResult.isNotEmpty()) {
+                return searxngResult
+            }
+        }
+        
+        // 2. 次选 SerpAPI
         if (AIConfig.SERPAPI_KEY.isNotEmpty()) {
             val serpResult = searchWithSerpAPI(query)
             if (serpResult.isNotEmpty()) {
@@ -1225,12 +1610,74 @@ class DirectModelAgent(
             }
         }
         
-        // 备选：Brave Search API
+        // 3. 备选：Brave Search API
         if (AIConfig.BRAVE_API_KEY.isNotEmpty()) {
             return searchWithBrave(query)
         }
         
-        return "⚠️ 未配置搜索 API Key，请设置环境变量 SERPAPI_KEY 或 BRAVE_API_KEY"
+        return "⚠️ 未配置搜索 API Key，请设置环境变量 SEARXNG_URL、SERPAPI_KEY 或 BRAVE_API_KEY"
+    }
+    
+    /**
+     * 使用 SearXNG 搜索 (自托管搜索引擎，最高优先级)
+     */
+    private fun searchWithSearXNG(query: String): String {
+        return try {
+            val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+            val searxngUrl = AIConfig.SEARXNG_URL.trimEnd('/')
+            val url = "$searxngUrl/search?q=$encodedQuery&format=json&categories=general&language=zh-CN"
+            
+            logger.info("🔍 SearXNG Search: $query")
+            
+            val searxngClient = HttpClient.newBuilder()
+                .version(HttpClient.Version.HTTP_1_1)
+                .connectTimeout(Duration.ofSeconds(10))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build()
+            
+            val request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Accept", "application/json")
+                .timeout(Duration.ofSeconds(15))
+                .GET()
+                .build()
+            
+            val response = searxngClient.send(request, HttpResponse.BodyHandlers.ofString())
+            
+            if (response.statusCode() == 200) {
+                parseSearXNGResponse(response.body(), query)
+            } else {
+                logger.error("❌ SearXNG 失败: ${response.statusCode()}")
+                ""  // 返回空字符串，让备选搜索引擎处理
+            }
+        } catch (e: Exception) {
+            logger.error("❌ SearXNG 搜索异常: ${e.message}")
+            ""  // 返回空字符串，让备选搜索引擎处理
+        }
+    }
+    
+    /**
+     * 解析 SearXNG 响应
+     */
+    private fun parseSearXNGResponse(responseBody: String, query: String): String {
+        return try {
+            val jsonResponse = json.parseToJsonElement(responseBody).jsonObject
+            val resultsArray = jsonResponse["results"]?.jsonArray
+            if (resultsArray == null || resultsArray.isEmpty()) return ""
+
+            val chunks = resultsArray.take(5).mapNotNull { element ->
+                val result = element.jsonObject
+                val title = result["title"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                val content = result["content"]?.jsonPrimitive?.content
+                    ?: result["snippet"]?.jsonPrimitive?.content ?: ""
+                val url = result["url"]?.jsonPrimitive?.content
+                EvidenceChunk(sourceName = "SearXNG", title = title, snippet = content, url = url)
+            }
+            formatEvidenceForModel(chunks, query, "via SearXNG")
+        } catch (e: Exception) {
+            logger.error("❌ 解析 SearXNG 响应失败: ${e.message}")
+            ""
+        }
     }
     
     /**
@@ -1277,32 +1724,16 @@ class DirectModelAgent(
         return try {
             val jsonResponse = json.parseToJsonElement(responseBody).jsonObject
             val organicResults = jsonResponse["organic_results"]?.jsonArray
-            
-            if (organicResults == null || organicResults.isEmpty()) {
-                return ""  // 返回空字符串，让备选搜索引擎处理
-            }
-            
-            val results = StringBuilder()
-            results.append("🔍 **搜索结果: $query** (via SerpAPI/Google)\n\n")
-            
-            val maxResults = minOf(5, organicResults.size)
-            for (i in 0 until maxResults) {
-                val result = organicResults[i].jsonObject
-                val title = result["title"]?.jsonPrimitive?.content ?: ""
+            if (organicResults == null || organicResults.isEmpty()) return ""
+
+            val chunks = organicResults.take(5).mapNotNull { element ->
+                val result = element.jsonObject
+                val title = result["title"]?.jsonPrimitive?.content ?: return@mapNotNull null
                 val snippet = result["snippet"]?.jsonPrimitive?.content ?: ""
-                val link = result["link"]?.jsonPrimitive?.content ?: ""
-                
-                results.append("**${i + 1}. $title**\n")
-                if (snippet.isNotEmpty()) {
-                    results.append("   $snippet\n")
-                }
-                if (link.isNotEmpty()) {
-                    results.append("   📎 $link\n")
-                }
-                results.append("\n")
+                val link = result["link"]?.jsonPrimitive?.content
+                EvidenceChunk(sourceName = "SerpAPI", title = title, snippet = snippet, url = link)
             }
-            
-            results.toString()
+            formatEvidenceForModel(chunks, query, "via SerpAPI/Google")
         } catch (e: Exception) {
             logger.error("❌ 解析 SerpAPI 响应失败: ${e.message}")
             ""
@@ -1354,32 +1785,18 @@ class DirectModelAgent(
         return try {
             val jsonResponse = json.parseToJsonElement(responseBody).jsonObject
             val webResults = jsonResponse["web"]?.jsonObject?.get("results")?.jsonArray
-            
             if (webResults == null || webResults.isEmpty()) {
                 return "🔍 搜索 \"$query\" 未找到相关结果"
             }
-            
-            val results = StringBuilder()
-            results.append("🔍 **搜索结果: $query**\n\n")
-            
-            val maxResults = minOf(5, webResults.size)
-            for (i in 0 until maxResults) {
-                val result = webResults[i].jsonObject
-                val title = result["title"]?.jsonPrimitive?.content ?: ""
+
+            val chunks = webResults.take(5).mapNotNull { element ->
+                val result = element.jsonObject
+                val title = result["title"]?.jsonPrimitive?.content ?: return@mapNotNull null
                 val description = result["description"]?.jsonPrimitive?.content ?: ""
-                val url = result["url"]?.jsonPrimitive?.content ?: ""
-                
-                results.append("**${i + 1}. $title**\n")
-                if (description.isNotEmpty()) {
-                    results.append("   $description\n")
-                }
-                if (url.isNotEmpty()) {
-                    results.append("   📎 $url\n")
-                }
-                results.append("\n")
+                val url = result["url"]?.jsonPrimitive?.content
+                EvidenceChunk(sourceName = "Brave", title = title, snippet = description, url = url)
             }
-            
-            results.toString()
+            formatEvidenceForModel(chunks, query, "via Brave Search")
         } catch (e: Exception) {
             logger.error("❌ 解析 Brave Search 响应失败: ${e.message}")
             "解析搜索结果失败: ${e.message}"
@@ -1408,6 +1825,85 @@ class DirectModelAgent(
         }
     }
     
+    /**
+     * 执行 AutoCLI 命令，获取网站结构化数据
+     */
+    private fun executeAutoCli(command: String, policy: ToolPolicy): String {
+        if (!AIConfig.AUTOCLI_ENABLED) {
+            return "⚠️ AutoCLI 未启用，请在 .env 中设置 AUTOCLI_ENABLED=true"
+        }
+
+        if (command.isBlank()) {
+            return "⚠️ AutoCLI 命令不能为空"
+        }
+
+        val parts = command.trim().split(Regex("\\s+"))
+        val site = parts.firstOrNull() ?: ""
+
+        val disallowedPatterns = listOf(";", "&&", "||", "|", "`", "$(", "\n", "\r", ">", "<")
+        if (disallowedPatterns.any { command.contains(it) }) {
+            logger.warn("⛔ [autocli] 检测到不安全字符: $command")
+            return "⛔ 安全限制：命令包含不允许的字符"
+        }
+
+        if (policy.permission == ToolPermission.SANDBOXED && policy.safeCommands.isNotEmpty()) {
+            if (site !in policy.safeCommands) {
+                logger.warn("⛔ [autocli] 站点不在白名单中: $site (允许: ${policy.safeCommands})")
+                return "⛔ 安全限制：站点 '$site' 不在允许列表中。允许的站点: ${policy.safeCommands.joinToString(", ")}"
+            }
+        }
+
+        return try {
+            val autocliPath = AIConfig.AUTOCLI_PATH
+            val timeout = AIConfig.AUTOCLI_TIMEOUT
+
+            val cmdArgs = mutableListOf(autocliPath) + parts
+            if (!command.contains("--format")) {
+                cmdArgs as MutableList
+                cmdArgs.addAll(listOf("--format", "json"))
+            }
+
+            logger.info("🔧 [autocli] 执行: ${cmdArgs.joinToString(" ")}")
+
+            val process = ProcessBuilder(cmdArgs)
+                .redirectErrorStream(true)
+                .start()
+
+            val completed = process.waitFor(timeout, java.util.concurrent.TimeUnit.SECONDS)
+            val output = process.inputStream.bufferedReader().readText()
+
+            if (!completed) {
+                process.destroyForcibly()
+                logger.warn("⏱️ [autocli] 命令超时 (${timeout}s): $command")
+                return "⏱️ AutoCLI 命令超时（${timeout}秒）。请尝试减少 --limit 或选择其他站点。"
+            }
+
+            val exitCode = process.exitValue()
+            if (exitCode != 0) {
+                logger.warn("❌ [autocli] 命令失败 (exit=$exitCode): $command\n$output")
+                return "❌ AutoCLI 执行失败: ${output.take(500)}"
+            }
+
+            val effectiveCommand = command.trim()
+            val chunks = parseAutoCliEvidenceChunks(output)
+            val evidenceText = if (chunks.isNotEmpty()) {
+                formatEvidenceForModel(chunks, effectiveCommand, "via AutoCLI")
+            } else {
+                val truncated = if (output.length > 8000) {
+                    output.take(8000) + "\n... (结果已截断，共 ${output.length} 字符)"
+                } else {
+                    output
+                }
+                truncated
+            }
+            logger.info("✅ [autocli] 成功: ${output.length} 字符")
+            "📊 AutoCLI 结果 ($effectiveCommand)\n\n$evidenceText"
+        } catch (e: Exception) {
+            logger.error("❌ [autocli] 执行异常: ${e.message}", e)
+            "❌ AutoCLI 执行失败: ${e.message}"
+        }
+    }
+
     /**
      * 执行命令（应用权限策略）
      */
@@ -1690,6 +2186,109 @@ class DirectModelAgent(
         val messageCount: Int
     )
     
+    private fun removeInvalidCitationMarkers(content: String): String {
+        val maxIndex = currentResponseReferences.size
+        return content.replace(Regex("\\[(citation|available):(\\d+)\\]")) { match ->
+            val idx = match.groupValues[2].toIntOrNull() ?: 0
+            if (idx in 1..maxIndex) match.value else ""
+        }
+    }
+
+    private fun ensureCitationMarkers(content: String): String {
+        val cleaned = removeInvalidCitationMarkers(content)
+        if (currentResponseReferences.isEmpty()) return cleaned
+        if (Regex("\\[(citation|available):\\d+\\]").containsMatchIn(cleaned)) return cleaned
+
+        val topRefs = currentResponseReferences.take(3)
+        val markers = topRefs.joinToString(" ") { ref ->
+            "[${ref.kind}:${ref.index}]"
+        }
+        return "$cleaned $markers"
+    }
+
+    private fun finalizeAgentResponse(content: String): FinalCitationResult {
+        val withMarkers = ensureCitationMarkers(content)
+        return normalizeCitedReferences(withMarkers)
+    }
+
+    private fun normalizeCitedReferences(content: String): FinalCitationResult {
+        val citedPattern = Regex("\\[(citation|available):(\\d+)\\]")
+        val citedIndices = citedPattern.findAll(content)
+            .map { it.groupValues[2].toInt() }
+            .distinct()
+            .sorted()
+            .toList()
+
+        if (citedIndices.isEmpty()) {
+            return FinalCitationResult(content, emptyList())
+        }
+
+        val citedRefs = citedIndices.mapNotNull { idx ->
+            currentResponseReferences.find { it.index == idx }
+        }
+
+        val reindexMap = mutableMapOf<Int, Int>()
+        val newRefs = mutableListOf<com.silk.backend.models.MessageReference>()
+        var citationCounter = 0
+        var availableCounter = 0
+
+        for (ref in citedRefs) {
+            val newIndex = if (ref.kind == "citation") {
+                ++citationCounter
+            } else {
+                ++availableCounter
+            }
+            reindexMap[ref.index] = newIndex
+            newRefs.add(ref.copy(index = newIndex))
+        }
+
+        val newContent = citedPattern.replace(content) { match ->
+            val kind = match.groupValues[1]
+            val oldIdx = match.groupValues[2].toInt()
+            val newIdx = reindexMap[oldIdx] ?: oldIdx
+            "[$kind:$newIdx]"
+        }
+
+        return FinalCitationResult(newContent, newRefs)
+    }
+
+    // ========== Test helpers ==========
+    internal fun citationGuidelinesForTest(prompt: String): String = withCitationGuidelines(prompt)
+
+    internal fun referencesForTest(): List<com.silk.backend.models.MessageReference> =
+        currentResponseReferences.toList()
+
+    internal fun resetReferencesForTest() {
+        currentResponseReferences.clear()
+    }
+
+    internal fun parseBraveSearchResponseForTest(responseBody: String, query: String): String =
+        parseBraveSearchResponse(responseBody, query)
+
+    internal fun ensureCitationMarkersForTest(content: String): String =
+        ensureCitationMarkers(content)
+
+    internal fun extractFirstUrlFromJsonTextForTest(text: String): String? =
+        extractFirstUrlFromJsonText(text)
+
+    internal fun formatEvidenceForModelForTest(query: String, sourceLabel: String, rawJson: String): String {
+        val chunks = parseAutoCliEvidenceChunks(rawJson)
+        return formatEvidenceForModel(chunks, query, sourceLabel)
+    }
+
+    internal fun registerCitationForTest(title: String, url: String): Int =
+        registerReference(kind = "citation", title = title, url = url)
+
+    internal fun citedReferencesForTest(content: String): List<com.silk.backend.models.MessageReference> {
+        val result = normalizeCitedReferences(content)
+        return result.references
+    }
+
+    internal fun finalizeCitationsForTest(content: String): AgentResponse {
+        val result = finalizeAgentResponse(content)
+        return AgentResponse(content = result.content, references = result.references)
+    }
+
     /**
      * 清空对话历史
      */

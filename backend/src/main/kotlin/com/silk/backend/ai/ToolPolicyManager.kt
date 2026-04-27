@@ -93,6 +93,18 @@ object ToolPolicyManager {
             permission = ToolPermission.DISABLED,
             safeCommands = listOf("ls", "pwd", "echo", "date", "whoami"),
             description = "执行系统命令（默认禁用，仅允许安全命令）"
+        ),
+        "autocli" to ToolPolicy(
+            name = "autocli",
+            permission = ToolPermission.SANDBOXED,
+            safeCommands = listOf(
+                "hackernews", "devto", "lobsters", "arxiv", "bbc", "bloomberg",
+                "producthunt", "techcrunch", "reuters", "hf",
+                "bilibili", "zhihu", "douban", "weibo", "xiaohongshu",
+                "twitter", "reddit", "youtube", "facebook", "instagram",
+                "google", "coupang", "ctrip"
+            ),
+            description = "通过 AutoCLI 从 55+ 网站获取结构化数据（沙箱模式，限制可用站点）"
         )
     )
     
