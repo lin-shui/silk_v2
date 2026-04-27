@@ -59,7 +59,24 @@ export struct MessageBubble {
   }
 
   private getSafeAIContent(): string {
-    return this.message.content ? this.message.content : '';
+    const raw = this.message.content ? this.message.content : '';
+    return this.renderCitationMarkersAsLinks(raw);
+  }
+
+  private renderCitationMarkersAsLinks(content: string): string {
+    const refs: Reference[] = this.message.references ? this.message.references : [];
+    if (refs.length === 0 || content.length === 0) {
+      return content;
+    }
+    return content.replace(/\[(citation|available):(\d+)\]/g, (_m: string, kind: string, idxText: string) => {
+      const idx = Number(idxText);
+      const ref = refs.find((r: Reference) => r.kind === kind && r.index === idx);
+      const label = kind === 'citation' ? `来源 ${idx}` : `资料 ${idx}`;
+      if (!ref || !ref.url || ref.url.trim().length === 0) {
+        return `[${label}]`;
+      }
+      return `[${label}](${ref.url.trim()})`;
+    });
   }
 
   private isLongAIContent(): boolean {
