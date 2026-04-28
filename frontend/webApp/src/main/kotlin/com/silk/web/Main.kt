@@ -2057,8 +2057,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     val handler: (dynamic) -> Unit = { event: dynamic ->
                         val key = event.key as? String
                         val shiftKey = event.shiftKey as? Boolean ?: false
-                        
-                        if (key == "Enter" && !shiftKey) {
+                        // 输入法合成中（如中文拼音按 Enter 确认），不发送
+                        val isComposing = (event.isComposing as? Boolean) ?: false
+
+                        if (key == "Enter" && !shiftKey && !isComposing) {
                             event.preventDefault()
                             sendMessage()
                         }

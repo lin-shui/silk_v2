@@ -33,6 +33,7 @@ export struct MessageBubble {
   /** 长文本/转发全文从展开收起到折叠后，由列表滚回本条，避免高度突变导致视口跑偏 */
   onLongContentCollapsed?: () => void;
   @Prop suggestedAction: MetaServiceIntent | null = null;
+  @Prop isLastMessage: boolean = false;
   @State private isAIExpanded: boolean = false;
   @State private isForwardExpanded: boolean = false;
   @State private metaParamPickup: string = '';
@@ -385,7 +386,7 @@ export struct MessageBubble {
 
         Blank().height(10)
 
-        if (!this.isLongAIContent()) {
+        if (!this.isLongAIContent() || this.isLastMessage) {
           MarkdownLite({
             content: this.getSafeAIContent()
           })

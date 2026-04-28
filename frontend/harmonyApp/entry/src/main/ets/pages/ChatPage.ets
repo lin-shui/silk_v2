@@ -255,7 +255,7 @@ struct ChatPage {
         return;
       }
       const lastIndex = this.messages.length - 1;
-      this.listScroller.scrollToIndex(lastIndex, false, ScrollAlign.END);
+      this.listScroller.scrollToIndex(lastIndex, false, ScrollAlign.START);
     }, 80);
   }
 
@@ -1835,6 +1835,7 @@ struct ChatPage {
                     actionsEnabled: !this.isSelectionMode,
                     messageStatus: this.getMessageStatus(message.id),
                     suggestedAction: this.getSuggestedActionForMessage(message, index),
+                    isLastMessage: index === this.messages.length - 1,
                     onCopy: (content: string): void => this.handleCopy(content),
                     onForward: (msg: Message): void => this.handleForward(msg),
                     onRetry: (msg: Message): void => this.retryMessage(msg),
