@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import signal
+import ssl
 from typing import Any
 
 import websockets
@@ -376,17 +377,49 @@ def _log_task_exception(task: asyncio.Task) -> None:
         logger.error("[Bridge] Dispatch task failed: %s", exc, exc_info=True)
 
 
-async def run(server: str, token: str, working_dir: str) -> None:
+def _env_tls_insecure() -> bool:
+    v = os.environ.get("BRIDGE_TLS_INSECURE", "").strip().lower()
+    return v in ("1", "true", "yes")
+
+
+async def run(
+    server: str,
+    token: str,
+    working_dir: str,
+    *,
+    tls_insecure: bool = False,
+) -> None:
     """Main loop: connect, dispatch messages, auto-reconnect on failure."""
-    # Build WebSocket URL from plain host:port
+    # Build WebSocket URL: https / wss → wss://… (TLS); http / ws / bare host:port → ws://…
     host = server.rstrip("/")
-    # Strip protocol prefix if user accidentally included it
-    for prefix in ("ws://", "wss://", "http://", "https://"):
-        if host.lower().startswith(prefix):
-            host = host[len(prefix):]
-            break
-    ws_url = f"ws://{host}/cc-bridge?token={token}"
+    ws_scheme = "ws"
+    lower = host.lower()
+    if lower.startswith("wss://"):
+        host = host[6:]
+        ws_scheme = "wss"
+    elif lower.startswith("https://"):
+        host = host[8:]
+        ws_scheme = "wss"
+    elif lower.startswith("ws://"):
+        host = host[5:]
+    elif lower.startswith("http://"):
+        host = host[7:]
+    ws_url = f"{ws_scheme}://{host}/cc-bridge?token={token}"
     working_dir_holder = [os.path.realpath(working_dir)]
+
+    connect_kw: dict[str, Any] = {
+        "ping_interval": 30,
+        "ping_timeout": 10,
+        "max_size": 10 * 1024 * 1024,  # 10 MB
+    }
+    if ws_scheme == "wss" and tls_insecure:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        connect_kw["ssl"] = ctx
+        logger.warning(
+            "[Bridge] TLS 证书校验已关闭（仅用于自签/内网；生产请使用受信任证书或撤掉该选项）"
+        )
 
     delay = 1.0  # exponential backoff start
     max_delay = 60.0
@@ -394,12 +427,7 @@ async def run(server: str, token: str, working_dir: str) -> None:
     while True:
         try:
             logger.info("[Bridge] Connecting to %s ...", ws_url)
-            async with websockets.connect(
-                ws_url,
-                ping_interval=30,
-                ping_timeout=10,
-                max_size=10 * 1024 * 1024,  # 10 MB
-            ) as ws:
+            async with websockets.connect(ws_url, **connect_kw) as ws:
                 # Reset backoff on successful connect
                 delay = 1.0
                 logger.info("[Bridge] Connected successfully")
@@ -444,7 +472,7 @@ def main() -> None:
     parser.add_argument(
         "--server",
         required=True,
-        help="Silk backend address, e.g. localhost:8006",
+        help="Silk backend, e.g. localhost:8006 or https://host:port (HTTPS uses WSS)",
     )
     parser.add_argument(
         "--token",
@@ -462,7 +490,13 @@ def main() -> None:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Log level (default: INFO)",
     )
+    parser.add_argument(
+        "--tls-insecure",
+        action="store_true",
+        help="WSS 时不校验服务端证书（自签证书场景）；也可用环境变量 BRIDGE_TLS_INSECURE=1",
+    )
     args = parser.parse_args()
+    tls_insecure = bool(args.tls_insecure) or _env_tls_insecure()
 
     logging.basicConfig(
         level=getattr(logging, args.log_level),
@@ -491,7 +525,7 @@ def main() -> None:
 
     async def _run_with_shutdown() -> None:
         main_task = asyncio.create_task(
-            run(args.server, args.token, args.working_dir)
+            run(args.server, args.token, args.working_dir, tls_insecure=tls_insecure)
         )
         shutdown_task = asyncio.create_task(shutdown_event.wait())
 

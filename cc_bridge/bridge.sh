@@ -32,8 +32,25 @@ BRIDGE_SERVER="${BRIDGE_SERVER:-}"
 BRIDGE_TOKEN="${BRIDGE_TOKEN:-}"
 BRIDGE_WORKING_DIR="${BRIDGE_WORKING_DIR:-$(pwd)}"
 BRIDGE_LOG_LEVEL="${BRIDGE_LOG_LEVEL:-INFO}"
+# 可选：WSS 自签证书时设为 1（bridge.sh 会传 --tls-insecure）
+BRIDGE_TLS_INSECURE="${BRIDGE_TLS_INSECURE:-}"
+# 可选：仓库外 venv 的 python 绝对路径，例如 /Users/you/venvs/silk-bridge/bin/python3
+BRIDGE_PYTHON="${BRIDGE_PYTHON:-}"
 
 # ---- 辅助函数 ----
+
+_resolve_python_bin() {
+    if [ -n "$BRIDGE_PYTHON" ]; then
+        if [ -x "$BRIDGE_PYTHON" ]; then
+            PYTHON_BIN="$BRIDGE_PYTHON"
+            return 0
+        fi
+        echo -e "${RED}错误: BRIDGE_PYTHON 不是可执行文件: $BRIDGE_PYTHON${NC}" >&2
+        return 1
+    fi
+    PYTHON_BIN="python3"
+    return 0
+}
 
 _check_config() {
     if [ -z "$BRIDGE_SERVER" ] || [ -z "$BRIDGE_TOKEN" ]; then
@@ -44,12 +61,15 @@ _check_config() {
         echo "  1) 创建 $BRIDGE_DIR/.env 文件:"
         echo "     BRIDGE_SERVER=<silk后端地址:端口>"
         echo "     BRIDGE_TOKEN=<你的Token>"
+        echo "     # BRIDGE_PYTHON=/path/outside/repo/.venv/bin/python3  (可选，推荐)"
         echo "     # BRIDGE_WORKING_DIR=/path/to/workdir  (可选)"
         echo "     # BRIDGE_LOG_LEVEL=INFO                (可选)"
+        echo "     # BRIDGE_TLS_INSECURE=1                (可选，自签 WSS 证书)"
         echo ""
         echo "  2) 设置环境变量:"
         echo "     export BRIDGE_SERVER=localhost:8006"
         echo "     export BRIDGE_TOKEN=your-token"
+        echo "     export BRIDGE_PYTHON=/path/to/.venv/bin/python3"
         echo ""
         return 1
     fi
@@ -85,18 +105,29 @@ do_start() {
     fi
 
     _check_config || return 1
+    _resolve_python_bin || return 1
 
     echo -e "${BLUE}启动 CC Bridge...${NC}"
     echo -e "  Server:      ${GREEN}$BRIDGE_SERVER${NC}"
+    echo -e "  Python:      $PYTHON_BIN"
     echo -e "  Working dir: $BRIDGE_WORKING_DIR"
     echo -e "  Log level:   $BRIDGE_LOG_LEVEL"
     echo -e "  Log file:    $LOG_FILE"
 
-    nohup python3 "$BRIDGE_DIR/bridge_agent.py" \
+    TLS_EXTRA=()
+    case "${BRIDGE_TLS_INSECURE}" in
+        1|true|TRUE|yes|YES) TLS_EXTRA=(--tls-insecure) ;;
+    esac
+    if [ ${#TLS_EXTRA[@]} -gt 0 ]; then
+        echo -e "  ${YELLOW}TLS:         跳过证书校验 (--tls-insecure)${NC}"
+    fi
+
+    nohup "$PYTHON_BIN" "$BRIDGE_DIR/bridge_agent.py" \
         --server "$BRIDGE_SERVER" \
         --token "$BRIDGE_TOKEN" \
         --working-dir "$BRIDGE_WORKING_DIR" \
         --log-level "$BRIDGE_LOG_LEVEL" \
+        "${TLS_EXTRA[@]}" \
         >> "$LOG_FILE" 2>&1 &
 
     local pid=$!
