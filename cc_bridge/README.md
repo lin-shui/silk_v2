@@ -24,12 +24,16 @@ Silk 后端将用户的 CC 模式消息转发给 Bridge，Bridge 调用本地的
 
 ## 快速开始
 
-### 1. 安装依赖
+### 1. 安装依赖（建议在仓库外建 venv）
+
+不在 `silk_harmony` 里创建 `.venv`，例如在用户目录单独建环境并安装依赖：
 
 ```bash
-cd cc_bridge
-pip install -r requirements.txt
+python3 -m venv ~/venvs/silk-cc-bridge
+~/venvs/silk-cc-bridge/bin/pip install -r /path/to/silk_harmony/cc_bridge/requirements.txt
 ```
+
+之后在 `cc_bridge/.env` 里设置 `BRIDGE_PYTHON` 指向该解释器（见下一步）。若坚持用系统 Python，可省略 `BRIDGE_PYTHON`，并在当前 shell 对 `python3` 执行 `pip install -r requirements.txt`。
 
 ### 2. 生成 Bridge Token
 
@@ -41,10 +45,23 @@ pip install -r requirements.txt
 
 ```bash
 BRIDGE_SERVER=<silk后端地址>:8006
+# 若 Web 入口是 HTTPS，请写完整 URL（会自动用 WSS 连 /cc-bridge），例如：
+# BRIDGE_SERVER=https://ai-silk.duckdns.org:36796
 BRIDGE_TOKEN=<你的Token>
+BRIDGE_PYTHON=/path/to/your-venv/bin/python3   # 推荐：仓库外 venv 的 python3
 # BRIDGE_WORKING_DIR=/path/to/workdir  # 可选，默认为当前目录
 # BRIDGE_LOG_LEVEL=INFO                # 可选：DEBUG/INFO/WARNING/ERROR
 ```
+
+`BRIDGE_SERVER` 带 `https://` 或 `wss://` 前缀时，桥接使用 **WSS**；`http://`、`ws://` 或仅 `host:port` 时使用 **WS**。
+
+若 WSS 使用**自签名证书**，Python 会报 `CERTIFICATE_VERIFY_FAILED`。在 `cc_bridge/.env` 中增加一行（仅内网/自建可信环境）：
+
+```bash
+BRIDGE_TLS_INSECURE=1
+```
+
+然后 `./bridge.sh restart`。长期方案是在反向代理上使用 Let’s Encrypt 等受信任证书，再删掉该选项。
 
 ### 4. 启动
 
@@ -57,7 +74,7 @@ BRIDGE_TOKEN=<你的Token>
 **前台运行（调试用）：**
 
 ```bash
-python bridge_agent.py --server <silk后端地址>:8006 --token <你的Token>
+/path/to/your-venv/bin/python bridge_agent.py --server <silk后端地址>:8006 --token <你的Token>
 ```
 
 ### 5. 验证
