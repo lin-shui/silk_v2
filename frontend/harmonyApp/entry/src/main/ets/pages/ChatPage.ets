@@ -1376,7 +1376,12 @@ struct ChatPage {
   }
 
   private applySilkQuickMention(): void {
-    this.messageInput = '@Silk ';
+    const existing = this.messageInput;
+    if (existing.trim().length > 0) {
+      this.messageInput = existing + ' @Silk ';
+    } else {
+      this.messageInput = '@Silk ';
+    }
   }
 
   private getMessageInputPlaceholder(): string {
