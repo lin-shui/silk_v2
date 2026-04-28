@@ -38,7 +38,7 @@ const SERVICE_REGISTRY: MetaServiceDef[] = [
     abilityName: 'EntryAbility',
     uriSchemeTemplate: 'openapp.jdmobile://search?keyword={{keywords}}',
     searchUrlTemplate: 'https://search.jd.com/Search?keyword={{keywords}}',
-    triggerKeywords: ['京东', '京东购物', '京', 'jd', 'JD', '买'],
+    triggerKeywords: ['京东', '京东购物', '京', 'jd', 'JD', '买', '购物', '买东西'],
     hasBrowserFallback: true
   },
   {

@@ -259,8 +259,8 @@ export class ShoppingIntentParser {
       }
     }
 
-    // 默认使用淘宝
-    return 'taobao';
+    // 默认使用京东（与 MetaServiceConfig 中京东为首保持一致）
+    return 'jd';
   }
 
   /**

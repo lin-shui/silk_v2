@@ -1110,10 +1110,14 @@ struct ChatPage {
    * done=true 时不显示按钮：避免执行成功后仍显示「运行」导致重复创建系统提醒；需取消勾选后再「↻ 重设」。
    */
   private todoCanExecute(item: UserTodoItem): boolean {
+    const at = (item.actionType ? item.actionType : 'none').toLowerCase();
+    // 购物和元服务始终可执行（可重复打开）
+    if (at === 'shopping' || at === 'meta_service') {
+      return true;
+    }
     if (item.done) {
       return false;
     }
-    const at = (item.actionType ? item.actionType : 'none').toLowerCase();
     if (at !== 'alarm' && at !== 'calendar' && at !== 'none') {
       return false;
     }
@@ -1156,12 +1160,25 @@ struct ChatPage {
       this.showToast('正在执行中，请稍候');
       return;
     }
+    let at = (item.actionType ? item.actionType : 'none').toLowerCase();
+
+    // 购物：解析意图并跳转元服务
+    if (at === 'shopping') {
+      await this.executeChatShoppingTodo(item);
+      return;
+    }
+    // 元服务：直接解析配置并跳转
+    if (at === 'meta_service') {
+      await this.executeChatMetaServiceTodo(item);
+      return;
+    }
+
     if (item.done) {
       this.showToast(this.isLongTermTemplate(item) ? '该模板已暂停。请先启用模板后再执行。' :
         '该项已完成。请先取消左侧勾选，再点「重设」调整提醒。');
       return;
     }
-    let at = (item.actionType ? item.actionType : 'none').toLowerCase();
+    at = (item.actionType ? item.actionType : 'none').toLowerCase();
     if (at === 'none' || at.length === 0) {
       at = 'alarm';
     }
@@ -1217,6 +1234,151 @@ struct ChatPage {
         this.applyTodoRunSuccessLocal(item, firstExec, res.reminderId);
       }
     });
+  }
+
+  /**
+   * 执行购物待办：解析意图后跳转对应元服务
+   */
+  private async executeChatShoppingTodo(item: UserTodoItem): Promise<void> {
+    const parsed = ShoppingIntentParser.parse(item.title, item.actionDetail);
+
+    if (parsed.type === 'ride_hailing' && parsed.rideHailingIntent) {
+      const ride = parsed.rideHailingIntent;
+      const def = MetaServiceConfig.getServiceDef('t3_ride');
+      if (!def) {
+        this.showToast('未找到 T3出行 元服务配置');
+        return;
+      }
+      const params: Record<string, string> = {};
+      if (ride.pickup) {
+        params['pickup'] = ride.pickup;
+      }
+      if (ride.destination) {
+        params['destination'] = ride.destination;
+      }
+      const uri = MetaServiceConfig.resolveUri(def, params);
+      const intent: MetaServiceIntent = {
+        serviceId: 't3_ride',
+        serviceName: 'T3出行',
+        serviceType: 'parameter',
+        params: params,
+        uri: uri
+      };
+      const result = await MetaServiceLauncher.launch(intent);
+      this.showToast(result.message);
+      if (result.success) {
+        await this.markTodoDone(item);
+      }
+      return;
+    }
+
+    if (parsed.type === 'shopping' && parsed.shoppingIntent && parsed.shoppingIntent.isShopping) {
+      const si = parsed.shoppingIntent;
+      const platToSvc: Record<string, string> = {
+        'taobao': 'taobao_shopping',
+        'jd': 'jd_shopping',
+        'meituan': 'meituan_shopping',
+        'pdd': 'pdd_shopping'
+      };
+      const svcId = platToSvc[si.platform] || 'jd_shopping';
+      const def = MetaServiceConfig.getServiceDef(svcId);
+      if (!def) {
+        this.showToast('未找到对应的购物元服务');
+        return;
+      }
+      const keywords = si.keywords.join(' ');
+      const uriParams: Record<string, string> = {};
+      uriParams['keywords'] = keywords;
+      const uri = MetaServiceConfig.resolveUri(def, uriParams);
+      const fallbackUrl = MetaServiceConfig.resolveSearchUrl(def, keywords);
+      const intent: MetaServiceIntent = {
+        serviceId: svcId,
+        serviceName: def.name,
+        serviceType: 'search',
+        keywords: si.keywords,
+        uri: uri,
+        fallbackUrl: fallbackUrl
+      };
+      const result = await MetaServiceLauncher.launch(intent);
+      this.showToast(result.message);
+      if (result.success) {
+        await this.markTodoDone(item);
+      }
+      return;
+    }
+
+    this.showToast('未识别到购物或出行意图');
+  }
+
+  /**
+   * 执行元服务待办：解析 actionDetail JSON 后直接跳转
+   * JSON 格式: {"service":"jd_shopping","params":{"keywords":"手机"}}
+   */
+  private async executeChatMetaServiceTodo(item: UserTodoItem): Promise<void> {
+    const detail = item.actionDetail ? item.actionDetail : '';
+    if (!detail) {
+      this.showToast('元服务配置为空');
+      return;
+    }
+    let svcId = '';
+    const params: Record<string, string> = {};
+    try {
+      const parsed: Record<string, Object> = JSON.parse(detail);
+      svcId = String(parsed['service'] || '');
+      const rawParams: Object = parsed['params'];
+      if (rawParams) {
+        const paramObj: Record<string, Object> = rawParams as Record<string, Object>;
+        const keys: string[] = Object.keys(paramObj);
+        for (let i = 0; i < keys.length; i++) {
+          params[keys[i]] = String(paramObj[keys[i]] || '');
+        }
+      }
+    } catch (_e) {
+      this.showToast('元服务配置格式无效，请使用 JSON 格式');
+      return;
+    }
+    if (!svcId) {
+      this.showToast('元服务ID为空');
+      return;
+    }
+    const def = MetaServiceConfig.getServiceDef(svcId);
+    if (!def) {
+      this.showToast(`未找到元服务: ${svcId}`);
+      return;
+    }
+    const uri = MetaServiceConfig.resolveUri(def, params);
+    const keywords = params['keywords'] || '';
+    const fallbackUrl = def.serviceType === 'search' ? MetaServiceConfig.resolveSearchUrl(def, keywords) : undefined;
+    const intent: MetaServiceIntent = {
+      serviceId: svcId,
+      serviceName: def.name,
+      serviceType: def.serviceType,
+      params: params,
+      uri: uri,
+      fallbackUrl: fallbackUrl
+    };
+    const result = await MetaServiceLauncher.launch(intent);
+    this.showToast(result.message);
+    if (result.success) {
+      await this.markTodoDone(item);
+    }
+  }
+
+  /** 标记待办为已完成（后端 + 本地） */
+  private async markTodoDone(item: UserTodoItem): Promise<void> {
+    const now = Date.now();
+    const patch: UserTodoPatch = {
+      done: true,
+      executedAt: now,
+      lifecycleState: 'done',
+      closedAt: now
+    };
+    const updateRes = await this.apiClient.updateUserTodoItem(this.userId, item.id, patch);
+    if (updateRes.success && updateRes.data) {
+      this.todoItems = updateRes.data;
+    } else {
+      this.showToast(updateRes.message ? updateRes.message : '同步待办失败');
+    }
   }
 
   /** 整行锁定：系统能力 + 写回后端全程禁止重复点击 */
@@ -2261,10 +2423,42 @@ struct ChatPage {
           .onClick((): void => {
             this.editActionType = 'calendar';
           })
+        Button('购物')
+          .height(32)
+          .fontSize(12)
+          .backgroundColor(this.editActionType === 'shopping' ? SilkColors.primary : '#EEE')
+          .fontColor(this.editActionType === 'shopping' ? SilkColors.onPrimary : SilkColors.textPrimary)
+          .onClick((): void => {
+            this.editActionType = 'shopping';
+          })
+        Button('元服务')
+          .height(32)
+          .fontSize(12)
+          .backgroundColor(this.editActionType === 'meta_service' ? SilkColors.primary : '#EEE')
+          .fontColor(this.editActionType === 'meta_service' ? SilkColors.onPrimary : SilkColors.textPrimary)
+          .onClick((): void => {
+            this.editActionType = 'meta_service';
+          })
       }
       .margin({ bottom: 12 })
 
-      if (this.editActionType !== 'none') {
+      if (this.editActionType === 'shopping') {
+        TextInput({ text: this.editActionDetail, placeholder: '商品关键词，如 手机 电脑' })
+          .fontSize(14)
+          .width('100%')
+          .margin({ bottom: 16 })
+          .onChange((val: string): void => {
+            this.editActionDetail = val;
+          })
+      } else if (this.editActionType === 'meta_service') {
+        TextInput({ text: this.editActionDetail, placeholder: 'JSON: {"service":"jd_shopping","params":{"keywords":"手机"}}' })
+          .fontSize(14)
+          .width('100%')
+          .margin({ bottom: 16 })
+          .onChange((val: string): void => {
+            this.editActionDetail = val;
+          })
+      } else if (this.editActionType !== 'none') {
         TextInput({ text: this.editActionDetail, placeholder: '时间，如 07:00 或 明天 15:00' })
           .fontSize(14)
           .width('100%')
