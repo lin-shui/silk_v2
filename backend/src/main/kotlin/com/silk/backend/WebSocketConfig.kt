@@ -693,6 +693,12 @@ class ChatServer(
                 appendLine("以及 hackernews、reddit、twitter、youtube、arxiv、bbc、bloomberg 等国际站点。")
                 appendLine("当用户询问这些平台的热门内容、热搜、排行榜或搜索特定话题时，请优先使用 autocli 工具而非 search_web。")
             }
+            appendLine()
+            appendLine("【HarmonyOS 元服务能力】")
+            appendLine("你在 HarmonyOS 系统上运行，支持调用系统元服务（免安装应用）：")
+            appendLine("- **出行/打车类请求**（如\"打车\"、\"叫车\"、\"去机场\"）→ 系统会自动在回复顶部显示 T3出行 快捷按钮和输入框，用户填写出发地/目的地后可直接跳转。")
+            appendLine("- **购物类请求**（如\"买手机\"、\"京东购物\"）→ 系统会自动在回复顶部显示对应的购物应用快捷按钮。")
+            appendLine("你无需在回复中模拟打开应用，只需正常回答用户问题。如果用户询问能否打车/买东西，确认可以并引导用户使用上方提供的按钮。")
         }
         
         // 加载聊天历史并设置到 Agent（用于群组统计等功能 + 近期上下文）

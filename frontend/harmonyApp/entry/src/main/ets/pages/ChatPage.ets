@@ -21,6 +21,10 @@ import { parseAlarmTimeFromText } from '../common/TodoTimeParser';
 import { AudioRecorderService } from '../common/AudioRecorderService';
 import { getGlobalContext } from '../entryability/EntryAbility';
 import { router, KeyboardAvoidMode } from '@kit.ArkUI';
+import { ShoppingIntentParser } from '../common/ShoppingIntentParser';
+import { MetaServiceIntent } from '../models/MetaServiceDef';
+import { MetaServiceConfig } from '../common/MetaServiceConfig';
+import { MetaServiceLauncher } from '../common/MetaServiceLauncher';
 
 class MessageDataSource implements IDataSource {
   private data: Message[] = [];
@@ -345,6 +349,75 @@ struct ChatPage {
         promptAction.showToast({ message: '无法启动录音', duration: 2000 });
       }
     }
+  }
+
+  /**
+   * 为 AI 消息计算元服务快捷操作
+   * 检测上一条用户消息是否含出行/购物意图，若是则返回对应的 MetaServiceIntent
+   */
+  private getSuggestedActionForMessage(message: Message, index: number): MetaServiceIntent | null {
+    if (message.userId !== 'silk_ai_agent' || index <= 0) {
+      return null;
+    }
+    const prevMsg = this.messages[index - 1];
+    if (!prevMsg || prevMsg.userId !== this.userId) {
+      return null;
+    }
+    const userText = prevMsg.content ? prevMsg.content : '';
+    const parsed = ShoppingIntentParser.parse(userText);
+
+    if (parsed.type === 'ride_hailing' && parsed.rideHailingIntent) {
+      const ride = parsed.rideHailingIntent;
+      const def = MetaServiceConfig.getServiceDef('t3_ride');
+      if (!def) {
+        return null;
+      }
+      const params: Record<string, string> = {};
+      if (ride.pickup) {
+        params['pickup'] = ride.pickup;
+      }
+      if (ride.destination) {
+        params['destination'] = ride.destination;
+      }
+      const uri = MetaServiceConfig.resolveUri(def, params);
+      return {
+        serviceId: 't3_ride',
+        serviceName: 'T3出行',
+        serviceType: 'parameter',
+        params: params,
+        uri: uri
+      };
+    }
+
+    if (parsed.type === 'shopping' && parsed.shoppingIntent && parsed.shoppingIntent.isShopping) {
+      const si = parsed.shoppingIntent;
+      const platToSvc: Record<string, string> = {
+        'taobao': 'taobao_shopping',
+        'jd': 'jd_shopping',
+        'meituan': 'meituan_shopping',
+        'pdd': 'pdd_shopping'
+      };
+      const svcId = platToSvc[si.platform] || 'jd_shopping';
+      const def = MetaServiceConfig.getServiceDef(svcId);
+      if (!def) {
+        return null;
+      }
+      const keywords = si.keywords.join(' ');
+      const uriParams: Record<string, string> = {};
+      uriParams['keywords'] = keywords;
+      const uri = MetaServiceConfig.resolveUri(def, uriParams);
+      const fallbackUrl = MetaServiceConfig.resolveSearchUrl(def, keywords);
+      return {
+        serviceId: svcId,
+        serviceName: def.name,
+        serviceType: 'search',
+        keywords: si.keywords,
+        uri: uri,
+        fallbackUrl: fallbackUrl
+      };
+    }
+
+    return null;
   }
 
   private getMessageStatus(messageId: string): string {
@@ -1467,6 +1540,7 @@ struct ChatPage {
                     currentUserId: this.userId,
                     actionsEnabled: !this.isSelectionMode,
                     messageStatus: this.getMessageStatus(message.id),
+                    suggestedAction: this.getSuggestedActionForMessage(message, index),
                     onCopy: (content: string): void => this.handleCopy(content),
                     onForward: (msg: Message): void => this.handleForward(msg),
                     onRetry: (msg: Message): void => this.retryMessage(msg),

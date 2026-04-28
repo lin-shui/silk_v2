@@ -7,6 +7,10 @@ import { Message, MessageType, MessageCategory, Reference } from '../models/Mess
 import { Theme, SilkColors } from '../common/Theme';
 import { MarkdownLite } from './MarkdownLite';
 import { ReferenceList } from './ReferenceList';
+import { MetaServiceIntent, LaunchResult } from '../models/MetaServiceDef';
+import { MetaServiceLauncher } from '../common/MetaServiceLauncher';
+import { MetaServiceConfig } from '../common/MetaServiceConfig';
+import promptAction from '@ohos.promptAction';
 import {
   parseForwardedMessageContent,
   ForwardedMessageParts,
@@ -28,8 +32,11 @@ export struct MessageBubble {
   onRetry?: (message: Message) => void;
   /** 长文本/转发全文从展开收起到折叠后，由列表滚回本条，避免高度突变导致视口跑偏 */
   onLongContentCollapsed?: () => void;
+  @Prop suggestedAction: MetaServiceIntent | null = null;
   @State private isAIExpanded: boolean = false;
   @State private isForwardExpanded: boolean = false;
+  @State private metaParamPickup: string = '';
+  @State private metaParamDestination: string = '';
 
   private notifyLongContentCollapsed(): void {
     if (this.onLongContentCollapsed) {
@@ -331,6 +338,46 @@ export struct MessageBubble {
 
         Blank().height(10)
 
+        // 元服务快捷按钮（置顶）
+        if (this.suggestedAction) {
+          if (this.suggestedAction.serviceType === 'parameter') {
+            TextInput({ placeholder: '出发地', text: this.metaParamPickup })
+              .height(40)
+              .backgroundColor('#FFFFFF')
+              .borderRadius(8)
+              .padding({ left: 12, right: 12 })
+              .onChange((v: string) => { this.metaParamPickup = v; })
+            Blank().height(8)
+            TextInput({ placeholder: '目的地', text: this.metaParamDestination })
+              .height(40)
+              .backgroundColor('#FFFFFF')
+              .borderRadius(8)
+              .padding({ left: 12, right: 12 })
+              .onChange((v: string) => { this.metaParamDestination = v; })
+            Blank().height(12)
+          }
+          Row() {
+            Row() {
+              Text(this.getActionButtonIcon())
+                .fontSize(13)
+              Blank().width(6)
+              Text(this.getActionButtonLabel())
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#FFFFFF')
+            }
+            .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+            .onClick(() => {
+              this.handleSuggestedAction();
+            })
+          }
+          .width('100%')
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor(this.getActionButtonColor())
+          .borderRadius(8)
+          Blank().height(10)
+        }
+
         Row()
           .width('100%')
           .height(1)
@@ -621,6 +668,87 @@ export struct MessageBubble {
       return Theme.colors.primary;
     }
     return Theme.colors.textPrimary;
+  }
+
+  // -- 元服务快捷按钮 --
+
+  private getActionButtonIcon(): string {
+    if (!this.suggestedAction) {
+      return '';
+    }
+    if (this.suggestedAction.serviceType === 'parameter') {
+      return '🚗';
+    }
+    return '🛒';
+  }
+
+  private getActionButtonLabel(): string {
+    if (!this.suggestedAction) {
+      return '';
+    }
+    if (this.suggestedAction.serviceType === 'parameter') {
+      const dest = this.suggestedAction.params
+        ? this.suggestedAction.params['destination'] || ''
+        : '';
+      if (dest) {
+        return `打开 ${this.suggestedAction.serviceName} · 去${dest}`;
+      }
+    }
+    const kw = this.suggestedAction.keywords
+      ? this.suggestedAction.keywords.join(' ')
+      : '';
+    if (kw) {
+      return `${this.suggestedAction.serviceName} · ${kw}`;
+    }
+    return `打开 ${this.suggestedAction.serviceName}`;
+  }
+
+  private getActionButtonColor(): ResourceColor {
+    if (!this.suggestedAction) {
+      return '#C9A86C';
+    }
+    if (this.suggestedAction.serviceType === 'parameter') {
+      return '#4A90D9';
+    }
+    return '#C9A86C';
+  }
+
+  private handleSuggestedAction(): void {
+    if (!this.suggestedAction) {
+      return;
+    }
+    if (this.suggestedAction.serviceType === 'parameter') {
+      const params: Record<string, string> = {};
+      if (this.metaParamPickup.length > 0) {
+        params['pickup'] = this.metaParamPickup;
+      }
+      if (this.metaParamDestination.length > 0) {
+        params['destination'] = this.metaParamDestination;
+      }
+      const intent: MetaServiceIntent = {
+        serviceId: this.suggestedAction.serviceId,
+        serviceName: this.suggestedAction.serviceName,
+        serviceType: 'parameter',
+        params: params
+      };
+      MetaServiceLauncher.launch(intent).then((result: LaunchResult) => {
+        if (!result.success) {
+          promptAction.showToast({
+            message: result.message,
+            duration: 3000
+          });
+        }
+      });
+      return;
+    }
+    MetaServiceLauncher.launch(this.suggestedAction).then((result: LaunchResult) => {
+      if (!result.success) {
+        promptAction.showToast({
+          message: result.message,
+          duration: 3000
+        });
+      }
+    });
   }
 
   private formatTime(timestamp: number): string {

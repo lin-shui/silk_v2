@@ -31,7 +31,37 @@ export interface PlatformInfo {
   name: string;
 }
 
+export type ServiceType = 'shopping' | 'ride_hailing' | 'unknown';
+
+/** 出行意图信息 */
+export interface RideHailingIntent {
+  pickup?: string;
+  destination?: string;
+}
+
+/** 通用意图信息 */
+export interface ParsedIntent {
+  type: ServiceType;
+  shoppingIntent?: ShoppingIntent;
+  rideHailingIntent?: RideHailingIntent;
+}
+
 export class ShoppingIntentParser {
+  /** 出行关键词模式 */
+  private static readonly RIDE_HAILING_PATTERNS: RegExp[] = [
+    /打车|叫车|T3.*出行|专车|快车|拼车/,
+    /打车出行|出行去|去机场|去车站|去火车站/
+  ];
+
+  /** 从…到…模式（提取起终点） */
+  private static readonly FROM_TO_PATTERNS: RegExp[] = [
+    /从(.+?)到(.+)/,
+    /从(.+?)去(.+)/
+  ];
+
+  /** 去…模式（只提取终点） */
+  private static readonly TO_DEST_PATTERN: RegExp = /去(.+)/;
+
   /** 购物关键词模式 */
   private static readonly SHOPPING_PATTERNS: RegExp[] = [
     /购物|买东西|购买|下单|采购/,
@@ -83,10 +113,60 @@ export class ShoppingIntentParser {
   }
 
   /**
+   * 通用意图解析：先检测出行，再检测购物
+   */
+  static parse(title: string, detail?: string): ParsedIntent {
+    const fullText = `${title} ${detail ? detail : ''}`;
+
+    const rideResult = ShoppingIntentParser.tryParseRideHailing(fullText);
+    if (rideResult) {
+      return rideResult;
+    }
+
+    const shoppingIntent = ShoppingIntentParser.parseShoppingIntent(title, detail);
+    if (shoppingIntent.isShopping) {
+      return { type: 'shopping', shoppingIntent: shoppingIntent };
+    }
+
+    return { type: 'unknown' };
+  }
+
+  private static tryParseRideHailing(text: string): ParsedIntent | null {
+    let isRideHailing = false;
+    for (let i = 0; i < ShoppingIntentParser.RIDE_HAILING_PATTERNS.length; i++) {
+      if (ShoppingIntentParser.RIDE_HAILING_PATTERNS[i].test(text)) {
+        isRideHailing = true;
+        break;
+      }
+    }
+    if (!isRideHailing) {
+      return null;
+    }
+
+    const rideIntent: RideHailingIntent =
+      ShoppingIntentParser.extractRideHailingParams(text);
+    return { type: 'ride_hailing', rideHailingIntent: rideIntent };
+  }
+
+  private static extractRideHailingParams(text: string): RideHailingIntent {
+    const result: RideHailingIntent = {};
+    for (let i = 0; i < ShoppingIntentParser.FROM_TO_PATTERNS.length; i++) {
+      const match = text.match(ShoppingIntentParser.FROM_TO_PATTERNS[i]);
+      if (match) {
+        result.pickup = match[1].trim();
+        result.destination = match[2].trim();
+        return result;
+      }
+    }
+    const destMatch = text.match(ShoppingIntentParser.TO_DEST_PATTERN);
+    if (destMatch) {
+      result.destination = destMatch[1].trim();
+    }
+    return result;
+  }
+
+  /**
    * 解析待办文本中的购物意图
-   * @param title 待办标题
-   * @param detail 待办详情（可选）
-   * @returns 购物意图信息
    */
   static parseShoppingIntent(title: string, detail?: string): ShoppingIntent {
     const fullText = `${title} ${detail ? detail : ''}`;
