@@ -175,6 +175,7 @@ fun SilkApp() {
                             NavTab.SILK -> SilkTabContent(appState)
                             NavTab.WORKFLOW -> WorkflowScene(appState)
                             NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScene(appState)
+                            NavTab.AUDIO_DUPLEX -> AudioDuplexScene(appState)
                         }
                     }
                 }
@@ -227,6 +228,9 @@ fun SilkNavRail(appState: WebAppState) {
         }
         NavRailItem("知识库", appState.currentTab == NavTab.KNOWLEDGE_BASE, "\uD83D\uDCDA") {
             appState.selectTab(NavTab.KNOWLEDGE_BASE)
+        }
+        NavRailItem("音频双工", appState.currentTab == NavTab.AUDIO_DUPLEX, "📞") {
+            appState.selectTab(NavTab.AUDIO_DUPLEX)
         }
 
         // Spacer
