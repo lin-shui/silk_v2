@@ -746,7 +746,7 @@ private fun WorkflowChatPanel(
             onInput { messageText = it.value }
             attr("placeholder", "向 Agent 发送消息...")
             onKeyDown { event ->
-                if (event.key == "Enter" && !event.shiftKey && messageText.isNotBlank()) {
+                if (event.key == "Enter" && !event.shiftKey && !event.isComposing && messageText.isNotBlank()) {
                     event.preventDefault()
                     val text = messageText.trim()
                     messageText = ""
