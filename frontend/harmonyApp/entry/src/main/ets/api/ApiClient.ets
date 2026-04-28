@@ -869,6 +869,18 @@ export class ApiClient {
   }
 
   /**
+   * 删除消息（支持自己的消息、AI回复、群主删除任意消息）
+   */
+  async deleteMessage(groupId: string, messageId: string, userId: string): Promise<ApiResponse<void>> {
+    const payload: RecallMessageRequestBody = {
+      groupId: groupId,
+      messageId: messageId,
+      userId: userId
+    };
+    return this.post<void>('/api/messages/delete', payload);
+  }
+
+  /**
    * 获取当前用户的跨群待办列表
    */
   async getUserTodos(userId: string): Promise<ApiResponse<UserTodoItem[]>> {

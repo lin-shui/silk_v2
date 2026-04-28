@@ -1281,44 +1281,24 @@ class ChatServer(
         }
         
         val deletedMessageIds = mutableListOf<String>()
-        
-        // 3. 检查是否是 @silk 消息
-        val isSilkMessage = messageEntry.content.startsWith("@Silk") || messageEntry.content.startsWith("@silk")
-        
-        if (isSilkMessage) {
-            logger.debug("🔄 [recallMessage] 检测到 @silk 消息，查找 Silk 的回复")
-            
-            // 4. 查找 Silk 的回复消息（在用户消息之后，最近的 Silk 消息）
-            val messageIndex = chatHistory.messages.indexOf(messageEntry)
-            val silkReply = chatHistory.messages
-                .drop(messageIndex + 1)
-                .firstOrNull { it.senderId == SilkAgent.AGENT_ID }
-            
-            if (silkReply != null) {
-                logger.debug("🔄 [recallMessage] 找到 Silk 回复: {}", silkReply.messageId)
-                
-                // 5. 删除用户消息和 Silk 回复
-                historyManager.deleteMessages(sessionName, listOf(messageId, silkReply.messageId))
-                deletedMessageIds.add(messageId)
-                deletedMessageIds.add(silkReply.messageId)
-                
-                // 6. 从内存历史中移除
-                messageHistory.removeIf { it.id == messageId || it.id == silkReply.messageId }
-                
-                // 7. 广播撤回通知
-                broadcastRecallNotification(listOf(messageId, silkReply.messageId))
-                
-                logger.info("✅ [recallMessage] 已撤回用户消息和 Silk 回复")
-            } else {
-                logger.warn("⚠️ [recallMessage] 未找到 Silk 回复，只撤回用户消息")
-                historyManager.deleteMessages(sessionName, listOf(messageId))
-                deletedMessageIds.add(messageId)
-                messageHistory.removeIf { it.id == messageId }
-                broadcastRecallNotification(listOf(messageId))
-            }
+
+        // 3. 查找用户消息之后最近的 Silk 回复，级联删除
+        logger.debug("🔄 [recallMessage] 查找 Silk 的回复")
+        val messageIndex = chatHistory.messages.indexOf(messageEntry)
+        val silkReply = chatHistory.messages
+            .drop(messageIndex + 1)
+            .firstOrNull { it.senderId == SilkAgent.AGENT_ID }
+
+        if (silkReply != null) {
+            logger.debug("🔄 [recallMessage] 找到 Silk 回复: {}", silkReply.messageId)
+            historyManager.deleteMessages(sessionName, listOf(messageId, silkReply.messageId))
+            deletedMessageIds.add(messageId)
+            deletedMessageIds.add(silkReply.messageId)
+            messageHistory.removeIf { it.id == messageId || it.id == silkReply.messageId }
+            broadcastRecallNotification(listOf(messageId, silkReply.messageId))
+            logger.info("✅ [recallMessage] 已撤回用户消息和 Silk 回复")
         } else {
-            // 普通消息：直接删除
-            logger.debug("🔄 [recallMessage] 普通消息，直接撤回")
+            logger.warn("⚠️ [recallMessage] 未找到 Silk 回复，只撤回用户消息")
             historyManager.deleteMessages(sessionName, listOf(messageId))
             deletedMessageIds.add(messageId)
             messageHistory.removeIf { it.id == messageId }

@@ -78,6 +78,7 @@ struct ChatPage {
   @State private isSelectionMode: boolean = false;
   @State private selectedMessageIds: string[] = [];
   @State private isRecalling: boolean = false;
+  @State private isDeleting: boolean = false;
   @State private groupInvitationCode: string = '';
   @State private groupMembers: GroupMemberProfile[] = [];
   @State private membersLoading: boolean = false;
@@ -532,6 +533,44 @@ struct ChatPage {
     }
   }
 
+  private canDeleteSelectedMessage(msg: Message | null): boolean {
+    if (!msg || msg.isTransient) {
+      return false;
+    }
+    // 自己的文本消息用撤回，不用删除
+    if (msg.userId === this.userId && msg.type === MessageType.TEXT) {
+      return false;
+    }
+    return true;
+  }
+
+  private handleDeleteSelected(): void {
+    const msg = this.selectedActionMessage;
+    if (!msg || !this.canDeleteSelectedMessage(msg)) {
+      return;
+    }
+    this.runDeleteMessage(msg);
+  }
+
+  private async runDeleteMessage(msg: Message): Promise<void> {
+    this.isDeleting = true;
+    try {
+      const response = await this.apiClient.deleteMessage(this.groupId, msg.id, this.userId);
+      if (response.success) {
+        this.showToast('已删除');
+        this.showBottomSheet = false;
+        this.selectedActionMessage = null;
+      } else {
+        this.showToast(response.message ? response.message : '删除失败');
+      }
+    } catch (error) {
+      console.error(`Delete failed: ${error}`);
+      this.showToast('删除失败');
+    } finally {
+      this.isDeleting = false;
+    }
+  }
+
   private startForwardFromActions(message: Message): void {
     this.selectedActionMessage = message;
     this.handleForward(message);
@@ -714,6 +753,45 @@ struct ChatPage {
   private exitMultiSelectMode(): void {
     this.isSelectionMode = false;
     this.selectedMessageIds = [];
+  }
+
+  private handleBatchDelete(): void {
+    const ids = this.selectedMessageIds;
+    if (ids.length === 0) {
+      this.showToast('请先选择消息');
+      return;
+    }
+    AlertDialog.show({
+      title: '确认删除',
+      message: `确定删除选中的 ${ids.length} 条消息吗？`,
+      primaryButton: {
+        value: '取消',
+        action: () => {}
+      },
+      secondaryButton: {
+        value: '删除',
+        fontColor: '#FF0000',
+        action: () => {
+          this.runBatchDelete(ids);
+        }
+      }
+    });
+  }
+
+  private async runBatchDelete(ids: string[]): Promise<void> {
+    let successCount = 0;
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        const response = await this.apiClient.deleteMessage(this.groupId, ids[i], this.userId);
+        if (response.success) {
+          successCount++;
+        }
+      } catch (error) {
+        console.error(`Batch delete failed for ${ids[i]}: ${error}`);
+      }
+    }
+    this.exitMultiSelectMode();
+    this.showToast(`已删除 ${successCount} 条消息` + (successCount < ids.length ? `，${ids.length - successCount} 条失败` : ''));
   }
 
   private async loadForwardTargets(): Promise<void> {
@@ -1719,6 +1797,17 @@ struct ChatPage {
             .onClick(() => {
               this.handleBatchForward();
             })
+
+          Button(`删除(${this.selectedMessageIds.length})`)
+            .height(36)
+            .fontSize(13)
+            .backgroundColor(SilkColors.error)
+            .fontColor('#FFFFFF')
+            .margin({ left: 8 })
+            .enabled(this.selectedMessageIds.length > 0)
+            .onClick(() => {
+              this.handleBatchDelete();
+            })
         }
         .width('100%')
         .padding({ left: 12, right: 12, bottom: 10 })
@@ -2499,6 +2588,19 @@ struct ChatPage {
           this.showBottomSheet = false;
           this.selectedActionMessage = null;
         })
+
+      if (this.canDeleteSelectedMessage(this.selectedActionMessage)) {
+        Button(this.isDeleting ? '删除中...' : '删除')
+          .width('100%')
+          .height(42)
+          .backgroundColor(SilkColors.surfaceVariant)
+          .fontColor(SilkColors.error)
+          .margin({ top: 8 })
+          .enabled(!this.isDeleting)
+          .onClick(() => {
+            this.handleDeleteSelected();
+          })
+      }
 
       if (this.canRecallSelectedMessage()) {
         Button(this.isRecalling ? '撤回中...' : '撤回')
