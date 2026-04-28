@@ -7,6 +7,26 @@
             "groupId": "18b460f9-9f9c-45f1-a434-7b9cb39c2671",
             "createdAt": 1776928113246,
             "updatedAt": 1776928113246
+        },
+        {
+            "id": "wf_1777357605674_9173",
+            "name": "装修",
+            "ownerId": "a42ea8b9-30e8-4f81-b4b9-67b14ba8ab03",
+            "groupId": "dc94fe30-896b-41e3-a437-73528bc7e8c5",
+            "agentType": "silk_chat",
+            "taskFocus": "shopping",
+            "createdAt": 1777357605675,
+            "updatedAt": 1777357605675
+        },
+        {
+            "id": "wf_1777358114179_7526",
+            "name": "打车",
+            "ownerId": "a42ea8b9-30e8-4f81-b4b9-67b14ba8ab03",
+            "groupId": "f90244ba-e5d6-45b5-9dd8-c5a838b9a2d1",
+            "agentType": "silk_chat",
+            "taskFocus": "ride",
+            "createdAt": 1777358114179,
+            "updatedAt": 1777358114179
         }
     ]
 }

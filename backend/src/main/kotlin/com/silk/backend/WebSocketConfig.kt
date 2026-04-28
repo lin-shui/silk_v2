@@ -61,7 +61,8 @@ data class User(
 )
 
 class ChatServer(
-    private val sessionName: String = "default_room"
+    private val sessionName: String = "default_room",
+    private val isSilkChatWorkflow: Boolean = false
 ) {
     private val logger = LoggerFactory.getLogger(ChatServer::class.java)
     private val connections = ConcurrentHashMap<String, CopyOnWriteArrayList<WebSocketSession>>()
@@ -384,14 +385,15 @@ class ChatServer(
             messagesSinceAgentResponse++
             
             // 在 Silk 私聊中，所有消息都直接触发 AI 回复
+            // 在 Silk Chat 工作流中，所有消息也直接触发 AI 回复
             // 在普通群聊中，需要 @silk 才能触发 AI 回复
-            val shouldTriggerAI = isSilkPrivateChat || 
-                                  message.content.startsWith("@Silk") || 
+            val shouldTriggerAI = isSilkPrivateChat || isSilkChatWorkflow ||
+                                  message.content.startsWith("@Silk") ||
                                   message.content.startsWith("@silk")
             
             if (shouldTriggerAI) {
-                // 提取实际内容（移除 @silk 前缀，如果是私聊则直接使用原消息）
-                val silkContent = if (isSilkPrivateChat) {
+                // 提取实际内容（移除 @silk 前缀，如果是私聊或 Silk Chat 工作流则直接使用原消息）
+                val silkContent = if (isSilkPrivateChat || isSilkChatWorkflow) {
                     message.content  // Silk 私聊中直接使用原消息
                 } else {
                     message.content

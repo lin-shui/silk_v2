@@ -11,7 +11,7 @@ import { appStore as globalAppStore } from '../stores/AppStore';
 import { SilkColors } from '../common/Theme';
 import { parseForwardedMessageContent, ForwardedMessageParts } from '../common/ForwardedMessageParse';
 import { router as appRouter } from '../common/Router';
-import { apiClient as globalApiClient, UserTodoPatch, GroupMemberProfile } from '../api/ApiClient';
+import { apiClient as globalApiClient, UserTodoPatch, GroupMemberProfile, WorkflowApiItem } from '../api/ApiClient';
 import pasteboard from '@ohos.pasteboard';
 import promptAction from '@ohos.promptAction';
 import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl';
@@ -101,6 +101,7 @@ struct ChatPage {
   private userId: string = '';
   private userName: string = '';
   private isInitialized: boolean = false;
+  @State private workflowTaskFocus: string = '';
   private readonly apiClient = globalApiClient;
   private readonly audioRecorder = new AudioRecorderService();
   private listScroller: Scroller = new Scroller();
@@ -196,6 +197,17 @@ struct ChatPage {
         void this.quietRefreshTodos();
       }, 1000);
     }
+
+    // 从 AppStorage 同步读取 workflow 上下文（WorkflowPage 进入时已预置）
+    const storedTaskFocus = AppStorage.get<string>('currentWorkflowTaskFocus');
+    this.workflowTaskFocus = storedTaskFocus ? storedTaskFocus : '';
+
+    // 检测是否 silk_chat 工作流群组（API 异步查询，兜底非 WorkflowPage 入口）
+    this.apiClient.getWorkflowByGroupId(this.groupId).then((wf: WorkflowApiItem | undefined) => {
+      if (wf && wf.agentType === 'silk_chat') {
+        this.workflowTaskFocus = wf.taskFocus;
+      }
+    }).catch(() => {});
   }
 
   private syncMessages(): void {
@@ -265,9 +277,14 @@ struct ChatPage {
   }
 
   private handleSend(message: string): void {
-    const content = message.trim();
-    if (content === '') {
+    const baseContent = message.trim();
+    if (baseContent === '') {
       return;
+    }
+    // Silk Chat 工作流：自动追加任务焦点标签引导 AI 行为
+    let content = baseContent;
+    if (this.workflowTaskFocus.length > 0) {
+      content = `[task:${this.workflowTaskFocus}] ${baseContent}`;
     }
     const sentMessage = globalChatStore.sendMessage(content);
     if (!sentMessage) {
@@ -275,7 +292,7 @@ struct ChatPage {
     }
     this.setMessageStatus(sentMessage.id, 'sending');
 
-    if (this.isSilkPrivateChat() || content.startsWith('@Silk') || content.startsWith('@silk')) {
+    if (this.isSilkPrivateChat() || content.startsWith('@Silk') || content.startsWith('@silk') || this.workflowTaskFocus.length > 0) {
       this.isAiGenerating = true;
     }
 
@@ -365,7 +382,39 @@ struct ChatPage {
       return null;
     }
     const userText = prevMsg.content ? prevMsg.content : '';
-    const parsed = ShoppingIntentParser.parse(userText);
+
+    // Silk Chat 工作流：直接根据 workflowTaskFocus 创建元服务快捷按钮
+    if (this.workflowTaskFocus === 'shopping') {
+      const def = MetaServiceConfig.getServiceDef('jd_shopping');
+      if (def) {
+        const uriParams: Record<string, string> = {};
+        uriParams['keywords'] = '商品';
+        return {
+          serviceId: 'jd_shopping',
+          serviceName: '京东购物',
+          serviceType: 'search',
+          keywords: ['商品'],
+          uri: MetaServiceConfig.resolveUri(def, uriParams),
+          fallbackUrl: MetaServiceConfig.resolveSearchUrl(def, '商品')
+        };
+      }
+    }
+    if (this.workflowTaskFocus === 'ride') {
+      const def = MetaServiceConfig.getServiceDef('t3_ride');
+      if (def) {
+        const rideParams: Record<string, string> = {};
+        return {
+          serviceId: 't3_ride',
+          serviceName: 'T3出行',
+          serviceType: 'parameter',
+          params: rideParams
+        };
+      }
+    }
+
+    // 正常流程：通过 ShoppingIntentParser 解析用户意图
+    const cleanText = userText.replace(/^\[task:\w+\]\s*/, '');
+    const parsed = ShoppingIntentParser.parse(cleanText);
 
     if (parsed.type === 'ride_hailing' && parsed.rideHailingIntent) {
       const ride = parsed.rideHailingIntent;
@@ -1625,7 +1674,7 @@ struct ChatPage {
   }
 
   private getMessageInputPlaceholder(): string {
-    if (this.isSilkPrivateChat()) {
+    if (this.isSilkPrivateChat() || this.workflowTaskFocus.length > 0) {
       return '直接输入消息与 Silk 对话...';
     }
     return '在当前项目中输入需求...';
@@ -1861,7 +1910,7 @@ struct ChatPage {
           .justifyContent(FlexAlign.Center)
         } else {
           Row() {
-            if (!this.isSilkPrivateChat() && !this.isSelectionMode) {
+            if (!this.isSilkPrivateChat() && !this.isSelectionMode && this.workflowTaskFocus.length === 0) {
               Text('@Silk')
                 .fontSize(12)
                 .fontColor(SilkColors.primary)

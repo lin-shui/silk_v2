@@ -50,7 +50,11 @@ class WorkflowManager(
         load().workflows.filter { it.ownerId == userId }
 
     @Synchronized
-    fun createWorkflow(name: String, description: String, userId: String, groupId: String): Workflow {
+    fun createWorkflow(name: String, description: String, userId: String, groupId: String): Workflow =
+        createWorkflow(name, description, userId, groupId, "claude_code", "")
+
+    @Synchronized
+    fun createWorkflow(name: String, description: String, userId: String, groupId: String, agentType: String, taskFocus: String = ""): Workflow {
         val store = load()
         val workflow = Workflow(
             id = "wf_${System.currentTimeMillis()}_${(1000..9999).random()}",
@@ -58,12 +62,14 @@ class WorkflowManager(
             description = description,
             ownerId = userId,
             groupId = groupId,
+            agentType = agentType,
+            taskFocus = taskFocus,
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
         )
         store.workflows.add(workflow)
         save(store)
-        logger.info("Created workflow: {} for user {}, groupId={}", workflow.id, userId, groupId)
+        logger.info("Created workflow: {} for user {}, groupId={}, agentType={}", workflow.id, userId, groupId, agentType)
         return workflow
     }
 

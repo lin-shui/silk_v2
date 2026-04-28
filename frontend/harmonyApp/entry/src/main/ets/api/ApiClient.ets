@@ -121,6 +121,9 @@ export interface WorkflowApiItem {
   name: string;
   description: string;
   ownerId: string;
+  agentType: string;
+  taskFocus: string;
+  groupId: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -157,6 +160,15 @@ interface BackendLeaveGroupRequest {
 interface MarkReadRequest {
   userId: string;
   groupId: string;
+}
+
+interface CreateWorkflowRequestBody {
+  userId: string;
+  name: string;
+  description: string;
+  agentType?: string;
+  taskFocus?: string;
+  initialDir?: string;
 }
 
 interface StartSilkPrivateChatRequest {
@@ -1337,10 +1349,25 @@ export class ApiClient {
     } catch (_) { return []; }
   }
 
-  async createWorkflow(name: string, description: string, userId: string): Promise<WorkflowApiItem | undefined> {
+  async createWorkflow(name: string, description: string, userId: string, agentType?: string, taskFocus?: string, initialDir?: string): Promise<WorkflowApiItem | undefined> {
     try {
-      const body = JSON.stringify({ userId, name, description });
+      const bodyObj: CreateWorkflowRequestBody = {
+        userId: userId,
+        name: name,
+        description: description
+      };
+      if (agentType !== undefined) bodyObj.agentType = agentType;
+      if (taskFocus !== undefined) bodyObj.taskFocus = taskFocus;
+      if (initialDir !== undefined) bodyObj.initialDir = initialDir;
+      const body = JSON.stringify(bodyObj);
       const result = await this.postRaw('/api/workflows', body);
+      return JSON.parse(result) as WorkflowApiItem;
+    } catch (_) { return undefined; }
+  }
+
+  async getWorkflowByGroupId(groupId: string): Promise<WorkflowApiItem | undefined> {
+    try {
+      const result = await this.getRaw(`/api/workflows/by-group/${groupId}`);
       return JSON.parse(result) as WorkflowApiItem;
     } catch (_) { return undefined; }
   }

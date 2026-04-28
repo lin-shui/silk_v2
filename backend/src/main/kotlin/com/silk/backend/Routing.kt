@@ -57,8 +57,10 @@ private fun sanitizeFileName(input: String): String =
 private fun getGroupChatServer(groupId: String): ChatServer {
     return groupChatServers.getOrPut(groupId) {
         val sessionName = "group_$groupId"
-        ChatServer(sessionName).also {
-            logger.info("🆕 创建新的群组聊天服务器: {}", sessionName)
+        val wf = workflowManager.getWorkflowByGroupId(groupId)
+        val isSilkChat = wf != null && wf.agentType == "silk_chat"
+        ChatServer(sessionName, isSilkChat).also {
+            logger.info("🆕 创建新的群组聊天服务器: {} (silkChat={})", sessionName, isSilkChat)
         }
     }
 }
@@ -2041,15 +2043,39 @@ fun Application.configureRouting() {
                 return@post
             }
             val desc = req["description"]?.jsonPrimitive?.content ?: ""
-            val initialDir = req["initialDir"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+            val agentType = req["agentType"]?.jsonPrimitive?.contentOrNull ?: "claude_code"
+            val taskFocus = req["taskFocus"]?.jsonPrimitive?.contentOrNull ?: ""
 
+            // 自动创建关联群组（工作流私聊）
+            val groupName = "wf_${sanitizeFileName(name)}_${System.currentTimeMillis()}"
+            val group = com.silk.backend.database.GroupRepository.createGroup(groupName, userId)
+            if (group == null) {
+                respondError(HttpStatusCode.InternalServerError, "Failed to create workflow group")
+                return@post
+            }
+
+            if (agentType == "silk_chat") {
+                // Silk Chat 类型：跳过 bridge/目录校验，无 cdSync，直接返回
+                val wf = workflowManager.createWorkflow(name, desc, userId, group.id, agentType, taskFocus)
+                call.respondText(
+                    Json.encodeToString(Workflow.serializer(), wf),
+                    ContentType.Application.Json,
+                    HttpStatusCode.Created,
+                )
+                return@post
+            }
+
+            // Claude Code 类型（默认）：需要 bridge 连接和有效工作目录
+            val initialDir = req["initialDir"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
             // 工作目录是工作流的硬约束：必须由 bridge 验证过的合法路径才能创建。
             // 这样可避免出现"workflow 创建成功但工作目录是 backend 进程的 cwd"这种半生不熟的状态。
             if (initialDir.isEmpty()) {
+                com.silk.backend.database.GroupRepository.deleteGroup(group.id)
                 respondError(HttpStatusCode.BadRequest, "工作目录不能为空")
                 return@post
             }
             if (!BridgeRegistry.isConnected(userId)) {
+                com.silk.backend.database.GroupRepository.deleteGroup(group.id)
                 respondError(HttpStatusCode.Conflict, "Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
                 return@post
             }
@@ -2057,6 +2083,7 @@ fun Application.configureRouting() {
             // 信任目录检查
             val bridgeId = BridgeRegistry.getRemoteIp(userId)?.let { "ip:$it" } ?: "unknown"
             if (!trustedDirManager.isTrusted(userId, bridgeId, initialDir)) {
+                com.silk.backend.database.GroupRepository.deleteGroup(group.id)
                 val payload = kotlinx.serialization.json.buildJsonObject {
                     put("success", kotlinx.serialization.json.JsonPrimitive(false))
                     put("errorCode", kotlinx.serialization.json.JsonPrimitive("DIRECTORY_NOT_TRUSTED"))
@@ -2068,15 +2095,7 @@ fun Application.configureRouting() {
                 return@post
             }
 
-            // 自动创建关联群组（工作流私聊）
-            val groupName = "wf_${sanitizeFileName(name)}_${System.currentTimeMillis()}"
-            val group = com.silk.backend.database.GroupRepository.createGroup(groupName, userId)
-            if (group == null) {
-                respondError(HttpStatusCode.InternalServerError, "Failed to create workflow group")
-                return@post
-            }
-
-            val wf = workflowManager.createWorkflow(name, desc, userId, group.id)
+            val wf = workflowManager.createWorkflow(name, desc, userId, group.id, "claude_code", "")
 
             // cdSync 必须成功才能算创建完成；失败时回滚 group + workflow + CC state，避免遗留无效记录
             val cdResult: ClaudeCodeManager.CdResult = try {
@@ -2126,6 +2145,23 @@ fun Application.configureRouting() {
                 """{"success":$ok}""",
                 ContentType.Application.Json,
                 if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
+            )
+        }
+
+        get("/api/workflows/by-group/{groupId}") {
+            val groupId = call.parameters["groupId"] ?: ""
+            if (groupId.isBlank()) {
+                call.respondText("""{"success":false,"message":"Missing groupId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@get
+            }
+            val wf = workflowManager.getWorkflowByGroupId(groupId)
+            if (wf == null) {
+                call.respondText("""{"success":false,"message":"Workflow not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+                return@get
+            }
+            call.respondText(
+                Json.encodeToString(Workflow.serializer(), wf),
+                ContentType.Application.Json
             )
         }
 
@@ -2299,8 +2335,9 @@ fun Application.configureRouting() {
             // 为每个群组获取或创建独立的ChatServer
             val groupChatServer = getGroupChatServer(groupId)
 
-            // 工作流群组自动激活 CC 模式
-            if (workflowManager.getWorkflowByGroupId(groupId) != null) {
+            // 工作流群组自动激活 CC 模式（仅 claude_code 类型）
+            val workflow = workflowManager.getWorkflowByGroupId(groupId)
+            if (workflow != null && workflow.agentType == "claude_code") {
                 ClaudeCodeManager.autoActivateForWorkflow(userId, "group_$groupId")
             }
 

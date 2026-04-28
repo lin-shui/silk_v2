@@ -367,6 +367,7 @@ export struct GroupListPage {
     AppStorage.setOrCreate<string>('currentGroupId', group.id);
     AppStorage.setOrCreate<string>('currentGroupName', group.name);
     AppStorage.setOrCreate<string>('currentGroupInvitationCode', group.invitationCode ? group.invitationCode : '');
+    AppStorage.setOrCreate<string>('currentWorkflowTaskFocus', '');
     if (user) {
       AppStorage.setOrCreate<string>('currentUserId', user.id);
       AppStorage.setOrCreate<string>('currentUserName', user.name);
