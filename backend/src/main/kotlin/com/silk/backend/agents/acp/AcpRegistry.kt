@@ -1,6 +1,8 @@
 // backend/src/main/kotlin/com/silk/backend/agents/acp/AcpRegistry.kt
 package com.silk.backend.agents.acp
 
+import io.ktor.websocket.WebSocketSession
+import kotlinx.coroutines.CoroutineScope
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -23,6 +25,30 @@ object AcpRegistry {
     fun put(userId: String, agentType: String, client: AcpClient, remoteIp: String?): AcpClient? {
         val previous = entries.put(key(userId, agentType), Entry(client, remoteIp))
         return previous?.client
+    }
+
+    /**
+     * 接受一个 Ktor WebSocket 连接，包装为 AcpClient 并注册。
+     * 如果同 (userId, agentType) 已有旧 client，返回旧 client 供调用方关闭。
+     */
+    suspend fun acceptConnection(
+        userId: String,
+        agentType: String,
+        session: WebSocketSession,
+        remoteIp: String?,
+        scope: CoroutineScope,
+    ): AcpClient? {
+        val transport = AcpWebSocketTransport(session)
+        val client = AcpClient(transport, scope)
+        val evicted = put(userId, agentType, client, remoteIp)
+        if (evicted != null) {
+            try {
+                evicted.close("evicted by new connection")
+            } catch (_: Exception) {
+                // ignore
+            }
+        }
+        return client
     }
 
     fun get(userId: String, agentType: String): AcpClient? =

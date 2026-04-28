@@ -13,6 +13,9 @@ import com.silk.backend.models.Workflow
 import com.silk.backend.workflow.WorkflowManager
 import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
+import com.silk.backend.agents.acp.AcpRegistry
+import com.silk.backend.agents.core.AgentRegistry
+import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.claudecode.BridgeRegistry
 import com.silk.backend.claudecode.ClaudeCodeManager
 import com.silk.backend.trust.TrustedDirManager
@@ -2013,6 +2016,87 @@ fun Application.configureRouting() {
             } finally {
                 logger.info("🔌 Bridge 断开: userId={}", userId)
                 BridgeRegistry.unregister(userId)
+            }
+        }
+
+        // ==================== Agent Bridge WebSocket (ACP) ====================
+
+        webSocket("/agent-bridge") {
+            val token = call.request.queryParameters["token"]
+            if (token.isNullOrBlank()) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing token"))
+                return@webSocket
+            }
+            val userId = UserSettingsRepository.findUserIdByBridgeToken(token)
+            if (userId == null) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid token"))
+                return@webSocket
+            }
+
+            val agentType = call.request.queryParameters["agentType"]
+            if (agentType.isNullOrBlank()) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing agentType"))
+                return@webSocket
+            }
+            if (!AgentRegistry.isRegistered(agentType)) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "unknown agentType: $agentType"))
+                return@webSocket
+            }
+
+            logger.info("🔌 Agent Bridge 连接: userId={}, agentType={}", userId, agentType)
+            val remoteIp = call.request.local.remoteAddress
+
+            val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+            val client = try {
+                AcpRegistry.acceptConnection(
+                    userId = userId,
+                    agentType = agentType,
+                    session = this,
+                    remoteIp = remoteIp,
+                    scope = scope,
+                )
+            } catch (e: Exception) {
+                logger.error("❌ Agent Bridge acceptConnection 失败: {}", e.message)
+                close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "accept failed"))
+                return@webSocket
+            }
+
+            if (client == null) {
+                logger.error("❌ Agent Bridge acceptConnection 返回 null")
+                close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "accept failed"))
+                return@webSocket
+            }
+
+            try {
+                val result = client.initialize(
+                    com.silk.backend.agents.acp.InitializeParams(
+                        protocolVersion = "0.2",
+                        clientCapabilities = com.silk.backend.agents.acp.ClientCapabilities(
+                            fs = com.silk.backend.agents.acp.FsCapability(readTextFile = true, writeTextFile = true),
+                            terminal = false,
+                        ),
+                    )
+                )
+                logger.info("[Agent Bridge] initialize 成功: agentCapabilities={}", result.agentCapabilities)
+            } catch (e: Exception) {
+                logger.error("[Agent Bridge] initialize 失败: {}", e.message)
+                AcpRegistry.unregister(userId, agentType)
+                close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "initialize failed"))
+                return@webSocket
+            }
+
+            try {
+                incoming.consumeEach { frame ->
+                    if (frame is Frame.Text) {
+                        logger.debug("[Agent Bridge] frame received: {} bytes", frame.data.size)
+                    }
+                }
+            } catch (e: Exception) {
+                logger.error("❌ Agent Bridge WebSocket 错误: userId={}, agentType={}, error={}", userId, agentType, e.message)
+            } finally {
+                logger.info("🔌 Agent Bridge 断开: userId={}, agentType={}", userId, agentType)
+                AcpRegistry.unregister(userId, agentType)
+                AgentRuntime.handleAgentDisconnect(userId, agentType)
             }
         }
 

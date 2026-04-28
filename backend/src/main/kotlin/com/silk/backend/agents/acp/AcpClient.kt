@@ -130,6 +130,11 @@ class AcpClient(
         return decodeResultOrThrow(resp, JsonElement.serializer())
     }
 
+    /** 关闭底层 transport。 */
+    suspend fun close(reason: String = "closed") {
+        transport.close(reason)
+    }
+
     // ---- core ----
 
     private suspend fun call(method: String, params: JsonElement): JsonRpcResponse {

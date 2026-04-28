@@ -279,5 +279,9 @@ fun Application.module() {
     }
 
     configureWebSockets()
+
+    // 触发 AgentRuntime 单例初始化（注册 ClaudeCodeDescriptor 等）
+    com.silk.backend.agents.core.AgentRuntime.listRegisteredAgents()
+
     configureRouting()
 }
