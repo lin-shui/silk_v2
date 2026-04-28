@@ -1,5 +1,6 @@
 package com.silk.backend
 
+import com.silk.backend.ai.AIConfig
 import com.silk.backend.auth.AuthService
 import com.silk.backend.auth.GroupService
 import com.silk.backend.database.*
@@ -27,10 +28,17 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
+import io.ktor.client.*
+import io.ktor.client.plugins.websocket.*
+import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 import io.ktor.websocket.*
 import io.ktor.http.*
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
+import io.ktor.client.engine.cio.CIO
 import kotlinx.serialization.json.*
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
@@ -2365,6 +2373,60 @@ fun Application.configureRouting() {
             } finally {
                 logger.info("👤 用户断开: {} ({})", userName, userId)
                 groupChatServer.leave(userId, userName, this)
+            }
+        }
+
+        webSocket("/ws/audio-duplex") {
+            val sessionId = call.request.queryParameters["sessionId"]
+            if (sessionId.isNullOrBlank()) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing sessionId"))
+                return@webSocket
+            }
+
+            val upstreamUrl = AIConfig.AUDIO_DUPLEX_URL.trimEnd('/')
+                .replace("http://", "ws://")
+                .replace("https://", "wss://") + "/ws/duplex?session_id=$sessionId"
+
+            logger.info("🔊 AudioDuplex proxy: {} -> {}", sessionId, upstreamUrl)
+
+            val httpClient = HttpClient(CIO) {
+                install(ClientWebSockets)
+            }
+
+            try {
+                val serverSession = this
+
+                httpClient.webSocket(upstreamUrl) {
+                    coroutineScope {
+                        val sendToUpstream = launch {
+                            try {
+                                serverSession.incoming.consumeEach { frame ->
+                                    if (frame is Frame.Text) {
+                                        send(Frame.Text(frame.readText()))
+                                    }
+                                }
+                            } catch (_: CancellationException) {}
+                        }
+
+                        val sendToClient = launch {
+                            try {
+                                incoming.consumeEach { frame ->
+                                    if (frame is Frame.Text) {
+                                        serverSession.send(Frame.Text(frame.readText()))
+                                    }
+                                }
+                            } catch (_: CancellationException) {}
+                        }
+
+                        sendToUpstream.join()
+                        sendToClient.cancelAndJoin()
+                    }
+                }
+            } catch (e: Exception) {
+                logger.error("❌ AudioDuplex proxy error: {}", e.message)
+                try { close(CloseReason(CloseReason.Codes.PROTOCOL_ERROR, e.message ?: "proxy error")) } catch (_: Exception) {}
+            } finally {
+                httpClient.close()
             }
         }
     }

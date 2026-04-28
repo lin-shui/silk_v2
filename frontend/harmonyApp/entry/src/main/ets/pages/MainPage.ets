@@ -3,6 +3,7 @@ import { router as appRouter } from '../common/Router';
 import { GroupListPage } from './GroupListPage';
 import { WorkflowPage } from './WorkflowPage';
 import { KnowledgeBasePage } from './KnowledgeBasePage';
+import { AudioDuplexPage } from './AudioDuplexPage';
 
 @Component
 export struct MainPage {
@@ -24,6 +25,11 @@ export struct MainPage {
         KnowledgeBasePage()
       }
       .tabBar(this.buildTabItem(2, '📚', '知识库'))
+
+      TabContent() {
+        AudioDuplexPage()
+      }
+      .tabBar(this.buildTabItem(3, '📞', '音频双工'))
     }
     .width('100%')
     .height('100%')

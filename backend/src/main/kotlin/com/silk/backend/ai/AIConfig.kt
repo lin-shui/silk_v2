@@ -39,6 +39,9 @@ object AIConfig {
     val ASR_TRANSCODE_TO_WAV: Boolean get() = env("ASR_TRANSCODE_TO_WAV")?.toBoolean() ?: true
     val ASR_FFMPEG_PATH: String get() = env("ASR_FFMPEG_PATH")?.trim()?.takeIf { it.isNotEmpty() } ?: "ffmpeg"
 
+    // Audio Duplex (MiniCPM-o full-duplex conversation)
+    val AUDIO_DUPLEX_URL: String get() = env("AUDIO_DUPLEX_URL") ?: "http://localhost:22700"
+
     // Weaviate 向量库地址
     val WEAVIATE_URL: String get() = env("WEAVIATE_URL") ?: ""
 
