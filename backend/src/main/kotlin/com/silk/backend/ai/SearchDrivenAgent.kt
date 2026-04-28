@@ -589,7 +589,8 @@ $userInput
                     sessionId = sessionId,
                     authorId = message.senderId,
                     authorName = message.senderName,
-                    timestamp = java.time.Instant.ofEpochMilli(message.timestamp).toString()
+                    timestamp = java.time.Instant.ofEpochMilli(message.timestamp).toString(),
+                    messageId = message.messageId
                 ),
                 participants = participants
             )

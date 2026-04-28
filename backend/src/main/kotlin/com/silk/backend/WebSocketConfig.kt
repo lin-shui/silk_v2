@@ -21,6 +21,7 @@ import com.silk.backend.database.GroupRepository
 import com.silk.backend.todos.GroupTodoExtractionService
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.claudecode.ClaudeCodeManager
+import com.silk.backend.search.WeaviateClient
 import org.slf4j.LoggerFactory
 
 @Serializable
@@ -1296,6 +1297,14 @@ class ChatServer(
             deletedMessageIds.add(silkReply.messageId)
             messageHistory.removeIf { it.id == messageId || it.id == silkReply.messageId }
             broadcastRecallNotification(listOf(messageId, silkReply.messageId))
+            // 同步删除 Weaviate 向量索引
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId, silkReply.messageId))
+                } catch (e: Exception) {
+                    logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败: {}", e.message)
+                }
+            }
             logger.info("✅ [recallMessage] 已撤回用户消息和 Silk 回复")
         } else {
             logger.warn("⚠️ [recallMessage] 未找到 Silk 回复，只撤回用户消息")
@@ -1303,6 +1312,14 @@ class ChatServer(
             deletedMessageIds.add(messageId)
             messageHistory.removeIf { it.id == messageId }
             broadcastRecallNotification(listOf(messageId))
+            // 同步删除 Weaviate 向量索引
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
+                } catch (e: Exception) {
+                    logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败: {}", e.message)
+                }
+            }
         }
         
         return RecallResult(true, "撤回成功", deletedMessageIds)
@@ -1342,7 +1359,15 @@ class ChatServer(
         historyManager.deleteMessages(sessionName, listOf(messageId))
         messageHistory.removeIf { it.id == messageId }
         broadcastRecallNotification(listOf(messageId))
-        
+        // 同步删除 Weaviate 向量索引
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
+            } catch (e: Exception) {
+                logger.warn("⚠️ [deleteMessage] Weaviate 删除向量失败: {}", e.message)
+            }
+        }
+
         logger.info("🗑️ [deleteMessage] 消息已删除: {} by {} (own={}, host={}, silkReply={})",
             messageId, userId, isOwnMessage, isGroupHost, isSilkReplyToMe)
         return RecallResult(true, "删除成功", listOf(messageId))
