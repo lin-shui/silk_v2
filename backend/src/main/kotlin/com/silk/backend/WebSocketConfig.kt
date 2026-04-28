@@ -22,6 +22,7 @@ import com.silk.backend.todos.GroupTodoExtractionService
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.claudecode.ClaudeCodeManager
 import com.silk.backend.search.WeaviateClient
+import com.silk.backend.agents.core.AgentRuntime
 import org.slf4j.LoggerFactory
 
 @Serializable
@@ -334,7 +335,7 @@ class ChatServer(
         // ==================== Claude Code 模式拦截 ====================
         if (message.type == MessageType.TEXT && !message.isTransient
             && message.userId != SilkAgent.AGENT_ID
-            && message.userId != ClaudeCodeManager.CC_AGENT_ID
+            && !AgentRuntime.isAgentMessage(message)
         ) {
             val groupId = sessionName
             // 构造单用户发送函数（CC 响应只发给触发用户的所有连接）
@@ -366,7 +367,7 @@ class ChatServer(
                 val ccText = message.content
                     .removePrefix("@Silk").removePrefix("@silk")
                     .trim()
-                val ccHandled = ClaudeCodeManager.handleIfActive(
+                val ccHandled = AgentRuntime.handleIfActive(
                     userId = message.userId,
                     groupId = groupId,
                     text = ccText,
@@ -629,7 +630,7 @@ class ChatServer(
     private suspend fun handleStopGeneration(userId: String) {
         logger.info("🛑 收到停止生成请求 (userId={})", userId)
 
-        // 1. CC 模式：委托 ClaudeCodeManager 取消
+        // 1. Agent 模式：委托 AgentRuntime 取消
         val groupId = sessionName
         val userSessions = connections[userId]
         if (userSessions != null && userSessions.isNotEmpty()) {
@@ -644,9 +645,9 @@ class ChatServer(
                     try { session.send(Frame.Text(msgJson)) } catch (_: Exception) {}
                 }
             }
-            val ccCancelled = ClaudeCodeManager.cancelIfActive(userId, groupId, ccBroadcastFn)
+            val ccCancelled = AgentRuntime.cancelIfActive(userId, groupId, ccBroadcastFn)
             if (ccCancelled) {
-                logger.info("🛑 已通过 ClaudeCodeManager 取消 CC 任务")
+                logger.info("🛑 已通过 AgentRuntime 取消 Agent 任务")
                 broadcastSystemStatus("CLEAR_STATUS")
                 return
             }

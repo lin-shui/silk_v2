@@ -8,6 +8,7 @@ import com.silk.backend.agents.acp.ContentBlock
 import com.silk.backend.agents.acp.PermissionResponse
 import com.silk.backend.agents.acp.StopReason
 import com.silk.backend.agents.adapters.claudecode.ClaudeCodeDescriptor
+import com.silk.backend.claudecode.ClaudeCodeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -71,7 +72,13 @@ object AgentRuntime {
                 true
             }
             is CommandRouter.RouteResult.Command -> {
-                handleCommand(ctx, route.cmd, broadcastFn)
+                val agentType = ctx.currentAgentType
+                if (agentType != null && getAcpClient(agentType, userId) == null) {
+                    // 过渡期回退：ACP bridge 未连接时委托旧 ClaudeCodeManager 处理命令
+                    ClaudeCodeManager.handleIfActive(userId, groupId, text, userName, broadcastFn)
+                } else {
+                    handleCommand(ctx, route.cmd, broadcastFn)
+                }
                 true
             }
             is CommandRouter.RouteResult.Prompt -> {
@@ -96,7 +103,10 @@ object AgentRuntime {
         val ctx = context(userId, groupId)
         val agentType = ctx.currentAgentType ?: return false
         val session = ctx.sessions[agentType] ?: return false
-        if (!session.running) return false
+        if (!session.running) {
+            // 过渡期回退：AgentRuntime 无运行任务时尝试旧 ClaudeCodeManager
+            return ClaudeCodeManager.cancelIfActive(userId, groupId, broadcastFn)
+        }
 
         handleCancel(session, broadcastFn)
         return true
@@ -110,7 +120,12 @@ object AgentRuntime {
         val ctx = context(userId, groupId)
         ctx.currentAgentType = agentType
         ctx.getOrCreateSession(agentType)
-        logger.info("[AgentRuntime] 工作流自动激活: userId={}, groupId={}, agentType={}", userId, groupId, agentType)
+        // 过渡期同步：旧 ClaudeCodeManager 持有真实 workingDir（来自 workflow seed / cdSync）
+        val oldSnap = ClaudeCodeManager.snapshotState(userId, groupId)
+        if (oldSnap != null && oldSnap.workingDir.isNotBlank()) {
+            ctx.workingDir = oldSnap.workingDir
+        }
+        logger.info("[AgentRuntime] 工作流自动激活: userId={}, groupId={}, agentType={}, workingDir={}", userId, groupId, agentType, ctx.workingDir)
     }
 
     /** Bridge 断线时由 Routing.kt 调用 */
@@ -420,11 +435,15 @@ object AgentRuntime {
         val acp = getAcpClient(agentType, userId)
 
         if (acp == null) {
-            broadcastFn(AgentMessages.system(
-                "${descriptor.displayName} 未连接。请启动 Bridge Agent。",
-                agentUserId = descriptor.agentUserId,
-                agentName = descriptor.displayName,
-            ))
+            // 过渡期回退：ACP bridge 未连接时尝试旧 ClaudeCodeManager 路径
+            val fallbackHandled = ClaudeCodeManager.handleIfActive(userId, ctx.groupId, text, userName, broadcastFn)
+            if (!fallbackHandled) {
+                broadcastFn(AgentMessages.system(
+                    "${descriptor.displayName} 未连接。请启动 Bridge Agent。",
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
+                ))
+            }
             return
         }
 
@@ -600,6 +619,31 @@ object AgentRuntime {
 
     private fun getAcpClient(agentType: String, userId: String): AcpClient? {
         return AcpRegistry.get(userId, agentType)
+    }
+
+    // ========== Plan D proxy API ==========
+
+    data class AgentStateSnapshot(
+        val active: Boolean,
+        val running: Boolean,
+        val workingDir: String,
+        val agentType: String?,
+    )
+
+    fun snapshotState(userId: String, groupId: String): AgentStateSnapshot? {
+        val ctx = contexts[key(userId, groupId)] ?: return null
+        val agentType = ctx.currentAgentType
+        val session = if (agentType != null) ctx.sessions[agentType] else null
+        return AgentStateSnapshot(
+            active = agentType != null,
+            running = session?.running ?: false,
+            workingDir = ctx.workingDir,
+            agentType = agentType,
+        )
+    }
+
+    fun cleanupState(userId: String, groupId: String) {
+        contexts.remove(key(userId, groupId))
     }
 
     /** 仅供测试使用 */

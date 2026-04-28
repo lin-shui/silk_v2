@@ -2,16 +2,42 @@
 """Quick manual test for /agent-bridge endpoint."""
 import asyncio
 import json
+import ssl
 import sys
 
 import websockets
 
 
-async def test(url: str, token: str):
-    ws_url = f"{url}?agentType=claude-code&token={token}"
+def _build_ws_url(server: str, token: str) -> str:
+    """Normalize server address to ws:// or wss:// (matches bridge_agent.py)."""
+    host = server.rstrip("/")
+    lower = host.lower()
+    if lower.startswith("wss://"):
+        ws_scheme, host = "wss", host[6:]
+    elif lower.startswith("https://"):
+        ws_scheme, host = "wss", host[8:]
+    elif lower.startswith("ws://"):
+        ws_scheme, host = "ws", host[5:]
+    elif lower.startswith("http://"):
+        ws_scheme, host = "ws", host[7:]
+    else:
+        ws_scheme = "ws"
+    return f"{ws_scheme}://{host}/agent-bridge?agentType=claude-code&token={token}"
+
+
+async def test(url: str, token: str, *, tls_insecure: bool = False):
+    ws_url = _build_ws_url(url, token)
     print(f"Connecting to {ws_url} ...")
 
-    async with websockets.connect(ws_url) as ws:
+    connect_kw: dict = {}
+    if ws_url.startswith("wss://") and tls_insecure:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        connect_kw["ssl"] = ctx
+        print("(TLS certificate verification disabled)")
+
+    async with websockets.connect(ws_url, **connect_kw) as ws:
         print("Connected!")
 
         # 1. Read initialize request from server
@@ -71,10 +97,11 @@ async def test(url: str, token: str):
 
 
 if __name__ == "__main__":
-    url = sys.argv[1] if len(sys.argv) > 1 else "ws://localhost:8006/agent-bridge"
+    url = sys.argv[1] if len(sys.argv) > 1 else "ws://localhost:8006"
     token = sys.argv[2] if len(sys.argv) > 2 else ""
+    tls_skip = "--tls-insecure" in sys.argv
     if not token:
-        print("Usage: python3 test_acp_connection.py <ws_url> <token>")
-        print("Example: python3 test_acp_connection.py ws://localhost:8006/agent-bridge your-token")
+        print("Usage: python3 test_acp_connection.py <server> <token> [--tls-insecure]")
+        print("Example: python3 test_acp_connection.py https://myhost:8005 your-token --tls-insecure")
         sys.exit(1)
-    asyncio.run(test(url, token))
+    asyncio.run(test(url, token, tls_insecure=tls_skip))

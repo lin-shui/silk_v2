@@ -569,7 +569,8 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
                 return@get
             }
-            val connected = BridgeRegistry.isConnected(userId)
+            val connected = AcpRegistry.listConnected(userId).isNotEmpty()
+                    || BridgeRegistry.isConnected(userId)
             val bridgeIp = if (connected) BridgeRegistry.getRemoteIp(userId) else null
             call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected, bridgeIp = bridgeIp))
         }
@@ -588,24 +589,41 @@ fun Application.configureRouting() {
                 if (rawGroupId.startsWith("group_")) rawGroupId else "group_$rawGroupId",
                 rawGroupId,
             ).distinct()
-            val snap = candidateIds.firstNotNullOfOrNull { gid ->
+            // 优先查 AgentRuntime（新框架），fallback 到旧 ClaudeCodeManager
+            val agentSnap = candidateIds.firstNotNullOfOrNull { gid ->
+                AgentRuntime.snapshotState(userId, gid)
+            }
+            val oldSnap = candidateIds.firstNotNullOfOrNull { gid ->
                 ClaudeCodeManager.snapshotState(userId, gid)
             }
-            val bridgeConnected = BridgeRegistry.isConnected(userId)
-            if (snap == null) {
-                call.respond(CcStateResponse(success = true, bridgeConnected = bridgeConnected))
-            } else {
+            val bridgeConnected = AcpRegistry.listConnected(userId).isNotEmpty()
+                    || BridgeRegistry.isConnected(userId)
+            if (agentSnap != null) {
                 call.respond(
                     CcStateResponse(
                         success = true,
-                        active = snap.active,
-                        running = snap.running,
-                        workingDir = snap.workingDir,
-                        sessionId = snap.sessionId,
-                        sessionStarted = snap.sessionStarted,
+                        active = agentSnap.active,
+                        running = agentSnap.running,
+                        workingDir = agentSnap.workingDir,
+                        sessionId = "",
+                        sessionStarted = agentSnap.active,
                         bridgeConnected = bridgeConnected,
                     )
                 )
+            } else if (oldSnap != null) {
+                call.respond(
+                    CcStateResponse(
+                        success = true,
+                        active = oldSnap.active,
+                        running = oldSnap.running,
+                        workingDir = oldSnap.workingDir,
+                        sessionId = oldSnap.sessionId,
+                        sessionStarted = oldSnap.sessionStarted,
+                        bridgeConnected = bridgeConnected,
+                    )
+                )
+            } else {
+                call.respond(CcStateResponse(success = true, bridgeConnected = bridgeConnected))
             }
         }
 
@@ -2201,8 +2219,9 @@ fun Application.configureRouting() {
                 workflowManager.deleteWorkflow(wf.id, userId)
                 // 删 group（同上，GroupRepository.deleteGroup 内部捕获异常返回 false）
                 com.silk.backend.database.GroupRepository.deleteGroup(group.id)
-                // 同时清理 ClaudeCodeManager 里因 getOrCreateState 而产生的孤儿 state
+                // 清理旧 ClaudeCodeManager + 新 AgentRuntime 的孤儿 state
                 ClaudeCodeManager.cleanupState(userId, "group_${group.id}")
+                AgentRuntime.cleanupState(userId, "group_${group.id}")
                 respondError(HttpStatusCode.Conflict, "工作目录设置失败：${cdResult.reason}")
                 return@post
             }
@@ -2431,6 +2450,7 @@ fun Application.configureRouting() {
             val workflow = workflowManager.getWorkflowByGroupId(groupId)
             if (workflow != null && workflow.agentType == "claude_code") {
                 ClaudeCodeManager.autoActivateForWorkflow(userId, "group_$groupId")
+                AgentRuntime.autoActivateForWorkflow(userId, "group_$groupId", "claude-code")
             }
 
             try {

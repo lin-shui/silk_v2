@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import ssl
 from typing import Any
 
 import websockets
@@ -18,9 +19,10 @@ class AcpBridgeAdapter:
     Translates ACP JSON-RPC requests into local Claude CLI calls.
     """
 
-    def __init__(self, ws_url: str, token: str):
-        self.ws_url = f"{ws_url}?agentType=claude-code&token={token}"
+    def __init__(self, ws_url: str, token: str, *, tls_insecure: bool = False):
+        self.ws_url = _build_ws_url(ws_url, token)
         self.token = token
+        self.tls_insecure = tls_insecure
         self.ws: websockets.WebSocketClientProtocol | None = None
         self.next_id = 1
         self.pending: dict[int, asyncio.Future] = {}
@@ -30,7 +32,14 @@ class AcpBridgeAdapter:
 
     async def run(self) -> None:
         logger.info("[ACP] Connecting to %s", self.ws_url)
-        async with websockets.connect(self.ws_url) as ws:
+        connect_kw: dict[str, Any] = {}
+        if self.ws_url.startswith("wss://") and self.tls_insecure:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            connect_kw["ssl"] = ctx
+            logger.warning("[ACP] TLS certificate verification disabled")
+        async with websockets.connect(self.ws_url, **connect_kw) as ws:
             self.ws = ws
             await self._receive_loop()
 
@@ -143,12 +152,30 @@ class AcpBridgeAdapter:
         )
 
 
+def _build_ws_url(server: str, token: str) -> str:
+    """Normalize server address to ws:// or wss:// URL (matches bridge_agent.py logic)."""
+    host = server.rstrip("/")
+    lower = host.lower()
+    if lower.startswith("wss://"):
+        ws_scheme, host = "wss", host[6:]
+    elif lower.startswith("https://"):
+        ws_scheme, host = "wss", host[8:]
+    elif lower.startswith("ws://"):
+        ws_scheme, host = "ws", host[5:]
+    elif lower.startswith("http://"):
+        ws_scheme, host = "ws", host[7:]
+    else:
+        ws_scheme = "ws"
+    return f"{ws_scheme}://{host}/agent-bridge?agentType=claude-code&token={token}"
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    url = os.environ.get("SILK_BRIDGE_URL", "ws://localhost:8006/agent-bridge")
+    url = os.environ.get("SILK_BRIDGE_URL", "ws://localhost:8006")
     token = os.environ.get("SILK_BRIDGE_TOKEN", "")
+    tls_insecure = os.environ.get("BRIDGE_TLS_INSECURE", "").strip().lower() in ("1", "true", "yes")
     if not token:
         logger.error("SILK_BRIDGE_TOKEN not set")
         exit(1)
-    adapter = AcpBridgeAdapter(url, token)
+    adapter = AcpBridgeAdapter(url, token, tls_insecure=tls_insecure)
     asyncio.run(adapter.run())

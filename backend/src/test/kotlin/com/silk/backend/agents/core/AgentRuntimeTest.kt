@@ -9,6 +9,8 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class AgentRuntimeTest {
@@ -115,5 +117,45 @@ class AgentRuntimeTest {
             broadcastFn = { messages.add(it) },
         )
         assertTrue(handled)
+    }
+
+    // ========== Plan D: snapshotState + cleanupState ==========
+
+    @Test
+    fun `snapshotState returns null for unknown context`() {
+        val snap = AgentRuntime.snapshotState("u1", "g1")
+        assertNull(snap)
+    }
+
+    @Test
+    fun `snapshotState returns active state after activation`() {
+        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        val snap = AgentRuntime.snapshotState("u1", "g1")
+        assertNotNull(snap)
+        assertTrue(snap.active)
+        assertFalse(snap.running)
+        assertEquals("claude-code", snap.agentType)
+    }
+
+    @Test
+    fun `snapshotState reflects workingDir`() {
+        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        val snap = AgentRuntime.snapshotState("u1", "g1")
+        assertNotNull(snap)
+        assertTrue(snap.workingDir.isNotEmpty())
+    }
+
+    @Test
+    fun `cleanupState removes context`() {
+        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        assertNotNull(AgentRuntime.snapshotState("u1", "g1"))
+        AgentRuntime.cleanupState("u1", "g1")
+        assertNull(AgentRuntime.snapshotState("u1", "g1"))
+    }
+
+    @Test
+    fun `cleanupState on non-existent context is no-op`() {
+        AgentRuntime.cleanupState("u1", "g_nonexistent")
+        // should not throw
     }
 }
