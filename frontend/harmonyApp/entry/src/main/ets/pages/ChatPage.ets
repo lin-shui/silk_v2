@@ -102,6 +102,7 @@ export struct ChatPage {
   private userName: string = '';
   private isInitialized: boolean = false;
   @State private workflowTaskFocus: string = '';
+  @StorageProp('currentWorkflowAgentType') workflowAgentType: string = '';
   @State private isCcWorkflow: boolean = false;
   private readonly apiClient = globalApiClient;
   private readonly audioRecorder = new AudioRecorderService();
@@ -119,6 +120,13 @@ export struct ChatPage {
   aboutToAppear(): void {
     // RESIZE 让系统缩减可用高度，顶栏保持可见；输入框紧贴键盘
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+
+    // 同步检测 CC 工作流（必须在 build 前设置）
+    const agentType = AppStorage.get<string>('currentWorkflowAgentType');
+    if (agentType === 'claude_code') {
+      this.isCcWorkflow = true;
+    }
+
     if (this.isInitialized) {
       return;
     }
@@ -1919,18 +1927,11 @@ export struct ChatPage {
           .justifyContent(FlexAlign.Center)
         } else {
           Row() {
-            if (!this.isSilkPrivateChat() && !this.isSelectionMode && this.workflowTaskFocus.length === 0) {
-              Text('@Silk')
-                .fontSize(12)
-                .fontColor(SilkColors.primary)
-                .fontWeight(FontWeight.Medium)
-                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-                .backgroundColor('#26C9A86C')
-                .borderRadius(14)
-                .margin({ right: 6 })
-                .onClick((): void => {
-                  this.applySilkQuickMention();
-                })
+            if (!this.isSilkPrivateChat() && !this.isSelectionMode && !this.isCcWorkflow && this.workflowTaskFocus.length === 0) {
+              Text('')
+                .fontSize(0)
+                .width(0)
+                .height(0)
             }
 
             TextInput({ placeholder: this.getMessageInputPlaceholder(), text: $$this.messageInput })

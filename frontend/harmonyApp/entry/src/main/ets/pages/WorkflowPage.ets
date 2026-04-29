@@ -170,11 +170,13 @@ export struct WorkflowPage {
     }
   }
 
-  private enterChat(groupId: string, groupName: string, taskFocus: string): void {
+  private enterChat(groupId: string, groupName: string, taskFocus: string, agentType?: string): void {
     AppStorage.setOrCreate<string>('currentGroupId', groupId);
     AppStorage.setOrCreate<string>('currentGroupName', groupName);
     AppStorage.setOrCreate<string>('currentGroupInvitationCode', '');
     AppStorage.setOrCreate<string>('currentWorkflowTaskFocus', taskFocus);
+    AppStorage.setOrCreate<string>('currentWorkflowAgentType', agentType || '');
+    AppStorage.setOrCreate<boolean>('currentIsCcWorkflow', agentType === 'claude_code');
     appRouter.goToChat(groupId, groupName);
   }
 
@@ -301,7 +303,7 @@ export struct WorkflowPage {
                       .backgroundColor(SilkColors.primary)
                       .fontColor(Color.White)
                       .onClick(() => {
-                        this.enterChat(wf.groupId, wf.name, wf.taskFocus);
+                        this.enterChat(wf.groupId, wf.name, wf.taskFocus, wf.agentType);
                       })
                       .margin({ right: 8 })
                   }
@@ -320,7 +322,7 @@ export struct WorkflowPage {
               .backgroundColor(SilkColors.surfaceVariant)
               .borderRadius(12)
               .onClick(() => {
-                this.enterChat(wf.groupId, wf.name, wf.taskFocus);
+                this.enterChat(wf.groupId, wf.name, wf.taskFocus, wf.agentType);
               })
             }
           }, (wf: WorkflowApiItem) => wf.id)
