@@ -1764,10 +1764,8 @@ export struct ChatPage {
         .backgroundColor('#FDF3E0')
       }
 
-      // CC 工作流面板
-      if (this.isCcWorkflow) {
-        CcWorkflowPanel()
-      }
+      // CC 工作流面板（始终渲染，面板内部控制可见性）
+      CcWorkflowPanel()
 
       // 消息区域
       if (this.isSelectionMode) {
