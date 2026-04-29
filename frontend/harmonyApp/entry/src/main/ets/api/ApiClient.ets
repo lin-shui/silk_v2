@@ -403,16 +403,17 @@ export class ApiClient {
   async get<T>(endpoint: string): Promise<ApiResponse<T>> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = {
+        method: http.RequestMethod.GET,
+        header: {
+          'Content-Type': 'application/json'
+        },
+        connectTimeout: this.timeout,
+        readTimeout: this.timeout
+      };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        {
-          method: http.RequestMethod.GET,
-          header: {
-            'Content-Type': 'application/json'
-          },
-          connectTimeout: this.timeout,
-          readTimeout: this.timeout
-        }
+        opts
       );
 
       if (response.responseCode === 200) {
@@ -434,17 +435,18 @@ export class ApiClient {
   async post<T>(endpoint: string, body: Object): Promise<ApiResponse<T>> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = {
+        method: http.RequestMethod.POST,
+        header: {
+          'Content-Type': 'application/json'
+        },
+        extraData: body,
+        connectTimeout: this.timeout,
+        readTimeout: this.timeout
+      };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        {
-          method: http.RequestMethod.POST,
-          header: {
-            'Content-Type': 'application/json'
-          },
-          extraData: body,
-          connectTimeout: this.timeout,
-          readTimeout: this.timeout
-        }
+        opts
       );
 
       if (response.responseCode === 200 || response.responseCode === 201) {
@@ -463,17 +465,18 @@ export class ApiClient {
   async put<T>(endpoint: string, body: Object): Promise<ApiResponse<T>> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = {
+        method: http.RequestMethod.PUT,
+        header: {
+          'Content-Type': 'application/json'
+        },
+        extraData: body,
+        connectTimeout: this.timeout,
+        readTimeout: this.timeout
+      };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        {
-          method: http.RequestMethod.PUT,
-          header: {
-            'Content-Type': 'application/json'
-          },
-          extraData: body,
-          connectTimeout: this.timeout,
-          readTimeout: this.timeout
-        }
+        opts
       );
 
       if (response.responseCode === 200 || response.responseCode === 201) {
@@ -726,9 +729,10 @@ export class ApiClient {
   private async getRaw(endpoint: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.GET, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        { method: http.RequestMethod.GET, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout }
+        opts
       );
       return response.result as string;
     } finally {
@@ -739,9 +743,10 @@ export class ApiClient {
   private async postRaw(endpoint: string, body: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.POST, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        { method: http.RequestMethod.POST, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout }
+        opts
       );
       return response.result as string;
     } finally {
@@ -752,9 +757,10 @@ export class ApiClient {
   private async putRaw(endpoint: string, body: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.PUT, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        { method: http.RequestMethod.PUT, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout }
+        opts
       );
       return response.result as string;
     } finally {
@@ -765,9 +771,10 @@ export class ApiClient {
   private async deleteRaw(endpoint: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.DELETE, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        { method: http.RequestMethod.DELETE, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout }
+        opts
       );
       return response.result as string;
     } finally {
