@@ -2104,11 +2104,13 @@ fun Application.configureRouting() {
             }
 
             try {
-                incoming.consumeEach { frame ->
-                    if (frame is Frame.Text) {
-                        logger.debug("[Agent Bridge] frame received: {} bytes", frame.data.size)
-                    }
-                }
+                // IMPORTANT: Do NOT consume `incoming` here.
+                // AcpClient.receiveLoop() handles all incoming frames via AcpWebSocketTransport
+                // which consumes from the same Ktor channel. Two consumers race and lose frames.
+                // Just suspend until connection closes.
+                closeReason.await()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Normal: session scope cancelled on connection close
             } catch (e: Exception) {
                 logger.error("❌ Agent Bridge WebSocket 错误: userId={}, agentType={}, error={}", userId, agentType, e.message)
             } finally {

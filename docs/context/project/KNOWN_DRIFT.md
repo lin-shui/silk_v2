@@ -37,15 +37,15 @@
 - 它是 human-maintained roadmap，不是 agent 自动维护的执行日志
 - `docs/context/planning/TODO_ROADMAP.md` 只是 agent-facing wrapper
 
-## Agent Framework In Transition (Plan D Done, Plan E Pending)
+## Agent Framework In Transition (Plan E Done, E2-E4 Pending)
 
-`develop_acp` 分支正在把 CC 模式从 `ClaudeCodeManager` 迁到通用 `AgentRuntime` 框架，目前是**双桥并存**的过渡态：
+`develop_acp` 分支把 CC 模式从 `ClaudeCodeManager` 迁到通用 `AgentRuntime` 框架。**Plan E 已完成**，ACP 主路径端到端打通：
 
-- **入口面已切换**：`WebSocketConfig.kt`、`ChatServer.broadcast()` 现在只调 `AgentRuntime.{handleIfActive, cancelIfActive, isAgentMessage}`，不再直接调 `ClaudeCodeManager`
-- **执行面仍走旧桥**：`AgentRuntime.handlePrompt/handleCommand/cancelIfActive` 在 `AcpRegistry` 无客户端时**回退**到 `ClaudeCodeManager.handleIfActive`，由旧 `bridge_agent.py` + `/cc-bridge` 端点真正执行 Claude CLI
-- **新 `/agent-bridge` 端点已就绪**：`acp_adapter.py` 能完成 ACP 握手，但还没接入 `Executor`，所以实际跑 CLI 仍依赖旧桥
-- **状态层在 AgentRuntime**：`autoActivateForWorkflow` 同时写 `ClaudeCodeManager` 和 `AgentRuntime`；`AgentRuntime.GroupAgentContext.workingDir` 在激活时从 `ClaudeCodeManager.snapshotState()` 同步
+- **入口面**：`WebSocketConfig.kt`、`ChatServer.broadcast()` 只调 `AgentRuntime.{handleIfActive, cancelIfActive, isAgentMessage}`
+- **执行面**：`acp_adapter.py`（新默认桥）通过 `/agent-bridge` 端点接收 ACP 请求，复用 `Executor` 跑 Claude CLI，流式推 `session/update` 通知
+- **回退路径仍在**：`AgentRuntime.handlePrompt` 在 ACP 不可用时回退到 `ClaudeCodeManager`；`BRIDGE_MODE=legacy` 可启动旧桥 `bridge_agent.py`
+- **旧代码未删**：`ClaudeCodeManager` / `BridgeRegistry` / `/cc-bridge` 端点仍在代码中（E3/E4 清理）
 
-排查 CC 行为时优先看 `AgentRuntime`（入口/路由/状态），实际执行细节看 `ClaudeCodeManager`/`bridge_agent.py`。`/cc-state`、`/cc-settings/bridge-status` 端点都查双注册表（`AcpRegistry` + `BridgeRegistry`）。
+排查 CC 行为时优先看 `AgentRuntime`（入口/路由/状态）+ `acp_adapter.py`（执行）。旧 `ClaudeCodeManager` / `bridge_agent.py` 仅作回退参考。
 
-Plan E 完成后会移除旧桥；现阶段不要假设新旧路径已经合一。
+Plan E2: 把 cd/list_dir/持久化切到 ACP；E3: 清除所有旧 API 调用点；E4: 删除旧代码。

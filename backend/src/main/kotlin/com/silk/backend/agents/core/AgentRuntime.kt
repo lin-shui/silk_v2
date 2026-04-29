@@ -461,9 +461,8 @@ object AgentRuntime {
         // 设置 running 并注册 ACP 处理器
         session.running = true
         session.cancelled = false
-        setupAcpHandlers(acp, session, descriptor, broadcastFn)
-
         val accumulated = StringBuilder()
+        setupAcpHandlers(acp, session, descriptor, broadcastFn, accumulated)
 
         // 首次 prompt 需要 sessionNew
         if (session.acpSessionId == null) {
@@ -589,10 +588,10 @@ object AgentRuntime {
         session: AgentSession,
         descriptor: AgentDescriptor,
         broadcastFn: suspend (Message) -> Unit,
+        accumulated: StringBuilder,
     ) {
         acp.onSessionUpdate { notif ->
             if (notif.sessionId != session.acpSessionId) return@onSessionUpdate
-            val accumulated = StringBuilder()
             val msg = AcpUpdateMapper.map(
                 update = notif.update,
                 descriptor = descriptor,

@@ -36,6 +36,17 @@ BRIDGE_LOG_LEVEL="${BRIDGE_LOG_LEVEL:-INFO}"
 BRIDGE_TLS_INSECURE="${BRIDGE_TLS_INSECURE:-}"
 # 可选：仓库外 venv 的 python 绝对路径，例如 /Users/you/venvs/silk-bridge/bin/python3
 BRIDGE_PYTHON="${BRIDGE_PYTHON:-}"
+# Bridge 模式：acp（默认，新桥，走 /agent-bridge ACP 协议）或 legacy（旧桥，回退用，走 /cc-bridge 私有协议）
+BRIDGE_MODE="${BRIDGE_MODE:-acp}"
+
+case "$BRIDGE_MODE" in
+    acp)    BRIDGE_SCRIPT="acp_adapter.py" ;;
+    legacy) BRIDGE_SCRIPT="bridge_agent.py" ;;
+    *)
+        echo -e "\033[0;31m错误: 无效的 BRIDGE_MODE=$BRIDGE_MODE（应为 acp 或 legacy）\033[0m" >&2
+        exit 1
+        ;;
+esac
 
 # ---- 辅助函数 ----
 
@@ -65,6 +76,7 @@ _check_config() {
         echo "     # BRIDGE_WORKING_DIR=/path/to/workdir  (可选)"
         echo "     # BRIDGE_LOG_LEVEL=INFO                (可选)"
         echo "     # BRIDGE_TLS_INSECURE=1                (可选，自签 WSS 证书)"
+        echo "     # BRIDGE_MODE=acp                      (可选，acp=新桥默认/legacy=旧桥回退)"
         echo ""
         echo "  2) 设置环境变量:"
         echo "     export BRIDGE_SERVER=localhost:8006"
@@ -108,6 +120,7 @@ do_start() {
     _resolve_python_bin || return 1
 
     echo -e "${BLUE}启动 CC Bridge...${NC}"
+    echo -e "  Mode:        ${GREEN}$BRIDGE_MODE${NC} ($BRIDGE_SCRIPT)"
     echo -e "  Server:      ${GREEN}$BRIDGE_SERVER${NC}"
     echo -e "  Python:      $PYTHON_BIN"
     echo -e "  Working dir: $BRIDGE_WORKING_DIR"
@@ -122,7 +135,7 @@ do_start() {
         echo -e "  ${YELLOW}TLS:         跳过证书校验 (--tls-insecure)${NC}"
     fi
 
-    nohup "$PYTHON_BIN" "$BRIDGE_DIR/bridge_agent.py" \
+    nohup "$PYTHON_BIN" "$BRIDGE_DIR/$BRIDGE_SCRIPT" \
         --server "$BRIDGE_SERVER" \
         --token "$BRIDGE_TOKEN" \
         --working-dir "$BRIDGE_WORKING_DIR" \
@@ -232,6 +245,10 @@ case "${1:-}" in
         echo "  logs, l    查看日志 (tail -f)"
         echo ""
         echo "配置: 在 $BRIDGE_DIR/.env 中设置 BRIDGE_SERVER 和 BRIDGE_TOKEN"
+        echo ""
+        echo "环境变量:"
+        echo "  BRIDGE_MODE=acp     新桥（默认）— /agent-bridge ACP 协议"
+        echo "  BRIDGE_MODE=legacy  旧桥回退 — /cc-bridge 私有协议"
         echo ""
         ;;
 esac

@@ -1,6 +1,6 @@
 # Claude Code And Bridges
 
-> **过渡期注意**：`develop_acp` 分支引入了 `AgentRuntime` 框架层，当前是双桥并存。详见 `KNOWN_DRIFT.md#Agent Framework In Transition`。
+> **过渡期注意**：`develop_acp` 分支引入了 `AgentRuntime` 框架层。Plan E 已完成，ACP 新桥（`acp_adapter.py`）为默认执行路径，旧桥（`bridge_agent.py`）作为回退（`BRIDGE_MODE=legacy`）。详见 `KNOWN_DRIFT.md#Agent Framework In Transition`。
 
 ## Agent Framework Layer (新)
 
@@ -12,12 +12,12 @@
 - `backend/agents/adapters/claudecode/ClaudeCodeDescriptor.kt` — CC adapter 描述符
 - `backend/agents/acp/` — ACP 协议层（`AcpClient`、`AcpTransport`、`AcpRegistry`、JSON-RPC 消息类型）
 
-关键路径（过渡期）：
+关键路径：
 
 1. `WebSocketConfig.broadcast()` → `AgentRuntime.handleIfActive()` → `CommandRouter.route()`
-2. ACP 可用 → 走 `AcpRegistry` + `AcpClient`（新路径，Plan E 后启用）
-3. ACP 不可用 → **回退** `ClaudeCodeManager.handleIfActive()`（旧路径，当前实际走的）
-4. `autoActivateForWorkflow` 双写 `ClaudeCodeManager` + `AgentRuntime`，并从旧桥同步 workingDir
+2. ACP 可用（默认）→ `AcpRegistry` + `AcpClient` → adapter `session/prompt` → `Executor` 跑 Claude CLI → `session/update` 流式回传
+3. ACP 不可用 → **回退** `ClaudeCodeManager.handleIfActive()`（旧路径，E3 后移除）
+4. `autoActivateForWorkflow` 双写 `ClaudeCodeManager` + `AgentRuntime`（E3 后移除双写）
 
 ## Backend Side (旧，过渡期仍为实际执行层)
 
@@ -46,11 +46,11 @@
 
 主要文件：
 
-- `bridge_agent.py` — 旧桥主程序，连接 `/cc-bridge` 端点，注册到 `BridgeRegistry`
-- `executor.py` — 实际调用 Claude CLI 的执行器
-- `session_manager.py` — 本地会话管理（`~/.silk/cc_sessions.json`）
-- `bridge.sh` — 启动/停止管理脚本
-- `acp_adapter.py` — 新 ACP 桥骨架，连接 `/agent-bridge` 端点，注册到 `AcpRegistry`；尚未接入 `Executor`（Plan E 范围）
+- `acp_adapter.py` — **新默认桥**（`BRIDGE_MODE=acp`），ACP server 连接 `/agent-bridge` 端点，注册到 `AcpRegistry`，复用 `Executor` 执行 Claude CLI，支持 `_silk/*` 扩展
+- `bridge_agent.py` — 旧桥（`BRIDGE_MODE=legacy`），连接 `/cc-bridge` 端点，注册到 `BridgeRegistry`
+- `executor.py` — 实际调用 Claude CLI 的执行器（新旧桥共用）
+- `session_manager.py` — 本地会话管理（`~/.silk/cc_sessions.json`，新旧桥共用）
+- `bridge.sh` — 启动/停止管理脚本，`BRIDGE_MODE` 环境变量控制走新桥还是旧桥（默认 `acp`）
 
 关键职责：
 
