@@ -15,17 +15,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
-import kotlinx.serialization.Serializable
-
-@Serializable
-data class WorkflowItem(
-    val id: String,
-    val name: String,
-    val description: String = "",
-    val ownerId: String = "",
-    val createdAt: Long = 0,
-    val updatedAt: Long = 0
-)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -129,7 +118,9 @@ fun WorkflowScreen(appState: AppState) {
                     onClick = {
                         if (newName.isNotBlank()) {
                             scope.launch {
-                                ApiClient.createWorkflow(newName.trim(), "", user.id)
+                                val result = ApiClient.createWorkflow(newName.trim(), "", user.id, "")
+                                // Plan D will replace the entire dialog with proper initialDir handling.
+                                // For now, ignore result detail; refresh list either way.
                                 workflows = ApiClient.getWorkflows(user.id)
                                 showCreateDialog = false; newName = ""
                             }

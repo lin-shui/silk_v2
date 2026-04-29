@@ -9,6 +9,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import java.net.HttpURLConnection
@@ -138,6 +140,35 @@ data class AppVersionInfo(
     val fileSize: Long = 0,
     val downloadUrl: String = ""
 )
+
+// ==================== Workflow API ====================
+
+@Serializable
+data class WorkflowItem(
+    val id: String,
+    val name: String,
+    val description: String = "",
+    val ownerId: String = "",
+    val groupId: String = "",
+    val agentType: String = "claude_code",
+    val workingDir: String = "",
+    val sessionId: String = "",
+    val sessionStarted: Boolean = false,
+    val createdAt: Long = 0,
+    val updatedAt: Long = 0,
+)
+
+sealed class CreateWorkflowResult {
+    data class Ok(val workflow: WorkflowItem) : CreateWorkflowResult()
+    data class Err(val message: String) : CreateWorkflowResult()
+}
+
+sealed class TrustCheckResult {
+    data class Trusted(val bridgeId: String?) : TrustCheckResult()
+    data class NotTrusted(val bridgeId: String?) : TrustCheckResult()
+    object BridgeDisconnected : TrustCheckResult()
+    data class Error(val message: String) : TrustCheckResult()
+}
 
 object ApiClient {
     private val baseUrl: String get() = BackendUrlHolder.getBaseUrl()
@@ -589,8 +620,6 @@ object ApiClient {
         }
     }
 
-    // ==================== Workflow API ====================
-
     suspend fun getWorkflows(userId: String): List<WorkflowItem> = withContext(Dispatchers.IO) {
         try {
             val response = get("/api/workflows?userId=$userId")
@@ -601,14 +630,29 @@ object ApiClient {
         }
     }
 
-    suspend fun createWorkflow(name: String, description: String, userId: String): WorkflowItem? = withContext(Dispatchers.IO) {
+    suspend fun createWorkflow(
+        name: String,
+        description: String,
+        userId: String,
+        initialDir: String,
+    ): CreateWorkflowResult = withContext(Dispatchers.IO) {
         try {
-            val body = """{"userId":"$userId","name":"$name","description":"$description"}"""
+            val body = buildJsonObject {
+                put("userId", JsonPrimitive(userId))
+                put("name", JsonPrimitive(name))
+                put("description", JsonPrimitive(description))
+                put("initialDir", JsonPrimitive(initialDir))
+            }.toString()
             val response = post("/api/workflows", body)
-            jsonParser.decodeFromString(response)
+            val obj = jsonParser.parseToJsonElement(response).jsonObject
+            if (obj["success"]?.jsonPrimitive?.booleanOrNull == false) {
+                val msg = obj["message"]?.jsonPrimitive?.contentOrNull ?: "未知错误"
+                CreateWorkflowResult.Err(msg)
+            } else {
+                CreateWorkflowResult.Ok(jsonParser.decodeFromString(response))
+            }
         } catch (e: Exception) {
-            println("创建工作流失败: $e")
-            null
+            CreateWorkflowResult.Err(e.message ?: "网络错误")
         }
     }
 
@@ -618,6 +662,82 @@ object ApiClient {
             true
         } catch (e: Exception) {
             println("删除工作流失败: $e")
+            false
+        }
+    }
+
+    suspend fun getCcState(userId: String, groupId: String): CcStateResponse = withContext(Dispatchers.IO) {
+        try {
+            val response = get("/users/$userId/cc-state/$groupId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("获取 CC 状态失败: $e")
+            CcStateResponse(success = false, error = e.message)
+        }
+    }
+
+    suspend fun listCcDir(
+        userId: String,
+        path: String? = null,
+        showHidden: Boolean = false,
+    ): DirListingResponse = withContext(Dispatchers.IO) {
+        try {
+            val params = buildString {
+                append("?showHidden=$showHidden")
+                if (!path.isNullOrBlank()) {
+                    append("&path=").append(java.net.URLEncoder.encode(path, "UTF-8"))
+                }
+            }
+            val response = get("/users/$userId/cc-fs/list$params")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("列目录失败: $e")
+            DirListingResponse(success = false, error = e.message)
+        }
+    }
+
+    suspend fun cdCcDir(userId: String, groupId: String, path: String): CcStateResponse = withContext(Dispatchers.IO) {
+        try {
+            val body = buildJsonObject {
+                put("groupId", JsonPrimitive(groupId))
+                put("path", JsonPrimitive(path))
+            }.toString()
+            val response = post("/users/$userId/cc-fs/cd", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("切换目录失败: $e")
+            CcStateResponse(success = false, error = e.message)
+        }
+    }
+
+    suspend fun checkTrustedDir(userId: String, path: String): TrustCheckResult = withContext(Dispatchers.IO) {
+        try {
+            val encoded = java.net.URLEncoder.encode(path, "UTF-8")
+            val response = get("/users/$userId/trusted-dirs/check?path=$encoded")
+            val obj = jsonParser.parseToJsonElement(response).jsonObject
+            val bridgeConnected = obj["bridgeConnected"]?.jsonPrimitive?.booleanOrNull ?: false
+            val trusted = obj["trusted"]?.jsonPrimitive?.booleanOrNull ?: false
+            val bridgeId = obj["bridgeId"]?.jsonPrimitive?.contentOrNull
+            when {
+                !bridgeConnected -> TrustCheckResult.BridgeDisconnected
+                trusted -> TrustCheckResult.Trusted(bridgeId)
+                else -> TrustCheckResult.NotTrusted(bridgeId)
+            }
+        } catch (e: Exception) {
+            TrustCheckResult.Error(e.message ?: "网络错误")
+        }
+    }
+
+    suspend fun addTrustedDir(userId: String, path: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val body = buildJsonObject {
+                put("path", JsonPrimitive(path))
+            }.toString()
+            val response = post("/users/$userId/trusted-dirs", body)
+            val obj = jsonParser.parseToJsonElement(response).jsonObject
+            obj["success"]?.jsonPrimitive?.booleanOrNull ?: false
+        } catch (e: Exception) {
+            println("添加信任目录失败: $e")
             false
         }
     }
