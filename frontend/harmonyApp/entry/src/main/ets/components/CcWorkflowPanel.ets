@@ -8,7 +8,6 @@ import {
   DirEntry
 } from '../api/ApiClient';
 import promptAction from '@ohos.promptAction';
-import { router as appRouter } from '../common/Router';
 
 @Component
 export struct CcWorkflowPanel {
@@ -34,26 +33,22 @@ export struct CcWorkflowPanel {
   private readonly apiClient = globalApiClient;
 
   aboutToAppear(): void {
-    this.isCcWorkflow = appRouter.workflowAgentType === 'claude_code';
-    if (this.isCcWorkflow) {
-      this.loadCcState();
-    } else {
-      this.panelLoading = false;
-    }
+    this.loadCcState();
   }
 
   private async loadCcState(): Promise<void> {
     this.panelLoading = true;
     try {
       const state = await this.apiClient.getCcState(this.userId, this.groupId);
-      if (state) {
+      if (state && state.success) {
+        this.isCcWorkflow = true;
         this.workingDir = state.workingDir || '';
         this.isCcActive = state.active || false;
         this.isCcRunning = state.running || false;
         this.bridgeConnected = state.bridgeConnected || false;
       }
     } catch (_) {
-      // 静默失败
+      // 不是 CC 工作流或无 CC 状态
     }
     this.panelLoading = false;
   }
