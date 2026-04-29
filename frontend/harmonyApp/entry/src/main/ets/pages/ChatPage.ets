@@ -103,7 +103,6 @@ export struct ChatPage {
   private isInitialized: boolean = false;
   @State private workflowTaskFocus: string = '';
   @StorageProp('currentWorkflowAgentType') workflowAgentType: string = '';
-  @State private isCcWorkflow: boolean = false;
   private readonly apiClient = globalApiClient;
   private readonly audioRecorder = new AudioRecorderService();
   private listScroller: Scroller = new Scroller();
@@ -120,12 +119,6 @@ export struct ChatPage {
   aboutToAppear(): void {
     // RESIZE 让系统缩减可用高度，顶栏保持可见；输入框紧贴键盘
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
-
-    // 同步检测 CC 工作流（必须在 build 前设置）
-    const agentType = AppStorage.get<string>('currentWorkflowAgentType');
-    if (agentType === 'claude_code') {
-      this.isCcWorkflow = true;
-    }
 
     if (this.isInitialized) {
       return;
@@ -213,8 +206,8 @@ export struct ChatPage {
       if (wf) {
         if (wf.agentType === 'silk_chat') {
           this.workflowTaskFocus = wf.taskFocus;
-        } else if (wf.agentType === 'claude_code') {
-          this.isCcWorkflow = true;
+        } else if (wf.agentType === 'claude_code' && this.workflowAgentType !== 'claude_code') {
+          AppStorage.setOrCreate<string>('currentWorkflowAgentType', 'claude_code');
         }
       }
     }).catch(() => {});
@@ -1769,7 +1762,7 @@ export struct ChatPage {
       }
 
       // CC 工作流面板
-      if (this.isCcWorkflow) {
+      if (this.workflowAgentType === 'claude_code') {
         CcWorkflowPanel()
       }
 
@@ -1927,7 +1920,7 @@ export struct ChatPage {
           .justifyContent(FlexAlign.Center)
         } else {
           Row() {
-            if (!this.isSilkPrivateChat() && !this.isSelectionMode && !this.isCcWorkflow && this.workflowTaskFocus.length === 0) {
+            if (!this.isSilkPrivateChat() && !this.isSelectionMode && this.workflowAgentType !== 'claude_code' && this.workflowTaskFocus.length === 0) {
               Text('')
                 .fontSize(0)
                 .width(0)
