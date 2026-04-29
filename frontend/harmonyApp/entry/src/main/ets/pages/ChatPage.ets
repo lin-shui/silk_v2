@@ -120,6 +120,11 @@ export struct ChatPage {
     // RESIZE 让系统缩减可用高度，顶栏保持可见；输入框紧贴键盘
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
 
+    // 从 Router 单例同步检测 CC 工作流（绕过 AppStorage 跨页面写入/读取时序问题）
+    if (appRouter.workflowAgentType === 'claude_code') {
+      AppStorage.setOrCreate<string>('currentWorkflowAgentType', 'claude_code');
+    }
+
     if (this.isInitialized) {
       return;
     }

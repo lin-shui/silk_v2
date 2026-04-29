@@ -27,6 +27,7 @@ export class Router {
   private static instance: Router;
   private currentPage: PageName = PageName.Login;
   private pageListeners: Array<(page: PageName) => void> = [];
+  workflowAgentType: string = '';
   
   private constructor() {}
   
