@@ -112,8 +112,9 @@ export struct WorkflowPage {
   }
 
   build() {
-    Column() {
-      Row() {
+    Stack() {
+      Column() {
+        Row() {
         Text('工作流')
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
@@ -235,10 +236,23 @@ export struct WorkflowPage {
     .width('100%')
     .height('100%')
     .backgroundColor(SilkColors.background)
-    .bindSheet($$this.showCreateSheet, this.buildCreateSheet(), {
-      height: 440,
-      backgroundColor: SilkColors.surface
-    })
+
+      if (this.showCreateSheet) {
+        Column() {
+          Column()
+            .width('100%')
+            .layoutWeight(1)
+            .onClick(() => { this.showCreateSheet = false; })
+
+          this.buildCreateSheet()
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#66000000')
+      }
+    }
+    .width('100%')
+    .height('100%')
   }
 
   @Builder

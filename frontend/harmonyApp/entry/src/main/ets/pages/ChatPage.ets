@@ -60,9 +60,8 @@ class MessageDataSource implements IDataSource {
   }
 }
 
-@Entry
 @Component
-struct ChatPage {
+export struct ChatPage {
   @State private connectionState: ConnectionState = ConnectionState.DISCONNECTED;
   @State private messageInput: string = '';
   @State private groupName: string = '项目会话';
@@ -113,7 +112,7 @@ struct ChatPage {
 
   onBackPress(): boolean | void {
     this.aboutToDisappear();
-    router.back();
+    appRouter.goToMain();
     return true;
   }
 
@@ -156,9 +155,6 @@ struct ChatPage {
 
     if (this.userId === '') {
       appRouter.goToLogin();
-      router.replaceUrl({ url: 'pages/Index' }).catch((err: Error) => {
-        console.error('[ChatPage] replaceUrl Index failed:', err.message);
-      });
       return;
     }
 
@@ -1696,7 +1692,8 @@ struct ChatPage {
           .margin({ left: 12 })
           .width(36)
           .onClick((): void => {
-            router.back();
+            this.aboutToDisappear();
+            appRouter.goToMain();
           })
 
         Text(this.groupName)
