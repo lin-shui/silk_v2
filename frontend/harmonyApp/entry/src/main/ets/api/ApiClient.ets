@@ -148,6 +148,41 @@ export interface KBEntryApiItem {
   updatedAt: number;
 }
 
+// ==================== CC/Bridge workflow interfaces ====================
+
+export interface CcStateResponse {
+  success: boolean;
+  active?: boolean;
+  running?: boolean;
+  workingDir?: string;
+  sessionId?: string;
+  sessionStarted?: boolean;
+  bridgeConnected?: boolean;
+  error?: string;
+}
+
+export interface DirEntry {
+  name: string;
+  isDir: boolean;
+}
+
+export interface DirListingResponse {
+  success: boolean;
+  path?: string;
+  parent?: string;
+  segments?: string[];
+  separator?: string;
+  entries?: DirEntry[];
+  truncated?: boolean;
+  error?: string;
+}
+
+export interface TrustedDirCheckResponse {
+  trusted: boolean;
+  bridgeConnected: boolean;
+  bridgeId?: string;
+}
+
 interface BackendJoinGroupRequest {
   userId: string;
   invitationCode: string;
@@ -1468,6 +1503,61 @@ export class ApiClient {
     } finally {
       httpRequest.destroy();
     }
+  }
+
+  // ==================== CC/Bridge Workflow API ====================
+
+  /**
+   * 获取 CC 工作状态
+   */
+  async getCcState(userId: string, groupId: string): Promise<CcStateResponse | null> {
+    try {
+      const result = await this.getRaw(`/users/${userId}/cc-state/${groupId}`);
+      return JSON.parse(result) as CcStateResponse;
+    } catch (_) { return null; }
+  }
+
+  /**
+   * 列出远程服务器的子目录（目录浏览器用）
+   */
+  async listCcDir(userId: string, path?: string): Promise<DirListingResponse | null> {
+    try {
+      const query = path ? `?path=${encodeURIComponent(path)}` : '';
+      const result = await this.getRaw(`/users/${userId}/cc-fs/list${query}`);
+      return JSON.parse(result) as DirListingResponse;
+    } catch (_) { return null; }
+  }
+
+  /**
+   * 切换 CC 工作目录
+   */
+  async cdCcDir(userId: string, groupId: string, path: string): Promise<CcStateResponse | null> {
+    try {
+      const body = JSON.stringify({ groupId: groupId, path: path });
+      const result = await this.postRaw(`/users/${userId}/cc-fs/cd`, body);
+      return JSON.parse(result) as CcStateResponse;
+    } catch (_) { return null; }
+  }
+
+  /**
+   * 检查目录是否已被信任
+   */
+  async checkTrustedDir(userId: string, path: string): Promise<TrustedDirCheckResponse | null> {
+    try {
+      const result = await this.getRaw(`/users/${userId}/trusted-dirs/check?path=${encodeURIComponent(path)}`);
+      return JSON.parse(result) as TrustedDirCheckResponse;
+    } catch (_) { return null; }
+  }
+
+  /**
+   * 添加目录到信任列表
+   */
+  async addTrustedDir(userId: string, path: string): Promise<boolean> {
+    try {
+      const body = JSON.stringify({ path: path });
+      await this.postRaw(`/users/${userId}/trusted-dirs`, body);
+      return true;
+    } catch (_) { return false; }
   }
 
   static getInstance(): ApiClient {

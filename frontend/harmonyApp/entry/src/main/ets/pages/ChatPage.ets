@@ -25,6 +25,7 @@ import { ShoppingIntentParser } from '../common/ShoppingIntentParser';
 import { MetaServiceIntent } from '../models/MetaServiceDef';
 import { MetaServiceConfig } from '../common/MetaServiceConfig';
 import { MetaServiceLauncher } from '../common/MetaServiceLauncher';
+import { CcWorkflowPanel } from '../components/CcWorkflowPanel';
 
 class MessageDataSource implements IDataSource {
   private data: Message[] = [];
@@ -102,6 +103,7 @@ struct ChatPage {
   private userName: string = '';
   private isInitialized: boolean = false;
   @State private workflowTaskFocus: string = '';
+  @State private isCcWorkflow: boolean = false;
   private readonly apiClient = globalApiClient;
   private readonly audioRecorder = new AudioRecorderService();
   private listScroller: Scroller = new Scroller();
@@ -202,10 +204,14 @@ struct ChatPage {
     const storedTaskFocus = AppStorage.get<string>('currentWorkflowTaskFocus');
     this.workflowTaskFocus = storedTaskFocus ? storedTaskFocus : '';
 
-    // 检测是否 silk_chat 工作流群组（API 异步查询，兜底非 WorkflowPage 入口）
+    // 检测工作流类型（API 异步查询，兜底非 WorkflowPage 入口）
     this.apiClient.getWorkflowByGroupId(this.groupId).then((wf: WorkflowApiItem | undefined) => {
-      if (wf && wf.agentType === 'silk_chat') {
-        this.workflowTaskFocus = wf.taskFocus;
+      if (wf) {
+        if (wf.agentType === 'silk_chat') {
+          this.workflowTaskFocus = wf.taskFocus;
+        } else if (wf.agentType === 'claude_code') {
+          this.isCcWorkflow = true;
+        }
       }
     }).catch(() => {});
   }
@@ -1755,6 +1761,11 @@ struct ChatPage {
         .height(28)
         .justifyContent(FlexAlign.Center)
         .backgroundColor('#FDF3E0')
+      }
+
+      // CC 工作流面板
+      if (this.isCcWorkflow) {
+        CcWorkflowPanel({ userId: this.userId, groupId: this.groupId })
       }
 
       // 消息区域

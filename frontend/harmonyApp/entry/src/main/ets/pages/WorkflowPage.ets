@@ -199,7 +199,7 @@ export struct WorkflowPage {
                   }
                   Text('')
                     .layoutWeight(1)
-                  if (wf.agentType === 'silk_chat') {
+                  if (wf.agentType === 'silk_chat' || wf.agentType === 'claude_code') {
                     Button('进入对话')
                       .height(28)
                       .fontSize(12)

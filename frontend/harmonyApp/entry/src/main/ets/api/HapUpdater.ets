@@ -27,7 +27,7 @@ export class HapUpdater {
     const httpRequest = http.createHttp();
     try {
       const response = await httpRequest.request(
-        `${API_BASE_URL}${this.VERSION_PATH}`,
+        `${API_BASE_URL}${HapUpdater.VERSION_PATH}`,
         {
           method: http.RequestMethod.GET,
           header: { 'Content-Type': 'application/json' },
@@ -60,7 +60,7 @@ export class HapUpdater {
     const httpRequest = http.createHttp();
     try {
       const response = await httpRequest.request(
-        `${API_BASE_URL}${this.DOWNLOAD_PATH}`,
+        `${API_BASE_URL}${HapUpdater.DOWNLOAD_PATH}`,
         {
           method: http.RequestMethod.GET,
           expectDataType: http.HttpDataType.ARRAY_BUFFER,
@@ -92,14 +92,14 @@ export class HapUpdater {
    * 记录跳过的版本
    */
   static markSkippedVersion(versionCode: number): void {
-    AppStorage.setOrCreate(this.SKIP_VERSION_KEY, versionCode);
+    AppStorage.setOrCreate(HapUpdater.SKIP_VERSION_KEY, versionCode);
   }
 
   /**
    * 检查某版本是否已被跳过
    */
   static isVersionSkipped(versionCode: number): boolean {
-    const skipped = AppStorage.get<number>(this.SKIP_VERSION_KEY);
+    const skipped = AppStorage.get<number>(HapUpdater.SKIP_VERSION_KEY);
     return skipped === versionCode;
   }
 
@@ -108,14 +108,14 @@ export class HapUpdater {
    */
   static setRemindLater(): void {
     const later = Date.now() + 60 * 60 * 1000;
-    AppStorage.setOrCreate(this.REMIND_LATER_KEY, later);
+    AppStorage.setOrCreate(HapUpdater.REMIND_LATER_KEY, later);
   }
 
   /**
    * 检查是否还在稍后提醒期间
    */
   static isInRemindLaterPeriod(): boolean {
-    const until = AppStorage.get<number>(this.REMIND_LATER_KEY);
+    const until = AppStorage.get<number>(HapUpdater.REMIND_LATER_KEY);
     if (until === undefined || until === null) return false;
     return Date.now() < until;
   }
