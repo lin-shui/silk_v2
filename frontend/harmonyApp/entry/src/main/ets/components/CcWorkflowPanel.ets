@@ -173,17 +173,11 @@ export struct CcWorkflowPanel {
             : '#FF4D4F')
           .margin({ right: 4 })
 
-        Text('userId=' + this.userId + ' groupId=' + this.groupId)
-          .fontSize(10)
-          .fontColor(SilkColors.textSecondary)
-          .layoutWeight(1)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-
         if (this.panelLoading) {
-          Text('加载中')
+          Text('加载工作目录...')
             .fontSize(12)
             .fontColor(SilkColors.textLight)
+            .layoutWeight(1)
         } else if (this.workingDir && this.workingDir.length > 0) {
           Text(this.workingDir)
             .fontSize(12)
@@ -192,7 +186,7 @@ export struct CcWorkflowPanel {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
         } else {
-          Text('无目录')
+          Text('未设置工作目录')
             .fontSize(12)
             .fontColor(SilkColors.textLight)
             .layoutWeight(1)
