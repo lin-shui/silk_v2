@@ -1,6 +1,25 @@
 # Claude Code And Bridges
 
-## Backend Side
+> **过渡期注意**：`develop_acp` 分支引入了 `AgentRuntime` 框架层，当前是双桥并存。详见 `KNOWN_DRIFT.md#Agent Framework In Transition`。
+
+## Agent Framework Layer (新)
+
+- `backend/agents/core/AgentRuntime.kt` — 对外门面，替代 `ClaudeCodeManager` 作为 `WebSocketConfig` 的唯一入口
+- `backend/agents/core/CommandRouter.kt` — 命令解析（`/cc`、`/use`、`/status`、`@agent` 等）
+- `backend/agents/core/GroupAgentContext.kt` — per-(userId, groupId) 上下文，含 workingDir、currentAgentType、sessions
+- `backend/agents/core/AgentSession.kt` — per-agent 会话状态（running、queue、acpSessionId）
+- `backend/agents/core/AgentRegistry.kt` — agent 类型注册表
+- `backend/agents/adapters/claudecode/ClaudeCodeDescriptor.kt` — CC adapter 描述符
+- `backend/agents/acp/` — ACP 协议层（`AcpClient`、`AcpTransport`、`AcpRegistry`、JSON-RPC 消息类型）
+
+关键路径（过渡期）：
+
+1. `WebSocketConfig.broadcast()` → `AgentRuntime.handleIfActive()` → `CommandRouter.route()`
+2. ACP 可用 → 走 `AcpRegistry` + `AcpClient`（新路径，Plan E 后启用）
+3. ACP 不可用 → **回退** `ClaudeCodeManager.handleIfActive()`（旧路径，当前实际走的）
+4. `autoActivateForWorkflow` 双写 `ClaudeCodeManager` + `AgentRuntime`，并从旧桥同步 workingDir
+
+## Backend Side (旧，过渡期仍为实际执行层)
 
 - `backend/claudecode/ClaudeCodeManager.kt`
 - `backend/claudecode/BridgeRegistry.kt`
@@ -27,10 +46,11 @@
 
 主要文件：
 
-- `bridge_agent.py`
-- `executor.py`
-- `session_manager.py`
-- `bridge.sh`
+- `bridge_agent.py` — 旧桥主程序，连接 `/cc-bridge` 端点，注册到 `BridgeRegistry`
+- `executor.py` — 实际调用 Claude CLI 的执行器
+- `session_manager.py` — 本地会话管理（`~/.silk/cc_sessions.json`）
+- `bridge.sh` — 启动/停止管理脚本
+- `acp_adapter.py` — 新 ACP 桥骨架，连接 `/agent-bridge` 端点，注册到 `AcpRegistry`；尚未接入 `Executor`（Plan E 范围）
 
 关键职责：
 
@@ -60,7 +80,8 @@
 
 - 改 CC 指令或元信息格式：检查后端测试与 `cc_bridge` 兼容性
 - 改 Silk message shape：确认飞书消息适配层是否仍能消费
-- 新增 state 修改入口：必须走 `UserCCState.withLock { h -> ... }`（字段 setter 是 private，编译期会强制）
-- 新增 bridge 命令类型：同时改 `BridgeRequest`（@EncodeDefault NEVER 默认值省略） + bridge_agent.py dispatcher
-- 新增 RPC 风格响应：在 `handleBridgeMessage` 走 `pendingRpc.complete()` 路径，不要新建 broadcastFn 上下文
+- 新增 state 修改入口：旧桥走 `UserCCState.withLock { h -> ... }`；新框架走 `GroupAgentContext` / `AgentSession` 字段（`@Volatile`，当前不需 mutex）
+- 新增 bridge 命令类型：旧桥改 `BridgeRequest` + `bridge_agent.py` dispatcher；新桥改 `AcpExtensions.kt` + `acp_adapter.py`
+- 新增 RPC 风格响应：旧桥走 `pendingRpc.complete()`；新桥走 ACP JSON-RPC `_call()`
 - 新增需要持久化的 CC state 字段：在 `Workflow` 加字段 + `WorkflowManager` 加 update 方法 + `WorkflowPersistence` 回调 + `loadSeed` 取出 + `autoActivateForWorkflow` seed，否则重启后会丢
+- 改入口面（`WebSocketConfig` 调用点）：只改 `AgentRuntime`，不要直接调 `ClaudeCodeManager`

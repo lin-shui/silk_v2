@@ -36,3 +36,16 @@
 - Todo 规划的 canonical 文件仍是 `docs/todo-roadmap.md`
 - 它是 human-maintained roadmap，不是 agent 自动维护的执行日志
 - `docs/context/planning/TODO_ROADMAP.md` 只是 agent-facing wrapper
+
+## Agent Framework In Transition (Plan D Done, Plan E Pending)
+
+`develop_acp` 分支正在把 CC 模式从 `ClaudeCodeManager` 迁到通用 `AgentRuntime` 框架，目前是**双桥并存**的过渡态：
+
+- **入口面已切换**：`WebSocketConfig.kt`、`ChatServer.broadcast()` 现在只调 `AgentRuntime.{handleIfActive, cancelIfActive, isAgentMessage}`，不再直接调 `ClaudeCodeManager`
+- **执行面仍走旧桥**：`AgentRuntime.handlePrompt/handleCommand/cancelIfActive` 在 `AcpRegistry` 无客户端时**回退**到 `ClaudeCodeManager.handleIfActive`，由旧 `bridge_agent.py` + `/cc-bridge` 端点真正执行 Claude CLI
+- **新 `/agent-bridge` 端点已就绪**：`acp_adapter.py` 能完成 ACP 握手，但还没接入 `Executor`，所以实际跑 CLI 仍依赖旧桥
+- **状态层在 AgentRuntime**：`autoActivateForWorkflow` 同时写 `ClaudeCodeManager` 和 `AgentRuntime`；`AgentRuntime.GroupAgentContext.workingDir` 在激活时从 `ClaudeCodeManager.snapshotState()` 同步
+
+排查 CC 行为时优先看 `AgentRuntime`（入口/路由/状态），实际执行细节看 `ClaudeCodeManager`/`bridge_agent.py`。`/cc-state`、`/cc-settings/bridge-status` 端点都查双注册表（`AcpRegistry` + `BridgeRegistry`）。
+
+Plan E 完成后会移除旧桥；现阶段不要假设新旧路径已经合一。

@@ -96,7 +96,8 @@
 ## Claude Code / Bridge / Feishu
 
 - 先读：`integrations/CLAUDE_CODE_AND_BRIDGES.md`
-- 再看代码：`backend/claudecode/`、`cc_bridge/`、`feishu_bot/`
+- 再看代码：`backend/agents/`（入口面）、`backend/claudecode/`（旧执行层）、`cc_bridge/`、`feishu_bot/`
+- 过渡期注意：`KNOWN_DRIFT.md#Agent Framework In Transition`
 - 默认验证：
   - 后端侧 `./gradlew :backend:test`
   - Python 服务按各自 README 或手动 smoke

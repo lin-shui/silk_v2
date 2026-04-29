@@ -33,9 +33,10 @@
 
 ## Claude Code Mode
 
-- `claudecode/ClaudeCodeManager.kt` 维护 per-user-per-group CC 状态
-- `BridgeRegistry.kt` 管理 backend 与外部 bridge 的 WebSocket
-- 聊天消息在 `ChatServer.broadcast()` 中先被 CC 模式拦截，再决定是否进入 Silk AI 主链
+- 入口面已切到 `agents/core/AgentRuntime.kt`（`WebSocketConfig` 唯一调用点）
+- `AgentRuntime` 在 ACP bridge 不可用时回退到旧 `claudecode/ClaudeCodeManager.kt` 执行
+- `BridgeRegistry.kt` 管理旧桥 WebSocket；`agents/acp/AcpRegistry.kt` 管理新 ACP 桥
+- 详见 `integrations/CLAUDE_CODE_AND_BRIDGES.md` 和 `KNOWN_DRIFT.md#Agent Framework In Transition`
 
 ## ASR
 
