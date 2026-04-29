@@ -11,8 +11,8 @@ import promptAction from '@ohos.promptAction';
 
 @Component
 export struct CcWorkflowPanel {
-  @Prop userId: string = '';
-  @Prop groupId: string = '';
+  @StorageProp('currentUserId') userId: string = '';
+  @StorageProp('currentGroupId') groupId: string = '';
 
   @State workingDir: string = '';
   @State isCcActive: boolean = false;

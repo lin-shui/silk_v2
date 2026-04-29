@@ -104,7 +104,6 @@ export struct ChatPage {
   @State private workflowTaskFocus: string = '';
   @StorageProp('currentWorkflowAgentType') workflowAgentType: string = '';
   @State private isCcWorkflow: boolean = false;
-  @State private isChatReady: boolean = false;
   private readonly apiClient = globalApiClient;
   private readonly audioRecorder = new AudioRecorderService();
   private listScroller: Scroller = new Scroller();
@@ -161,8 +160,6 @@ export struct ChatPage {
     this.groupId = storedGroupId ? storedGroupId : (currentGroup ? currentGroup.id : 'default_room');
     this.groupName = storedGroupName ? storedGroupName : (currentGroup ? currentGroup.name : '项目会话');
     this.groupInvitationCode = storedGroupInviteCode ? storedGroupInviteCode : (currentGroup && currentGroup.invitationCode ? currentGroup.invitationCode : '');
-
-    this.isChatReady = true;
 
     if (this.userId === '') {
       appRouter.goToLogin();
@@ -1772,8 +1769,8 @@ export struct ChatPage {
       }
 
       // CC 工作流面板
-      if (this.isCcWorkflow && this.isChatReady) {
-        CcWorkflowPanel({ userId: this.userId, groupId: this.groupId })
+      if (this.isCcWorkflow) {
+        CcWorkflowPanel()
       }
 
       // 消息区域
