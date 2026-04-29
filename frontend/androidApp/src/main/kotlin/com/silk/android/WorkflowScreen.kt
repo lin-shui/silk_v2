@@ -76,8 +76,9 @@ fun WorkflowScreen(appState: AppState) {
                 ) {
                     items(workflows) { wf ->
                         Card(
+                            onClick = { appState.selectWorkflow(wf) },
                             modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = SilkColors.cardBackground)
+                            colors = CardDefaults.cardColors(containerColor = SilkColors.cardBackground),
                         ) {
                             Row(
                                 modifier = Modifier.fillMaxWidth().padding(16.dp),
