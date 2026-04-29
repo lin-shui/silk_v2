@@ -102,7 +102,7 @@ export struct ChatPage {
   private userName: string = '';
   private isInitialized: boolean = false;
   @State private workflowTaskFocus: string = '';
-  @StorageProp('currentWorkflowAgentType') workflowAgentType: string = '';
+  @State private isCcWorkflow: boolean = false;
   private readonly apiClient = globalApiClient;
   private readonly audioRecorder = new AudioRecorderService();
   private listScroller: Scroller = new Scroller();
@@ -120,10 +120,8 @@ export struct ChatPage {
     // RESIZE 让系统缩减可用高度，顶栏保持可见；输入框紧贴键盘
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
 
-    // 从 Router 单例同步检测 CC 工作流（绕过 AppStorage 跨页面写入/读取时序问题）
-    if (appRouter.workflowAgentType === 'claude_code') {
-      AppStorage.setOrCreate<string>('currentWorkflowAgentType', 'claude_code');
-    }
+    // 从 Router 单例同步检测 CC 工作流（WorkflowPage.enterChat 在导航前已设置）
+    this.isCcWorkflow = appRouter.workflowAgentType === 'claude_code';
 
     if (this.isInitialized) {
       return;
@@ -211,8 +209,8 @@ export struct ChatPage {
       if (wf) {
         if (wf.agentType === 'silk_chat') {
           this.workflowTaskFocus = wf.taskFocus;
-        } else if (wf.agentType === 'claude_code' && this.workflowAgentType !== 'claude_code') {
-          AppStorage.setOrCreate<string>('currentWorkflowAgentType', 'claude_code');
+        } else if (wf.agentType === 'claude_code' && !this.isCcWorkflow) {
+          this.isCcWorkflow = true;
         }
       }
     }).catch(() => {});
@@ -1767,7 +1765,7 @@ export struct ChatPage {
       }
 
       // CC 工作流面板
-      if (this.workflowAgentType === 'claude_code') {
+      if (this.isCcWorkflow) {
         CcWorkflowPanel()
       }
 
@@ -1925,7 +1923,7 @@ export struct ChatPage {
           .justifyContent(FlexAlign.Center)
         } else {
           Row() {
-            if (!this.isSilkPrivateChat() && !this.isSelectionMode && this.workflowAgentType !== 'claude_code' && this.workflowTaskFocus.length === 0) {
+            if (!this.isSilkPrivateChat() && !this.isSelectionMode && !this.isCcWorkflow && this.workflowTaskFocus.length === 0) {
               Text('')
                 .fontSize(0)
                 .width(0)
