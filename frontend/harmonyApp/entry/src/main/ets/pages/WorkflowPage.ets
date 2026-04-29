@@ -1,5 +1,5 @@
 import { SilkColors } from '../common/Theme';
-import { apiClient as globalApiClient, WorkflowApiItem } from '../api/ApiClient';
+import { apiClient as globalApiClient, WorkflowApiItem, DirEntry } from '../api/ApiClient';
 import { appStore as globalAppStore } from '../stores/AppStore';
 import { router as appRouter } from '../common/Router';
 import promptAction from '@ohos.promptAction';
@@ -13,6 +13,13 @@ export struct WorkflowPage {
   @State selectedAgentType: string = 'claude_code';
   @State selectedTaskFocus: string = 'general';
   @State newInitialDir: string = '';
+  @State showDirBrowser: boolean = false;
+  @State browserPath: string = '';
+  @State browserSegments: string[] = [];
+  @State browserSeparator: string = '/';
+  @State browserEntries: DirEntry[] = [];
+  @State browserParent: string | null = null;
+  @State browserLoading: boolean = false;
 
   private readonly appStore = globalAppStore;
   private readonly apiClient = globalApiClient;
@@ -38,32 +45,118 @@ export struct WorkflowPage {
     const user = this.appStore.currentUser;
     const trimmed = this.newName.trim();
     if (!user || !trimmed) return;
-    try {
-      let initialDir: string | undefined;
-      if (this.selectedAgentType === 'claude_code') {
-        initialDir = this.newInitialDir.trim();
-        if (initialDir === '') {
-          this.showToast('请输入工作目录');
-          return;
-        }
+    let initialDir: string | undefined;
+    if (this.selectedAgentType === 'claude_code') {
+      initialDir = this.newInitialDir.trim();
+      if (initialDir === '') {
+        this.showToast('请输入工作目录');
+        return;
       }
-      const taskFocus = this.selectedAgentType === 'silk_chat' ? this.selectedTaskFocus : undefined;
+    }
+    const taskFocus = this.selectedAgentType === 'silk_chat' ? this.selectedTaskFocus : undefined;
+    try {
       const result = await this.apiClient.createWorkflow(
         trimmed, '', user.id, this.selectedAgentType, taskFocus, initialDir
       );
-      if (result) {
-        this.showCreateSheet = false;
-        this.newName = '';
-        this.selectedAgentType = 'claude_code';
-        this.selectedTaskFocus = 'general';
-        this.newInitialDir = '';
-        await this.loadWorkflows();
+      this.showCreateSheet = false;
+      this.newName = '';
+      this.selectedAgentType = 'claude_code';
+      this.selectedTaskFocus = 'general';
+      this.newInitialDir = '';
+      await this.loadWorkflows();
+    } catch (e) {
+      const msg = (e as Error).message || '创建失败';
+      if (msg.includes('未被信任') && initialDir) {
+        this.showTrustConfirm(user.id, initialDir);
       } else {
-        this.showToast('创建失败');
+        this.showToast(msg);
+      }
+    }
+  }
+
+  private showTrustConfirm(userId: string, dir: string): void {
+    AlertDialog.show({
+      title: '信任目录',
+      message: '目录 "' + dir + '" 未被信任，是否将其添加到信任列表？',
+      primaryButton: {
+        value: '取消',
+        action: () => {}
+      },
+      secondaryButton: {
+        value: '信任并重试',
+        action: () => {
+          this.addTrustAndRetry(userId, dir);
+        }
+      }
+    });
+  }
+
+  private async addTrustAndRetry(userId: string, dir: string): Promise<void> {
+    try {
+      const added = await this.apiClient.addTrustedDir(userId, dir);
+      if (added) {
+        this.showToast('目录已信任，正在重试...');
+        await this.createWorkflow();
+      } else {
+        this.showToast('添加信任失败，请重试');
       }
     } catch (_) {
-      this.showToast('创建失败');
+      this.showToast('添加信任失败');
     }
+  }
+
+  private async openDirBrowser(): Promise<void> {
+    const user = this.appStore.currentUser;
+    if (!user) return;
+    this.showDirBrowser = true;
+    await this.loadDirList('', user.id);
+  }
+
+  private async loadDirList(path: string, userId?: string): Promise<void> {
+    const uid = userId || this.appStore.currentUser?.id;
+    if (!uid) return;
+    this.browserLoading = true;
+    try {
+      const listing = await this.apiClient.listCcDir(uid, path || undefined);
+      if (listing && listing.success) {
+        this.browserPath = listing.path || '';
+        this.browserSegments = listing.segments || [];
+        this.browserSeparator = listing.separator || '/';
+        this.browserEntries = listing.entries || [];
+        this.browserParent = listing.parent || null;
+      }
+    } catch (_) { /* 静默 */ }
+    this.browserLoading = false;
+  }
+
+  private navigateToSegment(index: number): void {
+    const parts: string[] = [];
+    for (let i = 0; i <= index; i++) {
+      parts.push(this.browserSegments[i]);
+    }
+    const sep = this.browserSeparator;
+    const path = parts.join(sep);
+    this.loadDirList(path);
+  }
+
+  private onBrowserDirClick(entry: DirEntry): void {
+    if (!entry.isDir) return;
+    const sep = this.browserSeparator;
+    const base = this.browserPath.endsWith(sep) ? this.browserPath : this.browserPath + sep;
+    this.loadDirList(base + entry.name);
+  }
+
+  private goToBrowserParent(): void {
+    if (this.browserParent) {
+      this.loadDirList(this.browserParent);
+    }
+  }
+
+  private selectBrowserDir(): void {
+    if (this.browserPath) {
+      this.newInitialDir = this.browserPath;
+    }
+    this.showDirBrowser = false;
   }
 
   async deleteWorkflow(id: string): Promise<void> {
@@ -113,6 +206,7 @@ export struct WorkflowPage {
 
   build() {
     Stack() {
+      // 主内容区域
       Column() {
         Row() {
         Text('工作流')
@@ -225,6 +319,9 @@ export struct WorkflowPage {
               .padding(16)
               .backgroundColor(SilkColors.surfaceVariant)
               .borderRadius(12)
+              .onClick(() => {
+                this.enterChat(wf.groupId, wf.name, wf.taskFocus);
+              })
             }
           }, (wf: WorkflowApiItem) => wf.id)
         }
@@ -238,17 +335,126 @@ export struct WorkflowPage {
     .backgroundColor(SilkColors.background)
 
       if (this.showCreateSheet) {
-        Column() {
-          Column()
-            .width('100%')
-            .layoutWeight(1)
-            .onClick(() => { this.showCreateSheet = false; })
+        if (this.showDirBrowser) {
+          // 目录浏览器
+          Column() {
+            // 标题
+            Text('选择工作目录')
+              .fontSize(17)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(SilkColors.textPrimary)
+              .width('100%')
+              .padding(14)
 
-          this.buildCreateSheet()
+            // 面包屑
+            if (this.browserSegments.length > 0) {
+              Scroll() {
+                Row({ space: 2 }) {
+                  ForEach(this.browserSegments, (segment: string, index: number) => {
+                    if (index > 0) {
+                      Text('›')
+                        .fontSize(13)
+                        .fontColor(SilkColors.textLight)
+                    }
+                    Text(segment === '/' ? '/' : segment)
+                      .fontSize(13)
+                      .fontColor(index === this.browserSegments.length - 1 ? SilkColors.primary : SilkColors.textSecondary)
+                      .fontWeight(index === this.browserSegments.length - 1 ? FontWeight.Medium : FontWeight.Normal)
+                      .onClick(() => { this.navigateToSegment(index); })
+                  }, (segment: string) => segment)
+                }
+                .width('100%')
+                .padding({ left: 14, right: 14 })
+              }
+              .height(32)
+              .scrollable(ScrollDirection.Horizontal)
+            }
+
+            Divider().color(SilkColors.border).margin({ top: 4, bottom: 4 })
+
+            // 目录列表
+            if (this.browserLoading) {
+              Column() {
+                LoadingProgress().width(24).height(24).color(SilkColors.primary)
+                Text('加载中...')
+                  .fontSize(13)
+                  .fontColor(SilkColors.textSecondary)
+                  .margin({ top: 8 })
+              }
+              .width('100%')
+              .height(300)
+              .justifyContent(FlexAlign.Center)
+              .alignItems(HorizontalAlign.Center)
+            } else {
+              List({ space: 2 }) {
+                // 返回上级
+                if (this.browserParent) {
+                  ListItem() {
+                    Row() {
+                      Text('📁').fontSize(16).margin({ right: 8 })
+                      Text('..').fontSize(14).fontColor(SilkColors.textPrimary)
+                    }
+                    .width('100%')
+                    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+                    .onClick(() => { this.goToBrowserParent(); })
+                  }
+                }
+
+                ForEach(this.browserEntries, (entry: DirEntry) => {
+                  ListItem() {
+                    Row() {
+                      Text('📁').fontSize(16).margin({ right: 8 })
+                      Text(entry.name).fontSize(14).fontColor(SilkColors.textPrimary)
+                    }
+                    .width('100%')
+                    .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+                    .onClick(() => { this.onBrowserDirClick(entry); })
+                  }
+                }, (entry: DirEntry) => entry.name)
+              }
+              .width('100%')
+              .height(300)
+            }
+
+            Divider().color(SilkColors.border).margin({ top: 4, bottom: 4 })
+
+            // 底部按钮
+            Row() {
+              Button('取消')
+                .width('45%').height(38)
+                .backgroundColor(SilkColors.surface)
+                .fontColor(SilkColors.textSecondary)
+                .fontSize(14)
+                .onClick(() => { this.showDirBrowser = false; })
+
+              Button('选择此目录')
+                .width('45%').height(38)
+                .backgroundColor(SilkColors.primary)
+                .fontColor(Color.White)
+                .fontSize(14)
+                .onClick(() => { this.selectBrowserDir(); })
+            }
+            .width('100%')
+            .padding(14)
+            .justifyContent(FlexAlign.SpaceBetween)
+          }
+          .width('100%')
+          .height('100%')
+          .backgroundColor(SilkColors.surface)
+        } else {
+          // 创建面板浮层
+          Column() {
+            Column()
+              .width('100%')
+              .layoutWeight(1)
+              .onClick(() => { this.showCreateSheet = false; })
+
+            this.buildCreateSheet()
+          }
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#66000000')
         }
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#66000000')
       }
     }
     .width('100%')
@@ -257,7 +463,6 @@ export struct WorkflowPage {
 
   @Builder
   buildCreateSheet() {
-    Scroll() {
     Column() {
       Text('创建工作流')
         .fontSize(18)
@@ -313,19 +518,27 @@ export struct WorkflowPage {
           .fontColor(SilkColors.textSecondary)
           .margin({ bottom: 6 })
 
-        TextInput({ placeholder: '输入工作目录路径', text: $$this.newInitialDir })
-          .width('100%')
-          .height(48)
-          .backgroundColor(SilkColors.background)
-          .onChange((value: string) => this.newInitialDir = value)
-          .margin({ bottom: 16 })
+        Row({ space: 8 }) {
+          TextInput({ placeholder: '输入工作目录路径（如 /home/user/project）', text: $$this.newInitialDir })
+            .layoutWeight(1)
+            .height(48)
+            .backgroundColor(SilkColors.background)
+
+          Button('浏览')
+            .height(48)
+            .fontSize(13)
+            .backgroundColor(SilkColors.primary)
+            .fontColor(Color.White)
+            .onClick(() => { void this.openDirBrowser(); })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
       }
 
       TextInput({ placeholder: '工作流名称', text: $$this.newName })
         .width('100%')
         .height(48)
         .backgroundColor(SilkColors.background)
-        .onChange((value: string) => this.newName = value)
         .margin({ bottom: 16 })
 
       Row() {
@@ -348,6 +561,5 @@ export struct WorkflowPage {
     }
     .width('100%')
     .padding(16)
-    }
   }
 }

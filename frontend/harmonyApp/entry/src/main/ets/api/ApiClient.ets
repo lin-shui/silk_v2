@@ -1391,20 +1391,22 @@ export class ApiClient {
     } catch (_) { return []; }
   }
 
-  async createWorkflow(name: string, description: string, userId: string, agentType?: string, taskFocus?: string, initialDir?: string): Promise<WorkflowApiItem | undefined> {
-    try {
-      const bodyObj: CreateWorkflowRequestBody = {
-        userId: userId,
-        name: name,
-        description: description
-      };
-      if (agentType !== undefined) bodyObj.agentType = agentType;
-      if (taskFocus !== undefined) bodyObj.taskFocus = taskFocus;
-      if (initialDir !== undefined) bodyObj.initialDir = initialDir;
-      const body = JSON.stringify(bodyObj);
-      const result = await this.postRaw('/api/workflows', body);
-      return JSON.parse(result) as WorkflowApiItem;
-    } catch (_) { return undefined; }
+  async createWorkflow(name: string, description: string, userId: string, agentType?: string, taskFocus?: string, initialDir?: string): Promise<WorkflowApiItem> {
+    const bodyObj: CreateWorkflowRequestBody = {
+      userId: userId,
+      name: name,
+      description: description
+    };
+    if (agentType !== undefined) bodyObj.agentType = agentType;
+    if (taskFocus !== undefined) bodyObj.taskFocus = taskFocus;
+    if (initialDir !== undefined) bodyObj.initialDir = initialDir;
+    const body = JSON.stringify(bodyObj);
+    const resultStr = await this.postRaw('/api/workflows', body);
+    if (resultStr.includes('"success":false')) {
+      const errObj = JSON.parse(resultStr) as Record<string, Object>;
+      throw new Error((errObj['message'] as string) || '创建工作流失败');
+    }
+    return JSON.parse(resultStr) as WorkflowApiItem;
   }
 
   async getWorkflowByGroupId(groupId: string): Promise<WorkflowApiItem | undefined> {
