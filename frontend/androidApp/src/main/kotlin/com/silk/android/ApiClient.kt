@@ -1,6 +1,7 @@
 package com.silk.android
 
 import com.silk.shared.models.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -652,6 +653,7 @@ object ApiClient {
                 CreateWorkflowResult.Ok(jsonParser.decodeFromString(response))
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             CreateWorkflowResult.Err(e.message ?: "网络错误")
         }
     }
@@ -671,6 +673,7 @@ object ApiClient {
             val response = get("/users/$userId/cc-state/$groupId")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             println("获取 CC 状态失败: $e")
             CcStateResponse(success = false, error = e.message)
         }
@@ -691,6 +694,7 @@ object ApiClient {
             val response = get("/users/$userId/cc-fs/list$params")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             println("列目录失败: $e")
             DirListingResponse(success = false, error = e.message)
         }
@@ -705,6 +709,7 @@ object ApiClient {
             val response = post("/users/$userId/cc-fs/cd", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             println("切换目录失败: $e")
             CcStateResponse(success = false, error = e.message)
         }
@@ -724,6 +729,7 @@ object ApiClient {
                 else -> TrustCheckResult.NotTrusted(bridgeId)
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             TrustCheckResult.Error(e.message ?: "网络错误")
         }
     }
@@ -737,6 +743,7 @@ object ApiClient {
             val obj = jsonParser.parseToJsonElement(response).jsonObject
             obj["success"]?.jsonPrimitive?.booleanOrNull ?: false
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             println("添加信任目录失败: $e")
             false
         }

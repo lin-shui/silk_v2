@@ -41,6 +41,12 @@ fun WorkflowChatScreen(appState: AppState) {
         val isGenerating by chatClient.isGenerating.collectAsState()
 
         var messageText by remember(groupId) { mutableStateOf(TextFieldValue("")) }
+        var workingDir by remember(groupId) { mutableStateOf(workflow.workingDir) }
+        var showFolderPicker by remember(groupId) { mutableStateOf(false) }
+        var showTrustConfirm by remember(groupId) { mutableStateOf(false) }
+        var trustConfirmPath by remember(groupId) { mutableStateOf("") }
+        var trustConfirmBridgeId by remember(groupId) { mutableStateOf<String?>(null) }
+        var errorDialogMessage by remember(groupId) { mutableStateOf<String?>(null) }
         val listState = rememberLazyListState()
 
         // Connect WebSocket
@@ -51,6 +57,18 @@ fun WorkflowChatScreen(appState: AppState) {
                 chatClient.connect(user.id, user.fullName, groupId)
             } catch (e: Exception) {
                 println("❌ 工作流 WebSocket 连接失败: ${e.message}")
+            }
+        }
+
+        // Sync working dir after WebSocket connects (autoActivateForWorkflow completes on backend)
+        LaunchedEffect(groupId, connectionState) {
+            if (groupId.isBlank()) return@LaunchedEffect
+            if (connectionState == ConnectionState.CONNECTED) {
+                kotlinx.coroutines.delay(200)
+                val snap = ApiClient.getCcState(user.id, groupId)
+                if (snap.success && snap.workingDir.isNotBlank()) {
+                    workingDir = snap.workingDir
+                }
             }
         }
 
@@ -70,6 +88,15 @@ fun WorkflowChatScreen(appState: AppState) {
             }
         }
 
+        suspend fun performCd(path: String) {
+            val resp = ApiClient.cdCcDir(user.id, groupId, path)
+            if (resp.success && resp.workingDir.isNotBlank()) {
+                workingDir = resp.workingDir
+            } else {
+                errorDialogMessage = resp.error ?: "切换目录失败"
+            }
+        }
+
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -80,6 +107,15 @@ fun WorkflowChatScreen(appState: AppState) {
                                 style = MaterialTheme.typography.titleMedium,
                                 color = SilkColors.textPrimary,
                             )
+                            if (workingDir.isNotBlank()) {
+                                Text(
+                                    "📁 $workingDir",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = SilkColors.textSecondary,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                )
+                            }
                             if (connectionState != ConnectionState.CONNECTED) {
                                 Text(
                                     text = when (connectionState) {
@@ -98,6 +134,14 @@ fun WorkflowChatScreen(appState: AppState) {
                     navigationIcon = {
                         IconButton(onClick = { appState.navigateBack() }) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        }
+                    },
+                    actions = {
+                        TextButton(onClick = { showFolderPicker = true }) {
+                            Text(
+                                if (workingDir.isBlank()) "📂 选择" else "更改",
+                                color = SilkColors.primary,
+                            )
                         }
                     },
                 )
@@ -224,6 +268,59 @@ fun WorkflowChatScreen(appState: AppState) {
                     }
                 }
             }
+        }
+
+        if (showFolderPicker) {
+            FolderPickerDialog(
+                userId = user.id,
+                initialPath = workingDir.ifBlank { null },
+                onDismiss = { showFolderPicker = false },
+                onConfirm = { selectedPath ->
+                    showFolderPicker = false
+                    scope.launch {
+                        when (val tc = ApiClient.checkTrustedDir(user.id, selectedPath)) {
+                            is TrustCheckResult.BridgeDisconnected -> {
+                                errorDialogMessage = "Bridge 未连接，无法切换目录。"
+                            }
+                            is TrustCheckResult.NotTrusted -> {
+                                trustConfirmPath = selectedPath
+                                trustConfirmBridgeId = tc.bridgeId
+                                showTrustConfirm = true
+                            }
+                            is TrustCheckResult.Error -> {
+                                errorDialogMessage = "检查信任状态失败：${tc.message}"
+                            }
+                            is TrustCheckResult.Trusted -> performCd(selectedPath)
+                        }
+                    }
+                },
+            )
+        }
+
+        if (showTrustConfirm) {
+            TrustConfirmDialog(
+                path = trustConfirmPath,
+                bridgeId = trustConfirmBridgeId,
+                onDismiss = { showTrustConfirm = false },
+                onTrust = {
+                    scope.launch {
+                        val added = ApiClient.addTrustedDir(user.id, trustConfirmPath)
+                        if (added) {
+                            showTrustConfirm = false
+                            performCd(trustConfirmPath)
+                        } else {
+                            errorDialogMessage = "添加信任记录失败，请重试。"
+                        }
+                    }
+                },
+            )
+        }
+
+        errorDialogMessage?.let { msg ->
+            WorkflowErrorDialog(
+                message = msg,
+                onDismiss = { errorDialogMessage = null },
+            )
         }
     }
 }
