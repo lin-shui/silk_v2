@@ -165,45 +165,48 @@ export struct CcWorkflowPanel {
 
   build() {
     Column() {
-      if (!this.panelLoading) {
-        Row() {
-          // 状态指示
-          Text('●')
-            .fontSize(10)
-            .fontColor(this.bridgeConnected
-              ? (this.isCcRunning ? '#52C41A' : '#8C8C8C')
-              : '#FF4D4F')
-            .margin({ right: 4 })
+      Row() {
+        // 状态指示
+        Text('●')
+          .fontSize(10)
+          .fontColor(this.bridgeConnected
+            ? (this.isCcRunning ? '#52C41A' : '#8C8C8C')
+            : '#FF4D4F')
+          .margin({ right: 4 })
 
-          if (this.workingDir && this.workingDir.length > 0) {
-            Text(this.workingDir)
-              .fontSize(12)
-              .fontColor(SilkColors.textSecondary)
-              .layoutWeight(1)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-          } else {
-            Text('未设置工作目录')
-              .fontSize(12)
-              .fontColor(SilkColors.textLight)
-              .layoutWeight(1)
-          }
-
-          Text('更改')
+        if (this.panelLoading) {
+          Text('加载工作目录...')
             .fontSize(12)
-            .fontColor(SilkColors.primary)
-            .fontWeight(FontWeight.Medium)
-            .padding({ left: 8, right: 12 })
-            .onClick(() => {
-              this.openDirBrowser();
-            })
+            .fontColor(SilkColors.textLight)
+            .layoutWeight(1)
+        } else if (this.workingDir && this.workingDir.length > 0) {
+          Text(this.workingDir)
+            .fontSize(12)
+            .fontColor(SilkColors.textSecondary)
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        } else {
+          Text('未设置工作目录')
+            .fontSize(12)
+            .fontColor(SilkColors.textLight)
+            .layoutWeight(1)
         }
-        .width('100%')
-        .height(36)
-        .alignItems(VerticalAlign.Center)
-        .padding({ left: 12 })
-        .backgroundColor('#F0F5FF')
+
+        Text('更改')
+          .fontSize(12)
+          .fontColor(SilkColors.primary)
+          .fontWeight(FontWeight.Medium)
+          .padding({ left: 8, right: 12 })
+          .onClick(() => {
+            this.openDirBrowser();
+          })
       }
+      .width('100%')
+      .height(36)
+      .alignItems(VerticalAlign.Center)
+      .padding({ left: 12 })
+      .backgroundColor('#F0F5FF')
     }
     .width('100%')
     .bindSheet($$this.showDirBrowser, this.dirBrowserSheet(), {
