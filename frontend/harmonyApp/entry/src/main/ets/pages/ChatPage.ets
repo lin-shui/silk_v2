@@ -1761,10 +1761,16 @@ export struct ChatPage {
         .backgroundColor('#FDF3E0')
       }
 
-      // CC 工作流面板
-      if (this.workflowAgentType === 'claude_code') {
-        CcWorkflowPanel()
+      // CC 工作流面板（无条件渲染诊断）
+      Row() {
+        Text('DEBUG-CcPanel')
+          .fontSize(12)
+          .fontColor(Color.White)
       }
+      .width('100%')
+      .height(36)
+      .backgroundColor(Color.Red)
+      CcWorkflowPanel()
 
       // 消息区域
       if (this.isSelectionMode) {
