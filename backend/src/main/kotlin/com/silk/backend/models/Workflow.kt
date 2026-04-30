@@ -10,6 +10,8 @@ data class Workflow(
     val ownerId: String,
     val groupId: String = "",
     val agentType: String = "claude_code",
+    /** Silk Chat 工作流的任务焦点：shopping / ride / general（仅 agentType=silk_chat 时有效） */
+    val taskFocus: String = "",
     val createdAt: Long,
     val updatedAt: Long,
     /** 持久化的工作目录，用户在创建/更改目录时落库；后端重启后用它 seed CC state 的 workingDir，避免回退到 backend 进程 cwd。 */

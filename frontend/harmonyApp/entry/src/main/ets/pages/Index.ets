@@ -5,6 +5,7 @@
 import { router as appRouter, PageName } from '../common/Router';
 import { LoginPage } from './LoginPage';
 import { MainPage } from './MainPage';
+import { ChatPage } from './ChatPage';
 import { TodoPage } from './TodoPage';
 import { SettingsPage } from './SettingsPage';
 
@@ -20,6 +21,14 @@ struct Index {
     });
   }
 
+  onBackPress(): boolean {
+    if (this.currentPage === PageName.Chat) {
+      appRouter.goToMain();
+      return true;
+    }
+    return false;
+  }
+
   build() {
     Column() {
       if (this.currentPage === PageName.Login) {
@@ -28,6 +37,8 @@ struct Index {
         MainPage();
       } else if (this.currentPage === PageName.Todo) {
         TodoPage();
+      } else if (this.currentPage === PageName.Chat) {
+        ChatPage();
       } else if (this.currentPage === PageName.Settings) {
         SettingsPage();
       } else {

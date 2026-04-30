@@ -19,7 +19,8 @@ enum class Scene {
 enum class NavTab {
     SILK,
     WORKFLOW,
-    KNOWLEDGE_BASE
+    KNOWLEDGE_BASE,
+    AUDIO_DUPLEX
 }
 
 class AppState(

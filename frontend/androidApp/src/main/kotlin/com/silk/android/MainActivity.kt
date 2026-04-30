@@ -21,6 +21,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
+import com.silk.android.AudioDuplexScreen
 
 /**
  * Silk 颜色定义 - 与 Web 前端保持一致
@@ -300,6 +301,7 @@ fun SilkApp(
                     }
                     NavTab.WORKFLOW -> WorkflowScreen(appState)
                     NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScreen(appState)
+                    NavTab.AUDIO_DUPLEX -> AudioDuplexScreen(appState)
                 }
             }
         }
@@ -344,6 +346,19 @@ fun SilkBottomNav(appState: AppState) {
             onClick = { appState.currentTab = NavTab.KNOWLEDGE_BASE },
             icon = { Icon(Icons.Default.MenuBook, contentDescription = "知识库") },
             label = { Text("知识库", fontSize = 11.sp) },
+            colors = NavigationBarItemDefaults.colors(
+                selectedIconColor = SilkColors.primary,
+                selectedTextColor = SilkColors.primary,
+                unselectedIconColor = SilkColors.textLight,
+                unselectedTextColor = SilkColors.textLight,
+                indicatorColor = SilkColors.primaryLight.copy(alpha = 0.3f)
+            )
+        )
+        NavigationBarItem(
+            selected = appState.currentTab == NavTab.AUDIO_DUPLEX,
+            onClick = { appState.currentTab = NavTab.AUDIO_DUPLEX },
+            icon = { Text("📞", fontSize = 20.sp) },
+            label = { Text("音频双工", fontSize = 11.sp) },
             colors = NavigationBarItemDefaults.colors(
                 selectedIconColor = SilkColors.primary,
                 selectedTextColor = SilkColors.primary,

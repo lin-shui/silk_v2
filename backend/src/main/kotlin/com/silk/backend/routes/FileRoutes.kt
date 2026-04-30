@@ -349,6 +349,99 @@ fun Route.fileRoutes() {
         }
         
         /**
+         * 获取最新 HAP 版本信息
+         * GET /api/files/hap-version
+         *
+         * 版本号基于 HAP 文件的修改时间自动生成（与 APK 相同算法）：
+         * - versionCode: (year-2020)*100000000 + month*1000000 + day*10000 + hour*100 + minute
+         * - versionName: yyyy.MMdd.HHmm
+         */
+        get("/hap-version") {
+            // HAP 文件路径 - 按优先级查找
+            val possiblePaths = listOf(
+                "static/silk.hap",                              // silk.sh 可能创建的符号链接
+                "frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap",  // 构建目录
+                "../frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap"
+            )
+
+            val hapFile = possiblePaths
+                .map { File(it) }
+                .firstOrNull { it.exists() && it.length() > 0 }
+
+            val lastModified = if (hapFile != null && hapFile.exists()) hapFile.lastModified() else System.currentTimeMillis()
+            val fileSize = if (hapFile != null && hapFile.exists()) hapFile.length() else 0L
+
+            // 基于 HAP 文件修改时间生成版本号
+            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).apply {
+                timeInMillis = lastModified
+            }
+
+            val year = calendar.get(java.util.Calendar.YEAR) - 2020
+            val month = calendar.get(java.util.Calendar.MONTH) + 1
+            val day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
+            val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+            val minute = calendar.get(java.util.Calendar.MINUTE)
+
+            val versionCode = year * 100000000 + month * 1000000 + day * 10000 + hour * 100 + minute
+            val versionName = String.format("%04d.%02d%02d.%02d%02d",
+                calendar.get(java.util.Calendar.YEAR), month, day, hour, minute)
+
+            logger.info("📱 HAP 版本: $versionName (code=$versionCode) - 文件时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(lastModified))}")
+
+            call.respond(AppVersionResponse(
+                versionCode = versionCode,
+                versionName = versionName,
+                lastModified = lastModified,
+                fileSize = fileSize,
+                downloadUrl = "/api/files/download-hap"
+            ))
+        }
+
+        /**
+         * 下载最新 Harmony HAP
+         * GET /api/files/download-hap
+         */
+        get("/download-hap") {
+            // HAP 文件路径 - 按优先级查找
+            val possiblePaths = listOf(
+                "static/silk.hap",                               // 符号链接（优先）
+                "frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap",  // 构建目录
+                "../frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap"
+            )
+
+            val hapFile = possiblePaths
+                .map { File(it) }
+                .firstOrNull { it.exists() && it.length() > 0 }
+
+            if (hapFile == null || !hapFile.exists()) {
+                logger.warn("HAP 文件不存在，已检查路径: $possiblePaths")
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "HAP 文件不存在，请先构建 Harmony 应用"))
+                return@get
+            }
+
+            // 检查文件是否正在被写入（最后修改时间在 5 秒内）
+            val lastModified = hapFile.lastModified()
+            val now = System.currentTimeMillis()
+            if (now - lastModified < 5000) {
+                logger.warn("⚠️ HAP 文件可能正在更新中，请稍后再试")
+                call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "文件正在更新中，请稍后再试"))
+                return@get
+            }
+
+            logger.info("📱 提供 HAP 下载: ${hapFile.name} (${hapFile.length()} bytes)")
+
+            call.response.header(
+                HttpHeaders.ContentDisposition,
+                ContentDisposition.Attachment.withParameter(
+                    ContentDisposition.Parameters.FileName,
+                    "Silk-Harmony.hap"
+                ).toString()
+            )
+
+            call.respondFile(hapFile)
+        }
+
+        /**
          * 获取会话文件列表
          * GET /api/files/list/{sessionId}
          */

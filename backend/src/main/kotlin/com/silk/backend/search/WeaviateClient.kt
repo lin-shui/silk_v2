@@ -546,6 +546,7 @@ class WeaviateClient(
                 document.filePath?.let { append("\"filePath\":\"${escapeJson(it)}\",") }
                 document.sourceUrl?.let { append("\"sourceUrl\":\"$it\",") }
                 document.timestamp?.let { append("\"timestamp\":\"$it\",") }
+                document.messageId?.let { append("\"messageId\":\"${it}\",") }
                 if (document.tags.isNotEmpty()) { append("\"tags\":[$tagsJson],") }
                 append("\"chunkIndex\":${document.chunkIndex},")
                 append("\"totalChunks\":${document.totalChunks},")
@@ -596,7 +597,8 @@ class WeaviateClient(
                     authorId = msg.userId,
                     authorName = msg.userName,
                     timestamp = msg.timestamp,
-                    importance = if (msg.isImportant) 1.0 else 0.5
+                    importance = if (msg.isImportant) 1.0 else 0.5,
+                    messageId = msg.messageId
                 ),
                 participants = participants
             )
@@ -605,7 +607,84 @@ class WeaviateClient(
         
         indexed
     }
-    
+
+    // ==================== 删除操作 ====================
+
+    /**
+     * 删除单个聊天消息的向量索引
+     * 通过 messageId + sessionId 查找 Weaviate 对象并删除
+     */
+    suspend fun deleteChatMessage(sessionId: String, messageId: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            // 1. GraphQL 查询找到 Weaviate 内部 UUID
+            val graphqlQuery = """
+            {
+                Get {
+                    SilkContext(
+                        where: {
+                            operator: And,
+                            operands: [
+                                { path: ["sessionId"], operator: Equal, valueText: "$sessionId" },
+                                { path: ["messageId"], operator: Equal, valueText: "$messageId" }
+                            ]
+                        }
+                        limit: 1
+                    ) {
+                        _additional { id }
+                    }
+                }
+            }
+            """.trimIndent()
+
+            val response = httpClient.post("$baseUrl/v1/graphql") {
+                contentType(ContentType.Application.Json)
+                setBody(GraphQLRequest(query = graphqlQuery))
+            }
+
+            val result = json.decodeFromString<JsonObject>(response.bodyAsText())
+            val weaviateId = result["data"]?.jsonObject
+                ?.get("Get")?.jsonObject
+                ?.get("SilkContext")?.jsonArray
+                ?.firstOrNull()?.jsonObject
+                ?.get("_additional")?.jsonObject
+                ?.get("id")?.jsonPrimitive?.content
+
+            if (weaviateId == null) {
+                logger.warn("⚠️ [Weaviate] 未找到 messageId={} 的向量，可能尚未索引", messageId)
+                return@withContext false
+            }
+
+            // 2. 通过 REST API 删除对象
+            val deleteResponse = httpClient.delete("$baseUrl/v1/objects/SilkContext/$weaviateId")
+            val success = deleteResponse.status.isSuccess()
+            if (success) {
+                logger.info("✅ [Weaviate] 已删除向量: messageId={}, weaviateId={}", messageId, weaviateId)
+            } else {
+                logger.error("❌ [Weaviate] 删除向量失败: {} - {}", deleteResponse.status, deleteResponse.bodyAsText())
+            }
+            success
+        } catch (e: Exception) {
+            logger.error("❌ [Weaviate] 删除向量异常: {}", e.message)
+            false
+        }
+    }
+
+    /**
+     * 批量删除聊天消息的向量索引
+     * @return 成功删除的数量
+     */
+    suspend fun deleteChatMessages(sessionId: String, messageIds: List<String>): Int {
+        var deleted = 0
+        for (msgId in messageIds) {
+            try {
+                if (deleteChatMessage(sessionId, msgId)) deleted++
+            } catch (e: Exception) {
+                logger.warn("⚠️ [Weaviate] 批量删除消息 {} 失败: {}", msgId, e.message)
+            }
+        }
+        return deleted
+    }
+
     // ==================== 辅助方法 ====================
     
     private suspend fun executeHybridSearch(
@@ -934,6 +1013,7 @@ data class IndexDocument(
     val timestamp: String? = null,
     val tags: List<String> = emptyList(),
     val metadata: Map<String, String> = emptyMap(),
+    val messageId: String? = null,
     val importance: Double = 0.5,
     val chunkIndex: Int = 0,
     val totalChunks: Int = 1
@@ -945,7 +1025,8 @@ data class ChatMessage(
     val userName: String,
     val content: String,
     val timestamp: String,
-    val isImportant: Boolean = false
+    val isImportant: Boolean = false,
+    val messageId: String? = null
 )
 
 // ===== GraphQL =====

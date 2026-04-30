@@ -13,8 +13,13 @@ import { AlarmService, AlarmResult } from '../common/AlarmService';
 import { parseAlarmTimeFromText } from '../common/TodoTimeParser';
 import { TodoTaskCardRow } from '../components/TodoTaskCardRow';
 import { API_BASE_URL } from '../common/Constants';
-import { ShoppingIntentParser, ShoppingIntent } from '../common/ShoppingIntentParser';
-import { ShoppingLauncher } from '../common/ShoppingLauncher';
+import { ShoppingIntentParser, ShoppingIntent, ParsedIntent } from '../common/ShoppingIntentParser';
+import { ShoppingLauncher, ShoppingLaunchResult } from '../common/ShoppingLauncher';
+import { MetaServiceLauncher } from '../common/MetaServiceLauncher';
+import { MetaServiceConfig, MetaServiceDef, MetaServiceParamDef } from '../common/MetaServiceConfig';
+import { MetaServiceIntent } from '../models/MetaServiceDef';
+
+const META_SERVICE_LIST: MetaServiceDef[] = MetaServiceConfig.getAllServices();
 
 @Component
 export struct TodoPage {
@@ -28,6 +33,9 @@ export struct TodoPage {
   @State private editTitle: string = '';
   @State private editActionType: string = 'none';
   @State private editActionDetail: string = '';
+  @State private editMetaServiceId: string = '';
+  @State private editMetaServiceParams: Record<string, string> = {};
+  @State private editMetaServiceKeywords: string = '';
   @State private deletingTodoId: string = '';
   @State private todoMenuTarget: UserTodoItem | null = null;
   @State private diagnosticsText: string = '';
@@ -389,8 +397,8 @@ export struct TodoPage {
 
   private todoCanExecute(item: UserTodoItem): boolean {
     const at = (item.actionType ? item.actionType : 'none').toLowerCase();
-    // 购物类型始终可执行（即使已完成也可重复购买）
-    if (at === 'shopping') {
+    // 购物和元服务类型始终可执行
+    if (at === 'shopping' || at === 'meta_service') {
       return true;
     }
     // 其他类型：已完成则不可执行
@@ -448,6 +456,12 @@ export struct TodoPage {
     // 处理购物类型
     if (at === 'shopping') {
       await this.executeShopping(item);
+      return;
+    }
+
+    // 处理元服务类型
+    if (at === 'meta_service') {
+      await this.executeMetaService(item);
       return;
     }
 
@@ -509,37 +523,168 @@ export struct TodoPage {
   }
 
   /**
-   * 执行购物待办：解析意图并跳转到电商平台
+   * 执行购物待办：解析意图并跳转到电商平台或出行服务
    */
   private async executeShopping(item: UserTodoItem): Promise<void> {
     await this.withTodoRowLocked(item.id, async (): Promise<void> => {
-      // 解析购物意图
-      const intent = ShoppingIntentParser.parseShoppingIntent(item.title, item.actionDetail);
+      // 先用通用解析器检测意图类型
+      const parsed: ParsedIntent = ShoppingIntentParser.parse(item.title, item.actionDetail);
 
-      if (!intent.isShopping) {
-        // 如果没有明确购物意图，尝试从标题提取关键词
-        const fallbackIntent: ShoppingIntent = {
-          isShopping: true,
-          keywords: [item.title],
-          platform: 'taobao',
-          searchUrl: `https://s.taobao.com/search?q=${encodeURIComponent(item.title)}`,
-          platformName: '淘宝'
-        };
-        this.showToast(`正在打开购物平台搜索: ${item.title}`);
-        const result = await ShoppingLauncher.launchShopping(fallbackIntent);
-        if (!result.success) {
-          this.showToast(result.message);
-        }
+      if (parsed.type === 'ride_hailing') {
+        // 出行类型 → 走元服务启动器
+        await this.executeRideHailingFromShopping(item, parsed);
         return;
       }
 
-      // 显示提示并跳转
-      this.showToast(`正在打开 ${intent.platformName} 搜索: ${intent.keywords.join(' ')}`);
+      if (parsed.type === 'shopping' && parsed.shoppingIntent) {
+        await this.executeShoppingIntent(item, parsed.shoppingIntent);
+        return;
+      }
 
-      const result = await ShoppingLauncher.launchShopping(intent);
+      // 无法识别意图，降级为淘宝搜索
+      const fallbackIntent: ShoppingIntent = {
+        isShopping: true,
+        keywords: [item.title],
+        platform: 'taobao',
+        searchUrl: `https://s.taobao.com/search?q=${encodeURIComponent(item.title)}`,
+        platformName: '淘宝'
+      };
+      this.showToast(`正在打开购物平台搜索: ${item.title}`);
+      const result = await ShoppingLauncher.launchShopping(fallbackIntent);
+      if (!result.success) {
+        this.showToast(result.message);
+      }
+    });
+  }
+
+  private async executeRideHailingFromShopping(item: UserTodoItem, parsed: ParsedIntent): Promise<void> {
+    const ride = parsed.rideHailingIntent;
+    if (!ride) {
+      return;
+    }
+    const def = MetaServiceConfig.getServiceDef('t3_ride');
+    if (!def) {
+      this.showToast('未找到 T3出行 元服务配置');
+      return;
+    }
+    const params: Record<string, string> = {};
+    if (ride.pickup) {
+      params.pickup = ride.pickup;
+    }
+    if (ride.destination) {
+      params.destination = ride.destination;
+    }
+    const uri = MetaServiceConfig.resolveUri(def, params);
+    const metaIntent: MetaServiceIntent = {
+      serviceId: 't3_ride',
+      serviceName: 'T3出行',
+      serviceType: 'parameter',
+      params: params,
+      uri: uri
+    };
+    this.showToast(ride.pickup
+      ? `正在打开 T3出行: ${ride.pickup} → ${ride.destination || '未知'}`
+      : `正在打开 T3出行${ride.destination ? ': 去' + ride.destination : ''}`);
+    const result = await MetaServiceLauncher.launch(metaIntent);
+    const slResult: ShoppingLaunchResult = {
+      success: result.success,
+      message: result.message,
+      launchType: result.launchType
+    };
+    await this.handleShoppingResult(item, slResult);
+  }
+
+  private async executeShoppingIntent(item: UserTodoItem, intent: ShoppingIntent): Promise<void> {
+    this.showToast(`正在打开 ${intent.platformName} 搜索: ${intent.keywords.join(' ')}`);
+    const result = await ShoppingLauncher.launchShopping(intent);
+    await this.handleShoppingResult(item, result);
+  }
+
+  private async handleShoppingResult(item: UserTodoItem, result: ShoppingLaunchResult): Promise<void> {
+    if (result.success) {
+      const now = Date.now();
+      const patch: UserTodoPatch = {
+        done: true,
+        executedAt: now,
+        lifecycleState: 'done',
+        closedAt: now
+      };
+      const updateRes = await this.apiClient.updateUserTodoItem(this.userId, item.id, patch);
+      if (updateRes.success && updateRes.data) {
+        this.setTodoItemsData(updateRes.data);
+      } else {
+        this.applyTodoShoppingSuccessLocal(item, now);
+      }
+    } else {
+      this.showToast(result.message);
+    }
+  }
+
+  /**
+   * 执行元服务待办：解析 actionDetail JSON 并调用元服务
+   */
+  private async executeMetaService(item: UserTodoItem): Promise<void> {
+    await this.withTodoRowLocked(item.id, async (): Promise<void> => {
+      let serviceId = '';
+      let rawParams: Record<string, string> = {};
+
+      try {
+        const parsed: Record<string, Object> = JSON.parse(item.actionDetail || '{}');
+        serviceId = parsed['service'] as string || '';
+        const p = parsed['params'];
+        if (p) {
+          const pObj = p as Record<string, string>;
+          const pKeys = Object.keys(pObj);
+          for (let i = 0; i < pKeys.length; i++) {
+            rawParams[pKeys[i]] = pObj[pKeys[i]];
+          }
+        }
+      } catch (e) {
+        const parts = (item.actionDetail || '').split('|');
+        serviceId = parts[0] || '';
+        if (parts.length >= 3) {
+          rawParams['pickup'] = parts[1];
+          rawParams['destination'] = parts[2];
+        }
+      }
+
+      if (!serviceId) {
+        this.showToast('未指定元服务');
+        return;
+      }
+
+      const def = MetaServiceConfig.getServiceDef(serviceId);
+      if (!def) {
+        this.showToast(`不支持的元服务: ${serviceId}`);
+        return;
+      }
+
+      // 搜索型：将 keywords 从 params 中提取
+      let keywords: string[] | undefined;
+      if (def.serviceType === 'search') {
+        const kw = rawParams['keywords'] || '';
+        keywords = kw.length > 0 ? [kw] : undefined;
+      }
+
+      const uri = MetaServiceConfig.resolveUri(def, rawParams);
+      const fallbackUrl = keywords
+        ? MetaServiceConfig.resolveSearchUrl(def, keywords.join(' '))
+        : undefined;
+
+      const metaIntent: MetaServiceIntent = {
+        serviceId: def.id,
+        serviceName: def.name,
+        serviceType: def.serviceType,
+        keywords: keywords,
+        params: rawParams,
+        uri: uri,
+        fallbackUrl: fallbackUrl
+      };
+
+      this.showToast(`正在打开 ${def.name}`);
+      const result = await MetaServiceLauncher.launch(metaIntent);
 
       if (result.success) {
-        // 标记为已执行
         const now = Date.now();
         const patch: UserTodoPatch = {
           done: true,
@@ -777,6 +922,29 @@ export struct TodoPage {
     this.editTitle = item.title;
     this.editActionType = item.actionType ? item.actionType : 'none';
     this.editActionDetail = item.actionDetail ? item.actionDetail : '';
+    this.editMetaServiceId = '';
+    this.editMetaServiceParams = {};
+    this.editMetaServiceKeywords = '';
+
+    if (this.editActionType === 'meta_service') {
+      try {
+        const parsed: Record<string, Object> = JSON.parse(this.editActionDetail || '{}');
+        this.editMetaServiceId = parsed['service'] as string || '';
+        const p = parsed['params'];
+        if (p) {
+          const pObj = p as Record<string, string>;
+          const pKeys = Object.keys(pObj);
+          const merged: Record<string, string> = {};
+          for (let i = 0; i < pKeys.length; i++) {
+            merged[pKeys[i]] = pObj[pKeys[i]];
+          }
+          this.editMetaServiceParams = merged;
+          this.editMetaServiceKeywords = merged['keywords'] || '';
+        }
+      } catch (e) {
+        // 如果解析失败就留空
+      }
+    }
   }
 
   private async saveEditTodo(): Promise<void> {
@@ -788,10 +956,28 @@ export struct TodoPage {
       this.showToast('标题不能为空');
       return;
     }
+    let actionDetail = this.editActionDetail.trim();
+    if (this.editActionType === 'meta_service') {
+      const svc = MetaServiceConfig.getServiceDef(this.editMetaServiceId);
+      if (!svc) {
+        this.showToast('请选择元服务');
+        return;
+      }
+      const params: Record<string, string> = {};
+      if (svc.serviceType === 'search') {
+        params.keywords = this.editMetaServiceKeywords.trim();
+      } else {
+        const keys = Object.keys(this.editMetaServiceParams);
+        for (let i = 0; i < keys.length; i++) {
+          params[keys[i]] = this.editMetaServiceParams[keys[i]];
+        }
+      }
+      actionDetail = JSON.stringify({ service: svc.id, params: params });
+    }
     const patch: UserTodoPatch = {
       title: title,
       actionType: this.editActionType === 'none' ? '' : this.editActionType,
-      actionDetail: this.editActionType === 'none' ? '' : this.editActionDetail.trim()
+      actionDetail: this.editActionType === 'none' ? '' : actionDetail
     };
     const res = await this.apiClient.updateUserTodoItem(this.userId, this.editingTodo.id, patch);
     if (res.success && res.data) {
@@ -822,6 +1008,23 @@ export struct TodoPage {
     } catch (_) {
       // ignore
     }
+  }
+
+  // -- 编辑弹框元服务辅助方法 --
+
+  private isEditDefTypeSearch(): boolean {
+    const def = MetaServiceConfig.getServiceDef(this.editMetaServiceId);
+    return def !== undefined && def.serviceType === 'search';
+  }
+
+  private isEditDefTypeParameter(): boolean {
+    const def = MetaServiceConfig.getServiceDef(this.editMetaServiceId);
+    return def !== undefined && def.serviceType === 'parameter' && def.paramSchema !== undefined;
+  }
+
+  private getEditMetaParamArray(): MetaServiceParamDef[] {
+    const def = MetaServiceConfig.getServiceDef(this.editMetaServiceId);
+    return def && def.paramSchema ? def.paramSchema : [];
   }
 
   build() {
@@ -1158,10 +1361,77 @@ export struct TodoPage {
           .onClick((): void => {
             this.editActionType = 'shopping';
           })
+        Button('元服务')
+          .height(32)
+          .fontSize(12)
+          .backgroundColor(this.editActionType === 'meta_service' ? SilkColors.primary : '#EEE')
+          .fontColor(this.editActionType === 'meta_service' ? SilkColors.onPrimary : SilkColors.textPrimary)
+          .onClick((): void => {
+            this.editActionType = 'meta_service';
+            if (!this.editMetaServiceId) {
+              const services = MetaServiceConfig.getAllServices();
+              if (services.length > 0) {
+                this.editMetaServiceId = services[0].id;
+                this.editMetaServiceParams = {};
+                this.editMetaServiceKeywords = '';
+              }
+            }
+          })
       }
       .margin({ bottom: 12 })
 
-      if (this.editActionType !== 'none') {
+      if (this.editActionType === 'meta_service') {
+        // 元服务选择器
+        Text('选择元服务')
+          .fontSize(14)
+          .fontColor(SilkColors.textSecondary)
+          .margin({ bottom: 6 })
+        Row({ space: 6 }) {
+          ForEach(META_SERVICE_LIST, (svc: MetaServiceDef) => {
+            Button(svc.name)
+              .height(32)
+              .fontSize(12)
+              .backgroundColor(this.editMetaServiceId === svc.id ? SilkColors.primary : '#EEE')
+              .fontColor(this.editMetaServiceId === svc.id ? SilkColors.onPrimary : SilkColors.textPrimary)
+              .onClick((): void => {
+                this.editMetaServiceId = svc.id;
+                this.editMetaServiceParams = {};
+                this.editMetaServiceKeywords = '';
+              })
+          }, (svc: MetaServiceDef) => svc.id)
+        }
+        .margin({ bottom: 12 })
+
+        // 参数输入
+        if (this.editMetaServiceId.length > 0 && this.isEditDefTypeSearch()) {
+          TextInput({ text: this.editMetaServiceKeywords, placeholder: '搜索关键词' })
+            .fontSize(14)
+            .width('100%')
+            .margin({ bottom: 16 })
+            .onChange((val: string): void => {
+              this.editMetaServiceKeywords = val;
+            })
+        } else if (this.editMetaServiceId.length > 0 && this.isEditDefTypeParameter()) {
+          ForEach(this.getEditMetaParamArray(), (param: MetaServiceParamDef) => {
+            TextInput({
+              text: this.editMetaServiceParams[param.key] || '',
+              placeholder: param.required ? `${param.label} *` : param.label
+            })
+              .fontSize(14)
+              .width('100%')
+              .margin({ bottom: 10 })
+              .onChange((val: string): void => {
+                const next: Record<string, string> = {};
+                const keys = Object.keys(this.editMetaServiceParams);
+                for (let i = 0; i < keys.length; i++) {
+                  next[keys[i]] = this.editMetaServiceParams[keys[i]];
+                }
+                next[param.key] = val;
+                this.editMetaServiceParams = next;
+              })
+          }, (param: MetaServiceParamDef) => param.key)
+        }
+      } else if (this.editActionType !== 'none') {
         TextInput({ text: this.editActionDetail, placeholder: '时间，如 07:00 或 明天 15:00' })
           .fontSize(14)
           .width('100%')

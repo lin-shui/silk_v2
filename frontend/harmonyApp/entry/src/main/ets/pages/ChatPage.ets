@@ -11,7 +11,7 @@ import { appStore as globalAppStore } from '../stores/AppStore';
 import { SilkColors } from '../common/Theme';
 import { parseForwardedMessageContent, ForwardedMessageParts } from '../common/ForwardedMessageParse';
 import { router as appRouter } from '../common/Router';
-import { apiClient as globalApiClient, UserTodoPatch, GroupMemberProfile } from '../api/ApiClient';
+import { apiClient as globalApiClient, UserTodoPatch, GroupMemberProfile, WorkflowApiItem } from '../api/ApiClient';
 import pasteboard from '@ohos.pasteboard';
 import promptAction from '@ohos.promptAction';
 import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl';
@@ -21,6 +21,11 @@ import { parseAlarmTimeFromText } from '../common/TodoTimeParser';
 import { AudioRecorderService } from '../common/AudioRecorderService';
 import { getGlobalContext } from '../entryability/EntryAbility';
 import { router, KeyboardAvoidMode } from '@kit.ArkUI';
+import { ShoppingIntentParser } from '../common/ShoppingIntentParser';
+import { MetaServiceIntent } from '../models/MetaServiceDef';
+import { MetaServiceConfig } from '../common/MetaServiceConfig';
+import { MetaServiceLauncher } from '../common/MetaServiceLauncher';
+import { CcWorkflowPanel } from '../components/CcWorkflowPanel';
 
 class MessageDataSource implements IDataSource {
   private data: Message[] = [];
@@ -55,9 +60,8 @@ class MessageDataSource implements IDataSource {
   }
 }
 
-@Entry
 @Component
-struct ChatPage {
+export struct ChatPage {
   @State private connectionState: ConnectionState = ConnectionState.DISCONNECTED;
   @State private messageInput: string = '';
   @State private groupName: string = '项目会话';
@@ -74,6 +78,7 @@ struct ChatPage {
   @State private isSelectionMode: boolean = false;
   @State private selectedMessageIds: string[] = [];
   @State private isRecalling: boolean = false;
+  @State private isDeleting: boolean = false;
   @State private groupInvitationCode: string = '';
   @State private groupMembers: GroupMemberProfile[] = [];
   @State private membersLoading: boolean = false;
@@ -96,6 +101,8 @@ struct ChatPage {
   private userId: string = '';
   private userName: string = '';
   private isInitialized: boolean = false;
+  @State private workflowTaskFocus: string = '';
+  @State private isCcWorkflow: boolean = false;
   private readonly apiClient = globalApiClient;
   private readonly audioRecorder = new AudioRecorderService();
   private listScroller: Scroller = new Scroller();
@@ -105,13 +112,17 @@ struct ChatPage {
 
   onBackPress(): boolean | void {
     this.aboutToDisappear();
-    router.back();
+    appRouter.goToMain();
     return true;
   }
 
   aboutToAppear(): void {
     // RESIZE 让系统缩减可用高度，顶栏保持可见；输入框紧贴键盘
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
+
+    // 从 Router 单例同步检测 CC 工作流（WorkflowPage.enterChat 在导航前已设置）
+    this.isCcWorkflow = appRouter.workflowAgentType === 'claude_code';
+
     if (this.isInitialized) {
       return;
     }
@@ -148,9 +159,6 @@ struct ChatPage {
 
     if (this.userId === '') {
       appRouter.goToLogin();
-      router.replaceUrl({ url: 'pages/Index' }).catch((err: Error) => {
-        console.error('[ChatPage] replaceUrl Index failed:', err.message);
-      });
       return;
     }
 
@@ -191,6 +199,21 @@ struct ChatPage {
         void this.quietRefreshTodos();
       }, 1000);
     }
+
+    // 从 AppStorage 同步读取 workflow 上下文（WorkflowPage 进入时已预置）
+    const storedTaskFocus = AppStorage.get<string>('currentWorkflowTaskFocus');
+    this.workflowTaskFocus = storedTaskFocus ? storedTaskFocus : '';
+
+    // 检测工作流类型（API 异步查询，兜底非 WorkflowPage 入口）
+    this.apiClient.getWorkflowByGroupId(this.groupId).then((wf: WorkflowApiItem | undefined) => {
+      if (wf) {
+        if (wf.agentType === 'silk_chat') {
+          this.workflowTaskFocus = wf.taskFocus;
+        } else if (wf.agentType === 'claude_code' && !this.isCcWorkflow) {
+          this.isCcWorkflow = true;
+        }
+      }
+    }).catch(() => {});
   }
 
   private syncMessages(): void {
@@ -238,7 +261,7 @@ struct ChatPage {
         return;
       }
       const lastIndex = this.messages.length - 1;
-      this.listScroller.scrollToIndex(lastIndex, false, ScrollAlign.END);
+      this.listScroller.scrollToIndex(lastIndex, false, ScrollAlign.START);
     }, 80);
   }
 
@@ -260,9 +283,14 @@ struct ChatPage {
   }
 
   private handleSend(message: string): void {
-    const content = message.trim();
-    if (content === '') {
+    const baseContent = message.trim();
+    if (baseContent === '') {
       return;
+    }
+    // Silk Chat 工作流：自动追加任务焦点标签引导 AI 行为
+    let content = baseContent;
+    if (this.workflowTaskFocus.length > 0) {
+      content = `[task:${this.workflowTaskFocus}] ${baseContent}`;
     }
     const sentMessage = globalChatStore.sendMessage(content);
     if (!sentMessage) {
@@ -270,7 +298,7 @@ struct ChatPage {
     }
     this.setMessageStatus(sentMessage.id, 'sending');
 
-    if (this.isSilkPrivateChat() || content.startsWith('@Silk') || content.startsWith('@silk')) {
+    if (this.isSilkPrivateChat() || content.startsWith('@Silk') || content.startsWith('@silk') || this.workflowTaskFocus.length > 0) {
       this.isAiGenerating = true;
     }
 
@@ -345,6 +373,107 @@ struct ChatPage {
         promptAction.showToast({ message: '无法启动录音', duration: 2000 });
       }
     }
+  }
+
+  /**
+   * 为 AI 消息计算元服务快捷操作
+   * 检测上一条用户消息是否含出行/购物意图，若是则返回对应的 MetaServiceIntent
+   */
+  private getSuggestedActionForMessage(message: Message, index: number): MetaServiceIntent | null {
+    if (message.userId !== 'silk_ai_agent' || index <= 0) {
+      return null;
+    }
+    const prevMsg = this.messages[index - 1];
+    if (!prevMsg || prevMsg.userId !== this.userId) {
+      return null;
+    }
+    const userText = prevMsg.content ? prevMsg.content : '';
+
+    // Silk Chat 工作流：直接根据 workflowTaskFocus 创建元服务快捷按钮
+    if (this.workflowTaskFocus === 'shopping') {
+      const def = MetaServiceConfig.getServiceDef('jd_shopping');
+      if (def) {
+        const uriParams: Record<string, string> = {};
+        uriParams['keywords'] = '商品';
+        return {
+          serviceId: 'jd_shopping',
+          serviceName: '京东购物',
+          serviceType: 'search',
+          keywords: ['商品'],
+          uri: MetaServiceConfig.resolveUri(def, uriParams),
+          fallbackUrl: MetaServiceConfig.resolveSearchUrl(def, '商品')
+        };
+      }
+    }
+    if (this.workflowTaskFocus === 'ride') {
+      const def = MetaServiceConfig.getServiceDef('t3_ride');
+      if (def) {
+        const rideParams: Record<string, string> = {};
+        return {
+          serviceId: 't3_ride',
+          serviceName: 'T3出行',
+          serviceType: 'parameter',
+          params: rideParams
+        };
+      }
+    }
+
+    // 正常流程：通过 ShoppingIntentParser 解析用户意图
+    const cleanText = userText.replace(/^\[task:\w+\]\s*/, '');
+    const parsed = ShoppingIntentParser.parse(cleanText);
+
+    if (parsed.type === 'ride_hailing' && parsed.rideHailingIntent) {
+      const ride = parsed.rideHailingIntent;
+      const def = MetaServiceConfig.getServiceDef('t3_ride');
+      if (!def) {
+        return null;
+      }
+      const params: Record<string, string> = {};
+      if (ride.pickup) {
+        params['pickup'] = ride.pickup;
+      }
+      if (ride.destination) {
+        params['destination'] = ride.destination;
+      }
+      const uri = MetaServiceConfig.resolveUri(def, params);
+      return {
+        serviceId: 't3_ride',
+        serviceName: 'T3出行',
+        serviceType: 'parameter',
+        params: params,
+        uri: uri
+      };
+    }
+
+    if (parsed.type === 'shopping' && parsed.shoppingIntent && parsed.shoppingIntent.isShopping) {
+      const si = parsed.shoppingIntent;
+      const platToSvc: Record<string, string> = {
+        'taobao': 'taobao_shopping',
+        'jd': 'jd_shopping',
+        'meituan': 'meituan_shopping',
+        'pdd': 'pdd_shopping'
+      };
+      const svcId = platToSvc[si.platform] || 'jd_shopping';
+      const def = MetaServiceConfig.getServiceDef(svcId);
+      if (!def) {
+        return null;
+      }
+      const keywords = si.keywords.join(' ');
+      const uriParams: Record<string, string> = {};
+      uriParams['keywords'] = keywords;
+      const uri = MetaServiceConfig.resolveUri(def, uriParams);
+      const fallbackUrl = MetaServiceConfig.resolveSearchUrl(def, keywords);
+      return {
+        serviceId: svcId,
+        serviceName: def.name,
+        serviceType: 'search',
+        keywords: si.keywords,
+        uri: uri,
+        fallbackUrl: fallbackUrl
+      };
+    }
+
+    return null;
   }
 
   private getMessageStatus(messageId: string): string {
@@ -456,6 +585,44 @@ struct ChatPage {
       this.showToast('撤回失败');
     } finally {
       this.isRecalling = false;
+    }
+  }
+
+  private canDeleteSelectedMessage(msg: Message | null): boolean {
+    if (!msg || msg.isTransient) {
+      return false;
+    }
+    // 自己的文本消息用撤回，不用删除
+    if (msg.userId === this.userId && msg.type === MessageType.TEXT) {
+      return false;
+    }
+    return true;
+  }
+
+  private handleDeleteSelected(): void {
+    const msg = this.selectedActionMessage;
+    if (!msg || !this.canDeleteSelectedMessage(msg)) {
+      return;
+    }
+    this.runDeleteMessage(msg);
+  }
+
+  private async runDeleteMessage(msg: Message): Promise<void> {
+    this.isDeleting = true;
+    try {
+      const response = await this.apiClient.deleteMessage(this.groupId, msg.id, this.userId);
+      if (response.success) {
+        this.showToast('已删除');
+        this.showBottomSheet = false;
+        this.selectedActionMessage = null;
+      } else {
+        this.showToast(response.message ? response.message : '删除失败');
+      }
+    } catch (error) {
+      console.error(`Delete failed: ${error}`);
+      this.showToast('删除失败');
+    } finally {
+      this.isDeleting = false;
     }
   }
 
@@ -641,6 +808,45 @@ struct ChatPage {
   private exitMultiSelectMode(): void {
     this.isSelectionMode = false;
     this.selectedMessageIds = [];
+  }
+
+  private handleBatchDelete(): void {
+    const ids = this.selectedMessageIds;
+    if (ids.length === 0) {
+      this.showToast('请先选择消息');
+      return;
+    }
+    AlertDialog.show({
+      title: '确认删除',
+      message: `确定删除选中的 ${ids.length} 条消息吗？`,
+      primaryButton: {
+        value: '取消',
+        action: () => {}
+      },
+      secondaryButton: {
+        value: '删除',
+        fontColor: '#FF0000',
+        action: () => {
+          this.runBatchDelete(ids);
+        }
+      }
+    });
+  }
+
+  private async runBatchDelete(ids: string[]): Promise<void> {
+    let successCount = 0;
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        const response = await this.apiClient.deleteMessage(this.groupId, ids[i], this.userId);
+        if (response.success) {
+          successCount++;
+        }
+      } catch (error) {
+        console.error(`Batch delete failed for ${ids[i]}: ${error}`);
+      }
+    }
+    this.exitMultiSelectMode();
+    this.showToast(`已删除 ${successCount} 条消息` + (successCount < ids.length ? `，${ids.length - successCount} 条失败` : ''));
   }
 
   private async loadForwardTargets(): Promise<void> {
@@ -959,10 +1165,14 @@ struct ChatPage {
    * done=true 时不显示按钮：避免执行成功后仍显示「运行」导致重复创建系统提醒；需取消勾选后再「↻ 重设」。
    */
   private todoCanExecute(item: UserTodoItem): boolean {
+    const at = (item.actionType ? item.actionType : 'none').toLowerCase();
+    // 购物和元服务始终可执行（可重复打开）
+    if (at === 'shopping' || at === 'meta_service') {
+      return true;
+    }
     if (item.done) {
       return false;
     }
-    const at = (item.actionType ? item.actionType : 'none').toLowerCase();
     if (at !== 'alarm' && at !== 'calendar' && at !== 'none') {
       return false;
     }
@@ -1005,12 +1215,25 @@ struct ChatPage {
       this.showToast('正在执行中，请稍候');
       return;
     }
+    let at = (item.actionType ? item.actionType : 'none').toLowerCase();
+
+    // 购物：解析意图并跳转元服务
+    if (at === 'shopping') {
+      await this.executeChatShoppingTodo(item);
+      return;
+    }
+    // 元服务：直接解析配置并跳转
+    if (at === 'meta_service') {
+      await this.executeChatMetaServiceTodo(item);
+      return;
+    }
+
     if (item.done) {
       this.showToast(this.isLongTermTemplate(item) ? '该模板已暂停。请先启用模板后再执行。' :
         '该项已完成。请先取消左侧勾选，再点「重设」调整提醒。');
       return;
     }
-    let at = (item.actionType ? item.actionType : 'none').toLowerCase();
+    at = (item.actionType ? item.actionType : 'none').toLowerCase();
     if (at === 'none' || at.length === 0) {
       at = 'alarm';
     }
@@ -1066,6 +1289,151 @@ struct ChatPage {
         this.applyTodoRunSuccessLocal(item, firstExec, res.reminderId);
       }
     });
+  }
+
+  /**
+   * 执行购物待办：解析意图后跳转对应元服务
+   */
+  private async executeChatShoppingTodo(item: UserTodoItem): Promise<void> {
+    const parsed = ShoppingIntentParser.parse(item.title, item.actionDetail);
+
+    if (parsed.type === 'ride_hailing' && parsed.rideHailingIntent) {
+      const ride = parsed.rideHailingIntent;
+      const def = MetaServiceConfig.getServiceDef('t3_ride');
+      if (!def) {
+        this.showToast('未找到 T3出行 元服务配置');
+        return;
+      }
+      const params: Record<string, string> = {};
+      if (ride.pickup) {
+        params['pickup'] = ride.pickup;
+      }
+      if (ride.destination) {
+        params['destination'] = ride.destination;
+      }
+      const uri = MetaServiceConfig.resolveUri(def, params);
+      const intent: MetaServiceIntent = {
+        serviceId: 't3_ride',
+        serviceName: 'T3出行',
+        serviceType: 'parameter',
+        params: params,
+        uri: uri
+      };
+      const result = await MetaServiceLauncher.launch(intent);
+      this.showToast(result.message);
+      if (result.success) {
+        await this.markTodoDone(item);
+      }
+      return;
+    }
+
+    if (parsed.type === 'shopping' && parsed.shoppingIntent && parsed.shoppingIntent.isShopping) {
+      const si = parsed.shoppingIntent;
+      const platToSvc: Record<string, string> = {
+        'taobao': 'taobao_shopping',
+        'jd': 'jd_shopping',
+        'meituan': 'meituan_shopping',
+        'pdd': 'pdd_shopping'
+      };
+      const svcId = platToSvc[si.platform] || 'jd_shopping';
+      const def = MetaServiceConfig.getServiceDef(svcId);
+      if (!def) {
+        this.showToast('未找到对应的购物元服务');
+        return;
+      }
+      const keywords = si.keywords.join(' ');
+      const uriParams: Record<string, string> = {};
+      uriParams['keywords'] = keywords;
+      const uri = MetaServiceConfig.resolveUri(def, uriParams);
+      const fallbackUrl = MetaServiceConfig.resolveSearchUrl(def, keywords);
+      const intent: MetaServiceIntent = {
+        serviceId: svcId,
+        serviceName: def.name,
+        serviceType: 'search',
+        keywords: si.keywords,
+        uri: uri,
+        fallbackUrl: fallbackUrl
+      };
+      const result = await MetaServiceLauncher.launch(intent);
+      this.showToast(result.message);
+      if (result.success) {
+        await this.markTodoDone(item);
+      }
+      return;
+    }
+
+    this.showToast('未识别到购物或出行意图');
+  }
+
+  /**
+   * 执行元服务待办：解析 actionDetail JSON 后直接跳转
+   * JSON 格式: {"service":"jd_shopping","params":{"keywords":"手机"}}
+   */
+  private async executeChatMetaServiceTodo(item: UserTodoItem): Promise<void> {
+    const detail = item.actionDetail ? item.actionDetail : '';
+    if (!detail) {
+      this.showToast('元服务配置为空');
+      return;
+    }
+    let svcId = '';
+    const params: Record<string, string> = {};
+    try {
+      const parsed: Record<string, Object> = JSON.parse(detail);
+      svcId = String(parsed['service'] || '');
+      const rawParams: Object = parsed['params'];
+      if (rawParams) {
+        const paramObj: Record<string, Object> = rawParams as Record<string, Object>;
+        const keys: string[] = Object.keys(paramObj);
+        for (let i = 0; i < keys.length; i++) {
+          params[keys[i]] = String(paramObj[keys[i]] || '');
+        }
+      }
+    } catch (_e) {
+      this.showToast('元服务配置格式无效，请使用 JSON 格式');
+      return;
+    }
+    if (!svcId) {
+      this.showToast('元服务ID为空');
+      return;
+    }
+    const def = MetaServiceConfig.getServiceDef(svcId);
+    if (!def) {
+      this.showToast(`未找到元服务: ${svcId}`);
+      return;
+    }
+    const uri = MetaServiceConfig.resolveUri(def, params);
+    const keywords = params['keywords'] || '';
+    const fallbackUrl = def.serviceType === 'search' ? MetaServiceConfig.resolveSearchUrl(def, keywords) : undefined;
+    const intent: MetaServiceIntent = {
+      serviceId: svcId,
+      serviceName: def.name,
+      serviceType: def.serviceType,
+      params: params,
+      uri: uri,
+      fallbackUrl: fallbackUrl
+    };
+    const result = await MetaServiceLauncher.launch(intent);
+    this.showToast(result.message);
+    if (result.success) {
+      await this.markTodoDone(item);
+    }
+  }
+
+  /** 标记待办为已完成（后端 + 本地） */
+  private async markTodoDone(item: UserTodoItem): Promise<void> {
+    const now = Date.now();
+    const patch: UserTodoPatch = {
+      done: true,
+      executedAt: now,
+      lifecycleState: 'done',
+      closedAt: now
+    };
+    const updateRes = await this.apiClient.updateUserTodoItem(this.userId, item.id, patch);
+    if (updateRes.success && updateRes.data) {
+      this.todoItems = updateRes.data;
+    } else {
+      this.showToast(updateRes.message ? updateRes.message : '同步待办失败');
+    }
   }
 
   /** 整行锁定：系统能力 + 写回后端全程禁止重复点击 */
@@ -1303,11 +1671,16 @@ struct ChatPage {
   }
 
   private applySilkQuickMention(): void {
-    this.messageInput = '@Silk ';
+    const existing = this.messageInput;
+    if (existing.trim().length > 0) {
+      this.messageInput = existing + ' @Silk ';
+    } else {
+      this.messageInput = '@Silk ';
+    }
   }
 
   private getMessageInputPlaceholder(): string {
-    if (this.isSilkPrivateChat()) {
+    if (this.isSilkPrivateChat() || this.workflowTaskFocus.length > 0) {
       return '直接输入消息与 Silk 对话...';
     }
     return '在当前项目中输入需求...';
@@ -1323,7 +1696,8 @@ struct ChatPage {
           .margin({ left: 12 })
           .width(36)
           .onClick((): void => {
-            router.back();
+            this.aboutToDisappear();
+            appRouter.goToMain();
           })
 
         Text(this.groupName)
@@ -1389,6 +1763,9 @@ struct ChatPage {
         .justifyContent(FlexAlign.Center)
         .backgroundColor('#FDF3E0')
       }
+
+      // CC 工作流面板（始终渲染，面板内部控制可见性）
+      CcWorkflowPanel()
 
       // 消息区域
       if (this.isSelectionMode) {
@@ -1467,6 +1844,8 @@ struct ChatPage {
                     currentUserId: this.userId,
                     actionsEnabled: !this.isSelectionMode,
                     messageStatus: this.getMessageStatus(message.id),
+                    suggestedAction: this.getSuggestedActionForMessage(message, index),
+                    isLastMessage: index === this.messages.length - 1,
                     onCopy: (content: string): void => this.handleCopy(content),
                     onForward: (msg: Message): void => this.handleForward(msg),
                     onRetry: (msg: Message): void => this.retryMessage(msg),
@@ -1542,18 +1921,11 @@ struct ChatPage {
           .justifyContent(FlexAlign.Center)
         } else {
           Row() {
-            if (!this.isSilkPrivateChat() && !this.isSelectionMode) {
-              Text('@Silk')
-                .fontSize(12)
-                .fontColor(SilkColors.primary)
-                .fontWeight(FontWeight.Medium)
-                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-                .backgroundColor('#26C9A86C')
-                .borderRadius(14)
-                .margin({ right: 6 })
-                .onClick((): void => {
-                  this.applySilkQuickMention();
-                })
+            if (!this.isSilkPrivateChat() && !this.isSelectionMode && !this.isCcWorkflow && this.workflowTaskFocus.length === 0) {
+              Text('')
+                .fontSize(0)
+                .width(0)
+                .height(0)
             }
 
             TextInput({ placeholder: this.getMessageInputPlaceholder(), text: $$this.messageInput })
@@ -1639,6 +2011,17 @@ struct ChatPage {
             .enabled(this.selectedMessageIds.length > 0)
             .onClick(() => {
               this.handleBatchForward();
+            })
+
+          Button(`删除(${this.selectedMessageIds.length})`)
+            .height(36)
+            .fontSize(13)
+            .backgroundColor(SilkColors.error)
+            .fontColor('#FFFFFF')
+            .margin({ left: 8 })
+            .enabled(this.selectedMessageIds.length > 0)
+            .onClick(() => {
+              this.handleBatchDelete();
             })
         }
         .width('100%')
@@ -2093,10 +2476,42 @@ struct ChatPage {
           .onClick((): void => {
             this.editActionType = 'calendar';
           })
+        Button('购物')
+          .height(32)
+          .fontSize(12)
+          .backgroundColor(this.editActionType === 'shopping' ? SilkColors.primary : '#EEE')
+          .fontColor(this.editActionType === 'shopping' ? SilkColors.onPrimary : SilkColors.textPrimary)
+          .onClick((): void => {
+            this.editActionType = 'shopping';
+          })
+        Button('元服务')
+          .height(32)
+          .fontSize(12)
+          .backgroundColor(this.editActionType === 'meta_service' ? SilkColors.primary : '#EEE')
+          .fontColor(this.editActionType === 'meta_service' ? SilkColors.onPrimary : SilkColors.textPrimary)
+          .onClick((): void => {
+            this.editActionType = 'meta_service';
+          })
       }
       .margin({ bottom: 12 })
 
-      if (this.editActionType !== 'none') {
+      if (this.editActionType === 'shopping') {
+        TextInput({ text: this.editActionDetail, placeholder: '商品关键词，如 手机 电脑' })
+          .fontSize(14)
+          .width('100%')
+          .margin({ bottom: 16 })
+          .onChange((val: string): void => {
+            this.editActionDetail = val;
+          })
+      } else if (this.editActionType === 'meta_service') {
+        TextInput({ text: this.editActionDetail, placeholder: 'JSON: {"service":"jd_shopping","params":{"keywords":"手机"}}' })
+          .fontSize(14)
+          .width('100%')
+          .margin({ bottom: 16 })
+          .onChange((val: string): void => {
+            this.editActionDetail = val;
+          })
+      } else if (this.editActionType !== 'none') {
         TextInput({ text: this.editActionDetail, placeholder: '时间，如 07:00 或 明天 15:00' })
           .fontSize(14)
           .width('100%')
@@ -2420,6 +2835,19 @@ struct ChatPage {
           this.showBottomSheet = false;
           this.selectedActionMessage = null;
         })
+
+      if (this.canDeleteSelectedMessage(this.selectedActionMessage)) {
+        Button(this.isDeleting ? '删除中...' : '删除')
+          .width('100%')
+          .height(42)
+          .backgroundColor(SilkColors.surfaceVariant)
+          .fontColor(SilkColors.error)
+          .margin({ top: 8 })
+          .enabled(!this.isDeleting)
+          .onClick(() => {
+            this.handleDeleteSelected();
+          })
+      }
 
       if (this.canRecallSelectedMessage()) {
         Button(this.isRecalling ? '撤回中...' : '撤回')

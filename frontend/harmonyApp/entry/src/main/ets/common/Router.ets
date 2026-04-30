@@ -27,6 +27,7 @@ export class Router {
   private static instance: Router;
   private currentPage: PageName = PageName.Login;
   private pageListeners: Array<(page: PageName) => void> = [];
+  workflowAgentType: string = '';
   
   private constructor() {}
   
@@ -72,15 +73,13 @@ export class Router {
   }
   
   /**
-   * 导航到聊天页面（系统页面栈 pushUrl，侧滑/返回键关闭聊天而非退出应用）
+   * 导航到聊天页面（通过自定义路由渲染 ChatPage，避免使用废弃的 pushUrl）
    * 入参已由调用方写入 AppStorage（currentGroupId 等）
    */
   goToChat(_groupId: string, _groupName: string): void {
     void _groupId;
     void _groupName;
-    pageRouter.pushUrl({ url: 'pages/ChatPage' }).catch((err: Error) => {
-      console.error('[Router] pushUrl ChatPage failed:', err.message);
-    });
+    this.notifyPageChange(PageName.Chat);
   }
 
   /**

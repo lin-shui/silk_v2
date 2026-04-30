@@ -175,6 +175,7 @@ fun SilkApp() {
                             NavTab.SILK -> SilkTabContent(appState)
                             NavTab.WORKFLOW -> WorkflowScene(appState)
                             NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScene(appState)
+                            NavTab.AUDIO_DUPLEX -> AudioDuplexScene(appState)
                         }
                     }
                 }
@@ -227,6 +228,9 @@ fun SilkNavRail(appState: WebAppState) {
         }
         NavRailItem("知识库", appState.currentTab == NavTab.KNOWLEDGE_BASE, "\uD83D\uDCDA") {
             appState.selectTab(NavTab.KNOWLEDGE_BASE)
+        }
+        NavRailItem("音频双工", appState.currentTab == NavTab.AUDIO_DUPLEX, "📞") {
+            appState.selectTab(NavTab.AUDIO_DUPLEX)
         }
 
         // Spacer
@@ -2057,8 +2061,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     val handler: (dynamic) -> Unit = { event: dynamic ->
                         val key = event.key as? String
                         val shiftKey = event.shiftKey as? Boolean ?: false
-                        
-                        if (key == "Enter" && !shiftKey) {
+                        // 输入法合成中（如中文拼音按 Enter 确认），不发送
+                        val isComposing = (event.isComposing as? Boolean) ?: false
+
+                        if (key == "Enter" && !shiftKey && !isComposing) {
                             event.preventDefault()
                             sendMessage()
                         }

@@ -153,7 +153,8 @@ private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger) {
                     userName = msg.senderName ?: "未知用户",
                     content = msg.content,
                     timestamp = Instant.ofEpochMilli(msg.timestamp).toString(),
-                    isImportant = false
+                    isImportant = false,
+                    messageId = msg.messageId
                 )
             }
 

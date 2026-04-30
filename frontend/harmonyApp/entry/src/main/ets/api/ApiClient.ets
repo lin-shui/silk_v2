@@ -121,6 +121,9 @@ export interface WorkflowApiItem {
   name: string;
   description: string;
   ownerId: string;
+  agentType: string;
+  taskFocus: string;
+  groupId: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -145,6 +148,41 @@ export interface KBEntryApiItem {
   updatedAt: number;
 }
 
+// ==================== CC/Bridge workflow interfaces ====================
+
+export interface CcStateResponse {
+  success: boolean;
+  active?: boolean;
+  running?: boolean;
+  workingDir?: string;
+  sessionId?: string;
+  sessionStarted?: boolean;
+  bridgeConnected?: boolean;
+  error?: string;
+}
+
+export interface DirEntry {
+  name: string;
+  isDir: boolean;
+}
+
+export interface DirListingResponse {
+  success: boolean;
+  path?: string;
+  parent?: string;
+  segments?: string[];
+  separator?: string;
+  entries?: DirEntry[];
+  truncated?: boolean;
+  error?: string;
+}
+
+export interface TrustedDirCheckResponse {
+  trusted: boolean;
+  bridgeConnected: boolean;
+  bridgeId?: string;
+}
+
 interface BackendJoinGroupRequest {
   userId: string;
   invitationCode: string;
@@ -157,6 +195,15 @@ interface BackendLeaveGroupRequest {
 interface MarkReadRequest {
   userId: string;
   groupId: string;
+}
+
+interface CreateWorkflowRequestBody {
+  userId: string;
+  name: string;
+  description: string;
+  agentType?: string;
+  taskFocus?: string;
+  initialDir?: string;
 }
 
 interface StartSilkPrivateChatRequest {
@@ -391,16 +438,17 @@ export class ApiClient {
   async get<T>(endpoint: string): Promise<ApiResponse<T>> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = {
+        method: http.RequestMethod.GET,
+        header: {
+          'Content-Type': 'application/json'
+        },
+        connectTimeout: this.timeout,
+        readTimeout: this.timeout
+      };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        {
-          method: http.RequestMethod.GET,
-          header: {
-            'Content-Type': 'application/json'
-          },
-          connectTimeout: this.timeout,
-          readTimeout: this.timeout
-        }
+        opts
       );
 
       if (response.responseCode === 200) {
@@ -422,17 +470,18 @@ export class ApiClient {
   async post<T>(endpoint: string, body: Object): Promise<ApiResponse<T>> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = {
+        method: http.RequestMethod.POST,
+        header: {
+          'Content-Type': 'application/json'
+        },
+        extraData: body,
+        connectTimeout: this.timeout,
+        readTimeout: this.timeout
+      };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        {
-          method: http.RequestMethod.POST,
-          header: {
-            'Content-Type': 'application/json'
-          },
-          extraData: body,
-          connectTimeout: this.timeout,
-          readTimeout: this.timeout
-        }
+        opts
       );
 
       if (response.responseCode === 200 || response.responseCode === 201) {
@@ -451,17 +500,18 @@ export class ApiClient {
   async put<T>(endpoint: string, body: Object): Promise<ApiResponse<T>> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = {
+        method: http.RequestMethod.PUT,
+        header: {
+          'Content-Type': 'application/json'
+        },
+        extraData: body,
+        connectTimeout: this.timeout,
+        readTimeout: this.timeout
+      };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        {
-          method: http.RequestMethod.PUT,
-          header: {
-            'Content-Type': 'application/json'
-          },
-          extraData: body,
-          connectTimeout: this.timeout,
-          readTimeout: this.timeout
-        }
+        opts
       );
 
       if (response.responseCode === 200 || response.responseCode === 201) {
@@ -714,9 +764,10 @@ export class ApiClient {
   private async getRaw(endpoint: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.GET, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        { method: http.RequestMethod.GET, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout }
+        opts
       );
       return response.result as string;
     } finally {
@@ -727,9 +778,10 @@ export class ApiClient {
   private async postRaw(endpoint: string, body: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.POST, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        { method: http.RequestMethod.POST, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout }
+        opts
       );
       return response.result as string;
     } finally {
@@ -740,9 +792,10 @@ export class ApiClient {
   private async putRaw(endpoint: string, body: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.PUT, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        { method: http.RequestMethod.PUT, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout }
+        opts
       );
       return response.result as string;
     } finally {
@@ -753,9 +806,10 @@ export class ApiClient {
   private async deleteRaw(endpoint: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.DELETE, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
-        { method: http.RequestMethod.DELETE, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout }
+        opts
       );
       return response.result as string;
     } finally {
@@ -866,6 +920,18 @@ export class ApiClient {
       userId: userId
     };
     return this.post<void>('/api/messages/recall', payload);
+  }
+
+  /**
+   * 删除消息（支持自己的消息、AI回复、群主删除任意消息）
+   */
+  async deleteMessage(groupId: string, messageId: string, userId: string): Promise<ApiResponse<void>> {
+    const payload: RecallMessageRequestBody = {
+      groupId: groupId,
+      messageId: messageId,
+      userId: userId
+    };
+    return this.post<void>('/api/messages/delete', payload);
   }
 
   /**
@@ -1325,10 +1391,27 @@ export class ApiClient {
     } catch (_) { return []; }
   }
 
-  async createWorkflow(name: string, description: string, userId: string): Promise<WorkflowApiItem | undefined> {
+  async createWorkflow(name: string, description: string, userId: string, agentType?: string, taskFocus?: string, initialDir?: string): Promise<WorkflowApiItem> {
+    const bodyObj: CreateWorkflowRequestBody = {
+      userId: userId,
+      name: name,
+      description: description
+    };
+    if (agentType !== undefined) bodyObj.agentType = agentType;
+    if (taskFocus !== undefined) bodyObj.taskFocus = taskFocus;
+    if (initialDir !== undefined) bodyObj.initialDir = initialDir;
+    const body = JSON.stringify(bodyObj);
+    const resultStr = await this.postRaw('/api/workflows', body);
+    if (resultStr.includes('"success":false')) {
+      const errObj = JSON.parse(resultStr) as Record<string, Object>;
+      throw new Error((errObj['message'] as string) || '创建工作流失败');
+    }
+    return JSON.parse(resultStr) as WorkflowApiItem;
+  }
+
+  async getWorkflowByGroupId(groupId: string): Promise<WorkflowApiItem | undefined> {
     try {
-      const body = JSON.stringify({ userId, name, description });
-      const result = await this.postRaw('/api/workflows', body);
+      const result = await this.getRaw(`/api/workflows/by-group/${groupId}`);
       return JSON.parse(result) as WorkflowApiItem;
     } catch (_) { return undefined; }
   }
@@ -1422,6 +1505,61 @@ export class ApiClient {
     } finally {
       httpRequest.destroy();
     }
+  }
+
+  // ==================== CC/Bridge Workflow API ====================
+
+  /**
+   * 获取 CC 工作状态
+   */
+  async getCcState(userId: string, groupId: string): Promise<CcStateResponse | null> {
+    try {
+      const result = await this.getRaw(`/users/${userId}/cc-state/${groupId}`);
+      return JSON.parse(result) as CcStateResponse;
+    } catch (_) { return null; }
+  }
+
+  /**
+   * 列出远程服务器的子目录（目录浏览器用）
+   */
+  async listCcDir(userId: string, path?: string): Promise<DirListingResponse | null> {
+    try {
+      const query = path ? `?path=${encodeURIComponent(path)}` : '';
+      const result = await this.getRaw(`/users/${userId}/cc-fs/list${query}`);
+      return JSON.parse(result) as DirListingResponse;
+    } catch (_) { return null; }
+  }
+
+  /**
+   * 切换 CC 工作目录
+   */
+  async cdCcDir(userId: string, groupId: string, path: string): Promise<CcStateResponse | null> {
+    try {
+      const body = JSON.stringify({ groupId: groupId, path: path });
+      const result = await this.postRaw(`/users/${userId}/cc-fs/cd`, body);
+      return JSON.parse(result) as CcStateResponse;
+    } catch (_) { return null; }
+  }
+
+  /**
+   * 检查目录是否已被信任
+   */
+  async checkTrustedDir(userId: string, path: string): Promise<TrustedDirCheckResponse | null> {
+    try {
+      const result = await this.getRaw(`/users/${userId}/trusted-dirs/check?path=${encodeURIComponent(path)}`);
+      return JSON.parse(result) as TrustedDirCheckResponse;
+    } catch (_) { return null; }
+  }
+
+  /**
+   * 添加目录到信任列表
+   */
+  async addTrustedDir(userId: string, path: string): Promise<boolean> {
+    try {
+      const body = JSON.stringify({ path: path });
+      await this.postRaw(`/users/${userId}/trusted-dirs`, body);
+      return true;
+    } catch (_) { return false; }
   }
 
   static getInstance(): ApiClient {

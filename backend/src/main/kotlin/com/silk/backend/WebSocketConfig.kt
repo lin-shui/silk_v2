@@ -21,6 +21,7 @@ import com.silk.backend.database.GroupRepository
 import com.silk.backend.todos.GroupTodoExtractionService
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.claudecode.ClaudeCodeManager
+import com.silk.backend.search.WeaviateClient
 import org.slf4j.LoggerFactory
 
 @Serializable
@@ -60,7 +61,8 @@ data class User(
 )
 
 class ChatServer(
-    private val sessionName: String = "default_room"
+    private val sessionName: String = "default_room",
+    private val isSilkChatWorkflow: Boolean = false
 ) {
     private val logger = LoggerFactory.getLogger(ChatServer::class.java)
     private val connections = ConcurrentHashMap<String, CopyOnWriteArrayList<WebSocketSession>>()
@@ -383,14 +385,15 @@ class ChatServer(
             messagesSinceAgentResponse++
             
             // 在 Silk 私聊中，所有消息都直接触发 AI 回复
+            // 在 Silk Chat 工作流中，所有消息也直接触发 AI 回复
             // 在普通群聊中，需要 @silk 才能触发 AI 回复
-            val shouldTriggerAI = isSilkPrivateChat || 
-                                  message.content.startsWith("@Silk") || 
+            val shouldTriggerAI = isSilkPrivateChat || isSilkChatWorkflow ||
+                                  message.content.startsWith("@Silk") ||
                                   message.content.startsWith("@silk")
             
             if (shouldTriggerAI) {
-                // 提取实际内容（移除 @silk 前缀，如果是私聊则直接使用原消息）
-                val silkContent = if (isSilkPrivateChat) {
+                // 提取实际内容（移除 @silk 前缀，如果是私聊或 Silk Chat 工作流则直接使用原消息）
+                val silkContent = if (isSilkPrivateChat || isSilkChatWorkflow) {
                     message.content  // Silk 私聊中直接使用原消息
                 } else {
                     message.content
@@ -693,6 +696,12 @@ class ChatServer(
                 appendLine("以及 hackernews、reddit、twitter、youtube、arxiv、bbc、bloomberg 等国际站点。")
                 appendLine("当用户询问这些平台的热门内容、热搜、排行榜或搜索特定话题时，请优先使用 autocli 工具而非 search_web。")
             }
+            appendLine()
+            appendLine("【HarmonyOS 元服务能力】")
+            appendLine("你在 HarmonyOS 系统上运行，支持调用系统元服务（免安装应用）：")
+            appendLine("- **出行/打车类请求**（如\"打车\"、\"叫车\"、\"去机场\"）→ 系统会自动在回复顶部显示 T3出行 快捷按钮和输入框，用户填写出发地/目的地后可直接跳转。")
+            appendLine("- **购物类请求**（如\"买手机\"、\"京东购物\"）→ 系统会自动在回复顶部显示对应的购物应用快捷按钮。")
+            appendLine("你无需在回复中模拟打开应用，只需正常回答用户问题。如果用户询问能否打车/买东西，确认可以并引导用户使用上方提供的按钮。")
         }
         
         // 加载聊天历史并设置到 Agent（用于群组统计等功能 + 近期上下文）
@@ -1275,48 +1284,44 @@ class ChatServer(
         }
         
         val deletedMessageIds = mutableListOf<String>()
-        
-        // 3. 检查是否是 @silk 消息
-        val isSilkMessage = messageEntry.content.startsWith("@Silk") || messageEntry.content.startsWith("@silk")
-        
-        if (isSilkMessage) {
-            logger.debug("🔄 [recallMessage] 检测到 @silk 消息，查找 Silk 的回复")
-            
-            // 4. 查找 Silk 的回复消息（在用户消息之后，最近的 Silk 消息）
-            val messageIndex = chatHistory.messages.indexOf(messageEntry)
-            val silkReply = chatHistory.messages
-                .drop(messageIndex + 1)
-                .firstOrNull { it.senderId == SilkAgent.AGENT_ID }
-            
-            if (silkReply != null) {
-                logger.debug("🔄 [recallMessage] 找到 Silk 回复: {}", silkReply.messageId)
-                
-                // 5. 删除用户消息和 Silk 回复
-                historyManager.deleteMessages(sessionName, listOf(messageId, silkReply.messageId))
-                deletedMessageIds.add(messageId)
-                deletedMessageIds.add(silkReply.messageId)
-                
-                // 6. 从内存历史中移除
-                messageHistory.removeIf { it.id == messageId || it.id == silkReply.messageId }
-                
-                // 7. 广播撤回通知
-                broadcastRecallNotification(listOf(messageId, silkReply.messageId))
-                
-                logger.info("✅ [recallMessage] 已撤回用户消息和 Silk 回复")
-            } else {
-                logger.warn("⚠️ [recallMessage] 未找到 Silk 回复，只撤回用户消息")
-                historyManager.deleteMessages(sessionName, listOf(messageId))
-                deletedMessageIds.add(messageId)
-                messageHistory.removeIf { it.id == messageId }
-                broadcastRecallNotification(listOf(messageId))
+
+        // 3. 查找用户消息之后最近的 Silk 回复，级联删除
+        logger.debug("🔄 [recallMessage] 查找 Silk 的回复")
+        val messageIndex = chatHistory.messages.indexOf(messageEntry)
+        val silkReply = chatHistory.messages
+            .drop(messageIndex + 1)
+            .firstOrNull { it.senderId == SilkAgent.AGENT_ID }
+
+        if (silkReply != null) {
+            logger.debug("🔄 [recallMessage] 找到 Silk 回复: {}", silkReply.messageId)
+            historyManager.deleteMessages(sessionName, listOf(messageId, silkReply.messageId))
+            deletedMessageIds.add(messageId)
+            deletedMessageIds.add(silkReply.messageId)
+            messageHistory.removeIf { it.id == messageId || it.id == silkReply.messageId }
+            broadcastRecallNotification(listOf(messageId, silkReply.messageId))
+            // 同步删除 Weaviate 向量索引
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId, silkReply.messageId))
+                } catch (e: Exception) {
+                    logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败: {}", e.message)
+                }
             }
+            logger.info("✅ [recallMessage] 已撤回用户消息和 Silk 回复")
         } else {
-            // 普通消息：直接删除
-            logger.debug("🔄 [recallMessage] 普通消息，直接撤回")
+            logger.warn("⚠️ [recallMessage] 未找到 Silk 回复，只撤回用户消息")
             historyManager.deleteMessages(sessionName, listOf(messageId))
             deletedMessageIds.add(messageId)
             messageHistory.removeIf { it.id == messageId }
             broadcastRecallNotification(listOf(messageId))
+            // 同步删除 Weaviate 向量索引
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
+                } catch (e: Exception) {
+                    logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败: {}", e.message)
+                }
+            }
         }
         
         return RecallResult(true, "撤回成功", deletedMessageIds)
@@ -1356,7 +1361,15 @@ class ChatServer(
         historyManager.deleteMessages(sessionName, listOf(messageId))
         messageHistory.removeIf { it.id == messageId }
         broadcastRecallNotification(listOf(messageId))
-        
+        // 同步删除 Weaviate 向量索引
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
+            } catch (e: Exception) {
+                logger.warn("⚠️ [deleteMessage] Weaviate 删除向量失败: {}", e.message)
+            }
+        }
+
         logger.info("🗑️ [deleteMessage] 消息已删除: {} by {} (own={}, host={}, silkReply={})",
             messageId, userId, isOwnMessage, isGroupHost, isSilkReplyToMe)
         return RecallResult(true, "删除成功", listOf(messageId))
