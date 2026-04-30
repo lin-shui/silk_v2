@@ -1031,8 +1031,9 @@ build_hap() {
     
     local HAP_FILE=""
     for cand in \
-        "$HARMONY_DIR/entry/build/default/outputs/default/entry-default-unsigned.hap" \
-        "$HARMONY_DIR/entry/build/default/outputs/default/app/entry-default.hap"; do
+        "$HARMONY_DIR/entry/build/default/outputs/default/entry-default-signed.hap" \
+        "$HARMONY_DIR/entry/build/default/outputs/default/app/entry-default.hap" \
+        "$HARMONY_DIR/entry/build/default/outputs/default/entry-default-unsigned.hap"; do
         if [ -f "$cand" ]; then
             HAP_FILE="$cand"
             break
