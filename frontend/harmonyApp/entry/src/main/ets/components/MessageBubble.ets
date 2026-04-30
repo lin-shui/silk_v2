@@ -448,6 +448,17 @@ export struct MessageBubble {
           .width('100%')
         }
 
+        // CC metadata footer（耗时/轮次）
+        if (this.message.footerContent) {
+          Blank().height(8)
+          Row() {
+            Text(this.message.footerContent)
+              .fontSize(12)
+              .fontColor(Theme.colors.textSecondary)
+          }
+          .width('100%')
+        }
+
         if (this.canShowAIActions()) {
           Blank().height(10)
 
