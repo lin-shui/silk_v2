@@ -13,7 +13,8 @@ enum class Scene {
     GROUP_LIST,
     CONTACTS,
     CHAT_ROOM,
-    SETTINGS
+    SETTINGS,
+    WORKFLOW_CHAT,
 }
 
 enum class NavTab {
@@ -35,7 +36,16 @@ class AppState(
     
     var selectedGroup by mutableStateOf<Group?>(null)
         private set
-    
+
+    var selectedWorkflow by mutableStateOf<WorkflowItem?>(null)
+        private set
+
+    fun selectWorkflow(workflow: WorkflowItem) {
+        println("📌 选择工作流: ${workflow.name} (groupId=${workflow.groupId})")
+        selectedWorkflow = workflow
+        navigateTo(Scene.WORKFLOW_CHAT)
+    }
+
     var isValidating by mutableStateOf(false)
         private set
 
@@ -115,7 +125,12 @@ class AppState(
             if (previousScene == Scene.GROUP_LIST) {
                 selectedGroup = null
             }
-            
+
+            // 离开 WORKFLOW_CHAT 时清掉 selectedWorkflow
+            if (currentScene == Scene.WORKFLOW_CHAT) {
+                selectedWorkflow = null
+            }
+
             currentScene = previousScene
             return true
         }

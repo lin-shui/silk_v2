@@ -280,7 +280,8 @@ fun SilkApp(
     } else if (appState.currentScene == Scene.LOGIN) {
         LoginScreen(appState)
     } else {
-        val showBottomNav = appState.currentScene != Scene.CHAT_ROOM
+        val showBottomNav = appState.currentScene != Scene.CHAT_ROOM &&
+                            appState.currentScene != Scene.WORKFLOW_CHAT
         Scaffold(
             bottomBar = {
                 if (showBottomNav) {
@@ -299,7 +300,12 @@ fun SilkApp(
                             else -> GroupListScreen(appState)
                         }
                     }
-                    NavTab.WORKFLOW -> WorkflowScreen(appState)
+                    NavTab.WORKFLOW -> {
+                        when (appState.currentScene) {
+                            Scene.WORKFLOW_CHAT -> WorkflowChatScreen(appState)
+                            else -> WorkflowScreen(appState)
+                        }
+                    }
                     NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScreen(appState)
                     NavTab.AUDIO_DUPLEX -> AudioDuplexScreen(appState)
                 }
