@@ -16,8 +16,6 @@ import com.silk.backend.routes.fileRoutes
 import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.core.AgentRegistry
 import com.silk.backend.agents.core.AgentRuntime
-import com.silk.backend.claudecode.BridgeRegistry
-import com.silk.backend.claudecode.ClaudeCodeManager
 import com.silk.backend.trust.TrustedDirManager
 import com.silk.shared.models.CcStateResponse
 import com.silk.shared.models.DirEntry
@@ -64,21 +62,18 @@ private fun sanitizeFileName(input: String): String =
 
 /**
  * 解析当前 user 对应的 bridgeId（用于 TrustedDirManager 的 scope key）。
- * ACP 优先 + 旧桥兜底；格式 "ip:<remoteIp>" 保持不变以兼容已有 trust 记录。
- * 没有任何桥连接时返回 null（caller 决定是否报错）。
+ * 格式 "ip:<remoteIp>" 兼容已有 trust 记录。没有 ACP 连接时返回 null。
  */
 private fun resolveBridgeId(userId: String): String? {
-    val ip = AcpRegistry.getRemoteIp(userId, "claude-code")
-        ?: BridgeRegistry.getRemoteIp(userId)
-        ?: return null
+    val ip = AcpRegistry.getRemoteIp(userId, "claude-code") ?: return null
     return "ip:$ip"
 }
 
 /**
- * 检测某 user 是否有任意桥（ACP 或旧）连接。
+ * 检测某 user 是否有 ACP 桥连接（claude-code agent）。
  */
 private fun isAnyBridgeConnected(userId: String): Boolean =
-    AcpRegistry.listConnected(userId).isNotEmpty() || BridgeRegistry.isConnected(userId)
+    AcpRegistry.listConnected(userId).contains("claude-code")
 
 /**
  * 获取或创建指定群组的ChatServer
@@ -141,30 +136,8 @@ suspend fun broadcastFileMessage(
 }
 
 fun Application.configureRouting() {
-    // 把 ClaudeCodeManager 的状态持久化绑定到 WorkflowManager：
-    // - workingDir / sessionId / sessionStarted 改动时写盘到 workflow_store.json
-    // - autoActivateForWorkflow 首次激活时根据已有记录 seed state（重启后续会话的关键）
-    ClaudeCodeManager.setWorkflowPersistence(object : ClaudeCodeManager.WorkflowPersistence {
-        override fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean =
-            workflowManager.updateWorkingDir(rawGroupId, workingDir)
-
-        override fun persistSessionState(rawGroupId: String, sessionId: String, sessionStarted: Boolean): Boolean =
-            workflowManager.updateSessionState(rawGroupId, sessionId, sessionStarted)
-
-        override fun loadSeed(rawGroupId: String): ClaudeCodeManager.WorkflowSeed? {
-            val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
-            // 全部都默认值（空 dir + 空 sessionId）也没必要 seed
-            if (wf.workingDir.isBlank() && wf.sessionId.isBlank()) return null
-            return ClaudeCodeManager.WorkflowSeed(
-                workingDir = wf.workingDir,
-                sessionId = wf.sessionId,
-                sessionStarted = wf.sessionStarted,
-            )
-        }
-    })
-
-    // Plan E2: AgentRuntime 自己的持久化 wiring（复用 Workflow.sessionId 字段存 ccSessionId）。
-    // 双写期：旧 ClaudeCodeManager wiring 暂保留（Plan E3 删），让两条路径都能写回 workflow_store.json。
+    // AgentRuntime 持久化 wiring：cdSync 成功 / prompt 完成时把 workingDir + ccSessionId 写回
+    // workflow_store.json，让重启后能 seed 恢复对话。复用 Workflow.sessionId 字段存 ccSessionId。
     AgentRuntime.setWorkflowPersistence(object : AgentRuntime.WorkflowPersistence {
         override fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean =
             workflowManager.updateWorkingDir(rawGroupId, workingDir)
@@ -565,8 +538,8 @@ fun Application.configureRouting() {
             }
             try {
                 val token = UserSettingsRepository.getBridgeToken(userId)
-                val connected = BridgeRegistry.isConnected(userId)
-                val bridgeIp = if (connected) BridgeRegistry.getRemoteIp(userId) else null
+                val connected = isAnyBridgeConnected(userId)
+                val bridgeIp = if (connected) AcpRegistry.getRemoteIp(userId, "claude-code") else null
                 call.respond(CcSettingsResponse(true, "ok", token, connected, bridgeIp))
             } catch (e: Exception) {
                 logger.error("❌ 获取CC设置失败: {}", e.message)
@@ -583,23 +556,13 @@ fun Application.configureRouting() {
             }
             try {
                 val token = UserSettingsRepository.generateBridgeToken(userId)
-                // 踢掉用旧 token 认证的 ACP + 旧桥连接
+                // 踢掉用旧 token 认证的 ACP 连接
                 val acpClosed = AcpRegistry.disconnect(userId)
                 if (acpClosed > 0) {
                     logger.info("🔌 Token 重生：关闭 {} 个 ACP 连接", acpClosed)
                 }
-                val oldConn = BridgeRegistry.getConnection(userId)
-                if (oldConn != null) {
-                    try {
-                        oldConn.session.close(CloseReason(CloseReason.Codes.NORMAL, "token regenerated"))
-                    } catch (_: Exception) {}
-                    BridgeRegistry.unregister(userId)
-                }
-                val connected = AcpRegistry.listConnected(userId).isNotEmpty()
-                        || BridgeRegistry.isConnected(userId)
-                val bridgeIp = if (connected) {
-                    AcpRegistry.getRemoteIp(userId, "claude-code") ?: BridgeRegistry.getRemoteIp(userId)
-                } else null
+                val connected = isAnyBridgeConnected(userId)
+                val bridgeIp = if (connected) AcpRegistry.getRemoteIp(userId, "claude-code") else null
                 call.respond(CcSettingsResponse(true, "Token 已生成", token, connected, bridgeIp))
             } catch (e: Exception) {
                 logger.error("❌ 生成Bridge Token失败: {}", e.message)
@@ -614,9 +577,8 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
                 return@get
             }
-            val connected = AcpRegistry.listConnected(userId).isNotEmpty()
-                    || BridgeRegistry.isConnected(userId)
-            val bridgeIp = if (connected) BridgeRegistry.getRemoteIp(userId) else null
+            val connected = isAnyBridgeConnected(userId)
+            val bridgeIp = if (connected) AcpRegistry.getRemoteIp(userId, "claude-code") else null
             call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected, bridgeIp = bridgeIp))
         }
 
@@ -634,15 +596,10 @@ fun Application.configureRouting() {
                 if (rawGroupId.startsWith("group_")) rawGroupId else "group_$rawGroupId",
                 rawGroupId,
             ).distinct()
-            // 优先查 AgentRuntime（新框架），fallback 到旧 ClaudeCodeManager
             val agentSnap = candidateIds.firstNotNullOfOrNull { gid ->
                 AgentRuntime.snapshotState(userId, gid)
             }
-            val oldSnap = candidateIds.firstNotNullOfOrNull { gid ->
-                ClaudeCodeManager.snapshotState(userId, gid)
-            }
-            val bridgeConnected = AcpRegistry.listConnected(userId).isNotEmpty()
-                    || BridgeRegistry.isConnected(userId)
+            val bridgeConnected = isAnyBridgeConnected(userId)
             if (agentSnap != null) {
                 call.respond(
                     CcStateResponse(
@@ -652,18 +609,6 @@ fun Application.configureRouting() {
                         workingDir = agentSnap.workingDir,
                         sessionId = "",
                         sessionStarted = agentSnap.active,
-                        bridgeConnected = bridgeConnected,
-                    )
-                )
-            } else if (oldSnap != null) {
-                call.respond(
-                    CcStateResponse(
-                        success = true,
-                        active = oldSnap.active,
-                        running = oldSnap.running,
-                        workingDir = oldSnap.workingDir,
-                        sessionId = oldSnap.sessionId,
-                        sessionStarted = oldSnap.sessionStarted,
                         bridgeConnected = bridgeConnected,
                     )
                 )
@@ -682,18 +627,11 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, DirListingResponse(success = false, error = "userId 为空"))
                 return@get
             }
-            val acpConnected = AcpRegistry.listConnected(userId).contains("claude-code")
-            val legacyConnected = BridgeRegistry.isConnected(userId)
-            if (!acpConnected && !legacyConnected) {
+            if (!AcpRegistry.listConnected(userId).contains("claude-code")) {
                 call.respond(HttpStatusCode.Conflict, DirListingResponse(success = false, error = "Bridge 未连接"))
                 return@get
             }
-            // ACP 优先；否则回退到旧桥
-            val raw = if (acpConnected) {
-                AgentRuntime.listDirectory(userId, path, showHidden)
-            } else {
-                ClaudeCodeManager.listDirectory(userId, path, showHidden)
-            }
+            val raw = AgentRuntime.listDirectory(userId, path, showHidden)
             if (raw == null) {
                 call.respond(HttpStatusCode.GatewayTimeout, DirListingResponse(success = false, error = "Bridge 未响应或超时"))
                 return@get
@@ -748,9 +686,8 @@ fun Application.configureRouting() {
                 )
                 return@post
             }
-            // 信任目录检查（ACP 优先 + 旧桥兜底，bridgeId 格式保持 "ip:<ip>" 兼容已有 trust 记录）
-            val bridgeId = (AcpRegistry.getRemoteIp(userId, "claude-code")
-                ?: BridgeRegistry.getRemoteIp(userId))?.let { "ip:$it" } ?: "unknown"
+            // 信任目录检查（bridgeId 格式 "ip:<ip>" 兼容已有 trust 记录）
+            val bridgeId = resolveBridgeId(userId) ?: "unknown"
             if (!trustedDirManager.isTrusted(userId, bridgeId, rawPath)) {
                 call.respond(
                     HttpStatusCode.BadRequest,
@@ -772,8 +709,7 @@ fun Application.configureRouting() {
                 }
                 is AgentRuntime.CdResult.Ok -> {
                     val snap = AgentRuntime.snapshotState(userId, ccGroupId)
-                    val bridgeConnected = AcpRegistry.listConnected(userId).isNotEmpty()
-                            || BridgeRegistry.isConnected(userId)
+                    val bridgeConnected = isAnyBridgeConnected(userId)
                     // 切目录会重置 sessionId（等价于 /new），在聊天里广播一条提示让用户感知
                     val rawGid = if (ccGroupId.startsWith("group_")) ccGroupId.removePrefix("group_") else ccGroupId
                     try {
@@ -2059,37 +1995,6 @@ fun Application.configureRouting() {
             }
         }
         
-        // ==================== CC Bridge WebSocket ====================
-
-        webSocket("/cc-bridge") {
-            val token = call.request.queryParameters["token"]
-            if (token.isNullOrBlank()) {
-                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing token"))
-                return@webSocket
-            }
-            val userId = UserSettingsRepository.findUserIdByBridgeToken(token)
-            if (userId == null) {
-                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid token"))
-                return@webSocket
-            }
-
-            logger.info("🔌 Bridge 连接: userId={}", userId)
-            val remoteIp = call.request.local.remoteAddress
-            BridgeRegistry.register(userId, this, "", remoteIp)
-            try {
-                incoming.consumeEach { frame ->
-                    if (frame is Frame.Text) {
-                        ClaudeCodeManager.handleBridgeMessage(userId, frame.readText())
-                    }
-                }
-            } catch (e: Exception) {
-                logger.error("❌ Bridge WebSocket 错误: userId={}, error={}", userId, e.message)
-            } finally {
-                logger.info("🔌 Bridge 断开: userId={}", userId)
-                BridgeRegistry.unregister(userId)
-            }
-        }
-
         // ==================== Agent Bridge WebSocket (ACP) ====================
 
         webSocket("/agent-bridge") {
@@ -2239,16 +2144,14 @@ fun Application.configureRouting() {
                 respondError(HttpStatusCode.BadRequest, "工作目录不能为空")
                 return@post
             }
-            val acpClaudeConnected = AcpRegistry.listConnected(userId).contains("claude-code")
-            if (!acpClaudeConnected && !BridgeRegistry.isConnected(userId)) {
+            if (!AcpRegistry.listConnected(userId).contains("claude-code")) {
                 com.silk.backend.database.GroupRepository.deleteGroup(group.id)
                 respondError(HttpStatusCode.Conflict, "Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
                 return@post
             }
 
-            // 信任目录检查（ACP 优先 + 旧桥兜底）
-            val bridgeId = (AcpRegistry.getRemoteIp(userId, "claude-code")
-                ?: BridgeRegistry.getRemoteIp(userId))?.let { "ip:$it" } ?: "unknown"
+            // 信任目录检查
+            val bridgeId = resolveBridgeId(userId) ?: "unknown"
             if (!trustedDirManager.isTrusted(userId, bridgeId, initialDir)) {
                 com.silk.backend.database.GroupRepository.deleteGroup(group.id)
                 val payload = kotlinx.serialization.json.buildJsonObject {
@@ -2274,8 +2177,6 @@ fun Application.configureRouting() {
                 logger.warn("⚠️ 工作流 {} 初始 /cd 失败，回滚 group + workflow: {}", wf.id, cdResult.reason)
                 workflowManager.deleteWorkflow(wf.id, userId)
                 com.silk.backend.database.GroupRepository.deleteGroup(group.id)
-                // 双清理（旧 ClaudeCodeManager + 新 AgentRuntime 的孤儿 state；E3 删旧的）
-                ClaudeCodeManager.cleanupState(userId, "group_${group.id}")
                 AgentRuntime.cleanupState(userId, "group_${group.id}")
                 respondError(HttpStatusCode.Conflict, "工作目录设置失败：${cdResult.reason}")
                 return@post
@@ -2503,7 +2404,6 @@ fun Application.configureRouting() {
             // 工作流群组自动激活 CC 模式（仅 claude_code 类型）
             val workflow = workflowManager.getWorkflowByGroupId(groupId)
             if (workflow != null && workflow.agentType == "claude_code") {
-                ClaudeCodeManager.autoActivateForWorkflow(userId, "group_$groupId")
                 AgentRuntime.autoActivateForWorkflow(userId, "group_$groupId", "claude-code")
             }
 

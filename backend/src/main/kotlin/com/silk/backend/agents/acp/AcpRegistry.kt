@@ -59,6 +59,15 @@ object AcpRegistry {
 
     fun getRemoteIp(userId: String, agentType: String): String? =
         entries[key(userId, agentType)]?.remoteIp
+            ?.takeIf { it.isNotBlank() }
+            ?.let { normalizeIp(it) }
+
+    /** 把 IPv6 loopback / wildcard 转成易读形式，与旧 BridgeRegistry 行为一致。 */
+    private fun normalizeIp(ip: String): String = when (ip) {
+        "0:0:0:0:0:0:0:1", "::1" -> "127.0.0.1 (本机)"
+        "0:0:0:0:0:0:0:0", "::" -> "0.0.0.0"
+        else -> ip
+    }
 
     fun unregister(userId: String, agentType: String) {
         entries.remove(key(userId, agentType))

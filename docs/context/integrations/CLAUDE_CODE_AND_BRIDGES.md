@@ -1,10 +1,10 @@
 # Claude Code And Bridges
 
-> **过渡期注意**：`develop_acp` 分支引入了 `AgentRuntime` 框架层。**Plan E + E2 已完成**，ACP 新桥（`acp_adapter.py`）为默认执行路径，覆盖聊天 + 文件系统操作 + 持久化；旧桥（`bridge_agent.py`）作为回退（`BRIDGE_MODE=legacy`）。详见 `KNOWN_DRIFT.md#Agent Framework In Transition`。
+> **Plan E + E2 + E3 已完成**：所有业务代码走 ACP，旧 `ClaudeCodeManager` / `BridgeRegistry` 已无人引用，文件保留待 E4 物理删除。`acp_adapter.py` 是唯一执行路径，`/cc-bridge` 端点已删除。详见 `KNOWN_DRIFT.md#Agent Framework In Transition`。
 
-## Agent Framework Layer (新)
+## Agent Framework
 
-- `backend/agents/core/AgentRuntime.kt` — 对外门面，替代 `ClaudeCodeManager` 作为 `WebSocketConfig` 的唯一入口
+- `backend/agents/core/AgentRuntime.kt` — 对外门面，`WebSocketConfig` 的唯一入口
 - `backend/agents/core/CommandRouter.kt` — 命令解析（`/cc`、`/use`、`/status`、`@agent` 等）
 - `backend/agents/core/GroupAgentContext.kt` — per-(userId, groupId) 上下文，含 workingDir、currentAgentType、sessions
 - `backend/agents/core/AgentSession.kt` — per-agent 会话状态（running、queue、acpSessionId、ccSessionId）
@@ -20,13 +20,14 @@
 3. **/cc-fs/list**：`Routing.kt` → `AgentRuntime.listDirectory()` → ACP `_silk/list_dir` → adapter 调 `fs_listing.list_directory`
 4. **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.ccSessionId` 写入 `Workflow.sessionId`；`autoActivateForWorkflow` 用 seed 续会话
 5. **Token 重生**：`/cc-settings/generate-token` → `AcpRegistry.disconnect(userId)` 关老连接
-6. **回退**：ACP 不可用时（如 `BRIDGE_MODE=legacy`）回退到 `ClaudeCodeManager`；E3 删
 
-## Backend Side (旧，过渡期仍作回退)
+ACP 不可用时直接报"未连接"，无 fallback。
 
-- `backend/claudecode/ClaudeCodeManager.kt` — 仅在 ACP 不可用时被回退调用
-- `backend/claudecode/BridgeRegistry.kt` — 仅旧桥 `bridge_agent.py` 使用
-- `backend/claudecode/StreamParser.kt` — 旧桥用
+## Legacy (E4 待删)
+
+- `backend/claudecode/ClaudeCodeManager.kt` — 无人引用，待删
+- `backend/claudecode/BridgeRegistry.kt` — 无人引用，待删（仅 `cc_bridge/bridge_agent.py` 在 `BRIDGE_MODE=legacy` 时还会连，但 backend 路由已无端点接收）
+- `backend/claudecode/StreamParser.kt` — 检查无引用后可删
 
 核心事实：
 

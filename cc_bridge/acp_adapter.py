@@ -386,13 +386,19 @@ class AcpAgentServer:
                 "[ACP] sending prompt response sid=%s msg_id=%s stopReason=%s",
                 sid, msg_id, final_result["stopReason"],
             )
-            # 把 cc_session_id（Claude CLI 真实 session id）通过 meta 报回 backend，
-            # 让 backend 能持久化到 workflow_store.json，重启后通过 session/new 的 ccSessionId 续会话。
+            # 把 cc_session_id（Claude CLI 真实 session id）和耗时/费用/轮次通过 meta 报回 backend，
+            # backend 用 ccSessionId 持久化用于 resume，其余字段格式化成会话末尾的"⏱ ..."提示行。
             response_payload: dict[str, Any] = {"stopReason": final_result["stopReason"]}
             executor_meta = final_result.get("meta") or {}
             cc_sid = executor_meta.get("sessionId") or sess.cc_session_id
+            meta_out: dict[str, Any] = {}
             if cc_sid:
-                response_payload["meta"] = {"ccSessionId": cc_sid}
+                meta_out["ccSessionId"] = cc_sid
+            for k in ("costUsd", "durationMs", "numTurns"):
+                if k in executor_meta:
+                    meta_out[k] = executor_meta[k]
+            if meta_out:
+                response_payload["meta"] = meta_out
             await self._send_response(msg_id, response_payload)
 
         sess.request_id = None

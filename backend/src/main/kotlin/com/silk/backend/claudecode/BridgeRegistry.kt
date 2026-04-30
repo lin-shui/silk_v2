@@ -43,13 +43,11 @@ object BridgeRegistry {
 
     /**
      * 注销 bridge 连接。
-     * 若有运行中任务，通知 ClaudeCodeManager 处理断线。
      */
     fun unregister(userId: String) {
         val removed = bridges.remove(userId)
         if (removed != null) {
             logger.info("[Bridge] 用户 {} 的 bridge 已注销", userId)
-            ClaudeCodeManager.handleBridgeDisconnect(userId)
         }
     }
 

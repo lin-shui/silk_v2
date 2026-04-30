@@ -20,7 +20,6 @@ import com.silk.backend.database.UnreadRepository
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.todos.GroupTodoExtractionService
 import com.silk.backend.ai.AIConfig
-import com.silk.backend.claudecode.ClaudeCodeManager
 import com.silk.backend.search.WeaviateClient
 import com.silk.backend.agents.core.AgentRuntime
 import org.slf4j.LoggerFactory

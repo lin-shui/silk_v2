@@ -8,21 +8,23 @@ import com.silk.backend.agents.acp.ContentBlock
 import com.silk.backend.agents.acp.PermissionResponse
 import com.silk.backend.agents.acp.StopReason
 import com.silk.backend.agents.adapters.claudecode.ClaudeCodeDescriptor
-import com.silk.backend.claudecode.ClaudeCodeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Agent 框架对外门面。签名兼容旧 ClaudeCodeManager 的 5 个公共方法。
+ * Agent 框架对外门面。
  */
 object AgentRuntime {
 
@@ -64,6 +66,29 @@ object AgentRuntime {
     /** group_xxx → xxx；非 group_ 前缀原样返回 */
     private fun stripGroupPrefix(groupId: String): String =
         if (groupId.startsWith("group_")) groupId.removePrefix("group_") else groupId
+
+    /**
+     * 把 ACP `session/prompt` response 里的 meta（adapter 携带的 cost/duration/turns/cc_sid）
+     * 格式化成会话末尾的 "⏱ 费用: $X | 耗时: Xs | 轮次: N | 会话: XXXXXXXX..." 提示行。
+     * 字段缺失或为零值时跳过；都为空返回空串。
+     */
+    private fun formatPromptMeta(
+        meta: kotlinx.serialization.json.JsonElement,
+        ccSessionId: String?,
+    ): String {
+        val obj = runCatching { meta.jsonObject }.getOrNull() ?: return ""
+        val parts = mutableListOf<String>()
+        val cost = obj["costUsd"]?.jsonPrimitive?.doubleOrNull ?: 0.0
+        val duration = obj["durationMs"]?.jsonPrimitive?.longOrNull ?: 0L
+        val turns = obj["numTurns"]?.jsonPrimitive?.intOrNull ?: 0
+        val sid = obj["ccSessionId"]?.jsonPrimitive?.contentOrNull ?: ccSessionId.orEmpty()
+        if (cost > 0) parts.add("费用: ${"$"}%.4f".format(cost))
+        if (duration > 0) parts.add("耗时: %.1fs".format(duration / 1000.0))
+        if (turns > 0) parts.add("轮次: $turns")
+        if (sid.isNotBlank()) parts.add("会话: ${sid.take(8)}...")
+        val joined = parts.joinToString(" | ")
+        return if (joined.isNotBlank()) "⏱ $joined" else ""
+    }
 
     /** 异步持久化 workingDir（不阻塞调用方）。 */
     private fun persistWorkingDirAsync(groupId: String, workingDir: String) {
@@ -125,13 +150,7 @@ object AgentRuntime {
                 true
             }
             is CommandRouter.RouteResult.Command -> {
-                val agentType = ctx.currentAgentType
-                if (agentType != null && getAcpClient(agentType, userId) == null) {
-                    // 过渡期回退：ACP bridge 未连接时委托旧 ClaudeCodeManager 处理命令
-                    ClaudeCodeManager.handleIfActive(userId, groupId, text, userName, broadcastFn)
-                } else {
-                    handleCommand(ctx, route.cmd, broadcastFn)
-                }
+                handleCommand(ctx, route.cmd, broadcastFn)
                 true
             }
             is CommandRouter.RouteResult.Prompt -> {
@@ -156,10 +175,7 @@ object AgentRuntime {
         val ctx = context(userId, groupId)
         val agentType = ctx.currentAgentType ?: return false
         val session = ctx.sessions[agentType] ?: return false
-        if (!session.running) {
-            // 过渡期回退：AgentRuntime 无运行任务时尝试旧 ClaudeCodeManager
-            return ClaudeCodeManager.cancelIfActive(userId, groupId, broadcastFn)
-        }
+        if (!session.running) return false
 
         handleCancel(session, broadcastFn)
         return true
@@ -184,12 +200,6 @@ object AgentRuntime {
             if (seed.workingDir.isNotBlank()) ctx.workingDir = seed.workingDir
             if (!seed.ccSessionId.isNullOrBlank() && seed.sessionStarted) {
                 session.ccSessionId = seed.ccSessionId
-            }
-        } else {
-            // 兜底：从旧 ClaudeCodeManager.snapshotState 读 workingDir（过渡期，E3 删）
-            val oldSnap = ClaudeCodeManager.snapshotState(userId, groupId)
-            if (oldSnap != null && oldSnap.workingDir.isNotBlank()) {
-                ctx.workingDir = oldSnap.workingDir
             }
         }
         logger.info(
@@ -269,11 +279,13 @@ object AgentRuntime {
         val descriptor = AgentRegistry.getByType(agentType) ?: return
         ctx.currentAgentType = agentType
         val session = ctx.getOrCreateSession(agentType)
-        // 触发命令时重置 session（和旧 /cc 行为一致）
+        // 触发命令时重置 session（和旧 /cc 行为一致：开新会话）
         session.acpSessionId = null
+        session.ccSessionId = null
         session.running = false
         session.cancelled = false
         session.messageQueue.clear()
+        persistCcSessionAsync(ctx.groupId, "", false)
         broadcastFn(AgentMessages.system(
             "${descriptor.displayName} 已激活\n发送消息开始对话，/help 查看命令，/exit 退出",
             agentUserId = descriptor.agentUserId,
@@ -334,9 +346,12 @@ object AgentRuntime {
             is SilkCommand.Cancel -> handleCancel(session, broadcastFn)
             is SilkCommand.New -> {
                 session.acpSessionId = null
+                session.ccSessionId = null
                 session.running = false
                 session.cancelled = false
                 session.messageQueue.clear()
+                // 清除已持久化的 ccSessionId，让重启后不会盲目 resume 一个废 session（与 cdSync 行为一致）
+                persistCcSessionAsync(ctx.groupId, "", false)
                 broadcastFn(AgentMessages.system(
                     "已开启新会话",
                     agentUserId = descriptor.agentUserId,
@@ -505,15 +520,11 @@ object AgentRuntime {
         val acp = getAcpClient(agentType, userId)
 
         if (acp == null) {
-            // 过渡期回退：ACP bridge 未连接时尝试旧 ClaudeCodeManager 路径
-            val fallbackHandled = ClaudeCodeManager.handleIfActive(userId, ctx.groupId, text, userName, broadcastFn)
-            if (!fallbackHandled) {
-                broadcastFn(AgentMessages.system(
-                    "${descriptor.displayName} 未连接。请启动 Bridge Agent。",
-                    agentUserId = descriptor.agentUserId,
-                    agentName = descriptor.displayName,
-                ))
-            }
+            broadcastFn(AgentMessages.system(
+                "${descriptor.displayName} 未连接。请启动 Bridge Agent。",
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
             return
         }
 
@@ -612,6 +623,16 @@ object AgentRuntime {
                 agentName = descriptor.displayName,
             ))
 
+            // 广播 meta 信息（费用/耗时/轮次/会话 id），与旧路径行为一致
+            val metaStr = result.meta?.let { formatPromptMeta(it, session.ccSessionId) }
+            if (!metaStr.isNullOrBlank()) {
+                broadcastFn(AgentMessages.system(
+                    metaStr,
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
+                ))
+            }
+
         } catch (e: Exception) {
             logger.error("[AgentRuntime] sessionPrompt 失败: userId={}, agentType={}", userId, agentType, e)
             broadcastFn(AgentMessages.system(
@@ -690,7 +711,7 @@ object AgentRuntime {
         }
 
         acp.onPermissionRequest { _ ->
-            // 默认自动 approve（和旧 ClaudeCodeManager 行为一致）
+            // 默认自动 approve
             PermissionResponse(
                 outcome = buildJsonObject {
                     put("kind", "selected")

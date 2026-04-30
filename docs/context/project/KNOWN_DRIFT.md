@@ -37,22 +37,20 @@
 - 它是 human-maintained roadmap，不是 agent 自动维护的执行日志
 - `docs/context/planning/TODO_ROADMAP.md` 只是 agent-facing wrapper
 
-## Agent Framework In Transition (Plan E + E2 Done, E3-E4 Pending)
+## Agent Framework In Transition (Plan E + E2 + E3 Done, E4 Pending)
 
-`develop_acp` 分支把 CC 模式从 `ClaudeCodeManager` 迁到通用 `AgentRuntime` 框架。**Plan E + E2 已完成**，ACP 已能覆盖所有 CC 功能（不只聊天）：
+`develop_acp` 分支把 CC 模式从 `ClaudeCodeManager` 迁到通用 `AgentRuntime` 框架。**Plan E + E2 + E3 已完成**，所有业务代码完全走 ACP，不再引用旧 API：
 
 - **入口面**：`WebSocketConfig.kt`、`ChatServer.broadcast()` 只调 `AgentRuntime.{handleIfActive, cancelIfActive, isAgentMessage}`
-- **聊天执行**：`acp_adapter.py`（新默认桥）通过 `/agent-bridge` 端点接收 ACP 请求，复用 `Executor` 跑 Claude CLI，流式推 `session/update` 通知
-- **文件系统操作走 ACP（E2 新增）**：
-  - `/cc-fs/cd` → `AgentRuntime.cdSync()` → `_silk/set_cwd` 扩展
-  - `/cc-fs/list` → `AgentRuntime.listDirectory()` → `_silk/list_dir` 扩展
-  - 创建工作流（`POST /api/workflows`）的 cdSync 也走 ACP
-- **持久化（E2 新增）**：`AgentRuntime.WorkflowPersistence` 接口接 `WorkflowManager`；`session/prompt` response 通过 `meta.ccSessionId` 把 Claude CLI session id 报回，写入 `Workflow.sessionId`；重启后 `autoActivateForWorkflow` 从 seed 拿 ccSessionId，下次 `session/new` 带过去让 adapter resume
-- **Token 重生踢连接（E2 新增）**：`AcpRegistry.disconnect(userId)` 关闭老 ACP 连接；`/cc-settings/generate-token` 同时清理两路注册表
-- **TrustedDir bridgeId（E2 新增）**：抽出 `resolveBridgeId(userId)` helper，ACP 优先 + 旧桥兜底，格式 `"ip:<remoteIp>"` 不变以兼容已有 trust 记录
-- **回退路径仍在**：`AgentRuntime.handlePrompt` 在 ACP 不可用时回退到 `ClaudeCodeManager`；`/cc-fs/list` 在 ACP 不可用时也回退；`BRIDGE_MODE=legacy` 可启动旧桥 `bridge_agent.py`
-- **旧代码未删**：`ClaudeCodeManager` / `BridgeRegistry` / `/cc-bridge` 端点仍在代码中（E3/E4 清理）；`Routing.kt#configureRouting` 双 wiring 持久化
+- **聊天执行**：`acp_adapter.py` 通过 `/agent-bridge` 端点接收 ACP 请求，复用 `Executor` 跑 Claude CLI，流式推 `session/update` 通知
+- **文件系统操作走 ACP**：`/cc-fs/cd` → `_silk/set_cwd`；`/cc-fs/list` → `_silk/list_dir`
+- **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.ccSessionId` 写入 `Workflow.sessionId`；`autoActivateForWorkflow` 用 seed 续会话
+- **Token 重生踢连接**：`AcpRegistry.disconnect(userId)` 关闭老 ACP 连接
+- **TrustedDir bridgeId**：`resolveBridgeId(userId)` 从 `AcpRegistry.getRemoteIp` 拿，格式 `"ip:<remoteIp>"` 不变
+- **`/cc-bridge` WebSocket 端点已删除**
+- **无回退路径**：ACP 不可用时直接报"未连接"，不再走 ClaudeCodeManager
+- **旧代码孤岛**：`backend/claudecode/ClaudeCodeManager.kt` 和 `BridgeRegistry.kt` 仍在文件系统中但无人引用（E4 物理删除）
 
-排查 CC 行为时优先看 `AgentRuntime`（入口/路由/状态）+ `acp_adapter.py`（执行）。旧 `ClaudeCodeManager` / `bridge_agent.py` 仅作回退参考。
+排查 CC 行为时只看 `AgentRuntime` + `acp_adapter.py`，旧 `ClaudeCodeManager` / `bridge_agent.py` 不再有效。
 
-Plan E3: 清除所有旧 API 调用点（让旧 object 无人引用）；E4: 删除旧代码。
+Plan E4: 物理删除 `claudecode/` 包 + `bridge_agent.py`，`bridge.sh` 移除 `BRIDGE_MODE=legacy` 选项。
