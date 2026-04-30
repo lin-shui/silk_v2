@@ -220,12 +220,16 @@ fun WorkflowScene(appState: WebAppState) {
                 }
             } else {
                 // Chat panel for selected workflow
-                WorkflowChatPanel(
-                    userId = user.id,
-                    userName = user.fullName,
-                    groupId = wf.groupId,
-                    workflowName = wf.name,
-                )
+                // key(wf.groupId) 使切换 workflow 时 Compose 销毁旧组件再创建新组件，
+                // 避免共用同一个 ChatClient 导致旧会话的流式消息泄漏到新会话 UI
+                key(wf.groupId) {
+                    WorkflowChatPanel(
+                        userId = user.id,
+                        userName = user.fullName,
+                        groupId = wf.groupId,
+                        workflowName = wf.name,
+                    )
+                }
             }
         }
     }
@@ -535,9 +539,10 @@ private fun WorkflowChatPanel(
     }
 
     // Connect WebSocket when groupId changes
+    // key(wf.groupId) 保证切换 workflow 时此组件被销毁重建，ChatClient 始终是新实例，
+    // 无需 delay 等待旧连接关闭
     LaunchedEffect(groupId) {
         chatClient.clearMessages()
-        kotlinx.coroutines.delay(500)
         try {
             chatClient.connect(userId, userName, groupId)
         } catch (e: dynamic) {
