@@ -1423,6 +1423,14 @@ export class ApiClient {
     } catch (_) { return false; }
   }
 
+  async renameWorkflow(workflowId: string, userId: string, newName: string): Promise<WorkflowApiItem | undefined> {
+    try {
+      const body = JSON.stringify({ userId: userId, name: newName });
+      const result = await this.putRaw(`/api/workflows/${workflowId}`, body);
+      return JSON.parse(result) as WorkflowApiItem;
+    } catch (_) { return undefined; }
+  }
+
   // ==================== Knowledge Base API ====================
 
   async getKBTopics(userId: string): Promise<KBTopicApiItem[]> {
