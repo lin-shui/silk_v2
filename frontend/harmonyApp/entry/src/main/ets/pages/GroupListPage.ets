@@ -408,6 +408,7 @@ export struct GroupListPage {
     }
     this.groups = nextGroups;
 
+    AppStorage.setOrCreate<number>('lastMainTab', 0);
     appRouter.goToChat(group.id, group.name);
   }
 

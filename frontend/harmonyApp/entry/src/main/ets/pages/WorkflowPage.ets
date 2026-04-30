@@ -228,6 +228,7 @@ export struct WorkflowPage {
     AppStorage.setOrCreate<string>('currentWorkflowAgentType', agentType || '');
     AppStorage.setOrCreate<boolean>('currentIsCcWorkflow', agentType === 'claude_code');
     appRouter.workflowAgentType = agentType || '';
+    AppStorage.setOrCreate<number>('lastMainTab', 1);
     appRouter.goToChat(groupId, groupName);
   }
 
