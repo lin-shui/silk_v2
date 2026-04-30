@@ -49,6 +49,9 @@ fun WorkflowChatScreen(appState: AppState) {
         var errorDialogMessage by remember(groupId) { mutableStateOf<String?>(null) }
         val listState = rememberLazyListState()
 
+        // AI 消息展开/收起状态（与 ChatScreen 相同的 pattern）
+        val aiExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
+
         // Connect WebSocket
         LaunchedEffect(groupId) {
             if (groupId.isBlank()) return@LaunchedEffect
@@ -216,6 +219,28 @@ fun WorkflowChatScreen(appState: AppState) {
                                 currentUserId = user.id,
                                 context = context,
                                 isTransient = false,
+                                isAIExpanded = aiExpandedStates[msg.id] ?: false,
+                                onAIExpandChange = { messageId, isExpanded ->
+                                    aiExpandedStates[messageId] = isExpanded
+                                    if (!isExpanded) {
+                                        val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                        if (idx >= 0) {
+                                            scope.launch {
+                                                kotlinx.coroutines.delay(80)
+                                                listState.scrollToItem(idx)
+                                            }
+                                        }
+                                    }
+                                },
+                                onLongContentCollapsed = { messageId ->
+                                    val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                    if (idx >= 0) {
+                                        scope.launch {
+                                            kotlinx.coroutines.delay(80)
+                                            listState.scrollToItem(idx)
+                                        }
+                                    }
+                                },
                             )
                         }
                     }

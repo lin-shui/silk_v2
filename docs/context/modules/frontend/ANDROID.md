@@ -8,6 +8,8 @@
 - `ChatScreen.kt`
 - `GroupListScreen.kt`
 - `WorkflowScreen.kt`
+- `WorkflowChatScreen.kt`
+- `WorkflowDialogs.kt`
 - `KnowledgeBaseScreen.kt`
 - `SettingsScreen.kt`
 
@@ -15,7 +17,8 @@
 
 - Jetpack Compose + Material 3
 - 登录后主壳是底部三 Tab
-- 聊天页隐藏底栏
+- 聊天页 / 工作流会话页隐藏底栏
+- 工作流会话页（`WorkflowChatScreen.kt`）复用 `com.silk.shared.ChatClient`，通过 `wf.groupId` 走 `/chat` WebSocket
 - 包含版本检查 / APK 下载 / 文件处理 / ASR
 
 ## Build-Time Facts
@@ -31,3 +34,4 @@
 - 改文件 payload 时看 `FileContracts.kt` / `FileContractsTest.kt`
 - 改导航壳层时看 `AppState.kt` 与 `MainActivity.kt`
 - 改后端地址逻辑时同时检查 `.env.example`
+- 改工作流目录信任 / Bridge 交互流程时看 `WorkflowDialogs.kt`（`FolderPickerDialog` / `TrustConfirmDialog`）和 `WorkflowChatScreen.kt`，与 Web 端 `WorkflowScene.kt` 行为对齐
