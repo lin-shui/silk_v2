@@ -1990,14 +1990,7 @@ fun AIMessageCardAndroid(
                 }
                 else -> {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 360.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            MarkdownWebView(message.content)
-                        }
+                        MarkdownWebView(message.content)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
