@@ -909,15 +909,17 @@ private fun WorkflowChatPanel(
         }
     }) {
         // Persistent messages
-        messages.forEach { message ->
-            MessageItem(
-                message = message,
-                isTransient = false,
-                isLastMessage = message == messages.lastOrNull(),
-                currentUserId = userId,
-                groupId = groupId,
-                onCopy = { content -> copyTextToClipboard(content) }
-            )
+        messages.forEachIndexed { index, message ->
+            key(message.id) {
+                MessageItem(
+                    message = message,
+                    isTransient = false,
+                    isLastMessage = index == messages.lastIndex,
+                    currentUserId = userId,
+                    groupId = groupId,
+                    onCopy = { content -> copyTextToClipboard(content) }
+                )
+            }
         }
 
         // Status messages
