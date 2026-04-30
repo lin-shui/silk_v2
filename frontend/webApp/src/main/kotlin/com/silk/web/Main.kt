@@ -3717,6 +3717,7 @@ fun AIMessageCard(
     message: Message,
     timeString: String,
     isTransient: Boolean = false,
+    isLastMessage: Boolean = false,
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {},
     onDelete: (String) -> Unit = {},
@@ -3725,7 +3726,7 @@ fun AIMessageCard(
     onToggleSelection: (String) -> Unit = {},
     onEnterSelectionMode: (String) -> Unit = {}
 ) {
-    var isExpanded by remember { mutableStateOf(false) }  // 默认收起
+    var isExpanded by remember { mutableStateOf(isLastMessage) }  // 默认展开（最后一条）
     val isLongContent = message.content.length > 500
     val effectiveExpanded = if (isTransient) true else isExpanded
     val collapsedPreview = remember(message.content) {
@@ -4018,10 +4019,11 @@ fun AIMessageCard(
 
 @Composable
 fun MessageItem(
-    message: Message, 
+    message: Message,
     isTransient: Boolean = false,
     currentUserId: String = "",
     groupId: String = "",
+    isLastMessage: Boolean = false,
     isRecalling: Boolean = false,
     onRecall: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
@@ -4045,6 +4047,7 @@ fun MessageItem(
             message = message,
             timeString = timeString,
             isTransient = isTransient,
+            isLastMessage = isLastMessage,
             onCopy = onCopy,
             onForward = onForward,
             onDelete = onDelete,

@@ -39,6 +39,10 @@ export struct MessageBubble {
   @State private metaParamPickup: string = '';
   @State private metaParamDestination: string = '';
 
+  aboutToAppear() {
+    this.isAIExpanded = this.isLastMessage;
+  }
+
   private notifyLongContentCollapsed(): void {
     if (this.onLongContentCollapsed) {
       this.onLongContentCollapsed();
@@ -386,7 +390,7 @@ export struct MessageBubble {
 
         Blank().height(10)
 
-        if (!this.isLongAIContent() || this.isLastMessage) {
+        if (!this.isLongAIContent() || this.isAIExpanded) {
           MarkdownLite({
             content: this.getSafeAIContent()
           })

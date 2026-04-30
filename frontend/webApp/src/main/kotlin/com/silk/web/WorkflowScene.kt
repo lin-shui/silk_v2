@@ -681,6 +681,7 @@ private fun WorkflowChatPanel(
             MessageItem(
                 message = message,
                 isTransient = false,
+                isLastMessage = message == messages.lastOrNull(),
                 currentUserId = userId,
                 groupId = groupId,
                 onCopy = { content -> copyTextToClipboard(content) }
