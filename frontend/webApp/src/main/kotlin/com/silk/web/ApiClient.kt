@@ -771,6 +771,20 @@ object ApiClient {
         }
     }
 
+    suspend fun renameWorkflow(workflowId: String, userId: String, newName: String): WorkflowItem? {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("name", kotlinx.serialization.json.JsonPrimitive(newName))
+            }.toString()
+            val response = put("/api/workflows/$workflowId", body)
+            jsonParser.decodeFromString<WorkflowItem>(response)
+        } catch (e: Exception) {
+            console.log("重命名工作流失败:", e)
+            null
+        }
+    }
+
     suspend fun deleteWorkflow(workflowId: String, userId: String): Boolean {
         return try {
             val response = window.fetch(
