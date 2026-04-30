@@ -3726,7 +3726,7 @@ fun AIMessageCard(
     onToggleSelection: (String) -> Unit = {},
     onEnterSelectionMode: (String) -> Unit = {}
 ) {
-    var isExpanded by remember(message.id) { mutableStateOf(isLastMessage) }  // 默认展开（最后一条）
+    var isExpanded by remember(message.id) { mutableStateOf(isLastMessage) }  // 最后一条默认展开
     val isLongContent = message.content.length > 500
     val effectiveExpanded = if (isTransient) true else isExpanded
     val collapsedPreview = remember(message.content) {
