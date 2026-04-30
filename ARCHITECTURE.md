@@ -2,10 +2,10 @@
 
 Silk 是一个以 Kotlin 为主的多端聊天系统：
 
-- 后端：Ktor JVM，承担 HTTP、WebSocket、AI/tool calling、文件路由、导出、Todo、Workflow、Knowledge Base、Claude Code bridge 接入。
+- 后端：Ktor JVM，承担 HTTP、WebSocket、AI/tool calling、文件路由、导出、Todo、Workflow、Knowledge Base、Agent 框架（Claude Code via ACP）。
 - 前端主线：Kotlin Multiplatform + Compose，包含 `frontend/shared`、`webApp`、`androidApp`、`desktopApp`。
 - 独立端：`frontend/harmonyApp` 为 ArkTS/ArkUI，未复用 KMP 代码。
-- 辅助服务：`search/`（Weaviate 相关脚本）、`cc_bridge/`（Claude CLI bridge）、`feishu_bot/`（飞书网关）。
+- 辅助服务：`search/`（Weaviate 相关脚本）、`cc_bridge/`（Claude CLI ACP adapter）、`feishu_bot/`（飞书网关）。
 
 ## Primary Runtime Flow
 
@@ -19,9 +19,10 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
    - 未读计数
    - Weaviate 索引
    - URL/PDF 下载提取
-   - Claude Code 模式拦截
+   - Agent 框架（Claude Code）拦截：`AgentRuntime.handleIfActive()`
    - Silk AI / `DirectModelAgent` 响应
-5. `frontend/shared` 定义多端共享消息模型、WebSocket 客户端行为、解析逻辑。
+5. Claude Code 通过 ACP 协议（JSON-RPC 2.0 over WebSocket）连接 `/agent-bridge` 端点；外部 `cc_bridge/acp_adapter.py` adapter 跑 Claude CLI 并流式回传。
+6. `frontend/shared` 定义多端共享消息模型、WebSocket 客户端行为、解析逻辑。
 
 ## Persistent State
 
@@ -42,6 +43,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | App/bootstrap | `Application.kt`, `settings.gradle.kts`, root `build.gradle.kts`, `silk.sh` | 运行入口与构建编排 |
 | HTTP routes | `Routing.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt` | `Routing.kt` 仍然很大，是主索引点 |
 | Chat/WebSocket | `WebSocketConfig.kt`, `ChatHistoryManager.kt` | 消息主链、历史、URL 下载 |
+| Agent framework | `agents/core/`, `agents/acp/`, `agents/adapters/` | Claude Code via ACP，唯一执行路径 |
 | AI/tools/search | `ai/`, `search/`, `utils/WebPageDownloader.kt` | 当前主线是 `DirectModelAgent` |
 | Auth/data | `auth/`, `database/`, `models/` | SQLite + Exposed |
 | Domain modules | `todos/`, `workflow/`, `kb/`, `export/`, `pdf/` | Todo/Workflow/KB 混合文件存储 |

@@ -35,7 +35,7 @@
 - `/users/{userId}/trusted-dirs/check` (GET, query: path)
 - `/users/{userId}/trusted-dirs` (POST, DELETE, GET)
 - `/chat` WebSocket
-- `/cc-bridge` WebSocket
+- `/agent-bridge` WebSocket（ACP 协议，Claude Code adapter 连接点）
 
 已拆出的专项路由：
 
@@ -59,7 +59,7 @@
 5. 异步 Weaviate 索引
 6. 广播到所有 session
 7. 对普通文本异步触发 URL/PDF 处理
-8. Claude Code 模式拦截
+8. Agent 框架（Claude Code）拦截：`AgentRuntime.handleIfActive()`
 9. Silk AI / `DirectModelAgent` 响应
 
 ## Contracts Visible To Clients

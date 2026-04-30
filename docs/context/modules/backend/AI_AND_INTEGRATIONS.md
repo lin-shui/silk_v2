@@ -33,10 +33,10 @@
 
 ## Claude Code Mode
 
-- 入口面已切到 `agents/core/AgentRuntime.kt`（`WebSocketConfig` 唯一调用点）
-- `AgentRuntime` 在 ACP bridge 不可用时回退到旧 `claudecode/ClaudeCodeManager.kt` 执行
-- `BridgeRegistry.kt` 管理旧桥 WebSocket；`agents/acp/AcpRegistry.kt` 管理新 ACP 桥
-- 详见 `integrations/CLAUDE_CODE_AND_BRIDGES.md` 和 `KNOWN_DRIFT.md#Agent Framework In Transition`
+- 入口面：`agents/core/AgentRuntime.kt`（`WebSocketConfig` 唯一调用点）
+- 执行面：`cc_bridge/acp_adapter.py`（外部进程）通过 ACP 协议连接 `/agent-bridge` 端点；`agents/acp/AcpRegistry.kt` 管理连接
+- ACP 不可用时直接报"未连接"，无 fallback
+- 详见 `integrations/CLAUDE_CODE_AND_BRIDGES.md`
 
 ## ASR
 
@@ -47,5 +47,5 @@
 
 - 改 tool schema / tool permission：更新后端测试
 - 改 Weaviate 搜索过滤：确认 session/user 隔离不被破坏
-- 改 CC 指令路由：同时查看 `cc_bridge/`
+- 改 CC 指令路由：看 `agents/core/CommandRouter.kt` + adapter `cc_bridge/acp_adapter.py`
 - 改 ASR 协议：同步看 Web/Android/Harmony 调用端

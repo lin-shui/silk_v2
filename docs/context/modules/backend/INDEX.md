@@ -8,7 +8,7 @@
 - 历史/文件：`ChatHistoryManager.kt`, `routes/FileRoutes.kt`
 - AI：`ai/DirectModelAgent.kt`, `ai/ToolPolicyManager.kt`, `ai/AIConfig.kt`
 - 搜索：`search/WeaviateClient.kt`, `search/ExternalSearchService.kt`
-- Claude Code：`claudecode/ClaudeCodeManager.kt`, `claudecode/BridgeRegistry.kt`
+- Agent 框架（Claude Code 入口）：`agents/core/AgentRuntime.kt`, `agents/acp/AcpClient.kt`, `agents/acp/AcpRegistry.kt`
 
 ## Read Next By Task
 
