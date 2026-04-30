@@ -3,6 +3,7 @@ import { SilkColors } from '../common/Theme';
 import { UserSettings, Language } from '../models/UserSettings';
 import { apiClient as globalApiClient } from '../api/ApiClient';
 import { router as appRouter } from '../common/Router';
+import common from '@ohos.app.ability.common';
 import { BUILD_TIMESTAMP } from '../common/EnvConfig';
 import { HapUpdater, HapVersionInfo } from '../api/HapUpdater';
 
@@ -215,8 +216,8 @@ export struct SettingsPage {
   @Builder
   OtherOptions() {
     Column() {
-      this.SettingItem('关于', HapUpdater.formatVersionDate(BUILD_TIMESTAMP * 1000), () => {
-        this.statusMessage = 'Silk 鸿蒙版';
+      this.SettingItem('关于', '构建时间: ' + HapUpdater.formatVersionDate(BUILD_TIMESTAMP * 1000), () => {
+        this.statusMessage = 'Silk 鸿蒙版 · 构建 ' + HapUpdater.formatVersionDate(BUILD_TIMESTAMP * 1000);
       })
 
       Divider().color(SilkColors.border).margin({ left: 16 })
@@ -283,7 +284,7 @@ export struct SettingsPage {
       this.statusMessage = '检查更新失败: 无法连接服务器';
       return;
     }
-    if (info.versionCode > BUILD_TIMESTAMP) {
+    if (HapUpdater.isNewerVersion(info)) {
       this.updateInfo = info;
       this.showUpdateDialog = true;
       AlertDialog.show({
@@ -311,11 +312,21 @@ export struct SettingsPage {
     this.isDownloading = false;
     if (path && path.length > 0) {
       this.statusMessage = '';
-      AlertDialog.show({
-        title: '下载完成',
-        message: 'HAP 已保存到: ' + path + '\n请在文件管理器中找到该文件并手动安装。',
-        confirm: { value: '知道了', action: () => {} }
-      });
+      // 尝试自动安装
+      const installed = await HapUpdater.installHap(getContext(this) as common.UIAbilityContext, path);
+      if (installed) {
+        AlertDialog.show({
+          title: '下载完成',
+          message: '系统安装器已启动，请按照提示完成安装。完成后请重启应用。\n\n文件路径: ' + path,
+          confirm: { value: '知道了', action: () => {} }
+        });
+      } else {
+        AlertDialog.show({
+          title: '下载完成',
+          message: 'HAP 已保存到:\n' + path + '\n\n请使用文件管理器找到该文件并手动安装。',
+          confirm: { value: '知道了', action: () => {} }
+        });
+      }
     } else {
       this.statusMessage = '下载失败，请稍后重试';
     }
