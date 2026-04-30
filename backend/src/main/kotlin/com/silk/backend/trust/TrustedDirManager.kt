@@ -22,7 +22,9 @@ data class TrustedDirRecord(
 
 class TrustedDirManager(
     private val baseDir: String =
-        System.getProperty("silk.workflowDir")?.trim()?.takeIf { it.isNotEmpty() } ?: "workflows"
+        System.getProperty("silk.workflowDir")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: System.getenv("SILK_WORKFLOW_DIR")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: "${System.getProperty("user.home")}/.silk-data/workflows"
 ) {
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
     private val logger = LoggerFactory.getLogger(TrustedDirManager::class.java)

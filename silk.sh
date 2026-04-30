@@ -146,6 +146,8 @@ else
 fi
 FRONTEND_SCHEME=${FRONTEND_SCHEME:-$BACKEND_SCHEME}
 FRONTEND_PUBLIC_PORT=${FRONTEND_PUBLIC_PORT:-$FRONTEND_HTTP_PORT}
+SILK_WORKFLOW_DIR=${SILK_WORKFLOW_DIR:-"$HOME/.silk-data/workflows"}
+export SILK_WORKFLOW_DIR
 
 # curl 访问 Weaviate 时附加 API Key（与 AUTHENTICATION_APIKEY 一致）
 CURL_WEAVIATE_AUTH=()
@@ -1214,12 +1216,13 @@ deploy() {
 # ============================================================
 
 start_services_internal() {
+    mkdir -p "$SILK_WORKFLOW_DIR"
     # 启动后端
     echo ""
     echo -e "${BLUE}启动 Silk 后端...${NC}"
     cd "$SILK_DIR"
     clean_gradle_kotlin_snapshots
-    nohup ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
+    nohup env JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
     echo -e "  ${GREEN}后端启动命令已执行${NC}"
     echo -e "  日志: /tmp/silk_backend.log"
     
@@ -1305,7 +1308,8 @@ start_services() {
     else
         cd "$SILK_DIR"
         clean_gradle_kotlin_snapshots
-        nohup ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
+        mkdir -p "$SILK_WORKFLOW_DIR"
+        nohup env JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
         echo -e "  ${GREEN}后端启动命令已执行${NC}"
         echo -e "  日志: /tmp/silk_backend.log"
     fi
@@ -1491,7 +1495,8 @@ quick_restart() {
     # 启动后端
     cd "$SILK_DIR"
     clean_gradle_kotlin_snapshots
-    nohup ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
+    mkdir -p "$SILK_WORKFLOW_DIR"
+    nohup env JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
     echo "  后端启动中..."
     
     # 启动前端 (使用预编译的生产版本)

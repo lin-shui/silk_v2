@@ -12,6 +12,14 @@ application {
     mainClass.set("com.silk.backend.ApplicationKt")
 }
 
+tasks.named<JavaExec>("run") {
+    val workflowDir = System.getProperty("silk.workflowDir")
+        ?: System.getenv("SILK_WORKFLOW_DIR")
+    if (!workflowDir.isNullOrBlank()) {
+        systemProperty("silk.workflowDir", workflowDir)
+    }
+}
+
 // ShadowJar 配置
 tasks.shadowJar {
     archiveClassifier.set("all")
