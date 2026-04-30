@@ -30,6 +30,7 @@ import websockets
 from websockets.exceptions import ConnectionClosed
 
 from executor import Executor
+from fs_listing import list_directory
 from session_manager import SessionManager
 
 logger = logging.getLogger("acp_bridge")
@@ -208,6 +209,8 @@ class AcpAgentServer:
                 await self._handle_silk_list_sessions(msg_id, params)
             elif method == "_silk/set_cwd":
                 await self._handle_silk_set_cwd(msg_id, params)
+            elif method == "_silk/list_dir":
+                await self._handle_silk_list_dir(msg_id, params)
             else:
                 await self._send_error(msg_id, -32601, f"Method not found: {method}")
         except Exception as exc:
@@ -243,6 +246,7 @@ class AcpAgentServer:
                         "compact": True,
                         "listLocalSessions": True,
                         "setCwd": True,
+                        "listDir": True,
                     },
                 },
             },
@@ -253,10 +257,20 @@ class AcpAgentServer:
     # ------------------------------------------------------------------
 
     async def _handle_session_new(self, msg_id: Any, params: Any) -> None:
-        cwd = (params or {}).get("cwd") or self.default_cwd
+        p = params or {}
+        cwd = p.get("cwd") or self.default_cwd
+        cc_session_id = p.get("ccSessionId")
         acp_session_id = str(uuid.uuid4())
-        self.sessions[acp_session_id] = AcpSession(cwd=os.path.realpath(cwd))
-        logger.info("[ACP] session/new: %s cwd=%s", acp_session_id, cwd)
+        sess = AcpSession(cwd=os.path.realpath(cwd))
+        if cc_session_id:
+            # backend seed：续旧 CC session（重启后从 WorkflowPersistence 拿来的 cc_session_id）
+            # 下次 session/prompt 会因 sess.cc_session_id 非空而走 resume=True
+            sess.cc_session_id = cc_session_id
+        self.sessions[acp_session_id] = sess
+        logger.info(
+            "[ACP] session/new: %s cwd=%s cc_seed=%s",
+            acp_session_id, cwd, (cc_session_id or "")[:8],
+        )
         await self._send_response(msg_id, {"sessionId": acp_session_id})
 
     # ------------------------------------------------------------------
@@ -372,9 +386,14 @@ class AcpAgentServer:
                 "[ACP] sending prompt response sid=%s msg_id=%s stopReason=%s",
                 sid, msg_id, final_result["stopReason"],
             )
-            await self._send_response(
-                msg_id, {"stopReason": final_result["stopReason"]}
-            )
+            # 把 cc_session_id（Claude CLI 真实 session id）通过 meta 报回 backend，
+            # 让 backend 能持久化到 workflow_store.json，重启后通过 session/new 的 ccSessionId 续会话。
+            response_payload: dict[str, Any] = {"stopReason": final_result["stopReason"]}
+            executor_meta = final_result.get("meta") or {}
+            cc_sid = executor_meta.get("sessionId") or sess.cc_session_id
+            if cc_sid:
+                response_payload["meta"] = {"ccSessionId": cc_sid}
+            await self._send_response(msg_id, response_payload)
 
         sess.request_id = None
 
@@ -501,6 +520,14 @@ class AcpAgentServer:
         sess.cc_session_id = None
         logger.info("[ACP] _silk/set_cwd sid=%s cwd=%s", sid, resolved)
         await self._send_response(msg_id, {"ok": True, "path": resolved})
+
+    async def _handle_silk_list_dir(self, msg_id: Any, params: Any) -> None:
+        p = params or {}
+        path = p.get("path") or self.default_cwd
+        show_hidden = bool(p.get("showHidden", False))
+        result = list_directory(path, show_hidden)
+        logger.debug("[ACP] _silk/list_dir path=%s success=%s", path, result.get("success"))
+        await self._send_response(msg_id, result)
 
     async def _handle_silk_compact(self, msg_id: Any, params: Any) -> None:
         sid = (params or {}).get("sessionId")

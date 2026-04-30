@@ -12,6 +12,8 @@ class AgentSession(
     val groupId: String,
     val agentType: String,
     @Volatile var acpSessionId: String? = null,
+    /** Claude CLI 真实 session id（从 adapter `complete.meta.sessionId` 拿到，用于持久化 + 重启 resume） */
+    @Volatile var ccSessionId: String? = null,
     @Volatile var running: Boolean = false,
     @Volatile var cancelled: Boolean = false,
     @Volatile var currentRequestId: String? = null,

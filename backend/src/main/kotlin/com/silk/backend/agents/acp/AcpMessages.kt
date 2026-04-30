@@ -74,6 +74,8 @@ data class InitializeResult(
 data class SessionNewParams(
     val cwd: String,
     val mcpServers: List<McpServer> = emptyList(),
+    /** Silk 扩展：续旧 CC session（重启后从 WorkflowPersistence seed 拿到 cc_session_id） */
+    val ccSessionId: String? = null,
 )
 
 @Serializable
@@ -105,6 +107,8 @@ data class SessionPromptParams(
 @Serializable
 data class SessionPromptResult(
     val stopReason: StopReason,
+    /** Silk 扩展：adapter 通过 meta.ccSessionId 把 Claude CLI 真实 session id 报回来用于持久化 */
+    val meta: kotlinx.serialization.json.JsonElement? = null,
 )
 
 @Serializable

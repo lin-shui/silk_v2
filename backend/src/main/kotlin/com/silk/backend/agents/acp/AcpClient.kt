@@ -79,10 +79,11 @@ class AcpClient(
     suspend fun sessionNew(
         cwd: String,
         mcpServers: List<McpServer> = emptyList(),
+        ccSessionId: String? = null,
     ): SessionNewResult {
         val params = json.encodeToJsonElement(
             SessionNewParams.serializer(),
-            SessionNewParams(cwd = cwd, mcpServers = mcpServers),
+            SessionNewParams(cwd = cwd, mcpServers = mcpServers, ccSessionId = ccSessionId),
         )
         val resp = call("session/new", params)
         return decodeResultOrThrow(resp, SessionNewResult.serializer())

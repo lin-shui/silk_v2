@@ -1,29 +1,32 @@
 # Claude Code And Bridges
 
-> **过渡期注意**：`develop_acp` 分支引入了 `AgentRuntime` 框架层。Plan E 已完成，ACP 新桥（`acp_adapter.py`）为默认执行路径，旧桥（`bridge_agent.py`）作为回退（`BRIDGE_MODE=legacy`）。详见 `KNOWN_DRIFT.md#Agent Framework In Transition`。
+> **过渡期注意**：`develop_acp` 分支引入了 `AgentRuntime` 框架层。**Plan E + E2 已完成**，ACP 新桥（`acp_adapter.py`）为默认执行路径，覆盖聊天 + 文件系统操作 + 持久化；旧桥（`bridge_agent.py`）作为回退（`BRIDGE_MODE=legacy`）。详见 `KNOWN_DRIFT.md#Agent Framework In Transition`。
 
 ## Agent Framework Layer (新)
 
 - `backend/agents/core/AgentRuntime.kt` — 对外门面，替代 `ClaudeCodeManager` 作为 `WebSocketConfig` 的唯一入口
 - `backend/agents/core/CommandRouter.kt` — 命令解析（`/cc`、`/use`、`/status`、`@agent` 等）
 - `backend/agents/core/GroupAgentContext.kt` — per-(userId, groupId) 上下文，含 workingDir、currentAgentType、sessions
-- `backend/agents/core/AgentSession.kt` — per-agent 会话状态（running、queue、acpSessionId）
+- `backend/agents/core/AgentSession.kt` — per-agent 会话状态（running、queue、acpSessionId、ccSessionId）
 - `backend/agents/core/AgentRegistry.kt` — agent 类型注册表
+- `backend/agents/core/AcpExtensions.kt` — Silk 私有扩展调用（`_silk/compact`、`_silk/list_local_sessions`、`_silk/set_cwd`、`_silk/list_dir`）
 - `backend/agents/adapters/claudecode/ClaudeCodeDescriptor.kt` — CC adapter 描述符
 - `backend/agents/acp/` — ACP 协议层（`AcpClient`、`AcpTransport`、`AcpRegistry`、JSON-RPC 消息类型）
 
 关键路径：
 
-1. `WebSocketConfig.broadcast()` → `AgentRuntime.handleIfActive()` → `CommandRouter.route()`
-2. ACP 可用（默认）→ `AcpRegistry` + `AcpClient` → adapter `session/prompt` → `Executor` 跑 Claude CLI → `session/update` 流式回传
-3. ACP 不可用 → **回退** `ClaudeCodeManager.handleIfActive()`（旧路径，E3 后移除）
-4. `autoActivateForWorkflow` 双写 `ClaudeCodeManager` + `AgentRuntime`（E3 后移除双写）
+1. **聊天**：`WebSocketConfig.broadcast()` → `AgentRuntime.handleIfActive()` → `CommandRouter.route()` → ACP `session/prompt` → adapter 跑 `Executor` → `session/update` 流式回传
+2. **/cc-fs/cd**：`Routing.kt` → `AgentRuntime.cdSync()` → ACP `_silk/set_cwd` → adapter 验证 + 返回 resolved path
+3. **/cc-fs/list**：`Routing.kt` → `AgentRuntime.listDirectory()` → ACP `_silk/list_dir` → adapter 调 `fs_listing.list_directory`
+4. **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.ccSessionId` 写入 `Workflow.sessionId`；`autoActivateForWorkflow` 用 seed 续会话
+5. **Token 重生**：`/cc-settings/generate-token` → `AcpRegistry.disconnect(userId)` 关老连接
+6. **回退**：ACP 不可用时（如 `BRIDGE_MODE=legacy`）回退到 `ClaudeCodeManager`；E3 删
 
-## Backend Side (旧，过渡期仍为实际执行层)
+## Backend Side (旧，过渡期仍作回退)
 
-- `backend/claudecode/ClaudeCodeManager.kt`
-- `backend/claudecode/BridgeRegistry.kt`
-- `backend/claudecode/StreamParser.kt`
+- `backend/claudecode/ClaudeCodeManager.kt` — 仅在 ACP 不可用时被回退调用
+- `backend/claudecode/BridgeRegistry.kt` — 仅旧桥 `bridge_agent.py` 使用
+- `backend/claudecode/StreamParser.kt` — 旧桥用
 
 核心事实：
 
@@ -46,10 +49,11 @@
 
 主要文件：
 
-- `acp_adapter.py` — **新默认桥**（`BRIDGE_MODE=acp`），ACP server 连接 `/agent-bridge` 端点，注册到 `AcpRegistry`，复用 `Executor` 执行 Claude CLI，支持 `_silk/*` 扩展
+- `acp_adapter.py` — **新默认桥**（`BRIDGE_MODE=acp`），ACP server 连接 `/agent-bridge` 端点，注册到 `AcpRegistry`，复用 `Executor` 执行 Claude CLI，支持 `_silk/*` 扩展（`compact` / `list_local_sessions` / `set_cwd` / `list_dir`）
 - `bridge_agent.py` — 旧桥（`BRIDGE_MODE=legacy`），连接 `/cc-bridge` 端点，注册到 `BridgeRegistry`
 - `executor.py` — 实际调用 Claude CLI 的执行器（新旧桥共用）
 - `session_manager.py` — 本地会话管理（`~/.silk/cc_sessions.json`，新旧桥共用）
+- `fs_listing.py` — 共用目录列表工具（被 `_silk/list_dir` 和旧桥 `handle_list_dir` 共用）
 - `bridge.sh` — 启动/停止管理脚本，`BRIDGE_MODE` 环境变量控制走新桥还是旧桥（默认 `acp`）
 
 关键职责：

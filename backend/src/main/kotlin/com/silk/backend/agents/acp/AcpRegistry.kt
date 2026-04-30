@@ -69,6 +69,24 @@ object AcpRegistry {
         return entries.keys.filter { it.startsWith(prefix) }.map { it.removePrefix(prefix) }
     }
 
+    /**
+     * 关闭并移除该 user 下所有 agentType 的 ACP 连接。返回关闭数。
+     * 用于 token 重新生成等强制踢连接的场景。
+     */
+    suspend fun disconnect(userId: String): Int {
+        val prefix = "${userId}::"
+        val toClose = entries.entries.filter { it.key.startsWith(prefix) }.toList()
+        for (entry in toClose) {
+            try {
+                entry.value.client.close("token regenerated")
+            } catch (_: Exception) {
+                // ignore — adapter 端可能已先关
+            }
+            entries.remove(entry.key)
+        }
+        return toClose.size
+    }
+
     /** 仅供测试使用 */
     internal fun clearForTest() {
         entries.clear()

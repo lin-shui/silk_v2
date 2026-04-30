@@ -13,6 +13,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.util.UUID
@@ -28,6 +31,56 @@ object AgentRuntime {
 
     init {
         AgentRegistry.register(ClaudeCodeDescriptor)
+    }
+
+    // ========== Workflow 持久化（Plan E2） ==========
+
+    /**
+     * Workflow 持久化回调：让 AgentRuntime 把 workingDir 和 cc_session_id 写回 WorkflowManager。
+     * 由 [Application]/[configureRouting] 在启动时通过 [setWorkflowPersistence] 注入。
+     */
+    interface WorkflowPersistence {
+        /** workingDir 变化时持久化（cdSync 成功后异步触发）。 */
+        fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean
+        /** Claude CLI session id 变化时持久化（prompt 完成后从 meta 拿到）。 */
+        fun persistCcSession(rawGroupId: String, ccSessionId: String, sessionStarted: Boolean): Boolean
+        /** 启动 / 首次激活时根据 workflow record 提供 seed；返回 null 表示不是 workflow 或无值可 seed。 */
+        fun loadSeed(rawGroupId: String): WorkflowSeed?
+    }
+
+    data class WorkflowSeed(
+        val workingDir: String,
+        val ccSessionId: String?,
+        val sessionStarted: Boolean,
+    )
+
+    @Volatile
+    private var persistence: WorkflowPersistence? = null
+
+    fun setWorkflowPersistence(p: WorkflowPersistence) {
+        persistence = p
+    }
+
+    /** group_xxx → xxx；非 group_ 前缀原样返回 */
+    private fun stripGroupPrefix(groupId: String): String =
+        if (groupId.startsWith("group_")) groupId.removePrefix("group_") else groupId
+
+    /** 异步持久化 workingDir（不阻塞调用方）。 */
+    private fun persistWorkingDirAsync(groupId: String, workingDir: String) {
+        val p = persistence ?: return
+        CoroutineScope(Dispatchers.IO).launch {
+            try { p.persistWorkingDir(stripGroupPrefix(groupId), workingDir) }
+            catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 workingDir 失败: {}", e.message) }
+        }
+    }
+
+    /** 异步持久化 ccSessionId / sessionStarted。 */
+    private fun persistCcSessionAsync(groupId: String, ccSessionId: String, started: Boolean) {
+        val p = persistence ?: return
+        CoroutineScope(Dispatchers.IO).launch {
+            try { p.persistCcSession(stripGroupPrefix(groupId), ccSessionId, started) }
+            catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 ccSessionId 失败: {}", e.message) }
+        }
     }
 
     // ========== 公共 API（5 个方法） ==========
@@ -119,13 +172,30 @@ object AgentRuntime {
     fun autoActivateForWorkflow(userId: String, groupId: String, agentType: String) {
         val ctx = context(userId, groupId)
         ctx.currentAgentType = agentType
-        ctx.getOrCreateSession(agentType)
-        // 过渡期同步：旧 ClaudeCodeManager 持有真实 workingDir（来自 workflow seed / cdSync）
-        val oldSnap = ClaudeCodeManager.snapshotState(userId, groupId)
-        if (oldSnap != null && oldSnap.workingDir.isNotBlank()) {
-            ctx.workingDir = oldSnap.workingDir
+        val session = ctx.getOrCreateSession(agentType)
+        // 优先从 WorkflowPersistence seed
+        val seed = try {
+            persistence?.loadSeed(stripGroupPrefix(groupId))
+        } catch (e: Exception) {
+            logger.warn("[AgentRuntime] loadSeed 失败: {}", e.message)
+            null
         }
-        logger.info("[AgentRuntime] 工作流自动激活: userId={}, groupId={}, agentType={}, workingDir={}", userId, groupId, agentType, ctx.workingDir)
+        if (seed != null) {
+            if (seed.workingDir.isNotBlank()) ctx.workingDir = seed.workingDir
+            if (!seed.ccSessionId.isNullOrBlank() && seed.sessionStarted) {
+                session.ccSessionId = seed.ccSessionId
+            }
+        } else {
+            // 兜底：从旧 ClaudeCodeManager.snapshotState 读 workingDir（过渡期，E3 删）
+            val oldSnap = ClaudeCodeManager.snapshotState(userId, groupId)
+            if (oldSnap != null && oldSnap.workingDir.isNotBlank()) {
+                ctx.workingDir = oldSnap.workingDir
+            }
+        }
+        logger.info(
+            "[AgentRuntime] 工作流自动激活: userId={}, groupId={}, agentType={}, workingDir={}, ccSeed={}",
+            userId, groupId, agentType, ctx.workingDir, seed?.ccSessionId?.take(8) ?: "-"
+        )
     }
 
     /** Bridge 断线时由 Routing.kt 调用 */
@@ -464,10 +534,13 @@ object AgentRuntime {
         val accumulated = StringBuilder()
         setupAcpHandlers(acp, session, descriptor, broadcastFn, accumulated)
 
-        // 首次 prompt 需要 sessionNew
+        // 首次 prompt 需要 sessionNew（带 ccSessionId seed 让 adapter 续旧 CC session）
         if (session.acpSessionId == null) {
             try {
-                val result = acp.sessionNew(cwd = ctx.workingDir)
+                val result = acp.sessionNew(
+                    cwd = ctx.workingDir,
+                    ccSessionId = session.ccSessionId,
+                )
                 session.acpSessionId = result.sessionId
             } catch (e: Exception) {
                 logger.error("[AgentRuntime] sessionNew 失败: userId={}, agentType={}", userId, agentType, e)
@@ -490,6 +563,17 @@ object AgentRuntime {
                 sessionId = session.acpSessionId!!,
                 prompt = listOf(ContentBlock.Text(text)),
             )
+
+            // 从 result.meta 拿 ccSessionId 持久化（adapter complete.meta.sessionId → response.meta.ccSessionId）
+            val metaCcSid = result.meta?.let { meta ->
+                runCatching {
+                    meta.jsonObject["ccSessionId"]?.jsonPrimitive?.contentOrNull
+                }.getOrNull()
+            }
+            if (!metaCcSid.isNullOrBlank()) {
+                session.ccSessionId = metaCcSid
+                persistCcSessionAsync(ctx.groupId, metaCcSid, true)
+            }
 
             // prompt 完成处理
             when (result.stopReason) {
@@ -639,6 +723,96 @@ object AgentRuntime {
             workingDir = ctx.workingDir,
             agentType = agentType,
         )
+    }
+
+    // ========== Plan E2: filesystem ops via ACP ==========
+
+    sealed class CdResult {
+        data class Ok(val resolvedPath: String) : CdResult()
+        data class Err(val reason: String) : CdResult()
+    }
+
+    /**
+     * 走 ACP `_silk/set_cwd` 切换工作目录。
+     * 行为约束：
+     *  - 任务运行中 → 拒绝（让用户先 /cancel）
+     *  - ACP bridge 未连接 → 返回 Err
+     *  - 没有 ACP session 时先 sessionNew（adapter 用 sessionId 索引 cwd）
+     *  - 成功后 ctx.workingDir 取 adapter 返回的 resolved path
+     *  - 切目录会让 adapter 把 cc_session_id reset，本地 acpSessionId 也重置（下次 prompt 重建）
+     */
+    suspend fun cdSync(
+        userId: String,
+        groupId: String,
+        path: String,
+        agentType: String = "claude-code",
+    ): CdResult {
+        val ctx = context(userId, groupId)
+        val existingSession = ctx.sessions[agentType]
+        if (existingSession?.running == true) {
+            return CdResult.Err("任务运行中，请先 /cancel 再 /cd")
+        }
+        val acp = AcpRegistry.get(userId, agentType)
+            ?: return CdResult.Err("ACP Bridge 未连接")
+
+        // adapter 端用 sessionId 索引 cwd；如果还没有 ACP session 就先建一个
+        val session = ctx.getOrCreateSession(agentType)
+        var acpSessionId = session.acpSessionId
+        if (acpSessionId == null) {
+            try {
+                val newSession = acp.sessionNew(cwd = path)
+                acpSessionId = newSession.sessionId
+                session.acpSessionId = acpSessionId
+            } catch (e: Exception) {
+                logger.warn("[AgentRuntime] cdSync 创建 ACP session 失败: {}", e.message)
+                return CdResult.Err("创建 ACP session 失败: ${e.message}")
+            }
+        }
+
+        return try {
+            val resp = AcpExtensions.setCwd(acp, acpSessionId!!, path)
+            // adapter 返回 {ok: true, path: <resolved>}
+            val resolvedPath = resp.jsonObject["path"]?.jsonPrimitive?.contentOrNull ?: path
+            ctx.workingDir = resolvedPath
+            // adapter 已经把它的 cc_session_id 设为 null；本地也重置 acpSessionId + ccSessionId
+            // 让下次 prompt 走 sessionNew 重建（与旧 cdSync 重置 sessionId 行为对齐）
+            session.acpSessionId = null
+            session.ccSessionId = null
+            persistWorkingDirAsync(groupId, resolvedPath)
+            // 切目录等价于 /new：清空已持久化的 ccSessionId 让重启不会盲目 resume 一个废 session
+            persistCcSessionAsync(groupId, "", false)
+            logger.info("[AgentRuntime] cdSync 成功: userId={}, groupId={}, path={}", userId, groupId, resolvedPath)
+            CdResult.Ok(resolvedPath)
+        } catch (e: com.silk.backend.agents.acp.AcpRpcException) {
+            CdResult.Err(e.rpcError.message)
+        } catch (e: Exception) {
+            logger.warn("[AgentRuntime] cdSync 异常: {}", e.message)
+            CdResult.Err("set_cwd 异常: ${e.message}")
+        }
+    }
+
+    /**
+     * 走 ACP `_silk/list_dir` 列出指定路径下的子目录。
+     * @return adapter 的 raw JSON（含 success/path/parent/segments/separator/entries/truncated/error）；
+     *   ACP 不可用时返回 null（让 caller 决定是否回退到旧桥）。
+     */
+    suspend fun listDirectory(
+        userId: String,
+        path: String?,
+        showHidden: Boolean,
+        agentType: String = "claude-code",
+    ): kotlinx.serialization.json.JsonObject? {
+        val acp = AcpRegistry.get(userId, agentType) ?: return null
+        return try {
+            val resp = AcpExtensions.listDir(acp, path ?: "", showHidden)
+            resp.jsonObject
+        } catch (e: com.silk.backend.agents.acp.AcpRpcException) {
+            logger.warn("[AgentRuntime] _silk/list_dir 失败: {}", e.rpcError.message)
+            null
+        } catch (e: Exception) {
+            logger.warn("[AgentRuntime] _silk/list_dir 异常: {}", e.message)
+            null
+        }
     }
 
     fun cleanupState(userId: String, groupId: String) {
