@@ -223,13 +223,11 @@ fun WorkflowChatScreen(appState: AppState) {
                                 isAIExpanded = aiExpandedStates[msg.id] ?: (msg.id == lastMsgId),
                                 onAIExpandChange = { messageId, isExpanded ->
                                     aiExpandedStates[messageId] = isExpanded
-                                    if (!isExpanded) {
-                                        val idx = messages.reversed().indexOfFirst { it.id == messageId }
-                                        if (idx >= 0) {
-                                            scope.launch {
-                                                kotlinx.coroutines.delay(80)
-                                                listState.scrollToItem(idx)
-                                            }
+                                    val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                    if (idx >= 0) {
+                                        scope.launch {
+                                            kotlinx.coroutines.delay(80)
+                                            listState.scrollToItem(idx)
                                         }
                                     }
                                 },

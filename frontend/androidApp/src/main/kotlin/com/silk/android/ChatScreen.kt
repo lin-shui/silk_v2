@@ -1036,13 +1036,11 @@ fun ChatScreen(appState: AppState) {
                             isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
                             onAIExpandChange = { messageId, isExpanded ->
                                 aiMessageExpandedStates[messageId] = isExpanded
-                                if (!isExpanded) {
-                                    val idx = messages.reversed().indexOfFirst { it.id == messageId }
-                                    if (idx >= 0) {
-                                        scopeForScroll.launch {
-                                            kotlinx.coroutines.delay(80)
-                                            listState.scrollToItem(idx)
-                                        }
+                                val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                if (idx >= 0) {
+                                    scopeForScroll.launch {
+                                        kotlinx.coroutines.delay(80)
+                                        listState.scrollToItem(idx)
                                     }
                                 }
                             },
