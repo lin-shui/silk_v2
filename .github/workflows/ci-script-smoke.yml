@@ -228,3 +228,401 @@ jobs:
           test -f backend/static/files/androidApp-debug.apk
           test -L backend/static/silk.apk
           test "$(readlink backend/static/silk.apk)" = "$PWD/backend/static/silk-ci-smoke.apk"
+
+  runtime-start-smoke:
+    name: silk.sh start/stop runtime smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      BACKEND_HTTP_PORT: "18003"
+      BACKEND_INTERNAL_PORT: "18003"
+      FRONTEND_HTTP_PORT: "18005"
+      FRONTEND_INTERNAL_PORT: "18005"
+      FRONTEND_PUBLIC_PORT: "18005"
+      WEAVIATE_HTTP_PORT: "18008"
+      WEAVIATE_GRPC_PORT: "15051"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Use official Gradle distribution on GitHub-hosted runner
+        run: |
+          if grep -q 'mirrors.cloud.tencent.com' gradle/wrapper/gradle-wrapper.properties; then
+            sed -i 's#https\\://mirrors.cloud.tencent.com/gradle/gradle-8.4-bin.zip#https\\://services.gradle.org/distributions/gradle-8.4-bin.zip#' gradle/wrapper/gradle-wrapper.properties
+          fi
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Write runtime smoke config and Web fixture
+        run: |
+          cat > .env <<EOF
+          BACKEND_HTTP_PORT=${BACKEND_HTTP_PORT}
+          BACKEND_INTERNAL_PORT=${BACKEND_INTERNAL_PORT}
+          FRONTEND_HTTP_PORT=${FRONTEND_HTTP_PORT}
+          FRONTEND_INTERNAL_PORT=${FRONTEND_INTERNAL_PORT}
+          FRONTEND_PUBLIC_PORT=${FRONTEND_PUBLIC_PORT}
+          WEAVIATE_HTTP_PORT=${WEAVIATE_HTTP_PORT}
+          WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT}
+          WEAVIATE_URL=http://127.0.0.1:${WEAVIATE_HTTP_PORT}
+          WEAVIATE_API_KEY=ci-smoke
+          SILK_WORKFLOW_DIR=${RUNNER_TEMP}/silk-workflows
+          EOF
+
+          mkdir -p frontend/webApp/build/dist/js/productionExecutable
+          printf '%s\n' '<!doctype html><html><head><title>Silk CI runtime smoke</title></head><body>ok</body></html>' \
+            > frontend/webApp/build/dist/js/productionExecutable/index.html
+          printf '%s\n' 'console.log("Silk CI runtime smoke");' \
+            > frontend/webApp/build/dist/js/productionExecutable/webApp.js
+
+      - name: Start local Weaviate readiness mock
+        run: |
+          cat > "$RUNNER_TEMP/silk_weaviate_mock.py" <<'PY'
+          import json
+          import os
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  if self.path.startswith("/v1/.well-known/ready"):
+                      self.send_response(200)
+                      self.end_headers()
+                      self.wfile.write(b"ready")
+                      return
+                  if self.path.startswith("/v1/meta"):
+                      body = json.dumps({"version": "ci-smoke"}).encode()
+                      self.send_response(200)
+                      self.send_header("Content-Type", "application/json")
+                      self.send_header("Content-Length", str(len(body)))
+                      self.end_headers()
+                      self.wfile.write(body)
+                      return
+                  self.send_response(404)
+                  self.end_headers()
+
+              def log_message(self, fmt, *args):
+                  return
+
+
+          HTTPServer(("127.0.0.1", int(os.environ["WEAVIATE_HTTP_PORT"])), Handler).serve_forever()
+          PY
+
+          python3 "$RUNNER_TEMP/silk_weaviate_mock.py" > /tmp/silk_weaviate_mock.log 2>&1 &
+          echo $! > "$RUNNER_TEMP/silk_weaviate_mock.pid"
+
+          for _ in {1..10}; do
+            if curl -fsS "http://127.0.0.1:${WEAVIATE_HTTP_PORT}/v1/.well-known/ready" >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          cat /tmp/silk_weaviate_mock.log
+          exit 1
+
+      - name: Run silk.sh start smoke
+        run: printf '\n' | ./silk.sh start
+
+      - name: Verify runtime endpoints
+        run: |
+          for _ in {1..90}; do
+            if curl -fsS "http://127.0.0.1:${BACKEND_HTTP_PORT}/health" > /tmp/silk_health.json \
+              && curl -fsS "http://127.0.0.1:${FRONTEND_HTTP_PORT}/" > /tmp/silk_frontend.html; then
+              grep -q '"status":"ok"' /tmp/silk_health.json
+              grep -q 'Silk CI runtime smoke' /tmp/silk_frontend.html
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::group::backend log"
+          tail -200 /tmp/silk_backend.log 2>/dev/null || true
+          echo "::endgroup::"
+          echo "::group::frontend log"
+          tail -50 /tmp/silk_frontend.log 2>/dev/null || true
+          echo "::endgroup::"
+          exit 1
+
+      - name: Stop runtime smoke services
+        if: always()
+        run: |
+          ./silk.sh stop || true
+          if [ -f "$RUNNER_TEMP/silk_weaviate_mock.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/silk_weaviate_mock.pid")" 2>/dev/null || true
+          fi
+
+      - name: Upload runtime smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-start-smoke-logs
+          path: |
+            /tmp/silk_backend.log
+            /tmp/silk_frontend.log
+            /tmp/silk_weaviate_mock.log
+            /tmp/silk_health.json
+            /tmp/silk_frontend.html
+          if-no-files-found: ignore
+
+  deploy-orchestration-smoke:
+    name: silk.sh deploy orchestration smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BACKEND_HTTP_PORT: "18103"
+      BACKEND_INTERNAL_PORT: "18103"
+      FRONTEND_HTTP_PORT: "18105"
+      FRONTEND_INTERNAL_PORT: "18105"
+      FRONTEND_PUBLIC_PORT: "18105"
+      WEAVIATE_HTTP_PORT: "18108"
+      WEAVIATE_GRPC_PORT: "15151"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Smoke check deploy orchestration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CALL_LOG="$PWD/.ci-deploy-gradlew-calls"
+          export CALL_LOG
+          export SILK_BACKEND_MOCK="$RUNNER_TEMP/silk_backend_mock.py"
+
+          cat > .env <<EOF
+          BACKEND_HTTP_PORT=${BACKEND_HTTP_PORT}
+          BACKEND_INTERNAL_PORT=${BACKEND_INTERNAL_PORT}
+          FRONTEND_HTTP_PORT=${FRONTEND_HTTP_PORT}
+          FRONTEND_INTERNAL_PORT=${FRONTEND_INTERNAL_PORT}
+          FRONTEND_PUBLIC_PORT=${FRONTEND_PUBLIC_PORT}
+          WEAVIATE_HTTP_PORT=${WEAVIATE_HTTP_PORT}
+          WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT}
+          WEAVIATE_URL=http://127.0.0.1:${WEAVIATE_HTTP_PORT}
+          WEAVIATE_API_KEY=ci-smoke
+          SILK_WORKFLOW_DIR=${RUNNER_TEMP}/silk-workflows
+          EOF
+
+          cat > "$SILK_BACKEND_MOCK" <<'PY'
+          import os
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          stale = os.environ.get("SILK_BACKEND_STALE") == "1"
+          port = int(os.environ["BACKEND_INTERNAL_PORT"])
+
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  if self.path.startswith("/health"):
+                      service = "stale" if stale else "silk-ci-deploy-smoke"
+                      body = ('{"status":"ok","service":"%s"}' % service).encode()
+                      self.send_response(200)
+                      self.send_header("Content-Type", "application/json")
+                      self.send_header("Content-Length", str(len(body)))
+                      self.end_headers()
+                      self.wfile.write(body)
+                      return
+                  self.send_response(404)
+                  self.end_headers()
+
+              def log_message(self, fmt, *args):
+                  return
+
+
+          HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+          PY
+
+          cat > "$RUNNER_TEMP/silk_frontend_stale.py" <<'PY'
+          import os
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+          port = int(os.environ["FRONTEND_INTERNAL_PORT"])
+
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  body = b"<!doctype html><title>stale frontend</title>"
+                  self.send_response(200)
+                  self.send_header("Content-Type", "text/html")
+                  self.send_header("Content-Length", str(len(body)))
+                  self.end_headers()
+                  self.wfile.write(body)
+
+              def log_message(self, fmt, *args):
+                  return
+
+
+          HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+          PY
+
+          cat > "$RUNNER_TEMP/silk_weaviate_mock.py" <<'PY'
+          import json
+          import os
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+          class Handler(BaseHTTPRequestHandler):
+              def do_GET(self):
+                  if self.path.startswith("/v1/.well-known/ready"):
+                      self.send_response(200)
+                      self.end_headers()
+                      self.wfile.write(b"ready")
+                      return
+                  if self.path.startswith("/v1/meta"):
+                      body = json.dumps({"version": "ci-smoke"}).encode()
+                      self.send_response(200)
+                      self.send_header("Content-Type", "application/json")
+                      self.send_header("Content-Length", str(len(body)))
+                      self.end_headers()
+                      self.wfile.write(body)
+                      return
+                  self.send_response(404)
+                  self.end_headers()
+
+              def log_message(self, fmt, *args):
+                  return
+
+
+          HTTPServer(("127.0.0.1", int(os.environ["WEAVIATE_HTTP_PORT"])), Handler).serve_forever()
+          PY
+
+          SILK_BACKEND_STALE=1 python3 "$SILK_BACKEND_MOCK" > /tmp/silk_deploy_stale_backend.log 2>&1 &
+          echo $! > "$RUNNER_TEMP/silk_deploy_stale_backend.pid"
+
+          python3 "$RUNNER_TEMP/silk_frontend_stale.py" > /tmp/silk_deploy_stale_frontend.log 2>&1 &
+          echo $! > "$RUNNER_TEMP/silk_deploy_stale_frontend.pid"
+
+          python3 "$RUNNER_TEMP/silk_weaviate_mock.py" > /tmp/silk_deploy_weaviate_mock.log 2>&1 &
+          echo $! > "$RUNNER_TEMP/silk_deploy_weaviate_mock.pid"
+
+          for _ in {1..20}; do
+            if curl -fsS "http://127.0.0.1:${BACKEND_HTTP_PORT}/health" > /tmp/silk_deploy_stale_health.json \
+              && curl -fsS "http://127.0.0.1:${FRONTEND_HTTP_PORT}/" > /tmp/silk_deploy_stale_frontend.html \
+              && curl -fsS "http://127.0.0.1:${WEAVIATE_HTTP_PORT}/v1/.well-known/ready" >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          grep -q '"service":"stale"' /tmp/silk_deploy_stale_health.json
+          grep -q 'stale frontend' /tmp/silk_deploy_stale_frontend.html
+
+          mv gradlew gradlew.real
+          cat > gradlew <<'STUB'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          printf '%s\n' "$*" >> "${CALL_LOG:?}"
+
+          case " $* " in
+            *" :frontend:webApp:browserProductionWebpack "*)
+              mkdir -p frontend/webApp/build/dist/js/productionExecutable
+              printf '%s\n' '<!doctype html><title>Silk CI deploy smoke</title>' \
+                > frontend/webApp/build/dist/js/productionExecutable/index.html
+              printf '%s\n' 'console.log("Silk CI deploy smoke");' \
+                > frontend/webApp/build/dist/js/productionExecutable/webApp.js
+              ;;
+            *" :frontend:androidApp:assembleDebug "*)
+              mkdir -p frontend/androidApp/build/outputs/apk/debug
+              mkdir -p frontend/androidApp/build/generated/source/buildConfig/debug/com/silk/android
+              printf '%s\n' 'stub apk' \
+                > frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk
+              printf '%s\n' \
+                'package com.silk.android;' \
+                'public final class BuildConfig {' \
+                '  public static final String VERSION_NAME = "ci-deploy-smoke";' \
+                '}' \
+                > frontend/androidApp/build/generated/source/buildConfig/debug/com/silk/android/BuildConfig.java
+              ;;
+            *" :backend:run "*)
+              exec python3 "${SILK_BACKEND_MOCK:?}"
+              ;;
+            *)
+              echo "Unexpected Gradle invocation: $*" >&2
+              exit 1
+              ;;
+          esac
+          STUB
+          chmod +x gradlew
+
+          ./silk.sh deploy 2>&1 | tee /tmp/silk_deploy_smoke.log
+
+          call_count=$(wc -l < "$CALL_LOG" | tr -d ' ')
+          test "$call_count" -eq 3
+          first_call=$(sed -n '1p' "$CALL_LOG")
+          second_call=$(sed -n '2p' "$CALL_LOG")
+          third_call=$(sed -n '3p' "$CALL_LOG")
+          case "$first_call" in
+            *":frontend:webApp:browserProductionWebpack"*) ;;
+            *)
+              echo "Expected browserProductionWebpack as first Gradle call, got: $first_call" >&2
+              exit 1
+              ;;
+          esac
+          case "$second_call" in
+            *":frontend:androidApp:assembleDebug"*) ;;
+            *)
+              echo "Expected assembleDebug as second Gradle call, got: $second_call" >&2
+              exit 1
+              ;;
+          esac
+          case "$third_call" in
+            *":backend:run"*) ;;
+            *)
+              echo "Expected backend:run as third Gradle call, got: $third_call" >&2
+              exit 1
+              ;;
+          esac
+
+          test -f backend/static/index.html
+          cmp frontend/webApp/build/dist/js/productionExecutable/index.html backend/static/index.html
+          test -f backend/static/silk-ci-deploy-smoke.apk
+          test -f backend/static/files/androidApp-debug.apk
+          test -L backend/static/silk.apk
+          test "$(readlink backend/static/silk.apk)" = "$PWD/backend/static/silk-ci-deploy-smoke.apk"
+
+          curl -fsS "http://127.0.0.1:${BACKEND_HTTP_PORT}/health" > /tmp/silk_deploy_health.json
+          curl -fsS "http://127.0.0.1:${FRONTEND_HTTP_PORT}/" > /tmp/silk_deploy_frontend.html
+          grep -q '"service":"silk-ci-deploy-smoke"' /tmp/silk_deploy_health.json
+          grep -q 'Silk CI deploy smoke' /tmp/silk_deploy_frontend.html
+
+      - name: Stop deploy smoke services
+        if: always()
+        shell: bash
+        run: |
+          ./silk.sh stop || true
+          for pid_file in \
+            "$RUNNER_TEMP/silk_deploy_stale_backend.pid" \
+            "$RUNNER_TEMP/silk_deploy_stale_frontend.pid" \
+            "$RUNNER_TEMP/silk_deploy_weaviate_mock.pid"; do
+            if [ -f "$pid_file" ]; then
+              kill "$(cat "$pid_file")" 2>/dev/null || true
+            fi
+          done
+          if [ -f gradlew.real ]; then
+            mv -f gradlew.real gradlew
+          fi
+
+      - name: Upload deploy smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-orchestration-smoke-logs
+          path: |
+            /tmp/silk_deploy_smoke.log
+            /tmp/silk_backend.log
+            /tmp/silk_frontend.log
+            /tmp/silk_deploy_weaviate_mock.log
+            /tmp/silk_deploy_stale_backend.log
+            /tmp/silk_deploy_stale_frontend.log
+            /tmp/silk_deploy_health.json
+            /tmp/silk_deploy_frontend.html
+          if-no-files-found: ignore

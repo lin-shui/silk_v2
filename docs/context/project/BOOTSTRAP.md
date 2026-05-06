@@ -24,7 +24,7 @@
 - 环境变量模板：`.env.example`
 - 统一运维脚本：`silk.sh`
 - 快检工作流：`.github/workflows/ci-fast-validation.yml`
-- 脚本 smoke 工作流：`.github/workflows/ci-script-smoke.yml`
+- 脚本 smoke 工作流：`.github/workflows/ci-script-smoke.yml`（`build` / `build-apk` / `build-all` / `deploy` 装配 smoke，以及 `start` / `stop` 运行态 smoke）
 - Backend 测试说明：`backend/src/test/kotlin/com/silk/backend/README_TESTS.md`
 
 ## Default Local Commands

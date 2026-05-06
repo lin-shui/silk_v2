@@ -105,7 +105,7 @@ frontend 轻量快检：
 - [ ] AI 工具完整端到端 tool-calling（真实模型响应、外部搜索、Weaviate）
 - [ ] 外部真实站点 URL/PDF 抓取、异常响应处理，以及 Weaviate 索引链路
 - [ ] Harmony HAP 构建
-- [ ] `silk.sh start/deploy` 级别的运行态脚本 smoke（`build` / `build-apk` / `build-all` 编排已拆到 `ci-script-smoke.yml`）
+- [ ] `silk.sh deploy` 真实 Web/Android 构建 + 真实 backend + 真实 Weaviate 全链路一次性跑通（`build` / `build-apk` / `build-all` / `start` / `deploy` 编排 smoke 已拆到 `ci-script-smoke.yml`）
 
 ## 运行备注
 
@@ -122,10 +122,12 @@ frontend 轻量快检：
 - Desktop 轻量单测跑 JVM `test`，锁定文件卡片 payload、PDF 下载文件名提取和默认扩展名补齐逻辑，不依赖 GUI 自动化。
 - Android 轻量单测跑本地 `testDebugUnitTest`，只覆盖纯解析函数，不引入模拟器或设备依赖。
 - `silk.sh build` / `build-apk` / `build-all` 编排已拆到独立 `.github/workflows/ci-script-smoke.yml`；快检继续只保留 `bash -n` 与只读 `status`，避免把装配层耗时塞回基础拦截。
+- `silk.sh start` / `stop` 运行态 smoke 也放在 `.github/workflows/ci-script-smoke.yml`，使用本地 Weaviate mock 与临时端口验证后端 `/health` 和前端静态服务；基础快检仍不承担后台进程生命周期。
+- `silk.sh deploy` 编排 smoke 同样放在 `.github/workflows/ci-script-smoke.yml`，使用 Gradle/backend stub 和本地 Weaviate mock 验证端口清理、调用顺序、产物复制和最终端口就绪；基础快检仍不承担部署生命周期。
 
 ## 下一步建议
 
 1. Desktop/Android/Web 的文件下载动作还没做真正 UI 自动化；如果后续文件交互继续增量，建议单独补一层组件级 smoke。
 2. AI 端到端另起一层可选 smoke，专门验证模型 tool-calling 回路，不阻塞基础快检。
 3. Harmony HAP 另起独立 workflow，放到自托管或预置 DevEco/hvigor 环境的 runner。
-4. `silk.sh start/deploy` 另起运行态 smoke，补端口清理、服务启动和 Weaviate 协同，而不是只验只读 `status`。
+4. `silk.sh deploy` 的真实构建 + 真实 backend + 真实 Weaviate 全链路可另起可选或定时 smoke，避免拖慢普通 PR。
