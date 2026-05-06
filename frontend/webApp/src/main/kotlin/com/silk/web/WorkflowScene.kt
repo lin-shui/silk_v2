@@ -20,6 +20,8 @@ fun WorkflowScene(appState: WebAppState) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
     var newInitialDir by remember { mutableStateOf("") }
+    var availableAgents by remember { mutableStateOf<List<AgentInfo>>(emptyList()) }
+    var selectedAgentType by remember { mutableStateOf("") }
     var showCreatePicker by remember { mutableStateOf(false) }
     var selectedWorkflow by remember { mutableStateOf<WorkflowItem?>(null) }
     // 创建对话框中"加载默认目录"的失败原因（一般是 Bridge 未连接）。
@@ -32,8 +34,9 @@ fun WorkflowScene(appState: WebAppState) {
 
     // 提取创建 workflow 的 suspend 函数，供信任弹窗回调复用
     suspend fun performCreateWorkflow() {
+        val agentType = selectedAgentType.ifBlank { "claude_code" }
         val result = ApiClient.createWorkflow(
-            newName.trim(), "", user.id, newInitialDir.trim(),
+            newName.trim(), "", user.id, newInitialDir.trim(), agentType,
         )
         workflows = ApiClient.getWorkflows(user.id)
         when (result) {
@@ -42,6 +45,7 @@ fun WorkflowScene(appState: WebAppState) {
                 showCreateDialog = false
                 newName = ""
                 newInitialDir = ""
+                selectedAgentType = ""
                 dirLoadError = null
             }
             is ApiClient.CreateWorkflowResult.Err -> {
@@ -243,6 +247,18 @@ fun WorkflowScene(appState: WebAppState) {
         // 这个 LaunchedEffect 是否进入组合，一旦进入就跑一次；用 showCreateDialog 做 key
         // 在"key 始终为 true"的情况下会造成阅读歧义，所以改用 Unit 更贴合语义
         LaunchedEffect(Unit) {
+            // 加载可选 agent 列表，并按"已连接 codex > 已连接 claude_code > 兜底 claude_code"决定默认值。
+            val agents = ApiClient.listAgents(user.id)
+            availableAgents = agents
+            if (selectedAgentType.isBlank()) {
+                val codexConnected = agents.firstOrNull { it.agentType == "codex" && it.connected } != null
+                val ccConnected = agents.firstOrNull { it.agentType == "claude_code" && it.connected } != null
+                selectedAgentType = when {
+                    codexConnected -> "codex"
+                    ccConnected -> "claude_code"
+                    else -> "claude_code"
+                }
+            }
             if (newInitialDir.isBlank()) {
                 dirLoadError = null
                 val resp = ApiClient.listCcDir(user.id, null)
@@ -260,6 +276,7 @@ fun WorkflowScene(appState: WebAppState) {
                 showCreateDialog = false
                 newName = ""
                 newInitialDir = ""
+                selectedAgentType = ""
                 dirLoadError = null
             },
             zIndex = 1000,
@@ -289,6 +306,49 @@ fun WorkflowScene(appState: WebAppState) {
                         fontSize(14.px)
                         marginBottom(12.px)
                         property("box-sizing", "border-box")
+                    }
+                }
+                // Agent 选择
+                Span({
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("display", "block")
+                        marginBottom(4.px)
+                    }
+                }) { Text("Agent") }
+                Select({
+                    style {
+                        width(100.percent)
+                        height(40.px)
+                        borderRadius(6.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        padding(8.px)
+                        fontSize(14.px)
+                        marginBottom(12.px)
+                        property("box-sizing", "border-box")
+                        backgroundColor(Color.white)
+                    }
+                    onChange { event ->
+                        val newValue = event.value ?: return@onChange
+                        selectedAgentType = newValue
+                    }
+                }) {
+                    if (availableAgents.isEmpty()) {
+                        Option("") { Text("加载中…") }
+                    } else {
+                        availableAgents.forEach { agent ->
+                            Option(
+                                value = agent.agentType,
+                                attrs = {
+                                    if (!agent.connected) attr("disabled", "")
+                                    if (agent.agentType == selectedAgentType) attr("selected", "")
+                                },
+                            ) {
+                                val suffix = if (agent.connected) "" else "（未连接）"
+                                Text("${agent.displayName}${suffix}")
+                            }
+                        }
                     }
                 }
                 // 工作目录
@@ -385,12 +445,12 @@ fun WorkflowScene(appState: WebAppState) {
                             showCreateDialog = false
                             newName = ""
                             newInitialDir = ""
+                            selectedAgentType = ""
                             dirLoadError = null
                         }
                     }) { Text("取消") }
                     Button({
-                        // Bridge 离线时直接禁用创建（后端也会拒绝，提前挡在前端更及时）
-                        val canCreate = dirLoadError == null && newName.isNotBlank() && newInitialDir.isNotBlank()
+                        val canCreate = newName.isNotBlank() && dirLoadError == null && newInitialDir.isNotBlank()
                         if (!canCreate) attr("disabled", "")
                         style {
                             backgroundColor(
@@ -497,6 +557,7 @@ private fun WorkflowChatPanel(
     val isGenerating by chatClient.isGenerating.collectAsState()
     var messageText by remember(groupId) { mutableStateOf("") }
     var workingDir by remember(groupId) { mutableStateOf("") }
+    var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
     var showFolderPicker by remember(groupId) { mutableStateOf(false) }
     // 信任确认弹窗状态（替代浏览器原生 confirm）
     var showTrustConfirm by remember(groupId) { mutableStateOf(false) }
@@ -535,6 +596,20 @@ private fun WorkflowChatPanel(
         val snap = ApiClient.getCcState(userId, groupId)
         if (snap.success) {
             workingDir = snap.workingDir
+            activeAgentDisplay = snap.agentDisplayName
+        }
+    }
+
+    // M4 Task 4: 监听 /use 切换后的系统消息，自动刷新 activeAgent 显示
+    LaunchedEffect(messages.size) {
+        val latest = messages.lastOrNull() ?: return@LaunchedEffect
+        if (latest.type == com.silk.shared.models.MessageType.SYSTEM &&
+            (latest.content.startsWith("已切换到") || latest.content.contains("已激活") || latest.content.contains("已退出 agent"))
+        ) {
+            val snap = ApiClient.getCcState(userId, groupId)
+            if (snap.success) {
+                activeAgentDisplay = snap.agentDisplayName
+            }
         }
     }
 
@@ -623,6 +698,21 @@ private fun WorkflowChatPanel(
                         }
                         attr("title", workingDir)
                     }) { Text("\uD83D\uDCC1 $workingDir") }
+                }
+                // M4 Task 4: 显示当前激活的 agent（/use 切换后实时更新）
+                if (activeAgentDisplay.isNotBlank()) {
+                    Span({
+                        style {
+                            fontSize(11.px)
+                            color(Color(SilkColors.textSecondary))
+                            property("flex-shrink", "0")
+                            property("white-space", "nowrap")
+                            property("padding", "1px 6px")
+                            property("border-radius", "4px")
+                            property("background", "rgba(0,0,0,0.04)")
+                        }
+                        attr("title", "当前激活的 Agent")
+                    }) { Text(activeAgentDisplay) }
                 }
                 Span({
                     style {

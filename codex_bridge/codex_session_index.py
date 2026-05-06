@@ -104,3 +104,35 @@ def _parse_rollout_head(file_path: Path) -> dict[str, Any] | None:
 
 def _iso_from_epoch(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).replace(microsecond=0).isoformat()
+
+
+def find_session_file(
+    thread_id: str,
+    *,
+    sessions_root: Path | None = None,
+) -> Path | None:
+    """Locate the rollout-*.jsonl file whose session_meta.id == thread_id.
+
+    Codex stores rollouts as ``~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl``.
+    The thread_id is embedded in the filename, so we filter via glob first
+    to avoid parsing every rollout. Falls back to a slow scan if the
+    filename pattern doesn't match (e.g. older codex versions).
+    Returns None when no rollout matches.
+    """
+    if not thread_id:
+        return None
+    root = sessions_root or _DEFAULT_SESSIONS_ROOT
+    if not root.exists():
+        return None
+    # Fast path: filename contains the thread_id
+    for candidate in root.rglob(f"rollout-*-{thread_id}.jsonl"):
+        return candidate
+    # Slow path: parse session_meta head
+    for candidate in root.rglob("rollout-*.jsonl"):
+        try:
+            meta = _parse_rollout_head(candidate)
+        except Exception:
+            continue
+        if meta and meta.get("sessionId") == thread_id:
+            return candidate
+    return None

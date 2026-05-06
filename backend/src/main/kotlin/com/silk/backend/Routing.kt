@@ -167,6 +167,12 @@ fun Application.configureRouting() {
         override fun persistCcSession(rawGroupId: String, ccSessionId: String, sessionStarted: Boolean): Boolean =
             workflowManager.updateSessionState(rawGroupId, ccSessionId, sessionStarted)
 
+        override fun persistCcSession(rawGroupId: String, agentType: String, ccSessionId: String, sessionStarted: Boolean): Boolean =
+            workflowManager.updateSessionState(rawGroupId, agentType, ccSessionId, sessionStarted)
+
+        override fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean =
+            workflowManager.updateActiveAgent(rawGroupId, agentType)
+
         override fun loadSeed(rawGroupId: String): AgentRuntime.WorkflowSeed? {
             val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
             if (wf.workingDir.isBlank() && wf.sessionId.isBlank()) return null
@@ -174,6 +180,27 @@ fun Application.configureRouting() {
                 workingDir = wf.workingDir,
                 ccSessionId = wf.sessionId.takeIf { it.isNotBlank() },
                 sessionStarted = wf.sessionStarted,
+            )
+        }
+
+        override fun loadSeed(rawGroupId: String, agentType: String): AgentRuntime.WorkflowSeed? {
+            val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
+            // 优先取 per-agent state；缺失时仅当 agentType 等于 workflow 默认 agent 才回落到旧字段，
+            // 避免别的 agent 拿到不属于它的 ccSessionId 触发 resume 失败。
+            val perAgent = wf.agentSessions[agentType]
+            val defaultDash = when (wf.agentType) {
+                "claude_code" -> "claude-code"
+                else -> wf.agentType
+            }
+            val ccSid = perAgent?.sessionId?.takeIf { it.isNotBlank() }
+                ?: wf.sessionId.takeIf { it.isNotBlank() && agentType == defaultDash }
+            val sessionStarted = perAgent?.sessionStarted
+                ?: (wf.sessionStarted && agentType == defaultDash)
+            if (wf.workingDir.isBlank() && ccSid.isNullOrBlank()) return null
+            return AgentRuntime.WorkflowSeed(
+                workingDir = wf.workingDir,
+                ccSessionId = ccSid,
+                sessionStarted = sessionStarted,
             )
         }
     })
@@ -623,6 +650,7 @@ fun Application.configureRouting() {
             }
             val bridgeConnected = isAnyBridgeConnected(userId)
             if (agentSnap != null) {
+                val descriptor = agentSnap.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
                 call.respond(
                     CcStateResponse(
                         success = true,
@@ -632,6 +660,8 @@ fun Application.configureRouting() {
                         sessionId = "",
                         sessionStarted = agentSnap.active,
                         bridgeConnected = bridgeConnected,
+                        agentType = agentSnap.agentType ?: "",
+                        agentDisplayName = descriptor?.displayName ?: "",
                     )
                 )
             } else {
@@ -745,6 +775,7 @@ fun Application.configureRouting() {
                     } catch (e: Exception) {
                         logger.warn("广播切目录提示失败: {}", e.message)
                     }
+                    val descriptor = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
                     call.respond(
                         CcStateResponse(
                             success = true,
@@ -754,6 +785,8 @@ fun Application.configureRouting() {
                             sessionId = "",  // ACP 路径不暴露内部 sessionId
                             sessionStarted = snap?.active ?: false,
                             bridgeConnected = bridgeConnected,
+                            agentType = snap?.agentType ?: "",
+                            agentDisplayName = descriptor?.displayName ?: "",
                         )
                     )
                 }
@@ -2100,6 +2133,36 @@ fun Application.configureRouting() {
             }
         }
 
+        // ==================== Agents API ====================
+
+        // GET /api/agents?userId=<id>
+        // 列出可作为 workflow agent 的选项：仅包含已注册的 bridge agent（claude_code / codex 等）。
+        // silk_chat 走普通会话路径，不在工作流 agent 选择范围内。
+        // agentType 字段使用 workflow 存储一致的 underscore 形式。
+        get("/api/agents") {
+            val userId = call.request.queryParameters["userId"]
+            if (userId.isNullOrBlank()) {
+                call.respondText(
+                    """{"success":false,"message":"Missing userId"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+                return@get
+            }
+            val arr = kotlinx.serialization.json.buildJsonArray {
+                AgentRegistry.list().forEach { desc ->
+                    val dashType = desc.agentType
+                    val underscoreType = dashType.replace('-', '_')
+                    add(kotlinx.serialization.json.buildJsonObject {
+                        put("agentType", kotlinx.serialization.json.JsonPrimitive(underscoreType))
+                        put("displayName", kotlinx.serialization.json.JsonPrimitive(desc.displayName))
+                        put("connected", kotlinx.serialization.json.JsonPrimitive(AcpRegistry.isConnected(userId, dashType)))
+                    })
+                }
+            }
+            call.respondText(arr.toString(), ContentType.Application.Json)
+        }
+
         // ==================== Workflow API ====================
 
         get("/api/workflows") {
@@ -2187,7 +2250,7 @@ fun Application.configureRouting() {
                 return@post
             }
 
-            val wf = workflowManager.createWorkflow(name, desc, userId, group.id, "claude_code", "")
+            val wf = workflowManager.createWorkflow(name, desc, userId, group.id, agentType, "")
 
             // cdSync 必须成功才能算创建完成；失败时回滚 group + workflow + CC state，避免遗留无效记录
             val cdResult: AgentRuntime.CdResult = try {
@@ -2423,10 +2486,16 @@ fun Application.configureRouting() {
             // 为每个群组获取或创建独立的ChatServer
             val groupChatServer = getGroupChatServer(groupId)
 
-            // 工作流群组自动激活 CC 模式（仅 claude_code 类型）
+            // 工作流群组自动激活 agent 模式（仅非 silk_chat 类型）。
+            // M4 Task 3: 优先取持久化的 activeAgent；缺失则回落到 workflow.agentType（underscore→dash）。
             val workflow = workflowManager.getWorkflowByGroupId(groupId)
-            if (workflow != null && workflow.agentType == "claude_code") {
-                AgentRuntime.autoActivateForWorkflow(userId, "group_$groupId", "claude-code")
+            if (workflow != null && workflow.agentType != "silk_chat") {
+                val resolvedAgent = workflow.activeAgent.takeIf { it.isNotBlank() }
+                    ?: when (workflow.agentType) {
+                        "claude_code" -> "claude-code"
+                        else -> workflow.agentType
+                    }
+                AgentRuntime.autoActivateForWorkflow(userId, "group_$groupId", resolvedAgent)
             }
 
             try {

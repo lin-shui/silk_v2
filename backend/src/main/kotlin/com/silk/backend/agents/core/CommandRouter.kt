@@ -10,8 +10,8 @@ object CommandRouter {
         /** /use <agent> 或 /use none */
         data class UseAgent(val agentType: String?) : RouteResult()
 
-        /** triggerCommand 匹配，如 /cc */
-        data class TriggerAgent(val agentType: String) : RouteResult()
+        /** triggerCommand 匹配，如 /cc；inlineText 不为 null 时表示一次性切换+发送 */
+        data class TriggerAgent(val agentType: String, val inlineText: String? = null) : RouteResult()
 
         /** @xxx <text> */
         data class AtAgent(val agentType: String, val remainingText: String) : RouteResult()
@@ -51,10 +51,16 @@ object CommandRouter {
             }
         }
 
-        // 3. triggerCommand 匹配
+        // 3. triggerCommand 匹配（支持 `/cc` 单独触发，也支持 `/cc <text>` 切换+发送）
         AgentRegistry.list().forEach { d ->
-            if (trimmed.lowercase() == d.triggerCommand.lowercase()) {
+            val trigger = d.triggerCommand.lowercase()
+            val lower = trimmed.lowercase()
+            if (lower == trigger) {
                 return RouteResult.TriggerAgent(d.agentType)
+            }
+            if (lower.startsWith("$trigger ")) {
+                val inline = trimmed.substring(d.triggerCommand.length).trim()
+                return RouteResult.TriggerAgent(d.agentType, inlineText = inline.ifBlank { null })
             }
         }
 

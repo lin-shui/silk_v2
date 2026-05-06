@@ -29,7 +29,7 @@ from websockets.exceptions import ConnectionClosed
 from codex_dispatcher import DispatcherState, dispatch_event
 from codex_executor import CodexExecutor, cancel_process
 from fs_listing import list_directory
-from codex_session_index import list_local_sessions
+from codex_session_index import find_session_file, list_local_sessions
 
 logger = logging.getLogger("codex_bridge")
 
@@ -196,6 +196,8 @@ class AcpAgentServer:
                 await self._handle_initialize(msg_id, params)
             elif method == "session/new":
                 await self._handle_session_new(msg_id, params)
+            elif method == "session/load":
+                await self._handle_session_load(msg_id, params)
             elif method == "session/prompt":
                 await self._handle_session_prompt(msg_id, params)
             elif method == "session/request_permission":
@@ -232,7 +234,8 @@ class AcpAgentServer:
         result = {
             "protocolVersion": "0.2",
             "agentCapabilities": {
-                "loadSession": False,
+                # M4 Task 5: advertise session/load support to backend
+                "loadSession": True,
                 "promptCapabilities": {
                     "image": False,
                     "audio": False,
@@ -269,7 +272,44 @@ class AcpAgentServer:
         await self._send_response(msg_id, {"sessionId": acp_session_id})
 
     # ------------------------------------------------------------------
-    # session/cancel (notification)
+    # session/load — resume a known codex thread by id
+    # ------------------------------------------------------------------
+
+    async def _handle_session_load(self, msg_id: Any, params: Any) -> None:
+        """Bind a backend ACP session to an existing codex rollout.
+
+        Verifies that the rollout file for ``params.sessionId`` (the codex
+        ``thread_id``) exists in ``~/.codex/sessions/``. If found, mints a
+        fresh ACP UUID and stores it as a new :class:`AcpSession` whose
+        ``cc_session_id`` is the supplied thread id. The next ``session/prompt``
+        will then run ``codex exec resume <thread_id>`` and inherit history.
+        """
+        p = params or {}
+        thread_id = p.get("sessionId")
+        cwd = p.get("cwd") or self.default_cwd
+        if not thread_id:
+            await self._send_error(msg_id, -32602, "missing sessionId")
+            return
+        # rglob can be slow on huge ~/.codex/sessions/ trees; offload to a
+        # worker thread so the receive loop never stalls.
+        rollout = await asyncio.to_thread(find_session_file, thread_id)
+        if rollout is None:
+            await self._send_error(
+                msg_id,
+                -32602,
+                f"codex session not found: {thread_id}",
+            )
+            return
+        acp_session_id = str(uuid.uuid4())
+        sess = AcpSession(cwd=os.path.realpath(cwd), cc_session_id=thread_id)
+        self.sessions[acp_session_id] = sess
+        logger.info(
+            "[ACP] session/load: acp=%s thread_id=%s rollout=%s",
+            acp_session_id, thread_id[:8], rollout.name,
+        )
+        await self._send_response(
+            msg_id, {"sessionId": acp_session_id, "loaded": True}
+        )
     # ------------------------------------------------------------------
 
     async def _handle_session_cancel(self, params: Any) -> None:
