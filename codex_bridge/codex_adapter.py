@@ -28,6 +28,8 @@ from websockets.exceptions import ConnectionClosed
 
 from codex_dispatcher import DispatcherState, dispatch_event
 from codex_executor import CodexExecutor, cancel_process
+from fs_listing import list_directory
+from codex_session_index import list_local_sessions
 
 logger = logging.getLogger("codex_bridge")
 
@@ -238,9 +240,9 @@ class AcpAgentServer:
                 },
                 "_silk": {
                     "compact": False,           # Codex has no compact concept
-                    "listLocalSessions": False,  # M3
-                    "setCwd": False,             # M3
-                    "listDir": False,            # M3
+                    "listLocalSessions": True,  # M3
+                    "setCwd": True,             # M3
+                    "listDir": True,            # M3
                 },
             },
         }
@@ -335,7 +337,7 @@ class AcpAgentServer:
             async for ev in self.executor.run(
                 prompt=prompt_text,
                 cwd=sess.cwd,
-                resume_thread_id=None,  # M3: resume support
+                resume_thread_id=sess.cc_session_id,
             ):
                 kind = ev.get("kind")
 
@@ -421,13 +423,50 @@ class AcpAgentServer:
     # ------------------------------------------------------------------
 
     async def _handle_silk_list_sessions(self, msg_id: Any, params: Any) -> None:
-        await self._send_error(msg_id, -32601, "Method not found (M1: not implemented)")
+        """Return list of recent codex sessions from ~/.codex/sessions/.
+
+        Backend frontend renders this as session history selector.
+        """
+        sessions = list_local_sessions()
+        logger.debug("[ACP] _silk/list_local_sessions count=%d", len(sessions))
+        await self._send_response(msg_id, {"sessions": sessions})
 
     async def _handle_silk_set_cwd(self, msg_id: Any, params: Any) -> None:
-        await self._send_error(msg_id, -32601, "Method not found (M1: not implemented)")
+        """Update session cwd; invalidate cc_session_id (cwd change ≡ /new for codex).
+
+        Codex resume must run in the original session's cwd, so changing cwd
+        breaks resume by definition. We null cc_session_id; next prompt spawns
+        a fresh codex session.
+        """
+        p = params or {}
+        sid = p.get("sessionId")
+        cwd = p.get("cwd")
+        sess = self.sessions.get(sid) if sid else None
+        if sess is None:
+            await self._send_error(msg_id, -32602, f"unknown session: {sid}")
+            return
+        if not cwd:
+            await self._send_error(msg_id, -32602, "missing cwd")
+            return
+        if not os.path.isdir(cwd):
+            await self._send_error(msg_id, -32602, f"not a directory: {cwd}")
+            return
+        resolved = os.path.realpath(cwd)
+        sess.cwd = resolved
+        sess.cc_session_id = None  # cwd change invalidates codex session
+        sess.accumulated = ""
+        sess.seen_tool_ids = set()
+        logger.info("[ACP] _silk/set_cwd sid=%s cwd=%s", sid, resolved)
+        await self._send_response(msg_id, {"ok": True, "path": resolved})
 
     async def _handle_silk_list_dir(self, msg_id: Any, params: Any) -> None:
-        await self._send_error(msg_id, -32601, "Method not found (M1: not implemented)")
+        """List a directory's contents (used by Silk UI's folder picker)."""
+        p = params or {}
+        path = p.get("path") or self.default_cwd
+        show_hidden = bool(p.get("showHidden", False))
+        result = list_directory(path, show_hidden)
+        logger.debug("[ACP] _silk/list_dir path=%s success=%s", path, result.get("success"))
+        await self._send_response(msg_id, result)
 
     async def _handle_silk_compact(self, msg_id: Any, params: Any) -> None:
         await self._send_error(msg_id, -32601, "Method not found (Codex has no compact concept)")

@@ -266,6 +266,27 @@ object AgentRuntime {
         }
         val descriptor = AgentRegistry.getByType(agentType) ?: return
         ctx.currentAgentType = agentType
+        // M3: 同步加载该工作流持久化的 sessionId 到新切换 agent 的 session 上，
+        // 让 /use 后第一条 prompt 能 resume（autoActivateForWorkflow 默认硬编码到
+        // claude-code，多 agent 时切换没有触发过 seed 加载）。
+        // 已知限制：Workflow.sessionId 是 per-workflow 单值不分 agent，所以如果
+        // 用户在多个 agent 间切换过，seed 可能属于另一个 agent；此时 resume 会
+        // 失败但 adapter 会自动起新 thread，不影响功能。M4 会通过 per-agent
+        // 持久化彻底解决（详见 docs/superpowers/issues/...multi-agent-routing-ux-defects.md #3）。
+        val session = ctx.getOrCreateSession(agentType)
+        val seed = try {
+            persistence?.loadSeed(stripGroupPrefix(ctx.groupId))
+        } catch (e: Exception) {
+            logger.warn("[AgentRuntime] /use {} loadSeed 失败: {}", agentType, e.message)
+            null
+        }
+        if (seed != null && !seed.ccSessionId.isNullOrBlank() && seed.sessionStarted) {
+            session.ccSessionId = seed.ccSessionId
+            logger.info(
+                "[AgentRuntime] /use {} 加载 seed: ccSessionId={}",
+                agentType, seed.ccSessionId.take(8),
+            )
+        }
         broadcastFn(AgentMessages.system(
             "已切换到 ${descriptor.displayName}。",
             agentUserId = descriptor.agentUserId,

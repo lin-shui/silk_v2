@@ -236,23 +236,35 @@ def test_reasoning_fixture_round_trip():
 from codex_bridge.codex_executor import CodexExecutor
 
 
-def test_build_cmd_includes_show_raw_reasoning():
+def test_build_cmd_uses_global_cd_for_fresh():
+    """Fresh run: codex --cd <cwd> exec --json ... -"""
     ex = CodexExecutor(auto_approve=True)
     cmd = ex._build_cmd(cwd="/tmp", resume_thread_id=None)
-    assert "-c" in cmd
-    # Find -c position and check the next arg
-    i = cmd.index("-c")
-    assert cmd[i + 1] == "show_raw_agent_reasoning=true"
+    # --cd MUST come BEFORE the `exec` subcommand (global flag).
+    cd_idx = cmd.index("--cd")
+    exec_idx = cmd.index("exec")
+    assert cd_idx < exec_idx, f"expected --cd before exec, got {cmd}"
+    assert cmd[cd_idx + 1] == "/tmp"
+    # Reasoning flag still present
+    assert "show_raw_agent_reasoning=true" in cmd
+    # Stdin marker
+    assert cmd[-1] == "-"
 
 
-def test_build_cmd_includes_show_raw_reasoning_on_resume():
+def test_build_cmd_uses_global_cd_for_resume():
+    """Resume: codex --cd <cwd> exec resume <id> --json ... -"""
     ex = CodexExecutor(auto_approve=True)
     cmd = ex._build_cmd(cwd="/tmp", resume_thread_id="abc-123")
-    assert "-c" in cmd
-    i = cmd.index("-c")
-    assert cmd[i + 1] == "show_raw_agent_reasoning=true"
-    assert "resume" in cmd
-    assert "abc-123" in cmd
+    cd_idx = cmd.index("--cd")
+    exec_idx = cmd.index("exec")
+    resume_idx = cmd.index("resume")
+    assert cd_idx < exec_idx < resume_idx, f"expected --cd<exec<resume, got {cmd}"
+    assert cmd[cd_idx + 1] == "/tmp"
+    # session id immediately after `resume`
+    assert cmd[resume_idx + 1] == "abc-123"
+    # Reasoning flag present
+    assert "show_raw_agent_reasoning=true" in cmd
+    assert cmd[-1] == "-"
 
 
 # ---- M2: cancel_process ----

@@ -108,18 +108,20 @@ class CodexExecutor:
         self.auto_approve = auto_approve
 
     def _build_cmd(self, *, cwd: str, resume_thread_id: str | None) -> list[str]:
-        # M2: -c show_raw_agent_reasoning=true makes Codex emit `reasoning` items
-        # in the JSONL stream so we can map them to agent_thought_chunk.
-        common_flags = [
+        # Use GLOBAL --cd (before `exec`) so the same shape works for both
+        # fresh runs and `exec resume` (which does not accept --cd as a
+        # subcommand flag).
+        cmd: list[str] = ["codex", "--cd", cwd]
+        if resume_thread_id:
+            cmd += ["exec", "resume", resume_thread_id]
+        else:
+            cmd += ["exec"]
+        # Common per-run flags after the subcommand:
+        cmd += [
             "--json",
             "--skip-git-repo-check",
-            "--cd", cwd,
             "-c", "show_raw_agent_reasoning=true",
         ]
-        if resume_thread_id:
-            cmd = ["codex", "exec", "resume", resume_thread_id, *common_flags]
-        else:
-            cmd = ["codex", "exec", *common_flags]
         if self.auto_approve:
             cmd.append("--dangerously-bypass-approvals-and-sandbox")
         cmd.append("-")
