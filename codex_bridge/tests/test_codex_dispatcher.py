@@ -96,6 +96,20 @@ def test_reasoning_emits_agent_thought_chunk():
     }]
 
 
+# ---- status_update (idle heartbeat) ----
+
+def test_status_update_emits_agent_thought_chunk():
+    state = _new_state()
+    updates = dispatch_event(
+        {"kind": "status_update", "text": "\U0001f4ad \u601d\u8003\u4e2d... (\u5df2\u7b49\u5f85 3s)"},
+        state,
+    )
+    assert updates == [{
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {"type": "text", "text": "\U0001f4ad \u601d\u8003\u4e2d... (\u5df2\u7b49\u5f85 3s)"},
+    }]
+
+
 # ---- command_execution ----
 
 def test_command_started_emits_tool_call_and_remembers_id():

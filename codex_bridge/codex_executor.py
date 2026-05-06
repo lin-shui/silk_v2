@@ -9,10 +9,14 @@ import asyncio
 import json
 import logging
 import shlex
+import time
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
 logger = logging.getLogger("codex_bridge.executor")
+
+# Seconds between idle heartbeat status updates (matches cc_bridge).
+IDLE_REFRESH_S: float = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -156,8 +160,33 @@ class CodexExecutor:
         yield {"kind": "_proc", "proc": proc}
 
         assert proc.stdout is not None
+
+        # Phase-aware idle heartbeat (mirrors cc_bridge/executor.py)
+        model_thinking = True
+        phase_start_time = time.monotonic()
+
         try:
-            async for raw_line in proc.stdout:
+            while True:
+                try:
+                    raw_line = await asyncio.wait_for(
+                        proc.stdout.readline(),
+                        timeout=IDLE_REFRESH_S,
+                    )
+                except asyncio.TimeoutError:
+                    # No data within IDLE_REFRESH_S — emit heartbeat
+                    if proc.returncode is not None:
+                        break
+                    elapsed = int(time.monotonic() - phase_start_time)
+                    if model_thinking:
+                        status = f"\U0001f4ad \u601d\u8003\u4e2d... (\u5df2\u7b49\u5f85 {elapsed}s)"
+                    else:
+                        status = f"\u23f3 \u6b63\u5728\u5904\u7406... (\u5df2\u7b49\u5f85 {elapsed}s)"
+                    yield {"kind": "status_update", "text": status}
+                    continue
+
+                if not raw_line:
+                    break  # EOF
+
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line:
                     continue
@@ -166,7 +195,20 @@ class CodexExecutor:
                 except json.JSONDecodeError:
                     logger.warning("codex emitted non-JSON line: %r", line)
                     continue
-                yield parse_jsonl_event(obj)
+
+                parsed = parse_jsonl_event(obj)
+
+                # Phase transitions for heartbeat status text
+                prev_thinking = model_thinking
+                kind = parsed.get("kind")
+                if kind in ("command_started", "file_change_started", "agent_message"):
+                    model_thinking = False
+                elif kind in ("command_completed", "file_change_completed", "reasoning"):
+                    model_thinking = True
+                if model_thinking != prev_thinking:
+                    phase_start_time = time.monotonic()
+
+                yield parsed
         finally:
             rc = await proc.wait()
             stderr_bytes = await stderr_task

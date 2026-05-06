@@ -62,6 +62,12 @@ def dispatch_event(ev: dict[str, Any], state: DispatcherState) -> list[dict[str,
             "content": {"type": "text", "text": ev.get("text", "")},
         }]
 
+    if kind == "status_update":
+        return [{
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {"type": "text", "text": ev.get("text", "")},
+        }]
+
     if kind == "command_started":
         tool_id = ev.get("tool_id", "")
         state.seen_tool_ids.add(tool_id)
