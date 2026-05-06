@@ -173,7 +173,7 @@ class ChatClient(
                 return
             }
             
-            val isSilkAi = message.userId == "silk_ai_agent"
+            val isSilkAi = message.userId.startsWith("silk_ai_")
             
             // 停止后抑制残余流式消息（允许 CLEAR_STATUS 通过）
             if (suppressTransient && isSilkAi && message.isTransient) {

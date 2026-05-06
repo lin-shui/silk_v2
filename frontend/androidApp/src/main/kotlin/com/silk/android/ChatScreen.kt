@@ -274,13 +274,13 @@ fun ChatScreen(appState: AppState) {
         users.add(user.id to user.fullName)
         // 从群组成员列表添加所有成员
         groupMembers.forEach { member ->
-            if (member.id != "silk_ai_agent" && member.id != user.id) {
+            if (!member.id.startsWith("silk_ai_") && member.id != user.id) {
                 users.add(member.id to member.fullName)
             }
         }
         // 从消息中提取其他用户（作为补充，以防成员列表不完整）
         messages.forEach { msg ->
-            if (msg.userId != "silk_ai_agent" && msg.userId != user.id) {
+            if (!msg.userId.startsWith("silk_ai_") && msg.userId != user.id) {
                 users.add(msg.userId to msg.userName)
             }
         }
@@ -1156,7 +1156,7 @@ fun ChatScreen(appState: AppState) {
                                             ) {
                                                 items(filteredUsers.size) { index ->
                                                     val (userId, userName) = filteredUsers[index]
-                                                    val displayName = if (userId == "silk_ai_agent") "Silk" else userName
+                                                    val displayName = if (userId.startsWith("silk_ai_")) "Silk" else userName
                                                     Surface(
                                                         onClick = {
                                                             val beforeAt = messageText.text.substring(0, mentionStartIndex.coerceAtLeast(0))
@@ -1174,7 +1174,7 @@ fun ChatScreen(appState: AppState) {
                                                             text = userName,
                                                             modifier = Modifier.padding(10.dp, 12.dp),
                                                             style = MaterialTheme.typography.bodyMedium,
-                                                            fontWeight = if (userId == "silk_ai_agent") FontWeight.SemiBold else FontWeight.Normal
+                                                            fontWeight = if (userId.startsWith("silk_ai_")) FontWeight.SemiBold else FontWeight.Normal
                                                         )
                                                     }
                                                 }
@@ -3334,7 +3334,7 @@ fun MessageItem(
     val canShowContextMenu = !isTransient && !isSystemMessage && message.type == MessageType.TEXT
     
     // ✅ AI 消息特殊处理 - 使用专用卡片
-    val isAIMessage = message.userId == "silk_ai_agent"
+    val isAIMessage = message.userId.startsWith("silk_ai_")
     if (isAIMessage && message.type == MessageType.TEXT && 
         message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS) {
         AIMessageCardAndroid(
@@ -4552,7 +4552,7 @@ fun MembersDialog(
                         items(members) { member ->
                             val isCurrentUser = member.id == currentUserId
                             val isContact = member.id in contactIds
-                            val isSilkAI = member.id == "silk_ai_agent"
+                            val isSilkAI = member.id.startsWith("silk_ai_")
                             
                             Card(
                                 modifier = Modifier
