@@ -62,18 +62,40 @@ private fun sanitizeFileName(input: String): String =
 
 /**
  * 解析当前 user 对应的 bridgeId（用于 TrustedDirManager 的 scope key）。
- * 格式 "ip:<remoteIp>" 兼容已有 trust 记录。没有 ACP 连接时返回 null。
+ * 格式 "ip:<remoteIp>" 兼容已有 trust 记录。优先用 claude-code 的 IP（保留旧 trust 记录的兼容性），
+ * 没有时退到任意一个已连接 agent 的 IP。无任何连接返回 null。
  */
 private fun resolveBridgeId(userId: String): String? {
-    val ip = AcpRegistry.getRemoteIp(userId, "claude-code") ?: return null
+    val ip = getAnyBridgeIp(userId) ?: return null
     return "ip:$ip"
 }
 
 /**
- * 检测某 user 是否有 ACP 桥连接（claude-code agent）。
+ * 检测某 user 是否有任意一个 ACP 桥连接（claude-code / codex / 其他）。
  */
 private fun isAnyBridgeConnected(userId: String): Boolean =
-    AcpRegistry.listConnected(userId).contains("claude-code")
+    AcpRegistry.listConnected(userId).isNotEmpty()
+
+/**
+ * 取该 user 任意一个已连接 agent 的远端 IP（用于状态展示与 trust scope）。
+ * 优先 claude-code（兼容旧 TrustedDir 记录），否则回退到第一个已连接 agent。
+ */
+private fun getAnyBridgeIp(userId: String): String? {
+    val connected = AcpRegistry.listConnected(userId)
+    if (connected.isEmpty()) return null
+    val preferred = if (connected.contains("claude-code")) "claude-code" else connected.first()
+    return AcpRegistry.getRemoteIp(userId, preferred)
+}
+
+/**
+ * 解析 cdSync / listDirectory 等"无显式 agentType"路径应该调用哪个 bridge。
+ * 优先 claude-code（保持旧行为），否则用第一个已连接的 agent。无连接返回 null。
+ */
+private fun resolveActiveAgentType(userId: String): String? {
+    val connected = AcpRegistry.listConnected(userId)
+    if (connected.isEmpty()) return null
+    return if (connected.contains("claude-code")) "claude-code" else connected.first()
+}
 
 /**
  * 获取或创建指定群组的ChatServer
@@ -539,7 +561,7 @@ fun Application.configureRouting() {
             try {
                 val token = UserSettingsRepository.getBridgeToken(userId)
                 val connected = isAnyBridgeConnected(userId)
-                val bridgeIp = if (connected) AcpRegistry.getRemoteIp(userId, "claude-code") else null
+                val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
                 call.respond(CcSettingsResponse(true, "ok", token, connected, bridgeIp))
             } catch (e: Exception) {
                 logger.error("❌ 获取CC设置失败: {}", e.message)
@@ -562,7 +584,7 @@ fun Application.configureRouting() {
                     logger.info("🔌 Token 重生：关闭 {} 个 ACP 连接", acpClosed)
                 }
                 val connected = isAnyBridgeConnected(userId)
-                val bridgeIp = if (connected) AcpRegistry.getRemoteIp(userId, "claude-code") else null
+                val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
                 call.respond(CcSettingsResponse(true, "Token 已生成", token, connected, bridgeIp))
             } catch (e: Exception) {
                 logger.error("❌ 生成Bridge Token失败: {}", e.message)
@@ -578,7 +600,7 @@ fun Application.configureRouting() {
                 return@get
             }
             val connected = isAnyBridgeConnected(userId)
-            val bridgeIp = if (connected) AcpRegistry.getRemoteIp(userId, "claude-code") else null
+            val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
             call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected, bridgeIp = bridgeIp))
         }
 
@@ -627,11 +649,11 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, DirListingResponse(success = false, error = "userId 为空"))
                 return@get
             }
-            if (!AcpRegistry.listConnected(userId).contains("claude-code")) {
+            if (!isAnyBridgeConnected(userId)) {
                 call.respond(HttpStatusCode.Conflict, DirListingResponse(success = false, error = "Bridge 未连接"))
                 return@get
             }
-            val raw = AgentRuntime.listDirectory(userId, path, showHidden)
+            val raw = AgentRuntime.listDirectory(userId, path, showHidden, agentType = resolveActiveAgentType(userId) ?: "claude-code")
             if (raw == null) {
                 call.respond(HttpStatusCode.GatewayTimeout, DirListingResponse(success = false, error = "Bridge 未响应或超时"))
                 return@get
@@ -700,7 +722,7 @@ fun Application.configureRouting() {
             }
             // 与 autoActivateForWorkflow 一致使用 "group_<id>" 形式作为 CC state key
             val ccGroupId = if (groupId.startsWith("group_")) groupId else "group_$groupId"
-            when (val result = AgentRuntime.cdSync(userId, ccGroupId, rawPath)) {
+            when (val result = AgentRuntime.cdSync(userId, ccGroupId, rawPath, agentType = resolveActiveAgentType(userId) ?: "claude-code")) {
                 is AgentRuntime.CdResult.Err -> {
                     call.respond(
                         HttpStatusCode.Conflict,
@@ -2144,7 +2166,7 @@ fun Application.configureRouting() {
                 respondError(HttpStatusCode.BadRequest, "工作目录不能为空")
                 return@post
             }
-            if (!AcpRegistry.listConnected(userId).contains("claude-code")) {
+            if (!isAnyBridgeConnected(userId)) {
                 com.silk.backend.database.GroupRepository.deleteGroup(group.id)
                 respondError(HttpStatusCode.Conflict, "Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
                 return@post
@@ -2169,7 +2191,7 @@ fun Application.configureRouting() {
 
             // cdSync 必须成功才能算创建完成；失败时回滚 group + workflow + CC state，避免遗留无效记录
             val cdResult: AgentRuntime.CdResult = try {
-                AgentRuntime.cdSync(userId, "group_${group.id}", initialDir)
+                AgentRuntime.cdSync(userId, "group_${group.id}", initialDir, agentType = resolveActiveAgentType(userId) ?: "claude-code")
             } catch (e: Exception) {
                 AgentRuntime.CdResult.Err(e.message ?: "初始目录切换异常")
             }
