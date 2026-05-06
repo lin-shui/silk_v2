@@ -36,10 +36,13 @@ def test_item_completed_agent_message_yields_text():
     assert ev == {"kind": "agent_message", "text": "hello"}
 
 
-def test_item_completed_unknown_type_is_ignored_in_m1():
+def test_item_completed_unknown_item_type_is_ignored():
+    # Tests that a truly unrecognised item type is silently ignored.
+    # (M1 used "reasoning" here; M2 now parses reasoning, so we use a future
+    # placeholder type instead.)
     raw = {
         "type": "item.completed",
-        "item": {"id": "item_1", "type": "reasoning", "text": "thinking..."},
+        "item": {"id": "item_1", "type": "some_future_item_type", "data": "..."},
     }
     ev = parse_jsonl_event(raw)
     assert ev == {"kind": "ignore"}
@@ -85,3 +88,249 @@ def test_real_fixture_round_trip():
     for e in events:
         if e["kind"] == "agent_message":
             assert isinstance(e["text"], str) and e["text"]
+
+
+# ---- M2: new event types ----
+
+def test_command_execution_started():
+    raw = {
+        "type": "item.started",
+        "item": {
+            "id": "item_1",
+            "type": "command_execution",
+            "command": "/bin/bash -lc 'ls'",
+            "aggregated_output": "",
+            "exit_code": None,
+            "status": "in_progress",
+        },
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev == {
+        "kind": "command_started",
+        "tool_id": "item_1",
+        "command": "/bin/bash -lc 'ls'",
+    }
+
+
+def test_command_execution_completed_success():
+    raw = {
+        "type": "item.completed",
+        "item": {
+            "id": "item_1",
+            "type": "command_execution",
+            "command": "/bin/bash -lc 'ls'",
+            "aggregated_output": "file1\nfile2\n",
+            "exit_code": 0,
+            "status": "completed",
+        },
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev == {
+        "kind": "command_completed",
+        "tool_id": "item_1",
+        "command": "/bin/bash -lc 'ls'",
+        "exit_code": 0,
+        "output": "file1\nfile2\n",
+    }
+
+
+def test_command_execution_completed_failure():
+    raw = {
+        "type": "item.completed",
+        "item": {
+            "id": "item_2",
+            "type": "command_execution",
+            "command": "false",
+            "aggregated_output": "",
+            "exit_code": 1,
+            "status": "completed",
+        },
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev["kind"] == "command_completed"
+    assert ev["exit_code"] == 1
+
+
+def test_file_change_started():
+    raw = {
+        "type": "item.started",
+        "item": {
+            "id": "item_4",
+            "type": "file_change",
+            "changes": [
+                {"path": "/tmp/a.txt", "kind": "add"},
+                {"path": "/tmp/b.txt", "kind": "modify"},
+            ],
+            "status": "in_progress",
+        },
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev == {
+        "kind": "file_change_started",
+        "tool_id": "item_4",
+        "paths": ["/tmp/a.txt", "/tmp/b.txt"],
+        "kinds": ["add", "modify"],
+    }
+
+
+def test_file_change_completed():
+    raw = {
+        "type": "item.completed",
+        "item": {
+            "id": "item_4",
+            "type": "file_change",
+            "changes": [{"path": "/tmp/a.txt", "kind": "add"}],
+            "status": "completed",
+        },
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev == {
+        "kind": "file_change_completed",
+        "tool_id": "item_4",
+        "paths": ["/tmp/a.txt"],
+        "kinds": ["add"],
+    }
+
+
+def test_reasoning_yields_text():
+    raw = {
+        "type": "item.completed",
+        "item": {
+            "id": "item_0",
+            "type": "reasoning",
+            "text": "**Planning**\n\nI need to think about...",
+        },
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev == {
+        "kind": "reasoning",
+        "text": "**Planning**\n\nI need to think about...",
+    }
+
+
+def test_tool_use_fixture_round_trip():
+    """Parse the captured tool_use fixture; ensure all expected kinds appear."""
+    fixture = Path(__file__).parent / "fixtures" / "jsonl_tool_use.jsonl"
+    raws = [json.loads(ln) for ln in fixture.read_text().splitlines() if ln.strip()]
+    events = [parse_jsonl_event(r) for r in raws]
+    kinds = {e["kind"] for e in events}
+    assert "thread_started" in kinds
+    assert "agent_message" in kinds
+    assert "command_started" in kinds
+    assert "command_completed" in kinds
+    assert "file_change_started" in kinds
+    assert "file_change_completed" in kinds
+    assert "turn_completed" in kinds
+
+
+def test_reasoning_fixture_round_trip():
+    fixture = Path(__file__).parent / "fixtures" / "jsonl_with_reasoning.jsonl"
+    raws = [json.loads(ln) for ln in fixture.read_text().splitlines() if ln.strip()]
+    events = [parse_jsonl_event(r) for r in raws]
+    kinds = {e["kind"] for e in events}
+    assert "reasoning" in kinds
+
+
+# ---- M2: cmd builder ----
+
+from codex_bridge.codex_executor import CodexExecutor
+
+
+def test_build_cmd_includes_show_raw_reasoning():
+    ex = CodexExecutor(auto_approve=True)
+    cmd = ex._build_cmd(cwd="/tmp", resume_thread_id=None)
+    assert "-c" in cmd
+    # Find -c position and check the next arg
+    i = cmd.index("-c")
+    assert cmd[i + 1] == "show_raw_agent_reasoning=true"
+
+
+def test_build_cmd_includes_show_raw_reasoning_on_resume():
+    ex = CodexExecutor(auto_approve=True)
+    cmd = ex._build_cmd(cwd="/tmp", resume_thread_id="abc-123")
+    assert "-c" in cmd
+    i = cmd.index("-c")
+    assert cmd[i + 1] == "show_raw_agent_reasoning=true"
+    assert "resume" in cmd
+    assert "abc-123" in cmd
+
+
+# ---- M2: cancel_process ----
+
+import asyncio
+import signal
+
+
+class _FakeProcess:
+    """Minimal stand-in for asyncio.subprocess.Process for cancel tests."""
+
+    def __init__(self, *, dies_on_sigint: bool, sigint_delay: float = 0.0) -> None:
+        self.dies_on_sigint = dies_on_sigint
+        self.sigint_delay = sigint_delay
+        self.returncode: int | None = None
+        self.signals_received: list[int] = []
+        self._wait_future: asyncio.Future[int] | None = None
+
+    def _ensure_future(self) -> asyncio.Future[int]:
+        if self._wait_future is None:
+            self._wait_future = asyncio.get_running_loop().create_future()
+        return self._wait_future
+
+    def send_signal(self, sig: int) -> None:
+        self.signals_received.append(sig)
+        if sig == signal.SIGINT and self.dies_on_sigint:
+            async def die() -> None:
+                if self.sigint_delay:
+                    await asyncio.sleep(self.sigint_delay)
+                self.returncode = 130  # 128 + SIGINT
+                fut = self._ensure_future()
+                if not fut.done():
+                    fut.set_result(130)
+            asyncio.create_task(die())
+
+    def kill(self) -> None:
+        self.signals_received.append(signal.SIGKILL)
+        self.returncode = -9
+        fut = self._ensure_future()
+        if not fut.done():
+            fut.set_result(-9)
+
+    async def wait(self) -> int:
+        if self.returncode is not None:
+            return self.returncode
+        return await self._ensure_future()
+
+
+def test_cancel_sends_sigint_when_proc_alive():
+    from codex_bridge.codex_executor import cancel_process
+    async def _go():
+        proc = _FakeProcess(dies_on_sigint=True, sigint_delay=0.1)
+        await cancel_process(proc, sigint_grace_seconds=1.0)
+        return proc
+    proc = asyncio.run(_go())
+    assert signal.SIGINT in proc.signals_received
+    assert signal.SIGKILL not in proc.signals_received
+    assert proc.returncode == 130
+
+
+def test_cancel_escalates_to_sigkill_when_sigint_ignored():
+    from codex_bridge.codex_executor import cancel_process
+    async def _go():
+        proc = _FakeProcess(dies_on_sigint=False)
+        await cancel_process(proc, sigint_grace_seconds=0.2)
+        return proc
+    proc = asyncio.run(_go())
+    assert signal.SIGINT in proc.signals_received
+    assert signal.SIGKILL in proc.signals_received
+    assert proc.returncode == -9
+
+
+def test_cancel_noop_when_proc_already_dead():
+    from codex_bridge.codex_executor import cancel_process
+    async def _go():
+        proc = _FakeProcess(dies_on_sigint=False)
+        proc.returncode = 0
+        await cancel_process(proc, sigint_grace_seconds=0.2)
+        return proc
+    proc = asyncio.run(_go())
+    assert proc.signals_received == []  # no signal sent to dead proc

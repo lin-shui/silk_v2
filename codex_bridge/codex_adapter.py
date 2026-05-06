@@ -20,13 +20,14 @@ import signal
 import ssl
 import sys
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import websockets
 from websockets.exceptions import ConnectionClosed
 
-from codex_executor import CodexExecutor
+from codex_dispatcher import DispatcherState, dispatch_event
+from codex_executor import CodexExecutor, cancel_process
 
 logger = logging.getLogger("codex_bridge")
 
@@ -42,8 +43,10 @@ class AcpSession:
 
     cwd: str
     cc_session_id: str | None = None  # Codex CLI's thread_id (from thread.started event)
-    accumulated: str = ""  # full streamed text so far — used to compute deltas
+    accumulated: str = ""              # full streamed text so far — used to compute deltas
     cancelled: bool = False
+    seen_tool_ids: set[str] = field(default_factory=set)  # M2: dedup tool_call vs tool_call_update
+    proc_handle: Any | None = None     # M2: live codex subprocess for /cancel
 
 
 # ---------------------------------------------------------------------------
@@ -268,20 +271,34 @@ class AcpAgentServer:
     # ------------------------------------------------------------------
 
     async def _handle_session_cancel(self, params: Any) -> None:
-        """M1: cancellation is not wired. Just mark the session and let the
-        in-flight prompt finish naturally. M2 will SIGINT the codex subprocess."""
+        """Mark session cancelled and SIGINT the live codex subprocess.
+
+        Sends SIGINT to give codex a chance to flush its session file. If it
+        doesn't exit within 1s, escalates to SIGKILL via cancel_process.
+        No-op when no prompt is currently running for this session.
+        """
         acp_session_id = (params or {}).get("sessionId")
         sess = self.sessions.get(acp_session_id)
-        if sess is not None:
-            sess.cancelled = True
-            logger.info("cancel requested for %s (M1: not enforced)", acp_session_id)
+        if sess is None:
+            logger.info("cancel: unknown sessionId %s", acp_session_id)
+            return
+        sess.cancelled = True
+        proc = sess.proc_handle
+        if proc is None:
+            logger.info("cancel: no in-flight codex proc for %s", acp_session_id)
+            return
+        logger.info("cancel: SIGINT codex proc for %s", acp_session_id)
+        try:
+            await cancel_process(proc, sigint_grace_seconds=1.0)
+        except Exception as exc:
+            logger.warning("cancel: failed to terminate codex proc: %s", exc)
 
     # ------------------------------------------------------------------
     # session/prompt — the core: stream executor events as session/update
     # ------------------------------------------------------------------
 
     async def _handle_session_prompt(self, msg_id: Any, params: Any) -> None:
-        """Run a Codex prompt and stream agent_message_chunk updates back."""
+        """Run a Codex prompt and stream tool/message updates back."""
         acp_session_id = params.get("sessionId")
         prompt_blocks = params.get("prompt") or []
         sess = self.sessions.get(acp_session_id)
@@ -289,7 +306,6 @@ class AcpAgentServer:
             await self._send_error(msg_id, -32602, f"unknown sessionId: {acp_session_id}")
             return
 
-        # Concatenate text blocks (M1 ignores image/embedded blocks).
         prompt_text = "\n".join(
             b.get("text", "") for b in prompt_blocks if b.get("type") == "text"
         )
@@ -299,10 +315,18 @@ class AcpAgentServer:
 
         sess.cancelled = False
         sess.accumulated = ""
+        sess.seen_tool_ids = set()
+        sess.proc_handle = None
         notify = self._make_notify_send(acp_session_id)
 
-        proc_handle: asyncio.subprocess.Process | None = None
-        thread_id: str | None = sess.cc_session_id  # M1: always None on first call
+        # M2: dispatcher state mirrors per-session mutable fields the
+        # dispatcher needs. accumulated / seen_tool_ids are kept in sync.
+        dstate = DispatcherState(
+            accumulated="",
+            seen_tool_ids=sess.seen_tool_ids,  # share the set so cancel can inspect it
+            thread_id=sess.cc_session_id,
+        )
+
         usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
         stop_reason = "end_turn"
         error_text: str | None = None
@@ -311,47 +335,45 @@ class AcpAgentServer:
             async for ev in self.executor.run(
                 prompt=prompt_text,
                 cwd=sess.cwd,
-                resume_thread_id=None,  # M1: no resume
+                resume_thread_id=None,  # M3: resume support
             ):
                 kind = ev.get("kind")
+
+                # Control events from executor (not parsed JSONL):
                 if kind == "_proc":
-                    proc_handle = ev["proc"]
+                    sess.proc_handle = ev["proc"]
                     continue
                 if kind == "_done":
-                    if ev["exit_code"] != 0:
+                    if ev["exit_code"] != 0 and not sess.cancelled:
                         error_text = (
                             f"codex exec exited with code {ev['exit_code']}: "
                             f"{ev['stderr'][:500]}"
                         )
                     continue
-                if kind == "ignore":
-                    continue
-                if kind == "thread_started":
-                    thread_id = ev["thread_id"]
-                    sess.cc_session_id = thread_id
-                    continue
-                if kind == "agent_message":
-                    # Codex emits the full message in one item.completed event.
-                    # ACP backend expects deltas — compute delta against accumulated.
-                    full = ev["text"]
-                    delta = full[len(sess.accumulated):] if full.startswith(sess.accumulated) else full
-                    sess.accumulated = full
-                    if delta:
-                        await notify({
-                            "sessionUpdate": "agent_message_chunk",
-                            "content": {"type": "text", "text": delta},
-                        })
-                    continue
+
+                # Capture turn_completed usage before delegating (dispatcher
+                # returns [] for it but we still need the numbers for the
+                # final response):
                 if kind == "turn_completed":
                     usage = {
                         "input_tokens": ev["input_tokens"],
                         "output_tokens": ev["output_tokens"],
                         "reasoning_tokens": ev["reasoning_tokens"],
                     }
-                    continue
-        except Exception as exc:  # pragma: no cover — defensive
+
+                # Delegate to dispatcher for ACP update mapping:
+                for update in dispatch_event(ev, dstate):
+                    await notify(update)
+
+                # Sync dispatcher's mutated state back into AcpSession:
+                sess.accumulated = dstate.accumulated
+                if dstate.thread_id and not sess.cc_session_id:
+                    sess.cc_session_id = dstate.thread_id
+        except Exception as exc:
             logger.exception("codex prompt loop failed: %s", exc)
             error_text = f"adapter error: {exc}"
+        finally:
+            sess.proc_handle = None  # M2: clear handle once prompt finishes
 
         if error_text is not None:
             await self._send_error(msg_id, -32000, error_text)
@@ -363,7 +385,7 @@ class AcpAgentServer:
         result = {
             "stopReason": stop_reason,
             "meta": {
-                "ccSessionId": thread_id or "",
+                "ccSessionId": sess.cc_session_id or "",
                 "inputTokens": usage["input_tokens"],
                 "outputTokens": usage["output_tokens"],
                 "reasoningTokens": usage["reasoning_tokens"],

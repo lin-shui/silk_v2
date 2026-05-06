@@ -110,6 +110,10 @@ tmp/
 # Claude Code
 .claude/
 
+# Codex CLI
+.codex
+.codex/
+
 # Python
 __pycache__/
 *.pyc

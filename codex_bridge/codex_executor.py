@@ -25,6 +25,11 @@ def parse_jsonl_event(raw: dict[str, Any]) -> dict[str, Any]:
     Returns one of:
         {"kind": "thread_started", "thread_id": str}
         {"kind": "agent_message", "text": str}
+        {"kind": "reasoning", "text": str}
+        {"kind": "command_started", "tool_id": str, "command": str}
+        {"kind": "command_completed", "tool_id": str, "command": str, "exit_code": int, "output": str}
+        {"kind": "file_change_started", "tool_id": str, "paths": list[str], "kinds": list[str]}
+        {"kind": "file_change_completed", "tool_id": str, "paths": list[str], "kinds": list[str]}
         {"kind": "turn_completed", "input_tokens": int, "output_tokens": int, "reasoning_tokens": int}
         {"kind": "ignore"}
     """
@@ -36,11 +41,48 @@ def parse_jsonl_event(raw: dict[str, Any]) -> dict[str, Any]:
     if t == "turn.started":
         return {"kind": "ignore"}
 
-    if t == "item.completed":
+    if t in ("item.started", "item.completed"):
         item = raw.get("item") or {}
         item_type = item.get("type")
-        if item_type == "agent_message":
+        item_id = item.get("id", "")
+
+        # Agent message: only emitted as item.completed
+        if item_type == "agent_message" and t == "item.completed":
             return {"kind": "agent_message", "text": item.get("text", "")}
+
+        # Reasoning: only emitted as item.completed (when show_raw_agent_reasoning=true)
+        if item_type == "reasoning" and t == "item.completed":
+            return {"kind": "reasoning", "text": item.get("text", "")}
+
+        # Command execution: paired item.started + item.completed
+        if item_type == "command_execution":
+            if t == "item.started":
+                return {
+                    "kind": "command_started",
+                    "tool_id": item_id,
+                    "command": item.get("command", ""),
+                }
+            return {
+                "kind": "command_completed",
+                "tool_id": item_id,
+                "command": item.get("command", ""),
+                "exit_code": int(item.get("exit_code") or 0),
+                "output": item.get("aggregated_output", ""),
+            }
+
+        # File change: paired item.started + item.completed
+        if item_type == "file_change":
+            changes = item.get("changes") or []
+            paths = [c.get("path", "") for c in changes]
+            kinds_list = [c.get("kind", "") for c in changes]
+            kind_name = "file_change_started" if t == "item.started" else "file_change_completed"
+            return {
+                "kind": kind_name,
+                "tool_id": item_id,
+                "paths": paths,
+                "kinds": kinds_list,
+            }
+
         return {"kind": "ignore"}
 
     if t == "turn.completed":
@@ -66,13 +108,20 @@ class CodexExecutor:
         self.auto_approve = auto_approve
 
     def _build_cmd(self, *, cwd: str, resume_thread_id: str | None) -> list[str]:
-        cmd: list[str] = ["codex", "exec", "--json", "--skip-git-repo-check", "--cd", cwd]
+        # M2: -c show_raw_agent_reasoning=true makes Codex emit `reasoning` items
+        # in the JSONL stream so we can map them to agent_thought_chunk.
+        common_flags = [
+            "--json",
+            "--skip-git-repo-check",
+            "--cd", cwd,
+            "-c", "show_raw_agent_reasoning=true",
+        ]
+        if resume_thread_id:
+            cmd = ["codex", "exec", "resume", resume_thread_id, *common_flags]
+        else:
+            cmd = ["codex", "exec", *common_flags]
         if self.auto_approve:
             cmd.append("--dangerously-bypass-approvals-and-sandbox")
-        if resume_thread_id:
-            cmd = ["codex", "exec", "resume", resume_thread_id, "--json", "--skip-git-repo-check", "--cd", cwd]
-            if self.auto_approve:
-                cmd.append("--dangerously-bypass-approvals-and-sandbox")
         cmd.append("-")
         return cmd
 
@@ -124,3 +173,26 @@ class CodexExecutor:
                 "exit_code": rc,
                 "stderr": stderr_bytes.decode("utf-8", errors="replace"),
             }
+
+
+async def cancel_process(
+    proc: Any,  # asyncio.subprocess.Process or compatible
+    *,
+    sigint_grace_seconds: float = 1.0,
+) -> None:
+    """Cancel a running codex subprocess: SIGINT first, then SIGKILL after grace.
+
+    Sends SIGINT to give codex a chance to flush its session file and exit
+    cleanly. If the process hasn't exited within `sigint_grace_seconds`,
+    escalates to SIGKILL. No-op if the process is already dead.
+    """
+    if proc.returncode is not None:
+        return  # already exited
+    import signal as _signal
+    proc.send_signal(_signal.SIGINT)
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=sigint_grace_seconds)
+    except asyncio.TimeoutError:
+        logger.warning("codex did not exit %ss after SIGINT, escalating to SIGKILL", sigint_grace_seconds)
+        proc.kill()
+        await proc.wait()
