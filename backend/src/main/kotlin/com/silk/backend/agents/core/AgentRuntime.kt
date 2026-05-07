@@ -275,8 +275,8 @@ object AgentRuntime {
         }
         val msg = AgentMessages.system(
             "已注册的 Agent:\n$agents\n\n使用 `/use <agent>` 切换当前 agent，或使用 `@<agent>` 一次性插队。",
-            agentUserId = "silk_system",
-            agentName = "System",
+            agentUserId = SilkAgent.AGENT_ID,
+            agentName = SilkAgent.AGENT_NAME,
         )
         broadcastFn(msg)
     }
@@ -290,8 +290,8 @@ object AgentRuntime {
             ctx.currentAgentType = null
             broadcastFn(AgentMessages.system(
                 "已退出 agent 模式，回到普通 Silk AI。",
-                agentUserId = "silk_system",
-                agentName = "System",
+                agentUserId = SilkAgent.AGENT_ID,
+                agentName = SilkAgent.AGENT_NAME,
             ))
             return
         }

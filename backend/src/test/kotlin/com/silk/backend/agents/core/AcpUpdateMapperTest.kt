@@ -9,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class AcpUpdateMapperTest {
@@ -33,7 +34,7 @@ class AcpUpdateMapperTest {
         assertNotNull(msg)
         assertEquals("hello", msg.content)
         assertEquals("claudecode_ai_agent", msg.userId)
-        assertTrue(msg.isIncremental)
+        assertFalse(msg.isIncremental)
     }
 
     @Test
