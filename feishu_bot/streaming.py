@@ -22,7 +22,8 @@ from message_adapter import build_streaming_card
 
 logger = logging.getLogger(__name__)
 
-_SILK_AI_USER_ID = "silk_ai_agent"
+def _is_agent_user_id(uid: str) -> bool:
+    return uid.endswith("_ai_agent")
 
 
 _SESSION_TIMEOUT = 300  # 流式会话超时（秒），防止 AI 断连时会话永远不被清理
@@ -65,7 +66,7 @@ class StreamingManager:
         content = silk_msg.get("content", "")
         msg_type = silk_msg.get("type", "TEXT")
 
-        if sender_id != _SILK_AI_USER_ID:
+        if not _is_agent_user_id(sender_id):
             return False
 
         # 清理超时的流式会话（防止 AI 断连导致会话永远不被关闭）

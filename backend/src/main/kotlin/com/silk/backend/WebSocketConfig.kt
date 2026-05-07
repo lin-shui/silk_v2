@@ -140,7 +140,7 @@ class ChatServer(
     
     suspend fun join(userId: String, userName: String, session: WebSocketSession) {
         // 权限校验：群聊仅允许群成员加入（否则会导致历史/工具上下文越权）
-        if (sessionName.startsWith("group_") && userId != SilkAgent.AGENT_ID) {
+        if (sessionName.startsWith("group_") && userId != SilkAgent.AGENT_ID && !AgentRuntime.isAgentUserId(userId)) {
             val groupId = sessionName.removePrefix("group_")
             if (!GroupRepository.isUserInGroup(groupId, userId)) {
                 session.close(
@@ -156,7 +156,7 @@ class ChatServer(
         connections.getOrPut(userId) { CopyOnWriteArrayList() }.add(session)
         
         // 如果是第一个真实用户加入，让 Silk AI 也加入（静默模式）
-        if (!isAgentJoined && userId != SilkAgent.AGENT_ID) {
+        if (!isAgentJoined && userId != SilkAgent.AGENT_ID && !AgentRuntime.isAgentUserId(userId)) {
             joinSilkAgentSilently()
         }
         
@@ -321,7 +321,7 @@ class ChatServer(
         logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
         
         // ✅ URL检测和网页下载索引
-        if (message.type == MessageType.TEXT && !message.isTransient && message.userId != SilkAgent.AGENT_ID) {
+        if (message.type == MessageType.TEXT && !message.isTransient && message.userId != SilkAgent.AGENT_ID && !AgentRuntime.isAgentMessage(message)) {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     processUrlsInMessage(message)
@@ -381,7 +381,7 @@ class ChatServer(
         // 检查是否是 Silk 专属私聊会话（群组名以 "[Silk]" 开头）
         val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
         
-        if (message.userId != SilkAgent.AGENT_ID && message.type == MessageType.TEXT && !message.isTransient) {
+        if (message.userId != SilkAgent.AGENT_ID && !AgentRuntime.isAgentMessage(message) && message.type == MessageType.TEXT && !message.isTransient) {
             messagesSinceAgentResponse++
             
             // 在 Silk 私聊中，所有消息都直接触发 AI 回复
@@ -708,7 +708,8 @@ class ChatServer(
         val chatHistory = historyManager.loadChatHistory(sessionName)
         val historyMessages = chatHistory?.messages ?: emptyList()
         directModelAgent.setGroupChatHistory(historyMessages)
-        directModelAgent.loadRecentHistory(historyMessages, SilkAgent.AGENT_ID)
+        val agentUserIds = AgentRuntime.listRegisteredAgents().map { it.agentUserId }.toSet() + SilkAgent.AGENT_ID
+        directModelAgent.loadRecentHistory(historyMessages, agentUserIds)
         
         // 获取群组成员列表并设置到 Agent（用于统计所有成员）
         if (sessionName.startsWith("group_")) {
@@ -947,7 +948,7 @@ class ChatServer(
         val historyEntries = chatHistory?.messages ?: emptyList()
         
         val latestUserName = historyEntries
-            .filter { it.senderId != SilkAgent.AGENT_ID }
+            .filter { it.senderId != SilkAgent.AGENT_ID && !AgentRuntime.isAgentUserId(it.senderId) }
             .lastOrNull()?.senderName ?: "用户"
         
         val groupDisplayName = getGroupDisplayName(sessionName)
@@ -986,7 +987,7 @@ class ChatServer(
         
         // 执行快速诊断更新
         val message = historyEntries
-            .filter { it.senderId != SilkAgent.AGENT_ID }
+            .filter { it.senderId != SilkAgent.AGENT_ID && !AgentRuntime.isAgentUserId(it.senderId) }
             .lastOrNull()?.content ?: ""
         
         silkAgent.executeDoctorDiagnosisUpdate(
@@ -1009,7 +1010,7 @@ class ChatServer(
         
         // 提取最新的用户名（用于 PDF 文件命名）
         val latestUserName = historyEntries
-            .filter { it.senderId != SilkAgent.AGENT_ID }
+            .filter { it.senderId != SilkAgent.AGENT_ID && !AgentRuntime.isAgentUserId(it.senderId) }
             .lastOrNull()?.senderName ?: "用户"
         
         // 获取群组显示名称（用于PDF标题和文件名）
@@ -1186,7 +1187,7 @@ class ChatServer(
         
         // 提取用户名
         val userName = historyEntries
-            .filter { it.senderId != SilkAgent.AGENT_ID }
+            .filter { it.senderId != SilkAgent.AGENT_ID && !AgentRuntime.isAgentUserId(it.senderId) }
             .lastOrNull()?.senderName ?: "用户"
         
         // 执行医生诊断更新
@@ -1290,7 +1291,7 @@ class ChatServer(
         val messageIndex = chatHistory.messages.indexOf(messageEntry)
         val silkReply = chatHistory.messages
             .drop(messageIndex + 1)
-            .firstOrNull { it.senderId == SilkAgent.AGENT_ID }
+            .firstOrNull { it.senderId == SilkAgent.AGENT_ID || AgentRuntime.isAgentUserId(it.senderId) }
 
         if (silkReply != null) {
             logger.debug("🔄 [recallMessage] 找到 Silk 回复: {}", silkReply.messageId)
@@ -1345,11 +1346,11 @@ class ChatServer(
         val hostId = getGroupHostId(sessionName)
         val isGroupHost = hostId == userId
         
-        val isSilkReplyToMe = if (messageEntry.senderId == SilkAgent.AGENT_ID) {
+        val isSilkReplyToMe = if (messageEntry.senderId == SilkAgent.AGENT_ID || AgentRuntime.isAgentUserId(messageEntry.senderId)) {
             val msgIndex = chatHistory.messages.indexOf(messageEntry)
             val precedingMsg = chatHistory.messages
                 .take(msgIndex)
-                .lastOrNull { it.senderId != SilkAgent.AGENT_ID }
+                .lastOrNull { it.senderId != SilkAgent.AGENT_ID && !AgentRuntime.isAgentUserId(it.senderId) }
             precedingMsg?.senderId == userId &&
                 (precedingMsg.content.startsWith("@Silk") || precedingMsg.content.startsWith("@silk"))
         } else false

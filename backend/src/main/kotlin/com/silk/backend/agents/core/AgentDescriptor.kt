@@ -9,7 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 interface AgentDescriptor {
     val agentType: String          // "claude-code"
     val displayName: String        // "🤖 Claude Code"
-    val agentUserId: String        // 消息 userId，如 "silk_ai_agent"
+    val agentUserId: String        // 消息 userId，如 "claudecode_ai_agent"
     val triggerCommand: String     // "/cc"
     val aliases: List<String>      // ["cc"]
 

@@ -2,7 +2,7 @@
  * ChatPage - 聊天页面
  * 使用 ChatStore + WebSocket 进行实时聊天
  */
-import { Message, MessageType } from '../models/Message';
+import { Message, MessageType, isAgentUserId } from '../models/Message';
 import { UserTodoItem } from '../models/UserTodoItem';
 import { Group } from '../models/Group';
 import { MessageBubble } from '../components';
@@ -380,7 +380,7 @@ export struct ChatPage {
    * 检测上一条用户消息是否含出行/购物意图，若是则返回对应的 MetaServiceIntent
    */
   private getSuggestedActionForMessage(message: Message, index: number): MetaServiceIntent | null {
-    if (message.userId !== 'silk_ai_agent' || index <= 0) {
+    if (!isAgentUserId(message.userId) || index <= 0) {
       return null;
     }
     const prevMsg = this.messages[index - 1];
@@ -555,7 +555,7 @@ export struct ChatPage {
     if (msg.userId !== this.userId) {
       return false;
     }
-    if (msg.userId === 'silk_ai_agent') {
+    if (isAgentUserId(msg.userId)) {
       return false;
     }
     return true;

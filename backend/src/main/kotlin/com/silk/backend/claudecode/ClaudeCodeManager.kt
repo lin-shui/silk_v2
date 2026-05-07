@@ -26,7 +26,7 @@ object ClaudeCodeManager {
 
     private val logger = LoggerFactory.getLogger(ClaudeCodeManager::class.java)
 
-    const val CC_AGENT_ID = "silk_ai_agent"
+    const val CC_AGENT_ID = "claudecode_ai_agent"
     const val CC_AGENT_NAME = "🤖 Claude Code"
     private const val MAX_QUEUE_SIZE = 10
 

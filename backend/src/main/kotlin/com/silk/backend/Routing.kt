@@ -764,18 +764,18 @@ fun Application.configureRouting() {
                     val bridgeConnected = isAnyBridgeConnected(userId)
                     // 切目录会重置 sessionId（等价于 /new），在聊天里广播一条提示让用户感知
                     val rawGid = if (ccGroupId.startsWith("group_")) ccGroupId.removePrefix("group_") else ccGroupId
+                    val descriptor = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
                     try {
                         getGroupChatServer(rawGid).broadcast(
                             com.silk.backend.agents.core.AgentMessages.system(
                                 "工作目录已切换至：${result.resolvedPath} 会话已重置",
-                                agentUserId = "silk_ai_agent",
-                                agentName = "🤖 Claude Code",
+                                agentUserId = descriptor?.agentUserId ?: SilkAgent.AGENT_ID,
+                                agentName = descriptor?.displayName ?: SilkAgent.AGENT_NAME,
                             )
                         )
                     } catch (e: Exception) {
                         logger.warn("广播切目录提示失败: {}", e.message)
                     }
-                    val descriptor = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
                     call.respond(
                         CcStateResponse(
                             success = true,

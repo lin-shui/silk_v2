@@ -52,6 +52,11 @@ export interface Message {
   references?: Reference[];  // 引用来源列表（可选）
 }
 
+/** 判断某个 userId 是否属于 AI agent（所有 agent 的 userId 均以 _ai_agent 结尾）。 */
+export function isAgentUserId(userId: string): boolean {
+  return userId.endsWith('_ai_agent');
+}
+
 /**
  * 创建默认消息
  */

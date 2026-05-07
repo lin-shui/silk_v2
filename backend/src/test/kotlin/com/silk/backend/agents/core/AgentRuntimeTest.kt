@@ -27,7 +27,7 @@ class AgentRuntimeTest {
     fun `isAgentMessage returns true for claude code agent message`() {
         val msg = Message(
             id = "1",
-            userId = "silk_ai_agent",
+            userId = "claudecode_ai_agent",
             userName = "Claude",
             content = "hi",
             timestamp = 0L,

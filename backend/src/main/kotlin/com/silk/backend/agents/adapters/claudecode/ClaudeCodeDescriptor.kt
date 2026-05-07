@@ -13,7 +13,7 @@ import kotlinx.serialization.json.put
 object ClaudeCodeDescriptor : AgentDescriptor {
     override val agentType = "claude-code"
     override val displayName = "🤖 Claude Code"
-    override val agentUserId = "silk_ai_agent"
+    override val agentUserId = "claudecode_ai_agent"
     override val triggerCommand = "/cc"
     override val aliases = listOf("cc")
 

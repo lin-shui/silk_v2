@@ -9,6 +9,7 @@ import com.silk.shared.ConnectionState
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.UserSettings
+import com.silk.shared.models.isAgentUserId
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.await
 import kotlinx.coroutines.withTimeoutOrNull
@@ -999,7 +1000,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         users.add(user.id to user.fullName)
         // 从消息中提取其他用户（补充可能不在成员列表中的用户，如已退群的用户）
         messages.forEach { msg ->
-            if (!msg.userId.startsWith("silk_ai_") && msg.userId != user.id) {
+            if (!isAgentUserId(msg.userId) && msg.userId != user.id) {
                 users.add(msg.userId to msg.userName)
             }
         }
@@ -2009,7 +2010,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                         onClick {
                                             // 插入 @用户名
                                             val beforeAt = messageText.substring(0, mentionStartIndex)
-                                            val displayName = if (userId.startsWith("silk_ai_")) "Silk" else userName
+                                            val displayName = if (isAgentUserId(userId)) "Silk" else userName
                                             messageText = "$beforeAt@$displayName "
                                             showMentionMenu = false
                                             mentionStartIndex = -1
@@ -2031,14 +2032,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                             style {
                                                 fontSize(14.px)
                                                 color(Color(SilkColors.textPrimary))
-                                                if (userId.startsWith("silk_ai_")) {
+                                                if (isAgentUserId(userId)) {
                                                     property("font-weight", "600")
                                                 }
                                             }
                                         }) {
                                             Text(userName)
                                         }
-                                        if (userId.startsWith("silk_ai_")) {
+                                        if (isAgentUserId(userId)) {
                                             Span({
                                                 style {
                                                     fontSize(12.px)
@@ -4037,7 +4038,7 @@ fun MessageItem(
     }
     
     // 是否是 AI 消息
-    val isAIMessage = message.userId.startsWith("silk_ai_")
+    val isAIMessage = isAgentUserId(message.userId)
     
     // AI 消息使用专用卡片
     if (isAIMessage && message.type == MessageType.TEXT && message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS) {
@@ -4058,7 +4059,7 @@ fun MessageItem(
     
     // 是否可以撤回：只能撤回自己发送的消息，且不是 Silk 的消息
     val canRecall = message.userId == currentUserId && 
-                    !message.userId.startsWith("silk_ai_") &&
+                    !isAgentUserId(message.userId) &&
                     message.type == MessageType.TEXT &&
                     !isTransient
     
@@ -5063,7 +5064,7 @@ fun MembersDialog(
                     members.forEach { member ->
                         val isCurrentUser = member.id == currentUserId
                         val isContact = member.id in contactIds
-                        val isSilkAI = member.id.startsWith("silk_ai_")
+                        val isSilkAI = isAgentUserId(member.id)
                         
                         Div({
                             style {

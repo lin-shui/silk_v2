@@ -32,7 +32,7 @@ class AcpUpdateMapperTest {
         )
         assertNotNull(msg)
         assertEquals("hello", msg.content)
-        assertEquals("silk_ai_agent", msg.userId)
+        assertEquals("claudecode_ai_agent", msg.userId)
         assertTrue(msg.isIncremental)
     }
 

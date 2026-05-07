@@ -142,6 +142,11 @@ object AgentRuntime {
         return AgentRegistry.list().any { it.agentUserId == msg.userId }
     }
 
+    /** 判断某个 userId 是否属于已注册的 agent。 */
+    fun isAgentUserId(userId: String): Boolean {
+        return AgentRegistry.list().any { it.agentUserId == userId }
+    }
+
     /**
      * 被 ChatServer.broadcast() 调用。
      * 返回 true 表示消息已被 agent 框架处理，ChatServer 不应再走 Silk AI 逻辑。
