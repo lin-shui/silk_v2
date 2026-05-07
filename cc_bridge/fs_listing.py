@@ -1,7 +1,7 @@
-"""Shared filesystem directory-listing helper used by both bridge_agent.py
-(legacy /cc-bridge protocol) and acp_adapter.py (ACP _silk/list_dir extension).
+"""Shared filesystem directory-listing helper used by acp_adapter.py
+(ACP _silk/list_dir extension).
 
-Returns a dict matching the legacy bridge `dir_listing` payload (minus the
+Returns a dict matching the `dir_listing` payload (minus the
 ``type`` and ``requestId`` envelope fields which the caller adds back when
 needed). The ACP path uses the dict as-is — JSON-RPC handles its own envelope.
 """

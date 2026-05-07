@@ -37,9 +37,9 @@
 - 它是 human-maintained roadmap，不是 agent 自动维护的执行日志
 - `docs/context/planning/TODO_ROADMAP.md` 只是 agent-facing wrapper
 
-## Agent Framework In Transition (Plan E + E2 + E3 Done, F1 M1-M4 Done, E4 Pending)
+## Agent Framework (Plan E–E4 + F1 M1-M4 Done)
 
-`develop_acp` 分支把 CC 模式从 `ClaudeCodeManager` 迁到通用 `AgentRuntime` 框架。**Plan E + E2 + E3 已完成**，所有业务代码完全走 ACP，不再引用旧 API。**Plan F1 M1-M4 已落地**，Codex CLI 经 ACP 接入并完成多 agent UX 收尾：
+CC 模式已完全迁到通用 `AgentRuntime` 框架。旧 `ClaudeCodeManager` / `BridgeRegistry` / `StreamParser` / `bridge_agent.py` 已物理删除。**Plan F1 M1-M4 已落地**，Codex CLI 经 ACP 接入并完成多 agent UX 收尾：
 
 - **入口面**：`WebSocketConfig.kt`、`ChatServer.broadcast()` 只调 `AgentRuntime.{handleIfActive, cancelIfActive, isAgentMessage}`
 - **聊天执行**：`acp_adapter.py` 通过 `/agent-bridge` 端点接收 ACP 请求，复用 `Executor` 跑 Claude CLI，流式推 `session/update` 通知
@@ -50,9 +50,6 @@
 - **Token 重生踢连接**：`AcpRegistry.disconnect(userId)` 关闭老 ACP 连接
 - **TrustedDir bridgeId**：`resolveBridgeId(userId)` 从 `AcpRegistry.getRemoteIp` 拿，格式 `"ip:<remoteIp>"` 不变
 - **`/cc-bridge` WebSocket 端点已删除**
-- **无回退路径**：ACP 不可用时直接报"未连接"，不再走 ClaudeCodeManager
-- **旧代码孤岛**：`backend/claudecode/ClaudeCodeManager.kt` 和 `BridgeRegistry.kt` 仍在文件系统中但无人引用（E4 物理删除）
+- **无回退路径**：ACP 不可用时直接报"未连接"
 
-排查 CC 行为时只看 `AgentRuntime` + `acp_adapter.py`，旧 `ClaudeCodeManager` / `bridge_agent.py` 不再有效。
-
-Plan E4: 物理删除 `claudecode/` 包 + `bridge_agent.py`，`bridge.sh` 移除 `BRIDGE_MODE=legacy` 选项。
+排查 CC 行为时只看 `AgentRuntime` + `acp_adapter.py`。

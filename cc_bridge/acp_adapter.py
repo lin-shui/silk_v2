@@ -627,7 +627,7 @@ class AcpAgentServer:
 
 
 def _build_ws_url(server: str, token: str) -> str:
-    """Normalize server address to ws:// or wss:// URL (mirrors bridge_agent.py)."""
+    """Normalize server address to ws:// or wss:// URL."""
     host = server.rstrip("/")
     lower = host.lower()
     if lower.startswith("wss://"):

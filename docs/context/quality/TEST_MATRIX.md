@@ -35,8 +35,6 @@
   - `agents/acp/AcpClientTest`
   - `agents/acp/AcpRegistryTest`
 
-> 注：`claudecode/StreamParserTest` 仍在仓库中但测试的是已废弃 orphan 类（Plan E4 待删）。
-
 ## Web File Contract / Parser
 
 - Commands:

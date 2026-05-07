@@ -36,7 +36,6 @@
 | `ai/` | AIConfig、DirectModelAgent、tool policy |
 | `search/` | Weaviate / 外部搜索 |
 | `agents/` | Agent 框架（`core/` 路由+状态、`acp/` ACP 协议层、`adapters/claudecode/` Claude Code 描述符） |
-| `claudecode/` | 已废弃的旧执行层；业务代码无引用，待 Plan E4 删除 |
 | `todos/` | Todo 抽取、刷新、存储、节假日逻辑 |
 | `workflow/` | Workflow JSON store |
 | `kb/` | Knowledge Base JSON store + exporter |
