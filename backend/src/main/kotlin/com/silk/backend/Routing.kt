@@ -1797,7 +1797,7 @@ fun Application.configureRouting() {
                 }
                 
                 // Silk AI Agent ID
-                val silkAgentId = "silk_ai_agent"
+                val silkAgentId = SilkAgent.AGENT_ID
                 
                 // 查找用户与 Silk 的专属私聊群组
                 // 使用特殊命名规则来区分 Silk 私聊：以 "[Silk] " 开头

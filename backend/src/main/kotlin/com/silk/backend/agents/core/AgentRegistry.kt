@@ -11,6 +11,9 @@ object AgentRegistry {
     private val descriptors = ConcurrentHashMap<String, AgentDescriptor>()
 
     fun register(descriptor: AgentDescriptor) {
+        require(descriptor.agentUserId.endsWith("_ai_agent")) {
+            "agentUserId must end with '_ai_agent', got: '${descriptor.agentUserId}'"
+        }
         descriptors[descriptor.agentType] = descriptor
         for (alias in descriptor.aliases) {
             descriptors[alias] = descriptor

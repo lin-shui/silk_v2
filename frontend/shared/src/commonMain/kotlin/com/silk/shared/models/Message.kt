@@ -48,6 +48,10 @@ data class User(
     val name: String
 )
 
+/** Silk 内建 AI 的 userId 常量，用于前端需要显式引用的场景（如 @ 提及列表）。 */
+const val SILK_AGENT_USER_ID = "silk_ai_agent"
+const val SILK_AGENT_DISPLAY_NAME = "Silk"
+
 /** 判断某个 userId 是否属于 AI agent（所有 agent 的 userId 均以 _ai_agent 结尾）。 */
 fun isAgentUserId(userId: String): Boolean = userId.endsWith("_ai_agent")
 

@@ -63,6 +63,8 @@ import com.silk.shared.ConnectionState
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.isAgentUserId
+import com.silk.shared.models.SILK_AGENT_USER_ID
+import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import com.silk.shared.utils.formatMessageTimestamp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -270,7 +272,7 @@ fun ChatScreen(appState: AppState) {
     val sessionUsers = remember(messages, groupMembers) {
         val users = mutableSetOf<Pair<String, String>>() // (id, name)
         // 始终添加 Silk AI
-        users.add("silk_ai_agent" to "🤖 Silk")
+        users.add(SILK_AGENT_USER_ID to "🤖 $SILK_AGENT_DISPLAY_NAME")
         // 添加当前用户
         users.add(user.id to user.fullName)
         // 从群组成员列表添加所有成员

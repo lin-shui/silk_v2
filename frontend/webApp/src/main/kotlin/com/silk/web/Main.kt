@@ -10,6 +10,8 @@ import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.UserSettings
 import com.silk.shared.models.isAgentUserId
+import com.silk.shared.models.SILK_AGENT_USER_ID
+import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.await
 import kotlinx.coroutines.withTimeoutOrNull
@@ -991,7 +993,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val sessionUsers = remember(groupMembers, messages) {
         val users = mutableSetOf<Pair<String, String>>() // (id, name)
         // 始终添加 Silk AI
-        users.add("silk_ai_agent" to "🤖 Silk")
+        users.add(SILK_AGENT_USER_ID to "🤖 $SILK_AGENT_DISPLAY_NAME")
         // 添加群组成员列表中的所有成员
         groupMembers.forEach { member ->
             users.add(member.id to member.fullName)

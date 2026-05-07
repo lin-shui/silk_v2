@@ -3,7 +3,6 @@ package com.silk.backend.pdf
 import com.silk.backend.ai.AIStepwiseAgent
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.ChatHistoryManager
-import com.silk.backend.SilkAgent
 import com.itextpdf.io.font.PdfEncodings
 import com.itextpdf.kernel.colors.ColorConstants
 import com.itextpdf.kernel.colors.DeviceRgb
@@ -394,7 +393,7 @@ class PDFReportGenerator {
         val historyManager = ChatHistoryManager()
         val sessionData = historyManager.loadSessionData(sessionName)
         val participantNames = sessionData?.members
-            ?.filter { it.userId != SilkAgent.AGENT_ID && !AgentRuntime.isAgentUserId(it.userId) }  // 排除 AI Agent
+            ?.filter { !AgentRuntime.isAgentUserId(it.userId) }  // 排除 AI Agent
             ?.map { it.userName }
             ?.distinct()
             ?.filter { it != userName }  // 排除本人
@@ -590,7 +589,7 @@ class PDFReportGenerator {
             
             // 过滤用户消息（排除AI和系统消息）
             val userMessages = messages
-                .filter { it.senderId != SilkAgent.AGENT_ID && !AgentRuntime.isAgentUserId(it.senderId) }
+                .filter { !AgentRuntime.isAgentUserId(it.senderId) }
                 .filter { it.messageType == "TEXT" }
                 .filter { !it.content.startsWith("@诊断") && !it.content.startsWith("@diagnosis") }
                 .filter { it.content.isNotEmpty() && it.content.length >= 3 }

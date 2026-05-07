@@ -2,6 +2,7 @@
 package com.silk.backend.agents.core
 
 import com.silk.backend.Message
+import com.silk.backend.SilkAgent
 import com.silk.backend.agents.acp.AcpClient
 import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.acp.ContentBlock
@@ -139,12 +140,12 @@ object AgentRuntime {
 
     /** 判断某条消息是否来自某个 agent（用于 WebSocketConfig 的 AGENT_ID 过滤）。 */
     fun isAgentMessage(msg: Message): Boolean {
-        return AgentRegistry.list().any { it.agentUserId == msg.userId }
+        return msg.userId == SilkAgent.AGENT_ID || AgentRegistry.list().any { it.agentUserId == msg.userId }
     }
 
     /** 判断某个 userId 是否属于已注册的 agent。 */
     fun isAgentUserId(userId: String): Boolean {
-        return AgentRegistry.list().any { it.agentUserId == userId }
+        return userId == SilkAgent.AGENT_ID || AgentRegistry.list().any { it.agentUserId == userId }
     }
 
     /**
