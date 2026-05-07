@@ -2,6 +2,20 @@ package com.silk.backend.models
 
 import kotlinx.serialization.Serializable
 
+/**
+ * 单个 agent 的 per-workflow 会话状态（M4 Plan Task 3）。
+ * - sessionId: 该 agent 上一次返回的 ccSessionId（让重启后的 prompt 能 resume 该 agent 的旧线程）
+ * - sessionStarted: true → 下次 prompt 带 resume=true
+ *
+ * 与 Workflow.sessionId / sessionStarted 的关系：旧字段为 backward-compat 保留；
+ * agentSessions 是 per-agent 多线程持久化，避免在多 agent 间切换时互相覆盖。
+ */
+@Serializable
+data class AgentSessionState(
+    val sessionId: String = "",
+    val sessionStarted: Boolean = false,
+)
+
 @Serializable
 data class Workflow(
     val id: String,
@@ -20,4 +34,15 @@ data class Workflow(
     val sessionId: String = "",
     /** 上一次的 sessionStarted 标记。true → 下次 executePrompt 会带 resume=true 让 bridge 续会话。 */
     val sessionStarted: Boolean = false,
+    /**
+     * M4 Task 3: 用户当前激活的 agent（runtime 的 dash form，例如 "claude-code" / "codex"）。
+     * 空串 → 回落到 agentType（underscore form 需要 normalize）。
+     * /use 切换时由 AgentRuntime.handleUseAgent 持久化。
+     */
+    val activeAgent: String = "",
+    /**
+     * M4 Task 3: per-agent 会话状态。Key 是 runtime 的 agentType（dash form）。
+     * 让多 agent 互相切换时彼此的 resume 状态独立保留。
+     */
+    val agentSessions: Map<String, AgentSessionState> = emptyMap(),
 )

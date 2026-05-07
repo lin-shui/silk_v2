@@ -171,6 +171,13 @@ data class WorkflowItem(
     val updatedAt: Long = 0,
 )
 
+@Serializable
+data class AgentInfo(
+    val agentType: String,
+    val displayName: String,
+    val connected: Boolean,
+)
+
 // ==================== Knowledge Base models ====================
 
 @Serializable
@@ -719,6 +726,17 @@ object ApiClient {
         }
     }
 
+    /** 列出可作为 workflow agent 的选项（含 bridge agent 与 silk_chat）。失败时返回空列表。 */
+    suspend fun listAgents(userId: String): List<AgentInfo> {
+        return try {
+            val response = get("/api/agents?userId=${encodeUri(userId)}")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取 agent 列表失败:", e)
+            emptyList()
+        }
+    }
+
     /** 创建工作流的结果。Ok 携带后端落库后的 workflow；Err 携带可展示给用户的错误消息。 */
     sealed class CreateWorkflowResult {
         data class Ok(val workflow: WorkflowItem) : CreateWorkflowResult()
@@ -730,6 +748,7 @@ object ApiClient {
         description: String,
         userId: String,
         initialDir: String = "",
+        agentType: String = "claude_code",
     ): CreateWorkflowResult {
         return try {
             // 构造 JSON，使用 JsonObject 安全编码避免手动转义
@@ -739,6 +758,9 @@ object ApiClient {
                 put("description", kotlinx.serialization.json.JsonPrimitive(description))
                 if (initialDir.isNotBlank()) {
                     put("initialDir", kotlinx.serialization.json.JsonPrimitive(initialDir))
+                }
+                if (agentType.isNotBlank()) {
+                    put("agentType", kotlinx.serialization.json.JsonPrimitive(agentType))
                 }
             }
             val response = post("/api/workflows", obj.toString())

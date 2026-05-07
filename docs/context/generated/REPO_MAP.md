@@ -23,7 +23,7 @@
 | `frontend/desktopApp/` | Desktop 前端 | `Main.kt`, `AppState.kt`, `ApiClient.kt` |
 | `frontend/harmonyApp/` | HarmonyOS ArkTS 前端 | `entry/src/main/ets/pages/*.ets`, `api/*.ets`, `stores/*.ets` |
 | `search/` | Weaviate schema / indexing / startup 脚本 | `schema.py`, `indexer.py`, `start.sh` |
-| `cc_bridge/` | Claude CLI bridge | `bridge_agent.py`, `executor.py`, `session_manager.py` |
+| `cc_bridge/` | Claude CLI ACP adapter | `acp_adapter.py`, `executor.py`, `session_manager.py`, `fs_listing.py` |
 | `feishu_bot/` | 飞书网关 | `main.py`, `silk_client.py`, `feishu_handler.py` |
 | `docs/` | 现有项目文档与 agent workflow skill | `todo-roadmap.md`, `context/`, `skills/` |
 
@@ -35,7 +35,8 @@
 | `database/` | Exposed tables / repositories |
 | `ai/` | AIConfig、DirectModelAgent、tool policy |
 | `search/` | Weaviate / 外部搜索 |
-| `claudecode/` | Claude Code 模式与 bridge registry |
+| `agents/` | Agent 框架（`core/` 路由+状态、`acp/` ACP 协议层、`adapters/claudecode/` Claude Code 描述符） |
+| `claudecode/` | 已废弃的旧执行层；业务代码无引用，待 Plan E4 删除 |
 | `todos/` | Todo 抽取、刷新、存储、节假日逻辑 |
 | `workflow/` | Workflow JSON store |
 | `kb/` | Knowledge Base JSON store + exporter |

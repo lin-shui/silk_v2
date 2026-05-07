@@ -1,10 +1,33 @@
 # Claude Code And Bridges
 
-## Backend Side
+> **Plan E + E2 + E3 已完成**：所有业务代码走 ACP，旧 `ClaudeCodeManager` / `BridgeRegistry` 已无人引用，文件保留待 E4 物理删除。`acp_adapter.py` 是唯一执行路径，`/cc-bridge` 端点已删除。详见 `KNOWN_DRIFT.md#Agent Framework In Transition`。
 
-- `backend/claudecode/ClaudeCodeManager.kt`
-- `backend/claudecode/BridgeRegistry.kt`
-- `backend/claudecode/StreamParser.kt`
+## Agent Framework
+
+- `backend/agents/core/AgentRuntime.kt` — 对外门面，`WebSocketConfig` 的唯一入口
+- `backend/agents/core/CommandRouter.kt` — 命令解析（`/cc`、`/use`、`/status`、`@agent` 等）
+- `backend/agents/core/GroupAgentContext.kt` — per-(userId, groupId) 上下文，含 workingDir、currentAgentType、sessions
+- `backend/agents/core/AgentSession.kt` — per-agent 会话状态（running、queue、acpSessionId、ccSessionId）
+- `backend/agents/core/AgentRegistry.kt` — agent 类型注册表
+- `backend/agents/core/AcpExtensions.kt` — Silk 私有扩展调用（`_silk/compact`、`_silk/list_local_sessions`、`_silk/set_cwd`、`_silk/list_dir`）
+- `backend/agents/adapters/claudecode/ClaudeCodeDescriptor.kt` — CC adapter 描述符
+- `backend/agents/acp/` — ACP 协议层（`AcpClient`、`AcpTransport`、`AcpRegistry`、JSON-RPC 消息类型）
+
+关键路径：
+
+1. **聊天**：`WebSocketConfig.broadcast()` → `AgentRuntime.handleIfActive()` → `CommandRouter.route()` → ACP `session/prompt` → adapter 跑 `Executor` → `session/update` 流式回传
+2. **/cc-fs/cd**：`Routing.kt` → `AgentRuntime.cdSync()` → ACP `_silk/set_cwd` → adapter 验证 + 返回 resolved path
+3. **/cc-fs/list**：`Routing.kt` → `AgentRuntime.listDirectory()` → ACP `_silk/list_dir` → adapter 调 `fs_listing.list_directory`
+4. **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.ccSessionId` 写入 `Workflow.sessionId`；`autoActivateForWorkflow` 用 seed 续会话
+5. **Token 重生**：`/cc-settings/generate-token` → `AcpRegistry.disconnect(userId)` 关老连接
+
+ACP 不可用时直接报"未连接"，无 fallback。
+
+## Legacy (E4 待删)
+
+- `backend/claudecode/ClaudeCodeManager.kt` — 无人引用，待删
+- `backend/claudecode/BridgeRegistry.kt` — 无人引用，待删（仅 `cc_bridge/bridge_agent.py` 在 `BRIDGE_MODE=legacy` 时还会连，但 backend 路由已无端点接收）
+- `backend/claudecode/StreamParser.kt` — 检查无引用后可删
 
 核心事实：
 
@@ -27,10 +50,12 @@
 
 主要文件：
 
-- `bridge_agent.py`
-- `executor.py`
-- `session_manager.py`
-- `bridge.sh`
+- `acp_adapter.py` — **新默认桥**（`BRIDGE_MODE=acp`），ACP server 连接 `/agent-bridge` 端点，注册到 `AcpRegistry`，复用 `Executor` 执行 Claude CLI，支持 `_silk/*` 扩展（`compact` / `list_local_sessions` / `set_cwd` / `list_dir`）
+- `bridge_agent.py` — 旧桥（`BRIDGE_MODE=legacy`），连接 `/cc-bridge` 端点，注册到 `BridgeRegistry`
+- `executor.py` — 实际调用 Claude CLI 的执行器（新旧桥共用）
+- `session_manager.py` — 本地会话管理（`~/.silk/cc_sessions.json`，新旧桥共用）
+- `fs_listing.py` — 共用目录列表工具（被 `_silk/list_dir` 和旧桥 `handle_list_dir` 共用）
+- `bridge.sh` — 启动/停止管理脚本，`BRIDGE_MODE` 环境变量控制走新桥还是旧桥（默认 `acp`）
 
 关键职责：
 
@@ -60,7 +85,8 @@
 
 - 改 CC 指令或元信息格式：检查后端测试与 `cc_bridge` 兼容性
 - 改 Silk message shape：确认飞书消息适配层是否仍能消费
-- 新增 state 修改入口：必须走 `UserCCState.withLock { h -> ... }`（字段 setter 是 private，编译期会强制）
-- 新增 bridge 命令类型：同时改 `BridgeRequest`（@EncodeDefault NEVER 默认值省略） + bridge_agent.py dispatcher
-- 新增 RPC 风格响应：在 `handleBridgeMessage` 走 `pendingRpc.complete()` 路径，不要新建 broadcastFn 上下文
+- 新增 state 修改入口：旧桥走 `UserCCState.withLock { h -> ... }`；新框架走 `GroupAgentContext` / `AgentSession` 字段（`@Volatile`，当前不需 mutex）
+- 新增 bridge 命令类型：旧桥改 `BridgeRequest` + `bridge_agent.py` dispatcher；新桥改 `AcpExtensions.kt` + `acp_adapter.py`
+- 新增 RPC 风格响应：旧桥走 `pendingRpc.complete()`；新桥走 ACP JSON-RPC `_call()`
 - 新增需要持久化的 CC state 字段：在 `Workflow` 加字段 + `WorkflowManager` 加 update 方法 + `WorkflowPersistence` 回调 + `loadSeed` 取出 + `autoActivateForWorkflow` seed，否则重启后会丢
+- 改入口面（`WebSocketConfig` 调用点）：只改 `AgentRuntime`，不要直接调 `ClaudeCodeManager`

@@ -36,8 +36,8 @@ All day-to-day operations (build, run, stop, logs, Weaviate) are driven by the *
 | `.env` | Local config (create from `.env.example`). Not committed. |
 | `.env.example` | Template and documentation for required/optional env vars. |
 | `backend/` | Kotlin backend (Ktor), static files, chat history. |
-| `backend/.../claudecode/` | Claude Code integration module (StreamParser, SessionStore, Runner, Manager). |
-| `cc_bridge/` | CC Bridge Agent: connects an external Claude CLI to Silk via WebSocket. |
+| `backend/.../agents/` | Agent framework: AgentRuntime, ACP protocol layer, Claude Code adapter descriptor. |
+| `cc_bridge/` | ACP Bridge Adapter: external Python process running Claude CLI; connects to backend `/agent-bridge` via ACP. |
 | `frontend/webApp/` | Kotlin/JS web frontend. |
 | `frontend/androidApp/` | Android app; APK output can be copied to `backend/static`. |
 | `frontend/desktopApp/` | Desktop client (optional). |
@@ -181,7 +181,7 @@ Before creating a workflow or changing its working directory, the selected direc
 
 ### Prerequisites
 
-Workflows require a running **CC Bridge Agent** — see [CC Bridge](#cc-bridge-external-claude-cli) below.
+Workflows require a running **ACP Bridge Adapter** — see [CC Bridge](#cc-bridge-external-claude-cli) below.
 
 ---
 
@@ -189,16 +189,16 @@ Workflows require a running **CC Bridge Agent** — see [CC Bridge](#cc-bridge-e
 
 Silk supports a **Claude Code (CC) mode** that lets users interact with a Claude Code CLI from any chat session. This turns Silk into a programming assistant interface — users can ask Claude to read, write, and edit code on the filesystem.
 
-CC mode uses a **Bridge Agent** architecture: the Silk backend does not run the Claude CLI itself. Instead, a separate Python process (`cc_bridge/bridge_agent.py`) connects to the backend via WebSocket, receives commands, and executes the Claude CLI locally. This decouples the backend deployment from the Claude execution environment.
+CC mode uses an **ACP (Agent Client Protocol) Bridge** architecture: the Silk backend does not run the Claude CLI itself. Instead, a separate Python process (`cc_bridge/acp_adapter.py`) connects to the backend via WebSocket using the ACP JSON-RPC protocol, receives commands, and executes the Claude CLI locally. This decouples the backend deployment from the Claude execution environment.
 
 ### Prerequisites
 
-- **CC Bridge Agent** running and connected to the Silk backend (see [CC Bridge](#cc-bridge-external-claude-cli) below)
-- **Claude CLI** installed on the machine running the Bridge Agent (`npm install -g @anthropic-ai/claude-code` or equivalent)
+- **ACP Bridge Adapter** running and connected to the Silk backend (see [CC Bridge](#cc-bridge-external-claude-cli) below)
+- **Claude CLI** installed on the machine running the adapter (`npm install -g @anthropic-ai/claude-code` or equivalent)
 
 ### Configuration
 
-The following environment variables are used by the **Bridge Agent** (set on the machine running `bridge_agent.py`, not the Silk backend):
+The following environment variables are used by the **ACP Bridge Adapter** (set on the machine running `acp_adapter.py`, not the Silk backend):
 
 ```bash
 # Claude CLI binary path (default: auto-detected from PATH)
@@ -255,19 +255,21 @@ In any Silk chat (group or private), send `/cc` to enter Claude Code mode:
 
 ### Architecture
 
-CC mode is implemented in `backend/src/main/kotlin/com/silk/backend/claudecode/`:
+CC mode is implemented in `backend/src/main/kotlin/com/silk/backend/agents/`:
 
-| File | Responsibility |
+| Package/File | Responsibility |
 |------|---------------|
-| `ClaudeCodeManager.kt` | Command routing (`/cc`, `/exit`, `/new`, etc.), per-user state, message queue |
-| `BridgeRegistry.kt` | Manage Bridge WebSocket connections, send commands to bridge, track connection status and IP |
-| `StreamParser.kt` | Parse Claude CLI's `stream-json` JSONL output |
+| `agents/core/AgentRuntime.kt` | Command routing, per-user state, message queue, workflow persistence |
+| `agents/core/CommandRouter.kt` | Parse `/cc`, `/new`, `/status`, `@agent` etc. |
+| `agents/acp/AcpClient.kt` | ACP JSON-RPC client (talks to adapter) |
+| `agents/acp/AcpRegistry.kt` | Manage ACP WebSocket connections per (userId, agentType) |
+| `agents/core/AcpExtensions.kt` | `_silk/*` extension calls (set_cwd, list_dir, compact, list_local_sessions) |
 
-The integration point is an interception block in `ChatServer.broadcast()` (in `WebSocketConfig.kt`) that routes CC-mode messages to `ClaudeCodeManager` before the normal Silk AI logic.
+The integration point is `AgentRuntime.handleIfActive()` called from `ChatServer.broadcast()` (in `WebSocketConfig.kt`).
 
 ### CC Bridge (external Claude CLI)
 
-The Claude CLI runs on a separate machine (or the same machine in a different process) via the **CC Bridge Agent**, which connects to Silk via WebSocket. This is useful when:
+The Claude CLI runs on a separate machine (or the same machine in a different process) via the **ACP Bridge Adapter**, which connects to Silk via WebSocket using ACP (JSON-RPC 2.0). This is useful when:
 
 - The backend runs in a container or VM without Claude CLI installed
 - You want to run Claude CLI on a machine with direct access to your codebase
@@ -276,10 +278,10 @@ The Claude CLI runs on a separate machine (or the same machine in a different pr
 #### How it works
 
 ```
-User (browser) ──→ Silk backend ──WebSocket──→ CC Bridge (bridge_agent.py) ──→ Claude CLI
+User (browser) ──→ Silk backend ──ACP/WebSocket──→ ACP Adapter (acp_adapter.py) ──→ Claude CLI
 ```
 
-The Bridge Agent (`cc_bridge/bridge_agent.py`) connects to the Silk backend via WebSocket, authenticates with a token, and executes Claude CLI commands on behalf of the user. The Silk backend routes CC-mode messages to the bridge instead of spawning a local CLI process.
+The ACP Adapter (`cc_bridge/acp_adapter.py`) connects to the Silk backend's `/agent-bridge` WebSocket endpoint, authenticates with a token, and handles ACP requests (`session/new`, `session/prompt`, `_silk/*` extensions) by executing Claude CLI commands locally and streaming results back as `session/update` notifications.
 
 #### Setup
 
@@ -310,26 +312,26 @@ The Bridge Agent (`cc_bridge/bridge_agent.py`) connects to the Silk backend via 
    # BRIDGE_LOG_LEVEL=INFO                # optional
    ```
 
-5. **Start the Bridge Agent**:
+5. **Start the ACP Bridge Adapter**:
 
    ```bash
    cd cc_bridge
    ./bridge.sh start        # background (recommended)
-   # or: python bridge_agent.py --server <host>:8006 --token <token>   # foreground
+   # or: python acp_adapter.py --server <host>:8006 --token <token>   # foreground
    ```
 
 6. **Verify connection** in the Silk web UI:
    - Settings page should show a green status dot with **Connected**
-   - **Bridge IP** displays the IP address of the machine running bridge_agent.py
+   - **Bridge IP** displays the IP address of the machine running the adapter
    - Click **Refresh Status** to update the connection status
 
 #### Management (bridge.sh)
 
 | Command | Description |
 |---------|-------------|
-| `./bridge.sh start` | Start bridge in background |
-| `./bridge.sh stop` | Stop bridge (graceful shutdown) |
-| `./bridge.sh restart` | Restart bridge |
+| `./bridge.sh start` | Start adapter in background |
+| `./bridge.sh stop` | Stop adapter (graceful shutdown) |
+| `./bridge.sh restart` | Restart adapter |
 | `./bridge.sh status` | Check running status |
 | `./bridge.sh logs` | Tail the log file |
 
@@ -338,9 +340,10 @@ The Bridge Agent (`cc_bridge/bridge_agent.py`) connects to the Silk backend via 
 | File | Responsibility |
 |------|---------------|
 | `cc_bridge/bridge.sh` | Management script: start/stop/restart/status/logs |
-| `cc_bridge/bridge_agent.py` | WebSocket client, message routing, authentication |
+| `cc_bridge/acp_adapter.py` | ACP server: handles session/prompt, streams updates, _silk/* extensions |
 | `cc_bridge/executor.py` | Claude CLI subprocess management |
 | `cc_bridge/session_manager.py` | Session persistence and lifecycle |
+| `cc_bridge/fs_listing.py` | Directory listing helper (used by _silk/list_dir) |
 | `cc_bridge/requirements.txt` | Python dependencies (`websockets>=12.0`) |
 
 ---

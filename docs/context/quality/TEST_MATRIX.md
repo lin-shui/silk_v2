@@ -22,11 +22,20 @@
 - Primary tests:
   - `todos/UserTodoStoreTest`
 
-## Claude Code Metadata / Parser Surface
+## Agent Framework / ACP
 
 - Command: `./gradlew :backend:test`
 - Primary tests:
-  - `claudecode/StreamParserTest`
+  - `agents/core/AgentRuntimeTest`
+  - `agents/core/AgentRuntimeAcpIntegrationTest`
+  - `agents/core/AgentSessionTest`
+  - `agents/core/CommandRouterTest`
+  - `agents/core/GroupAgentContextTest`
+  - `agents/core/AcpUpdateMapperTest`
+  - `agents/acp/AcpClientTest`
+  - `agents/acp/AcpRegistryTest`
+
+> 注：`claudecode/StreamParserTest` 仍在仓库中但测试的是已废弃 orphan 类（Plan E4 待删）。
 
 ## Web File Contract / Parser
 
