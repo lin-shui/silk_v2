@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from codex_bridge.codex_session_index import list_local_sessions
+from codex_bridge.codex_session_index import find_session_file, list_local_sessions
 
 
 def _write_rollout(
@@ -139,3 +139,28 @@ def test_list_local_sessions_filters_by_age_default_30_days(tmp_path):
     os.utime(f, (sixty_days_ago, sixty_days_ago))
     result = list_local_sessions(sessions_root=tmp_path, max_age_days=30)
     assert len(result) == 0
+
+
+def test_find_session_file_prefix_match(tmp_path):
+    """Prefix of thread_id should find the session."""
+    _write_rollout(
+        tmp_path, date="2026/05/06", timestamp="2026-05-06T10-00-00",
+        thread_id="abc-123-456-789", cwd="/proj", first_user_message="hi",
+    )
+    result = find_session_file("abc-123", sessions_root=tmp_path)
+    assert result is not None
+    assert result.name.endswith(".jsonl")
+
+
+def test_find_session_file_prefix_ambiguous_returns_match(tmp_path):
+    """When prefix matches multiple, return one (not None)."""
+    _write_rollout(
+        tmp_path, date="2026/05/06", timestamp="2026-05-06T10-00-00",
+        thread_id="abc-111", cwd="/proj", first_user_message="first",
+    )
+    _write_rollout(
+        tmp_path, date="2026/05/06", timestamp="2026-05-06T11-00-00",
+        thread_id="abc-222", cwd="/proj", first_user_message="second",
+    )
+    result = find_session_file("abc", sessions_root=tmp_path)
+    assert result is not None

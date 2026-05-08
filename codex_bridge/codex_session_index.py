@@ -111,12 +111,11 @@ def find_session_file(
     *,
     sessions_root: Path | None = None,
 ) -> Path | None:
-    """Locate the rollout-*.jsonl file whose session_meta.id == thread_id.
+    """Locate the rollout-*.jsonl file whose session_meta.id matches *thread_id*.
 
-    Codex stores rollouts as ``~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<thread_id>.jsonl``.
-    The thread_id is embedded in the filename, so we filter via glob first
-    to avoid parsing every rollout. Falls back to a slow scan if the
-    filename pattern doesn't match (e.g. older codex versions).
+    Supports both exact match and prefix match. When *thread_id* is a prefix
+    of the actual thread id, returns the matching rollout file.
+    If multiple sessions match a prefix, returns the most recently modified.
     Returns None when no rollout matches.
     """
     if not thread_id:
@@ -124,15 +123,41 @@ def find_session_file(
     root = sessions_root or _DEFAULT_SESSIONS_ROOT
     if not root.exists():
         return None
-    # Fast path: filename contains the thread_id
+
+    # Fast path: filename contains the thread_id (exact match)
     for candidate in root.rglob(f"rollout-*-{thread_id}.jsonl"):
         return candidate
-    # Slow path: parse session_meta head
+
+    # Prefix path: filename contains the prefix
+    prefix_candidates: list[tuple[float, Path]] = []
+    for candidate in root.rglob(f"rollout-*-{thread_id}*.jsonl"):
+        try:
+            mtime = candidate.stat().st_mtime
+            prefix_candidates.append((mtime, candidate))
+        except Exception:
+            continue
+
+    if prefix_candidates:
+        prefix_candidates.sort(key=lambda t: t[0], reverse=True)
+        return prefix_candidates[0][1]
+
+    # Slow path: parse session_meta head — check both exact and prefix
+    slow_candidates: list[tuple[float, Path]] = []
     for candidate in root.rglob("rollout-*.jsonl"):
         try:
             meta = _parse_rollout_head(candidate)
         except Exception:
             continue
-        if meta and meta.get("sessionId") == thread_id:
-            return candidate
+        sid = meta.get("sessionId", "") if meta else ""
+        if sid == thread_id or sid.startswith(thread_id):
+            try:
+                mtime = candidate.stat().st_mtime
+                slow_candidates.append((mtime, candidate))
+            except Exception:
+                slow_candidates.append((0, candidate))
+
+    if slow_candidates:
+        slow_candidates.sort(key=lambda t: t[0], reverse=True)
+        return slow_candidates[0][1]
+
     return None
