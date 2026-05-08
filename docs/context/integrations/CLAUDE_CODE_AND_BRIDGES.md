@@ -1,6 +1,6 @@
 # Claude Code And Bridges
 
-> **Plan E + E2 + E3 已完成**：所有业务代码走 ACP，旧 `ClaudeCodeManager` / `BridgeRegistry` 已无人引用，文件保留待 E4 物理删除。`acp_adapter.py` 是唯一执行路径，`/cc-bridge` 端点已删除。详见 `KNOWN_DRIFT.md#Agent Framework In Transition`。
+> **Plan E + E2 + E3 + E4 已完成**：所有业务代码走 ACP，旧 `ClaudeCodeManager` / `BridgeRegistry` / `StreamParser` 已物理删除。`acp_adapter.py` 是唯一执行路径，`/cc-bridge` 端点已删除。详见 `KNOWN_DRIFT.md#Agent Framework In Transition`。
 
 ## Agent Framework
 
@@ -23,12 +23,6 @@
 
 ACP 不可用时直接报"未连接"，无 fallback。
 
-## Legacy (E4 待删)
-
-- `backend/claudecode/ClaudeCodeManager.kt` — 无人引用，待删
-- `backend/claudecode/BridgeRegistry.kt` — 无人引用，待删（仅 `cc_bridge/bridge_agent.py` 在 `BRIDGE_MODE=legacy` 时还会连，但 backend 路由已无端点接收）
-- `backend/claudecode/StreamParser.kt` — 检查无引用后可删
-
 核心事实：
 
 - CC 模式是 per-user-per-group 状态机
@@ -36,7 +30,7 @@ ACP 不可用时直接报"未连接"，无 fallback。
 - `ChatServer.broadcast()` 会先拦截 CC 模式消息
 - `UserCCState` 字段私有，外部只能通过 `state.withLock { h -> ... }` 修改：所有多字段写入强制走 Mutex 保护，避免 chat WebSocket 路径与 HTTP `/cc-fs/*` 入口的并发 race。`snapshot()` 提供无锁只读快照
 - 切目录有两种入口：
-  - HTTP `POST /users/{userId}/cc-fs/cd`（UI"更改"按钮 + 创建工作流时的 initialDir）→ 先经 `TrustedDirManager.isTrusted()` 验证目录信任状态，未信任则返回 `400 DIRECTORY_NOT_TRUSTED`；通过后再调 `ClaudeCodeManager.cdSync()` 走 RPC 等 bridge `cd_result` 完成，原子更新 state，返回 `CdResult.Ok | CdResult.Err`
+  - HTTP `POST /users/{userId}/cc-fs/cd`（UI"更改"按钮 + 创建工作流时的 initialDir）→ 先经 `TrustedDirManager.isTrusted()` 验证目录信任状态，未信任则返回 `400 DIRECTORY_NOT_TRUSTED`；通过后再调 `AgentRuntime.cdSync()` 走 ACP `_silk/set_cwd` 完成，原子更新 state，返回 `CdResult.Ok | CdResult.Err`
   - 历史的聊天 `/cd` 命令已废弃，`routeMessage` 命中后只回一条引导提示
 - 目录浏览：HTTP `GET /users/{userId}/cc-fs/list?path=&showHidden=` → `listDirectory()` 通过 RPC 让 bridge 跑 `handle_list_dir`
 - RPC 通用机制：`pendingRpc: Map<requestId, CompletableDeferred>`，bridge 响应在 `handleBridgeMessage` 顶部优先 complete Deferred；超时 5s（withTimeout）
@@ -50,12 +44,11 @@ ACP 不可用时直接报"未连接"，无 fallback。
 
 主要文件：
 
-- `acp_adapter.py` — **新默认桥**（`BRIDGE_MODE=acp`），ACP server 连接 `/agent-bridge` 端点，注册到 `AcpRegistry`，复用 `Executor` 执行 Claude CLI，支持 `_silk/*` 扩展（`compact` / `list_local_sessions` / `set_cwd` / `list_dir`）
-- `bridge_agent.py` — 旧桥（`BRIDGE_MODE=legacy`），连接 `/cc-bridge` 端点，注册到 `BridgeRegistry`
-- `executor.py` — 实际调用 Claude CLI 的执行器（新旧桥共用）
-- `session_manager.py` — 本地会话管理（`~/.silk/cc_sessions.json`，新旧桥共用）
-- `fs_listing.py` — 共用目录列表工具（被 `_silk/list_dir` 和旧桥 `handle_list_dir` 共用）
-- `bridge.sh` — 启动/停止管理脚本，`BRIDGE_MODE` 环境变量控制走新桥还是旧桥（默认 `acp`）
+- `acp_adapter.py` — ACP server 连接 `/agent-bridge` 端点，注册到 `AcpRegistry`，复用 `Executor` 执行 Claude CLI，支持 `_silk/*` 扩展（`compact` / `list_local_sessions` / `set_cwd` / `list_dir`）
+- `executor.py` — 实际调用 Claude CLI 的执行器
+- `session_manager.py` — 本地会话管理（`~/.silk/cc_sessions.json`）
+- `fs_listing.py` — 目录列表工具（被 `_silk/list_dir` 使用）
+- `bridge.sh` — 启动/停止管理脚本
 
 关键职责：
 
@@ -85,8 +78,8 @@ ACP 不可用时直接报"未连接"，无 fallback。
 
 - 改 CC 指令或元信息格式：检查后端测试与 `cc_bridge` 兼容性
 - 改 Silk message shape：确认飞书消息适配层是否仍能消费
-- 新增 state 修改入口：旧桥走 `UserCCState.withLock { h -> ... }`；新框架走 `GroupAgentContext` / `AgentSession` 字段（`@Volatile`，当前不需 mutex）
-- 新增 bridge 命令类型：旧桥改 `BridgeRequest` + `bridge_agent.py` dispatcher；新桥改 `AcpExtensions.kt` + `acp_adapter.py`
-- 新增 RPC 风格响应：旧桥走 `pendingRpc.complete()`；新桥走 ACP JSON-RPC `_call()`
+- 新增 state 修改入口：走 `GroupAgentContext` / `AgentSession` 字段（`@Volatile`，当前不需 mutex）
+- 新增 bridge 命令类型：改 `AcpExtensions.kt` + `acp_adapter.py`
+- 新增 RPC 风格响应：走 ACP JSON-RPC `_call()`
 - 新增需要持久化的 CC state 字段：在 `Workflow` 加字段 + `WorkflowManager` 加 update 方法 + `WorkflowPersistence` 回调 + `loadSeed` 取出 + `autoActivateForWorkflow` seed，否则重启后会丢
-- 改入口面（`WebSocketConfig` 调用点）：只改 `AgentRuntime`，不要直接调 `ClaudeCodeManager`
+- 改入口面（`WebSocketConfig` 调用点）：只改 `AgentRuntime`

@@ -8,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -27,7 +28,7 @@ class AgentRuntimeTest {
     fun `isAgentMessage returns true for claude code agent message`() {
         val msg = Message(
             id = "1",
-            userId = "silk_ai_agent",
+            userId = "claudecode_ai_agent",
             userName = "Claude",
             content = "hi",
             timestamp = 0L,
@@ -157,5 +158,37 @@ class AgentRuntimeTest {
     fun `cleanupState on non-existent context is no-op`() {
         AgentRuntime.cleanupState("u1", "g_nonexistent")
         // should not throw
+    }
+
+    @Test
+    fun `register rejects agentUserId not ending with _ai_agent`() {
+        val bad = object : AgentDescriptor {
+            override val agentType = "bad-agent"
+            override val displayName = "Bad"
+            override val agentUserId = "bad_user_id"
+            override val triggerCommand = "/bad"
+            override val aliases = emptyList<String>()
+            override suspend fun handleSilkCommand(
+                cmd: SilkCommand, session: AgentSession, acp: com.silk.backend.agents.acp.AcpClient
+            ) = SilkCommandResult.Fallback
+        }
+        assertFailsWith<IllegalArgumentException> {
+            AgentRegistry.register(bad)
+        }
+    }
+
+    @Test
+    fun `isAgentUserId returns true for SilkAgent AGENT_ID`() {
+        assertTrue(AgentRuntime.isAgentUserId(com.silk.backend.SilkAgent.AGENT_ID))
+    }
+
+    @Test
+    fun `isAgentUserId returns true for registered agent`() {
+        assertTrue(AgentRuntime.isAgentUserId("claudecode_ai_agent"))
+    }
+
+    @Test
+    fun `isAgentUserId returns false for regular user`() {
+        assertFalse(AgentRuntime.isAgentUserId("550e8400-e29b-41d4-a716-446655440000"))
     }
 }

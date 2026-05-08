@@ -114,9 +114,9 @@ def _die_claude_not_found(system: str, extra: str = "") -> None:
     msg.append("  3. Set the path manually:")
     if system == "Windows":
         msg.append('     set CLAUDE_CODE_PATH=C:\\path\\to\\claude.cmd')
-        msg.append("     python bridge_agent.py --server ... --token ...")
+        msg.append("     python acp_adapter.py --server ... --token ...")
     else:
-        msg.append("     CLAUDE_CODE_PATH=/path/to/claude python bridge_agent.py --server ... --token ...")
+        msg.append("     CLAUDE_CODE_PATH=/path/to/claude python acp_adapter.py --server ... --token ...")
     msg.append("")
     msg.append("=" * 60)
     print("\n".join(msg), flush=True)
@@ -129,6 +129,10 @@ CLAUDE_CODE_TIMEOUT: int = int(os.environ.get("CLAUDE_CODE_TIMEOUT", "36000"))
 CLAUDE_CODE_MAX_OUTPUT_CHARS: int = int(
     os.environ.get("CLAUDE_CODE_MAX_OUTPUT_CHARS", "30000")
 )
+
+# Proxy for claude CLI subprocess only (does not affect bridge's own connections)
+CLAUDE_HTTP_PROXY: str = os.environ.get("CLAUDE_HTTP_PROXY", "")
+CLAUDE_HTTPS_PROXY: str = os.environ.get("CLAUDE_HTTPS_PROXY", "")
 
 # Streaming throttle
 STREAM_MIN_INTERVAL_S: float = 0.5
@@ -412,12 +416,25 @@ class Executor:
         # through the PTY and won't be captured by stderr=PIPE.  Merge stderr
         # into stdout so we can still see error messages in the output stream.
         use_pty = platform.system() != "Windows"
+
+        # Build subprocess env: inherit current env + inject proxy for claude only
+        sub_env: dict[str, str] | None = None
+        if CLAUDE_HTTP_PROXY or CLAUDE_HTTPS_PROXY:
+            sub_env = os.environ.copy()
+            if CLAUDE_HTTP_PROXY:
+                sub_env["http_proxy"] = CLAUDE_HTTP_PROXY
+                sub_env["HTTP_PROXY"] = CLAUDE_HTTP_PROXY
+            if CLAUDE_HTTPS_PROXY:
+                sub_env["https_proxy"] = CLAUDE_HTTPS_PROXY
+                sub_env["HTTPS_PROXY"] = CLAUDE_HTTPS_PROXY
+
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT if use_pty else asyncio.subprocess.PIPE,
                 cwd=working_dir,
+                env=sub_env,
                 limit=10 * 1024 * 1024,  # 10 MB – CC tool results can exceed the 64 KB default
             )
         except Exception as exc:

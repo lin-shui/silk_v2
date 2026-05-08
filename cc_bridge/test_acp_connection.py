@@ -9,7 +9,7 @@ import websockets
 
 
 def _build_ws_url(server: str, token: str) -> str:
-    """Normalize server address to ws:// or wss:// (matches bridge_agent.py)."""
+    """Normalize server address to ws:// or wss:// (matches acp_adapter.py)."""
     host = server.rstrip("/")
     lower = host.lower()
     if lower.startswith("wss://"):

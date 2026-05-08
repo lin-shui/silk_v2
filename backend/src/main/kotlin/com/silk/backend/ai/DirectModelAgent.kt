@@ -1,5 +1,6 @@
 package com.silk.backend.ai
 
+import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.search.WeaviateClient
 import com.silk.backend.search.SearchMode
 import com.silk.backend.ai.ToolPolicyManager.ToolPermission
@@ -92,13 +93,13 @@ class DirectModelAgent(
      * 将持久化的近期聊天历史注入 conversationHistory，
      * 仅在 conversationHistory 为空时执行（deploy/重启后首次调用）。
      */
-    fun loadRecentHistory(entries: List<com.silk.backend.models.ChatHistoryEntry>, agentId: String) {
+    fun loadRecentHistory(entries: List<com.silk.backend.models.ChatHistoryEntry>) {
         if (conversationHistory.isNotEmpty()) return
         val recent = entries.filter { it.messageType == "TEXT" }.takeLast(20)
         if (recent.isEmpty()) return
 
         for (entry in recent) {
-            val role = if (entry.senderId == agentId) "assistant" else "user"
+            val role = if (AgentRuntime.isAgentUserId(entry.senderId)) "assistant" else "user"
             val content = if (role == "user") {
                 "[${entry.senderName}] ${entry.content}"
             } else {
@@ -2111,7 +2112,7 @@ douban(movie-hot)、bbc(news)、bloomberg(news) 等。
     private fun getGroupStats(): String {
         return try {
             // 过滤掉 AI 自己的消息
-            val userMessages = groupChatHistory.filter { it.senderId != "silk_ai_agent" }
+            val userMessages = groupChatHistory.filter { !AgentRuntime.isAgentUserId(it.senderId) }
             
             // 统计发言的成员
             val speakingStats = userMessages

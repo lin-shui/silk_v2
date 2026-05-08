@@ -5,7 +5,7 @@ CC Bridge 是一个 Python 服务，通过 WebSocket 连接 Silk 后端，在本
 ## 架构
 
 ```
-用户 (浏览器) ──→ Silk 后端 ──WebSocket──→ CC Bridge (bridge_agent.py) ──→ Claude CLI
+用户 (浏览器) ──→ Silk 后端 ──WebSocket──→ CC Bridge (acp_adapter.py) ──→ Claude CLI
 ```
 
 Silk 后端将用户的 CC 模式消息转发给 Bridge，Bridge 调用本地的 Claude CLI 执行，并将流式输出实时回传。
@@ -74,7 +74,7 @@ BRIDGE_TLS_INSECURE=1
 **前台运行（调试用）：**
 
 ```bash
-/path/to/your-venv/bin/python bridge_agent.py --server <silk后端地址>:8006 --token <你的Token>
+/path/to/your-venv/bin/python acp_adapter.py --server <silk后端地址>:8006 --token <你的Token>
 ```
 
 ### 5. 验证
@@ -99,9 +99,9 @@ BRIDGE_TLS_INSECURE=1
 
 日志输出到 `cc_bridge/bridge.log`，PID 记录在 `cc_bridge/.bridge.pid`。
 
-## bridge_agent.py 命令行参数
+## acp_adapter.py 命令行参数
 
-直接运行 `bridge_agent.py` 时使用以下参数（使用 `bridge.sh` 时通过 `.env` 配置）：
+直接运行 `acp_adapter.py` 时使用以下参数（使用 `bridge.sh` 时通过 `.env` 配置）：
 
 | 参数 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -115,7 +115,7 @@ BRIDGE_TLS_INSECURE=1
 | 文件 | 职责 |
 |------|------|
 | `bridge.sh` | 管理脚本：后台启动/停止/重启/状态/日志 |
-| `bridge_agent.py` | 入口：WebSocket 客户端、消息路由、Token 认证 |
+| `acp_adapter.py` | 入口：ACP 协议适配器、WebSocket 客户端、Token 认证 |
 | `executor.py` | Claude CLI 子进程管理、stream-json 输出解析 |
 | `session_manager.py` | 会话持久化，保存至 `~/.silk/cc_sessions.json` |
 | `requirements.txt` | Python 依赖（`websockets>=12.0`） |

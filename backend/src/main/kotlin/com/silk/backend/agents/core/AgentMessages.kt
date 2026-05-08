@@ -47,7 +47,7 @@ object AgentMessages {
         timestamp = System.currentTimeMillis(),
         type = MessageType.TEXT,
         isTransient = true,
-        isIncremental = true,
+        isIncremental = false,
     )
 
     fun final(

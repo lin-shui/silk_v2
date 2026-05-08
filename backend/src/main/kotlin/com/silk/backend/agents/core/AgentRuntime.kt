@@ -2,6 +2,7 @@
 package com.silk.backend.agents.core
 
 import com.silk.backend.Message
+import com.silk.backend.SilkAgent
 import com.silk.backend.agents.acp.AcpClient
 import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.acp.ContentBlock
@@ -139,7 +140,12 @@ object AgentRuntime {
 
     /** 判断某条消息是否来自某个 agent（用于 WebSocketConfig 的 AGENT_ID 过滤）。 */
     fun isAgentMessage(msg: Message): Boolean {
-        return AgentRegistry.list().any { it.agentUserId == msg.userId }
+        return msg.userId == SilkAgent.AGENT_ID || AgentRegistry.list().any { it.agentUserId == msg.userId }
+    }
+
+    /** 判断某个 userId 是否属于已注册的 agent。 */
+    fun isAgentUserId(userId: String): Boolean {
+        return userId == SilkAgent.AGENT_ID || AgentRegistry.list().any { it.agentUserId == userId }
     }
 
     /**
@@ -269,8 +275,8 @@ object AgentRuntime {
         }
         val msg = AgentMessages.system(
             "已注册的 Agent:\n$agents\n\n使用 `/use <agent>` 切换当前 agent，或使用 `@<agent>` 一次性插队。",
-            agentUserId = "silk_system",
-            agentName = "System",
+            agentUserId = SilkAgent.AGENT_ID,
+            agentName = SilkAgent.AGENT_NAME,
         )
         broadcastFn(msg)
     }
@@ -284,8 +290,8 @@ object AgentRuntime {
             ctx.currentAgentType = null
             broadcastFn(AgentMessages.system(
                 "已退出 agent 模式，回到普通 Silk AI。",
-                agentUserId = "silk_system",
-                agentName = "System",
+                agentUserId = SilkAgent.AGENT_ID,
+                agentName = SilkAgent.AGENT_NAME,
             ))
             return
         }

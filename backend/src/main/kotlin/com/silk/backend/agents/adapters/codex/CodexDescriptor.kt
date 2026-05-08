@@ -12,7 +12,7 @@ import kotlinx.serialization.json.put
 object CodexDescriptor : AgentDescriptor {
     override val agentType = "codex"
     override val displayName = "🧠 Codex"
-    override val agentUserId = "silk_ai_codex"
+    override val agentUserId = "codex_ai_agent"
     override val triggerCommand = "/codex"
     override val aliases = listOf("codex")
 

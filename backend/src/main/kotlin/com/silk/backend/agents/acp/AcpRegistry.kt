@@ -62,7 +62,7 @@ object AcpRegistry {
             ?.takeIf { it.isNotBlank() }
             ?.let { normalizeIp(it) }
 
-    /** 把 IPv6 loopback / wildcard 转成易读形式，与旧 BridgeRegistry 行为一致。 */
+    /** 把 IPv6 loopback / wildcard 转成易读形式。 */
     private fun normalizeIp(ip: String): String = when (ip) {
         "0:0:0:0:0:0:0:1", "::1" -> "127.0.0.1 (本机)"
         "0:0:0:0:0:0:0:0", "::" -> "0.0.0.0"
