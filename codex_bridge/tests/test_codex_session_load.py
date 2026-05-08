@@ -105,7 +105,7 @@ def test_handle_session_load_success(tmp_path):
     assert payload["result"]["loaded"] is True
     new_acp_id = payload["result"]["sessionId"]
     assert new_acp_id in server.sessions
-    assert server.sessions[new_acp_id].cc_session_id == "thread-42"
+    assert server.sessions[new_acp_id].cli_session_id == "thread-42"
 
 
 def test_handle_session_load_missing_file_returns_error(tmp_path):
@@ -150,5 +150,5 @@ def test_handle_session_load_prefix_match(tmp_path):
     assert kind == "response"
     assert payload["result"]["loaded"] is True
     new_acp_id = payload["result"]["sessionId"]
-    # The stored cc_session_id should be the FULL id, not the prefix
-    assert server.sessions[new_acp_id].cc_session_id == full_id
+    # The stored cli_session_id should be the FULL id, not the prefix
+    assert server.sessions[new_acp_id].cli_session_id == full_id
