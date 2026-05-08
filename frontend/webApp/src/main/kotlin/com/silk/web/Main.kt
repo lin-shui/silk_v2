@@ -3992,6 +3992,30 @@ fun AIMessageCard(
                     Text("🗑")
                     Text("删除")
                 }
+
+                // 底部收起开关（仅展开时长内容显示）
+                if (isLongContent && effectiveExpanded && !isTransient) {
+                    Span({
+                        style {
+                            fontSize(11.px)
+                            color(Color(SilkColors.textSecondary))
+                            property("cursor", "pointer")
+                            padding(4.px, 10.px)
+                            borderRadius(4.px)
+                            property("transition", "all 0.2s")
+                            display(DisplayStyle.Flex)
+                            alignItems(AlignItems.Center)
+                            property("gap", "4px")
+                            property("user-select", "none")
+                        }
+                        onClick {
+                            isExpanded = false
+                        }
+                    }) {
+                        Text("▲")
+                        Text("收起")
+                    }
+                }
                 
                 Span({
                     style {
