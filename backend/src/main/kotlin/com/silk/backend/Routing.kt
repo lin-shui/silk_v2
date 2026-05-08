@@ -158,17 +158,17 @@ suspend fun broadcastFileMessage(
 }
 
 fun Application.configureRouting() {
-    // AgentRuntime 持久化 wiring：cdSync 成功 / prompt 完成时把 workingDir + ccSessionId 写回
-    // workflow_store.json，让重启后能 seed 恢复对话。复用 Workflow.sessionId 字段存 ccSessionId。
+    // AgentRuntime 持久化 wiring：cdSync 成功 / prompt 完成时把 workingDir + cliSessionId 写回
+    // workflow_store.json，让重启后能 seed 恢复对话。复用 Workflow.sessionId 字段存 cliSessionId。
     AgentRuntime.setWorkflowPersistence(object : AgentRuntime.WorkflowPersistence {
         override fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean =
             workflowManager.updateWorkingDir(rawGroupId, workingDir)
 
-        override fun persistCcSession(rawGroupId: String, ccSessionId: String, sessionStarted: Boolean): Boolean =
-            workflowManager.updateSessionState(rawGroupId, ccSessionId, sessionStarted)
+        override fun persistCliSession(rawGroupId: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
+            workflowManager.updateSessionState(rawGroupId, cliSessionId, sessionStarted)
 
-        override fun persistCcSession(rawGroupId: String, agentType: String, ccSessionId: String, sessionStarted: Boolean): Boolean =
-            workflowManager.updateSessionState(rawGroupId, agentType, ccSessionId, sessionStarted)
+        override fun persistCliSession(rawGroupId: String, agentType: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
+            workflowManager.updateSessionState(rawGroupId, agentType, cliSessionId, sessionStarted)
 
         override fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean =
             workflowManager.updateActiveAgent(rawGroupId, agentType)
@@ -178,7 +178,7 @@ fun Application.configureRouting() {
             if (wf.workingDir.isBlank() && wf.sessionId.isBlank()) return null
             return AgentRuntime.WorkflowSeed(
                 workingDir = wf.workingDir,
-                ccSessionId = wf.sessionId.takeIf { it.isNotBlank() },
+                cliSessionId = wf.sessionId.takeIf { it.isNotBlank() },
                 sessionStarted = wf.sessionStarted,
             )
         }
@@ -186,20 +186,20 @@ fun Application.configureRouting() {
         override fun loadSeed(rawGroupId: String, agentType: String): AgentRuntime.WorkflowSeed? {
             val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
             // 优先取 per-agent state；缺失时仅当 agentType 等于 workflow 默认 agent 才回落到旧字段，
-            // 避免别的 agent 拿到不属于它的 ccSessionId 触发 resume 失败。
+            // 避免别的 agent 拿到不属于它的 cliSessionId 触发 resume 失败。
             val perAgent = wf.agentSessions[agentType]
             val defaultDash = when (wf.agentType) {
                 "claude_code" -> "claude-code"
                 else -> wf.agentType
             }
-            val ccSid = perAgent?.sessionId?.takeIf { it.isNotBlank() }
+            val cliSid = perAgent?.sessionId?.takeIf { it.isNotBlank() }
                 ?: wf.sessionId.takeIf { it.isNotBlank() && agentType == defaultDash }
             val sessionStarted = perAgent?.sessionStarted
                 ?: (wf.sessionStarted && agentType == defaultDash)
-            if (wf.workingDir.isBlank() && ccSid.isNullOrBlank()) return null
+            if (wf.workingDir.isBlank() && cliSid.isNullOrBlank()) return null
             return AgentRuntime.WorkflowSeed(
                 workingDir = wf.workingDir,
-                ccSessionId = ccSid,
+                cliSessionId = cliSid,
                 sessionStarted = sessionStarted,
             )
         }
