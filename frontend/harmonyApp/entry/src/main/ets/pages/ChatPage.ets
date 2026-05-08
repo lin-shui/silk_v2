@@ -1864,7 +1864,8 @@ export struct ChatPage {
                     onForward: (msg: Message): void => this.handleForward(msg),
                     onRetry: (msg: Message): void => this.retryMessage(msg),
                     onOpenActions: (msg: Message): void => this.openMessageActions(msg),
-                    onLongContentCollapsed: (): void => this.scrollListToMessageId(message.id)
+                    onLongContentCollapsed: (): void => this.scrollListToMessageId(message.id),
+                    onLongContentExpanded: (): void => this.scrollListToMessageId(message.id)
                   })
                 }
                 .width('100%')

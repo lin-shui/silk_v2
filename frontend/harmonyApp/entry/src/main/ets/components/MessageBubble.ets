@@ -32,6 +32,8 @@ export struct MessageBubble {
   onRetry?: (message: Message) => void;
   /** 长文本/转发全文从展开收起到折叠后，由列表滚回本条，避免高度突变导致视口跑偏 */
   onLongContentCollapsed?: () => void;
+  /** 长文本展开后滚动到本条头部 */
+  onLongContentExpanded?: () => void;
   @Prop suggestedAction: MetaServiceIntent | null = null;
   @Prop isLastMessage: boolean = false;
   @State private isAIExpanded: boolean = false;
@@ -335,6 +337,8 @@ export struct MessageBubble {
                 this.isAIExpanded = !this.isAIExpanded;
                 if (wasExpanded) {
                   this.notifyLongContentCollapsed();
+                } else if (this.onLongContentExpanded) {
+                  this.onLongContentExpanded();
                 }
               })
           }
@@ -421,6 +425,9 @@ export struct MessageBubble {
             .padding({ top: 6, bottom: 6 })
             .onClick(() => {
               this.isAIExpanded = true;
+              if (this.onLongContentExpanded) {
+                this.onLongContentExpanded();
+              }
             })
           }
           .width('100%')
