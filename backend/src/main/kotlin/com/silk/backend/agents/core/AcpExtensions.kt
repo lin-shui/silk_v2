@@ -15,9 +15,11 @@ object AcpExtensions {
         })
     }
 
-    /** /session（列表） */
-    suspend fun listLocalSessions(acp: AcpClient): JsonElement {
-        return acp.callExtension("_silk/list_local_sessions", buildJsonObject {})
+    /** /session（列表），传 cwd 让 adapter 只返回该目录下的会话 */
+    suspend fun listLocalSessions(acp: AcpClient, cwd: String): JsonElement {
+        return acp.callExtension("_silk/list_local_sessions", buildJsonObject {
+            put("cwd", cwd)
+        })
     }
 
     /** /cd — 需要 sessionId 让 adapter 定位到正确的 AcpSession */
