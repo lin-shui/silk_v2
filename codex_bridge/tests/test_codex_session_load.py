@@ -90,11 +90,11 @@ class _FakeServer:
 
 
 def test_handle_session_load_success(tmp_path):
-    _write_rollout(tmp_path, "thread-42", cwd=str(tmp_path))
+    f = _write_rollout(tmp_path, "thread-42", cwd=str(tmp_path))
     server = _FakeServer(default_cwd=str(tmp_path))
 
     with patch.object(codex_adapter, "find_session_file",
-                      lambda tid: tmp_path if tid == "thread-42" else None):
+                      lambda tid, **kw: f if tid == "thread-42" else None):
         asyncio.run(server._handle_session_load(
             1, {"sessionId": "thread-42", "cwd": str(tmp_path)}
         ))
@@ -131,3 +131,24 @@ def test_handle_session_load_missing_session_id(tmp_path):
     assert kind == "error"
     assert payload["code"] == -32602
     assert "missing sessionId" in payload["message"]
+
+
+def test_handle_session_load_prefix_match(tmp_path):
+    """Prefix of thread_id should successfully load the session."""
+    full_id = "thread-42-long-suffix"
+    f = _write_rollout(tmp_path, full_id, cwd=str(tmp_path))
+    server = _FakeServer(default_cwd=str(tmp_path))
+
+    with patch.object(codex_adapter, "find_session_file",
+                      lambda tid, **kw: f if full_id.startswith(tid) else None):
+        asyncio.run(server._handle_session_load(
+            1, {"sessionId": "thread-42", "cwd": str(tmp_path)}
+        ))
+
+    assert len(server.sent) == 1
+    kind, payload = server.sent[0]
+    assert kind == "response"
+    assert payload["result"]["loaded"] is True
+    new_acp_id = payload["result"]["sessionId"]
+    # The stored cc_session_id should be the FULL id, not the prefix
+    assert server.sessions[new_acp_id].cc_session_id == full_id

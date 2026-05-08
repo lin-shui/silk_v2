@@ -29,7 +29,7 @@ from websockets.exceptions import ConnectionClosed
 from codex_dispatcher import DispatcherState, dispatch_event
 from codex_executor import CodexExecutor, cancel_process
 from fs_listing import list_directory
-from codex_session_index import find_session_file, list_local_sessions
+from codex_session_index import find_session_file, list_local_sessions, _parse_rollout_head
 
 logger = logging.getLogger("codex_bridge")
 
@@ -300,12 +300,17 @@ class AcpAgentServer:
                 f"codex session not found: {thread_id}",
             )
             return
+        # Extract full thread_id from the rollout file metadata
+        actual_thread_id = thread_id
+        meta = _parse_rollout_head(rollout)
+        if meta and meta.get("sessionId"):
+            actual_thread_id = meta["sessionId"]
         acp_session_id = str(uuid.uuid4())
-        sess = AcpSession(cwd=os.path.realpath(cwd), cc_session_id=thread_id)
+        sess = AcpSession(cwd=os.path.realpath(cwd), cc_session_id=actual_thread_id)
         self.sessions[acp_session_id] = sess
         logger.info(
             "[ACP] session/load: acp=%s thread_id=%s rollout=%s",
-            acp_session_id, thread_id[:8], rollout.name,
+            acp_session_id, actual_thread_id[:8], rollout.name,
         )
         await self._send_response(
             msg_id, {"sessionId": acp_session_id, "loaded": True}

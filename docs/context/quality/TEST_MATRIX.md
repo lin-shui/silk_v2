@@ -76,6 +76,22 @@
 - CI supplement:
   - `.github/workflows/ci-script-smoke.yml` 覆盖 `./silk.sh build`、`./silk.sh build-apk` 与 `./silk.sh build-all` 编排 smoke
 
+## CC Bridge (Python)
+
+- Command: `python3 -m pytest cc_bridge/tests/ -v`
+- Primary tests:
+  - `cc_bridge/tests/test_cc_session_index.py`
+
+## Codex Bridge (Python)
+
+- Command: `python3 -m pytest codex_bridge/tests/ -v`
+- Primary tests:
+  - `codex_bridge/tests/test_codex_session_index.py`
+  - `codex_bridge/tests/test_codex_session_load.py`
+  - `codex_bridge/tests/test_codex_dispatcher.py`
+  - `codex_bridge/tests/test_codex_executor.py`
+  - `codex_bridge/tests/test_fs_listing.py`
+
 ## When Payloads Change
 
 同时触发：

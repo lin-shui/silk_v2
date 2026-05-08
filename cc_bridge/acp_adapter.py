@@ -31,7 +31,7 @@ from websockets.exceptions import ConnectionClosed
 
 from executor import Executor
 from fs_listing import list_directory
-from session_manager import SessionManager
+from cc_session_index import find_session_file, list_local_sessions
 
 logger = logging.getLogger("acp_bridge")
 
@@ -76,7 +76,6 @@ class AcpAgentServer:
 
         self.ws: websockets.WebSocketClientProtocol | None = None
         self.executor = Executor()
-        self.session_manager = SessionManager()
         self.sessions: dict[str, AcpSession] = {}
 
     # ------------------------------------------------------------------
@@ -283,11 +282,9 @@ class AcpAgentServer:
         """Bind a backend ACP session to a known Claude CLI session.
 
         ``params.sessionId`` is the Claude CLI session id (or a unique prefix
-        thereof) — Silk persists these in ``~/.silk/cc_sessions.json`` via
-        :class:`SessionManager`. We look it up there; if found, we mint a
-        fresh ACP UUID and seed ``cc_session_id`` so the next prompt runs
-        ``claude --resume <session_id>``. Working directory falls back to the
-        record's persisted ``workingDir`` when the caller's ``cwd`` is empty.
+        thereof). We scan ``~/.claude/projects/`` to find the matching session
+        file. If found, we mint a fresh ACP UUID and seed ``cc_session_id``
+        so the next prompt runs ``claude --resume <session_id>``.
         """
         p = params or {}
         prefix = p.get("sessionId")
@@ -295,16 +292,13 @@ class AcpAgentServer:
         if not prefix:
             await self._send_error(msg_id, -32602, "missing sessionId")
             return
-        record = await asyncio.to_thread(self.session_manager.resume_session, prefix)
+        record = await asyncio.to_thread(find_session_file, prefix)
         if record is None:
             await self._send_error(
                 msg_id, -32602, f"claude session not found: {prefix}"
             )
             return
-        cc_session_id = record.get("sessionId") or prefix
-        # Prefer the caller's cwd; fall back to the persisted workingDir
-        # (Silk often calls session/load right after a fresh workflow open
-        # where no cwd has been negotiated yet).
+        cc_session_id = record["sessionId"]
         if not cwd:
             cwd = record.get("workingDir") or self.default_cwd
         acp_session_id = str(uuid.uuid4())
@@ -548,7 +542,7 @@ class AcpAgentServer:
     # ------------------------------------------------------------------
 
     async def _handle_silk_list_sessions(self, msg_id: Any, params: Any) -> None:
-        sessions = self.session_manager.list_sessions()
+        sessions = await asyncio.to_thread(list_local_sessions)
         await self._send_response(msg_id, {"sessions": sessions})
 
     async def _handle_silk_set_cwd(self, msg_id: Any, params: Any) -> None:
