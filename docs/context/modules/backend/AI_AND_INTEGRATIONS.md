@@ -5,11 +5,17 @@
 - 当前主线 agent 是 `ai/DirectModelAgent.kt`
 - `SilkAgent.kt` 仍保留旧接口与兼容逻辑，但新代码默认沿着 `DirectModelAgent` 看
 - `AIConfig.kt` 统一读取：
-  - OpenAI-compatible API
-  - Weaviate
-  - 外部搜索
+  - Anthropic Claude API（Messages API）
   - ASR
   - 工具开关
+
+## Anthropic Client
+
+- `ai/AnthropicClient.kt` 封装与 Anthropic Messages API 的通信：
+  - SSE 流式解析（content_block_start/delta/stop + message_delta）
+  - 内部 Message ↔ Anthropic 格式双向转换
+  - 工具定义转换（custom tools → {name, description, input_schema}，web_search → 原生 `web_search_20260209`）
+  - tool_use 收集与残缺 JSON 修复
 
 ## Tool Calling
 
@@ -21,13 +27,14 @@
 
 ## Search Stack
 
-- `search/WeaviateClient.kt`:
-  - 前景/背景搜索
-  - 当前 session 与跨 session 搜索区分
-  - 兼顾中文查询 + 英文文件名兜底
-- `search/ExternalSearchService.kt`:
-  - SerpAPI / Brave / Bing / DuckDuckGo 兜底
-- `utils/WebPageDownloader.kt`:
+- Claude 原生 `web_search` 工具（由 AnthropicClient 转换为 `web_search_20260209` 类型）：
+  - 替代旧 SerpAPI / Brave / Bing / SearXNG 外部搜索
+  - 模型自动触发，无需后端编排
+- `searchContext()` 后端 grep 搜索（替代 Weaviate）：
+  - 基于 `DirectModelAgent.accessibleSessionIds` 限制搜索范围
+  - 搜索 `_text.txt`（PDF 提取文本）和 `session.json`（聊天消息）
+  - 结果截断至 30000 字符，路径层级限制防逃逸
+- `utils/WebPageDownloader.kt`：
   - URL 提取、HTML/PDF 下载、提取、落盘
   - `WebPageDownloaderSmokeTest` 覆盖本地 smoke
 
@@ -45,6 +52,7 @@
 ## Change Checklist
 
 - 改 tool schema / tool permission：更新后端测试
-- 改 Weaviate 搜索过滤：确认 session/user 隔离不被破坏
+- 改 AnthropicClient 格式转换：同步验证 convertMessage / convertTool 双向兼容
+- 改 grep searchContext：确认 accessibleSessionIds 隔离不被破坏
 - 改 CC 指令路由：同时查看 `cc_bridge/`
 - 改 ASR 协议：同步看 Web/Android/Harmony 调用端

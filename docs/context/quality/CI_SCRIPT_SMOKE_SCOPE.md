@@ -49,7 +49,7 @@
 ## 明确未覆盖
 
 - [ ] `./silk.sh start` 的服务启动 smoke
-- [ ] `./silk.sh deploy` 的端口清理、Weaviate、启动全链路
+- [ ] `./silk.sh deploy` 的端口清理、启动全链路
 - [ ] `./silk.sh build-hap` / Harmony HAP 构建
 
 ## 运行备注
@@ -61,5 +61,5 @@
 
 ## 下一步建议
 
-1. 若要覆盖 `start` / `deploy`，单独准备临时端口、后台进程清理和 Weaviate mock/skip 策略，避免把 runner 弄成状态机。
+1. 若要覆盖 `start` / `deploy`，单独准备临时端口、后台进程清理，避免把 runner 弄成状态机。
 2. Harmony 仍应保留为独立 workflow，放到具备 DevEco / hvigor / hdc 的 runner。

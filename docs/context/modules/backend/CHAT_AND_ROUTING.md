@@ -56,8 +56,7 @@
 2. 非 transient 消息写入内存历史
 3. 持久化到 `ChatHistoryManager`
 4. 未读计数
-5. 异步 Weaviate 索引
-6. 广播到所有 session
+5. 广播到所有 session
 7. 对普通文本异步触发 URL/PDF 处理
 8. Claude Code 模式拦截
 9. Silk AI / `DirectModelAgent` 响应

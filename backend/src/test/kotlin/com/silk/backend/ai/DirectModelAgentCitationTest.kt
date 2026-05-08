@@ -15,112 +15,34 @@ class DirectModelAgentCitationTest {
         val prompt = agent.citationGuidelinesForTest("你是 Silk。")
 
         assertContains(prompt, "[citation:数字]")
-        assertContains(prompt, "[available:数字]")
         assertContains(prompt, "引用标记必须放在相关内容的句末或段末")
         assertContains(prompt, "禁止堆砌大量引用标记")
     }
 
     @Test
-    fun `brave search results are exposed as citation references`() {
+    fun `explicitly registered citations appear in references`() {
         val agent = DirectModelAgent(sessionId = "test_session")
         agent.resetReferencesForTest()
 
-        val result = agent.parseBraveSearchResponseForTest(
-            responseBody = """
-                {
-                  "web": {
-                    "results": [
-                      {
-                        "title": "Silk 引用格式",
-                        "description": "用于验证网络搜索来源引用。",
-                        "url": "https://example.com/silk-citation"
-                      }
-                    ]
-                  }
-                }
-            """.trimIndent(),
-            query = "Silk citation"
-        )
+        val idx = agent.registerCitationForTest("测试来源", "https://example.com/test")
+        assertEquals(1, idx)
 
-        assertContains(result, "[citation:1]")
         val refs = agent.referencesForTest()
         assertEquals(1, refs.size)
         assertEquals("citation", refs.first().kind)
         assertEquals(1, refs.first().index)
-        assertEquals("https://example.com/silk-citation", refs.first().url)
+        assertEquals("https://example.com/test", refs.first().url)
     }
 
     @Test
     fun `final content gets fallback citation markers when model omits them`() {
         val agent = DirectModelAgent(sessionId = "test_session")
         agent.resetReferencesForTest()
-        agent.parseBraveSearchResponseForTest(
-            responseBody = """
-                {
-                  "web": {
-                    "results": [
-                      {
-                        "title": "来源标题",
-                        "description": "来源摘要",
-                        "url": "https://example.com/source"
-                      }
-                    ]
-                  }
-                }
-            """.trimIndent(),
-            query = "source"
-        )
+        agent.registerCitationForTest("来源标题", "https://example.com/source")
 
         val content = agent.ensureCitationMarkersForTest("这是没有引用标记的回答。")
 
         assertContains(content, "[citation:1]")
-    }
-
-    @Test
-    fun `autocli json output exposes first url for clickable references`() {
-        val agent = DirectModelAgent(sessionId = "test_session")
-        val url = agent.extractFirstUrlFromJsonTextForTest(
-            """
-                [
-                  {
-                    "title": "视频标题",
-                    "url": "https://www.bilibili.com/video/BV123",
-                    "snippet": "摘要"
-                  }
-                ]
-            """.trimIndent()
-        )
-
-        assertEquals("https://www.bilibili.com/video/BV123", url)
-    }
-
-    @Test
-    fun `evidence formatter filters spammy autocli results`() {
-        val agent = DirectModelAgent(sessionId = "test_session")
-        agent.resetReferencesForTest()
-
-        val formatted = agent.formatEvidenceForModelForTest(
-            query = "上虞马家埠拆迁",
-            sourceLabel = "via AutoCLI",
-            rawJson = """
-                [
-                  {
-                    "title": "优化霸屏【TG电报∶@AK5537】 facebook ads",
-                    "url": "https://spam.example/ad",
-                    "snippet": "TG飞机 代投 开户"
-                  },
-                  {
-                    "title": "白云棠涌旧改142亩安置补偿方案发布",
-                    "url": "https://www.bilibili.com/video/BV1YXoTBJE5P",
-                    "snippet": "旧改安置补偿方案发布"
-                  }
-                ]
-            """.trimIndent()
-        )
-
-        assertTrue(!formatted.contains("@AK5537"))
-        assertContains(formatted, "[citation:1]")
-        assertEquals("https://www.bilibili.com/video/BV1YXoTBJE5P", agent.referencesForTest().first().url)
     }
 
     @Test

@@ -1,8 +1,8 @@
-# Search And Aux Services
+# Search And Aux Services (Legacy)
 
 ## Search Directory
 
-`search/` 不是主应用代码，而是 Weaviate 相关脚本集合：
+`search/` 不是主应用代码，而是 Weaviate 相关脚本集合（**已弃用**，由 Claude 原生 `web_search` + 后端 grep 替代）：
 
 - `schema.py`
 - `indexer.py`
@@ -14,16 +14,18 @@
 ## Important Fact
 
 - `search/README.md` 是 Weaviate 上游 README，不是 Silk 的项目文档
-- 对 Silk 而言，真正有价值的是脚本、schema 与后端调用点
+- Weaviate 已由以下方案替代，`search/` 目录仅为历史遗留：
+  1. **网络搜索**: Claude 原生 `web_search` 工具（`AnthropicClient` 转换为 `web_search_20260209` 类型）
+  2. **本地检索**: 后端 `searchContext()` 通过 grep 搜索 `_text.txt` 和 `session.json`，受 `accessibleSessionIds` 隔离
 
-## Backend Touchpoints
+## Backend Touchpoints (Legacy)
 
-- `backend/search/WeaviateClient.kt`
-- `backend/search/ExternalSearchService.kt`
-- `routes/FileRoutes.kt` 的文件索引
-- `WebSocketConfig.kt` 的消息索引与 URL 下载入口
+- ~~`backend/search/WeaviateClient.kt`~~ → 已移除，由 DirectModelAgent.searchContext() 替代
+- ~~`backend/search/ExternalSearchService.kt`~~ → 已移除，由 Anthropic web_search 工具替代
+- `routes/FileRoutes.kt` 的文件保存逻辑（保留，文件不再索引到 Weaviate）
+- `WebSocketConfig.kt` 的消息持久化与 URL 下载入口（保留，Weaviate 索引步骤已移除）
 
 ## Runtime Modes
 
-- 本地 Docker / native Weaviate 都可能被 `silk.sh` 使用
-- 如果未配置 Weaviate，后端部分路径会跳过索引，不应把外部索引可用性硬绑进基础快检
+- Weaviate 不再需要运行；`silk.sh` 中相关启动逻辑已标记为遗留
+- 后端不再依赖任何外部搜索服务（无需 Docker、无需 API Key）

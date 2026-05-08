@@ -5,7 +5,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - 后端：Ktor JVM，承担 HTTP、WebSocket、AI/tool calling、文件路由、导出、Todo、Workflow、Knowledge Base、Claude Code bridge 接入。
 - 前端主线：Kotlin Multiplatform + Compose，包含 `frontend/shared`、`webApp`、`androidApp`、`desktopApp`。
 - 独立端：`frontend/harmonyApp` 为 ArkTS/ArkUI，未复用 KMP 代码。
-- 辅助服务：`search/`（Weaviate 相关脚本）、`cc_bridge/`（Claude CLI bridge）、`feishu_bot/`（飞书网关）。
+- 辅助服务：`search/`（索引检索脚本，已由 Claude 原生 web_search + 后端 grep 替代）、`cc_bridge/`（Claude CLI bridge）、`feishu_bot/`（飞书网关）。
 
 ## Primary Runtime Flow
 
@@ -17,7 +17,6 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
    - 历史回放
    - 消息持久化
    - 未读计数
-   - Weaviate 索引
    - URL/PDF 下载提取
    - Claude Code 模式拦截
    - Silk AI / `DirectModelAgent` 响应
@@ -42,7 +41,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | App/bootstrap | `Application.kt`, `settings.gradle.kts`, root `build.gradle.kts`, `silk.sh` | 运行入口与构建编排 |
 | HTTP routes | `Routing.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt` | `Routing.kt` 仍然很大，是主索引点 |
 | Chat/WebSocket | `WebSocketConfig.kt`, `ChatHistoryManager.kt` | 消息主链、历史、URL 下载 |
-| AI/tools/search | `ai/`, `search/`, `utils/WebPageDownloader.kt` | 当前主线是 `DirectModelAgent` |
+| AI/tools/search | `ai/`  (AnthropicClient + DirectModelAgent), `utils/WebPageDownloader.kt` | Anthropic Messages API + 原生 web_search 工具 + 后端 grep 搜索 |
 | Auth/data | `auth/`, `database/`, `models/` | SQLite + Exposed |
 | Domain modules | `todos/`, `workflow/`, `kb/`, `export/`, `pdf/` | Todo/Workflow/KB 混合文件存储 |
 | Shared client contract | `frontend/shared/` | 三端消息/文件合同面 |

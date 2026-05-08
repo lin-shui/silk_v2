@@ -5,7 +5,7 @@
 - Backend：Ktor Netty，入口 `backend/.../Application.kt`
 - Web 前端：Kotlin/JS dev server 或 backend 静态资源
 - Android / Desktop / Harmony：各自原生客户端
-- Weaviate：由 `silk.sh` 或 `search/` 脚本管理
+- Weaviate（不再需要 — 已由 Claude 原生 web_search + 后端 grep 替代）
 - Claude Code Bridge：`cc_bridge/bridge_agent.py`
 - Feishu 网关：`feishu_bot/main.py`
 
@@ -34,9 +34,10 @@
 
 ## Search / Indexing
 
-- 上传文件后，后端异步广播文件消息并尝试索引到 Weaviate
-- 聊天文本消息也会尝试索引到 Weaviate
+- 上传文件后，PDF 文本经 PDFBox 提取保存为 `_text.txt` 供 AI grep 搜索
+- 聊天文本消息持久化到 `session.json`
 - URL/PDF 链接经 `WebPageDownloader` 下载提取后可生成文件消息并持久化
+- AI 搜索由 `DirectModelAgent.searchContext()` 通过 grep 检索 `_text.txt` 和 `session.json`，受 accessibleSessionIds 隔离
 
 ## Cross-Client Contract Surface
 

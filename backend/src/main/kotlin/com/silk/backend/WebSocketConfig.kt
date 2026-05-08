@@ -688,14 +688,7 @@ class ChatServer(
                 appendLine("你是 Silk，一个智能助手。")
             }
             appendLine()
-            appendLine("你可以使用工具来搜索文件、搜索互联网、读取文件等。请根据用户的问题选择合适的工具。")
-            if (AIConfig.AUTOCLI_ENABLED) {
-                appendLine()
-                appendLine("【重要】你拥有 autocli 工具，可以从 55+ 个网站获取实时结构化数据（JSON），包括：")
-                appendLine("微博(weibo hot/search)、知乎(zhihu hot/search)、B站(bilibili hot/search)、小红书(xiaohongshu search/feed)、豆瓣(douban movie-hot/top250/search)、抖音等社交平台，")
-                appendLine("以及 hackernews、reddit、twitter、youtube、arxiv、bbc、bloomberg 等国际站点。")
-                appendLine("当用户询问这些平台的热门内容、热搜、排行榜或搜索特定话题时，请优先使用 autocli 工具而非 search_web。")
-            }
+            appendLine("你可以使用互联网搜索工具来查找最新信息。")
             appendLine()
             appendLine("【HarmonyOS 元服务能力】")
             appendLine("你在 HarmonyOS 系统上运行，支持调用系统元服务（免安装应用）：")
@@ -735,6 +728,11 @@ class ChatServer(
         }
         
         // 使用 DirectModelAgent 直接调用模型
+        // 初始化 claude CLI 进程客户端（设置群组隔离的工作目录）
+        val workspaceDir = "${AIConfig.CLAUDE_CLI_WORKSPACE_ROOT}/$sessionName"
+        java.io.File(workspaceDir).mkdirs()
+        directModelAgent.initClaudeClient(workspaceDir)
+
         var fullResponse = ""
         var agentReferences: List<com.silk.backend.models.MessageReference> = emptyList()
         try {

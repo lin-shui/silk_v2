@@ -10,10 +10,31 @@ import com.silk.backend.EnvLoader
 object AIConfig {
     private fun env(key: String): String? = EnvLoader.get(key) ?: System.getenv(key)?.takeIf { it.isNotBlank() }
 
-    // AI API 配置 (OpenAI 兼容接口)
+    // ── Anthropic Claude API 配置（新主线） ─────────────────────────────
+    val ANTHROPIC_API_KEY: String get() =
+        env("ANTHROPIC_API_KEY") ?: env("ANTHROPIC_AUTH_TOKEN") ?: ""
+    val ANTHROPIC_API_BASE_URL: String get() =
+        env("ANTHROPIC_API_BASE_URL") ?: env("ANTHROPIC_BASE_URL") ?: "https://api.anthropic.com"
+    val ANTHROPIC_MODEL: String get() =
+        env("ANTHROPIC_MODEL") ?: "claude-sonnet-4-20250514"
+
+    // ── OpenAI 兼容接口（已弃用，请换用 ANTHROPIC_*） ───────────────────
+    @Deprecated("改用 ANTHROPIC_API_KEY", replaceWith = ReplaceWith("ANTHROPIC_API_KEY"))
     val API_KEY: String get() = env("OPENAI_API_KEY") ?: ""
+    @Deprecated("改用 ANTHROPIC_API_BASE_URL", replaceWith = ReplaceWith("ANTHROPIC_API_BASE_URL"))
     val API_BASE_URL: String get() = env("API_BASE_URL") ?: ""
+    @Deprecated("改用 ANTHROPIC_MODEL", replaceWith = ReplaceWith("ANTHROPIC_MODEL"))
     val MODEL: String get() = env("AI_MODEL") ?: ""
+
+    // ── Claude CLI 客户端配置 ──────────────────────────────────
+    /** claude 可执行文件路径，默认从 PATH 查找 */
+    val CLAUDE_CLI_PATH: String get() = env("CLAUDE_CLI_PATH") ?: "claude"
+    /** 单次 claude -p 响应超时（毫秒），默认 10 分钟 */
+    val CLAUDE_CLI_RESPONSE_TIMEOUT_MS: Long get() =
+        env("CLAUDE_CLI_RESPONSE_TIMEOUT_MS")?.toLongOrNull()?.takeIf { it > 0 } ?: 600_000L
+    /** 群组 workspace 根目录 */
+    val CLAUDE_CLI_WORKSPACE_ROOT: String get() =
+        env("CLAUDE_CLI_WORKSPACE_ROOT") ?: "backend/chat_workspaces"
 
     /**
      * 调用大模型（OpenAI 兼容）时的 HTTP 超时（毫秒）。
@@ -42,13 +63,17 @@ object AIConfig {
     // Audio Duplex (MiniCPM-o full-duplex conversation)
     val AUDIO_DUPLEX_URL: String get() = env("AUDIO_DUPLEX_URL") ?: "http://localhost:22700"
 
-    // Weaviate 向量库地址
+    // Weaviate 向量库地址（已弃用：改用 Claude 200K context + grep 搜索）
     val WEAVIATE_URL: String get() = env("WEAVIATE_URL") ?: ""
 
     /** Weaviate API Key（与 docker AUTHENTICATION_APIKEY_ALLOWED_KEYS 一致，匿名关闭时必填） */
     val WEAVIATE_API_KEY: String get() = env("WEAVIATE_API_KEY") ?: ""
 
-    /** 获取 AI API 地址，为空时抛错提示配置 .env */
+    /** 获取 Anhtropic API 地址，为空时抛错提示配置 .env */
+    fun requireAnthropicApiBaseUrl(): String = ANTHROPIC_API_BASE_URL.trim().takeIf { it.isNotBlank() }
+        ?: throw IllegalStateException("请在项目根目录 .env 中配置 ANTHROPIC_API_BASE_URL")
+
+    @Deprecated("改用 requireAnthropicApiBaseUrl", replaceWith = ReplaceWith("requireAnthropicApiBaseUrl"))
     fun requireApiBaseUrl(): String = API_BASE_URL.trim().takeIf { it.isNotBlank() }
         ?: throw IllegalStateException("请在项目根目录 .env 中配置 API_BASE_URL")
 
@@ -56,7 +81,7 @@ object AIConfig {
     fun requireWeaviateUrl(): String = WEAVIATE_URL.trim().takeIf { it.isNotBlank() }
         ?: throw IllegalStateException("请在项目根目录 .env 中配置 WEAVIATE_URL")
 
-    // 外部搜索 API Key
+    // ── 外部搜索（已弃用：改用 Claude 原生 web_search 工具） ─────────
     val SERPAPI_KEY: String get() = env("SERPAPI_KEY") ?: ""
     val BRAVE_API_KEY: String get() = env("BRAVE_API_KEY") ?: ""
     val BING_API_KEY: String get() = env("BING_API_KEY") ?: ""
@@ -90,9 +115,9 @@ object AIConfig {
         "生成帮助回复"
     )
     
-    // 系统提示词 - 搜索驱动的智能助手
-    const val COMMON_PROMPT = """你是 Silk，一个智能助手。你的任务是：
-1. 根据用户输入和搜索到的上下文，理解用户当前的主要目标
+    // 系统提示词
+    const val COMMON_PROMPT = """你是 Silk，一个基于 Claude 的智能助手。你的任务是：
+1. 根据用户输入和群聊上下文，理解用户当前的主要目标
 2. 分析用户的情绪状态（积极、中性、焦虑、困惑等）
 3. 判断用户是否需要帮助
 4. 如果需要帮助，基于搜索结果提供有价值的回复
@@ -103,23 +128,24 @@ object AIConfig {
 3. 保持友好、专业的语气
 
 【信息来源优先级】（从高到低）：
-1. [FOREGROUND/可靠-当前会话]: 最高优先级，直接采信
-2. [BACKGROUND/参考-历史会话]: 中等优先级，可作参考
-3. [INTERNET/待验证-外部搜索]: 较低优先级，需谨慎使用
-4. [AI知识库]: 当以上来源均无相关信息时，可使用你自身的知识库回答
+1. 当前群聊历史: 最高优先级，直接采信
+2. 本地文件内容: 通过 search_files 工具获取，可作参考
+3. 互联网搜索结果: 通过 web_search 工具获取，标注引用
+4. 自身知识库: 当以上来源均无相关信息时使用
 
-【回答来源标注规则】（必须遵守）：
-- 如果回答主要基于 [INTERNET/待验证-外部搜索] 的内容，在回复末尾标注："🌐 *此回答基于互联网搜索结果*"
-- 如果搜索结果为空，使用自身知识回答时，在回复末尾标注："💡 *此回答基于 AI 知识库*"
-- 如果回答主要基于 [FOREGROUND] 或 [BACKGROUND] 的会话内容，无需额外标注
-- 对于涉及当前会话、用户个人信息的问题，如果搜索无结果则坦诚告知
-- 保持谦逊态度，如有不确定的信息要说明
+【引用规则】：
+- 引用网络搜索结果时使用 [citation:数字]
+- 引用本地可用资源时使用 [available:数字]
+- 引用标记必须放在相关内容的句末或段末
+- 每个观点通常只需引用2-3个最相关的来源
+- 禁止堆砌大量引用标记
+- 只能基于证据回答，不要凭空捏造来源编号
 
 【HarmonyOS 元服务能力】
 你在 HarmonyOS 系统上运行，支持调用系统元服务（免安装应用）：
-- **出行/打车类请求**（如"打车"、"叫车"、"去机场"、"T3"）→ 系统会自动在回复顶部显示 T3出行 快捷按钮和输入框，用户填写出发地/目的地后可直接跳转。你无需在回复中模拟打开应用，只需正常回答用户问题。
-- **购物类请求**（如"买手机"、"京东购物"、"淘宝"）→ 系统会自动在回复顶部显示对应的购物应用快捷按钮。你无需在回复中模拟打开应用。
-- 如果用户询问"能不能打车/买东西"，你可以确认可以，并引导用户使用上方提供的输入框和按钮。
+- **出行/打车类请求**（如"打车"、"叫车"、"去机场"、"T3"）→ 系统会自动在回复顶部显示 T3出行 快捷按钮和输入框。
+- **购物类请求**（如"买手机"、"京东购物"、"淘宝"）→ 系统会自动在回复顶部显示对应的购物应用快捷按钮。
+- 如果用户询问"能不能打车/买东西"，你可以确认可以，并引导用户使用上方提供的按钮。
 """
 
     // 意图分析提示词

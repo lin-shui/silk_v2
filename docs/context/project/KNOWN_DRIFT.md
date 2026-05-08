@@ -21,10 +21,11 @@
 - `frontend/desktopApp` 当前主要是登录 / 群组 / 聊天 / 设置。
 - Workflow / Knowledge Base 的三 Tab 主壳当前在 Web、Android、Harmony，更不是 Desktop 的事实能力面。
 
-## `search/README.md` Is Not Silk Guidance
+## `search/` Is Legacy
 
+- `search/` 目录是 Weaviate 时代的遗留物。Weaviate 已由 Claude 原生 `web_search` + 后端 grep `searchContext()` 替代。
 - `search/README.md` 是 Weaviate 上游 README，不是本仓库的项目说明。
-- 阅读 `search/` 时优先看脚本与 Silk 调用点，不要把该 README 当成项目约束。
+- 阅读 `search/` 时注意其内容已不反映当前架构。
 
 ## Generated / Runtime Paths May Be Dirty
 
