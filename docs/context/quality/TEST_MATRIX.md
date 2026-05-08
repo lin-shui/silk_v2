@@ -9,11 +9,13 @@
   - `BackendWebSocketContractTest`
   - `BackendPersistenceContractTest`
 
-## AI Tool Policy / Search / URL Download
+## AI / Search / URL Download
 
 - Command: `./gradlew :backend:test`
 - Primary tests:
   - `ai/DirectModelAgentToolPolicyTest`
+  - `ai/DirectModelAgentAutoCliTest`
+  - `ai/DirectModelAgentCitationTest`
   - `utils/WebPageDownloaderSmokeTest`
 
 ## Todo Lifecycle
@@ -35,6 +37,12 @@
   - `agents/acp/AcpClientTest`
   - `agents/acp/AcpRegistryTest`
 
+## Trusted Directory
+
+- Command: `./gradlew :backend:test`
+- Primary tests:
+  - `trust/TrustedDirManagerTest`
+
 ## Web File Contract / Parser
 
 - Commands:
@@ -48,8 +56,9 @@
 - Commands:
   - `./gradlew :frontend:androidApp:testDebugUnitTest`
   - `./gradlew :frontend:androidApp:compileDebugKotlin`
-- Primary test:
+- Primary tests:
   - `frontend/androidApp/src/test/kotlin/com/silk/android/FileContractsTest.kt`
+  - `frontend/androidApp/src/test/kotlin/com/silk/android/WorkflowPathUtilsTest.kt`
 
 ## Desktop File Contract / Parser
 
