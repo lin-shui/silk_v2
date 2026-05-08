@@ -1547,10 +1547,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             }
 
             // 显示所有普通消息
+            val lastMessageId = messages.lastOrNull()?.id
             messages.forEach { message ->
                 MessageItem(
                     message = message,
                     isTransient = false,
+                    isLastMessage = message.id == lastMessageId,
                     currentUserId = user.id,
                     groupId = group.id,
                     isRecalling = message.id in recallingMessageIds,
