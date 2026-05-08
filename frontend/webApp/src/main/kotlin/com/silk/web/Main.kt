@@ -3784,6 +3784,7 @@ fun AIMessageCard(
         
     Div({
         classes(SilkStylesheet.aiMessageCard)
+        attr("id", "ai-msg-${message.id}")
         style {
             property("flex", "1")
             property("min-width", "0")
@@ -3863,7 +3864,15 @@ fun AIMessageCard(
                         }
                     }
                     onClick {
-                        isExpanded = !effectiveExpanded
+                        val wasExpanded = effectiveExpanded
+                        isExpanded = !wasExpanded
+                        // 展开时延迟一帧滚动到消息头部，避免与 Compose 渲染冲突
+                        if (!wasExpanded) {
+                            kotlinx.browser.window.setTimeout({
+                                kotlinx.browser.document.getElementById("ai-msg-${message.id}")
+                                    ?.scrollIntoView(true)
+                            }, 50)
+                        }
                     }
                 }) {
                     Text(if (effectiveExpanded) "▼ 收起" else "▶ 展开")
