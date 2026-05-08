@@ -3919,7 +3919,34 @@ fun AIMessageCard(
                 Text("$collapsedPreview...")
             }
         }
-        
+        // 底部居中收起按钮
+        if (isLongContent && effectiveExpanded && !isTransient) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.Center)
+                    marginTop(12.px)
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("cursor", "pointer")
+                        padding(4.px, 12.px)
+                        borderRadius(4.px)
+                        property("transition", "all 0.2s")
+                        property("user-select", "none")
+                        property("background", "rgba(201, 168, 108, 0.08)")
+                    }
+                    onClick {
+                        isExpanded = false
+                    }
+                }) {
+                    Text("▲  收起")
+                }
+            }
+        }
         // 底部操作栏
         if (!isTransient && !isSelectionMode) {
             Div({
@@ -3993,29 +4020,6 @@ fun AIMessageCard(
                     Text("删除")
                 }
 
-                // 底部收起开关（仅展开时长内容显示）
-                if (isLongContent && effectiveExpanded && !isTransient) {
-                    Span({
-                        style {
-                            fontSize(11.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("cursor", "pointer")
-                            padding(4.px, 10.px)
-                            borderRadius(4.px)
-                            property("transition", "all 0.2s")
-                            display(DisplayStyle.Flex)
-                            alignItems(AlignItems.Center)
-                            property("gap", "4px")
-                            property("user-select", "none")
-                        }
-                        onClick {
-                            isExpanded = false
-                        }
-                    }) {
-                        Text("▲")
-                        Text("收起")
-                    }
-                }
                 
                 Span({
                     style {
