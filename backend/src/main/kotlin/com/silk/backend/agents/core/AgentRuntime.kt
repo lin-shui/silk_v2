@@ -504,7 +504,7 @@ object AgentRuntime {
                 if (acp != null) {
                     try {
                         val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            com.silk.backend.agents.core.AcpExtensions.listLocalSessions(acp)
+                            com.silk.backend.agents.core.AcpExtensions.listLocalSessions(acp, ctx.workingDir)
                         }
                         broadcastFn(AgentMessages.status(
                             result.toString(),

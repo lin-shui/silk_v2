@@ -472,9 +472,13 @@ class AcpAgentServer:
         """Return list of recent codex sessions from ~/.codex/sessions/.
 
         Backend frontend renders this as session history selector.
+        Filters by cwd when provided by backend.
         """
+        cwd = os.path.realpath((params or {}).get("cwd") or "")
         sessions = list_local_sessions()
-        logger.debug("[ACP] _silk/list_local_sessions count=%d", len(sessions))
+        if cwd:
+            sessions = [s for s in sessions if os.path.realpath(s.get("workingDir", "")) == cwd]
+        logger.debug("[ACP] _silk/list_local_sessions count=%d (cwd=%s)", len(sessions), cwd or "all")
         await self._send_response(msg_id, {"sessions": sessions})
 
     async def _handle_silk_set_cwd(self, msg_id: Any, params: Any) -> None:
