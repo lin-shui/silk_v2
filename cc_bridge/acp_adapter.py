@@ -542,7 +542,10 @@ class AcpAgentServer:
     # ------------------------------------------------------------------
 
     async def _handle_silk_list_sessions(self, msg_id: Any, params: Any) -> None:
+        cwd = os.path.realpath((params or {}).get("cwd") or "")
         sessions = await asyncio.to_thread(list_local_sessions)
+        if cwd:
+            sessions = [s for s in sessions if os.path.realpath(s.get("workingDir", "")) == cwd]
         await self._send_response(msg_id, {"sessions": sessions})
 
     async def _handle_silk_set_cwd(self, msg_id: Any, params: Any) -> None:
