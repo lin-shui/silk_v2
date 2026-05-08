@@ -2069,12 +2069,26 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         if (key == "Enter" && !shiftKey && !isComposing) {
                             event.preventDefault()
                             sendMessage()
+                        } else if (key == "Enter" && shiftKey) {
+                            // Shift+Enter：在光标处插入换行
+                            event.preventDefault()
+                            val input = js("document.getElementById('chat-input')")
+                            val start = input.selectionStart as? Int ?: messageText.length
+                            val end = input.selectionEnd as? Int ?: start
+                            val before = messageText.substring(0, start)
+                            val after = messageText.substring(end)
+                            messageText = "$before\n$after"
+                            // 光标移到换行后
+                            window.setTimeout({
+                                val newPos = start + 1
+                                input.setSelectionRange(newPos, newPos)
+                            }, 0)
                         }
                     }
-                    
+
                     val input = js("document.getElementById('chat-input')")
                     input?.addEventListener("keydown", handler)
-                    
+
                     onDispose {
                         input?.removeEventListener("keydown", handler)
                     }
