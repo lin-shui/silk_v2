@@ -41,26 +41,26 @@ object AgentRuntime {
     // ========== Workflow 持久化（Plan E2） ==========
 
     /**
-     * Workflow 持久化回调：让 AgentRuntime 把 workingDir 和 cc_session_id 写回 WorkflowManager。
+     * Workflow 持久化回调：让 AgentRuntime 把 workingDir 和 cli_session_id 写回 WorkflowManager。
      * 由 [Application]/[configureRouting] 在启动时通过 [setWorkflowPersistence] 注入。
      */
     interface WorkflowPersistence {
         /** workingDir 变化时持久化（cdSync 成功后异步触发）。 */
         fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean
-        /** Claude CLI session id 变化时持久化（prompt 完成后从 meta 拿到）。旧 API，per-workflow 单值。 */
-        fun persistCcSession(rawGroupId: String, ccSessionId: String, sessionStarted: Boolean): Boolean
+        /** CLI session id 变化时持久化（prompt 完成后从 meta 拿到）。旧 API，per-workflow 单值。 */
+        fun persistCliSession(rawGroupId: String, cliSessionId: String, sessionStarted: Boolean): Boolean
         /**
          * M4 Task 3: per-agent 持久化。agentType 是 runtime dash form。
          * 默认实现回退到旧的单值版本以保持 backward-compat。
          */
-        fun persistCcSession(rawGroupId: String, agentType: String, ccSessionId: String, sessionStarted: Boolean): Boolean =
-            persistCcSession(rawGroupId, ccSessionId, sessionStarted)
+        fun persistCliSession(rawGroupId: String, agentType: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
+            persistCliSession(rawGroupId, cliSessionId, sessionStarted)
         /** M4 Task 3: 持久化用户当前激活的 agent（dash form）。 */
         fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean = false
         /** 启动 / 首次激活时根据 workflow record 提供 seed；返回 null 表示不是 workflow 或无值可 seed。 */
         fun loadSeed(rawGroupId: String): WorkflowSeed?
         /**
-         * M4 Task 3: per-agent seed。返回该 agent 自己的 ccSessionId。
+         * M4 Task 3: per-agent seed。返回该 agent 自己的 cliSessionId。
          * 默认实现回退到旧的单值版本（向后兼容老 impl）。
          */
         fun loadSeed(rawGroupId: String, agentType: String): WorkflowSeed? = loadSeed(rawGroupId)
@@ -68,7 +68,7 @@ object AgentRuntime {
 
     data class WorkflowSeed(
         val workingDir: String,
-        val ccSessionId: String?,
+        val cliSessionId: String?,
         val sessionStarted: Boolean,
     )
 
@@ -84,20 +84,20 @@ object AgentRuntime {
         if (groupId.startsWith("group_")) groupId.removePrefix("group_") else groupId
 
     /**
-     * 把 ACP `session/prompt` response 里的 meta（adapter 携带的 cost/duration/turns/cc_sid）
+     * 把 ACP `session/prompt` response 里的 meta（adapter 携带的 cost/duration/turns/cliSessionId）
      * 格式化成会话末尾的 "⏱ 费用: $X | 耗时: Xs | 轮次: N | 会话: XXXXXXXX..." 提示行。
      * 字段缺失或为零值时跳过；都为空返回空串。
      */
     private fun formatPromptMeta(
         meta: kotlinx.serialization.json.JsonElement,
-        ccSessionId: String?,
+        cliSessionId: String?,
     ): String {
         val obj = runCatching { meta.jsonObject }.getOrNull() ?: return ""
         val parts = mutableListOf<String>()
         val cost = obj["costUsd"]?.jsonPrimitive?.doubleOrNull ?: 0.0
         val duration = obj["durationMs"]?.jsonPrimitive?.longOrNull ?: 0L
         val turns = obj["numTurns"]?.jsonPrimitive?.intOrNull ?: 0
-        val sid = obj["ccSessionId"]?.jsonPrimitive?.contentOrNull ?: ccSessionId.orEmpty()
+        val sid = obj["cliSessionId"]?.jsonPrimitive?.contentOrNull ?: cliSessionId.orEmpty()
         if (cost > 0) parts.add("费用: ${"$"}%.4f".format(cost))
         if (duration > 0) parts.add("耗时: %.1fs".format(duration / 1000.0))
         if (turns > 0) parts.add("轮次: $turns")
@@ -115,12 +115,12 @@ object AgentRuntime {
         }
     }
 
-    /** 异步持久化 ccSessionId / sessionStarted（per-agent，M4 Task 3）。 */
-    private fun persistCcSessionAsync(groupId: String, agentType: String, ccSessionId: String, started: Boolean) {
+    /** 异步持久化 cliSessionId / sessionStarted（per-agent，M4 Task 3）。 */
+    private fun persistCliSessionAsync(groupId: String, agentType: String, cliSessionId: String, started: Boolean) {
         val p = persistence ?: return
         CoroutineScope(Dispatchers.IO).launch {
-            try { p.persistCcSession(stripGroupPrefix(groupId), agentType, ccSessionId, started) }
-            catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 ccSessionId 失败: {}", e.message) }
+            try { p.persistCliSession(stripGroupPrefix(groupId), agentType, cliSessionId, started) }
+            catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 cliSessionId 失败: {}", e.message) }
         }
     }
 
@@ -231,13 +231,13 @@ object AgentRuntime {
         }
         if (seed != null) {
             if (seed.workingDir.isNotBlank()) ctx.workingDir = seed.workingDir
-            if (!seed.ccSessionId.isNullOrBlank() && seed.sessionStarted) {
-                session.ccSessionId = seed.ccSessionId
+            if (!seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
+                session.cliSessionId = seed.cliSessionId
             }
         }
         logger.info(
-            "[AgentRuntime] 工作流自动激活: userId={}, groupId={}, agentType={}, workingDir={}, ccSeed={}",
-            userId, groupId, agentType, ctx.workingDir, seed?.ccSessionId?.take(8) ?: "-"
+            "[AgentRuntime] 工作流自动激活: userId={}, groupId={}, agentType={}, workingDir={}, cliSeed={}",
+            userId, groupId, agentType, ctx.workingDir, seed?.cliSessionId?.take(8) ?: "-"
         )
     }
 
@@ -297,7 +297,7 @@ object AgentRuntime {
         }
         val descriptor = AgentRegistry.getByType(agentType) ?: return
         ctx.currentAgentType = agentType
-        // M4 Task 3: per-agent loadSeed —— 取该 agent 自己的 ccSessionId，
+        // M4 Task 3: per-agent loadSeed —— 取该 agent 自己的 cliSessionId，
         // 不再受其他 agent 干扰。同时持久化 activeAgent 让重启后保持选择。
         val session = ctx.getOrCreateSession(agentType)
         val seed = try {
@@ -306,11 +306,11 @@ object AgentRuntime {
             logger.warn("[AgentRuntime] /use {} loadSeed 失败: {}", agentType, e.message)
             null
         }
-        if (seed != null && !seed.ccSessionId.isNullOrBlank() && seed.sessionStarted) {
-            session.ccSessionId = seed.ccSessionId
+        if (seed != null && !seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
+            session.cliSessionId = seed.cliSessionId
             logger.info(
-                "[AgentRuntime] /use {} 加载 seed: ccSessionId={}",
-                agentType, seed.ccSessionId.take(8),
+                "[AgentRuntime] /use {} 加载 seed: cliSessionId={}",
+                agentType, seed.cliSessionId.take(8),
             )
         }
         persistActiveAgentAsync(ctx.groupId, agentType)
@@ -331,11 +331,11 @@ object AgentRuntime {
         val session = ctx.getOrCreateSession(agentType)
         // 触发命令时重置 session（和旧 /cc 行为一致：开新会话）
         session.acpSessionId = null
-        session.ccSessionId = null
+        session.cliSessionId = null
         session.running = false
         session.cancelled = false
         session.messageQueue.clear()
-        persistCcSessionAsync(ctx.groupId, agentType, "", false)
+        persistCliSessionAsync(ctx.groupId, agentType, "", false)
         broadcastFn(AgentMessages.system(
             "${descriptor.displayName} 已激活\n发送消息开始对话，/help 查看命令，/exit 退出",
             agentUserId = descriptor.agentUserId,
@@ -396,12 +396,12 @@ object AgentRuntime {
             is SilkCommand.Cancel -> handleCancel(session, broadcastFn)
             is SilkCommand.New -> {
                 session.acpSessionId = null
-                session.ccSessionId = null
+                session.cliSessionId = null
                 session.running = false
                 session.cancelled = false
                 session.messageQueue.clear()
-                // 清除已持久化的 ccSessionId，让重启后不会盲目 resume 一个废 session（与 cdSync 行为一致）
-                persistCcSessionAsync(ctx.groupId, agentType, "", false)
+                // 清除已持久化的 cliSessionId，让重启后不会盲目 resume 一个废 session（与 cdSync 行为一致）
+                persistCliSessionAsync(ctx.groupId, agentType, "", false)
                 broadcastFn(AgentMessages.system(
                     "已开启新会话",
                     agentUserId = descriptor.agentUserId,
@@ -540,10 +540,10 @@ object AgentRuntime {
                             acp.sessionLoad(cmd.sessionIdPrefix, ctx.workingDir)
                         }
                         // adapter 返回的 ACP UUID 是后端用来发 session/prompt 的句柄；
-                        // 用户输入的本地 session id（codex thread_id / claude session_id）走 ccSessionId
+                        // 用户输入的本地 session id（codex thread_id / claude session_id）走 cliSessionId
                         // 槽位，下次 prompt 时 adapter 会用它真正 resume 历史会话。
                         session.acpSessionId = result.sessionId
-                        session.ccSessionId = cmd.sessionIdPrefix
+                        session.cliSessionId = cmd.sessionIdPrefix
                         broadcastFn(AgentMessages.system(
                             "已加载会话: ${cmd.sessionIdPrefix.take(8)}...",
                             agentUserId = descriptor.agentUserId,
@@ -627,12 +627,12 @@ object AgentRuntime {
         val accumulated = StringBuilder()
         setupAcpHandlers(acp, session, descriptor, broadcastFn, accumulated)
 
-        // 首次 prompt 需要 sessionNew（带 ccSessionId seed 让 adapter 续旧 CC session）
+        // 首次 prompt 需要 sessionNew（带 cliSessionId seed 让 adapter 续旧 CLI session）
         if (session.acpSessionId == null) {
             try {
                 val result = acp.sessionNew(
                     cwd = ctx.workingDir,
-                    ccSessionId = session.ccSessionId,
+                    cliSessionId = session.cliSessionId,
                 )
                 session.acpSessionId = result.sessionId
             } catch (e: Exception) {
@@ -657,15 +657,15 @@ object AgentRuntime {
                 prompt = listOf(ContentBlock.Text(text)),
             )
 
-            // 从 result.meta 拿 ccSessionId 持久化（adapter complete.meta.sessionId → response.meta.ccSessionId）
-            val metaCcSid = result.meta?.let { meta ->
+            // 从 result.meta 拿 cliSessionId 持久化（adapter complete.meta.sessionId → response.meta.cliSessionId）
+            val metaCliSid = result.meta?.let { meta ->
                 runCatching {
-                    meta.jsonObject["ccSessionId"]?.jsonPrimitive?.contentOrNull
+                    meta.jsonObject["cliSessionId"]?.jsonPrimitive?.contentOrNull
                 }.getOrNull()
             }
-            if (!metaCcSid.isNullOrBlank()) {
-                session.ccSessionId = metaCcSid
-                persistCcSessionAsync(ctx.groupId, agentType, metaCcSid, true)
+            if (!metaCliSid.isNullOrBlank()) {
+                session.cliSessionId = metaCliSid
+                persistCliSessionAsync(ctx.groupId, agentType, metaCliSid, true)
             }
 
             // prompt 完成处理
@@ -706,7 +706,7 @@ object AgentRuntime {
             ))
 
             // 广播 meta 信息（费用/耗时/轮次/会话 id），与旧路径行为一致
-            val metaStr = result.meta?.let { formatPromptMeta(it, session.ccSessionId) }
+            val metaStr = result.meta?.let { formatPromptMeta(it, session.cliSessionId) }
             if (!metaStr.isNullOrBlank()) {
                 broadcastFn(AgentMessages.system(
                     metaStr,
@@ -842,7 +842,7 @@ object AgentRuntime {
      *  - ACP bridge 未连接 → 返回 Err
      *  - 没有 ACP session 时先 sessionNew（adapter 用 sessionId 索引 cwd）
      *  - 成功后 ctx.workingDir 取 adapter 返回的 resolved path
-     *  - 切目录会让 adapter 把 cc_session_id reset，本地 acpSessionId 也重置（下次 prompt 重建）
+     *  - 切目录会让 adapter 把 cli_session_id reset，本地 acpSessionId 也重置（下次 prompt 重建）
      */
     suspend fun cdSync(
         userId: String,
@@ -877,13 +877,13 @@ object AgentRuntime {
             // adapter 返回 {ok: true, path: <resolved>}
             val resolvedPath = resp.jsonObject["path"]?.jsonPrimitive?.contentOrNull ?: path
             ctx.workingDir = resolvedPath
-            // adapter 已经把它的 cc_session_id 设为 null；本地也重置 acpSessionId + ccSessionId
+            // adapter 已经把它的 cli_session_id 设为 null；本地也重置 acpSessionId + cliSessionId
             // 让下次 prompt 走 sessionNew 重建（与旧 cdSync 重置 sessionId 行为对齐）
             session.acpSessionId = null
-            session.ccSessionId = null
+            session.cliSessionId = null
             persistWorkingDirAsync(groupId, resolvedPath)
-            // 切目录等价于 /new：清空已持久化的 ccSessionId 让重启不会盲目 resume 一个废 session
-            persistCcSessionAsync(groupId, agentType, "", false)
+            // 切目录等价于 /new：清空已持久化的 cliSessionId 让重启不会盲目 resume 一个废 session
+            persistCliSessionAsync(groupId, agentType, "", false)
             logger.info("[AgentRuntime] cdSync 成功: userId={}, groupId={}, path={}", userId, groupId, resolvedPath)
             CdResult.Ok(resolvedPath)
         } catch (e: com.silk.backend.agents.acp.AcpRpcException) {

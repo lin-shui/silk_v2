@@ -44,7 +44,7 @@ class AcpSession:
     """State held per ACP session id (one per workflow group on backend)."""
 
     cwd: str
-    cc_session_id: str | None = None  # Codex CLI's thread_id (from thread.started event)
+    cli_session_id: str | None = None  # Codex CLI's thread_id (from thread.started event)
     accumulated: str = ""              # full streamed text so far — used to compute deltas
     cancelled: bool = False
     seen_tool_ids: set[str] = field(default_factory=set)  # M2: dedup tool_call vs tool_call_update
@@ -258,16 +258,16 @@ class AcpAgentServer:
     async def _handle_session_new(self, msg_id: Any, params: Any) -> None:
         p = params or {}
         cwd = p.get("cwd") or self.default_cwd
-        cc_session_id = p.get("ccSessionId")
+        cli_session_id = p.get("cliSessionId")
         acp_session_id = str(uuid.uuid4())
         sess = AcpSession(cwd=os.path.realpath(cwd))
-        if cc_session_id:
+        if cli_session_id:
             # backend seed: resume old Codex thread (from WorkflowPersistence)
-            sess.cc_session_id = cc_session_id
+            sess.cli_session_id = cli_session_id
         self.sessions[acp_session_id] = sess
         logger.info(
-            "[ACP] session/new: %s cwd=%s cc_seed=%s",
-            acp_session_id, cwd, (cc_session_id or "")[:8],
+            "[ACP] session/new: %s cwd=%s cli_seed=%s",
+            acp_session_id, cwd, (cli_session_id or "")[:8],
         )
         await self._send_response(msg_id, {"sessionId": acp_session_id})
 
@@ -281,8 +281,9 @@ class AcpAgentServer:
         Verifies that the rollout file for ``params.sessionId`` (the codex
         ``thread_id``) exists in ``~/.codex/sessions/``. If found, mints a
         fresh ACP UUID and stores it as a new :class:`AcpSession` whose
-        ``cc_session_id`` is the supplied thread id. The next ``session/prompt``
-        will then run ``codex exec resume <thread_id>`` and inherit history.
+        ``cli_session_id`` is set to the supplied thread id. The next
+        ``session/prompt`` will then run ``codex exec resume <thread_id>``
+        and inherit history.
         """
         p = params or {}
         thread_id = p.get("sessionId")
@@ -306,7 +307,7 @@ class AcpAgentServer:
         if meta and meta.get("sessionId"):
             actual_thread_id = meta["sessionId"]
         acp_session_id = str(uuid.uuid4())
-        sess = AcpSession(cwd=os.path.realpath(cwd), cc_session_id=actual_thread_id)
+        sess = AcpSession(cwd=os.path.realpath(cwd), cli_session_id=actual_thread_id)
         self.sessions[acp_session_id] = sess
         logger.info(
             "[ACP] session/load: acp=%s thread_id=%s rollout=%s",
@@ -371,7 +372,7 @@ class AcpAgentServer:
         dstate = DispatcherState(
             accumulated="",
             seen_tool_ids=sess.seen_tool_ids,  # share the set so cancel can inspect it
-            thread_id=sess.cc_session_id,
+            thread_id=sess.cli_session_id,
         )
 
         usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
@@ -382,7 +383,7 @@ class AcpAgentServer:
             async for ev in self.executor.run(
                 prompt=prompt_text,
                 cwd=sess.cwd,
-                resume_thread_id=sess.cc_session_id,
+                resume_thread_id=sess.cli_session_id,
             ):
                 kind = ev.get("kind")
 
@@ -414,8 +415,8 @@ class AcpAgentServer:
 
                 # Sync dispatcher's mutated state back into AcpSession:
                 sess.accumulated = dstate.accumulated
-                if dstate.thread_id and not sess.cc_session_id:
-                    sess.cc_session_id = dstate.thread_id
+                if dstate.thread_id and not sess.cli_session_id:
+                    sess.cli_session_id = dstate.thread_id
         except Exception as exc:
             logger.exception("codex prompt loop failed: %s", exc)
             error_text = f"adapter error: {exc}"
@@ -432,7 +433,7 @@ class AcpAgentServer:
         result = {
             "stopReason": stop_reason,
             "meta": {
-                "ccSessionId": sess.cc_session_id or "",
+                "cliSessionId": sess.cli_session_id or "",
                 "inputTokens": usage["input_tokens"],
                 "outputTokens": usage["output_tokens"],
                 "reasoningTokens": usage["reasoning_tokens"],
@@ -477,10 +478,10 @@ class AcpAgentServer:
         await self._send_response(msg_id, {"sessions": sessions})
 
     async def _handle_silk_set_cwd(self, msg_id: Any, params: Any) -> None:
-        """Update session cwd; invalidate cc_session_id (cwd change ≡ /new for codex).
+        """Update session cwd; invalidate cli_session_id (cwd change ≡ /new for codex).
 
         Codex resume must run in the original session's cwd, so changing cwd
-        breaks resume by definition. We null cc_session_id; next prompt spawns
+        breaks resume by definition. We null cli_session_id; next prompt spawns
         a fresh codex session.
         """
         p = params or {}
@@ -498,7 +499,7 @@ class AcpAgentServer:
             return
         resolved = os.path.realpath(cwd)
         sess.cwd = resolved
-        sess.cc_session_id = None  # cwd change invalidates codex session
+        sess.cli_session_id = None  # cwd change invalidates codex session
         sess.accumulated = ""
         sess.seen_tool_ids = set()
         logger.info("[ACP] _silk/set_cwd sid=%s cwd=%s", sid, resolved)

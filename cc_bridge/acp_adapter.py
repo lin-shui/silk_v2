@@ -46,7 +46,7 @@ class AcpSession:
     """State held per ACP session id (one per workflow group on backend)."""
 
     cwd: str
-    cc_session_id: str | None = None  # Claude CLI's real session id (from `complete.meta`)
+    cli_session_id: str | None = None  # Claude CLI's real session id (from `complete.meta`)
     accumulated: str = ""  # full streamed text so far — used to compute deltas
     seen_tool_ids: set[str] = field(default_factory=set)
     cancelled: bool = False
@@ -260,17 +260,17 @@ class AcpAgentServer:
     async def _handle_session_new(self, msg_id: Any, params: Any) -> None:
         p = params or {}
         cwd = p.get("cwd") or self.default_cwd
-        cc_session_id = p.get("ccSessionId")
+        cli_session_id = p.get("cliSessionId")
         acp_session_id = str(uuid.uuid4())
         sess = AcpSession(cwd=os.path.realpath(cwd))
-        if cc_session_id:
-            # backend seed：续旧 CC session（重启后从 WorkflowPersistence 拿来的 cc_session_id）
-            # 下次 session/prompt 会因 sess.cc_session_id 非空而走 resume=True
-            sess.cc_session_id = cc_session_id
+        if cli_session_id:
+            # backend seed：续旧 CLI session（重启后从 WorkflowPersistence 拿来的 cli_session_id）
+            # 下次 session/prompt 会因 sess.cli_session_id 非空而走 resume=True
+            sess.cli_session_id = cli_session_id
         self.sessions[acp_session_id] = sess
         logger.info(
-            "[ACP] session/new: %s cwd=%s cc_seed=%s",
-            acp_session_id, cwd, (cc_session_id or "")[:8],
+            "[ACP] session/new: %s cwd=%s cli_seed=%s",
+            acp_session_id, cwd, (cli_session_id or "")[:8],
         )
         await self._send_response(msg_id, {"sessionId": acp_session_id})
 
@@ -283,7 +283,7 @@ class AcpAgentServer:
 
         ``params.sessionId`` is the Claude CLI session id (or a unique prefix
         thereof). We scan ``~/.claude/projects/`` to find the matching session
-        file. If found, we mint a fresh ACP UUID and seed ``cc_session_id``
+        file. If found, we mint a fresh ACP UUID and seed ``cli_session_id``
         so the next prompt runs ``claude --resume <session_id>``.
         """
         p = params or {}
@@ -298,15 +298,15 @@ class AcpAgentServer:
                 msg_id, -32602, f"claude session not found: {prefix}"
             )
             return
-        cc_session_id = record["sessionId"]
+        cli_session_id = record["sessionId"]
         if not cwd:
             cwd = record.get("workingDir") or self.default_cwd
         acp_session_id = str(uuid.uuid4())
-        sess = AcpSession(cwd=os.path.realpath(cwd), cc_session_id=cc_session_id)
+        sess = AcpSession(cwd=os.path.realpath(cwd), cli_session_id=cli_session_id)
         self.sessions[acp_session_id] = sess
         logger.info(
-            "[ACP] session/load: acp=%s cc_sid=%s",
-            acp_session_id, cc_session_id[:8],
+            "[ACP] session/load: acp=%s cli_sid=%s",
+            acp_session_id, cli_session_id[:8],
         )
         await self._send_response(
             msg_id, {"sessionId": acp_session_id, "loaded": True}
@@ -355,8 +355,8 @@ class AcpAgentServer:
 
         # NOTE: on_session_upsert is called *synchronously* by the executor —
         # must be a regular `def`, not `async def`.
-        def on_session_upsert(cc_sid: str, wdir: str, title: str) -> None:
-            sess.cc_session_id = cc_sid
+        def on_session_upsert(cli_sid: str, wdir: str, title: str) -> None:
+            sess.cli_session_id = cli_sid
 
         notify_send = self._make_notify_send(sid)
 
@@ -381,18 +381,18 @@ class AcpAgentServer:
             else:
                 await notify_send(payload)
 
-        # Resume an existing CC session if we already have a cc_session_id;
+        # Resume an existing CLI session if we already have a cli_session_id;
         # otherwise create a fresh one.
-        if sess.cc_session_id:
-            cc_session_id = sess.cc_session_id
+        if sess.cli_session_id:
+            cli_session_id = sess.cli_session_id
             resume = True
         else:
-            cc_session_id = str(uuid.uuid4())
+            cli_session_id = str(uuid.uuid4())
             resume = False
 
         logger.info(
-            "[ACP] session/prompt sid=%s cc_sid=%s resume=%s prompt_len=%d",
-            sid, cc_session_id, resume, len(prompt_text),
+            "[ACP] session/prompt sid=%s cli_sid=%s resume=%s prompt_len=%d",
+            sid, cli_session_id, resume, len(prompt_text),
         )
 
         executor_task = asyncio.create_task(
@@ -400,7 +400,7 @@ class AcpAgentServer:
                 send=send_with_terminal_capture,
                 request_id=request_id,
                 prompt=prompt_text,
-                session_id=cc_session_id,
+                session_id=cli_session_id,
                 working_dir=sess.cwd,
                 resume=resume,
                 on_session_upsert=on_session_upsert,
@@ -422,14 +422,14 @@ class AcpAgentServer:
                 "[ACP] sending prompt response sid=%s msg_id=%s stopReason=%s",
                 sid, msg_id, final_result["stopReason"],
             )
-            # 把 cc_session_id（Claude CLI 真实 session id）和耗时/费用/轮次通过 meta 报回 backend，
-            # backend 用 ccSessionId 持久化用于 resume，其余字段格式化成会话末尾的"⏱ ..."提示行。
+            # 把 cli_session_id（Claude CLI 真实 session id）和耗时/费用/轮次通过 meta 报回 backend，
+            # backend 用 cliSessionId 持久化用于 resume，其余字段格式化成会话末尾的"⏱ ..."提示行。
             response_payload: dict[str, Any] = {"stopReason": final_result["stopReason"]}
             executor_meta = final_result.get("meta") or {}
-            cc_sid = executor_meta.get("sessionId") or sess.cc_session_id
+            cli_sid = executor_meta.get("sessionId") or sess.cli_session_id
             meta_out: dict[str, Any] = {}
-            if cc_sid:
-                meta_out["ccSessionId"] = cc_sid
+            if cli_sid:
+                meta_out["cliSessionId"] = cli_sid
             for k in ("costUsd", "durationMs", "numTurns"):
                 if k in executor_meta:
                     meta_out[k] = executor_meta[k]
@@ -557,9 +557,9 @@ class AcpAgentServer:
             return
         resolved = os.path.realpath(cwd)
         sess.cwd = resolved
-        # cwd change invalidates the underlying CC session — next prompt will
+        # cwd change invalidates the underlying CLI session — next prompt will
         # spawn a fresh one.
-        sess.cc_session_id = None
+        sess.cli_session_id = None
         logger.info("[ACP] _silk/set_cwd sid=%s cwd=%s", sid, resolved)
         await self._send_response(msg_id, {"ok": True, "path": resolved})
 
@@ -577,7 +577,7 @@ class AcpAgentServer:
         if sess is None:
             await self._send_error(msg_id, -32602, f"Unknown session: {sid}")
             return
-        if not sess.cc_session_id:
+        if not sess.cli_session_id:
             await self._send_error(msg_id, -32000, "no active session to compact")
             return
 
@@ -592,7 +592,7 @@ class AcpAgentServer:
                 capture["error"] = payload.get("error") or "compact error"
                 done.set()
 
-        def _noop_upsert(cc_sid: str, wdir: str, title: str) -> None:
+        def _noop_upsert(cli_sid: str, wdir: str, title: str) -> None:
             return None
 
         compact_task = asyncio.create_task(
@@ -600,7 +600,7 @@ class AcpAgentServer:
                 send=send,
                 request_id=str(uuid.uuid4()),
                 prompt="/compact",
-                session_id=sess.cc_session_id,
+                session_id=sess.cli_session_id,
                 working_dir=sess.cwd,
                 resume=True,
                 on_session_upsert=_noop_upsert,
