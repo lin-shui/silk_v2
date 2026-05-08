@@ -3784,7 +3784,6 @@ fun AIMessageCard(
         
     Div({
         classes(SilkStylesheet.aiMessageCard)
-        attr("id", "ai-expand-${message.id}")
         style {
             property("flex", "1")
             property("min-width", "0")
@@ -3864,13 +3863,7 @@ fun AIMessageCard(
                         }
                     }
                     onClick {
-                        val wasExpanded = effectiveExpanded
-                        isExpanded = !wasExpanded
-                        // 展开时滚动到消息头部
-                        if (!wasExpanded) {
-                            kotlinx.browser.document.getElementById("ai-expand-${message.id}")
-                                ?.scrollIntoView(true)
-                        }
+                        isExpanded = !effectiveExpanded
                     }
                 }) {
                     Text(if (effectiveExpanded) "▼ 收起" else "▶ 展开")
