@@ -44,6 +44,14 @@ object AcpExtensions {
         })
     }
 
+    /** AskUserQuestion 回答传回 bridge */
+    suspend fun resolveQuestion(acp: AcpClient, requestId: String, answer: String): JsonElement {
+        return acp.callExtension("_silk/resolve_question", buildJsonObject {
+            put("requestId", requestId)
+            put("answer", answer)
+        })
+    }
+
     /** 把 `_silk/list_local_sessions` 的 JSON 结果转成适合 Agent 状态框展示的多行文本。 */
     fun formatLocalSessionsForDisplay(result: JsonElement): String {
         val sessions = runCatching {

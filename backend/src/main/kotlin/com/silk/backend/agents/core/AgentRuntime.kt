@@ -12,12 +12,14 @@ import com.silk.backend.agents.adapters.claudecode.ClaudeCodeDescriptor
 import com.silk.backend.agents.adapters.codex.CodexDescriptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
@@ -248,8 +250,11 @@ object AgentRuntime {
             val session = ctx.sessions[agentType] ?: continue
 
             if (session.running) {
+                session.promptJob?.cancel()
+                session.promptJob = null
                 session.running = false
                 session.cancelled = false
+                session.pendingQuestion = null
                 logger.info(
                     "[AgentRuntime] Bridge 断线，agent 任务已终止: userId={}, groupId={}, agentType={}",
                     userId, ctx.groupId, agentType
@@ -601,6 +606,22 @@ object AgentRuntime {
         val session = ctx.getOrCreateSession(agentType)
         val acp = getAcpClient(agentType, userId)
 
+        // ★ Must check before session.running — when CLI is blocked on AskUserQuestion,
+        // running is still true. Checking running first would queue the answer → deadlock.
+        val pending = session.pendingQuestion
+        logger.info(
+            "[AgentRuntime] handlePrompt: agentType={}, running={}, pendingQuestion={}, textLen={}",
+            agentType, session.running, pending?.requestId?.take(8), text.length,
+        )
+        if (pending != null) {
+            logger.info(
+                "[AgentRuntime] User reply to question: requestId={}, answerLen={}",
+                pending.requestId.take(8), text.length,
+            )
+            handleQuestionReply(session, pending, text, broadcastFn)
+            return
+        }
+
         if (acp == null) {
             broadcastFn(AgentMessages.system(
                 "${descriptor.displayName} 未连接。请启动 Bridge Agent。",
@@ -611,6 +632,7 @@ object AgentRuntime {
         }
 
         if (session.running) {
+            logger.info("[AgentRuntime] Message queued: running=true, pendingQuestion=null, textLen={}", text.length)
             session.messageQueue.add(QueuedMessage(text, userId, userName))
             broadcastFn(AgentMessages.status(
                 "任务运行中，消息已加入队列 (${session.messageQueue.size} 条)",
@@ -624,9 +646,52 @@ object AgentRuntime {
         // 设置 running 并注册 ACP 处理器
         session.running = true
         session.cancelled = false
-        val accumulated = StringBuilder()
-        setupAcpHandlers(acp, session, descriptor, broadcastFn, accumulated)
 
+        // ★ Launch prompt execution in background coroutine.
+        // This is critical: the caller (WebSocket consumeEach) must not be blocked
+        // by acp.sessionPrompt(), otherwise incoming messages (e.g., question replies)
+        // cannot be received until the prompt completes — causing AskUserQuestion deadlock.
+        //
+        // session.running stays true throughout the entire lifecycle: initial prompt +
+        // queue drain. This prevents consumeEach from starting a concurrent prompt
+        // during the gap between prompts.
+        session.promptJob = ctx.scope.launch {
+            try {
+                val accumulated = StringBuilder()
+                setupAcpHandlers(acp, session, descriptor, broadcastFn, accumulated)
+                executeSinglePrompt(ctx, acp, session, descriptor, text, broadcastFn, accumulated)
+
+                // Drain queued messages one-by-one, still under running=true
+                while (true) {
+                    val next = session.messageQueue.pollFirst() ?: break
+                    logger.info(
+                        "[AgentRuntime] drainQueue: processing next queued message, remaining={}",
+                        session.messageQueue.size,
+                    )
+                    val nextAccumulated = StringBuilder()
+                    setupAcpHandlers(acp, session, descriptor, broadcastFn, nextAccumulated)
+                    executeSinglePrompt(ctx, acp, session, descriptor, next.text, broadcastFn, nextAccumulated)
+                }
+            } finally {
+                session.running = false
+                session.promptJob = null
+            }
+        }
+    }
+
+    /**
+     * Execute a single ACP prompt. Runs in a background coroutine so it doesn't
+     * block the WebSocket receive loop.
+     */
+    private suspend fun executeSinglePrompt(
+        ctx: GroupAgentContext,
+        acp: AcpClient,
+        session: AgentSession,
+        descriptor: AgentDescriptor,
+        text: String,
+        broadcastFn: suspend (Message) -> Unit,
+        accumulated: StringBuilder,
+    ) {
         // 首次 prompt 需要 sessionNew（带 cliSessionId seed 让 adapter 续旧 CLI session）
         if (session.acpSessionId == null) {
             try {
@@ -636,14 +701,13 @@ object AgentRuntime {
                 )
                 session.acpSessionId = result.sessionId
             } catch (e: Exception) {
-                logger.error("[AgentRuntime] sessionNew 失败: userId={}, agentType={}", userId, agentType, e)
-                session.running = false
+                logger.error("[AgentRuntime] sessionNew 失败: userId={}, agentType={}", session.userId, session.agentType, e)
                 broadcastFn(AgentMessages.system(
                     "创建会话失败: ${e.message}",
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
-                return
+                return  // caller's finally sets running=false
             }
         }
 
@@ -665,7 +729,7 @@ object AgentRuntime {
             }
             if (!metaCliSid.isNullOrBlank()) {
                 session.cliSessionId = metaCliSid
-                persistCliSessionAsync(ctx.groupId, agentType, metaCliSid, true)
+                persistCliSessionAsync(ctx.groupId, session.agentType, metaCliSid, true)
             }
 
             // prompt 完成处理
@@ -716,16 +780,18 @@ object AgentRuntime {
             }
 
         } catch (e: Exception) {
-            logger.error("[AgentRuntime] sessionPrompt 失败: userId={}, agentType={}", userId, agentType, e)
+            logger.error("[AgentRuntime] sessionPrompt 失败: userId={}, agentType={}", session.userId, session.agentType, e)
             broadcastFn(AgentMessages.system(
                 "执行失败: ${e.message}",
                 agentUserId = descriptor.agentUserId,
                 agentName = descriptor.displayName,
             ))
         } finally {
-            session.running = false
             session.currentRequestId = null
-            finishQueue(ctx, session, broadcastFn)
+            session.pendingQuestion = null
+            // Note: session.running is NOT cleared here — the caller (handlePrompt's
+            // launch block) keeps running=true while draining queued messages, and
+            // only sets running=false when the queue is empty.
         }
     }
 
@@ -752,8 +818,11 @@ object AgentRuntime {
             }
         }
 
+        session.promptJob?.cancel()
+        session.promptJob = null
         session.running = false
         session.cancelled = true
+        session.pendingQuestion = null
         broadcastFn(AgentMessages.status(
             "任务已取消",
             agentUserId = descriptor.agentUserId,
@@ -761,13 +830,44 @@ object AgentRuntime {
         ))
     }
 
-    private suspend fun finishQueue(
-        ctx: GroupAgentContext,
+    private suspend fun handleQuestionReply(
         session: AgentSession,
+        pending: PendingQuestion,
+        answerText: String,
         broadcastFn: suspend (Message) -> Unit,
     ) {
-        val next = session.messageQueue.pollFirst() ?: return
-        handlePrompt(ctx, next.text, next.userId, next.userName, broadcastFn)
+        val descriptor = AgentRegistry.getByType(session.agentType) ?: return
+        val acp = getAcpClient(session.agentType, session.userId)
+
+        // Clear pending state immediately
+        session.pendingQuestion = null
+
+        if (acp == null) {
+            broadcastFn(AgentMessages.system(
+                "回答发送失败: Bridge 未连接",
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+            return
+        }
+
+        try {
+            AcpExtensions.resolveQuestion(acp, pending.requestId, answerText)
+            logger.info(
+                "[AgentRuntime] Question answered: requestId={}, answerLen={}",
+                pending.requestId.take(8), answerText.length,
+            )
+        } catch (e: Exception) {
+            logger.error(
+                "[AgentRuntime] resolveQuestion failed: requestId={}, error={}",
+                pending.requestId.take(8), e.message,
+            )
+            broadcastFn(AgentMessages.system(
+                "回答发送失败: ${e.message}",
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+        }
     }
 
     private fun setupAcpHandlers(
@@ -779,6 +879,28 @@ object AgentRuntime {
     ) {
         acp.onSessionUpdate { notif ->
             if (notif.sessionId != session.acpSessionId) return@onSessionUpdate
+
+            // Check if this is an ask_user_question and set pending state
+            val kind = notif.update["sessionUpdate"]?.let {
+                (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+            }
+            if (kind == "ask_user_question") {
+                val requestId = notif.update["requestId"]?.let {
+                    (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                }
+                val questions = notif.update["questions"]?.jsonArray
+                    ?.mapNotNull { el ->
+                        (el as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    }
+                if (requestId != null && !questions.isNullOrEmpty()) {
+                    session.pendingQuestion = PendingQuestion(requestId, questions)
+                    logger.info(
+                        "[AgentRuntime] pendingQuestion set: requestId={}, questionCount={}",
+                        requestId.take(8), questions.size,
+                    )
+                }
+            }
+
             val msg = AcpUpdateMapper.map(
                 update = notif.update,
                 descriptor = descriptor,
@@ -825,6 +947,29 @@ object AgentRuntime {
             running = session?.running ?: false,
             workingDir = ctx.workingDir,
             agentType = agentType,
+        )
+    }
+
+    // ========== AskUserQuestion ==========
+
+    data class PendingQuestionSnapshot(
+        val requestId: String,
+        val questions: List<String>,
+        val agentUserId: String,
+        val agentName: String,
+    )
+
+    fun snapshotPendingQuestion(userId: String, groupId: String): PendingQuestionSnapshot? {
+        val ctx = contexts[key(userId, groupId)] ?: return null
+        val agentType = ctx.currentAgentType ?: return null
+        val session = ctx.sessions[agentType] ?: return null
+        val pending = session.pendingQuestion ?: return null
+        val descriptor = AgentRegistry.getByType(agentType) ?: return null
+        return PendingQuestionSnapshot(
+            requestId = pending.requestId,
+            questions = pending.questions,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
         )
     }
 
@@ -919,11 +1064,12 @@ object AgentRuntime {
     }
 
     fun cleanupState(userId: String, groupId: String) {
-        contexts.remove(key(userId, groupId))
+        contexts.remove(key(userId, groupId))?.scope?.cancel()
     }
 
     /** 仅供测试使用 */
     internal fun clearForTest() {
+        contexts.values.forEach { it.scope.cancel() }
         contexts.clear()
     }
 }

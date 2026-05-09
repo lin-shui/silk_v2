@@ -52,7 +52,11 @@ class ChatClient(
     // 系统状态消息列表（用于显示搜索、索引等状态）
     private val _statusMessages = MutableStateFlow<List<Message>>(emptyList())
     val statusMessages: StateFlow<List<Message>> = _statusMessages.asStateFlow()
-    
+
+    // Agent 提问等待回答状态（AskUserQuestion requestId）
+    private val _pendingQuestionId = MutableStateFlow<String?>(null)
+    val pendingQuestionId: StateFlow<String?> = _pendingQuestionId.asStateFlow()
+
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
     
@@ -202,6 +206,7 @@ class ChatClient(
                         _statusMessages.value = emptyList()
                         _isGenerating.value = false
                         suppressTransient = false
+                        _pendingQuestionId.value = null
                     } else {
                         log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
                         if (isSilkAi) _isGenerating.value = true
@@ -249,10 +254,22 @@ class ChatClient(
                     } else {
                         log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
                     }
-                    _transientMessage.value = null
-                    _statusMessages.value = emptyList()
-                    _isGenerating.value = false
-                    suppressTransient = false
+                    // Track pending question state
+                    if (message.category == MessageCategory.AGENT_QUESTION) {
+                        val reqId = message.id.removePrefix("agent_question_")
+                        _pendingQuestionId.value = reqId
+                        // Must clear isGenerating so the send button shows (not stop button)
+                        _isGenerating.value = false
+                        _transientMessage.value = null
+                        _statusMessages.value = emptyList()
+                        suppressTransient = false
+                    } else {
+                        _transientMessage.value = null
+                        _statusMessages.value = emptyList()
+                        _isGenerating.value = false
+                        suppressTransient = false
+                        _pendingQuestionId.value = null
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -293,6 +310,7 @@ class ChatClient(
         _isGenerating.value = false
         _transientMessage.value = null
         _statusMessages.value = emptyList()
+        _pendingQuestionId.value = null
     }
     
     suspend fun sendMessage(userId: String, userName: String, content: String) {

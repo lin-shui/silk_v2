@@ -2496,6 +2496,18 @@ fun Application.configureRouting() {
                         else -> workflow.agentType
                     }
                 AgentRuntime.autoActivateForWorkflow(userId, "group_$groupId", resolvedAgent)
+
+                // Re-broadcast pending question if agent is waiting for user answer
+                val pendingSnapshot = AgentRuntime.snapshotPendingQuestion(userId, "group_$groupId")
+                if (pendingSnapshot != null) {
+                    val questionMsg = com.silk.backend.agents.core.AgentMessages.question(
+                        content = com.silk.backend.agents.core.AgentMessages.formatQuestionText(pendingSnapshot.questions),
+                        requestId = pendingSnapshot.requestId,
+                        agentUserId = pendingSnapshot.agentUserId,
+                        agentName = pendingSnapshot.agentName,
+                    )
+                    groupChatServer.broadcast(questionMsg)
+                }
             }
 
             try {

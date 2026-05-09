@@ -4,6 +4,7 @@ package com.silk.backend.agents.core
 import com.silk.backend.Message
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
@@ -79,6 +80,21 @@ object AcpUpdateMapper {
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                     stableId = "agent_plan_${agentType}",
+                )
+            }
+            "ask_user_question" -> {
+                val requestId = update["requestId"]?.let {
+                    (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                } ?: return null
+                val questions = update["questions"]?.jsonArray
+                    ?.mapNotNull { el ->
+                        (el as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                    } ?: return null
+                AgentMessages.question(
+                    content = AgentMessages.formatQuestionText(questions),
+                    requestId = requestId,
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
                 )
             }
             "available_commands_update" -> {
