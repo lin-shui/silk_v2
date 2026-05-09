@@ -11,15 +11,16 @@
 - `WorkflowChatScreen.kt`
 - `WorkflowDialogs.kt`
 - `KnowledgeBaseScreen.kt`
+- `AudioDuplexScreen.kt`
 - `SettingsScreen.kt`
 
 ## Current Shape
 
 - Jetpack Compose + Material 3
-- 登录后主壳是底部三 Tab
+- 登录后主壳是底部四 Tab
 - 聊天页 / 工作流会话页隐藏底栏
 - 工作流会话页（`WorkflowChatScreen.kt`）复用 `com.silk.shared.ChatClient`，通过 `wf.groupId` 走 `/chat` WebSocket
-- 包含版本检查 / APK 下载 / 文件处理 / ASR
+- 包含版本检查 / APK 下载 / 文件处理 / ASR / Audio Duplex
 
 ## Build-Time Facts
 
@@ -34,4 +35,5 @@
 - 改文件 payload 时看 `FileContracts.kt` / `FileContractsTest.kt`
 - 改导航壳层时看 `AppState.kt` 与 `MainActivity.kt`
 - 改后端地址逻辑时同时检查 `.env.example`
+- 改 Audio Duplex 时看 `AudioDuplexScreen.kt` 与后端 `/ws/audio-duplex`
 - 改工作流目录信任 / Bridge 交互流程时看 `WorkflowDialogs.kt`（`FolderPickerDialog` / `TrustConfirmDialog`）和 `WorkflowChatScreen.kt`，与 Web 端 `WorkflowScene.kt` 行为对齐

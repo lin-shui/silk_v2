@@ -98,12 +98,12 @@ class TrustedDirManagerTest {
 
         val user1Trusts = manager.listTrusts("user1")
         assertEquals(2, user1Trusts.size)
-        assertTrue(user1Trusts.any { it.path == "/home/user/a" })
-        assertTrue(user1Trusts.any { it.path == "/home/user/b" })
+        assertTrue(user1Trusts.any { it.path == File("/home/user/a").canonicalPath })
+        assertTrue(user1Trusts.any { it.path == File("/home/user/b").canonicalPath })
 
         val user2Trusts = manager.listTrusts("user2")
         assertEquals(1, user2Trusts.size)
-        assertTrue(user2Trusts.any { it.path == "/home/user/c" })
+        assertTrue(user2Trusts.any { it.path == File("/home/user/c").canonicalPath })
     }
 
     @Test
