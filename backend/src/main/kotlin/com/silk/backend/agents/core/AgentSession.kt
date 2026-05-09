@@ -1,6 +1,7 @@
 // backend/src/main/kotlin/com/silk/backend/agents/core/AgentSession.kt
 package com.silk.backend.agents.core
 
+import kotlinx.coroutines.Job
 import java.util.concurrent.ConcurrentLinkedDeque
 
 /**
@@ -19,6 +20,15 @@ class AgentSession(
     @Volatile var currentRequestId: String? = null,
     val messageQueue: ConcurrentLinkedDeque<QueuedMessage> = ConcurrentLinkedDeque(),
     val startedAt: Long = System.currentTimeMillis(),
+    @Volatile var pendingQuestion: PendingQuestion? = null,
+    /** The background coroutine running the current prompt + queue drain. */
+    @Volatile var promptJob: Job? = null,
 )
 
 data class QueuedMessage(val text: String, val userId: String, val userName: String)
+
+data class PendingQuestion(
+    val requestId: String,
+    val questions: List<String>,
+    val receivedAt: Long = System.currentTimeMillis(),
+)

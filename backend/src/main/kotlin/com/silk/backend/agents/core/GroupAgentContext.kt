@@ -1,6 +1,10 @@
 // backend/src/main/kotlin/com/silk/backend/agents/core/GroupAgentContext.kt
 package com.silk.backend.agents.core
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
@@ -18,6 +22,9 @@ class GroupAgentContext(
     @Volatile var currentAgentType: String? = null,
     val sessions: ConcurrentHashMap<String, AgentSession> = ConcurrentHashMap(),
 ) {
+    /** Scope for background prompt coroutines; cancelled when this context is cleaned up. */
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     private val mutex = Mutex()
 
     /** 原子检查所有 session 是否有 running 任务。返回阻塞中的 agentType 列表。 */
