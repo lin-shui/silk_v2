@@ -1538,9 +1538,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 fontSize(13.px)
                                 fontStyle("italic")
                                 marginBottom(4.px)
-                                display(DisplayStyle.Flex)
-                                alignItems(AlignItems.Center)
-                                property("gap", "8px")
+                                property("white-space", "pre-wrap")
+                                property("word-break", "break-word")
                             }
                         }) {
                             Text(status.content)
@@ -4081,6 +4080,8 @@ fun MessageItem(
                 fontSize(13.px)
                 color(Color("#757575"))
                 property("font-style", "italic")
+                property("white-space", "pre-wrap")
+                property("word-break", "break-word")
             }
         }) {
             Text(message.content)
