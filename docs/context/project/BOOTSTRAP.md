@@ -27,6 +27,11 @@
 - 脚本 smoke 工作流：`.github/workflows/ci-script-smoke.yml`（`build` / `build-apk` / `build-all` / `deploy` 装配 smoke，以及 `start` / `stop` 运行态 smoke）
 - Backend 测试说明：`backend/src/test/kotlin/com/silk/backend/README_TESTS.md`
 
+## CI Script Smoke Notes
+
+- `start` smoke 使用真实 backend 启动、本地 Weaviate readiness mock 和预置 Web 静态 fixture，验证 `/health`、前端静态服务和 `stop` 清理。
+- `deploy` smoke 使用 Gradle/backend stub 和本地 Weaviate mock，验证端口清理、构建编排、产物复制和最终端口就绪。
+
 ## Default Local Commands
 
 - 只读状态：`./silk.sh status`

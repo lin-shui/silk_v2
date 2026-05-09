@@ -319,7 +319,7 @@ jobs:
           echo $! > "$RUNNER_TEMP/silk_weaviate_mock.pid"
 
           for _ in {1..10}; do
-            if curl -fsS "http://127.0.0.1:${WEAVIATE_HTTP_PORT}/v1/.well-known/ready" >/dev/null; then
+            if curl -fsS "http://127.0.0.1:${WEAVIATE_HTTP_PORT}/v1/.well-known/ready" >/dev/null 2>&1; then
               exit 0
             fi
             sleep 1
@@ -504,9 +504,9 @@ jobs:
           echo $! > "$RUNNER_TEMP/silk_deploy_weaviate_mock.pid"
 
           for _ in {1..20}; do
-            if curl -fsS "http://127.0.0.1:${BACKEND_HTTP_PORT}/health" > /tmp/silk_deploy_stale_health.json \
-              && curl -fsS "http://127.0.0.1:${FRONTEND_HTTP_PORT}/" > /tmp/silk_deploy_stale_frontend.html \
-              && curl -fsS "http://127.0.0.1:${WEAVIATE_HTTP_PORT}/v1/.well-known/ready" >/dev/null; then
+            if curl -fsS "http://127.0.0.1:${BACKEND_HTTP_PORT}/health" > /tmp/silk_deploy_stale_health.json 2>/dev/null \
+              && curl -fsS "http://127.0.0.1:${FRONTEND_HTTP_PORT}/" > /tmp/silk_deploy_stale_frontend.html 2>/dev/null \
+              && curl -fsS "http://127.0.0.1:${WEAVIATE_HTTP_PORT}/v1/.well-known/ready" >/dev/null 2>&1; then
               break
             fi
             sleep 1

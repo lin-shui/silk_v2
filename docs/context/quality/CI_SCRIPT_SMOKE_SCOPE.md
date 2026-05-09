@@ -18,7 +18,7 @@
 - `start` / `deploy` smoke 复用同一 workflow 触发范围；纯 backend 源码变更默认仍由快检覆盖，需要验证运行态启动时可手动 `workflow_dispatch`。
 - 这里不复用 `ci-fast-validation.yml` 的触发矩阵；它的职责仍然是快速拦截。
 
-## 当前覆盖（2026-05-06）
+## 当前覆盖（2026-05-09）
 
 ### Web 脚本链路
 
