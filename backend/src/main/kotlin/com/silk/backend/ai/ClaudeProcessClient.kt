@@ -13,16 +13,10 @@ import java.util.UUID
 
 /**
  * Claude CLI 进程客户端。
- * 通过 PTY（伪终端）启动 claude CLI 子进程，确保输出是行缓冲的流式文本。
+ * 通过 PTY（伪终端）启动 claude CLI 子进程。
  *
- * 因为 claude CLI（Node.js）在 stdout 是管道（pipe）时会启用块缓冲，
- * 导致整个响应一次性输出。PTY 让 claude CLI 认为自己在终端中运行，
- * 从而获得实时的行缓冲输出。
- *
- * 实现方式：通过 `pty_chat.py` Python 脚本创建 PTY 并在其中运行 claude。
- *
- * 每次调用生成唯一 [sessionId]（UUID），claude 不持久化跨轮会话；
- * 上下文连续性由调用方（[DirectModelAgent]）在 prompt 中构建完整对话历史实现。
+ * pty_chat.py 使用 claude -p --include-partial-messages，
+ * 让 claude 逐 token 写入 PTY，实现真正的实时流式。
  */
 class ClaudeProcessClient(
     /** 群组标识（如 group_<uuid>），用于日志/workspace 路径 */
@@ -41,8 +35,6 @@ class ClaudeProcessClient(
 
     /**
      * 从 CWD 向上查找 cc_bridge/pty_chat.py。
-     * Gradle :backend:run 的 CWD 是 backend/，直接启动的 CWD 是项目根目录。
-     * 向上查找可适配两种启动方式。
      */
     private fun resolvePtyChatPath(): String {
         val target = "cc_bridge/pty_chat.py"
@@ -111,12 +103,8 @@ class ClaudeProcessClient(
                     try {
                         val output = StringBuilder()
                         var lastSentLength = 0
-                        // 用于跨 read 边界保留不完整 UTF-8 尾部的溢出字节
                         var overflow = ByteArray(0)
 
-                        // 使用 InputStream.read(byte[]) 直接读取 pipe，
-                        // 避免 InputStreamReader / BufferedReader 内部的大缓冲区
-                        // 将 pipe 数据一次性吞掉导致无流式效果。
                         val buf = ByteArray(256)
 
                         while (true) {
@@ -124,7 +112,6 @@ class ClaudeProcessClient(
                             if (bytesRead == -1) break
                             ensureActive()
 
-                            // 合并且解码（lenient UTF-8：跨边界截断的字符以 � 替代）
                             val merged = if (overflow.isNotEmpty()) {
                                 ByteArray(overflow.size + bytesRead).apply {
                                     overflow.copyInto(this)
@@ -135,16 +122,12 @@ class ClaudeProcessClient(
                             }
 
                             val decoded = merged.decodeToString()
-                            // 检查末尾是否有不完整的 UTF-8 序列，保留到下次
                             overflow = captureTrailingPartial(decoded, merged)
 
                             val cleaned = decoded
                                 .replace("\r", "")
-                                // CSI: \e[<params><letter>（含 ? / < / > 等私有标记）
                                 .replace(Regex("\\e\\[[\\d;?<>]*[a-zA-Z]"), "")
-                                // OSC: \e]<string>(\e\|\x07)
                                 .replace(Regex("\\e\\][^\\e\\x07]*[\\e\\x07]"), "")
-                                // 字符集切换
                                 .replace(Regex("\\e[()][a-zA-Z]"), "")
 
                             if (cleaned.isNotBlank()) {
@@ -189,7 +172,6 @@ class ClaudeProcessClient(
                 logger.error("[ClaudeProcessClient-{}] 异常: {}", callId, e.message)
                 throw e
             } finally {
-                // 清理临时文件
                 promptFile.delete()
             }
         }
@@ -198,13 +180,9 @@ class ClaudeProcessClient(
     /**
      * 检查解码后的字符串末尾是否有因为跨 read 边界截断而导致的不完整 UTF-8 序列。
      * 如有，从原始字节中提取不完整尾部字节返回；否则返回空数组。
-     *
-     * 原理：当 [decoded] 末尾出现 �（REPLACEMENT CHARACTER）时，
-     * 说明 [raw] 末尾有不完整多字节序列。扫描 raw 尾部找到第一个不完整序列的起始位置。
      */
     private fun captureTrailingPartial(decoded: String, raw: ByteArray): ByteArray {
         if (!decoded.endsWith('�')) return ByteArray(0)
-        // 从 raw 末尾向前扫描，找到不完整 UTF-8 序列的起始字节
         var i = raw.size - 1
         while (i >= 0 && (raw[i].toInt() and 0xC0) == 0x80) {
             i--

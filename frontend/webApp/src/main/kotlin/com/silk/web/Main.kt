@@ -3542,9 +3542,11 @@ private fun linkCitationMarkers(
         val ref = references.find { it.kind == kind && it.index == idx }
         if (ref != null) {
             val label = if (kind == "citation") "来源 $idx" else "资料 $idx"
-            val href = ref.url ?: "#${anchorPrefix}ref-$idx"
-            val target = if (ref.url != null) " target=\"_blank\" rel=\"noopener noreferrer\"" else ""
-            "<a href=\"$href\"$target class=\"silk-citation-chip\">$label</a>"
+            if (ref.url != null) {
+                "<a href=\"${ref.url}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"silk-citation-chip\">$label</a>"
+            } else {
+                "<span class=\"silk-citation-chip silk-citation-nav\" data-idx=\"$idx\" style=\"cursor:pointer\">$label</span>"
+            }
         } else {
             match.value
         }
@@ -3586,6 +3588,8 @@ fun MarkdownContent(
             val links = element.querySelectorAll("a")
             for (index in 0 until links.length) {
                 val link = links.item(index) as? HTMLAnchorElement ?: continue
+                val href = link.getAttribute("href") ?: ""
+                if (href.startsWith("#")) continue
                 link.target = "_blank"
                 link.rel = "noopener noreferrer nofollow"
             }
@@ -3595,6 +3599,7 @@ fun MarkdownContent(
             } catch (error: Throwable) {
                 console.warn("Markdown math render failed:", error)
             }
+
         }
 
         onDispose {
@@ -3610,7 +3615,7 @@ fun ReferenceSourcesList(
 ) {
     if (references.isEmpty()) return
 
-    var isExpanded by remember { mutableStateOf(false) }
+    var isExpanded by remember { mutableStateOf(true) }
 
     Div({
         style {
@@ -3622,6 +3627,7 @@ fun ReferenceSourcesList(
         }
     }) {
         Div({
+            id("refs-toggle-$anchorPrefix")
             style {
                 display(DisplayStyle.Flex)
                 alignItems(AlignItems.Center)

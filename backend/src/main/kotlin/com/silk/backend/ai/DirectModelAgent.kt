@@ -143,6 +143,14 @@ class DirectModelAgent(
             val finalized = finalizeAgentResponse(rawResponse)
             lastAgentResponse = AgentResponse(content = finalized.content, references = finalized.references)
         }
+        logger.info("[processInput] refs={}, contentHasCitation={}, contentLen={}",
+            lastAgentResponse!!.references.size,
+            lastAgentResponse!!.content.contains("[citation:"),
+            lastAgentResponse!!.content.length)
+        logger.info("[processInput] content_preview: {}",
+            lastAgentResponse!!.content.take(300).replace('\n', ' '))
+        logger.info("[processInput] content_tail: {}",
+            lastAgentResponse!!.content.takeLast(400).replace('\n', ' '))
         return lastAgentResponse!!.content
     }
 
@@ -151,13 +159,15 @@ class DirectModelAgent(
         return buildString {
             appendLine(base)
             appendLine()
-            appendLine("## 引用规则")
-            appendLine("请使用以下引用格式：")
-            appendLine("- 引用网络搜索结果时使用 [citation:数字]")
-            appendLine("- 引用标记必须放在相关内容的句末或段末")
-            appendLine("- 每个观点通常只需引用2-3个最相关的来源")
-            appendLine("- 禁止堆砌大量引用标记")
-            appendLine("- 只能基于证据回答，不要凭空捏造来源编号")
+            appendLine("## 网络搜索规则（必须遵守）")
+            appendLine("对于天气、新闻、实时数据、股价、赛事等时效性信息，你必须使用 web_search 工具获取最新结果，不能仅凭训练数据回答。")
+            appendLine()
+            appendLine("## 引用规则（必须遵守）")
+            appendLine("当你使用网络搜索获取信息后，必须在回答中标注信息来源：")
+            appendLine("- 引用网络搜索结果时，在相关内容末尾添加 [citation:数字]")
+            appendLine("- 第一个搜索结果的引用编号为 [citation:1]，第二个为 [citation:2]，以此类推")
+            appendLine("- 每个重要观点都必须标注来源引用，不能遗漏")
+            appendLine("- 如果你没有使用网络搜索，则不需要添加引用标记")
         }
     }
 
@@ -230,11 +240,17 @@ class DirectModelAgent(
         }
 
         val response = try {
-            val apiKey = AIConfig.ANTHROPIC_API_KEY
-            if (apiKey.isNotBlank()) {
-                chatViaAnthropicApi(apiKey, toolContext, callback)
-            } else {
+            // 优先使用 Claude CLI（内置 web_search、Grep、Read、glob 工具，原生支持 [citation:N] 引用）
+            try {
                 chatViaClaudeProcess(toolContext, callback)
+            } catch (e: Exception) {
+                logger.warn("⚠️ [DirectModelAgent] Claude CLI 调用失败，回退到 API 路径: ${e.message}")
+                val apiKey = AIConfig.ANTHROPIC_API_KEY
+                if (apiKey.isNotBlank()) {
+                    chatViaAnthropicApi(apiKey, toolContext, callback)
+                } else {
+                    throw e
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -287,7 +303,6 @@ class DirectModelAgent(
         toolContext: String,
         callback: suspend (String, String, Boolean) -> Unit
     ): String {
-        // 提取 system prompt 并与工具上下文合并
         val systemMessages = conversationHistory.filter { it.role == "system" }.mapNotNull { it.content }
         val mergedSystem = buildString {
             if (systemMessages.isNotEmpty()) {
@@ -299,12 +314,49 @@ class DirectModelAgent(
         val nonSystemMessages = conversationHistory.filter { it.role != "system" }
 
         val client = AnthropicClient(apiKey = apiKey)
+
+        // web_search 是 Anthropic 服务端工具，Claude 自行调用并处理搜索结果
+        val tools = listOf(
+            Tool(
+                type = "function",
+                function = ToolDefinition(
+                    name = "web_search",
+                    description = "搜索互联网获取实时信息。当用户询问实时信息、最新新闻、你不知道的内容，或者需要外部数据来回答问题时使用。",
+                    parameters = buildJsonObject {
+                        put("type", "object")
+                        put("properties", buildJsonObject {
+                            put("query", buildJsonObject {
+                                put("type", "string")
+                                put("description", "搜索关键词")
+                            })
+                        })
+                        put("required", buildJsonArray { add("query") })
+                    }
+                )
+            )
+        )
+
         val result = client.streamCompletion(
             systemPrompt = mergedSystem.trim(),
             messages = nonSystemMessages,
-            tools = null,
+            tools = tools,
             callback = callback,
         )
+
+        // 从 Anthropic 响应中提取服务端 web_search 返回的引用元数据
+        val citationCount = result.citations?.size ?: 0
+        result.citations?.forEach { cit ->
+            registerReference("citation", cit.title, cit.url, cit.text)
+        }
+
+        logger.info("[chatViaAnthropicApi] result: content_len={}, citations={}, toolCalls={}",
+            result.content.length, citationCount, result.toolCalls?.size ?: 0)
+        // 记录回复的前 300 字，便于调试引用内容
+        if (result.content.isNotEmpty()) {
+            logger.info("[chatViaAnthropicApi] content_preview: {}",
+                result.content.take(300).replace('\n', ' '))
+        }
+
         return result.content
     }
 
@@ -320,8 +372,12 @@ class DirectModelAgent(
     }
 
     private fun ensureCitationMarkers(content: String): String {
+        if (currentResponseReferences.isEmpty()) {
+            // 没有注册引用时：citation 标记来自 Anthropic 服务端 web_search，始终保留
+            // 只清理 available 标记（旧代码注入的本地文件引用，无引用时无效）
+            return content.replace(Regex("\\[available:\\d+\\]"), "")
+        }
         val cleaned = removeInvalidCitationMarkers(content)
-        if (currentResponseReferences.isEmpty()) return cleaned
         if (Regex("\\[(citation|available):\\d+\\]").containsMatchIn(cleaned)) return cleaned
 
         val topRefs = currentResponseReferences.take(3)
@@ -332,6 +388,12 @@ class DirectModelAgent(
     }
 
     private fun finalizeAgentResponse(content: String): FinalCitationResult {
+        // Claude CLI 路径：无真实引用（空或全是占位），直接剥离标记
+        // 让 Sources: 部分（带真实链接）自然显示
+        if (currentResponseReferences.isEmpty() || currentResponseReferences.all { it.url == null && it.path == null }) {
+            val stripped = content.replace(Regex("\\[(citation|available):\\d+\\]"), "")
+            return FinalCitationResult(stripped, emptyList())
+        }
         val withMarkers = ensureCitationMarkers(content)
         return normalizeCitedReferences(withMarkers)
     }
@@ -348,6 +410,10 @@ class DirectModelAgent(
             .toList()
 
         if (citedKeys.isEmpty()) {
+            // 文本中没有引用标记但有搜索结果的，仍然返回 references 供前端展示来源列表
+            if (currentResponseReferences.isNotEmpty()) {
+                return FinalCitationResult(content, currentResponseReferences.toList())
+            }
             return FinalCitationResult(content, emptyList())
         }
 
@@ -362,6 +428,7 @@ class DirectModelAgent(
         var citationCounter = 0
         var availableCounter = 0
 
+        // 先处理有元数据的引用
         for (ref in citedRefs) {
             val newIndex = if (ref.kind == "citation") {
                 ++citationCounter
@@ -370,6 +437,27 @@ class DirectModelAgent(
             }
             reindexMap["${ref.kind}:${ref.index}"] = newIndex
             newRefs.add(ref.copy(index = newIndex))
+        }
+
+        // 对文本中有标记但无对应元数据的（如 Claude CLI 输出的 [citation:N]），创建占位引用
+        for (key in citedKeys) {
+            if (reindexMap.containsKey(key)) continue
+            val kind = key.substringBefore(":")
+            val idx = key.substringAfter(":").toIntOrNull() ?: continue
+            val newIndex = if (kind == "citation" || kind == "available") {
+                if (kind == "citation") ++citationCounter else ++availableCounter
+            } else continue
+            reindexMap[key] = newIndex
+            newRefs.add(
+                com.silk.backend.models.MessageReference(
+                    kind = kind,
+                    index = newIndex,
+                    title = "${if (kind == "citation") "来源" else "资料"} $idx",
+                    snippet = null,
+                    url = null,
+                    path = null
+                )
+            )
         }
 
         val newContent = citedPattern.replace(content) { match ->

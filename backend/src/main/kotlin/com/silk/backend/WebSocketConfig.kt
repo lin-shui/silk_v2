@@ -689,6 +689,7 @@ class ChatServer(
             }
             appendLine()
             appendLine("你可以使用互联网搜索工具来查找最新信息。")
+            appendLine("对于天气、新闻、实时数据等时效性信息，你必须使用互联网搜索获取最新结果，不能仅凭训练数据回答。")
             appendLine()
             appendLine("【HarmonyOS 元服务能力】")
             appendLine("你在 HarmonyOS 系统上运行，支持调用系统元服务（免安装应用）：")

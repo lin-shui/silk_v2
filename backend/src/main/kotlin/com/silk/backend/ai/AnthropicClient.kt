@@ -39,9 +39,16 @@ class AnthropicClient(
         prettyPrint = true
     }
 
+    data class Citation(
+        val title: String,
+        val url: String,
+        val text: String
+    )
+
     data class AnthropicStreamResult(
         val content: String,
-        val toolCalls: List<ToolCall>? = null
+        val toolCalls: List<ToolCall>? = null,
+        val citations: List<Citation>? = null
     )
 
     // ── 公开 API ─────────────────────────────────────────────────────────
@@ -85,6 +92,18 @@ class AnthropicClient(
 
         // 2. 转换 tools → Anthropic 格式
         val apiTools = if (tools != null) tools.mapNotNull { convertTool(it) } else null
+        logger.info("[Anthropic] Request: tools={}, model={}, messages={}",
+            apiTools?.size ?: 0, model, filteredMessages.size)
+        logger.info("[Anthropic] system_prompt_preview: {}",
+            mergedSystem.trim().take(300).replace('\n', ' '))
+        if (!apiTools.isNullOrEmpty()) {
+            logger.info("[Anthropic] tools_json: {}",
+                JsonArray(apiTools).toString().take(500))
+        }
+        logger.info("[Anthropic] last_user_msg: {}",
+            filteredMessages.lastOrNull()?.let {
+                if (it.role == "user") it.content?.take(100) else "not user"
+            } ?: "empty")
 
         // 3. 构建请求体
         val bodyObj = buildJsonObject {
@@ -135,8 +154,11 @@ class AnthropicClient(
         // tool_use 收集（key = block index）
         val pendingToolUses = mutableMapOf<Int, PendingToolUse>()
 
-        // 记录完成的 tool_use
+        // 记录完成的 tool_use（过滤掉服务端工具，如 web_search）
         val completedToolCalls = mutableListOf<ToolCall>()
+
+        // 收集引用元数据（来自服务端 web_search 的结果）
+        val collectedCitations = mutableListOf<Citation>()
 
         // 流式读取带 watchdog 超时保护（强制关闭 InputStream 以中断 blocking readLine）
         val inputStream = response.body()
@@ -161,7 +183,7 @@ class AnthropicClient(
                                     continue
                                 }
                                 try {
-                                    handleEvent(data, fullText, pendingToolUses, completedToolCalls)
+                                    handleEvent(data, fullText, pendingToolUses, completedToolCalls, collectedCitations)
                                     // 将累积文本通过流式回调逐段发送
                                     if (fullText.length - lastSentLength >= sendThreshold) {
                                         val chunk = fullText.substring(lastSentLength)
@@ -192,7 +214,8 @@ class AnthropicClient(
 
         return AnthropicStreamResult(
             content = fullText.toString(),
-            toolCalls = completedToolCalls.ifEmpty { null }
+            toolCalls = completedToolCalls.ifEmpty { null },
+            citations = collectedCitations.ifEmpty { null }
         )
     }
 
@@ -201,20 +224,92 @@ class AnthropicClient(
         fullText: StringBuilder,
         pendingToolUses: MutableMap<Int, PendingToolUse>,
         completedToolCalls: MutableList<ToolCall>,
+        collectedCitations: MutableList<Citation>,
     ) {
         val obj = json.parseToJsonElement(data).jsonObject
-        val type = obj["type"]?.jsonPrimitive?.content
+        val type = obj["type"]?.jsonPrimitive?.content ?: ""
 
         when (type) {
             "content_block_start" -> {
                 val index = obj["index"]?.jsonPrimitive?.int ?: return
                 val block = obj["content_block"]?.jsonObject ?: return
                 val blockType = block["type"]?.jsonPrimitive?.content
+                logger.info("[Anthropic SSE] content_block_start index={}, type={}", index, blockType)
 
-                if (blockType == "tool_use") {
-                    val id = block["id"]?.jsonPrimitive?.content ?: ""
-                    val name = block["name"]?.jsonPrimitive?.content ?: ""
-                    pendingToolUses[index] = PendingToolUse(id = id, name = name, arguments = StringBuilder())
+                when (blockType) {
+                    "tool_use", "server_tool_use" -> {
+                        val id = block["id"]?.jsonPrimitive?.content ?: ""
+                        val name = block["name"]?.jsonPrimitive?.content ?: ""
+                        logger.info("[Anthropic] {}: id={}, name={}", blockType, id, name)
+                        // 服务端工具不加入 pendingToolUses（Anthropic 自行处理）
+                        if (blockType == "server_tool_use") {
+                            logger.info("[Anthropic] 服务端工具调用: {}", name)
+                        } else {
+                            pendingToolUses[index] = PendingToolUse(id = id, name = name, arguments = StringBuilder())
+                        }
+                    }
+                    "text" -> {
+                        // 服务端 web_search 的引用元数据嵌入在 text content block 中
+                        val citationsArray = block["citations"]?.jsonArray
+                        if (citationsArray != null) {
+                            logger.info("[Anthropic] text block 发现 citations, count={}", citationsArray.size)
+                        }
+                        citationsArray?.forEach { citElem ->
+                            val cit = citElem.jsonObject
+                            collectedCitations.add(Citation(
+                                title = cit["title"]?.jsonPrimitive?.content ?: "",
+                                url = cit["url"]?.jsonPrimitive?.content ?: "",
+                                text = cit["text"]?.jsonPrimitive?.content ?: "",
+                            ))
+                        }
+                    }
+                    "web_search_tool_result" -> {
+                        logger.info("[Anthropic] web_search_tool_result block keys: {}",
+                            block.keys.joinToString(", "))
+                        val content = extractTextContent(block)
+                        if (content.isNotEmpty()) {
+                            fullText.append(content)
+                        }
+                        // 优先从 citations/sources 字段提取引用
+                        val citationsArray = block["citations"]?.jsonArray
+                        if (citationsArray != null) {
+                            logger.info("[Anthropic] web_search_tool_result: citations={}", citationsArray.size)
+                            citationsArray.forEach { citElem ->
+                                val cit = citElem.jsonObject
+                                collectedCitations.add(Citation(
+                                    title = cit["title"]?.jsonPrimitive?.content ?: "",
+                                    url = cit["url"]?.jsonPrimitive?.content ?: "",
+                                    text = cit["text"]?.jsonPrimitive?.content ?: "",
+                                ))
+                            }
+                        } else {
+                            // DeepSeek 等代理：从 web_search_result 数组中提取 URL 作为引用
+                            val searchResults = block["content"]?.jsonArray
+                            if (searchResults != null) {
+                                var count = 0
+                                for (result in searchResults) {
+                                    val obj = try { result.jsonObject } catch (_: Exception) { null } ?: continue
+                                    val title = obj["title"]?.jsonPrimitive?.content ?: ""
+                                    val url = obj["url"]?.jsonPrimitive?.content ?: ""
+                                    if (url.isNotEmpty()) {
+                                        collectedCitations.add(Citation(
+                                            title = title.ifEmpty { "搜索结果 #${count + 1}" },
+                                            url = url,
+                                            text = title.ifEmpty { url }
+                                        ))
+                                        count++
+                                    }
+                                }
+                                logger.info("[Anthropic] web_search_tool_result: 从 content 提取 {} 条引用", count)
+                            }
+                        }
+                    }
+                    "thinking" -> {
+                        // Claude 思考过程，跳过
+                    }
+                    else -> {
+                        logger.warn("[Anthropic] 未知 content_block 类型: {}", blockType)
+                    }
                 }
             }
 
@@ -232,6 +327,20 @@ class AnthropicClient(
                         val partial = delta["partial_json"]?.jsonPrimitive?.content ?: ""
                         pendingToolUses[index]?.arguments?.append(partial)
                     }
+                    // web_search_tool_result 等块的 delta 可能含文本
+                    "content_delta" -> {
+                        val text = delta["text"]?.jsonPrimitive?.content ?: delta["content"]?.jsonPrimitive?.content ?: ""
+                        if (text.isNotEmpty()) fullText.append(text)
+                    }
+                    else -> {
+                        // 尝试从任何 delta 中提取文本
+                        val text = delta["text"]?.jsonPrimitive?.content
+                            ?: delta["content"]?.jsonPrimitive?.content ?: ""
+                        if (text.isNotEmpty()) {
+                            logger.info("[Anthropic] 非标准 delta '{}' 含文本: {}...", deltaType, text.take(80))
+                            fullText.append(text)
+                        }
+                    }
                 }
             }
 
@@ -239,6 +348,12 @@ class AnthropicClient(
                 val index = obj["index"]?.jsonPrimitive?.int ?: return
                 val pending = pendingToolUses.remove(index)
                 if (pending != null) {
+                    // web_search 是服务端工具，Anthropic 自行处理，我们无需响应
+                    if (pending.name == "web_search") {
+                        logger.info("[Anthropic] Claude 使用了 web_search")
+                        return
+                    }
+
                     val rawArgs = pending.arguments.toString().trim()
                     // 修复/验证 JSON
                     val validArgs = try {
@@ -413,6 +528,22 @@ class AnthropicClient(
         } catch (_: Exception) {
             null
         }
+    }
+
+    /** 从各种类型的 content 字段中提取文本 */
+    private fun extractTextContent(block: JsonObject): String {
+        // 尝试直接字符串
+        block["text"]?.jsonPrimitive?.content?.let { return it }
+        block["content"]?.jsonPrimitive?.content?.let { return it }
+        // 尝试 content 为数组（如 content block 数组）
+        block["content"]?.jsonArray?.let { arr ->
+            val texts = arr.mapNotNull { elem ->
+                val obj = try { elem.jsonObject } catch (_: Exception) { null } ?: return@mapNotNull null
+                obj["text"]?.jsonPrimitive?.content ?: obj["content"]?.jsonPrimitive?.content
+            }
+            if (texts.isNotEmpty()) return texts.joinToString("\n")
+        }
+        return ""
     }
 
     // ── 测试辅助 ──────────────────────────────────────────────────────────

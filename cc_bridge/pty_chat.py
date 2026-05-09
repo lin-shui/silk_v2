@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 """
-PTY bridge for claude CLI - forces line-buffered output via pseudo-terminal.
-
-Usage:
-    python3 pty_chat.py <prompt_file>
-
-Reads the prompt from the specified file, spawns `claude -p <prompt>`
-inside a PTY, and forwards output to stdout byte-by-byte for real-time streaming.
+PTY bridge for claude CLI - forces real-time token streaming via --include-partial-messages.
+Parses stream-json output and extracts plain text to stdout.
 """
 
+import json
 import os
 import pty
 import select
@@ -23,15 +19,11 @@ def main():
 
     prompt_file = sys.argv[1]
 
-    # Read prompt from file (to avoid shell escaping issues)
-    try:
-        with open(prompt_file, "r", encoding="utf-8") as f:
-            prompt = f.read()
-    except Exception as e:
-        print(f"Error reading prompt file: {e}", file=sys.stderr)
-        sys.exit(1)
+    with open(prompt_file, "r", encoding="utf-8") as f:
+        prompt = f.read()
 
-    # Build claude command
+    # --include-partial-messages enables real-time token-by-token output
+    # requires --print and --output-format=stream-json
     cmd = [
         "claude",
         "-p", prompt,
@@ -39,21 +31,21 @@ def main():
         "--disallowedTools", "Bash,Write,Edit,ExecuteCommand",
         "--no-chrome",
         "--permission-mode", "bypassPermissions",
+        "--print",
+        "--output-format", "stream-json",
+        "--verbose",
+        "--include-partial-messages",
     ]
 
     pid, fd = pty.fork()
 
     if pid == 0:
-        # Child process: execute claude
         os.execvp(cmd[0], cmd)
-        # If exec fails
         sys.exit(1)
 
-    # Parent process: read from PTY and forward to stdout
     try:
         _forward_pty_output(fd, pid)
     finally:
-        # Clean up
         try:
             os.close(fd)
         except OSError:
@@ -64,8 +56,36 @@ def main():
             pass
 
 
+def _try_extract_text(line: str) -> str | None:
+    """Try to parse a JSON line from claude stream-json and return the text content delta."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+
+    # Stream events wrap content deltas
+    if obj.get("type") != "stream_event":
+        return None
+
+    event = obj.get("event", {})
+    if event.get("type") != "content_block_delta":
+        return None
+
+    delta = event.get("delta", {})
+    if delta.get("type") == "text_delta":
+        text = delta.get("text", "")
+        if text:
+            return text
+
+    return None
+
+
 def _forward_pty_output(fd: int, pid: int) -> None:
-    """Read PTY output and forward to stdout with immediate flush."""
+    """Read PTY output, parse stream-json, and forward plain text to stdout."""
+    buf = ""
     while True:
         try:
             r, _, _ = select.select([fd], [], [], 0.5)
@@ -73,20 +93,31 @@ def _forward_pty_output(fd: int, pid: int) -> None:
                 data = os.read(fd, 4096)
                 if not data:
                     break
-                # Write to stdout (which may be piped to Java)
-                sys.stdout.buffer.write(data)
-                sys.stdout.buffer.flush()
+                buf += data.decode("utf-8", errors="replace")
+
+                # Process complete lines (NDJSON)
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    text = _try_extract_text(line)
+                    if text:
+                        sys.stdout.write(text)
+                        sys.stdout.flush()
         except (OSError, ValueError):
             break
 
-    # Drain remaining
+    # Drain any remaining data
     try:
         while True:
             data = os.read(fd, 4096)
             if not data:
                 break
-            sys.stdout.buffer.write(data)
-            sys.stdout.buffer.flush()
+            buf += data.decode("utf-8", errors="replace")
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
+                text = _try_extract_text(line)
+                if text:
+                    sys.stdout.write(text)
+                    sys.stdout.flush()
     except OSError:
         pass
 
