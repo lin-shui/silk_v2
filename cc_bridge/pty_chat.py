@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 PTY bridge for claude CLI - forces real-time token streaming via --include-partial-messages.
-Parses stream-json output, extracts text and thinking deltas to stdout.
+Parses stream-json output, streams thinking and text deltas incrementally to stdout.
 """
 
 import json
@@ -22,8 +22,6 @@ def main():
     with open(prompt_file, "r", encoding="utf-8") as f:
         prompt = f.read()
 
-    # --include-partial-messages enables real-time token-by-token output
-    # requires --print and --output-format=stream-json
     cmd = [
         "claude",
         "-p", prompt,
@@ -78,26 +76,30 @@ def _process_line(line: str, state: dict) -> str:
         if block_type == "thinking":
             state["in_thinking"] = True
             state["thinking_buf"] = []
+            state["thinking_emitted_len"] = 0
         elif block_type == "text":
             state["in_text"] = True
-            # Flush any pending thinking before text starts
-            if state.get("thinking_buf"):
-                thinking_text = "".join(state["thinking_buf"])
-                state["thinking_buf"] = None
-                # Format thinking as a markdown blockquote with header
-                # This renders reliably in any markdown renderer without frontend changes
-                indented = "\n> ".join(thinking_text.split("\n"))
-                return "\n\n> **思考过程**\n> \n> " + indented + "\n\n---\n\n"
+            # Flush remaining thinking and insert marker
+            result = _flush_thinking(state)
+            return result + "\n\n<!--THINKING_END-->\n\n"
         return ""
 
     elif event_type == "content_block_delta":
         delta = event.get("delta", {})
         delta_type = delta.get("type", "")
 
-        if delta_type == "thinking_delta" and state.get("in_thinking") and state.get("thinking_buf") is not None:
+        if delta_type == "thinking_delta" and state.get("in_thinking"):
             text = delta.get("thinking", "")
             if text:
                 state["thinking_buf"].append(text)
+                # Periodically flush new thinking for progressive display
+                acc = "".join(state["thinking_buf"])
+                em = state["thinking_emitted_len"]
+                if len(acc) - em >= 250:
+                    new_text = acc[em:]
+                    state["thinking_emitted_len"] = len(acc)
+                    if new_text:
+                        return new_text
             return ""
 
         if delta_type == "text_delta":
@@ -111,6 +113,21 @@ def _process_line(line: str, state: dict) -> str:
         return ""
 
     return ""
+
+
+def _flush_thinking(state: dict) -> str:
+    """Flush any remaining buffered thinking content as plain text."""
+    buf = state.get("thinking_buf")
+    if not buf:
+        return ""
+    acc = "".join(buf)
+    em = state["thinking_emitted_len"]
+    if em >= len(acc):
+        return ""
+    new_text = acc[em:]
+    state["thinking_emitted_len"] = len(acc)
+    new_text = new_text.lstrip()
+    return new_text
 
 
 def _forward_pty_output(fd: int, pid: int) -> None:

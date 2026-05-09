@@ -3589,9 +3589,25 @@ fun MarkdownContent(
     val markdownEngine = rememberMarkdownEngine()
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
     val safeHtml = remember(content, references) {
+        // Convert thinking section (before <!--THINKING_END-->) to collapsible <details>
+        val withThinkingDetails = if (content.contains("<!--THINKING_END-->")) {
+            content.replace(Regex("([\\s\\S]*?)<!--THINKING_END-->\\n*")) { match ->
+                val thinkingText = match.groupValues[1].trim()
+                val escaped = thinkingText
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace("\n", "<br>")
+                "<details class=\"silk-thinking-details\" open>\n" +
+                "<summary>💭 思考过程</summary>\n" +
+                escaped + "\n</details>\n\n"
+            }
+        } else {
+            content
+        }
         val linked = linkCitationMarkers(
             DOMPurify.sanitize(
-                markdownEngine.render(normalizeMathBlocks(content)),
+                markdownEngine.render(normalizeMathBlocks(withThinkingDetails)),
                 createSanitizeConfig()
             ),
             references,
