@@ -3605,9 +3605,14 @@ fun MarkdownContent(
         } else {
             content
         }
+        // Normalize headings missing space after # (e.g., "##一、" → "## 一、")
+        val normalizedHeadings = withThinkingDetails.replace(
+            Regex("^(#{1,6})([^#\\s])", RegexOption.MULTILINE),
+            "$1 $2"
+        )
         val linked = linkCitationMarkers(
             DOMPurify.sanitize(
-                markdownEngine.render(normalizeMathBlocks(withThinkingDetails)),
+                markdownEngine.render(normalizeMathBlocks(normalizedHeadings)),
                 createSanitizeConfig()
             ),
             references,
