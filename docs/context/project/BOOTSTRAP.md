@@ -25,11 +25,14 @@
 - 统一运维脚本：`silk.sh`
 - 快检工作流：`.github/workflows/ci-fast-validation.yml`
 - 脚本 smoke 工作流：`.github/workflows/ci-script-smoke.yml`
+- Lint 配置与 baseline：`config/lint/detekt.yml`、`config/lint/detekt/`
 - Backend 测试说明：`backend/src/test/kotlin/com/silk/backend/README_TESTS.md`
 
 ## Default Local Commands
 
 - 只读状态：`./silk.sh status`
+- 仓库 lint：`./gradlew silkLint`
+- lint baseline 刷新：`./gradlew silkLintBaseline`
 - Backend 快检：`./gradlew :backend:test`
 - Web 快检：`./gradlew :frontend:webApp:nodeTest :frontend:webApp:compileProductionExecutableKotlinJs`
 - Android 快检：`./gradlew :frontend:androidApp:testDebugUnitTest :frontend:androidApp:compileDebugKotlin`

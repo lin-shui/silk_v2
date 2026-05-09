@@ -48,6 +48,9 @@ jobs:
       - name: Smoke check silk.sh status
         run: ./silk.sh status
 
+      - name: Run Silk lint
+        run: ./gradlew $GRADLE_ARGS_COMMON silkLint
+
       - name: Run backend, packaging, web, and desktop fast validation
         run: |
           ./gradlew $GRADLE_ARGS_COMMON \
@@ -57,6 +60,19 @@ jobs:
             :frontend:webApp:compileProductionExecutableKotlinJs \
             :frontend:desktopApp:test \
             :frontend:desktopApp:compileKotlin
+
+      - name: Upload lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-reports
+          path: |
+            backend/build/reports/detekt
+            frontend/shared/build/reports/detekt
+            frontend/webApp/build/reports/detekt
+            frontend/desktopApp/build/reports/detekt
+            frontend/androidApp/build/reports/detekt
+          if-no-files-found: ignore
 
       - name: Upload backend test reports
         if: always()

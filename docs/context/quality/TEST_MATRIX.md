@@ -76,6 +76,15 @@
 - CI supplement:
   - `.github/workflows/ci-script-smoke.yml` 覆盖 `./silk.sh build`、`./silk.sh build-apk` 与 `./silk.sh build-all` 编排 smoke
 
+## Kotlin / Script Lint
+
+- Command: `./gradlew silkLint`
+- Coverage:
+  - detekt checks Kotlin source across `backend` and Gradle frontends
+  - `silkScriptLint` checks `silk.sh` with `bash -n`
+- Maintenance:
+  - `./gradlew silkLintBaseline` regenerates `config/lint/detekt/` baselines for intentionally accepted existing findings
+
 ## When Payloads Change
 
 同时触发：

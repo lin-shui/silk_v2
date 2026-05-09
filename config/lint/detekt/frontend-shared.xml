@@ -1,0 +1,40 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>ClassNaming:Strings_EN.kt$Strings_EN : Strings</ID>
+    <ID>ClassNaming:Strings_ZH.kt$Strings_ZH : Strings</ID>
+    <ID>ComplexCondition:ChatClient.kt$ChatClient$_isLoadingHistory.value &amp;&amp; !message.isTransient &amp;&amp; message.category != MessageCategory.AGENT_STATUS &amp;&amp; message.type != MessageType.RECALL</ID>
+    <ID>CyclomaticComplexMethod:ChatClient.kt$ChatClient$private fun handleMessage(text: String)</ID>
+    <ID>CyclomaticComplexMethod:PlatformWebSocket.android.kt$PlatformWebSocket$actual fun connect(userId: String, userName: String, groupId: String)</ID>
+    <ID>CyclomaticComplexMethod:PlatformWebSocket.jvm.kt$PlatformWebSocket$actual fun connect(userId: String, userName: String, groupId: String)</ID>
+    <ID>NestedBlockDepth:ChatClient.kt$ChatClient$private fun handleMessage(text: String)</ID>
+    <ID>SwallowedException:PlatformWebSocket.jvm.kt$PlatformWebSocket$e: CancellationException</ID>
+    <ID>TooGenericExceptionCaught:ChatClient.kt$ChatClient$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:PlatformWebSocket.android.kt$PlatformWebSocket$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:PlatformWebSocket.js.kt$PlatformWebSocket$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:PlatformWebSocket.jvm.kt$PlatformWebSocket$e: Exception</ID>
+    <ID>UnusedPrivateProperty:DateTimeUtils.kt$val date = Date(timestamp.toDouble())</ID>
+    <ID>WildcardImport:ChatClient.kt$import kotlinx.coroutines.flow.*</ID>
+    <ID>WildcardImport:Platform.android.kt$import io.ktor.client.*</ID>
+    <ID>WildcardImport:Platform.android.kt$import io.ktor.client.engine.okhttp.*</ID>
+    <ID>WildcardImport:Platform.android.kt$import io.ktor.client.plugins.websocket.*</ID>
+    <ID>WildcardImport:Platform.js.kt$import io.ktor.client.*</ID>
+    <ID>WildcardImport:Platform.js.kt$import io.ktor.client.engine.js.*</ID>
+    <ID>WildcardImport:Platform.js.kt$import io.ktor.client.plugins.websocket.*</ID>
+    <ID>WildcardImport:Platform.jvm.kt$import io.ktor.client.*</ID>
+    <ID>WildcardImport:Platform.jvm.kt$import io.ktor.client.engine.cio.*</ID>
+    <ID>WildcardImport:Platform.jvm.kt$import io.ktor.client.plugins.websocket.*</ID>
+    <ID>WildcardImport:Platform.kt$import io.ktor.client.*</ID>
+    <ID>WildcardImport:PlatformWebSocket.android.kt$import io.ktor.client.*</ID>
+    <ID>WildcardImport:PlatformWebSocket.android.kt$import io.ktor.client.engine.okhttp.*</ID>
+    <ID>WildcardImport:PlatformWebSocket.android.kt$import io.ktor.client.plugins.websocket.*</ID>
+    <ID>WildcardImport:PlatformWebSocket.android.kt$import io.ktor.websocket.*</ID>
+    <ID>WildcardImport:PlatformWebSocket.android.kt$import kotlinx.coroutines.*</ID>
+    <ID>WildcardImport:PlatformWebSocket.jvm.kt$import io.ktor.client.*</ID>
+    <ID>WildcardImport:PlatformWebSocket.jvm.kt$import io.ktor.client.engine.cio.*</ID>
+    <ID>WildcardImport:PlatformWebSocket.jvm.kt$import io.ktor.client.plugins.websocket.*</ID>
+    <ID>WildcardImport:PlatformWebSocket.jvm.kt$import io.ktor.websocket.*</ID>
+    <ID>WildcardImport:PlatformWebSocket.jvm.kt$import kotlinx.coroutines.*</ID>
+  </CurrentIssues>
+</SmellBaseline>
