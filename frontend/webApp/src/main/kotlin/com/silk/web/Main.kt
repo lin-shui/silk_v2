@@ -3372,6 +3372,31 @@ private val silkMarkdownRuntimeCss = """
         background-color: #FFF0D5;
         border-color: #C9A86C;
     }
+    .silk-thinking-details {
+        margin: 8px 0;
+        background: #FAF8F4;
+        border: 1px solid #E8E0D4;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    .silk-thinking-details summary {
+        padding: 8px 12px;
+        cursor: pointer;
+        user-select: none;
+        font-size: 12px;
+        color: #8B7355;
+        font-weight: 500;
+    }
+    .silk-thinking-details[open] summary {
+        border-bottom: 1px solid #E8E0D4;
+    }
+    .silk-thinking-details > :not(summary) {
+        padding: 8px 12px;
+        font-size: 12px;
+        color: #8B7355;
+        line-height: 1.6;
+        background: #FAF8F4;
+    }
 """.trimIndent()
 
 @Suppress("UNUSED_EXPRESSION")
@@ -3496,8 +3521,8 @@ private fun createMarkdownEngine(): MarkdownIt {
 @NoLiveLiterals
 private fun createSanitizeConfig(): dynamic {
     val config = js("{}")
-    config.ADD_TAGS = arrayOf("input")
-    config.ADD_ATTR = arrayOf("checked", "disabled", "type", "class")
+    config.ADD_TAGS = arrayOf("input", "details", "summary")
+    config.ADD_ATTR = arrayOf("checked", "disabled", "type", "class", "open")
     return config
 }
 
@@ -4665,10 +4690,10 @@ fun TransientMessageItem(message: Message) {
     val timeString = remember(message.timestamp) {
         formatMessageTimestampForWeb(message.timestamp)
     }
-    
+
     // 循环进度动画状态
     var progress by remember { mutableStateOf(0) }
-    
+
     LaunchedEffect(Unit) {
         // 循环动画：0 → 100 → 0 不断循环
         while (true) {
@@ -4678,16 +4703,16 @@ fun TransientMessageItem(message: Message) {
             }
         }
     }
-    
+
     Div({ classes(SilkStylesheet.transientMessageCard) }) {
-        Div({ 
+        Div({
             style {
                 display(DisplayStyle.Flex)
                 property("justify-content", "space-between")
                 marginBottom(6.px)
             }
         }) {
-            Span({ 
+            Span({
                 style {
                     property("font-weight", "600")
                     color(Color(SilkColors.primaryDark))
@@ -4695,7 +4720,7 @@ fun TransientMessageItem(message: Message) {
             }) {
                 Text("${message.userName} (处理中...)")
             }
-            Span({ 
+            Span({
                 style {
                     fontSize(11.px)
                     color(Color(SilkColors.textLight))
@@ -4704,7 +4729,7 @@ fun TransientMessageItem(message: Message) {
                 Text(timeString)
             }
         }
-        
+
         // 如果有步骤信息，显示进度条
         if (message.currentStep != null && message.totalSteps != null) {
             Div({ classes(SilkStylesheet.progressBarContainer) }) {
@@ -4722,10 +4747,10 @@ fun TransientMessageItem(message: Message) {
                     Span { Text("步骤 ${message.currentStep}/${message.totalSteps}") }
                     Span { Text("处理中...") }
                 }
-                
+
                 // 进度条
                 Div({ classes(SilkStylesheet.progressBar) }) {
-                    Div({ 
+                    Div({
                         classes(SilkStylesheet.progressFill)
                         style {
                             val totalProgress = ((message.currentStep!! - 1) * 100 + progress) / message.totalSteps!!
@@ -4735,7 +4760,7 @@ fun TransientMessageItem(message: Message) {
                 }
             }
         }
-        
+
         Div({
             style {
                 color(Color(SilkColors.textSecondary))

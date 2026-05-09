@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 PTY bridge for claude CLI - forces real-time token streaming via --include-partial-messages.
-Parses stream-json output and extracts plain text to stdout.
+Parses stream-json output, extracts text and thinking deltas to stdout.
 """
 
 import json
@@ -56,36 +56,68 @@ def main():
             pass
 
 
-def _try_extract_text(line: str) -> str | None:
-    """Try to parse a JSON line from claude stream-json and return the text content delta."""
+def _process_line(line: str, state: dict) -> str:
+    """Process a JSON line and update state. Returns text to emit (may be empty)."""
     line = line.strip()
     if not line:
-        return None
+        return ""
     try:
         obj = json.loads(line)
     except json.JSONDecodeError:
-        return None
+        return ""
 
-    # Stream events wrap content deltas
     if obj.get("type") != "stream_event":
-        return None
+        return ""
 
     event = obj.get("event", {})
-    if event.get("type") != "content_block_delta":
-        return None
+    event_type = event.get("type", "")
 
-    delta = event.get("delta", {})
-    if delta.get("type") == "text_delta":
-        text = delta.get("text", "")
-        if text:
-            return text
+    if event_type == "content_block_start":
+        block = event.get("content_block", {})
+        block_type = block.get("type", "")
+        if block_type == "thinking":
+            state["in_thinking"] = True
+            state["thinking_buf"] = []
+        elif block_type == "text":
+            state["in_text"] = True
+            # Flush any pending thinking before text starts
+            if state.get("thinking_buf"):
+                thinking_text = "".join(state["thinking_buf"])
+                state["thinking_buf"] = None
+                # Format thinking as a markdown blockquote with header
+                # This renders reliably in any markdown renderer without frontend changes
+                indented = "\n> ".join(thinking_text.split("\n"))
+                return "\n\n> **思考过程**\n> \n> " + indented + "\n\n---\n\n"
+        return ""
 
-    return None
+    elif event_type == "content_block_delta":
+        delta = event.get("delta", {})
+        delta_type = delta.get("type", "")
+
+        if delta_type == "thinking_delta" and state.get("in_thinking") and state.get("thinking_buf") is not None:
+            text = delta.get("thinking", "")
+            if text:
+                state["thinking_buf"].append(text)
+            return ""
+
+        if delta_type == "text_delta":
+            return delta.get("text", "")
+
+        return ""
+
+    elif event_type == "content_block_stop":
+        state["in_thinking"] = False
+        state["in_text"] = False
+        return ""
+
+    return ""
 
 
 def _forward_pty_output(fd: int, pid: int) -> None:
     """Read PTY output, parse stream-json, and forward plain text to stdout."""
+    state = {"in_thinking": False, "in_text": False, "thinking_buf": None}
     buf = ""
+
     while True:
         try:
             r, _, _ = select.select([fd], [], [], 0.5)
@@ -95,17 +127,15 @@ def _forward_pty_output(fd: int, pid: int) -> None:
                     break
                 buf += data.decode("utf-8", errors="replace")
 
-                # Process complete lines (NDJSON)
                 while "\n" in buf:
                     line, buf = buf.split("\n", 1)
-                    text = _try_extract_text(line)
+                    text = _process_line(line, state)
                     if text:
                         sys.stdout.write(text)
                         sys.stdout.flush()
         except (OSError, ValueError):
             break
 
-    # Drain any remaining data
     try:
         while True:
             data = os.read(fd, 4096)
@@ -114,7 +144,7 @@ def _forward_pty_output(fd: int, pid: int) -> None:
             buf += data.decode("utf-8", errors="replace")
             while "\n" in buf:
                 line, buf = buf.split("\n", 1)
-                text = _try_extract_text(line)
+                text = _process_line(line, state)
                 if text:
                     sys.stdout.write(text)
                     sys.stdout.flush()
