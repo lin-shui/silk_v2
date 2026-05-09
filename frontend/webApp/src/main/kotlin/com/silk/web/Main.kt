@@ -3589,24 +3589,31 @@ fun MarkdownContent(
     val markdownEngine = rememberMarkdownEngine()
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
     val safeHtml = remember(content, references) {
+        // Escape < followed by non-HTML-tag characters (e.g., "<1.2m" → "&lt;1.2m")
+        // before any other processing, so DOMPurify won't strip them as invalid tags.
+        val htmlSafeContent = content.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
         // Convert thinking section (before <!--THINKING_END-->) to collapsible <details>
+        // Note: processing on raw `content` so thinking-text escaping doesn't double-escape
         val withThinkingDetails = if (content.contains("<!--THINKING_END-->")) {
-            content.replace(Regex("([\\s\\S]*?)<!--THINKING_END-->\\n*")) { match ->
-                val thinkingText = match.groupValues[1].trim()
-                val escaped = thinkingText
-                    .replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-                    .replace("\n", "<br>")
-                "<details class=\"silk-thinking-details\" open>\n" +
-                "<summary>💭 思考过程</summary>\n" +
-                escaped + "\n</details>\n\n"
-            }
+            val idx = content.indexOf("<!--THINKING_END-->")
+            val thinkingText = content.substring(0, idx).trim()
+            val escaped = thinkingText
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\n", "<br>")
+            "<details class=\"silk-thinking-details\" open>\n" +
+            "<summary>💭 思考过程</summary>\n" +
+            escaped + "\n</details>\n\n" +
+            // Response part uses htmlSafeContent version (with < escaped)
+            htmlSafeContent.substring(idx + "<!--THINKING_END-->".length).trimStart('\n')
         } else {
-            content
+            htmlSafeContent
         }
+        // Collapse excessive blank lines (3+ → 1 blank line)
+        val reducedBlanks = withThinkingDetails.replace(Regex("\\n{3,}"), "\n\n")
         // Normalize headings missing space after # (e.g., "##一、" → "## 一、")
-        val normalizedHeadings = withThinkingDetails.replace(
+        val normalizedHeadings = reducedBlanks.replace(
             Regex("^(#{1,6})([^#\\s])", RegexOption.MULTILINE),
             "$1 $2"
         )
