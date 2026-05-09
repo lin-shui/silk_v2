@@ -507,7 +507,7 @@ object AgentRuntime {
                             com.silk.backend.agents.core.AcpExtensions.listLocalSessions(acp, ctx.workingDir)
                         }
                         broadcastFn(AgentMessages.status(
-                            result.toString(),
+                            com.silk.backend.agents.core.AcpExtensions.formatLocalSessionsForDisplay(result),
                             agentUserId = descriptor.agentUserId,
                             agentName = descriptor.displayName,
                         ))

@@ -3,10 +3,16 @@ package com.silk.backend.agents.core
 
 import com.silk.backend.agents.acp.AcpClient
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 object AcpExtensions {
+
+    private val whitespaceRegex = Regex("\\s+")
 
     /** /compact */
     suspend fun compact(acp: AcpClient, sessionId: String): JsonElement {
@@ -36,5 +42,47 @@ object AcpExtensions {
             put("path", path)
             put("showHidden", showHidden)
         })
+    }
+
+    /** 把 `_silk/list_local_sessions` 的 JSON 结果转成适合 Agent 状态框展示的多行文本。 */
+    fun formatLocalSessionsForDisplay(result: JsonElement): String {
+        val sessions = runCatching {
+            result.jsonObject["sessions"]?.jsonArray
+        }.getOrNull() ?: return result.toString()
+
+        if (sessions.isEmpty()) return "当前目录下没有本地会话"
+
+        return buildString {
+            appendLine("本地会话 (${sessions.size} 条):")
+            sessions.forEachIndexed { index, item ->
+                val obj = runCatching { item.jsonObject }.getOrNull()
+                if (obj == null) {
+                    appendLine("${index + 1}. ${item.toString()}")
+                    return@forEachIndexed
+                }
+
+                val sessionId = obj["sessionId"]?.jsonPrimitive?.contentOrNull
+                    ?.trim()
+                    ?.ifBlank { null }
+                    ?: "unknown-session"
+                val title = obj["title"]?.jsonPrimitive?.contentOrNull
+                    ?.replace(whitespaceRegex, " ")
+                    ?.trim()
+                    ?.ifBlank { null }
+                    ?: "无标题"
+                val lastActivity = obj["lastActivity"]?.jsonPrimitive?.contentOrNull
+                    ?.trim()
+                    ?.ifBlank { null }
+                val createdAt = obj["createdAt"]?.jsonPrimitive?.contentOrNull
+                    ?.trim()
+                    ?.ifBlank { null }
+                val whenText = lastActivity ?: createdAt
+
+                append("${index + 1}. $sessionId")
+                if (whenText != null) append(" | $whenText")
+                append(" | $title")
+                if (index < sessions.lastIndex) appendLine()
+            }
+        }
     }
 }
