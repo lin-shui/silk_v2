@@ -4047,7 +4047,10 @@ fun MessageItem(
     val isAIMessage = isAgentUserId(message.userId)
     
     // AI 消息使用专用卡片
-    if (isAIMessage && message.type == MessageType.TEXT && message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS && message.category != com.silk.shared.models.MessageCategory.AGENT_QUESTION) {
+    val isRegularAIText = isAIMessage && message.type == MessageType.TEXT &&
+        message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS &&
+        message.category != com.silk.shared.models.MessageCategory.AGENT_QUESTION
+    if (isRegularAIText) {
         AIMessageCard(
             message = message,
             timeString = timeString,
