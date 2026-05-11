@@ -14,13 +14,18 @@
 ## Tool Calling
 
 - 工具暴露与权限控制由 `ToolPolicyManager.kt` 决定
+- `backend/src/main/resources/tool_policy.json` 是默认工具权限配置
 - `DirectModelAgentToolPolicyTest` 锁定：
   - 禁用工具不暴露
   - 会话作用域拒绝
   - 路径拒绝与审计结果
+- `DirectModelAgentAutoCliTest` 锁定 AutoCLI 沙箱、白名单与可选集成执行
+- `DirectModelAgentCitationTest` 锁定 citation / available 引用标记、搜索证据格式化与引用重编号
 
 ## Search Stack
 
+- `DirectModelAgent.search_web` 优先级：SearXNG -> SerpAPI -> Brave Search
+- `autocli` 工具仅在 `AUTOCLI_ENABLED=true` 时暴露，命令经 `ToolPolicyManager` 的 sandbox / safeCommands 校验
 - `search/WeaviateClient.kt`:
   - 前景/背景搜索
   - 当前 session 与跨 session 搜索区分
@@ -31,10 +36,11 @@
   - URL 提取、HTML/PDF 下载、提取、落盘
   - `WebPageDownloaderSmokeTest` 覆盖本地 smoke
 
-## Claude Code Mode
+## Agent Framework / ACP
 
 - 入口面：`agents/core/AgentRuntime.kt`（`WebSocketConfig` 唯一调用点）
-- 执行面：`cc_bridge/acp_adapter.py`（外部进程）通过 ACP 协议连接 `/agent-bridge` 端点；`agents/acp/AcpRegistry.kt` 管理连接
+- Agent 描述符：`agents/adapters/claudecode/ClaudeCodeDescriptor.kt`、`agents/adapters/codex/CodexDescriptor.kt`
+- 执行面：`cc_bridge/acp_adapter.py` 与 `codex_bridge/codex_adapter.py`（外部进程）通过 ACP 协议连接 `/agent-bridge` 端点；`agents/acp/AcpRegistry.kt` 管理连接
 - ACP 不可用时直接报"未连接"，无 fallback
 - 详见 `integrations/CLAUDE_CODE_AND_BRIDGES.md`
 
@@ -43,9 +49,16 @@
 - `routes/AsrRoutes.kt` 代理 OpenAI-compatible ASR 服务
 - 可选 ffmpeg 转码由 `AIConfig.ASR_TRANSCODE_TO_WAV` 和 `ASR_FFMPEG_PATH` 控制
 
+## Audio Duplex
+
+- `Routing.kt` 的 `/ws/audio-duplex?sessionId=...` 是代理入口
+- 上游地址来自 `AIConfig.AUDIO_DUPLEX_URL`，默认 `http://localhost:22700`
+- Web / Android / Harmony 均有 Audio Duplex 页面；Desktop 当前无主壳承载
+
 ## Change Checklist
 
 - 改 tool schema / tool permission：更新后端测试
 - 改 Weaviate 搜索过滤：确认 session/user 隔离不被破坏
-- 改 CC 指令路由：看 `agents/core/CommandRouter.kt` + adapter `cc_bridge/acp_adapter.py`
+- 改 agent 指令路由：看 `agents/core/CommandRouter.kt` + 对应 adapter
 - 改 ASR 协议：同步看 Web/Android/Harmony 调用端
+- 改 Audio Duplex 代理协议：同步看 Web/Android/Harmony Audio Duplex 调用端

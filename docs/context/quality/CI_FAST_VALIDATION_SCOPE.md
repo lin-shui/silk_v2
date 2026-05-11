@@ -12,7 +12,7 @@
 
 不把它做成全量发布流水线；慢、重、依赖专用环境的项放到后续专用 CI。
 
-## 当前基线（2026-04-24）
+## 当前基线（2026-05-06 清查）
 
 工作流文件：`.github/workflows/ci-fast-validation.yml`
 
@@ -56,15 +56,19 @@ backend 真实快检：
 - [x] AI 工具暴露面过滤（禁用工具不暴露给模型）
 - [x] AI 工具会话作用域拒绝（空作用域 / 非当前会话）
 - [x] AI 工具路径拒绝与审计结果一致
+- [x] AutoCLI 工具沙箱、命令白名单与可选集成执行
+- [x] DirectModelAgent citation / available 引用标记、证据格式化与引用重编号
 - [x] 消息撤回 HTTP 合同（发送者权限、普通消息撤回、`@silk` 连带回复删除）
 - [x] 用户 Todo 列表 / 更新 / 删除 HTTP 合同
 - [x] Todo 生命周期：done 重开、cancelled 重开门槛、逻辑去重、月度模板实例化
 - [x] Claude Code Bridge 元信息格式化单测
+- [x] TrustedDir 精确匹配、子目录继承、bridge/user 隔离、幂等与持久化 round-trip
 
 frontend 轻量快检：
 
 - [x] Android 文件列表 JSON 解析与 `downloadUrl` 透传单测
 - [x] Android `FILE` 消息 payload 解析（JSON / 旧 `|` 格式）单测
+- [x] Android Workflow Folder Picker 路径拼接 / 面包屑工具单测
 - [x] Desktop 文件卡片 payload 解析与下载文件名提取单测
 - [x] Web 文件列表 JSON 解析与 `downloadUrl` 透传单测
 - [x] Web `FILE` 消息 payload 解析（JSON / 旧 `|` 格式）单测
@@ -85,6 +89,9 @@ frontend 轻量快检：
 - 给 `WebPageDownloader` 增加测试可控的连接 / 读取超时参数，并新增 WebSocket URL 异常分支 smoke，覆盖读超时、连接拒绝、损坏 PDF 时的状态消息和“不落盘”约束。
 - 把 URL 下载成功后的产物接成真实 `FILE` 消息，新增 WebSocket 合同测试覆盖实时文件消息广播、历史入库、后加入成员回放，以及重复 URL 不重复广播文件消息。
 - 新增 AI 工具权限测试，锁定禁用工具暴露面、会话作用域拒绝，以及路径拒绝时的审计结果。
+- 新增 AutoCLI 工具测试，锁定启用条件、命令注入拒绝、站点白名单和可选真实执行。
+- 新增 citation 测试，锁定搜索来源引用标记、垃圾结果过滤、无效引用剔除和最终引用重编号。
+- 新增 TrustedDirManager 测试，覆盖 per-user/per-bridge 信任隔离、子目录继承、幂等和持久化 round-trip。
 - Claude Code 已切到 Bridge Agent 架构后，移除了失效的旧 session store / stream parser JVM 单测，保留当前后端仍承担的元信息格式化测试。
 - 把 `silk.sh` 的基础语法校验和只读 `status` smoke 接进了快检。
 - 把 `:backend:shadowJar` 和产物 artifact 上传接进快检，补上交付装配层拦截。
@@ -92,6 +99,7 @@ frontend 轻量快检：
 - Web 文件列表加载改为显式 JSON 解析，直接锁定后端返回的 `fileName` / `downloadUrl` / `processedUrls` 合同，不再靠动态对象读字段。
 - Web `FILE` 消息卡片解析抽成纯函数，并补上旧 `fileName|fileSize|downloadUrl` 历史 payload 兼容，避免前端 UI 解析逻辑只能在运行时兜底。
 - Android `FILE` 消息卡片解析抽成纯函数，补齐 JSON / 旧 `|` payload 轻量单测，避免历史消息格式回归只在真机上暴露。
+- Android Workflow Folder Picker 路径拼接抽成可测工具，覆盖 Unix / Windows 路径与面包屑回跳。
 - Desktop 补上 `MessageType.FILE` 卡片解析与下载入口，PDF 报告下载文件名提取也抽成纯函数，避免桌面端继续靠字符串扫 `/download/report/...pdf` 和内联 URL 解码硬扛。
 - 快检工作流新增 `:frontend:webApp:nodeTest` 与 `:frontend:androidApp:testDebugUnitTest`，并上传 Web/Android 测试报告 artifact，方便直接定位前端解析回归。
 - 快检工作流再加入 `:frontend:desktopApp:test` 和 desktop 测试报告 artifact，把三端文件消息解析都放进基础拦截。
@@ -105,7 +113,7 @@ frontend 轻量快检：
 - [ ] AI 工具完整端到端 tool-calling（真实模型响应、外部搜索、Weaviate）
 - [ ] 外部真实站点 URL/PDF 抓取、异常响应处理，以及 Weaviate 索引链路
 - [ ] Harmony HAP 构建
-- [ ] `silk.sh start/deploy` 级别的运行态脚本 smoke（`build` / `build-apk` / `build-all` 编排已拆到 `ci-script-smoke.yml`）
+- [ ] `silk.sh deploy` 真实 Web/Android 构建 + 真实 backend + 真实 Weaviate 全链路一次性跑通（`build` / `build-apk` / `build-all` / `start` / `deploy` 编排 smoke 已拆到 `ci-script-smoke.yml`）
 
 ## 运行备注
 
@@ -122,10 +130,12 @@ frontend 轻量快检：
 - Desktop 轻量单测跑 JVM `test`，锁定文件卡片 payload、PDF 下载文件名提取和默认扩展名补齐逻辑，不依赖 GUI 自动化。
 - Android 轻量单测跑本地 `testDebugUnitTest`，只覆盖纯解析函数，不引入模拟器或设备依赖。
 - `silk.sh build` / `build-apk` / `build-all` 编排已拆到独立 `.github/workflows/ci-script-smoke.yml`；快检继续只保留 `bash -n` 与只读 `status`，避免把装配层耗时塞回基础拦截。
+- `silk.sh start` / `stop` 运行态 smoke 也放在 `.github/workflows/ci-script-smoke.yml`，使用本地 Weaviate mock 与临时端口验证后端 `/health` 和前端静态服务；基础快检仍不承担后台进程生命周期。
+- `silk.sh deploy` 编排 smoke 同样放在 `.github/workflows/ci-script-smoke.yml`，使用 Gradle/backend stub 和本地 Weaviate mock 验证端口清理、调用顺序、产物复制和最终端口就绪；基础快检仍不承担部署生命周期。
 
 ## 下一步建议
 
 1. Desktop/Android/Web 的文件下载动作还没做真正 UI 自动化；如果后续文件交互继续增量，建议单独补一层组件级 smoke。
 2. AI 端到端另起一层可选 smoke，专门验证模型 tool-calling 回路，不阻塞基础快检。
 3. Harmony HAP 另起独立 workflow，放到自托管或预置 DevEco/hvigor 环境的 runner。
-4. `silk.sh start/deploy` 另起运行态 smoke，补端口清理、服务启动和 Weaviate 协同，而不是只验只读 `status`。
+4. `silk.sh deploy` 的真实构建 + 真实 backend + 真实 Weaviate 全链路可另起可选或定时 smoke，避免拖慢普通 PR。

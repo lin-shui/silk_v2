@@ -2,14 +2,35 @@
 
 这些点容易误导 agent，遇到冲突时按本文件处理。
 
-## Port Defaults Are Not Uniform In Docs
+## Protected Human-Facing Files May Stay Stale
 
-- `README.md` 里有 8006/8005 的叙述。
-- 代码与脚本未配置时常回落到 8003/8005：
+- 本轮按用户要求不修改 `README.md`、`.env.example`、`silk.sh`。
+- 因此这些文件里的旧叙述不要自动当成最新事实；对 coding agent 来说，代码与 `docs/context/**` 的最近文档优先。
+
+## Port Defaults Are Not Uniform
+
+- `README.md` / `.env.example` 仍有 `8006` 后端端口叙述。
+- 后端运行入口未配置时回落到 `8003`：
   - `Application.kt`
   - `silk.sh`
-  - `.env.example`
-- 结论：实际任务中以 `.env` + `silk.sh` + 构建脚本为准，不要只抄 README 端口表。
+  - Web / Android / Desktop Gradle 后端地址 fallback
+- Web 前端端口也不完全一致：
+  - `silk.sh` 的 Python 静态服务器默认 `8005`
+  - `frontend/webApp` / `frontend/androidApp` 生成 `FRONTEND_PORT` 的 fallback 仍是 `8004`
+  - `frontend/webApp` dev server `runTask` 端口是 `8005`
+- 实际运行和构建任务中优先读 `.env` / Gradle 属性；不要只抄 README 端口表。
+
+## `silk.sh` HAP Comments Are Ahead Of Behavior
+
+- `silk.sh` 顶部注释和 help 文案仍说 `deploy` / `build-all` 包含 Harmony HAP。
+- 当前实际代码中 `build_all()` 只构建 WebApp + Android APK，`deploy()` 的 HAP 构建块被注释。
+- Harmony HAP 需要显式运行 `./silk.sh build-hap`。
+
+## README Understates Current Capabilities
+
+- `README.md` 仍以 Web / Android / optional Desktop 为主，未完整描述 Harmony、Audio Duplex、HAP 下载路由等当前能力。
+- `README.md` 里的 Workflow 存储路径仍写 `backend/workflows/workflow_store.json`，实际默认是 `~/.silk-data/workflows/workflow_store.json`。
+- 若需要 coding context，优先看 `ARCHITECTURE.md` 与 `docs/context/**`。
 
 ## `Routing.kt` Still Owns Most HTTP Surface
 
@@ -19,7 +40,7 @@
 ## Desktop Feature Parity Is Lower
 
 - `frontend/desktopApp` 当前主要是登录 / 群组 / 聊天 / 设置。
-- Workflow / Knowledge Base 的三 Tab 主壳当前在 Web、Android、Harmony，更不是 Desktop 的事实能力面。
+- Workflow / Knowledge Base / Audio Duplex 的主壳当前在 Web、Android、Harmony，更不是 Desktop 的事实能力面。
 
 ## `search/README.md` Is Not Silk Guidance
 
@@ -52,4 +73,4 @@ CC 模式已完全迁到通用 `AgentRuntime` 框架。旧 `ClaudeCodeManager` /
 - **`/cc-bridge` WebSocket 端点已删除**
 - **无回退路径**：ACP 不可用时直接报"未连接"
 
-排查 CC 行为时只看 `AgentRuntime` + `acp_adapter.py`。
+排查 agent 行为时只看 `AgentRuntime` + 对应 ACP adapter（Claude Code: `cc_bridge/acp_adapter.py`；Codex: `codex_bridge/codex_adapter.py`）。

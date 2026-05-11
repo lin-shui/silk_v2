@@ -2,7 +2,7 @@
 
 Silk 是一个以 Kotlin 为主的多端聊天系统：
 
-- 后端：Ktor JVM，承担 HTTP、WebSocket、AI/tool calling、文件路由、导出、Todo、Workflow、Knowledge Base、Agent 框架（Claude Code 与 Codex 经 ACP 协议接入）。
+- 后端：Ktor JVM，承担 HTTP、WebSocket、AI/tool calling、文件路由、导出、Todo、Workflow、Knowledge Base、Audio Duplex 代理、Agent 框架（Claude Code 与 Codex 经 ACP 协议接入）。
 - 前端主线：Kotlin Multiplatform + Compose，包含 `frontend/shared`、`webApp`、`androidApp`、`desktopApp`。
 - 独立端：`frontend/harmonyApp` 为 ArkTS/ArkUI，未复用 KMP 代码。
 - 辅助服务：`search/`（Weaviate 相关脚本）、`cc_bridge/`（Claude CLI ACP adapter）、`codex_bridge/`（Codex CLI ACP adapter）、`feishu_bot/`（飞书网关）。
@@ -19,11 +19,12 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
    - 未读计数
    - Weaviate 索引
    - URL/PDF 下载提取
-   - Agent 框架（Claude Code）拦截：`AgentRuntime.handleIfActive()`
+   - Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
    - Silk AI / `DirectModelAgent` 响应
 5. Claude Code / Codex 通过 ACP 协议（JSON-RPC 2.0 over WebSocket）连接 `/agent-bridge` 端点；外部 `cc_bridge/acp_adapter.py` 和 `codex_bridge/codex_adapter.py` adapter 跑各自 CLI 并流式回传。
 6. Workflow 持久化每条工作流的 `activeAgent` 与 per-agent `agentSessions[agentType]`；进入工作流时 `autoActivateForWorkflow` 读 `workflow.activeAgent`（不再硬编码 claude-code），用户 `/use <agent>` 切换会落盘。
-7. `frontend/shared` 定义多端共享消息模型、WebSocket 客户端行为、解析逻辑。
+7. `Routing.kt` 另提供 `/ws/audio-duplex`，把客户端音频双工 WebSocket 代理到 `AIConfig.AUDIO_DUPLEX_URL` 上游 Worker。
+8. `frontend/shared` 定义多端共享消息模型、WebSocket 客户端行为、解析逻辑。
 
 ## Persistent State
 
@@ -32,10 +33,10 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - 上传文件：`chat_history/<session>/uploads/`
 - URL 去重缓存：`processed_urls.txt`
 - 用户 Todo：`chat_history/user_todos/<user>.json`
-- Workflow：`workflows/workflow_store.json`
-- TrustedDir：`workflows/trusted_dirs.json`
+- Workflow：`~/.silk-data/workflows/workflow_store.json`（可用 `SILK_WORKFLOW_DIR` 或 `-Dsilk.workflowDir=...` 覆盖）
+- TrustedDir：`~/.silk-data/workflows/trusted_dirs.json`（与 Workflow 目录同源）
 - Knowledge Base：`knowledge_base/kb_store.json`
-- Web 静态产物/APK 分发：`backend/static/`
+- Web 静态产物/APK/HAP 分发：`backend/static/`
 
 ## Code Surfaces By Responsibility
 
@@ -47,12 +48,12 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | Agent framework | `agents/core/`, `agents/acp/`, `agents/adapters/` | Claude Code 与 Codex via ACP，唯一执行路径 |
 | AI/tools/search | `ai/`, `search/`, `utils/WebPageDownloader.kt` | 当前主线是 `DirectModelAgent` |
 | Auth/data | `auth/`, `database/`, `models/` | SQLite + Exposed |
-| Domain modules | `todos/`, `workflow/`, `kb/`, `export/`, `pdf/` | Todo/Workflow/KB 混合文件存储 |
-| Shared client contract | `frontend/shared/` | 三端消息/文件合同面 |
+| Domain modules | `todos/`, `workflow/`, `trust/`, `kb/`, `export/`, `pdf/` | Todo/Workflow/TrustedDir/KB 混合文件存储 |
+| Shared client contract | `frontend/shared/` | 三端消息/文件/Audio Duplex 合同面 |
 | Web | `frontend/webApp/` | 当前最完整的桌面浏览器 UI |
-| Android | `frontend/androidApp/` | 三 Tab + 移动端流程 |
+| Android | `frontend/androidApp/` | 四 Tab + 移动端流程 |
 | Desktop | `frontend/desktopApp/` | 可编译/可测试，但能力面窄于 Web/Android |
-| Harmony | `frontend/harmonyApp/` | 独立 ArkTS 应用，含 Todo/Workflow/KB |
+| Harmony | `frontend/harmonyApp/` | 独立 ArkTS 应用，含 Todo/Workflow/KB/Audio Duplex |
 | External bridges | `cc_bridge/`, `codex_bridge/`, `feishu_bot/` | Python 服务，不在 Gradle 主工程内 |
 
 ## Context Docs
@@ -65,4 +66,5 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - 辅助集成： [docs/context/integrations/CLAUDE_CODE_AND_BRIDGES.md](docs/context/integrations/CLAUDE_CODE_AND_BRIDGES.md)
 - 质量门禁： [docs/context/quality/INDEX.md](docs/context/quality/INDEX.md)
 - 规划治理： [docs/context/planning/INDEX.md](docs/context/planning/INDEX.md)
+- 定期清查记录： [docs/context/project/PERIODIC_AUDIT.md](docs/context/project/PERIODIC_AUDIT.md)
 - Agent 提交/PR workflow skill： [docs/skills/local-change-submit/SKILL.md](docs/skills/local-change-submit/SKILL.md)
