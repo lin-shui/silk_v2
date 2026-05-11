@@ -7,6 +7,7 @@
 - 变更到验证映射： [TEST_MATRIX.md](TEST_MATRIX.md)
 - CI workflow： `../../../.github/workflows/ci-fast-validation.yml`
 - 脚本 smoke workflow： `../../../.github/workflows/ci-script-smoke.yml`
+- CI auto-merge workflow： `../../../.github/workflows/auto-enable-ci-branch-merge.yml`
 - Backend 测试说明： `../../../backend/src/test/kotlin/com/silk/backend/README_TESTS.md`
 
 ## Default Principle
