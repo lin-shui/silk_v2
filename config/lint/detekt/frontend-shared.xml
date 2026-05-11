@@ -15,26 +15,5 @@
     <ID>TooGenericExceptionCaught:PlatformWebSocket.js.kt$PlatformWebSocket$e: Exception</ID>
     <ID>TooGenericExceptionCaught:PlatformWebSocket.jvm.kt$PlatformWebSocket$e: Exception</ID>
     <ID>UnusedPrivateProperty:DateTimeUtils.kt$val date = Date(timestamp.toDouble())</ID>
-    <ID>WildcardImport:ChatClient.kt$import kotlinx.coroutines.flow.*</ID>
-    <ID>WildcardImport:Platform.android.kt$import io.ktor.client.*</ID>
-    <ID>WildcardImport:Platform.android.kt$import io.ktor.client.engine.okhttp.*</ID>
-    <ID>WildcardImport:Platform.android.kt$import io.ktor.client.plugins.websocket.*</ID>
-    <ID>WildcardImport:Platform.js.kt$import io.ktor.client.*</ID>
-    <ID>WildcardImport:Platform.js.kt$import io.ktor.client.engine.js.*</ID>
-    <ID>WildcardImport:Platform.js.kt$import io.ktor.client.plugins.websocket.*</ID>
-    <ID>WildcardImport:Platform.jvm.kt$import io.ktor.client.*</ID>
-    <ID>WildcardImport:Platform.jvm.kt$import io.ktor.client.engine.cio.*</ID>
-    <ID>WildcardImport:Platform.jvm.kt$import io.ktor.client.plugins.websocket.*</ID>
-    <ID>WildcardImport:Platform.kt$import io.ktor.client.*</ID>
-    <ID>WildcardImport:PlatformWebSocket.android.kt$import io.ktor.client.*</ID>
-    <ID>WildcardImport:PlatformWebSocket.android.kt$import io.ktor.client.engine.okhttp.*</ID>
-    <ID>WildcardImport:PlatformWebSocket.android.kt$import io.ktor.client.plugins.websocket.*</ID>
-    <ID>WildcardImport:PlatformWebSocket.android.kt$import io.ktor.websocket.*</ID>
-    <ID>WildcardImport:PlatformWebSocket.android.kt$import kotlinx.coroutines.*</ID>
-    <ID>WildcardImport:PlatformWebSocket.jvm.kt$import io.ktor.client.*</ID>
-    <ID>WildcardImport:PlatformWebSocket.jvm.kt$import io.ktor.client.engine.cio.*</ID>
-    <ID>WildcardImport:PlatformWebSocket.jvm.kt$import io.ktor.client.plugins.websocket.*</ID>
-    <ID>WildcardImport:PlatformWebSocket.jvm.kt$import io.ktor.websocket.*</ID>
-    <ID>WildcardImport:PlatformWebSocket.jvm.kt$import kotlinx.coroutines.*</ID>
   </CurrentIssues>
 </SmellBaseline>

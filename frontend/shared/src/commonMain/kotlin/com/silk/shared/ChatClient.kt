@@ -1,14 +1,16 @@
 package com.silk.shared
 
 import com.silk.shared.models.Message
-import com.silk.shared.models.MessageType
 import com.silk.shared.models.MessageCategory
+import com.silk.shared.models.MessageType
 import com.silk.shared.models.isAgentUserId
-import kotlinx.coroutines.flow.*
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
 import kotlinx.datetime.Clock
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 // 日志回调
 typealias LogCallback = (String) -> Unit
