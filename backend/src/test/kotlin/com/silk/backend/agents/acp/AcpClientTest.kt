@@ -126,7 +126,7 @@ class AcpClientTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
         val received = mutableListOf<SessionUpdateNotification>()
-        client.onSessionUpdate { received.add(it) }
+        client.onSessionUpdate("s1") { received.add(it) }
 
         transport.pushFromServer(
             """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"hi"}}}}"""
@@ -143,7 +143,7 @@ class AcpClientTest {
     fun `onPermissionRequest handler answers server`() = runTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
-        client.onPermissionRequest { req ->
+        client.onPermissionRequest("s1") { req ->
             PermissionResponse(
                 outcome = kotlinx.serialization.json.buildJsonObject {
                     put("kind", kotlinx.serialization.json.JsonPrimitive("selected"))
@@ -199,7 +199,7 @@ class AcpClientTest {
     fun `handler throwing does not kill receive loop`() = runTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
-        client.onSessionUpdate { throw RuntimeException("boom") }
+        client.onSessionUpdate("s1") { throw RuntimeException("boom") }
 
         // first notification — handler throws; loop must survive
         transport.pushFromServer(
@@ -215,5 +215,91 @@ class AcpClientTest {
             """{"jsonrpc":"2.0","id":$id,"result":{"sessionId":"s-survived"}}"""
         )
         assertEquals("s-survived", deferred.await().sessionId)
+    }
+
+    @Test
+    fun `multi-session handlers dispatch independently`() = runTest {
+        val transport = InMemoryAcpTransport()
+        val client = AcpClient(transport, scope = backgroundScope)
+        val receivedA = mutableListOf<SessionUpdateNotification>()
+        val receivedB = mutableListOf<SessionUpdateNotification>()
+        client.onSessionUpdate("sess-A") { receivedA.add(it) }
+        client.onSessionUpdate("sess-B") { receivedB.add(it) }
+
+        transport.pushFromServer(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-A","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"a1"}}}}"""
+        )
+        transport.pushFromServer(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-B","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"b1"}}}}"""
+        )
+        transport.pushFromServer(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-A","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"a2"}}}}"""
+        )
+        kotlinx.coroutines.yield()
+
+        assertEquals(2, receivedA.size)
+        assertEquals(1, receivedB.size)
+        assertEquals("sess-A", receivedA[0].sessionId)
+        assertEquals("sess-A", receivedA[1].sessionId)
+        assertEquals("sess-B", receivedB[0].sessionId)
+    }
+
+    @Test
+    fun `removeHandlers stops delivery for that session`() = runTest {
+        val transport = InMemoryAcpTransport()
+        val client = AcpClient(transport, scope = backgroundScope)
+        val received = mutableListOf<SessionUpdateNotification>()
+        client.onSessionUpdate("sess-X") { received.add(it) }
+
+        transport.pushFromServer(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-X","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"first"}}}}"""
+        )
+        kotlinx.coroutines.yield()
+        assertEquals(1, received.size)
+
+        client.removeHandlers("sess-X")
+
+        transport.pushFromServer(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-X","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"second"}}}}"""
+        )
+        kotlinx.coroutines.yield()
+        assertEquals(1, received.size, "notification after removeHandlers should be silently dropped")
+    }
+
+    @Test
+    fun `permission request for unregistered session returns error`() = runTest {
+        val transport = InMemoryAcpTransport()
+        val client = AcpClient(transport, scope = backgroundScope)
+        // No handler registered for "sess-unknown"
+
+        transport.pushFromServer(
+            """{"jsonrpc":"2.0","id":50,"method":"session/request_permission","params":{"sessionId":"sess-unknown","toolCall":{"name":"bash"},"options":[]}}"""
+        )
+        val reply = json.parseToJsonElement(transport.readClientSent()).jsonObject
+        assertEquals(50L, reply["id"]!!.jsonPrimitive.long)
+        assertTrue(reply["error"] != null, "should return error for unregistered session")
+    }
+
+    @Test
+    fun `onPermissionRequest dispatches by sessionId`() = runTest {
+        val transport = InMemoryAcpTransport()
+        val client = AcpClient(transport, scope = backgroundScope)
+        client.onPermissionRequest("sess-P") { req ->
+            PermissionResponse(
+                outcome = kotlinx.serialization.json.buildJsonObject {
+                    put("kind", kotlinx.serialization.json.JsonPrimitive("selected"))
+                    put("optionId", kotlinx.serialization.json.JsonPrimitive("approve"))
+                }
+            )
+        }
+        transport.pushFromServer(
+            """{"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{"sessionId":"sess-P","toolCall":{"name":"bash"},"options":[]}}"""
+        )
+        val replyLine = transport.readClientSent()
+        val reply = json.parseToJsonElement(replyLine).jsonObject
+        assertEquals(99L, reply["id"]!!.jsonPrimitive.long)
+        val outcome = reply["result"]!!.jsonObject["outcome"]!!.jsonObject
+        assertEquals("selected", outcome["kind"]!!.jsonPrimitive.content)
+        assertEquals("approve", outcome["optionId"]!!.jsonPrimitive.content)
     }
 }
