@@ -4,6 +4,10 @@
 
 - Todo 路线图： [TODO_ROADMAP.md](TODO_ROADMAP.md)
 
+## Active Execution Plans
+
+- [Lint baseline reduction](exec-plans/active/lint-baseline-reduction.md)
+
 ## Usage
 
 - `docs/todo-roadmap.md` 是 human-maintained canonical roadmap

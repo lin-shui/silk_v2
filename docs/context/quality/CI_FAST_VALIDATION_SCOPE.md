@@ -12,7 +12,7 @@
 
 不把它做成全量发布流水线；慢、重、依赖专用环境的项放到后续专用 CI。
 
-## 当前基线（2026-05-06 清查）
+## 当前基线（2026-05-09 lint 接入后）
 
 工作流文件：`.github/workflows/ci-fast-validation.yml`
 
@@ -21,6 +21,7 @@
 工程与构建：
 
 - [x] Gradle 根工程可配置
+- [x] `./gradlew silkLint`（Kotlin 源码 detekt + `bash -n silk.sh`，detekt 带 baseline）
 - [x] `:backend:test`
 - [x] `:backend:shadowJar`
 - [x] `:frontend:webApp:nodeTest`
@@ -94,6 +95,7 @@ frontend 轻量快检：
 - 新增 TrustedDirManager 测试，覆盖 per-user/per-bridge 信任隔离、子目录继承、幂等和持久化 round-trip。
 - Claude Code 已切到 Bridge Agent 架构后，移除了失效的旧 session store / stream parser JVM 单测，保留当前后端仍承担的元信息格式化测试。
 - 把 `silk.sh` 的基础语法校验和只读 `status` smoke 接进了快检。
+- 新增仓库级 `silkLint`，用 detekt 检查 Gradle 主工程 Kotlin 源码，并用 `config/lint/detekt/` baseline 固化既有静态分析问题，避免首轮引入时全仓重排。
 - 把 `:backend:shadowJar` 和产物 artifact 上传接进快检，补上交付装配层拦截。
 - Android 文件夹浏览改为按 JSON 解析文件列表并直接使用后端返回的 `downloadUrl`，避免正则解析和手拼 URL 在特殊字符文件名下失真。
 - Web 文件列表加载改为显式 JSON 解析，直接锁定后端返回的 `fileName` / `downloadUrl` / `processedUrls` 合同，不再靠动态对象读字段。
@@ -132,6 +134,7 @@ frontend 轻量快检：
 - `silk.sh build` / `build-apk` / `build-all` 编排已拆到独立 `.github/workflows/ci-script-smoke.yml`；快检继续只保留 `bash -n` 与只读 `status`，避免把装配层耗时塞回基础拦截。
 - `silk.sh start` / `stop` 运行态 smoke 也放在 `.github/workflows/ci-script-smoke.yml`，使用本地 Weaviate mock 与临时端口验证后端 `/health` 和前端静态服务；基础快检仍不承担后台进程生命周期。
 - `silk.sh deploy` 编排 smoke 同样放在 `.github/workflows/ci-script-smoke.yml`，使用 Gradle/backend stub 和本地 Weaviate mock 验证端口清理、调用顺序、产物复制和最终端口就绪；基础快检仍不承担部署生命周期。
+- `silkLint` 是新增问题拦截入口；CI 不写代码也不刷新 baseline。
 
 ## 下一步建议
 
