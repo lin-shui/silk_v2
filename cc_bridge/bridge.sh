@@ -32,10 +32,14 @@ BRIDGE_SERVER="${BRIDGE_SERVER:-}"
 BRIDGE_TOKEN="${BRIDGE_TOKEN:-}"
 BRIDGE_WORKING_DIR="${BRIDGE_WORKING_DIR:-$(pwd)}"
 BRIDGE_LOG_LEVEL="${BRIDGE_LOG_LEVEL:-INFO}"
+# Export proxy vars so Python subprocess can read them via os.environ
+export CLAUDE_HTTP_PROXY="${CLAUDE_HTTP_PROXY:-}"
+export CLAUDE_HTTPS_PROXY="${CLAUDE_HTTPS_PROXY:-}"
 # 可选：WSS 自签证书时设为 1（bridge.sh 会传 --tls-insecure）
 BRIDGE_TLS_INSECURE="${BRIDGE_TLS_INSECURE:-}"
 # 可选：仓库外 venv 的 python 绝对路径，例如 /Users/you/venvs/silk-bridge/bin/python3
 BRIDGE_PYTHON="${BRIDGE_PYTHON:-}"
+BRIDGE_SCRIPT="acp_adapter.py"
 
 # ---- 辅助函数 ----
 
@@ -122,7 +126,7 @@ do_start() {
         echo -e "  ${YELLOW}TLS:         跳过证书校验 (--tls-insecure)${NC}"
     fi
 
-    nohup "$PYTHON_BIN" "$BRIDGE_DIR/bridge_agent.py" \
+    nohup "$PYTHON_BIN" "$BRIDGE_DIR/$BRIDGE_SCRIPT" \
         --server "$BRIDGE_SERVER" \
         --token "$BRIDGE_TOKEN" \
         --working-dir "$BRIDGE_WORKING_DIR" \
@@ -154,7 +158,7 @@ do_stop() {
     pid=$(_get_pid)
     echo -e "${BLUE}停止 Bridge (PID: $pid)...${NC}"
 
-    # 发送 SIGTERM，让 bridge_agent.py 优雅关闭
+    # 发送 SIGTERM，让 bridge 优雅关闭
     kill "$pid" 2>/dev/null
 
     # 等待最多 10 秒

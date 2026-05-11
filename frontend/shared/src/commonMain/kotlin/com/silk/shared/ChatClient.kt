@@ -3,6 +3,7 @@ package com.silk.shared
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.MessageCategory
+import com.silk.shared.models.isAgentUserId
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
@@ -173,7 +174,7 @@ class ChatClient(
                 return
             }
             
-            val isSilkAi = message.userId == "silk_ai_agent"
+            val isSilkAi = isAgentUserId(message.userId)
             
             // 停止后抑制残余流式消息（允许 CLEAR_STATUS 通过）
             if (suppressTransient && isSilkAi && message.isTransient) {

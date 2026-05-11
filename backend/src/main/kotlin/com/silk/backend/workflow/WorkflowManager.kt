@@ -1,5 +1,6 @@
 package com.silk.backend.workflow
 
+import com.silk.backend.models.AgentSessionState
 import com.silk.backend.models.Workflow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -135,6 +136,71 @@ class WorkflowManager(
         )
         save(store)
         return true
+    }
+
+    /**
+     * M4 Task 3: per-agent 持久化。同步写到：
+     *  - agentSessions[agentType]（per-agent 多 agent 互不覆盖）
+     *  - 旧 sessionId/sessionStarted（仅当 agentType 与 workflow.activeAgent 或默认 agentType 匹配时
+     *    更新，保持 backward-compat：老 client 读旧字段还能拿到"当前 agent"的值）
+     *
+     * agentType 应该是 runtime 的 dash form（例如 "claude-code" / "codex"）。
+     * 空字符串 sessionId 表示"清空该 agent 的 resume 状态"（与 /new、cdSync 行为一致）。
+     */
+    @Synchronized
+    fun updateSessionState(groupId: String, agentType: String, sessionId: String, sessionStarted: Boolean): Boolean {
+        if (agentType.isBlank()) return updateSessionState(groupId, sessionId, sessionStarted)
+        val store = load()
+        val idx = store.workflows.indexOfFirst { it.groupId == groupId }
+        if (idx < 0) return false
+        val old = store.workflows[idx]
+        val newSessions = old.agentSessions.toMutableMap()
+        val newState = AgentSessionState(sessionId = sessionId, sessionStarted = sessionStarted)
+        val prevState = newSessions[agentType]
+        val perAgentChanged = prevState?.sessionId != sessionId || prevState.sessionStarted != sessionStarted
+        if (perAgentChanged) newSessions[agentType] = newState
+
+        // 当 agentType 等于 workflow 当前激活 agent（或默认 agentType）时，
+        // 同步更新旧 sessionId/sessionStarted 字段保持向后兼容。
+        val activeAgentDash = old.activeAgent.takeIf { it.isNotBlank() } ?: normalizeWfAgentType(old.agentType)
+        val syncLegacy = agentType == activeAgentDash
+        val legacyChanged = syncLegacy && (old.sessionId != sessionId || old.sessionStarted != sessionStarted)
+
+        if (!perAgentChanged && !legacyChanged) return false
+        store.workflows[idx] = old.copy(
+            agentSessions = newSessions,
+            sessionId = if (syncLegacy) sessionId else old.sessionId,
+            sessionStarted = if (syncLegacy) sessionStarted else old.sessionStarted,
+            updatedAt = System.currentTimeMillis(),
+        )
+        save(store)
+        return true
+    }
+
+    /**
+     * M4 Task 3: 持久化用户当前激活的 agent（dash form）。
+     * 空字符串 → 等价于"使用默认 agentType"，仍然写入。
+     */
+    @Synchronized
+    fun updateActiveAgent(groupId: String, activeAgent: String): Boolean {
+        val store = load()
+        val idx = store.workflows.indexOfFirst { it.groupId == groupId }
+        if (idx < 0) return false
+        val old = store.workflows[idx]
+        if (old.activeAgent == activeAgent) return false
+        store.workflows[idx] = old.copy(
+            activeAgent = activeAgent,
+            updatedAt = System.currentTimeMillis(),
+        )
+        save(store)
+        logger.info("Workflow {} activeAgent 持久化: {}", old.id, activeAgent)
+        return true
+    }
+
+    /** workflow.agentType（underscore form）→ runtime agentType（dash form）。 */
+    private fun normalizeWfAgentType(wfAgentType: String): String = when (wfAgentType) {
+        "claude_code" -> "claude-code"
+        else -> wfAgentType
     }
 
     @Synchronized

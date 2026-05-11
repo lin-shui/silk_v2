@@ -12,7 +12,7 @@
 ## Layers
 
 - `generated/`: 仓库地图与检索入口
-- `project/`: 构建、运行、存储、已知偏差
+- `project/`: 构建、运行、存储、定期清查、已知偏差
 - `modules/`: backend / frontend 深挖
 - `integrations/`: Claude Code、Anthropic API、飞书等辅助子系统
 - `quality/`: 测试面、快检、验证映射
@@ -27,5 +27,6 @@
 - 若变更改变 agent 的读文档路径，更新 `TASK_ROUTER.md`；若改变顶层架构事实，更新 `ARCHITECTURE.md`。
 - 若变更影响面向人的启动、安装或能力说明，检查 `README.md` 是否也需要同步。
 - 若发现文档与代码暂时不一致且本轮不适合修正，记录到 `project/KNOWN_DRIFT.md`。
+- 需要周期性回顾的全仓清查项目，登记到 `project/PERIODIC_AUDIT.md`；每次清查完成后更新基准时间、commit 和结果。
 - 不把执行日志或临时计划写进模块文档；这类内容放到 `planning/exec-plans/`。
 - `docs/todo-roadmap.md` 仍由人维护，除非用户明确要求，不自动改 roadmap 正文。

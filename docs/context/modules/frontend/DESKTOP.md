@@ -16,7 +16,7 @@
   - GROUP_LIST
   - CHAT_ROOM
   - SETTINGS
-- 不是当前 Workflow / KB 三 Tab 主线承载端
+- 不是当前 Workflow / KB / Audio Duplex 主线承载端
 
 ## Why It Still Matters
 

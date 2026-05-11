@@ -17,6 +17,7 @@
   - `WorkflowPage.ets`
   - `KnowledgeBasePage.ets`
   - `TodoPage.ets`
+  - `AudioDuplexPage.ets`
   - `SettingsPage.ets`
 
 ## Tooling Facts
@@ -30,6 +31,7 @@
 
 - 改 Todo 时，Harmony 是真实主承载端之一
 - 改网络协议时，同时看 `api/ApiClient.ets` 与 `api/WebSocketClient.ets`
+- 改 Audio Duplex 时，同时看 `pages/AudioDuplexPage.ets`、`api/AudioDuplexSession.ets`、`common/AudioDuplexCapturer.ets`、`common/AudioDuplexPlayer.ets`
 - 改 Markdown / KaTeX 渲染时，看 `components/MarkdownWeb.ets`, `MarkdownLite.ets`, `MathKatexWeb.ets`
 - 改元服务/购物跳转时，同时看 `common/MetaServiceLauncher.ets`、`common/MetaServiceConfig.ets`、`common/ShoppingLauncher.ets`
 

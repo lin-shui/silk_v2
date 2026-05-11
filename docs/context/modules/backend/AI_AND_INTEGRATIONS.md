@@ -20,10 +20,13 @@
 ## Tool Calling
 
 - 工具暴露与权限控制由 `ToolPolicyManager.kt` 决定
+- `backend/src/main/resources/tool_policy.json` 是默认工具权限配置
 - `DirectModelAgentToolPolicyTest` 锁定：
   - 禁用工具不暴露
   - 会话作用域拒绝
   - 路径拒绝与审计结果
+- `DirectModelAgentAutoCliTest` 锁定 AutoCLI 沙箱、白名单与可选集成执行
+- `DirectModelAgentCitationTest` 锁定 citation / available 引用标记、搜索证据格式化与引用重编号
 
 ## Search Stack
 
@@ -38,21 +41,30 @@
   - URL 提取、HTML/PDF 下载、提取、落盘
   - `WebPageDownloaderSmokeTest` 覆盖本地 smoke
 
-## Claude Code Mode
+## Agent Framework / ACP
 
-- `claudecode/ClaudeCodeManager.kt` 维护 per-user-per-group CC 状态
-- `BridgeRegistry.kt` 管理 backend 与外部 bridge 的 WebSocket
-- 聊天消息在 `ChatServer.broadcast()` 中先被 CC 模式拦截，再决定是否进入 Silk AI 主链
+- 入口面：`agents/core/AgentRuntime.kt`（`WebSocketConfig` 唯一调用点）
+- Agent 描述符：`agents/adapters/claudecode/ClaudeCodeDescriptor.kt`、`agents/adapters/codex/CodexDescriptor.kt`
+- 执行面：`cc_bridge/acp_adapter.py` 与 `codex_bridge/codex_adapter.py`（外部进程）通过 ACP 协议连接 `/agent-bridge` 端点；`agents/acp/AcpRegistry.kt` 管理连接
+- ACP 不可用时直接报"未连接"，无 fallback
+- 详见 `integrations/CLAUDE_CODE_AND_BRIDGES.md`
 
 ## ASR
 
 - `routes/AsrRoutes.kt` 代理 OpenAI-compatible ASR 服务
 - 可选 ffmpeg 转码由 `AIConfig.ASR_TRANSCODE_TO_WAV` 和 `ASR_FFMPEG_PATH` 控制
 
+## Audio Duplex
+
+- `Routing.kt` 的 `/ws/audio-duplex?sessionId=...` 是代理入口
+- 上游地址来自 `AIConfig.AUDIO_DUPLEX_URL`，默认 `http://localhost:22700`
+- Web / Android / Harmony 均有 Audio Duplex 页面；Desktop 当前无主壳承载
+
 ## Change Checklist
 
 - 改 tool schema / tool permission：更新后端测试
 - 改 AnthropicClient 格式转换：同步验证 convertMessage / convertTool 双向兼容
 - 改 grep searchContext：确认 accessibleSessionIds 隔离不被破坏
-- 改 CC 指令路由：同时查看 `cc_bridge/`
+- 改 agent 指令路由：看 `agents/core/CommandRouter.kt` + 对应 adapter；外部 adapter：同时查看 `cc_bridge/`、`codex_bridge/`
 - 改 ASR 协议：同步看 Web/Android/Harmony 调用端
+- 改 Audio Duplex 代理协议：同步看 Web/Android/Harmony Audio Duplex 调用端

@@ -8,6 +8,7 @@
 - `GroupListScene.kt`
 - `KnowledgeBaseScene.kt`
 - `WorkflowScene.kt`
+- `AudioDuplexScene.kt`
 - `SettingsScene.kt`
 
 ## Current Shape
@@ -18,6 +19,7 @@
   - Silk
   - Workflow
   - Knowledge Base
+  - Audio Duplex
 
 ## Build-Time Facts
 
@@ -29,6 +31,7 @@
 
 - 改文件消息/下载逻辑时，优先看 `FileContracts.kt` / `FileContractsTest.kt`
 - 改布局壳层时，确认 `AppState.kt` 与 `Main.kt` 的 scene/tab 状态流
+- 改 Audio Duplex 时看 `AudioDuplexScene.kt` 与后端 `/ws/audio-duplex`
 - 工作流面板（`WorkflowScene.kt`）含 Folder Picker：
   - header 显示 agent 名（取自 `Message.userName`）和当前工作目录
   - "更改" 链接 / 创建工作流的"选择…" 按钮 → `FolderPickerDialog`（面包屑 + `..` + 子目录 + 手动输入）

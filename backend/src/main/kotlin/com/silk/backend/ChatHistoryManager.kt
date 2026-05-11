@@ -1,5 +1,6 @@
 package com.silk.backend
 
+import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.models.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -480,23 +481,21 @@ class ChatHistoryManager(
         val userMessage = chatHistory.messages[userMessageIndex]
         val userTimestamp = userMessage.timestamp
         
-        // AI Agent ID
-        val agentId = "silk_agent"
-        
+        val isAgent = { id: String -> AgentRuntime.isAgentUserId(id) }
+
         // 查找用户消息之后、连续的AI回复消息
         val agentReplies = mutableListOf<String>()
-        var foundNextUserMessage = false
-        
+
         for (i in (userMessageIndex + 1) until chatHistory.messages.size) {
             val msg = chatHistory.messages[i]
-            
+
             // 如果遇到其他用户的消息，停止查找
-            if (msg.senderId != agentId && msg.senderId != userMessage.senderId) {
+            if (!isAgent(msg.senderId) && msg.senderId != userMessage.senderId) {
                 break
             }
-            
+
             // 如果是AI的回复，添加到列表
-            if (msg.senderId == agentId) {
+            if (isAgent(msg.senderId)) {
                 // 检查是否是连续的AI回复（时间间隔在5分钟内）
                 val prevMsg = if (agentReplies.isEmpty()) userMessage else chatHistory.messages[i - 1]
                 if (msg.timestamp - prevMsg.timestamp < 5 * 60 * 1000) {

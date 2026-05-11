@@ -28,6 +28,9 @@
 - `/api/messages/*`
 - `/api/workflows` (POST **requires directory trust**)
 - `/api/kb/*`
+- `/api/files/app-version`
+- `/api/files/hap-version`
+- `/api/files/download-hap`
 - `/users/{userId}/cc-settings*`
 - `/users/{userId}/cc-state/{groupId}`
 - `/users/{userId}/cc-fs/list` (GET, query: path/showHidden)
@@ -35,7 +38,8 @@
 - `/users/{userId}/trusted-dirs/check` (GET, query: path)
 - `/users/{userId}/trusted-dirs` (POST, DELETE, GET)
 - `/chat` WebSocket
-- `/cc-bridge` WebSocket
+- `/ws/audio-duplex` WebSocket proxy
+- `/agent-bridge` WebSocket（ACP 协议，Claude Code / Codex adapter 连接点）
 
 已拆出的专项路由：
 
@@ -44,6 +48,9 @@
   - `/api/files/download/{sessionId}/{fileId}`
   - `/api/files/list/{sessionId}`
   - `/api/files/download-apk`
+  - `/api/files/app-version`
+  - `/api/files/hap-version`
+  - `/api/files/download-hap`
   - app version 查询
 - `routes/AsrRoutes.kt`:
   - `/api/asr/transcribe`
@@ -58,7 +65,7 @@
 4. 未读计数
 5. 广播到所有 session
 7. 对普通文本异步触发 URL/PDF 处理
-8. Claude Code 模式拦截
+8. Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
 9. Silk AI / `DirectModelAgent` 响应
 
 ## Contracts Visible To Clients
@@ -71,6 +78,7 @@
   - `routes/FileRoutes.kt`
   - `backend/BackendFileContractTest.kt`
   - `frontend/*/FileContractsTest.kt`
+- Audio Duplex WebSocket 透传协议影响 Web / Android / Harmony 的 Audio Duplex 页面与 `AIConfig.AUDIO_DUPLEX_URL`。
 
 ## Safe Change Checklist
 
@@ -78,3 +86,5 @@
 - 改文件路由时，同步检查 Web/Android/Desktop 文件合同测试
 - 改历史/持久化时，同步检查 `ChatHistoryManager.kt` 与 `TestWorkspace`
 - 改 WebSocket 权限或回放逻辑时，同步检查 `BackendWebSocketContractTest`
+- 改 `/ws/audio-duplex` 时，同步检查三端 Audio Duplex 调用端
+- 改 `/agent-bridge` 或 agent 指令路由时，同步检查 `AgentRuntime` / ACP 相关测试与 adapter

@@ -12,6 +12,14 @@
 - 发现代码和文档事实不一致但本轮不修：更新 `project/KNOWN_DRIFT.md`
 - Todo roadmap 例外：默认只读 `docs/todo-roadmap.md`，计划和记录写入 `planning/exec-plans/`
 
+## Periodic Audit / Documentation Consistency
+
+- 先读：`project/PERIODIC_AUDIT.md`、`project/KNOWN_DRIFT.md`
+- 若执行 `docs-code-consistency`：从 `PERIODIC_AUDIT.md` 记录的上次基准时间或 commit 开始查看增量 commits，再按变更路径打开最小上下文
+- 若发现文档事实过期：更新最近的 `docs/context/**`、`ARCHITECTURE.md` 或 `README.md`
+- 若发现偏差但本轮不修：更新 `project/KNOWN_DRIFT.md`
+- 默认验证：`git diff --check`；若清查带出代码、脚本、CI 或合同变更，再按 `quality/TEST_MATRIX.md` 选最窄验证
+
 ## Commit / Push / PR
 
 - 先读：`../skills/local-change-submit/SKILL.md`
@@ -38,6 +46,13 @@
 - 再看代码：`ai/DirectModelAgent.kt`、`ai/ToolPolicyManager.kt`、`ai/AnthropicClient.kt`
 - 默认验证：`./gradlew :backend:test`
 - 若改工具暴露或路径策略：必须覆盖 `DirectModelAgentToolPolicyTest`
+- 若改 AutoCLI 或引用证据格式：同步看 `DirectModelAgentAutoCliTest`、`DirectModelAgentCitationTest`
+
+## Audio Duplex
+
+- 先读：`modules/backend/AI_AND_INTEGRATIONS.md`、受影响前端文档（Web/Android/Harmony）
+- 再看代码：`Routing.kt` 的 `/ws/audio-duplex`、`ai/AIConfig.kt`、三端 Audio Duplex 页面/会话类
+- 默认验证：后端代理改动跑 `./gradlew :backend:test`；端侧改动跑受影响端的编译/单测
 
 ## File Upload / Download / URL Ingestion
 
@@ -90,13 +105,14 @@
 
 - 先读：`modules/frontend/HARMONY.md`
 - 再看代码：`frontend/harmonyApp/entry/src/main/ets/`
-- 默认验证：本地环境具备 DevEco/hvigor/hdc 时，按文档里的 sync + assembleHap + install 路径
+- 默认验证：本地环境具备 DevEco/hvigor/hdc 时，按文档里的 sync + assembleHap + install 路径，或使用 `./silk.sh build-hap`
 - 注意：Harmony 不复用 `frontend/shared`
 
-## Claude Code / Bridge / Feishu
+## Agent / Bridge / Feishu
 
 - 先读：`integrations/CLAUDE_CODE_AND_BRIDGES.md`
-- 再看代码：`backend/claudecode/`、`cc_bridge/`、`feishu_bot/`
+- 再看代码：`backend/agents/`（Agent 框架 + ACP 协议层）、`cc_bridge/acp_adapter.py`、`codex_bridge/codex_adapter.py`、`feishu_bot/`
+- 注意：旧 `backend/claudecode/` 执行层已删除；Claude Code / Codex 统一经 `/agent-bridge` ACP 端点接入
 - 默认验证：
   - 后端侧 `./gradlew :backend:test`
   - Python 服务按各自 README 或手动 smoke

@@ -2,7 +2,7 @@
  * ChatStore - 聊天状态管理
  * 管理消息列表、连接状态、当前群组等
  */
-import { Message, MessageType, MessageCategory, parseMessage } from '../models/Message';
+import { Message, MessageType, MessageCategory, parseMessage, isAgentUserId } from '../models/Message';
 import { Group } from '../models/Group';
 import { WebSocketClient, ConnectionState } from '../api/WebSocketClient';
 import { Constants } from '../common/Constants';
@@ -289,7 +289,7 @@ export class ChatStore {
         return;
       }
 
-      const isSilkAi: boolean = message.userId === 'silk_ai_agent';
+      const isSilkAi: boolean = isAgentUserId(message.userId);
 
       // 停止后抑制残余流式消息（允许 CLEAR_STATUS 通过）
       if (this._suppressTransient && isSilkAi && message.isTransient) {

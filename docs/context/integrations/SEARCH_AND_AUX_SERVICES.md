@@ -25,6 +25,13 @@
 - `routes/FileRoutes.kt` 的文件保存逻辑（保留，文件不再索引到 Weaviate）
 - `WebSocketConfig.kt` 的消息持久化与 URL 下载入口（保留，Weaviate 索引步骤已移除）
 
+## External Search / Evidence
+
+- `DirectModelAgent.search_web` 优先尝试 SearXNG，再走 SerpAPI，最后走 Brave Search
+- `ExternalSearchService.kt` 仍保留 SerpAPI / Brave / Bing / DuckDuckGo 兜底能力
+- `AUTOCLI_ENABLED=true` 时会额外暴露 `autocli` 工具；命令经 `tool_policy.json` 的 sandbox / safeCommands 校验
+- 搜索/AutoCLI 结果会进入 citation / available 引用流水线，相关单测在 `DirectModelAgentCitationTest`
+
 ## Runtime Modes
 
 - Weaviate 不再需要运行；`silk.sh` 中相关启动逻辑已标记为遗留

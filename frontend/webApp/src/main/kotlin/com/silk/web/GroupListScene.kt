@@ -1315,7 +1315,7 @@ fun GroupMembersListDialog(
                         val isHost = member.id == group.hostId
                         val isCurrentUser = member.id == currentUserId
                         val isContact = member.id in contactIds
-                        val isSilkAI = member.id == "silk_ai_agent"
+                        val isSilkAI = isAgentUserId(member.id)
                         
                         Div({
                             style {

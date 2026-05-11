@@ -9,11 +9,13 @@
   - `BackendWebSocketContractTest`
   - `BackendPersistenceContractTest`
 
-## AI Tool Policy / Search / URL Download
+## AI / Search / URL Download
 
 - Command: `./gradlew :backend:test`
 - Primary tests:
   - `ai/DirectModelAgentToolPolicyTest`
+  - `ai/DirectModelAgentAutoCliTest`
+  - `ai/DirectModelAgentCitationTest`
   - `utils/WebPageDownloaderSmokeTest`
 
 ## Todo Lifecycle
@@ -22,11 +24,24 @@
 - Primary tests:
   - `todos/UserTodoStoreTest`
 
-## Claude Code Metadata / Parser Surface
+## Agent Framework / ACP
 
 - Command: `./gradlew :backend:test`
 - Primary tests:
-  - `claudecode/StreamParserTest`
+  - `agents/core/AgentRuntimeTest`
+  - `agents/core/AgentRuntimeAcpIntegrationTest`
+  - `agents/core/AgentSessionTest`
+  - `agents/core/CommandRouterTest`
+  - `agents/core/GroupAgentContextTest`
+  - `agents/core/AcpUpdateMapperTest`
+  - `agents/acp/AcpClientTest`
+  - `agents/acp/AcpRegistryTest`
+
+## Trusted Directory / Workflow Directory Trust
+
+- Command: `./gradlew :backend:test`
+- Primary tests:
+  - `trust/TrustedDirManagerTest`
 
 ## Web File Contract / Parser
 
@@ -41,8 +56,9 @@
 - Commands:
   - `./gradlew :frontend:androidApp:testDebugUnitTest`
   - `./gradlew :frontend:androidApp:compileDebugKotlin`
-- Primary test:
+- Primary tests:
   - `frontend/androidApp/src/test/kotlin/com/silk/android/FileContractsTest.kt`
+  - `frontend/androidApp/src/test/kotlin/com/silk/android/WorkflowPathUtilsTest.kt`（工作流目录浏览路径工具）
 
 ## Desktop File Contract / Parser
 
@@ -58,7 +74,8 @@
   - `bash -n silk.sh`
   - `./silk.sh status`
 - CI supplement:
-  - `.github/workflows/ci-script-smoke.yml` 覆盖 `./silk.sh build`、`./silk.sh build-apk` 与 `./silk.sh build-all` 编排 smoke
+  - `.github/workflows/ci-script-smoke.yml` 覆盖 `./silk.sh build`、`./silk.sh build-apk`、`./silk.sh build-all` 与 `./silk.sh deploy` 编排 smoke
+  - `.github/workflows/ci-script-smoke.yml` 另覆盖 `./silk.sh start` / `./silk.sh stop` 运行态 smoke（本地 Weaviate mock、后端 `/health`、前端静态服务）
 
 ## When Payloads Change
 

@@ -12,6 +12,7 @@
 - `models/Message.kt`
 - `models/ApiResponses.kt`
 - `models/UserSettings.kt`（含 `CcStateResponse` / `DirEntry` / `DirListingResponse` 等 CC 模块协议）
+- `models/AudioDuplexModels.kt`
 - `PlatformWebSocket*`
 - `i18n/Strings.kt`
 
@@ -23,6 +24,7 @@
 - 停止生成消息发送
 - 跨端消息模型与基础 API response 模型
 - CC 模块前后端共享 DTO（避免双份维护）
+- Audio Duplex 基础状态模型
 
 ## Contract Change Checklist
 
@@ -37,6 +39,9 @@
   - 只改 `frontend/shared/models/UserSettings.kt` 一处
   - 后端通过 `import com.silk.shared.models.*` 自动看到
   - 老客户端解析靠 `ignoreUnknownKeys = true` 兼容新字段
+- 改 Audio Duplex 状态模型：
+  - Web / Android 可通过 `frontend/shared/models/AudioDuplexModels.kt` 共享
+  - Harmony 需手工同步 ArkTS 类型/状态
 
 ## Default Validation
 

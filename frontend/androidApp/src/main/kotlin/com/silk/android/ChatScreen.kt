@@ -62,6 +62,9 @@ import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
+import com.silk.shared.models.isAgentUserId
+import com.silk.shared.models.SILK_AGENT_USER_ID
+import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import com.silk.shared.utils.formatMessageTimestamp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -161,7 +164,7 @@ fun ChatScreen(appState: AppState) {
             addLog("   最新: ${last.userName}: ${last.content.take(20)}...")
             
             // 收到 Silk 的响应时，清除等待状态
-            if (last.userName == "Silk" && isWaitingForAI) {
+            if (isAgentUserId(last.userId) && isWaitingForAI) {
                 isWaitingForAI = false
                 addLog("✅ AI 响应已收到，清除等待状态")
             }
@@ -269,18 +272,18 @@ fun ChatScreen(appState: AppState) {
     val sessionUsers = remember(messages, groupMembers) {
         val users = mutableSetOf<Pair<String, String>>() // (id, name)
         // 始终添加 Silk AI
-        users.add("silk_ai_agent" to "🤖 Silk")
+        users.add(SILK_AGENT_USER_ID to "🤖 $SILK_AGENT_DISPLAY_NAME")
         // 添加当前用户
         users.add(user.id to user.fullName)
         // 从群组成员列表添加所有成员
         groupMembers.forEach { member ->
-            if (member.id != "silk_ai_agent" && member.id != user.id) {
+            if (!isAgentUserId(member.id) && member.id != user.id) {
                 users.add(member.id to member.fullName)
             }
         }
         // 从消息中提取其他用户（作为补充，以防成员列表不完整）
         messages.forEach { msg ->
-            if (msg.userId != "silk_ai_agent" && msg.userId != user.id) {
+            if (!isAgentUserId(msg.userId) && msg.userId != user.id) {
                 users.add(msg.userId to msg.userName)
             }
         }
@@ -1154,7 +1157,7 @@ fun ChatScreen(appState: AppState) {
                                             ) {
                                                 items(filteredUsers.size) { index ->
                                                     val (userId, userName) = filteredUsers[index]
-                                                    val displayName = if (userId == "silk_ai_agent") "Silk" else userName
+                                                    val displayName = if (isAgentUserId(userId)) "Silk" else userName
                                                     Surface(
                                                         onClick = {
                                                             val beforeAt = messageText.text.substring(0, mentionStartIndex.coerceAtLeast(0))
@@ -1172,7 +1175,7 @@ fun ChatScreen(appState: AppState) {
                                                             text = userName,
                                                             modifier = Modifier.padding(10.dp, 12.dp),
                                                             style = MaterialTheme.typography.bodyMedium,
-                                                            fontWeight = if (userId == "silk_ai_agent") FontWeight.SemiBold else FontWeight.Normal
+                                                            fontWeight = if (isAgentUserId(userId)) FontWeight.SemiBold else FontWeight.Normal
                                                         )
                                                     }
                                                 }
@@ -3312,7 +3315,7 @@ fun MessageItem(
     
     // 是否可以撤回：只能撤回自己发送的消息，且不是 Silk 的消息，且不是系统消息
     val canRecall = isCurrentUser && 
-                    message.userName != "Silk" && 
+                    !isAgentUserId(message.userId) &&
                     !isSystemMessage && 
                     !isTransient
     
@@ -3325,7 +3328,7 @@ fun MessageItem(
     val canShowContextMenu = !isTransient && !isSystemMessage && message.type == MessageType.TEXT
     
     // ✅ AI 消息特殊处理 - 使用专用卡片
-    val isAIMessage = message.userId == "silk_ai_agent"
+    val isAIMessage = isAgentUserId(message.userId)
     if (isAIMessage && message.type == MessageType.TEXT && 
         message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS) {
         AIMessageCardAndroid(
@@ -3462,7 +3465,7 @@ fun MessageItem(
                         modifier = Modifier.padding(horizontal = 4.dp)
                     ) {
                         // 用户名 - 可点击添加联系人（不包括 Silk）
-                        if (message.userName != "Silk" && onUserNameClick != null) {
+                        if (!isAgentUserId(message.userId) && onUserNameClick != null) {
                             Text(
                                 text = message.userName,
                                 style = MaterialTheme.typography.bodySmall.copy(
@@ -4543,7 +4546,7 @@ fun MembersDialog(
                         items(members) { member ->
                             val isCurrentUser = member.id == currentUserId
                             val isContact = member.id in contactIds
-                            val isSilkAI = member.id == "silk_ai_agent"
+                            val isSilkAI = isAgentUserId(member.id)
                             
                             Card(
                                 modifier = Modifier
