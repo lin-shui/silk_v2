@@ -921,6 +921,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
+    val pendingQuestionId by chatClient.pendingQuestionId.collectAsState()
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
     
@@ -1538,9 +1539,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 fontSize(13.px)
                                 fontStyle("italic")
                                 marginBottom(4.px)
-                                display(DisplayStyle.Flex)
-                                alignItems(AlignItems.Center)
-                                property("gap", "8px")
+                                property("white-space", "pre-wrap")
+                                property("word-break", "break-word")
                             }
                         }) {
                             Text(status.content)
@@ -1954,7 +1954,11 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 }
                             }
                         }
-                        attr("placeholder", if (group.name.startsWith("[Silk]")) strings.silkChatInputPlaceholder else strings.messageInputPlaceholder)
+                        attr("placeholder", when {
+                            pendingQuestionId != null -> "回答 Claude Code 的问题..."
+                            group.name.startsWith("[Silk]") -> strings.silkChatInputPlaceholder
+                            else -> strings.messageInputPlaceholder
+                        })
                         attr("rows", "2")
                         attr("id", "chat-input")
                         style {
@@ -4043,7 +4047,10 @@ fun MessageItem(
     val isAIMessage = isAgentUserId(message.userId)
     
     // AI 消息使用专用卡片
-    if (isAIMessage && message.type == MessageType.TEXT && message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS) {
+    val isRegularAIText = isAIMessage && message.type == MessageType.TEXT &&
+        message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS &&
+        message.category != com.silk.shared.models.MessageCategory.AGENT_QUESTION
+    if (isRegularAIText) {
         AIMessageCard(
             message = message,
             timeString = timeString,
@@ -4066,9 +4073,10 @@ fun MessageItem(
                     !isTransient
     
     // 是否显示操作按钮：文本消息且不是临时消息
-    val showActions = message.type == MessageType.TEXT && !isTransient && 
-                      message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS
-    
+    val showActions = message.type == MessageType.TEXT && !isTransient &&
+                      message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS &&
+                      message.category != com.silk.shared.models.MessageCategory.AGENT_QUESTION
+
     // Agent 状态消息 - 灰色样式
     if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) {
         Div({
@@ -4081,6 +4089,28 @@ fun MessageItem(
                 fontSize(13.px)
                 color(Color("#757575"))
                 property("font-style", "italic")
+                property("white-space", "pre-wrap")
+                property("word-break", "break-word")
+            }
+        }) {
+            Text(message.content)
+        }
+        return
+    }
+
+    // Agent 提问消息 - 橙色警告样式
+    if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION) {
+        Div({
+            style {
+                padding(12.px, 16.px)
+                marginBottom(8.px)
+                backgroundColor(Color("#FFF8F0"))
+                borderRadius(8.px)
+                property("border-left", "3px solid #E8B86C")
+                fontSize(14.px)
+                color(Color("#5D4E37"))
+                property("white-space", "pre-wrap")
+                property("word-break", "break-word")
             }
         }) {
             Text(message.content)

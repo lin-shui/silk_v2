@@ -215,6 +215,9 @@ class AgentRuntimeAcpIntegrationTest {
         )
 
         deferred.await()
+        // handlePrompt returns immediately; wait for background prompt coroutine to finish
+        AgentRuntime.snapshotState("u1", "g1")  // ensure context exists
+        awaitSessionIdle("u1", "g1")
         assertTrue(messages.any { it.content.contains("token") })
     }
 
@@ -250,6 +253,19 @@ class AgentRuntimeAcpIntegrationTest {
         )
 
         deferred.await()
+        // handlePrompt returns immediately; wait for background prompt coroutine to finish
+        awaitSessionIdle("u1", "g1")
         assertTrue(messages.any { it.content.contains("拒绝") })
+    }
+
+    /** Wait for the background prompt coroutine to complete (session.running becomes false). */
+    private suspend fun awaitSessionIdle(userId: String, groupId: String, timeoutMs: Long = 5000) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            val state = AgentRuntime.snapshotState(userId, groupId)
+            if (state == null || !state.running) return
+            kotlinx.coroutines.delay(10)
+        }
+        throw AssertionError("Session did not become idle within ${timeoutMs}ms")
     }
 }

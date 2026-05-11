@@ -795,6 +795,8 @@ private fun WorkflowChatPanel(
                             fontSize(13.px)
                             fontStyle("italic")
                             marginBottom(4.px)
+                            property("white-space", "pre-wrap")
+                            property("word-break", "break-word")
                         }
                     }) {
                         Text(status.content)
