@@ -9,6 +9,9 @@ import com.silk.shared.ConnectionState
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.UserSettings
+import com.silk.shared.models.isAgentUserId
+import com.silk.shared.models.SILK_AGENT_USER_ID
+import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.await
 import kotlinx.coroutines.withTimeoutOrNull
@@ -33,28 +36,28 @@ object SilkColors {
     const val primary = "#C9A86C"
     const val primaryDark = "#A8894D"
     const val primaryLight = "#E0CDA0"
-    
+
     // 次要色调 - 奶油丝绸
     const val secondary = "#E8D5B5"
     const val secondaryDark = "#D4C4A0"
-    
+
     // 背景色 - 温暖的奶白色
     const val background = "#FDF8F0"
     const val backgroundGradient = "linear-gradient(135deg, #FDF8F0 0%, #F5EDE0 50%, #EDE4D3 100%)"
     const val surface = "#FFFBF5"
     const val surfaceElevated = "#FFFFFF"
-    
+
     // 文字颜色
     const val textPrimary = "#4A4038"
     const val textSecondary = "#8A7B6A"
     const val textLight = "#B8A890"
-    
+
     // 功能色
     const val success = "#7DAE6C"
     const val warning = "#E8B86C"
     const val error = "#D97B7B"
     const val info = "#7BA8C9"
-    
+
     // 边框和分隔线
     const val border = "#E8E0D4"
     const val divider = "#F0E8DC"
@@ -127,17 +130,17 @@ private fun parseFileNameFromContentDisposition(contentDisposition: String?): St
 fun main() {
     console.log("🧵 Silk 正在启动...")
     console.log("1️⃣ 准备渲染...")
-    
+
     renderComposable(rootElementId = "root") {
         console.log("2️⃣ renderComposable 已调用")
-        
+
         Style(SilkStylesheet)
         console.log("3️⃣ Silk样式已加载")
-        
+
         SilkApp()
         console.log("4️⃣ 主应用组件已渲染")
     }
-    
+
     console.log("✅ Silk 启动完成")
 }
 
@@ -311,17 +314,17 @@ fun SilkTabContent(appState: WebAppState) {
 @Composable
 fun ChatScene(appState: WebAppState) {
     console.log("🎬 ChatScene被调用")
-    
+
     val group = appState.selectedGroup
     val user = appState.currentUser
     val scope = rememberCoroutineScope()
     var userGroups by remember(user?.id) { mutableStateOf<List<Group>>(emptyList()) }
     var unreadCounts by remember(user?.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var isLoadingGroups by remember(user?.id) { mutableStateOf(true) }
-    
+
     console.log("   群组:", group?.name ?: "null")
     console.log("   用户:", user?.fullName ?: "null")
-    
+
     if (group == null || user == null) {
         console.log("⚠️ 群组或用户为空，显示错误页面")
         Div({ style { padding(20.px) } }) {
@@ -368,7 +371,7 @@ fun ChatScene(appState: WebAppState) {
             }
         }
     }
-    
+
     console.log("✅ 群组和用户都有效，渲染聊天界面")
     Div({
         style {
@@ -545,7 +548,7 @@ object SilkStylesheet : StyleSheet() {
         property("overflow", "hidden")
         property("background", SilkColors.backgroundGradient)
     }
-    
+
     val header by style {
         property("flex-shrink", "0")
         property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
@@ -556,7 +559,7 @@ object SilkStylesheet : StyleSheet() {
         property("letter-spacing", "2px")
         property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.2)")
     }
-    
+
     val statusBar by style {
         property("flex-shrink", "0")
         padding(4.px, 16.px)
@@ -566,7 +569,7 @@ object SilkStylesheet : StyleSheet() {
         property("font-size", "12px")
         property("letter-spacing", "1px")
     }
-    
+
     val messagesContainer by style {
         property("flex", "1")
         property("min-height", "0")
@@ -576,7 +579,7 @@ object SilkStylesheet : StyleSheet() {
         padding(12.px)
         property("background", SilkColors.backgroundGradient)
     }
-    
+
     val messageCard by style {
         backgroundColor(Color(SilkColors.surfaceElevated))
         borderRadius(12.px)
@@ -586,25 +589,25 @@ object SilkStylesheet : StyleSheet() {
         property("border", "1px solid ${SilkColors.border}")
         property("transition", "all 0.2s ease")
     }
-    
+
     val messageHeader by style {
         display(DisplayStyle.Flex)
         property("justify-content", "space-between")
         marginBottom(6.px)
     }
-    
+
     val userName by style {
         property("font-weight", "600")
         color(Color(SilkColors.primary))
         property("letter-spacing", "0.5px")
     }
-    
+
     val timestamp by style {
         fontSize(11.px)
         color(Color(SilkColors.textLight))
         property("font-style", "italic")
     }
-    
+
     val systemMessage by style {
         fontSize(12.px)
         color(Color(SilkColors.textSecondary))
@@ -612,7 +615,7 @@ object SilkStylesheet : StyleSheet() {
         marginBottom(8.px)
         property("font-style", "italic")
     }
-    
+
     val inputContainer by style {
         display(DisplayStyle.Flex)
         property("flex-shrink", "0")
@@ -622,7 +625,7 @@ object SilkStylesheet : StyleSheet() {
         property("gap", "8px")
         property("box-shadow", "0 -2px 8px rgba(169, 137, 77, 0.05)")
     }
-    
+
     val input by style {
         property("flex", "1")
         padding(10.px)
@@ -638,7 +641,7 @@ object SilkStylesheet : StyleSheet() {
         property("color", SilkColors.textPrimary)
         property("transition", "all 0.2s ease")
     }
-    
+
     val button by style {
         padding(8.px, 20.px)
         property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
@@ -652,13 +655,13 @@ object SilkStylesheet : StyleSheet() {
         property("transition", "all 0.2s ease")
         property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.25)")
     }
-    
+
     val buttonHover by style {
         property("background", "linear-gradient(135deg, ${SilkColors.primaryDark} 0%, #8A7040 100%)")
         property("transform", "translateY(-1px)")
         property("box-shadow", "0 4px 12px rgba(169, 137, 77, 0.35)")
     }
-    
+
     // 临时消息样式 - 更柔和
     val transientMessageCard by style {
         backgroundColor(Color(SilkColors.secondary))
@@ -671,13 +674,13 @@ object SilkStylesheet : StyleSheet() {
         property("border-left", "3px solid ${SilkColors.warning}")
         property("box-shadow", "0 2px 6px rgba(169, 137, 77, 0.1)")
     }
-    
+
     // 进度条样式 - 丝滑金色
     val progressBarContainer by style {
         marginTop(10.px)
         marginBottom(8.px)
     }
-    
+
     val progressBar by style {
         width(100.percent)
         height(4.px)
@@ -686,14 +689,14 @@ object SilkStylesheet : StyleSheet() {
         property("overflow", "hidden")
         property("position", "relative")
     }
-    
+
     val progressFill by style {
         height(100.percent)
         property("background", "linear-gradient(90deg, ${SilkColors.primary}, ${SilkColors.primaryLight})")
         property("transition", "width 0.3s ease")
         property("box-shadow", "0 0 8px rgba(201, 168, 108, 0.5)")
     }
-    
+
     // ==================== AI 消息卡片样式 ====================
     // AI 消息卡片 - 渐变背景
     val aiMessageCard by style {
@@ -706,7 +709,7 @@ object SilkStylesheet : StyleSheet() {
         property("position", "relative")
         property("overflow", "hidden")
     }
-    
+
     // AI 头像区域
     val aiAvatar by style {
         width(36.px)
@@ -719,7 +722,7 @@ object SilkStylesheet : StyleSheet() {
         property("font-size", "18px")
         property("flex-shrink", "0")
     }
-    
+
     // AI 消息头部
     val aiMessageHeader by style {
         display(DisplayStyle.Flex)
@@ -727,7 +730,7 @@ object SilkStylesheet : StyleSheet() {
         property("gap", "10px")
         marginBottom(12.px)
     }
-    
+
     // AI 标签
     val aiBadge by style {
         padding(4.px, 10.px)
@@ -738,14 +741,14 @@ object SilkStylesheet : StyleSheet() {
         property("font-weight", "600")
         property("letter-spacing", "0.5px")
     }
-    
+
     // AI 消息内容区域
     val aiMessageContent by style {
         property("line-height", "1.8")
         property("color", "#1E293B")
         property("font-size", "14px")
     }
-    
+
     // Markdown 标题样式
     val markdownH1 by style {
         fontSize(20.px)
@@ -756,7 +759,7 @@ object SilkStylesheet : StyleSheet() {
         paddingBottom(8.px)
         property("border-bottom", "2px solid #E2E8F0")
     }
-    
+
     val markdownH2 by style {
         fontSize(18.px)
         property("font-weight", "600")
@@ -766,7 +769,7 @@ object SilkStylesheet : StyleSheet() {
         property("border-left", "3px solid #3B82F6")
         paddingLeft(10.px)
     }
-    
+
     val markdownH3 by style {
         fontSize(16.px)
         property("font-weight", "600")
@@ -774,7 +777,7 @@ object SilkStylesheet : StyleSheet() {
         marginTop(12.px)
         marginBottom(8.px)
     }
-    
+
     // Markdown 代码块
     val markdownCodeBlock by style {
         property("background", "#1E293B")
@@ -788,7 +791,7 @@ object SilkStylesheet : StyleSheet() {
         marginBottom(10.px)
         property("line-height", "1.6")
     }
-    
+
     // Markdown 行内代码
     val markdownInlineCode by style {
         property("background", "rgba(59, 130, 246, 0.1)")
@@ -798,7 +801,7 @@ object SilkStylesheet : StyleSheet() {
         property("font-family", "'JetBrains Mono', 'Fira Code', monospace")
         fontSize(13.px)
     }
-    
+
     // Markdown 引用
     val markdownBlockquote by style {
         property("border-left", "4px solid #3B82F6")
@@ -812,20 +815,20 @@ object SilkStylesheet : StyleSheet() {
         property("font-style", "italic")
         color(Color("#64748B"))
     }
-    
+
     // Markdown 列表
     val markdownList by style {
         marginLeft(20.px)
         marginTop(8.px)
         marginBottom(8.px)
     }
-    
+
     val markdownListItem by style {
         marginBottom(6.px)
         property("line-height", "1.6")
         property("position", "relative")
     }
-    
+
     // Markdown 链接
     val markdownLink by style {
         color(Color("#3B82F6"))
@@ -833,7 +836,7 @@ object SilkStylesheet : StyleSheet() {
         property("border-bottom", "1px solid rgba(59, 130, 246, 0.3)")
         property("transition", "all 0.2s")
     }
-    
+
     // Markdown 分割线
     val markdownHr by style {
         property("border", "none")
@@ -842,7 +845,7 @@ object SilkStylesheet : StyleSheet() {
         marginTop(16.px)
         marginBottom(16.px)
     }
-    
+
     // Markdown 表格
     val markdownTable by style {
         width(100.percent)
@@ -851,7 +854,7 @@ object SilkStylesheet : StyleSheet() {
         marginBottom(10.px)
         property("font-size", "13px")
     }
-    
+
     val markdownTableHeader by style {
         property("background", "rgba(59, 130, 246, 0.1)")
         property("font-weight", "600")
@@ -859,18 +862,18 @@ object SilkStylesheet : StyleSheet() {
         property("text-align", "left")
         property("border-bottom", "2px solid #E2E8F0")
     }
-    
+
     val markdownTableCell by style {
         padding(10.px)
         property("border-bottom", "1px solid #E2E8F0")
     }
-    
+
     // Markdown 加粗
     val markdownBold by style {
         property("font-weight", "700")
         color(Color("#1E293B"))
     }
-    
+
     // Markdown 斜体
     val markdownItalic by style {
         property("font-style", "italic")
@@ -881,13 +884,13 @@ object SilkStylesheet : StyleSheet() {
 @Composable
 fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     console.log("🎯 ChatAppWithGroup - 用户:", user.fullName, "群组:", group.name)
-    
+
     val scope = rememberCoroutineScope()
-    
+
     // Language and strings
     var userLanguage by remember { mutableStateOf<com.silk.shared.models.Language>(com.silk.shared.models.Language.CHINESE) }
     val strings = com.silk.shared.i18n.getStrings(userLanguage)
-    
+
     // Load user language preference
     // Reload when user changes OR when navigating to chat scene
     LaunchedEffect(user.id, appState.currentScene) {
@@ -904,14 +907,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             }
         }
     }
-    
+
     // 动态生成 WebSocket URL，兼容同源代理与本地分端口开发
     val wsUrl = remember {
         val url = backendWsOrigin()
         console.log("🔌 WebSocket URL: $url")
         url
     }
-    
+
     val chatClient = remember { ChatClient(wsUrl) }
     val messages by chatClient.messages.collectAsState()
     val transientMessage by chatClient.transientMessage.collectAsState()
@@ -920,7 +923,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val isGenerating by chatClient.isGenerating.collectAsState()
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
-    
+
     var messageText by remember { mutableStateOf("") }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
@@ -929,7 +932,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var showFolderExplorer by remember { mutableStateOf(false) }
     var folderFiles by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var isLoadingFiles by remember { mutableStateOf(false) }
-    
+
     // Drag-and-drop state
     var isDraggingOver by remember { mutableStateOf(false) }
 
@@ -938,33 +941,33 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var isTranscribing by remember { mutableStateOf(false) }
     var mediaRecorderJs by remember { mutableStateOf<dynamic>(null) }
     var audioChunksJs by remember { mutableStateOf<dynamic>(null) }
-    
+
     // 添加成员到群组相关状态
     var showAddMemberDialog by remember { mutableStateOf(false) }
     var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
     var groupMembers by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
     var isLoadingContacts by remember { mutableStateOf(false) }
     var addMemberResult by remember { mutableStateOf<String?>(null) }
-    
+
     // 查看成员列表相关状态
     var showMembersDialog by remember { mutableStateOf(false) }
     var selectedMemberForInvite by remember { mutableStateOf<GroupMember?>(null) }
     var isInvitingMember by remember { mutableStateOf(false) }
     var inviteMemberResult by remember { mutableStateOf<String?>(null) }
-    
+
     // @ mention 功能状态
     var showMentionMenu by remember { mutableStateOf(false) }
     var mentionSearchText by remember { mutableStateOf("") }
     var mentionStartIndex by remember { mutableStateOf(-1) }
     var mentionMenuPosition by remember { mutableStateOf(Pair(0.0, 0.0)) } // (left, bottom)
-    
+
     // 消息撤回相关状态：正在撤回中的消息ID集合，防止重复点击
     var recallingMessageIds by remember { mutableStateOf(setOf<String>()) }
-    
+
     // 消息选择模式状态
     var isSelectionMode by remember { mutableStateOf(false) }
     var selectedMessageIds by remember { mutableStateOf(setOf<String>()) }
-    
+
     // Escape 键退出选择模式
     DisposableEffect(Unit) {
         val handler: (org.w3c.dom.events.Event) -> Unit = { event ->
@@ -977,20 +980,20 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         window.addEventListener("keydown", handler)
         onDispose { window.removeEventListener("keydown", handler) }
     }
-    
+
     // 消息转发相关状态
     var showForwardDialog by remember { mutableStateOf(false) }
     var messageToForward by remember { mutableStateOf<Message?>(null) }
     var userGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
     var isLoadingGroups by remember { mutableStateOf(false) }
     var forwardResult by remember { mutableStateOf<String?>(null) }
-    
+
     // 从群组成员列表和消息历史中提取用户列表（去重）
     // 优先使用 groupMembers（包含所有成员），然后补充消息历史中的成员
     val sessionUsers = remember(groupMembers, messages) {
         val users = mutableSetOf<Pair<String, String>>() // (id, name)
         // 始终添加 Silk AI
-        users.add("silk_ai_agent" to "🤖 Silk")
+        users.add(SILK_AGENT_USER_ID to "🤖 $SILK_AGENT_DISPLAY_NAME")
         // 添加群组成员列表中的所有成员
         groupMembers.forEach { member ->
             users.add(member.id to member.fullName)
@@ -999,20 +1002,20 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         users.add(user.id to user.fullName)
         // 从消息中提取其他用户（补充可能不在成员列表中的用户，如已退群的用户）
         messages.forEach { msg ->
-            if (msg.userId != "silk_ai_agent" && msg.userId != user.id) {
+            if (!isAgentUserId(msg.userId) && msg.userId != user.id) {
                 users.add(msg.userId to msg.userName)
             }
         }
         users.toList()
     }
-    
+
     LaunchedEffect(group.id) {
         console.log("🔌 准备建立WebSocket连接...")
         console.log("   群组ID:", group.id, "群组名:", group.name)
-        
+
         hasSentDefaultInstruction = false
         chatClient.clearMessages()
-        
+
         // 并行：加载群成员 + 建立 WebSocket，互不阻塞
         launch {
             try {
@@ -1023,7 +1026,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 console.error("❌ 加载群成员列表失败:", e.toString())
             }
         }
-        
+
         try {
             console.log("🔌 开始连接WebSocket...")
             chatClient.connect(user.id, user.fullName, group.id)
@@ -1032,7 +1035,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             console.error("❌ WebSocket连接失败:", e.toString())
         }
     }
-    
+
     DisposableEffect(group.id) {
         onDispose {
             // connect() 内部会静默断开旧连接，此处只负责标记已读
@@ -1046,7 +1049,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             } catch (_: dynamic) {}
         }
     }
-    
+
     // 自动滚动到底部
     LaunchedEffect(messages.size, transientMessage, statusMessages.size) {
         js("""
@@ -1058,10 +1061,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             }, 100);
         """)
     }
-    
+
     Div({ classes(SilkStylesheet.container) }) {
         // Header - 丝滑风格
-        Div({ 
+        Div({
             classes(SilkStylesheet.header)
             style {
                 display(DisplayStyle.Flex)
@@ -1082,7 +1085,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     property("backdrop-filter", "blur(4px)")
                     property("transition", "all 0.2s ease")
                 }
-                onClick { 
+                onClick {
                     console.log("👈 用户点击返回按钮")
                     scope.launch {
                         // 1. 先断开WebSocket连接
@@ -1093,10 +1096,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         } catch (e: dynamic) {
                             console.log("ℹ️ WebSocket断开（忽略错误）")
                         }
-                        
+
                         // 2. 等待服务器完成所有消息处理
                         kotlinx.coroutines.delay(300)
-                        
+
                         // 3. 最后标记已读 - 在断开连接之后调用
                         // 这样可以确保标记时间晚于用户发送的所有消息
                         try {
@@ -1105,7 +1108,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         } catch (e: dynamic) {
                             console.log("⚠️ 标记已读失败")
                         }
-                        
+
                         // 4. 返回到群组列表
                         console.log("📋 返回到群组列表")
                         appState.navigateBack()
@@ -1114,16 +1117,16 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             }) {
                 Text("←")
             }
-            
-            Div({ 
-                style { 
-                    property("flex", "1") 
+
+            Div({
+                style {
+                    property("flex", "1")
                     property("letter-spacing", "2px")
-                } 
+                }
             }) {
                 Text(group.name)
             }
-            
+
             // 右侧按钮组
             if (isSelectionMode) {
                 // 选择模式工具栏
@@ -1143,7 +1146,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }) {
                         Text("已选择 ${selectedMessageIds.size} 条")
                     }
-                    
+
                     // 复制选中消息
                     Button({
                         style {
@@ -1172,7 +1175,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }) {
                         Text("📋复制")
                     }
-                    
+
                     // 转发选中消息
                     Button({
                         style {
@@ -1212,7 +1215,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }) {
                         Text("↗转发")
                     }
-                    
+
                     // 取消选择
                     Button({
                         style {
@@ -1378,7 +1381,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         Text("📂")
                     }
                 }
-                
+
                 // 邀请按钮
                 Button({
                     style {
@@ -1396,7 +1399,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }) {
                     Text(strings.inviteButton)
                 }
-                
+
                 // ➕ 添加成员按钮
                 Button({
                     style {
@@ -1426,7 +1429,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }) {
                     Text("➕")
                 }
-                
+
                 // 👥 查看成员按钮
                 Button({
                     style {
@@ -1459,10 +1462,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             }
             } // close else (non-selection mode)
         }
-        
+
         // Status Bar - only show when not connected
         if (connectionState != ConnectionState.CONNECTED) {
-            Div({ 
+            Div({
                 classes(SilkStylesheet.statusBar)
                 style {
                     property("background", when (connectionState) {
@@ -1480,11 +1483,11 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         else -> ""
                     })
                 }
-                
+
                 if (connectionState == ConnectionState.DISCONNECTED) {
                     Button({
                         classes(SilkStylesheet.button)
-                        style { 
+                        style {
                             padding(8.px, 16.px)
                             fontSize(12.px)
                         }
@@ -1499,10 +1502,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
             }
         }
-        
+
         // Messages container with drag-and-drop support
         // flex: 1 spacer pushes content to bottom; overflow-y: auto enables scroll
-        Div({ 
+        Div({
             classes(SilkStylesheet.messagesContainer)
             id("messages")
             style {
@@ -1649,20 +1652,20 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
             }
         }
-        
+
         // Drag-and-drop event handlers - directly manipulate DOM for immediate visual feedback
         DisposableEffect(group.id) {
             val sessionId = group.id
             val userId = user.id
             val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
             val primaryColor = SilkColors.primary
-            
+
             // Store values in window for JavaScript to access
             window.asDynamic().tempDragDropSessionId = sessionId
             window.asDynamic().tempDragDropUserId = userId
             window.asDynamic().tempDragDropUploadUrl = uploadUrl
             window.asDynamic().tempDragDropPrimaryColor = primaryColor
-            
+
             js("""
                 setTimeout(function() {
                     var container = document.getElementById('messages');
@@ -1670,9 +1673,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         console.error('❌ Drag-and-drop: messages container not found');
                         return;
                     }
-                    
+
                     console.log('✅ Drag-and-drop: messages container found');
-                    
+
                     // Clean up existing handlers if any
                     if (container._dragHandlers) {
                         container.removeEventListener('dragenter', container._dragHandlers.dragenter);
@@ -1684,12 +1687,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                         delete container._dragHandlers;
                     }
-                    
+
                     var sessionId = window.tempDragDropSessionId;
                     var userId = window.tempDragDropUserId;
                     var uploadUrl = window.tempDragDropUploadUrl;
                     var primaryColor = window.tempDragDropPrimaryColor;
-                    
+
                     // Create overlay element for drag feedback
                     var overlay = document.createElement('div');
                     overlay.id = 'drag-drop-overlay';
@@ -1697,21 +1700,21 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         'background: rgba(201, 168, 108, 0.1); display: none; ' +
                         'align-items: center; justify-content: center; z-index: 100; pointer-events: none; ' +
                         'border-radius: 8px;';
-                    
+
                     var overlayContent = document.createElement('div');
                     overlayContent.style.cssText = 'background: #FFFFFF; padding: 32px 48px; ' +
                         'border-radius: 16px; box-shadow: 0 8px 32px rgba(169, 137, 77, 0.3); ' +
                         'border: 2px solid ' + primaryColor + '; text-align: center;';
-                    
+
                     overlayContent.innerHTML = '<div style="font-size: 48px; margin-bottom: 16px;">📎</div>' +
                         '<div style="font-size: 18px; color: ' + primaryColor + '; font-weight: 600; margin-bottom: 8px;">拖放文件到此区域上传</div>' +
                         '<div style="font-size: 14px; color: #8A7B6A;">释放文件即可上传</div>';
-                    
+
                     overlay.appendChild(overlayContent);
                     container.appendChild(overlay);
-                    
+
                     var dragEnterCount = 0;
-                    
+
                     var handleDragEnter = function(event) {
                         event.preventDefault();
                         event.stopPropagation();
@@ -1724,7 +1727,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         overlay.style.alignItems = 'center';
                         overlay.style.justifyContent = 'center';
                     };
-                    
+
                     var handleDragOver = function(event) {
                         event.preventDefault();
                         event.stopPropagation();
@@ -1732,7 +1735,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             event.dataTransfer.dropEffect = 'copy';
                         }
                     };
-                    
+
                     var handleDragLeave = function(event) {
                         event.preventDefault();
                         event.stopPropagation();
@@ -1745,7 +1748,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             overlay.style.display = 'none';
                         }
                     };
-                    
+
                     var handleDrop = function(event) {
                         event.preventDefault();
                         event.stopPropagation();
@@ -1754,23 +1757,23 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         container.style.background = '';
                         container.style.boxShadow = '';
                         overlay.style.display = 'none';
-                        
+
                         var dataTransfer = event.dataTransfer;
                         if (!dataTransfer || !dataTransfer.files || dataTransfer.files.length === 0) {
                             return;
                         }
-                        
+
                         var file = dataTransfer.files[0];
                         console.log('📁 拖放文件: ' + file.name + ', 大小: ' + file.size);
-                        
+
                         var formData = new FormData();
                         formData.append('sessionId', sessionId);
                         formData.append('userId', userId);
                         formData.append('file', file);
-                        
+
                         var xhr = new XMLHttpRequest();
                         xhr.open('POST', uploadUrl, true);
-                        
+
                         xhr.onload = function() {
                             if (xhr.status === 200) {
                                 var response = JSON.parse(xhr.responseText);
@@ -1781,20 +1784,20 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 window.alert('文件上传失败: ' + xhr.statusText);
                             }
                         };
-                        
+
                         xhr.onerror = function() {
                             console.log('❌ 上传错误');
                             window.alert('文件上传失败，请检查网络连接');
                         };
-                        
+
                         xhr.send(formData);
                     };
-                    
+
                     container.addEventListener('dragenter', handleDragEnter);
                     container.addEventListener('dragover', handleDragOver);
                     container.addEventListener('dragleave', handleDragLeave);
                     container.addEventListener('drop', handleDrop);
-                    
+
                     // Store handlers for cleanup
                     container._dragHandlers = {
                         dragenter: handleDragEnter,
@@ -1806,7 +1809,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     console.log('✅ Drag-and-drop: handlers attached');
                 }, 200);
             """)
-            
+
             onDispose {
                 js("""
                     (function() {
@@ -1829,10 +1832,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 window.asDynamic().tempDragDropPrimaryColor = undefined
             }
         }
-        
+
         // Input区域（添加诊断按钮）- 丝滑风格
         if (connectionState == ConnectionState.CONNECTED) {
-            Div({ 
+            Div({
                 classes(SilkStylesheet.inputContainer)
                 style {
                     display(DisplayStyle.Flex)
@@ -1897,7 +1900,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }
                 }
-                
+
                 // 第一行：输入框占据整行
                 // 发送消息的函数
                 val sendMessage: () -> Unit = {
@@ -1909,7 +1912,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }
                 }
-                
+
                 // 输入框容器（用于定位 mention 菜单）
                 Div({
                     style {
@@ -1924,7 +1927,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             val newValue = event.value
                             val oldValue = messageText
                             messageText = newValue
-                            
+
                             // 检测 @ 符号
                             if (newValue.length > oldValue.length) {
                                 val lastChar = newValue.lastOrNull()
@@ -1940,7 +1943,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                     mentionSearchText = ""
                                 }
                             }
-                            
+
                             // 如果在 mention 模式，更新搜索文本
                             if (showMentionMenu && mentionStartIndex >= 0) {
                                 val textAfterAt = newValue.substring(mentionStartIndex + 1)
@@ -1962,7 +1965,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             property("resize", "none")
                         }
                     }
-                    
+
                     // @ Mention 下拉菜单 - 使用 fixed 定位避免被 overflow:hidden 裁剪
                     if (showMentionMenu) {
                         Div({
@@ -1986,10 +1989,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }) {
                             // 过滤用户列表
                             val filteredUsers = sessionUsers.filter { (_, name) ->
-                                mentionSearchText.isEmpty() || 
+                                mentionSearchText.isEmpty() ||
                                 name.lowercase().contains(mentionSearchText.lowercase())
                             }
-                            
+
                             if (filteredUsers.isEmpty()) {
                                 Div({
                                     style {
@@ -2011,11 +2014,11 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                         onClick {
                                             // 插入 @用户名
                                             val beforeAt = messageText.substring(0, mentionStartIndex)
-                                            val displayName = if (userId == "silk_ai_agent") "Silk" else userName
+                                            val displayName = if (isAgentUserId(userId)) "Silk" else userName
                                             messageText = "$beforeAt@$displayName "
                                             showMentionMenu = false
                                             mentionStartIndex = -1
-                                            
+
                                             // 聚焦输入框 (使用 window.setTimeout 确保在下一个事件循环执行)
                                             window.setTimeout({
                                                 val input = document.getElementById("chat-input")
@@ -2033,14 +2036,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                             style {
                                                 fontSize(14.px)
                                                 color(Color(SilkColors.textPrimary))
-                                                if (userId == "silk_ai_agent") {
+                                                if (isAgentUserId(userId)) {
                                                     property("font-weight", "600")
                                                 }
                                             }
                                         }) {
                                             Text(userName)
                                         }
-                                        if (userId == "silk_ai_agent") {
+                                        if (isAgentUserId(userId)) {
                                             Span({
                                                 style {
                                                     fontSize(12.px)
@@ -2057,7 +2060,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }
                 }
-                
+
                 // 添加键盘事件监听
                 DisposableEffect(Unit) {
                     val handler: (dynamic) -> Unit = { event: dynamic ->
@@ -2093,7 +2096,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         input?.removeEventListener("keydown", handler)
                     }
                 }
-                
+
                 // 第二行：按钮组靠右对齐
                 Div({
                     style {
@@ -2128,7 +2131,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }) {
                         Text(if (isUploading) "⏳" else "📁")
                     }
-                    
+
                     // 📎 上传单文件按钮
                     Button({
                         style {
@@ -2267,7 +2270,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             Text("🎤")
                         }
                     }
-                    
+
                     if (isGenerating) {
                         Button({
                             style {
@@ -2299,7 +2302,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             }
         }
     }
-    
+
     // 转发对话框
     if (showForwardDialog && messageToForward != null) {
         Div({
@@ -2316,7 +2319,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 property("z-index", "1100")
                 property("backdrop-filter", "blur(4px)")
             }
-            onClick { 
+            onClick {
                 showForwardDialog = false
                 messageToForward = null
                 forwardResult = null
@@ -2358,7 +2361,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }) { Text("1 条消息") }
                 }
-                
+
                 // 消息预览
                 Div({
                     style {
@@ -2374,7 +2377,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }) {
                     Text("${messageToForward!!.userName}: ${messageToForward!!.content.take(80)}${if (messageToForward!!.content.length > 80) "..." else ""}")
                 }
-                
+
                 // 结果提示
                 forwardResult?.let { result ->
                     Div({
@@ -2386,7 +2389,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }) { Text(result) }
                 }
-                
+
                 // 群组列表
                 if (isLoadingGroups) {
                     Div({
@@ -2470,7 +2473,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }
                 }
-                
+
                 // 取消按钮
                 Div({
                     style {
@@ -2497,7 +2500,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             }
         }
     }
-    
+
     // 邀请对话框
     if (showInvitationDialog) {
         InvitationDialog(
@@ -2506,7 +2509,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             onDismiss = { showInvitationDialog = false }
         )
     }
-    
+
     // 添加成员对话框
     if (showAddMemberDialog) {
         AddMemberDialog(
@@ -2529,13 +2532,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }
             },
-            onDismiss = { 
+            onDismiss = {
                 showAddMemberDialog = false
                 addMemberResult = null
             }
         )
     }
-    
+
     // 查看成员对话框
     if (showMembersDialog) {
         MembersDialog(
@@ -2555,7 +2558,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         try {
                             chatClient.disconnect()
                         } catch (e: dynamic) { }
-                        
+
                         // 调用API获取或创建与该联系人的对话
                         val response = ApiClient.startPrivateChat(user.id, member.id)
                         if (response.success && response.group != null) {
@@ -2570,14 +2573,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     selectedMemberForInvite = member
                 }
             },
-            onDismiss = { 
+            onDismiss = {
                 showMembersDialog = false
                 selectedMemberForInvite = null
                 inviteMemberResult = null
             }
         )
     }
-    
+
     // 邀请成员加入联系人确认对话框
     selectedMemberForInvite?.let { member ->
         Div({
@@ -2594,7 +2597,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 property("z-index", "1100")
                 property("backdrop-filter", "blur(4px)")
             }
-            onClick { 
+            onClick {
                 selectedMemberForInvite = null
                 inviteMemberResult = null
             }
@@ -2622,7 +2625,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }) {
                     Text(strings.addContact)
                 }
-                
+
                 Div({
                     style {
                         textAlign("center")
@@ -2634,14 +2637,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     Br()
                     Text(strings.sendContactRequestQuestion)
                 }
-                
+
                 // 显示结果消息
                 inviteMemberResult?.let { result ->
                     Div({
                         style {
                             textAlign("center")
                             marginBottom(16.px)
-                            color(if (result.contains(strings.contactRequestSent) || result.contains("✅")) 
+                            color(if (result.contains(strings.contactRequestSent) || result.contains("✅"))
                                 Color("#10B981") else Color("#EF4444"))
                             fontSize(14.px)
                         }
@@ -2649,7 +2652,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         Text(result)
                     }
                 }
-                
+
                 // 按钮区域
                 Div({
                     style {
@@ -2672,14 +2675,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             property("cursor", "pointer")
                             fontSize(14.px)
                         }
-                        onClick { 
+                        onClick {
                             selectedMemberForInvite = null
                             inviteMemberResult = null
                         }
                     }) {
                         Text(strings.cancelButton)
                     }
-                    
+
                     Button({
                         style {
                             backgroundColor(Color(SilkColors.primary))
@@ -2703,7 +2706,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                         "❌ ${response.message}"
                                     }
                                     isInvitingMember = false
-                                    
+
                                     // 成功后延迟关闭
                                     if (response.success) {
                                         kotlinx.coroutines.delay(1500)
@@ -2720,7 +2723,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             }
         }
     }
-    
+
     // 隐藏的单文件上传输入
     org.jetbrains.compose.web.dom.Input(org.jetbrains.compose.web.attributes.InputType.File) {
         id("file-upload-input")
@@ -2733,22 +2736,22 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             val sessionId = group.id
             val userId = user.id
             val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
-            
+
             js("""
                 (function() {
                     var input = document.getElementById('file-upload-input');
                     if (input && input.files && input.files.length > 0) {
                         var file = input.files[0];
                         console.log('📁 选择文件: ' + file.name + ', 大小: ' + file.size);
-                        
+
                         var formData = new FormData();
                         formData.append('sessionId', sessionId);
                         formData.append('userId', userId);
                         formData.append('file', file);
-                        
+
                         var xhr = new XMLHttpRequest();
                         xhr.open('POST', uploadUrl, true);
-                        
+
                         xhr.onload = function() {
                             if (xhr.status === 200) {
                                 var response = JSON.parse(xhr.responseText);
@@ -2759,12 +2762,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 window.alert('文件上传失败: ' + xhr.statusText);
                             }
                         };
-                        
+
                         xhr.onerror = function() {
                             console.log('❌ 上传错误');
                             window.alert('文件上传失败，请检查网络连接');
                         };
-                        
+
                         xhr.send(formData);
                         input.value = '';
                     }
@@ -2772,7 +2775,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             """)
         }
     }
-    
+
     // 隐藏的目录上传输入
     org.jetbrains.compose.web.dom.Input(org.jetbrains.compose.web.attributes.InputType.File) {
         id("folder-upload-input")
@@ -2786,12 +2789,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             val sessionId = group.id
             val userId = user.id
             val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
-            
+
             js("""
                 (function() {
                     var input = document.getElementById('folder-upload-input');
                     if (!input || !input.files || input.files.length === 0) return;
-                    
+
                     // 支持的文件扩展名
                     var supportedExtensions = [
                         // 文本文件
@@ -2806,10 +2809,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         // 文档
                         '.pdf'
                     ];
-                    
+
                     var files = input.files;
                     var filesToUpload = [];
-                    
+
                     // 筛选支持的文件
                     for (var i = 0; i < files.length; i++) {
                         var file = files[i];
@@ -2818,19 +2821,19 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             filesToUpload.push(file);
                         }
                     }
-                    
+
                     if (filesToUpload.length === 0) {
                         window.alert('所选目录中没有支持的文件类型');
                         input.value = '';
                         return;
                     }
-                    
+
                     console.log('📁 准备上传 ' + filesToUpload.length + ' 个文件（共 ' + files.length + ' 个文件）');
                     window.alert('准备上传 ' + filesToUpload.length + ' 个文件...');
-                    
+
                     var uploaded = 0;
                     var failed = 0;
-                    
+
                     // 逐一上传文件
                     function uploadNext(index) {
                         if (index >= filesToUpload.length) {
@@ -2838,18 +2841,18 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             input.value = '';
                             return;
                         }
-                        
+
                         var file = filesToUpload[index];
                         console.log('📤 上传 (' + (index + 1) + '/' + filesToUpload.length + '): ' + file.name);
-                        
+
                         var formData = new FormData();
                         formData.append('sessionId', sessionId);
                         formData.append('userId', userId);
                         formData.append('file', file);
-                        
+
                         var xhr = new XMLHttpRequest();
                         xhr.open('POST', uploadUrl, true);
-                        
+
                         xhr.onload = function() {
                             if (xhr.status === 200) {
                                 uploaded++;
@@ -2860,22 +2863,22 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             }
                             uploadNext(index + 1);
                         };
-                        
+
                         xhr.onerror = function() {
                             failed++;
                             console.log('❌ 网络错误: ' + file.name);
                             uploadNext(index + 1);
                         };
-                        
+
                         xhr.send(formData);
                     }
-                    
+
                     uploadNext(0);
                 })();
             """)
         }
     }
-    
+
     // 文件夹浏览对话框
     if (showFolderExplorer) {
         FolderExplorerDialog(
@@ -2896,7 +2899,7 @@ fun FolderExplorerDialog(
     var processedUrls by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    
+
     LaunchedEffect(groupId) {
         val apiUrl = "${backendHttpOrigin()}/api/files/list/$groupId"
         isLoading = true
@@ -2919,7 +2922,7 @@ fun FolderExplorerDialog(
             isLoading = false
         }
     }
-    
+
     // 对话框背景遮罩
     Div({
         style {
@@ -2971,7 +2974,7 @@ fun FolderExplorerDialog(
                 }) {
                     Text(strings.sessionFiles)
                 }
-                
+
                 // 关闭按钮
                 Button({
                     style {
@@ -2986,7 +2989,7 @@ fun FolderExplorerDialog(
                     Text("✕")
                 }
             }
-            
+
             // 文件列表区域
             Div({
                 style {
@@ -3057,7 +3060,7 @@ fun FolderExplorerDialog(
                             }) {
                                 Text("🔗 已下载的网页 (${processedUrls.size})")
                             }
-                            
+
                             processedUrls.forEach { url ->
                                 Div({
                                     style {
@@ -3112,7 +3115,7 @@ fun FolderExplorerDialog(
                             }
                         }
                     }
-                    
+
                     // 2️⃣ 然后显示上传的文件列表
                     if (files.isNotEmpty()) {
                         // 文件列表标题
@@ -3132,13 +3135,13 @@ fun FolderExplorerDialog(
                             }
                         }
                     }
-                    
+
                     // 显示文件列表
                     files.forEach { file ->
                         val fileName = file.name.ifBlank { strings.unknownFile }
                         val fileSize = file.size
                         val downloadUrl = file.downloadUrl
-                        
+
                         Div({
                             style {
                                 display(DisplayStyle.Flex)
@@ -3168,7 +3171,7 @@ fun FolderExplorerDialog(
                                 }) {
                                     Text(webFileIconForName(fileName))
                                 }
-                                
+
                                 Div {
                                     Div({
                                         style {
@@ -3189,7 +3192,7 @@ fun FolderExplorerDialog(
                                     }
                                 }
                             }
-                            
+
                             // 下载按钮
                             Button({
                                 style {
@@ -3807,7 +3810,7 @@ fun AIMessageCard(
     val collapsedPreview = remember(message.content) {
         message.content.trimStart().take(200).ifBlank { "（内容已折叠，点击展开）" }
     }
-    
+
     Div({
         style {
             display(DisplayStyle.Flex)
@@ -3840,7 +3843,7 @@ fun AIMessageCard(
                 if (isSelected) Text("✓")
             }
         }
-        
+
     Div({
         classes(SilkStylesheet.aiMessageCard)
         attr("id", "ai-msg-${message.id}")
@@ -3875,7 +3878,7 @@ fun AIMessageCard(
             }) {
                 Text("🤖")
             }
-            
+
             // AI 名称和时间
             Div({
                 style {
@@ -3905,7 +3908,7 @@ fun AIMessageCard(
                     Text(timeString)
                 }
             }
-            
+
             // 展开/折叠按钮（长内容时显示）
             if (isLongContent && !isTransient) {
                 Div({ style { property("flex", "1") } }) { }
@@ -3938,7 +3941,7 @@ fun AIMessageCard(
                 }
             }
         }
-        
+
         // 内容区域
         if (effectiveExpanded || !isLongContent) {
             if (isLongContent && effectiveExpanded && !isTransient) {
@@ -4047,7 +4050,7 @@ fun AIMessageCard(
                     Text("📋")
                     Text("复制")
                 }
-                
+
                 Span({
                     style {
                         fontSize(11.px)
@@ -4065,7 +4068,7 @@ fun AIMessageCard(
                     Text("↗")
                     Text("转发")
                 }
-                
+
                 Span({
                     style {
                         fontSize(11.px)
@@ -4088,7 +4091,7 @@ fun AIMessageCard(
                     Text("删除")
                 }
 
-                
+
                 Span({
                     style {
                         fontSize(11.px)
@@ -4108,7 +4111,7 @@ fun AIMessageCard(
                 }
             }
         }
-        
+
         // 临时消息状态指示
         if (isTransient) {
             Div({
@@ -4149,10 +4152,10 @@ fun MessageItem(
     val timeString = remember(message.timestamp) {
         formatMessageTimestampForWeb(message.timestamp)
     }
-    
+
     // 是否是 AI 消息
-    val isAIMessage = message.userId == "silk_ai_agent"
-    
+    val isAIMessage = isAgentUserId(message.userId)
+
     // AI 消息使用专用卡片
     if (isAIMessage && message.type == MessageType.TEXT && message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS) {
         AIMessageCard(
@@ -4170,17 +4173,17 @@ fun MessageItem(
         )
         return
     }
-    
+
     // 是否可以撤回：只能撤回自己发送的消息，且不是 Silk 的消息
-    val canRecall = message.userId == currentUserId && 
-                    message.userId != "silk_ai_agent" && 
+    val canRecall = message.userId == currentUserId &&
+                    !isAgentUserId(message.userId) &&
                     message.type == MessageType.TEXT &&
                     !isTransient
-    
+
     // 是否显示操作按钮：文本消息且不是临时消息
-    val showActions = message.type == MessageType.TEXT && !isTransient && 
+    val showActions = message.type == MessageType.TEXT && !isTransient &&
                       message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS
-    
+
     // Agent 状态消息 - 灰色样式
     if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) {
         Div({
@@ -4199,12 +4202,12 @@ fun MessageItem(
         }
         return
     }
-    
+
     when (message.type) {
         MessageType.TEXT -> {
             // 检测PDF下载链接
             val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
-            
+
             Div({
                 style {
                     display(DisplayStyle.Flex)
@@ -4274,7 +4277,7 @@ fun MessageItem(
                         val lines = message.content.split("\n")
                         var pdfUrl: String? = null
                         var fileName: String? = null
-                        
+
                         // 查找PDF路径和文件名
                         lines.forEach { line ->
                             val trimmedLine = line.trim()
@@ -4284,7 +4287,7 @@ fun MessageItem(
                                 fileName = trimmedLine.substringAfterLast("/").replace("%20", " ").replace("%27", "'")
                             }
                         }
-                        
+
                         // 显示消息内容（过滤掉路径行）
                         lines.forEach { line ->
                             val trimmedLine = line.trim()
@@ -4293,12 +4296,12 @@ fun MessageItem(
                                 Br()
                             }
                         }
-                        
+
                         // 显示下载按钮 - 丝滑绿色
                         if (pdfUrl != null) {
                             val baseUrl = backendHttpOrigin()
                             val fullUrl = "$baseUrl$pdfUrl"
-                            
+
                             Div({
                                 style {
                                     marginTop(14.px)
@@ -4327,11 +4330,11 @@ fun MessageItem(
                                         // ✅ 使用 fetch + Blob 方式下载PDF，触发浏览器保存对话框
                                         val downloadFileName = fileName ?: "diagnosis_report.pdf"
                                         console.log("开始下载PDF: $fullUrl, 文件名: $downloadFileName")
-                                        
+
                                         // 获取window和document对象（js()返回的已经是dynamic类型）
                                         val window = js("window")
                                         val document = js("document")
-                                        
+
                                         // 使用fetch下载PDF
                                         window.fetch(fullUrl)
                                             .then({ response: dynamic ->
@@ -4364,7 +4367,7 @@ fun MessageItem(
                                 }) {
                                     Text("📥 下载PDF报告")
                                 }
-                                
+
                                 // 显示文件名
                                 if (fileName != null) {
                                     Div({
@@ -4385,7 +4388,7 @@ fun MessageItem(
                         Text(message.content)
                     }
                 }
-                
+
                 // 消息操作按钮行
                 if (showActions && !isSelectionMode) {
                     Div({
@@ -4409,7 +4412,7 @@ fun MessageItem(
                             }
                             onClick { copyTextToClipboard(message.content) }
                         }) { Text("📋复制") }
-                        
+
                         Span({
                             style {
                                 fontSize(11.px)
@@ -4421,7 +4424,7 @@ fun MessageItem(
                             }
                             onClick { onForward(message) }
                         }) { Text("↗转发") }
-                        
+
                         if (canRecall && !isRecalling) {
                             Span({
                                 style {
@@ -4439,7 +4442,7 @@ fun MessageItem(
                                 }
                             }) { Text("↩撤回") }
                         }
-                        
+
                         Span({
                             style {
                                 fontSize(11.px)
@@ -4455,7 +4458,7 @@ fun MessageItem(
                                 }
                             }
                         }) { Text("🗑删除") }
-                        
+
                         Span({
                             style {
                                 fontSize(11.px)
@@ -4482,7 +4485,7 @@ fun MessageItem(
             val fileIcon = webFileIconForName(fileName)
             val fileSizeStr = formatWebFileSize(fileSize)
             val fileExtLabel = fileName.substringAfterLast(".", "").uppercase().ifBlank { "FILE" }
-            
+
             Div({
                 style {
                     display(DisplayStyle.Flex)
@@ -4539,7 +4542,7 @@ fun MessageItem(
                         Text(timeString)
                     }
                 }
-                
+
                 // 文件卡片
                 Div({
                     style {
@@ -4558,11 +4561,11 @@ fun MessageItem(
                             val baseUrl = backendHttpOrigin()
                             val fullUrl = "$baseUrl$downloadUrl"
                             console.log("打开文件下载: $fullUrl")
-                            
+
                             // 使用 fetch 下载文件
                             val window = js("window")
                             val document = js("document")
-                            
+
                             window.fetch(fullUrl)
                                 .then({ response: dynamic ->
                                     if (!response.ok) {
@@ -4600,7 +4603,7 @@ fun MessageItem(
                     }) {
                         Text(fileIcon)
                     }
-                    
+
                     // 文件信息
                     Div({
                         style {
@@ -4631,7 +4634,7 @@ fun MessageItem(
                             Text("$fileSizeStr • $fileExtLabel")
                         }
                     }
-                    
+
                     // 下载按钮
                     Div({
                         style {
@@ -4643,7 +4646,7 @@ fun MessageItem(
                         Text("⬇")
                     }
                 }
-                
+
                 // 文件消息操作按钮行
                 if (!isTransient && !isSelectionMode) {
                     Div({
@@ -4667,7 +4670,7 @@ fun MessageItem(
                             }
                             onClick { onForward(message) }
                         }) { Text("↗转发") }
-                        
+
                         Span({
                             style {
                                 fontSize(11.px)
@@ -4683,7 +4686,7 @@ fun MessageItem(
                                 }
                             }
                         }) { Text("🗑删除") }
-                        
+
                         Span({
                             style {
                                 fontSize(11.px)
@@ -4906,7 +4909,7 @@ fun AddMemberDialog(
     // 过滤出不在群组中的联系人
     val memberIds = groupMembers.map { it.id }.toSet()
     val availableContacts = contacts.filter { it.contactId !in memberIds }
-    
+
     // 对话框遮罩
     Div({
         style {
@@ -4948,7 +4951,7 @@ fun AddMemberDialog(
             }) {
                 Text(strings.addMembersToGroup)
             }
-            
+
             // 结果提示
             result?.let {
                 Div({
@@ -4967,7 +4970,7 @@ fun AddMemberDialog(
                     Text(it)
                 }
             }
-            
+
             if (isLoading) {
                 Div({
                     style {
@@ -5038,7 +5041,7 @@ fun AddMemberDialog(
                                     Text(contact.contactPhone)
                                 }
                             }
-                            
+
                             // 添加按钮
                             Button({
                                 style {
@@ -5060,7 +5063,7 @@ fun AddMemberDialog(
                     }
                 }
             }
-            
+
             // 关闭按钮
             Div({
                 style {
@@ -5103,7 +5106,7 @@ fun MembersDialog(
     onDismiss: () -> Unit
 ) {
     val contactIds = contacts.map { it.contactId }.toSet()
-    
+
     Div({
         style {
             position(Position.Fixed)
@@ -5145,7 +5148,7 @@ fun MembersDialog(
             }) {
                 Text(strings.groupMembersTitleWithCount.replace("{count}", members.size.toString()))
             }
-            
+
             if (isLoading) {
                 Div({
                     style {
@@ -5178,8 +5181,8 @@ fun MembersDialog(
                     members.forEach { member ->
                         val isCurrentUser = member.id == currentUserId
                         val isContact = member.id in contactIds
-                        val isSilkAI = member.id == "silk_ai_agent"
-                        
+                        val isSilkAI = isAgentUserId(member.id)
+
                         Div({
                             style {
                                 display(DisplayStyle.Flex)
@@ -5236,7 +5239,7 @@ fun MembersDialog(
                                         }
                                     )
                                 }
-                                
+
                                 // 名字和状态
                                 Div {
                                     Div({
@@ -5277,7 +5280,7 @@ fun MembersDialog(
                                     }
                                 }
                             }
-                            
+
                             // 右侧操作提示
                             if (!isCurrentUser && !isSilkAI) {
                                 Div({
@@ -5293,7 +5296,7 @@ fun MembersDialog(
                     }
                 }
             }
-            
+
             // 关闭按钮
             Button({
                 style {

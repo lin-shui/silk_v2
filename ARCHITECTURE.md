@@ -2,10 +2,10 @@
 
 Silk 是一个以 Kotlin 为主的多端聊天系统：
 
-- 后端：Ktor JVM，承担 HTTP、WebSocket、AI/tool calling、文件路由、导出、Todo、Workflow、Knowledge Base、Claude Code bridge 接入。
+- 后端：Ktor JVM，承担 HTTP、WebSocket、AI/tool calling、文件路由、导出、Todo、Workflow、Knowledge Base、Agent 框架（Claude Code 与 Codex 经 ACP 协议接入）。
 - 前端主线：Kotlin Multiplatform + Compose，包含 `frontend/shared`、`webApp`、`androidApp`、`desktopApp`。
 - 独立端：`frontend/harmonyApp` 为 ArkTS/ArkUI，未复用 KMP 代码。
-- 辅助服务：`search/`（索引检索脚本，已由 Claude 原生 web_search + 后端 grep 替代）、`cc_bridge/`（Claude CLI bridge）、`feishu_bot/`（飞书网关）。
+- 辅助服务：`search/`（Legacy Weaviate 脚本，当前 AI 主线已由 Claude 原生 web_search + 后端 grep 替代）、`cc_bridge/`（Claude CLI ACP adapter）、`codex_bridge/`（Codex CLI ACP adapter）、`feishu_bot/`（飞书网关）。
 
 ## Primary Runtime Flow
 
@@ -18,9 +18,11 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
    - 消息持久化
    - 未读计数
    - URL/PDF 下载提取
-   - Claude Code 模式拦截
+   - Agent 框架（Claude Code）拦截：`AgentRuntime.handleIfActive()`
    - Silk AI / `DirectModelAgent` 响应
-5. `frontend/shared` 定义多端共享消息模型、WebSocket 客户端行为、解析逻辑。
+5. Claude Code / Codex 通过 ACP 协议（JSON-RPC 2.0 over WebSocket）连接 `/agent-bridge` 端点；外部 `cc_bridge/acp_adapter.py` 和 `codex_bridge/codex_adapter.py` adapter 跑各自 CLI 并流式回传。
+6. Workflow 持久化每条工作流的 `activeAgent` 与 per-agent `agentSessions[agentType]`；进入工作流时 `autoActivateForWorkflow` 读 `workflow.activeAgent`（不再硬编码 claude-code），用户 `/use <agent>` 切换会落盘。
+7. `frontend/shared` 定义多端共享消息模型、WebSocket 客户端行为、解析逻辑。
 
 ## Persistent State
 
@@ -41,7 +43,8 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | App/bootstrap | `Application.kt`, `settings.gradle.kts`, root `build.gradle.kts`, `silk.sh` | 运行入口与构建编排 |
 | HTTP routes | `Routing.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt` | `Routing.kt` 仍然很大，是主索引点 |
 | Chat/WebSocket | `WebSocketConfig.kt`, `ChatHistoryManager.kt` | 消息主链、历史、URL 下载 |
-| AI/tools/search | `ai/`  (AnthropicClient + DirectModelAgent), `utils/WebPageDownloader.kt` | Anthropic Messages API + 原生 web_search 工具 + 后端 grep 搜索 |
+| Agent framework | `agents/core/`, `agents/acp/`, `agents/adapters/` | Claude Code 与 Codex via ACP，唯一执行路径 |
+| AI/tools/search | `ai/`  (AnthropicClient + DirectModelAgent), `utils/WebPageDownloader.kt`, `search/` legacy scripts | Anthropic Messages API + 原生 web_search 工具 + 后端 grep 搜索 |
 | Auth/data | `auth/`, `database/`, `models/` | SQLite + Exposed |
 | Domain modules | `todos/`, `workflow/`, `kb/`, `export/`, `pdf/` | Todo/Workflow/KB 混合文件存储 |
 | Shared client contract | `frontend/shared/` | 三端消息/文件合同面 |
@@ -49,7 +52,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | Android | `frontend/androidApp/` | 三 Tab + 移动端流程 |
 | Desktop | `frontend/desktopApp/` | 可编译/可测试，但能力面窄于 Web/Android |
 | Harmony | `frontend/harmonyApp/` | 独立 ArkTS 应用，含 Todo/Workflow/KB |
-| External bridges | `cc_bridge/`, `feishu_bot/` | Python 服务，不在 Gradle 主工程内 |
+| External bridges | `cc_bridge/`, `codex_bridge/`, `feishu_bot/` | Python 服务，不在 Gradle 主工程内 |
 
 ## Context Docs
 

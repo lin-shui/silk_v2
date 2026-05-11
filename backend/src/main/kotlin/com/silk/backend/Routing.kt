@@ -13,8 +13,9 @@ import com.silk.backend.models.Workflow
 import com.silk.backend.workflow.WorkflowManager
 import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
-import com.silk.backend.claudecode.BridgeRegistry
-import com.silk.backend.claudecode.ClaudeCodeManager
+import com.silk.backend.agents.acp.AcpRegistry
+import com.silk.backend.agents.core.AgentRegistry
+import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.trust.TrustedDirManager
 import com.silk.shared.models.CcStateResponse
 import com.silk.shared.models.DirEntry
@@ -58,6 +59,43 @@ private val knowledgeBaseManager = KnowledgeBaseManager()
 
 private fun sanitizeFileName(input: String): String =
     input.replace(Regex("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]"), "_").take(100)
+
+/**
+ * 解析当前 user 对应的 bridgeId（用于 TrustedDirManager 的 scope key）。
+ * 格式 "ip:<remoteIp>" 兼容已有 trust 记录。优先用 claude-code 的 IP（保留旧 trust 记录的兼容性），
+ * 没有时退到任意一个已连接 agent 的 IP。无任何连接返回 null。
+ */
+private fun resolveBridgeId(userId: String): String? {
+    val ip = getAnyBridgeIp(userId) ?: return null
+    return "ip:$ip"
+}
+
+/**
+ * 检测某 user 是否有任意一个 ACP 桥连接（claude-code / codex / 其他）。
+ */
+private fun isAnyBridgeConnected(userId: String): Boolean =
+    AcpRegistry.listConnected(userId).isNotEmpty()
+
+/**
+ * 取该 user 任意一个已连接 agent 的远端 IP（用于状态展示与 trust scope）。
+ * 优先 claude-code（兼容旧 TrustedDir 记录），否则回退到第一个已连接 agent。
+ */
+private fun getAnyBridgeIp(userId: String): String? {
+    val connected = AcpRegistry.listConnected(userId)
+    if (connected.isEmpty()) return null
+    val preferred = if (connected.contains("claude-code")) "claude-code" else connected.first()
+    return AcpRegistry.getRemoteIp(userId, preferred)
+}
+
+/**
+ * 解析 cdSync / listDirectory 等"无显式 agentType"路径应该调用哪个 bridge。
+ * 优先 claude-code（保持旧行为），否则用第一个已连接的 agent。无连接返回 null。
+ */
+private fun resolveActiveAgentType(userId: String): String? {
+    val connected = AcpRegistry.listConnected(userId)
+    if (connected.isEmpty()) return null
+    return if (connected.contains("claude-code")) "claude-code" else connected.first()
+}
 
 /**
  * 获取或创建指定群组的ChatServer
@@ -120,24 +158,49 @@ suspend fun broadcastFileMessage(
 }
 
 fun Application.configureRouting() {
-    // 把 ClaudeCodeManager 的状态持久化绑定到 WorkflowManager：
-    // - workingDir / sessionId / sessionStarted 改动时写盘到 workflow_store.json
-    // - autoActivateForWorkflow 首次激活时根据已有记录 seed state（重启后续会话的关键）
-    ClaudeCodeManager.setWorkflowPersistence(object : ClaudeCodeManager.WorkflowPersistence {
+    // AgentRuntime 持久化 wiring：cdSync 成功 / prompt 完成时把 workingDir + ccSessionId 写回
+    // workflow_store.json，让重启后能 seed 恢复对话。复用 Workflow.sessionId 字段存 ccSessionId。
+    AgentRuntime.setWorkflowPersistence(object : AgentRuntime.WorkflowPersistence {
         override fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean =
             workflowManager.updateWorkingDir(rawGroupId, workingDir)
 
-        override fun persistSessionState(rawGroupId: String, sessionId: String, sessionStarted: Boolean): Boolean =
-            workflowManager.updateSessionState(rawGroupId, sessionId, sessionStarted)
+        override fun persistCcSession(rawGroupId: String, ccSessionId: String, sessionStarted: Boolean): Boolean =
+            workflowManager.updateSessionState(rawGroupId, ccSessionId, sessionStarted)
 
-        override fun loadSeed(rawGroupId: String): ClaudeCodeManager.WorkflowSeed? {
+        override fun persistCcSession(rawGroupId: String, agentType: String, ccSessionId: String, sessionStarted: Boolean): Boolean =
+            workflowManager.updateSessionState(rawGroupId, agentType, ccSessionId, sessionStarted)
+
+        override fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean =
+            workflowManager.updateActiveAgent(rawGroupId, agentType)
+
+        override fun loadSeed(rawGroupId: String): AgentRuntime.WorkflowSeed? {
             val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
-            // 全部都默认值（空 dir + 空 sessionId）也没必要 seed
             if (wf.workingDir.isBlank() && wf.sessionId.isBlank()) return null
-            return ClaudeCodeManager.WorkflowSeed(
+            return AgentRuntime.WorkflowSeed(
                 workingDir = wf.workingDir,
-                sessionId = wf.sessionId,
+                ccSessionId = wf.sessionId.takeIf { it.isNotBlank() },
                 sessionStarted = wf.sessionStarted,
+            )
+        }
+
+        override fun loadSeed(rawGroupId: String, agentType: String): AgentRuntime.WorkflowSeed? {
+            val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
+            // 优先取 per-agent state；缺失时仅当 agentType 等于 workflow 默认 agent 才回落到旧字段，
+            // 避免别的 agent 拿到不属于它的 ccSessionId 触发 resume 失败。
+            val perAgent = wf.agentSessions[agentType]
+            val defaultDash = when (wf.agentType) {
+                "claude_code" -> "claude-code"
+                else -> wf.agentType
+            }
+            val ccSid = perAgent?.sessionId?.takeIf { it.isNotBlank() }
+                ?: wf.sessionId.takeIf { it.isNotBlank() && agentType == defaultDash }
+            val sessionStarted = perAgent?.sessionStarted
+                ?: (wf.sessionStarted && agentType == defaultDash)
+            if (wf.workingDir.isBlank() && ccSid.isNullOrBlank()) return null
+            return AgentRuntime.WorkflowSeed(
+                workingDir = wf.workingDir,
+                ccSessionId = ccSid,
+                sessionStarted = sessionStarted,
             )
         }
     })
@@ -264,7 +327,7 @@ fun Application.configureRouting() {
                             <span class="status">● RUNNING</span>
                         </h1>
                         <p class="subtitle">智能医疗问诊聊天系统 - 后端 API 服务</p>
-                        
+
                         <div class="endpoints">
                             <h2>🔐 认证接口</h2>
                             <div class="endpoint">
@@ -289,7 +352,7 @@ fun Application.configureRouting() {
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="endpoints">
                             <h2>👥 群组管理</h2>
                             <div class="endpoint">
@@ -328,7 +391,7 @@ fun Application.configureRouting() {
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="endpoints">
                             <h2>💬 聊天服务</h2>
                             <div class="endpoint">
@@ -346,7 +409,7 @@ fun Application.configureRouting() {
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="endpoints">
                             <h2>📥 文件下载</h2>
                             <div class="endpoint">
@@ -357,7 +420,7 @@ fun Application.configureRouting() {
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="endpoints">
                             <h2>🔧 系统监控</h2>
                             <div class="endpoint">
@@ -375,13 +438,13 @@ fun Application.configureRouting() {
                                 </div>
                             </div>
                         </div>
-                        
+
                         <div class="info-box">
                             <strong>💡 提示：</strong>
                             这是 Silk 的后端 API 服务器，不提供用户界面。
                             请使用 <strong>Desktop UI</strong> 或 <strong>Web UI</strong> 客户端连接到此服务器。
                         </div>
-                        
+
                         <div class="info-box" style="background: #fef3c7; border-color: #f59e0b; margin-top: 15px;">
                             <strong>🌐 Web UI 部署：</strong>
                             如需在浏览器中使用，请部署 Web UI 前端应用并配置其连接到此后端地址。
@@ -392,7 +455,7 @@ fun Application.configureRouting() {
             """.trimIndent()
             call.respondText(html, ContentType.Text.Html)
         }
-        
+
         // API 信息端点（JSON 格式，方便程序化访问）
         get("/api/info") {
             call.respondText("""
@@ -434,25 +497,25 @@ fun Application.configureRouting() {
                 }
             """.trimIndent(), ContentType.Application.Json)
         }
-        
+
         get("/health") {
             call.respondText(
                 """{"status":"ok","service":"silk","timestamp":${System.currentTimeMillis()}}""",
                 ContentType.Application.Json
             )
         }
-        
+
         get("/users") {
             val users = chatServer.getOnlineUsers()
             call.respond(users)
         }
-        
+
         // ==================== 用户设置 API ====================
-        
+
         // 获取用户设置
         get("/users/{userId}/settings") {
             val userId = call.parameters["userId"] ?: ""
-            
+
             if (userId.isBlank()) {
                 call.respond(
                     HttpStatusCode.BadRequest,
@@ -460,7 +523,7 @@ fun Application.configureRouting() {
                 )
                 return@get
             }
-            
+
             try {
                 val settings = UserSettingsRepository.getUserSettings(userId)
                 call.respond(UserSettingsResponse(true, "获取设置成功", settings))
@@ -472,11 +535,11 @@ fun Application.configureRouting() {
                 )
             }
         }
-        
+
         // 更新用户设置
         put("/users/{userId}/settings") {
             val userId = call.parameters["userId"] ?: ""
-            
+
             if (userId.isBlank()) {
                 call.respond(
                     HttpStatusCode.BadRequest,
@@ -484,10 +547,10 @@ fun Application.configureRouting() {
                 )
                 return@put
             }
-            
+
             try {
                 val request = call.receive<UpdateUserSettingsRequest>()
-                
+
                 // 验证userId匹配
                 if (request.userId != userId) {
                     call.respond(
@@ -496,13 +559,13 @@ fun Application.configureRouting() {
                     )
                     return@put
                 }
-                
+
                 val settings = UserSettingsRepository.updateUserSettings(
                     userId = userId,
                     language = request.language,
                     defaultAgentInstruction = request.defaultAgentInstruction
                 )
-                
+
                 call.respond(UserSettingsResponse(true, "设置更新成功", settings))
             } catch (e: Exception) {
                 logger.error("❌ 更新用户设置失败: {}", e.message)
@@ -524,8 +587,8 @@ fun Application.configureRouting() {
             }
             try {
                 val token = UserSettingsRepository.getBridgeToken(userId)
-                val connected = BridgeRegistry.isConnected(userId)
-                val bridgeIp = if (connected) BridgeRegistry.getRemoteIp(userId) else null
+                val connected = isAnyBridgeConnected(userId)
+                val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
                 call.respond(CcSettingsResponse(true, "ok", token, connected, bridgeIp))
             } catch (e: Exception) {
                 logger.error("❌ 获取CC设置失败: {}", e.message)
@@ -542,16 +605,13 @@ fun Application.configureRouting() {
             }
             try {
                 val token = UserSettingsRepository.generateBridgeToken(userId)
-                // 踢掉用旧 token 认证的 bridge 连接
-                val oldConn = BridgeRegistry.getConnection(userId)
-                if (oldConn != null) {
-                    try {
-                        oldConn.session.close(CloseReason(CloseReason.Codes.NORMAL, "token regenerated"))
-                    } catch (_: Exception) {}
-                    BridgeRegistry.unregister(userId)
+                // 踢掉用旧 token 认证的 ACP 连接
+                val acpClosed = AcpRegistry.disconnect(userId)
+                if (acpClosed > 0) {
+                    logger.info("🔌 Token 重生：关闭 {} 个 ACP 连接", acpClosed)
                 }
-                val connected = BridgeRegistry.isConnected(userId)
-                val bridgeIp = if (connected) BridgeRegistry.getRemoteIp(userId) else null
+                val connected = isAnyBridgeConnected(userId)
+                val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
                 call.respond(CcSettingsResponse(true, "Token 已生成", token, connected, bridgeIp))
             } catch (e: Exception) {
                 logger.error("❌ 生成Bridge Token失败: {}", e.message)
@@ -566,8 +626,8 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
                 return@get
             }
-            val connected = BridgeRegistry.isConnected(userId)
-            val bridgeIp = if (connected) BridgeRegistry.getRemoteIp(userId) else null
+            val connected = isAnyBridgeConnected(userId)
+            val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
             call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected, bridgeIp = bridgeIp))
         }
 
@@ -585,24 +645,27 @@ fun Application.configureRouting() {
                 if (rawGroupId.startsWith("group_")) rawGroupId else "group_$rawGroupId",
                 rawGroupId,
             ).distinct()
-            val snap = candidateIds.firstNotNullOfOrNull { gid ->
-                ClaudeCodeManager.snapshotState(userId, gid)
+            val agentSnap = candidateIds.firstNotNullOfOrNull { gid ->
+                AgentRuntime.snapshotState(userId, gid)
             }
-            val bridgeConnected = BridgeRegistry.isConnected(userId)
-            if (snap == null) {
-                call.respond(CcStateResponse(success = true, bridgeConnected = bridgeConnected))
-            } else {
+            val bridgeConnected = isAnyBridgeConnected(userId)
+            if (agentSnap != null) {
+                val descriptor = agentSnap.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
                 call.respond(
                     CcStateResponse(
                         success = true,
-                        active = snap.active,
-                        running = snap.running,
-                        workingDir = snap.workingDir,
-                        sessionId = snap.sessionId,
-                        sessionStarted = snap.sessionStarted,
+                        active = agentSnap.active,
+                        running = agentSnap.running,
+                        workingDir = agentSnap.workingDir,
+                        sessionId = "",
+                        sessionStarted = agentSnap.active,
                         bridgeConnected = bridgeConnected,
+                        agentType = agentSnap.agentType ?: "",
+                        agentDisplayName = descriptor?.displayName ?: "",
                     )
                 )
+            } else {
+                call.respond(CcStateResponse(success = true, bridgeConnected = bridgeConnected))
             }
         }
 
@@ -616,11 +679,11 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, DirListingResponse(success = false, error = "userId 为空"))
                 return@get
             }
-            if (!BridgeRegistry.isConnected(userId)) {
+            if (!isAnyBridgeConnected(userId)) {
                 call.respond(HttpStatusCode.Conflict, DirListingResponse(success = false, error = "Bridge 未连接"))
                 return@get
             }
-            val raw = ClaudeCodeManager.listDirectory(userId, path, showHidden)
+            val raw = AgentRuntime.listDirectory(userId, path, showHidden, agentType = resolveActiveAgentType(userId) ?: "claude-code")
             if (raw == null) {
                 call.respond(HttpStatusCode.GatewayTimeout, DirListingResponse(success = false, error = "Bridge 未响应或超时"))
                 return@get
@@ -675,8 +738,8 @@ fun Application.configureRouting() {
                 )
                 return@post
             }
-            // 信任目录检查
-            val bridgeId = BridgeRegistry.getRemoteIp(userId)?.let { "ip:$it" } ?: "unknown"
+            // 信任目录检查（bridgeId 格式 "ip:<ip>" 兼容已有 trust 记录）
+            val bridgeId = resolveBridgeId(userId) ?: "unknown"
             if (!trustedDirManager.isTrusted(userId, bridgeId, rawPath)) {
                 call.respond(
                     HttpStatusCode.BadRequest,
@@ -689,23 +752,25 @@ fun Application.configureRouting() {
             }
             // 与 autoActivateForWorkflow 一致使用 "group_<id>" 形式作为 CC state key
             val ccGroupId = if (groupId.startsWith("group_")) groupId else "group_$groupId"
-            when (val result = ClaudeCodeManager.cdSync(userId, ccGroupId, rawPath)) {
-                is ClaudeCodeManager.CdResult.Err -> {
+            when (val result = AgentRuntime.cdSync(userId, ccGroupId, rawPath, agentType = resolveActiveAgentType(userId) ?: "claude-code")) {
+                is AgentRuntime.CdResult.Err -> {
                     call.respond(
                         HttpStatusCode.Conflict,
                         CcStateResponse(success = false, error = result.reason)
                     )
                 }
-                is ClaudeCodeManager.CdResult.Ok -> {
-                    val snap = ClaudeCodeManager.snapshotState(userId, ccGroupId)
-                    val bridgeConnected = BridgeRegistry.isConnected(userId)
-                    // 切目录会重置 sessionId/sessionStarted/messageQueue（等价于 /new），
-                    // 在聊天里广播一条提示，让用户能感知"会话被重置了"，与 /new 命令体验一致
+                is AgentRuntime.CdResult.Ok -> {
+                    val snap = AgentRuntime.snapshotState(userId, ccGroupId)
+                    val bridgeConnected = isAnyBridgeConnected(userId)
+                    // 切目录会重置 sessionId（等价于 /new），在聊天里广播一条提示让用户感知
                     val rawGid = if (ccGroupId.startsWith("group_")) ccGroupId.removePrefix("group_") else ccGroupId
+                    val descriptor = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
                     try {
                         getGroupChatServer(rawGid).broadcast(
-                            ClaudeCodeManager.systemMessage(
-                                "工作目录已切换至：${result.resolvedPath} 会话已重置"
+                            com.silk.backend.agents.core.AgentMessages.system(
+                                "工作目录已切换至：${result.resolvedPath} 会话已重置",
+                                agentUserId = descriptor?.agentUserId ?: SilkAgent.AGENT_ID,
+                                agentName = descriptor?.displayName ?: SilkAgent.AGENT_NAME,
                             )
                         )
                     } catch (e: Exception) {
@@ -717,9 +782,11 @@ fun Application.configureRouting() {
                             active = snap?.active ?: true,
                             running = snap?.running ?: false,
                             workingDir = result.resolvedPath,
-                            sessionId = snap?.sessionId ?: "",
-                            sessionStarted = snap?.sessionStarted ?: false,
+                            sessionId = "",  // ACP 路径不暴露内部 sessionId
+                            sessionStarted = snap?.active ?: false,
                             bridgeConnected = bridgeConnected,
+                            agentType = snap?.agentType ?: "",
+                            agentDisplayName = descriptor?.displayName ?: "",
                         )
                     )
                 }
@@ -738,10 +805,8 @@ fun Application.configureRouting() {
                 )
                 return@get
             }
-            val bridgeConnected = BridgeRegistry.isConnected(userId)
-            val bridgeId = if (bridgeConnected) {
-                BridgeRegistry.getRemoteIp(userId)?.let { "ip:$it" } ?: "unknown"
-            } else null
+            val bridgeConnected = isAnyBridgeConnected(userId)
+            val bridgeId = if (bridgeConnected) resolveBridgeId(userId) else null
             val trusted = if (bridgeConnected && path.isNotBlank() && bridgeId != null) {
                 trustedDirManager.isTrusted(userId, bridgeId, path)
             } else false
@@ -774,7 +839,7 @@ fun Application.configureRouting() {
                 )
                 return@post
             }
-            val bridgeId = BridgeRegistry.getRemoteIp(userId)?.let { "ip:$it" } ?: "unknown"
+            val bridgeId = resolveBridgeId(userId) ?: "unknown"
             val added = trustedDirManager.addTrust(userId, bridgeId, req.path)
             call.respondText(
                 """{"success":true,"added":$added}""",
@@ -803,7 +868,7 @@ fun Application.configureRouting() {
                 )
                 return@delete
             }
-            val bridgeId = BridgeRegistry.getRemoteIp(userId)?.let { "ip:$it" } ?: "unknown"
+            val bridgeId = resolveBridgeId(userId) ?: "unknown"
             val removed = trustedDirManager.removeTrust(userId, bridgeId, req.path)
             call.respondText(
                 """{"success":$removed}""",
@@ -825,15 +890,15 @@ fun Application.configureRouting() {
         get("/download/report/{sessionName}/{fileName...}") {
             val sessionName = call.parameters["sessionName"] ?: "default_room"
             val fileName = call.parameters.getAll("fileName")?.joinToString("/") ?: ""
-            
+
             logger.debug("📥 PDF下载请求:")
             logger.debug("   sessionName: {}", sessionName)
             logger.debug("   fileName: {}", fileName)
-            
+
             // 获取当前工作目录
             val workingDir = System.getProperty("user.dir")
             logger.debug("   当前工作目录: {}", workingDir)
-            
+
             // 尝试多个可能的路径（适配服务器和本地）
             val possiblePaths = listOf(
                 // 服务器路径（~/Silk 目录）
@@ -847,32 +912,32 @@ fun Application.configureRouting() {
                 // Mac本地开发路径
                 "/Users/mac/Documents/Silk/backend/chat_history/$sessionName/reports/$fileName"
             )
-            
+
             logger.debug("   尝试的路径:")
             possiblePaths.forEachIndexed { index, path ->
                 val file = File(path)
                 logger.debug("     {}. {} (exists={}, isFile={})", index + 1, path, file.exists(), file.isFile)
             }
-            
+
             val pdfFile = possiblePaths
                 .map { File(it) }
                 .firstOrNull { it.exists() && it.isFile }
-            
+
             if (pdfFile != null) {
                 logger.info("✅ 找到PDF文件: {}", pdfFile.absolutePath)
                 logger.debug("   文件大小: {} bytes", pdfFile.length())
-                
+
                 // ✅ 验证文件是否为有效的PDF（检查文件头）
                 try {
                     pdfFile.inputStream().use { input ->
                         val header = ByteArray(5)
                         val bytesRead = input.read(header)
-                        val isPdf = bytesRead == 5 && 
+                        val isPdf = bytesRead == 5 &&
                                    header[0] == 0x25.toByte() &&  // %
                                    header[1] == 0x50.toByte() &&  // P
                                    header[2] == 0x44.toByte() &&  // D
                                    header[3] == 0x46.toByte()     // F
-                        
+
                         if (!isPdf) {
                             logger.warn("⚠️ 警告：文件不是有效的PDF格式")
                         }
@@ -880,10 +945,10 @@ fun Application.configureRouting() {
                 } catch (e: Exception) {
                     logger.warn("⚠️ 无法验证PDF格式: {}", e.message)
                 }
-                
+
                 // ✅ 设置正确的 Content-Type
                 call.response.header(HttpHeaders.ContentType, "application/pdf")
-                
+
                 // ✅ 设置 Content-Disposition，使用RFC 2231标准编码中文文件名
                 // 只使用 filename* 参数（RFC 2231），避免在 filename 中使用非ASCII字符
                 val encodedFileName = java.net.URLEncoder.encode(fileName, "UTF-8")
@@ -892,15 +957,15 @@ fun Application.configureRouting() {
                     HttpHeaders.ContentDisposition,
                     "attachment; filename*=UTF-8''$encodedFileName"  // ✅ 只使用 filename*，不使用 filename
                 )
-                
+
                 // ✅ 设置 Content-Length 以便浏览器显示下载进度
                 call.response.header(HttpHeaders.ContentLength, pdfFile.length().toString())
-                
+
                 // ✅ 禁用缓存，确保每次都下载最新文件
                 call.response.header(HttpHeaders.CacheControl, "no-cache, no-store, must-revalidate")
                 call.response.header(HttpHeaders.Pragma, "no-cache")
                 call.response.header(HttpHeaders.Expires, "0")
-                
+
                 call.respondFile(pdfFile)
             } else {
                 val errorMsg = "PDF 文件未找到: $fileName\n\n尝试的路径:\n${possiblePaths.mapIndexed { i, p -> "${i+1}. $p" }.joinToString("\n")}"
@@ -908,7 +973,7 @@ fun Application.configureRouting() {
                 call.respondText(errorMsg, status = HttpStatusCode.NotFound)
             }
         }
-        
+
         // 用户认证API
         post("/auth/register") {
             try {
@@ -920,7 +985,7 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "请求格式错误"))
             }
         }
-        
+
         post("/auth/login") {
             try {
                 val request = call.receive<LoginRequest>()
@@ -931,25 +996,25 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "请求格式错误"))
             }
         }
-        
+
         // 验证用户（用于重新认证）
         get("/auth/validate/{userId}") {
             val userId = call.parameters["userId"] ?: ""
             val user = UserRepository.findUserById(userId)
-            
+
             if (user != null) {
                 call.respond(AuthResponse(true, "验证成功", user))
             } else {
                 call.respond(AuthResponse(false, "用户不存在或已失效"))
             }
         }
-        
+
         // 群组管理API
         post("/groups/create") {
             try {
                 val request = call.receive<CreateGroupRequest>()
                 val response = GroupService.createGroup(request)
-                
+
                 // 如果创建成功，发送欢迎消息到群组
                 if (response.success && response.group != null) {
                     val welcomeMessage = buildString {
@@ -960,14 +1025,14 @@ fun Application.configureRouting() {
                     }
                     // TODO: 发送欢迎消息到群组聊天室
                 }
-                
+
                 call.respond(response)
             } catch (e: Exception) {
                 logger.error("❌ 创建群组失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, GroupResponse(false, "请求格式错误"))
             }
         }
-        
+
         post("/groups/join") {
             try {
                 val request = call.receive<JoinGroupRequest>()
@@ -978,13 +1043,13 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, GroupResponse(false, "请求格式错误"))
             }
         }
-        
+
         get("/groups/user/{userId}") {
             val userId = call.parameters["userId"] ?: ""
             val response = GroupService.getUserGroups(userId)
             call.respond(response)
         }
-        
+
         get("/groups/{groupId}") {
             val groupId = call.parameters["groupId"] ?: ""
             val exportMode = call.request.queryParameters["export"]?.trim().orEmpty()
@@ -1044,7 +1109,7 @@ fun Application.configureRouting() {
             val response = GroupService.getGroupDetails(groupId)
             call.respond(response)
         }
-        
+
         get("/groups/{groupId}/members") {
             val groupId = call.parameters["groupId"] ?: ""
             val members = GroupService.getGroupMembers(groupId)
@@ -1059,9 +1124,9 @@ fun Application.configureRouting() {
             }
             call.respond(GroupMembersResponse(success = true, members = apiMembers))
         }
-        
+
         // ==================== 联系人管理 API ====================
-        
+
         // 获取联系人列表（包含待处理请求）
         get("/contacts/{userId}") {
             val userId = call.parameters["userId"] ?: ""
@@ -1074,7 +1139,7 @@ fun Application.configureRouting() {
                 pendingRequests = pendingRequests
             ))
         }
-        
+
         // 通过电话号码搜索用户
         get("/users/search") {
             val phoneNumber = call.request.queryParameters["phone"] ?: ""
@@ -1082,7 +1147,7 @@ fun Application.configureRouting() {
                 call.respond(UserSearchResult(false, message = "请输入电话号码"))
                 return@get
             }
-            
+
             val user = UserRepository.findUserByPhoneNumber(phoneNumber)
             if (user != null) {
                 call.respond(UserSearchResult(true, user, "找到用户"))
@@ -1090,31 +1155,31 @@ fun Application.configureRouting() {
                 call.respond(UserSearchResult(false, message = "未找到该电话号码对应的用户"))
             }
         }
-        
+
         // 发送联系人请求（通过电话号码）
         post("/contacts/request") {
             try {
                 val request = call.receive<SendContactRequestData>()
-                
+
                 // 查找目标用户
                 val targetUser = UserRepository.findUserByPhoneNumber(request.toPhoneNumber)
                 if (targetUser == null) {
                     call.respond(ContactResponse(false, "未找到该电话号码对应的用户"))
                     return@post
                 }
-                
+
                 // 检查是否已经是联系人
                 if (ContactRepository.areContacts(request.fromUserId, targetUser.id)) {
                     call.respond(ContactResponse(false, "该用户已经是您的联系人"))
                     return@post
                 }
-                
+
                 // 检查是否是自己
                 if (request.fromUserId == targetUser.id) {
                     call.respond(ContactResponse(false, "不能添加自己为联系人"))
                     return@post
                 }
-                
+
                 // 创建联系人请求
                 val contactRequest = ContactRepository.createContactRequest(request.fromUserId, targetUser.id)
                 if (contactRequest != null) {
@@ -1132,26 +1197,26 @@ fun Application.configureRouting() {
         post("/contacts/request-by-id") {
             try {
                 val request = call.receive<SendContactRequestByIdData>()
-                
+
                 // 检查目标用户是否存在
                 val targetUser = UserRepository.findUserById(request.toUserId)
                 if (targetUser == null) {
                     call.respond(ContactResponse(false, "用户不存在"))
                     return@post
                 }
-                
+
                 // 检查是否已经是联系人
                 if (ContactRepository.areContacts(request.fromUserId, request.toUserId)) {
                     call.respond(ContactResponse(false, "该用户已经是您的联系人"))
                     return@post
                 }
-                
+
                 // 检查是否是自己
                 if (request.fromUserId == request.toUserId) {
                     call.respond(ContactResponse(false, "不能添加自己为联系人"))
                     return@post
                 }
-                
+
                 // 创建联系人请求
                 val contactRequest = ContactRepository.createContactRequest(request.fromUserId, request.toUserId)
                 if (contactRequest != null) {
@@ -1169,19 +1234,19 @@ fun Application.configureRouting() {
         post("/contacts/handle-request") {
             try {
                 val request = call.receive<HandleContactRequestData>()
-                
+
                 // 验证请求是否属于该用户
                 val contactRequest = ContactRepository.getRequestById(request.requestId)
                 if (contactRequest == null) {
                     call.respond(ContactResponse(false, "请求不存在"))
                     return@post
                 }
-                
+
                 if (contactRequest.toUserId != request.userId) {
                     call.respond(ContactResponse(false, "无权处理此请求"))
                     return@post
                 }
-                
+
                 val success = ContactRepository.handleContactRequest(request.requestId, request.accept)
                 if (success) {
                     val message = if (request.accept) "已添加联系人" else "已拒绝请求"
@@ -1194,30 +1259,30 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, ContactResponse(false, "请求格式错误"))
             }
         }
-        
+
         // 开始/获取私聊会话（与联系人的双人+Silk对话）
         post("/contacts/private-chat") {
             try {
                 val request = call.receive<StartPrivateChatRequest>()
-                
+
                 // 检查是否是联系人
                 if (!ContactRepository.areContacts(request.userId, request.contactId)) {
                     call.respond(PrivateChatResponse(false, "该用户不是您的联系人"))
                     return@post
                 }
-                
+
                 // 获取两个用户的信息
                 val user = UserRepository.findUserById(request.userId)
                 val contact = UserRepository.findUserById(request.contactId)
-                
+
                 if (user == null || contact == null) {
                     call.respond(PrivateChatResponse(false, "用户信息不完整"))
                     return@post
                 }
-                
+
                 // 查找两个用户共同的任意群组（不限成员数，群组可扩展）
                 val existingGroup = GroupRepository.findCommonGroup(request.userId, request.contactId)
-                
+
                 if (existingGroup != null) {
                     call.respond(PrivateChatResponse(true, "打开对话", existingGroup, isNew = false))
                 } else {
@@ -1228,7 +1293,7 @@ fun Application.configureRouting() {
                         user2Id = request.contactId,
                         groupName = groupName
                     )
-                    
+
                     if (newGroup != null) {
                         call.respond(PrivateChatResponse(true, "创建对话", newGroup, isNew = true))
                     } else {
@@ -1240,7 +1305,7 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, PrivateChatResponse(false, "请求格式错误"))
             }
         }
-        
+
         // 添加成员到群组（无需确认）
         post("/groups/{groupId}/add-member") {
             try {
@@ -1248,20 +1313,20 @@ fun Application.configureRouting() {
                     HttpStatusCode.BadRequest, SimpleResponse(false, "缺少群组ID")
                 )
                 val request = call.receive<AddMemberRequest>()
-                
+
                 // 检查群组是否存在
                 val group = GroupRepository.findGroupById(groupId)
                 if (group == null) {
                     call.respond(SimpleResponse(false, "群组不存在"))
                     return@post
                 }
-                
+
                 // 检查用户是否已在群组中
                 if (GroupRepository.isUserInGroup(groupId, request.userId)) {
                     call.respond(SimpleResponse(false, "用户已在群组中"))
                     return@post
                 }
-                
+
                 // 添加用户到群组
                 val success = GroupRepository.addUserToGroup(groupId, request.userId)
                 if (success) {
@@ -1274,7 +1339,7 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "请求格式错误"))
             }
         }
-        
+
         // 退出群组
         post("/groups/{groupId}/leave") {
             try {
@@ -1282,17 +1347,17 @@ fun Application.configureRouting() {
                     HttpStatusCode.BadRequest, LeaveGroupResponse(false, "缺少群组ID")
                 )
                 val request = call.receive<LeaveGroupRequest>()
-                
+
                 // 检查群组是否存在
                 val group = GroupRepository.findGroupById(groupId)
                 if (group == null) {
                     call.respond(LeaveGroupResponse(false, "群组不存在"))
                     return@post
                 }
-                
+
                 // 用户退出群组
                 val (success, groupDeleted) = GroupRepository.leaveGroup(groupId, request.userId)
-                
+
                 if (success) {
                     val message = if (groupDeleted) {
                         "已退出群组，群组已被删除（无剩余成员）"
@@ -1308,7 +1373,7 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, LeaveGroupResponse(false, "请求格式错误"))
             }
         }
-        
+
         // 删除群组（仅群主可操作）
         delete("/groups/{groupId}") {
             try {
@@ -1316,23 +1381,23 @@ fun Application.configureRouting() {
                     HttpStatusCode.BadRequest, SimpleResponse(false, "缺少群组ID")
                 )
                 val request = call.receive<DeleteGroupRequest>()
-                
+
                 // 检查群组是否存在
                 val group = GroupRepository.findGroupById(groupId)
                 if (group == null) {
                     call.respond(SimpleResponse(false, "群组不存在"))
                     return@delete
                 }
-                
+
                 // 验证是否为群主
                 if (group.hostId != request.userId) {
                     call.respond(SimpleResponse(false, "只有群主才能删除群组"))
                     return@delete
                 }
-                
+
                 // 删除群组
                 val (success, message, removedMembers) = GroupRepository.deleteGroupByHost(groupId, request.userId)
-                
+
                 if (success) {
                     // 清理群组的ChatServer实例
                     groupChatServers.remove(groupId)
@@ -1499,23 +1564,23 @@ fun Application.configureRouting() {
             call.response.headers.append("X-Silk-Updated-At", (chatHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
             call.respondText(markdown, ContentType.parse("text/markdown; charset=utf-8"))
         }
-        
+
         // ==================== 未读消息 API ====================
-        
+
         // 获取用户所有群组的未读消息数
         get("/api/unread/{userId}") {
             val userId = call.parameters["userId"] ?: ""
-            
+
             // 获取用户的所有群组
             val groups = GroupRepository.getUserGroups(userId)
             val groupIds = groups.map { it.id }
-            
+
             // 获取未读数
             val unreadCounts = UnreadRepository.getUnreadCounts(userId, groupIds)
-            
+
             call.respond(UnreadCountResponse(true, unreadCounts))
         }
-        
+
         // 标记群组已读
         post("/api/unread/mark-read") {
             try {
@@ -1712,35 +1777,35 @@ fun Application.configureRouting() {
                 .sortedByDescending { it.updatedAt }
             call.respond(UserTodosResponse(true, syncDetail, items))
         }
-        
+
         // 文件上传/下载 API
         fileRoutes()
 
         // 语音识别 (ASR) API
         asrRoutes()
-        
+
         // ==================== 与 Silk 直接对话 API ====================
         post("/api/silk-private-chat") {
             try {
                 val request = call.receive<StartSilkPrivateChatRequest>()
-                
+
                 // 获取用户信息
                 val user = UserRepository.findUserById(request.userId)
                 if (user == null) {
                     call.respond(PrivateChatResponse(false, "用户不存在"))
                     return@post
                 }
-                
+
                 // Silk AI Agent ID
-                val silkAgentId = "silk_ai_agent"
-                
+                val silkAgentId = SilkAgent.AGENT_ID
+
                 // 查找用户与 Silk 的专属私聊群组
                 // 使用特殊命名规则来区分 Silk 私聊：以 "[Silk] " 开头
                 val existingGroup = transaction {
                     val userGroups = GroupMembers
                         .select { GroupMembers.userId eq request.userId }
                         .map { it[GroupMembers.groupId] }
-                    
+
                     for (groupId in userGroups) {
                         val group = Groups.select { Groups.id eq groupId }.singleOrNull()
                         if (group != null && group[Groups.name].startsWith("[Silk] ")) {
@@ -1748,7 +1813,7 @@ fun Application.configureRouting() {
                             val silkInGroup = GroupMembers.select {
                                 (GroupMembers.groupId eq groupId) and (GroupMembers.userId eq silkAgentId)
                             }.count() > 0
-                            
+
                             if (silkInGroup) {
                                 // 检查群组是否只有2个成员（用户 + Silk）
                                 val memberCount = GroupMembers.select { GroupMembers.groupId eq groupId }.count()
@@ -1768,7 +1833,7 @@ fun Application.configureRouting() {
                     }
                     null
                 }
-                
+
                 if (existingGroup != null) {
                     logger.info("✅ 找到用户 {} 与 Silk 的私聊: {}", user.fullName, existingGroup.name)
                     call.respond(PrivateChatResponse(true, "打开 Silk 对话", existingGroup, isNew = false))
@@ -1777,7 +1842,7 @@ fun Application.configureRouting() {
                     val groupName = "[Silk] ${user.fullName} 的专属对话"
                     val groupId = java.util.UUID.randomUUID().toString()
                     val invitationCode = java.util.UUID.randomUUID().toString().substring(0, 6).uppercase()
-                    
+
                     val newGroup = transaction {
                         // 创建群组
                         Groups.insert {
@@ -1786,26 +1851,26 @@ fun Application.configureRouting() {
                             it[Groups.invitationCode] = invitationCode
                             it[hostId] = request.userId // 用户作为群主
                         }
-                        
+
                         // 添加用户作为成员
                         GroupMembers.insert {
                             it[GroupMembers.groupId] = groupId
                             it[GroupMembers.userId] = request.userId
                             it[GroupMembers.role] = MemberRole.HOST.name
                         }
-                        
+
                         // 添加 Silk AI 作为成员
                         GroupMembers.insert {
                             it[GroupMembers.groupId] = groupId
                             it[GroupMembers.userId] = silkAgentId
                             it[GroupMembers.role] = MemberRole.GUEST.name
                         }
-                        
+
                         // 创建聊天历史文件夹
                         val sessionDir = java.io.File("chat_history/group_$groupId")
                         sessionDir.mkdirs()
                         logger.debug("📁 Silk 私聊历史文件夹已创建: {}", sessionDir.path)
-                        
+
                         com.silk.backend.database.Group(
                             id = groupId,
                             name = groupName,
@@ -1815,7 +1880,7 @@ fun Application.configureRouting() {
                             createdAt = System.currentTimeMillis().toString()
                         )
                     }
-                    
+
                     logger.info("🆕 创建用户 {} 与 Silk 的私聊: {}", user.fullName, groupName)
                     call.respond(PrivateChatResponse(true, "创建 Silk 对话", newGroup, isNew = true))
                 }
@@ -1825,7 +1890,7 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, PrivateChatResponse(false, "请求格式错误"))
             }
         }
-        
+
         // ==================== 消息发送 API（用于转发等功能） ====================
         get("/api/messages/export/markdown") {
             val groupId = call.request.queryParameters["groupId"]?.trim().orEmpty()
@@ -1882,23 +1947,23 @@ fun Application.configureRouting() {
         post("/api/messages/send") {
             try {
                 val request = call.receive<SendMessageRequest>()
-                
+
                 // 检查群组是否存在
                 val group = GroupRepository.findGroupById(request.groupId)
                 if (group == null) {
                     call.respond(SimpleResponse(false, "群组不存在"))
                     return@post
                 }
-                
+
                 // 检查用户是否在群组中
                 if (!GroupRepository.isUserInGroup(request.groupId, request.userId)) {
                     call.respond(SimpleResponse(false, "您不是该群组成员"))
                     return@post
                 }
-                
+
                 // 获取群组的 ChatServer 并发送消息
                 val groupChatServer = getGroupChatServer(request.groupId)
-                
+
                 // 创建消息
                 val message = Message(
                     id = UUID.randomUUID().toString(),
@@ -1908,40 +1973,40 @@ fun Application.configureRouting() {
                     timestamp = System.currentTimeMillis(),
                     type = MessageType.TEXT
                 )
-                
+
                 // 广播消息到群组
                 groupChatServer.broadcast(message)
-                
+
                 logger.debug("📨 转发消息到群组 {}: {}...", request.groupId, request.content.take(50))
-                
+
                 call.respond(SimpleResponse(true, "消息发送成功"))
             } catch (e: Exception) {
                 logger.error("❌ 发送消息失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "发送失败: ${e.message}"))
             }
         }
-        
+
         // ==================== 消息撤回 API ====================
         post("/api/messages/recall") {
             try {
                 val request = call.receive<RecallMessageRequest>()
-                
+
                 // 检查群组是否存在
                 val group = GroupRepository.findGroupById(request.groupId)
                 if (group == null) {
                     call.respond(SimpleResponse(false, "群组不存在"))
                     return@post
                 }
-                
+
                 // 获取群组的 ChatServer 并撤回消息
                 val groupChatServer = getGroupChatServer(request.groupId)
-                
+
                 // 撤回消息
                 val result = groupChatServer.recallMessage(
                     messageId = request.messageId,
                     userId = request.userId
                 )
-                
+
                 if (result.success) {
                     logger.info("🗑️ 消息已撤回: {} by {}", request.messageId, request.userId)
                     call.respond(SimpleResponse(true, result.message))
@@ -1954,24 +2019,24 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "撤回失败: ${e.message}"))
             }
         }
-        
+
         // ==================== 消息删除 API ====================
         post("/api/messages/delete") {
             try {
                 val request = call.receive<RecallMessageRequest>()
-                
+
                 val group = GroupRepository.findGroupById(request.groupId)
                 if (group == null) {
                     call.respond(SimpleResponse(false, "群组不存在"))
                     return@post
                 }
-                
+
                 val groupChatServer = getGroupChatServer(request.groupId)
                 val result = groupChatServer.deleteMessage(
                     messageId = request.messageId,
                     userId = request.userId
                 )
-                
+
                 if (result.success) {
                     logger.info("🗑️ 消息已删除: {} by {}", request.messageId, request.userId)
                     call.respond(SimpleResponse(true, result.message))
@@ -1984,10 +2049,10 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "删除失败: ${e.message}"))
             }
         }
-        
-        // ==================== CC Bridge WebSocket ====================
 
-        webSocket("/cc-bridge") {
+        // ==================== Agent Bridge WebSocket (ACP) ====================
+
+        webSocket("/agent-bridge") {
             val token = call.request.queryParameters["token"]
             if (token.isNullOrBlank()) {
                 close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing token"))
@@ -1999,21 +2064,103 @@ fun Application.configureRouting() {
                 return@webSocket
             }
 
-            logger.info("🔌 Bridge 连接: userId={}", userId)
-            val remoteIp = call.request.local.remoteAddress
-            BridgeRegistry.register(userId, this, "", remoteIp)
-            try {
-                incoming.consumeEach { frame ->
-                    if (frame is Frame.Text) {
-                        ClaudeCodeManager.handleBridgeMessage(userId, frame.readText())
-                    }
-                }
-            } catch (e: Exception) {
-                logger.error("❌ Bridge WebSocket 错误: userId={}, error={}", userId, e.message)
-            } finally {
-                logger.info("🔌 Bridge 断开: userId={}", userId)
-                BridgeRegistry.unregister(userId)
+            val agentType = call.request.queryParameters["agentType"]
+            if (agentType.isNullOrBlank()) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing agentType"))
+                return@webSocket
             }
+            if (!AgentRegistry.isRegistered(agentType)) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "unknown agentType: $agentType"))
+                return@webSocket
+            }
+
+            logger.info("🔌 Agent Bridge 连接: userId={}, agentType={}", userId, agentType)
+            val remoteIp = call.request.local.remoteAddress
+
+            val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
+            val client = try {
+                AcpRegistry.acceptConnection(
+                    userId = userId,
+                    agentType = agentType,
+                    session = this,
+                    remoteIp = remoteIp,
+                    scope = scope,
+                )
+            } catch (e: Exception) {
+                logger.error("❌ Agent Bridge acceptConnection 失败: {}", e.message)
+                close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "accept failed"))
+                return@webSocket
+            }
+
+            if (client == null) {
+                logger.error("❌ Agent Bridge acceptConnection 返回 null")
+                close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "accept failed"))
+                return@webSocket
+            }
+
+            try {
+                val result = client.initialize(
+                    com.silk.backend.agents.acp.InitializeParams(
+                        protocolVersion = "0.2",
+                        clientCapabilities = com.silk.backend.agents.acp.ClientCapabilities(
+                            fs = com.silk.backend.agents.acp.FsCapability(readTextFile = true, writeTextFile = true),
+                            terminal = false,
+                        ),
+                    )
+                )
+                logger.info("[Agent Bridge] initialize 成功: agentCapabilities={}", result.agentCapabilities)
+            } catch (e: Exception) {
+                logger.error("[Agent Bridge] initialize 失败: {}", e.message)
+                AcpRegistry.unregister(userId, agentType)
+                close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "initialize failed"))
+                return@webSocket
+            }
+
+            try {
+                // IMPORTANT: Do NOT consume `incoming` here.
+                // AcpClient.receiveLoop() handles all incoming frames via AcpWebSocketTransport
+                // which consumes from the same Ktor channel. Two consumers race and lose frames.
+                // Just suspend until connection closes.
+                closeReason.await()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Normal: session scope cancelled on connection close
+            } catch (e: Exception) {
+                logger.error("❌ Agent Bridge WebSocket 错误: userId={}, agentType={}, error={}", userId, agentType, e.message)
+            } finally {
+                logger.info("🔌 Agent Bridge 断开: userId={}, agentType={}", userId, agentType)
+                AcpRegistry.unregister(userId, agentType)
+                AgentRuntime.handleAgentDisconnect(userId, agentType)
+            }
+        }
+
+        // ==================== Agents API ====================
+
+        // GET /api/agents?userId=<id>
+        // 列出可作为 workflow agent 的选项：仅包含已注册的 bridge agent（claude_code / codex 等）。
+        // silk_chat 走普通会话路径，不在工作流 agent 选择范围内。
+        // agentType 字段使用 workflow 存储一致的 underscore 形式。
+        get("/api/agents") {
+            val userId = call.request.queryParameters["userId"]
+            if (userId.isNullOrBlank()) {
+                call.respondText(
+                    """{"success":false,"message":"Missing userId"}""",
+                    ContentType.Application.Json,
+                    HttpStatusCode.BadRequest,
+                )
+                return@get
+            }
+            val arr = kotlinx.serialization.json.buildJsonArray {
+                AgentRegistry.list().forEach { desc ->
+                    val dashType = desc.agentType
+                    val underscoreType = dashType.replace('-', '_')
+                    add(kotlinx.serialization.json.buildJsonObject {
+                        put("agentType", kotlinx.serialization.json.JsonPrimitive(underscoreType))
+                        put("displayName", kotlinx.serialization.json.JsonPrimitive(desc.displayName))
+                        put("connected", kotlinx.serialization.json.JsonPrimitive(AcpRegistry.isConnected(userId, dashType)))
+                    })
+                }
+            }
+            call.respondText(arr.toString(), ContentType.Application.Json)
         }
 
         // ==================== Workflow API ====================
@@ -2082,14 +2229,14 @@ fun Application.configureRouting() {
                 respondError(HttpStatusCode.BadRequest, "工作目录不能为空")
                 return@post
             }
-            if (!BridgeRegistry.isConnected(userId)) {
+            if (!isAnyBridgeConnected(userId)) {
                 com.silk.backend.database.GroupRepository.deleteGroup(group.id)
                 respondError(HttpStatusCode.Conflict, "Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
                 return@post
             }
 
             // 信任目录检查
-            val bridgeId = BridgeRegistry.getRemoteIp(userId)?.let { "ip:$it" } ?: "unknown"
+            val bridgeId = resolveBridgeId(userId) ?: "unknown"
             if (!trustedDirManager.isTrusted(userId, bridgeId, initialDir)) {
                 com.silk.backend.database.GroupRepository.deleteGroup(group.id)
                 val payload = kotlinx.serialization.json.buildJsonObject {
@@ -2103,28 +2250,24 @@ fun Application.configureRouting() {
                 return@post
             }
 
-            val wf = workflowManager.createWorkflow(name, desc, userId, group.id, "claude_code", "")
+            val wf = workflowManager.createWorkflow(name, desc, userId, group.id, agentType, "")
 
             // cdSync 必须成功才能算创建完成；失败时回滚 group + workflow + CC state，避免遗留无效记录
-            val cdResult: ClaudeCodeManager.CdResult = try {
-                ClaudeCodeManager.cdSync(userId, "group_${group.id}", initialDir)
+            val cdResult: AgentRuntime.CdResult = try {
+                AgentRuntime.cdSync(userId, "group_${group.id}", initialDir, agentType = resolveActiveAgentType(userId) ?: "claude-code")
             } catch (e: Exception) {
-                ClaudeCodeManager.CdResult.Err(e.message ?: "初始目录切换异常")
+                AgentRuntime.CdResult.Err(e.message ?: "初始目录切换异常")
             }
-            if (cdResult is ClaudeCodeManager.CdResult.Err) {
+            if (cdResult is AgentRuntime.CdResult.Err) {
                 logger.warn("⚠️ 工作流 {} 初始 /cd 失败，回滚 group + workflow: {}", wf.id, cdResult.reason)
-                // 删 workflow（WorkflowManager 自己处理内部异常，这里不再二层捕获污染日志）
                 workflowManager.deleteWorkflow(wf.id, userId)
-                // 删 group（同上，GroupRepository.deleteGroup 内部捕获异常返回 false）
                 com.silk.backend.database.GroupRepository.deleteGroup(group.id)
-                // 同时清理 ClaudeCodeManager 里因 getOrCreateState 而产生的孤儿 state
-                ClaudeCodeManager.cleanupState(userId, "group_${group.id}")
+                AgentRuntime.cleanupState(userId, "group_${group.id}")
                 respondError(HttpStatusCode.Conflict, "工作目录设置失败：${cdResult.reason}")
                 return@post
             }
             // 同步把 workingDir 写到 workflow record，确保返回给前端的 wf 对象包含真实路径
-            // （cdSync 内部已 fire-and-forget 异步持久化一次，但同步写一次保证 race-free 返回）
-            val resolvedPath = (cdResult as ClaudeCodeManager.CdResult.Ok).resolvedPath
+            val resolvedPath = (cdResult as AgentRuntime.CdResult.Ok).resolvedPath
             workflowManager.updateWorkingDir(group.id, resolvedPath)
             val wfWithDir = wf.copy(workingDir = resolvedPath, updatedAt = System.currentTimeMillis())
 
@@ -2371,15 +2514,21 @@ fun Application.configureRouting() {
             // 为每个群组获取或创建独立的ChatServer
             val groupChatServer = getGroupChatServer(groupId)
 
-            // 工作流群组自动激活 CC 模式（仅 claude_code 类型）
+            // 工作流群组自动激活 agent 模式（仅非 silk_chat 类型）。
+            // M4 Task 3: 优先取持久化的 activeAgent；缺失则回落到 workflow.agentType（underscore→dash）。
             val workflow = workflowManager.getWorkflowByGroupId(groupId)
-            if (workflow != null && workflow.agentType == "claude_code") {
-                ClaudeCodeManager.autoActivateForWorkflow(userId, "group_$groupId")
+            if (workflow != null && workflow.agentType != "silk_chat") {
+                val resolvedAgent = workflow.activeAgent.takeIf { it.isNotBlank() }
+                    ?: when (workflow.agentType) {
+                        "claude_code" -> "claude-code"
+                        else -> workflow.agentType
+                    }
+                AgentRuntime.autoActivateForWorkflow(userId, "group_$groupId", resolvedAgent)
             }
 
             try {
                 groupChatServer.join(userId, userName, this)
-                
+
                 incoming.consumeEach { frame ->
                     when (frame) {
                         is Frame.Text -> {

@@ -39,34 +39,34 @@ import kotlinx.coroutines.launch
 fun GroupListScreen(appState: AppState) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    
+
     var groups by remember { mutableStateOf<List<Group>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
-    
+
     // 升级相关状态
     var showUpgradeDialog by remember { mutableStateOf(false) }
     var downloadState by remember { mutableStateOf<ApkDownloader.DownloadState>(ApkDownloader.DownloadState.Idle) }
-    
+
     // 删除模式相关状态
     var isDeleteMode by remember { mutableStateOf(false) }
     var selectedGroups by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isDeleting by remember { mutableStateOf(false) }
-    
+
     // 成员列表相关状态
     var showMembersDialog by remember { mutableStateOf(false) }
     var selectedGroupForMembers by remember { mutableStateOf<Group?>(null) }
     var groupMembers by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
     var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
     var isLoadingMembers by remember { mutableStateOf(false) }
-    
+
     // ✅ 未读消息计数
     var unreadCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
-    
+
     // Language and strings
     var userLanguage by remember { mutableStateOf<Language>(Language.CHINESE) }
-    
+
     // Load user language preference
     LaunchedEffect(appState.currentUser?.id) {
         appState.currentUser?.let { user ->
@@ -82,9 +82,9 @@ fun GroupListScreen(appState: AppState) {
             }
         }
     }
-    
+
     val strings = getStrings(userLanguage)
-    
+
     // 加载群组列表和未读数（每次进入 GROUP_LIST 场景时刷新）
     LaunchedEffect(appState.currentScene) {
         if (appState.currentScene == Scene.GROUP_LIST) {
@@ -94,13 +94,13 @@ fun GroupListScreen(appState: AppState) {
                     val response = appState.currentUser?.let { user ->
                         ApiClient.getUserGroups(user.id)
                     }
-                    
+
                     if (response != null && response.success) {
                         // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
                         // 它们只通过工作流 Tab 访问，不在 Silk 群组列表中显示
                         groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
                         println("✅ 加载了 ${groups.size} 个群组")
-                        
+
                         // 加载未读消息数
                         appState.currentUser?.let { user ->
                             val unreadResponse = ApiClient.getUnreadCounts(user.id)
@@ -118,7 +118,7 @@ fun GroupListScreen(appState: AppState) {
             }
         }
     }
-    
+
     // 定期刷新未读数（每30秒）
     LaunchedEffect(groups) {
         if (groups.isNotEmpty()) {
@@ -133,7 +133,7 @@ fun GroupListScreen(appState: AppState) {
             }
         }
     }
-    
+
     Scaffold(
         topBar = {
             // Silk 风格顶部导航 - 金色渐变
@@ -174,7 +174,7 @@ fun GroupListScreen(appState: AppState) {
                                 color = Color.White.copy(alpha = 0.9f)
                             )
                         }
-                        
+
                         Row(
                             modifier = Modifier
                                 .weight(1f, fill = false)
@@ -185,7 +185,7 @@ fun GroupListScreen(appState: AppState) {
                             if (isDeleteMode) {
                                 // 取消按钮
                                 IconButton(
-                                    onClick = { 
+                                    onClick = {
                                         isDeleteMode = false
                                         selectedGroups = emptySet()
                                     },
@@ -194,12 +194,12 @@ fun GroupListScreen(appState: AppState) {
                                     )
                                 ) {
                                     Icon(
-                                        Icons.Default.Close, 
+                                        Icons.Default.Close,
                                         contentDescription = "取消",
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
-                                
+
                                 // 确认退出按钮
                                 if (selectedGroups.isNotEmpty()) {
                                     IconButton(
@@ -208,22 +208,22 @@ fun GroupListScreen(appState: AppState) {
                                                 scope.launch {
                                                     isDeleting = true
                                                     val userId = appState.currentUser?.id ?: return@launch
-                                                    
+
                                                     selectedGroups.forEach { groupId ->
                                                         val response = ApiClient.leaveGroup(groupId, userId)
                                                         println("退出群组 $groupId: ${response.message}")
                                                     }
-                                                    
+
                                                     // 刷新群组列表
                                                     val response = ApiClient.getUserGroups(userId)
                                                     if (response.success) {
                                                         groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
                                                     }
-                                                    
+
                                                     isDeleting = false
                                                     isDeleteMode = false
                                                     selectedGroups = emptySet()
-                                                    
+
                                                     Toast.makeText(context, "已退出 ${selectedGroups.size} 个群组", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
@@ -240,14 +240,14 @@ fun GroupListScreen(appState: AppState) {
                                             )
                                         } else {
                                             Icon(
-                                                Icons.Default.Check, 
+                                                Icons.Default.Check,
                                                 contentDescription = "确认退出",
                                                 modifier = Modifier.size(22.dp)
                                             )
                                         }
                                     }
                                 }
-                                
+
                                 // 显示选中数量
                                 Text(
                                     text = "已选${selectedGroups.size}个",
@@ -263,12 +263,12 @@ fun GroupListScreen(appState: AppState) {
                                     )
                                 ) {
                                     Icon(
-                                        Icons.Default.Remove, 
+                                        Icons.Default.Remove,
                                         contentDescription = "退出群组",
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
-                                
+
                                 // 升级按钮 - 图标按钮
                                 IconButton(
                                     onClick = { showUpgradeDialog = true },
@@ -277,12 +277,12 @@ fun GroupListScreen(appState: AppState) {
                                     )
                                 ) {
                                     Icon(
-                                        Icons.Default.SystemUpdate, 
+                                        Icons.Default.SystemUpdate,
                                         contentDescription = "升级",
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
-                                
+
                                 // 创建群组按钮 - 图标按钮
                                 IconButton(
                                     onClick = { showCreateDialog = true },
@@ -291,12 +291,12 @@ fun GroupListScreen(appState: AppState) {
                                     )
                                 ) {
                                     Icon(
-                                        Icons.Default.Add, 
+                                        Icons.Default.Add,
                                         contentDescription = "创建",
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
-                                
+
                                 // 加入群组按钮 - 图标按钮
                                 IconButton(
                                     onClick = { showJoinDialog = true },
@@ -305,12 +305,12 @@ fun GroupListScreen(appState: AppState) {
                                     )
                                 ) {
                                     Icon(
-                                        Icons.Default.GroupAdd, 
+                                        Icons.Default.GroupAdd,
                                         contentDescription = "加入",
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
-                                
+
                                 // 🤖 与 Silk 对话按钮
                                 IconButton(
                                     onClick = {
@@ -336,7 +336,7 @@ fun GroupListScreen(appState: AppState) {
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
-                                
+
                                 // 联系人按钮 - 图标按钮
                                 IconButton(
                                     onClick = { appState.navigateTo(Scene.CONTACTS) },
@@ -345,12 +345,12 @@ fun GroupListScreen(appState: AppState) {
                                     )
                                 ) {
                                     Icon(
-                                        Icons.Default.Contacts, 
+                                        Icons.Default.Contacts,
                                         contentDescription = "联系人",
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
-                                
+
                                 // 设置按钮 - 图标按钮
                                 IconButton(
                                     onClick = { appState.navigateTo(Scene.SETTINGS) },
@@ -359,12 +359,12 @@ fun GroupListScreen(appState: AppState) {
                                     )
                                 ) {
                                     Icon(
-                                        Icons.Default.Settings, 
+                                        Icons.Default.Settings,
                                         contentDescription = "设置",
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
-                                
+
                                 // 登出按钮 - 图标按钮
                                 IconButton(
                                     onClick = { appState.logout() },
@@ -373,7 +373,7 @@ fun GroupListScreen(appState: AppState) {
                                     )
                                 ) {
                                     Icon(
-                                        Icons.Default.Logout, 
+                                        Icons.Default.Logout,
                                         contentDescription = "登出",
                                         modifier = Modifier.size(22.dp)
                                     )
@@ -484,7 +484,7 @@ fun GroupListScreen(appState: AppState) {
                                 }
                             }
                         }
-                        
+
                         items(groups) { group ->
                             val isSelected = group.id in selectedGroups
                             val unreadCount = unreadCounts[group.id] ?: 0
@@ -494,7 +494,7 @@ fun GroupListScreen(appState: AppState) {
                                 isDeleteMode = isDeleteMode,
                                 isSelected = isSelected,
                                 unreadCount = unreadCount,
-                                onClick = { 
+                                onClick = {
                                     if (isDeleteMode) {
                                         selectedGroups = if (isSelected) {
                                             selectedGroups - group.id
@@ -529,7 +529,7 @@ fun GroupListScreen(appState: AppState) {
                                 }
                             )
                         }
-                        
+
                         // 添加一个加入群组的按钮（非删除模式才显示）
                         if (!isDeleteMode) {
                             item {
@@ -558,7 +558,7 @@ fun GroupListScreen(appState: AppState) {
                 }
             }
         }
-        
+
         // 创建群组对话框
         if (showCreateDialog) {
             CreateGroupDialog(
@@ -571,7 +571,7 @@ fun GroupListScreen(appState: AppState) {
                 }
             )
         }
-        
+
         // 加入群组对话框
         if (showJoinDialog) {
             JoinGroupDialog(
@@ -584,12 +584,12 @@ fun GroupListScreen(appState: AppState) {
                 }
             )
         }
-        
+
         // 升级对话框
         if (showUpgradeDialog) {
             UpgradeDialog(
                 downloadState = downloadState,
-                onDismiss = { 
+                onDismiss = {
                     if (downloadState !is ApkDownloader.DownloadState.Downloading) {
                         showUpgradeDialog = false
                         downloadState = ApkDownloader.DownloadState.Idle
@@ -599,7 +599,7 @@ fun GroupListScreen(appState: AppState) {
                     scope.launch {
                         ApkDownloader.downloadApk(context) { state ->
                             downloadState = state
-                            
+
                             // 下载成功后自动安装
                             if (state is ApkDownloader.DownloadState.Success) {
                                 try {
@@ -613,7 +613,7 @@ fun GroupListScreen(appState: AppState) {
                 }
             )
         }
-        
+
         // 成员列表对话框
         if (showMembersDialog && selectedGroupForMembers != null) {
             GroupMembersListDialog(
@@ -650,7 +650,7 @@ fun GroupListScreen(appState: AppState) {
                         }
                     }
                 },
-                onDismiss = { 
+                onDismiss = {
                     showMembersDialog = false
                     selectedGroupForMembers = null
                 }
@@ -670,7 +670,7 @@ fun GroupCard(
     onMembersClick: (() -> Unit)? = null
 ) {
     val hasUnread = unreadCount > 0
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -722,7 +722,7 @@ fun GroupCard(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                 }
-                
+
                 // 群名
                 Text(
                     text = group.name,
@@ -732,9 +732,9 @@ fun GroupCard(
                     maxLines = 1,
                     modifier = Modifier.weight(1f, fill = false)
                 )
-                
+
                 Spacer(modifier = Modifier.width(8.dp))
-                
+
                 // 邀请码（小字体）
                 Text(
                     text = "[${group.invitationCode}]",
@@ -743,7 +743,7 @@ fun GroupCard(
                     letterSpacing = 1.sp
                 )
             }
-            
+
             // 右侧按钮区域
             Row(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -758,7 +758,7 @@ fun GroupCard(
                         fontWeight = FontWeight.Bold
                     )
                 }
-                
+
                 // 成员按钮（非删除模式下显示）
                 if (!isDeleteMode && onMembersClick != null) {
                     Surface(
@@ -773,7 +773,7 @@ fun GroupCard(
                         )
                     }
                 }
-                
+
                 // 删除模式下显示选择指示器
                 if (isDeleteMode) {
                     Box(
@@ -811,10 +811,10 @@ fun CreateGroupDialog(
     var groupName by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    
+
     val userName = appState.currentUser?.fullName ?: ""
     val previewName = if (groupName.isNotBlank()) "$userName's $groupName" else ""
-    
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(strings.createGroupTitle) },
@@ -828,7 +828,7 @@ fun CreateGroupDialog(
                     enabled = !isLoading,
                     singleLine = true
                 )
-                
+
                 if (previewName.isNotEmpty()) {
                     Text(
                         text = "${strings.fullName}: $previewName",
@@ -836,7 +836,7 @@ fun CreateGroupDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                
+
                 if (errorMessage.isNotEmpty()) {
                     Text(
                         text = errorMessage,
@@ -855,7 +855,7 @@ fun CreateGroupDialog(
                             val response = appState.currentUser?.let { user ->
                                 ApiClient.createGroup(user.id, groupName)
                             }
-                            
+
                             if (response != null && response.success && response.group != null) {
                                 println("群组创建成功: ${response.group.name}")
                                 onGroupCreated(response.group)
@@ -893,7 +893,7 @@ fun JoinGroupDialog(
     var invitationCode by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(strings.joinGroupTitle) },
@@ -911,7 +911,7 @@ fun JoinGroupDialog(
                     enabled = !isLoading,
                     singleLine = true
                 )
-                
+
                 if (errorMessage.isNotEmpty()) {
                     Text(
                         text = errorMessage,
@@ -930,7 +930,7 @@ fun JoinGroupDialog(
                             val response = appState.currentUser?.let { user ->
                                 ApiClient.joinGroup(user.id, invitationCode)
                             }
-                            
+
                             if (response != null && response.success && response.group != null) {
                                 println("加入群组成功: ${response.group.name}")
                                 onGroupJoined(response.group)
@@ -968,12 +968,12 @@ fun UpgradeDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { 
+        title = {
             Text(
                 "应用升级",
                 fontWeight = FontWeight.Bold,
                 color = SilkColors.primary
-            ) 
+            )
         },
         text = {
             Column(
@@ -1073,15 +1073,15 @@ fun GroupMembersListDialog(
     onDismiss: () -> Unit
 ) {
     val contactIds = contacts.map { it.contactId }.toSet()
-    
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { 
+        title = {
             Text(
                 "👥 ${group.name}",
                 fontWeight = FontWeight.Bold,
                 style = MaterialTheme.typography.titleMedium
-            ) 
+            )
         },
         text = {
             if (isLoading) {
@@ -1104,8 +1104,8 @@ fun GroupMembersListDialog(
                         val isHost = member.id == group.hostId
                         val isCurrentUser = member.id == currentUserId
                         val isContact = member.id in contactIds
-                        val isSilkAI = member.id == "silk_ai_agent"
-                        
+                        val isSilkAI = isAgentUserId(member.id)
+
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1117,7 +1117,7 @@ fun GroupMembersListDialog(
                                     }
                                 ),
                             colors = CardDefaults.cardColors(
-                                containerColor = if (isHost) SilkColors.primary.copy(alpha = 0.1f) 
+                                containerColor = if (isHost) SilkColors.primary.copy(alpha = 0.1f)
                                     else MaterialTheme.colorScheme.surfaceVariant
                             )
                         ) {
@@ -1159,7 +1159,7 @@ fun GroupMembersListDialog(
                                             )
                                         }
                                     }
-                                    
+
                                     Column {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Text(
@@ -1196,7 +1196,7 @@ fun GroupMembersListDialog(
                                         )
                                     }
                                 }
-                                
+
                                 if (!isCurrentUser && !isSilkAI) {
                                     Text(
                                         text = if (isContact) "💬" else "➕",

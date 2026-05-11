@@ -5,8 +5,9 @@
 - Backend：Ktor Netty，入口 `backend/.../Application.kt`
 - Web 前端：Kotlin/JS dev server 或 backend 静态资源
 - Android / Desktop / Harmony：各自原生客户端
-- Weaviate（不再需要 — 已由 Claude 原生 web_search + 后端 grep 替代）
-- Claude Code Bridge：`cc_bridge/bridge_agent.py`
+- Weaviate（不再需要；已由 Claude 原生 web_search + 后端 grep 替代，`search/` 仅保留 legacy 脚本）
+- Claude Code ACP Adapter：`cc_bridge/acp_adapter.py`（外部进程，连 backend `/agent-bridge` 端点）
+- Codex ACP Adapter：`codex_bridge/codex_adapter.py`（外部进程，连 backend `/agent-bridge` 端点）
 - Feishu 网关：`feishu_bot/main.py`
 
 ## Persistent Stores
@@ -23,7 +24,7 @@
 | Trusted directories | `workflows/trusted_dirs.json` (co-located with workflow store) | `TrustedDirManager` |
 | KB store | `knowledge_base/kb_store.json` or `-Dsilk.kbDir=...` | `KnowledgeBaseManager` |
 | Web static / APK | `backend/static/` | 后端静态分发 |
-| Bridge sessions | `~/.silk/cc_sessions.json` | `cc_bridge/session_manager.py` |
+| Bridge sessions | `~/.silk/cc_sessions.json` | `cc_bridge/session_manager.py`（adapter 共享） |
 | Feishu bindings | `feishu_bot/data/user_bindings.json` | 飞书账号绑定 |
 
 ## Chat Session Naming

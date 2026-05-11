@@ -65,6 +65,10 @@ data class CcStateResponse(
     val sessionId: String = "",
     val sessionStarted: Boolean = false,
     val bridgeConnected: Boolean = false,
+    /** 当前激活 agent 的 type（如 "claude-code"、"codex"）；未激活则为空字符串 */
+    val agentType: String = "",
+    /** 当前激活 agent 的显示名称（含 emoji）；未激活则为空字符串 */
+    val agentDisplayName: String = "",
     val error: String? = null,
 )
 

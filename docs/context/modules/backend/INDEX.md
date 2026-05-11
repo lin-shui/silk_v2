@@ -8,7 +8,7 @@
 - 历史/文件：`ChatHistoryManager.kt`, `routes/FileRoutes.kt`
 - AI：`ai/DirectModelAgent.kt`, `ai/ToolPolicyManager.kt`, `ai/AIConfig.kt`
 - 搜索：`(Legacy) search/WeaviateClient.kt`, `search/ExternalSearchService.kt` — 已由 AnthropicClient + grep 替代
-- Claude Code：`claudecode/ClaudeCodeManager.kt`, `claudecode/BridgeRegistry.kt`
+- Agent 框架（Claude Code / Codex 入口）：`agents/core/AgentRuntime.kt`, `agents/acp/AcpClient.kt`, `agents/acp/AcpRegistry.kt`
 
 ## Read Next By Task
 

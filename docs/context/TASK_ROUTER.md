@@ -96,7 +96,8 @@
 ## Claude Code / Bridge / Feishu
 
 - 先读：`integrations/CLAUDE_CODE_AND_BRIDGES.md`
-- 再看代码：`backend/claudecode/`、`cc_bridge/`、`feishu_bot/`
+- 再看代码：`backend/agents/`（Agent 框架 + ACP 协议层）、`cc_bridge/acp_adapter.py`（执行层）、`feishu_bot/`
+- 注意：`backend/claudecode/` 是已废弃的旧执行层，业务代码已无引用，待 Plan E4 删除
 - 默认验证：
   - 后端侧 `./gradlew :backend:test`
   - Python 服务按各自 README 或手动 smoke

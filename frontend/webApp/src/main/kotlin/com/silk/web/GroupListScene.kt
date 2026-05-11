@@ -11,31 +11,31 @@ import org.jetbrains.compose.web.dom.*
 @Composable
 fun GroupListScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
-    
+
     var groups by remember { mutableStateOf<List<Group>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
-    
+
     // 删除模式相关状态
     var isDeleteMode by remember { mutableStateOf(false) }
     var selectedGroups by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isDeleting by remember { mutableStateOf(false) }
-    
+
     // 成员列表相关状态
     var showMembersDialog by remember { mutableStateOf(false) }
     var selectedGroupForMembers by remember { mutableStateOf<Group?>(null) }
     var groupMembers by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
     var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
     var isLoadingMembers by remember { mutableStateOf(false) }
-    
+
     // ✅ 未读消息计数
     var unreadCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
-    
+
     // Language and strings
     var userLanguage by remember { mutableStateOf<Language>(Language.CHINESE) }
     val strings = getStrings(userLanguage)
-    
+
     // Load user language preference
     // Reload when user changes OR when navigating to this scene
     LaunchedEffect(appState.currentUser?.id, appState.currentScene) {
@@ -54,20 +54,20 @@ fun GroupListScene(appState: WebAppState) {
             }
         }
     }
-    
+
     // 加载群组列表和未读数（每次进入 GROUP_LIST 场景时刷新）
     LaunchedEffect(appState.currentScene) {
         if (appState.currentScene == Scene.GROUP_LIST) {
             console.log("📋 GroupListScene - 开始加载群组...")
             console.log("   当前用户:", appState.currentUser?.fullName)
-            
+
             isLoading = true
             try {
                 val response = appState.currentUser?.let { user ->
                     console.log("   发送API请求获取群组...")
                     ApiClient.getUserGroups(user.id)
                 }
-                
+
                 if (response != null && response.success) {
                     // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
                     // 它们应该只通过工作流 Tab 访问，不在 Silk 群组列表中显示
@@ -76,7 +76,7 @@ fun GroupListScene(appState: WebAppState) {
                     groups.forEach { group ->
                         console.log("   - ${group.name} (${group.invitationCode})")
                     }
-                    
+
                     // 加载未读消息数
                     appState.currentUser?.let { user ->
                         val unreadResponse = ApiClient.getUnreadCounts(user.id)
@@ -97,7 +97,7 @@ fun GroupListScene(appState: WebAppState) {
             }
         }
     }
-    
+
     // 定期刷新未读数（每30秒）
     LaunchedEffect(groups) {
         if (groups.isNotEmpty()) {
@@ -112,7 +112,7 @@ fun GroupListScene(appState: WebAppState) {
             }
         }
     }
-    
+
     // 设置全局样式，去掉浏览器滚动条
     Style {
         """
@@ -127,7 +127,7 @@ fun GroupListScene(appState: WebAppState) {
         }
         """.trimIndent()
     }
-    
+
     Div({
         style {
             display(DisplayStyle.Flex)
@@ -164,17 +164,17 @@ fun GroupListScene(appState: WebAppState) {
                 }) {
                     Text("Silk")
                 }
-                Div({ 
-                    style { 
+                Div({
+                    style {
                         fontSize(13.px)
                         property("opacity", "0.9")
                         property("letter-spacing", "1px")
-                    } 
+                    }
                 }) {
                     Text(appState.currentUser?.fullName ?: "")
                 }
             }
-            
+
             // 右侧按钮组
             Div({
                 style {
@@ -199,14 +199,14 @@ fun GroupListScene(appState: WebAppState) {
                             fontSize(14.px)
                             property("font-weight", "500")
                         }
-                        onClick { 
+                        onClick {
                             isDeleteMode = false
                             selectedGroups = emptySet()
                         }
                     }) {
                         Text(strings.cancelButton)
                     }
-                    
+
                     // 确认退出按钮
                     if (selectedGroups.isNotEmpty()) {
                         Button({
@@ -223,12 +223,12 @@ fun GroupListScene(appState: WebAppState) {
                                 property("font-weight", "500")
                                 property("opacity", if (isDeleting) "0.6" else "1")
                             }
-                            onClick { 
+                            onClick {
                                 if (!isDeleting) {
                                     scope.launch {
                                         isDeleting = true
                                         val userId = appState.currentUser?.id ?: return@launch
-                                        
+
                                         selectedGroups.forEach { groupId ->
                                             // 查找群组，判断是否是群主
                                             val group = groups.find { it.id == groupId }
@@ -242,13 +242,13 @@ fun GroupListScene(appState: WebAppState) {
                                                 console.log("退出群组 $groupId: ${response.message}")
                                             }
                                         }
-                                        
+
                                         // 刷新群组列表
                                         val response = ApiClient.getUserGroups(userId)
                                         if (response.success) {
                                             groups = response.groups ?: emptyList()
                                         }
-                                        
+
                                         isDeleting = false
                                         isDeleteMode = false
                                         selectedGroups = emptySet()
@@ -258,19 +258,19 @@ fun GroupListScene(appState: WebAppState) {
                         }) {
                             // 检查选中的群组中是否有群主身份的群
                             val userId = appState.currentUser?.id ?: ""
-                            val hasHostGroups = selectedGroups.any { groupId -> 
-                                groups.find { it.id == groupId }?.hostId == userId 
+                            val hasHostGroups = selectedGroups.any { groupId ->
+                                groups.find { it.id == groupId }?.hostId == userId
                             }
-                            val hasMemberGroups = selectedGroups.any { groupId -> 
-                                groups.find { it.id == groupId }?.hostId != userId 
+                            val hasMemberGroups = selectedGroups.any { groupId ->
+                                groups.find { it.id == groupId }?.hostId != userId
                             }
-                            
+
                             val actionText = when {
                                 hasHostGroups && hasMemberGroups -> "删除/退出"
                                 hasHostGroups -> "删除"
                                 else -> "退出"
                             }
-                            
+
                             Text(if (isDeleting) strings.exiting else "${actionText} (${selectedGroups.size})")
                         }
                     }
@@ -293,7 +293,7 @@ fun GroupListScene(appState: WebAppState) {
                     }) {
                         Text("➖ ${strings.exitButton}")
                     }
-                    
+
                     // 创建群组按钮
                     Button({
                         style {
@@ -313,7 +313,7 @@ fun GroupListScene(appState: WebAppState) {
                         Text("➕ ${strings.createButton}")
                     }
                 }
-                
+
                 // 加入群组按钮
                 Button({
                     style {
@@ -332,7 +332,7 @@ fun GroupListScene(appState: WebAppState) {
                 }) {
                     Text("🔗 ${strings.joinButton}")
                 }
-                
+
                 // 联系人按钮
                 Button({
                     style {
@@ -351,7 +351,7 @@ fun GroupListScene(appState: WebAppState) {
                 }) {
                     Text("👤 ${strings.contactsButton}")
                 }
-                
+
                 // 🤖 与 Silk 对话按钮
                 Button({
                     style {
@@ -366,7 +366,7 @@ fun GroupListScene(appState: WebAppState) {
                         fontSize(14.px)
                         property("font-weight", "600")
                     }
-                    onClick { 
+                    onClick {
                         scope.launch {
                             val userId = appState.currentUser?.id ?: return@launch
                             val response = ApiClient.startSilkPrivateChat(userId)
@@ -381,7 +381,7 @@ fun GroupListScene(appState: WebAppState) {
                 }) {
                     Text("🤖 ${strings.chatWithSilk}")
                 }
-                
+
                 // 设置按钮
                 Button({
                     style {
@@ -400,7 +400,7 @@ fun GroupListScene(appState: WebAppState) {
                 }) {
                     Text("⚙️ ${strings.settingsButton}")
                 }
-                
+
                 // 登出按钮
                 Button({
                     style {
@@ -421,7 +421,7 @@ fun GroupListScene(appState: WebAppState) {
                 }
             }
         }
-        
+
         // 内容区域
         Div({
             style {
@@ -452,26 +452,26 @@ fun GroupListScene(appState: WebAppState) {
                             padding(60.px, 40.px)
                         }
                     }) {
-                        H3({ 
-                            style { 
+                        H3({
+                            style {
                                 color(Color(SilkColors.textPrimary))
                                 marginBottom(12.px)
                                 property("font-weight", "600")
                                 property("letter-spacing", "1px")
-                            } 
-                        }) { 
-                            Text(strings.noGroupsMessage) 
+                            }
+                        }) {
+                            Text(strings.noGroupsMessage)
                         }
-                        P({ 
-                            style { 
+                        P({
+                            style {
                                 color(Color(SilkColors.textSecondary))
                                 fontSize(14.px)
                                 property("letter-spacing", "0.5px")
-                            } 
-                        }) { 
-                            Text(strings.noGroupsSubmessage) 
+                            }
+                        }) {
+                            Text(strings.noGroupsSubmessage)
                         }
-                        
+
                         Div({
                             style {
                                 display(DisplayStyle.Flex)
@@ -498,7 +498,7 @@ fun GroupListScene(appState: WebAppState) {
                             }) {
                                 Text(strings.createGroup)
                             }
-                            
+
                             Button({
                                 style {
                                     padding(14.px, 28.px)
@@ -551,7 +551,7 @@ fun GroupListScene(appState: WebAppState) {
                             }
                         }
                     }
-                    
+
                     // 群组列表
                     groups.forEach { group ->
                         val isSelected = group.id in selectedGroups
@@ -563,7 +563,7 @@ fun GroupListScene(appState: WebAppState) {
                             isSelected = isSelected,
                             unreadCount = unreadCount,
                             strings = strings,
-                            onClick = { 
+                            onClick = {
                                 if (isDeleteMode) {
                                     selectedGroups = if (isSelected) {
                                         selectedGroups - group.id
@@ -578,7 +578,7 @@ fun GroupListScene(appState: WebAppState) {
                                             unreadCounts = unreadCounts - group.id
                                         }
                                     }
-                                    appState.selectGroup(group) 
+                                    appState.selectGroup(group)
                                 }
                             },
                             onMembersClick = {
@@ -601,7 +601,7 @@ fun GroupListScene(appState: WebAppState) {
                 }
             }
         }
-        
+
         // FAB按钮（创建群组）- 丝滑风格
         if (groups.isNotEmpty()) {
             Button({
@@ -625,7 +625,7 @@ fun GroupListScene(appState: WebAppState) {
                 Text("+")
             }
         }
-        
+
         // 对话框
         if (showCreateDialog) {
             CreateGroupDialog(
@@ -638,7 +638,7 @@ fun GroupListScene(appState: WebAppState) {
                 }
             )
         }
-        
+
         if (showJoinDialog) {
             JoinGroupDialog(
                 appState = appState,
@@ -650,7 +650,7 @@ fun GroupListScene(appState: WebAppState) {
                 }
             )
         }
-        
+
         // 成员列表对话框
         if (showMembersDialog && selectedGroupForMembers != null) {
             GroupMembersListDialog(
@@ -688,7 +688,7 @@ fun GroupListScene(appState: WebAppState) {
                         }
                     }
                 },
-                onDismiss = { 
+                onDismiss = {
                     showMembersDialog = false
                     selectedGroupForMembers = null
                 }
@@ -699,8 +699,8 @@ fun GroupListScene(appState: WebAppState) {
 
 @Composable
 fun GroupCard(
-    group: Group, 
-    isHost: Boolean, 
+    group: Group,
+    isHost: Boolean,
     isDeleteMode: Boolean = false,
     isSelected: Boolean = false,
     unreadCount: Int = 0,
@@ -709,7 +709,7 @@ fun GroupCard(
     onMembersClick: (() -> Unit)? = null
 ) {
     val hasUnread = unreadCount > 0
-    
+
     Div({
         style {
             backgroundColor(
@@ -722,12 +722,12 @@ fun GroupCard(
             borderRadius(8.px)
             padding(10.px, 14.px)
             marginBottom(8.px)
-            property("box-shadow", 
+            property("box-shadow",
                 if (hasUnread) "0 2px 8px rgba(255, 152, 0, 0.3)" else "0 1px 4px rgba(169, 137, 77, 0.06)"
             )
             property("cursor", "pointer")
             property("transition", "all 0.2s ease")
-            property("border", 
+            property("border",
                 when {
                     isSelected -> "2px solid #e74c3c"
                     hasUnread -> "2px solid #FF9800"  // 橙色边框
@@ -772,7 +772,7 @@ fun GroupCard(
                         Text(if (unreadCount > 99) "99+" else unreadCount.toString())
                     }
                 }
-                
+
                 // 群名
                 Span({
                     style {
@@ -783,7 +783,7 @@ fun GroupCard(
                 }) {
                     Text(group.name)
                 }
-                
+
                 // 邀请码（小字体）
                 Span({
                     style {
@@ -795,7 +795,7 @@ fun GroupCard(
                     Text("[${group.invitationCode}]")
                 }
             }
-            
+
             // 右侧按钮区域
             Div({
                 style {
@@ -816,7 +816,7 @@ fun GroupCard(
                         Text(strings.newMessage)
                     }
                 }
-                
+
                 // 成员按钮（非删除模式下显示）
                 if (!isDeleteMode && onMembersClick != null) {
                     Button({
@@ -829,15 +829,15 @@ fun GroupCard(
                             property("cursor", "pointer")
                             fontSize(12.px)
                         }
-                        onClick { 
+                        onClick {
                             it.stopPropagation()
-                            onMembersClick() 
+                            onMembersClick()
                         }
                     }) {
                         Text("👥")
                     }
                 }
-                
+
                 // 删除模式下显示选择指示器
                 if (isDeleteMode) {
                     Div({
@@ -875,10 +875,10 @@ fun CreateGroupDialog(
     var groupName by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    
+
     val userName = appState.currentUser?.fullName ?: ""
     val previewName = if (groupName.isNotBlank()) "$userName's $groupName" else ""
-    
+
     // 对话框遮罩
     Div({
         style {
@@ -908,20 +908,20 @@ fun CreateGroupDialog(
             }
             onClick { it.stopPropagation() }
         }) {
-            H3({ 
-                style { 
+            H3({
+                style {
                     marginTop(0.px)
                     marginBottom(24.px)
                     color(Color(SilkColors.textPrimary))
                     property("font-weight", "600")
                     property("letter-spacing", "1px")
-                } 
+                }
             }) {
                 Text(strings.createGroupTitle)
             }
-            
+
             Div({ style { marginBottom(20.px) } }) {
-                Label { 
+                Label {
                     Span({
                         style {
                             fontSize(13.px)
@@ -940,10 +940,10 @@ fun CreateGroupDialog(
                         padding(14.px)
                         fontSize(14.px)
                         marginTop(8.px)
-                        border { 
+                        border {
                             width(1.px)
                             style(LineStyle.Solid)
-                            color(Color(SilkColors.border)) 
+                            color(Color(SilkColors.border))
                         }
                         borderRadius(8.px)
                         property("box-sizing", "border-box")
@@ -953,7 +953,7 @@ fun CreateGroupDialog(
                     }
                 }
             }
-            
+
             if (previewName.isNotEmpty()) {
                 Div({
                     style {
@@ -966,22 +966,22 @@ fun CreateGroupDialog(
                     Text("${strings.fullName}: $previewName")
                 }
             }
-            
+
             if (errorMessage.isNotEmpty()) {
-                Div({ 
-                    style { 
+                Div({
+                    style {
                         color(Color(SilkColors.error))
                         fontSize(13.px)
                         marginBottom(20.px)
                         padding(12.px)
                         backgroundColor(Color("#FDF5F5"))
                         borderRadius(8.px)
-                    } 
+                    }
                 }) {
                     Text(errorMessage)
                 }
             }
-            
+
             Div({
                 style {
                     display(DisplayStyle.Flex)
@@ -1004,7 +1004,7 @@ fun CreateGroupDialog(
                 }) {
                     Text(strings.cancelButton)
                 }
-                
+
                 Button({
                     style {
                         padding(12.px, 20.px)
@@ -1026,7 +1026,7 @@ fun CreateGroupDialog(
                                     val response = appState.currentUser?.let { user ->
                                         ApiClient.createGroup(user.id, groupName)
                                     }
-                                    
+
                                     if (response != null && response.success && response.group != null) {
                                         console.log("群组创建成功:", response.group.name)
                                         onGroupCreated(response.group)
@@ -1060,7 +1060,7 @@ fun JoinGroupDialog(
     var invitationCode by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    
+
     Div({
         style {
             position(Position.Fixed)
@@ -1089,20 +1089,20 @@ fun JoinGroupDialog(
             }
             onClick { it.stopPropagation() }
         }) {
-            H3({ 
-                style { 
+            H3({
+                style {
                     marginTop(0.px)
                     marginBottom(24.px)
                     color(Color(SilkColors.textPrimary))
                     property("font-weight", "600")
                     property("letter-spacing", "1px")
-                } 
+                }
             }) {
                 Text(strings.joinGroupTitle)
             }
-            
+
             Div({ style { marginBottom(20.px) } }) {
-                Label { 
+                Label {
                     Span({
                         style {
                             fontSize(13.px)
@@ -1115,7 +1115,7 @@ fun JoinGroupDialog(
                 }
                 Input(InputType.Text) {
                     value(invitationCode)
-                    onInput { 
+                    onInput {
                         invitationCode = it.value.uppercase().take(6)
                         errorMessage = ""
                     }
@@ -1124,10 +1124,10 @@ fun JoinGroupDialog(
                         padding(14.px)
                         fontSize(16.px)
                         marginTop(8.px)
-                        border { 
+                        border {
                             width(1.px)
                             style(LineStyle.Solid)
-                            color(Color(SilkColors.border)) 
+                            color(Color(SilkColors.border))
                         }
                         borderRadius(8.px)
                         property("box-sizing", "border-box")
@@ -1142,22 +1142,22 @@ fun JoinGroupDialog(
                     attr("maxlength", "6")
                 }
             }
-            
+
             if (errorMessage.isNotEmpty()) {
-                Div({ 
-                    style { 
+                Div({
+                    style {
                         color(Color(SilkColors.error))
                         fontSize(13.px)
                         marginBottom(20.px)
                         padding(12.px)
                         backgroundColor(Color("#FDF5F5"))
                         borderRadius(8.px)
-                    } 
+                    }
                 }) {
                     Text(errorMessage)
                 }
             }
-            
+
             Div({
                 style {
                     display(DisplayStyle.Flex)
@@ -1180,7 +1180,7 @@ fun JoinGroupDialog(
                 }) {
                     Text(strings.cancelButton)
                 }
-                
+
                 Button({
                     style {
                         padding(12.px, 20.px)
@@ -1202,7 +1202,7 @@ fun JoinGroupDialog(
                                     val response = appState.currentUser?.let { user ->
                                         ApiClient.joinGroup(user.id, invitationCode)
                                     }
-                                    
+
                                     if (response != null && response.success && response.group != null) {
                                         console.log("加入群组成功:", response.group.name)
                                         onGroupJoined(response.group)
@@ -1240,7 +1240,7 @@ fun GroupMembersListDialog(
     onDismiss: () -> Unit
 ) {
     val contactIds = contacts.map { it.contactId }.toSet()
-    
+
     Div({
         style {
             position(Position.Fixed)
@@ -1281,7 +1281,7 @@ fun GroupMembersListDialog(
             }) {
                 Text("👥 ${strings.groupMembersTitle} ${group.name}")
             }
-            
+
             if (isLoading) {
                 Div({
                     style {
@@ -1315,8 +1315,8 @@ fun GroupMembersListDialog(
                         val isHost = member.id == group.hostId
                         val isCurrentUser = member.id == currentUserId
                         val isContact = member.id in contactIds
-                        val isSilkAI = member.id == "silk_ai_agent"
-                        
+                        val isSilkAI = isAgentUserId(member.id)
+
                         Div({
                             style {
                                 display(DisplayStyle.Flex)
@@ -1324,7 +1324,7 @@ fun GroupMembersListDialog(
                                 alignItems(AlignItems.Center)
                                 padding(10.px, 12.px)
                                 backgroundColor(
-                                    if (isHost) Color("rgba(201, 168, 108, 0.1)") 
+                                    if (isHost) Color("rgba(201, 168, 108, 0.1)")
                                     else Color(SilkColors.surface)
                                 )
                                 borderRadius(8.px)
@@ -1374,7 +1374,7 @@ fun GroupMembersListDialog(
                                         }
                                     )
                                 }
-                                
+
                                 // 名字和状态
                                 Div {
                                     Div({
@@ -1426,7 +1426,7 @@ fun GroupMembersListDialog(
                                     }
                                 }
                             }
-                            
+
                             // 右侧操作提示
                             if (!isCurrentUser && !isSilkAI) {
                                 Div({
@@ -1441,7 +1441,7 @@ fun GroupMembersListDialog(
                     }
                 }
             }
-            
+
             // 关闭按钮
             Button({
                 style {

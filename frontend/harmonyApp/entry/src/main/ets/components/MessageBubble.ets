@@ -3,7 +3,7 @@
  * 用于在聊天界面显示单条消息
  * 严格对标 Android 端 ChatScreen.kt 的 MessageItem 逻辑
  */
-import { Message, MessageType, MessageCategory, Reference } from '../models/Message';
+import { Message, MessageType, MessageCategory, Reference, isAgentUserId } from '../models/Message';
 import { Theme, SilkColors } from '../common/Theme';
 import { MarkdownLite } from './MarkdownLite';
 import { ReferenceList } from './ReferenceList';
@@ -68,7 +68,7 @@ export struct MessageBubble {
   }
 
   private isAIMessage(): boolean {
-    return this.message.userId === 'silk_ai_agent' && 
+    return isAgentUserId(this.message.userId) &&
            this.message.category !== MessageCategory.AGENT_STATUS;
   }
 
@@ -562,7 +562,7 @@ export struct MessageBubble {
             .fontSize(12)
             .fontWeight(FontWeight.Medium)
             .fontColor(SilkColors.primary)
-          
+
           Text(' · ' + this.formatTime(this.message.timestamp))
             .fontSize(12)
             .fontColor(Theme.colors.textLight)

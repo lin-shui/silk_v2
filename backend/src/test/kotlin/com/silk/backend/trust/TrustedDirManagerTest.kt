@@ -13,6 +13,8 @@ class TrustedDirManagerTest {
         return TrustedDirManager(baseDir = baseDir.absolutePath)
     }
 
+    private fun canonical(path: String): String = File(path).canonicalPath
+
     @Test
     fun `isTrusted returns false for empty store`() {
         val tempDir = createTempDirectory("trusted-dir-test").toFile()
@@ -98,12 +100,12 @@ class TrustedDirManagerTest {
 
         val user1Trusts = manager.listTrusts("user1")
         assertEquals(2, user1Trusts.size)
-        assertTrue(user1Trusts.any { it.path == "/home/user/a" })
-        assertTrue(user1Trusts.any { it.path == "/home/user/b" })
+        assertTrue(user1Trusts.any { it.path == canonical("/home/user/a") })
+        assertTrue(user1Trusts.any { it.path == canonical("/home/user/b") })
 
         val user2Trusts = manager.listTrusts("user2")
         assertEquals(1, user2Trusts.size)
-        assertTrue(user2Trusts.any { it.path == "/home/user/c" })
+        assertTrue(user2Trusts.any { it.path == canonical("/home/user/c") })
     }
 
     @Test

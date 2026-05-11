@@ -1,5 +1,6 @@
 package com.silk.backend.ai
 
+import com.silk.backend.agents.core.AgentRuntime
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
@@ -71,13 +72,13 @@ class DirectModelAgent(
      * 将持久化的近期聊天历史注入 conversationHistory，
      * 仅在 conversationHistory 为空时执行（deploy/重启后首次调用）。
      */
-    fun loadRecentHistory(entries: List<com.silk.backend.models.ChatHistoryEntry>, agentId: String) {
+    fun loadRecentHistory(entries: List<com.silk.backend.models.ChatHistoryEntry>) {
         if (conversationHistory.isNotEmpty()) return
         val recent = entries.filter { it.messageType == "TEXT" }.takeLast(20)
         if (recent.isEmpty()) return
 
         for (entry in recent) {
-            val role = if (entry.senderId == agentId) "assistant" else "user"
+            val role = if (AgentRuntime.isAgentUserId(entry.senderId)) "assistant" else "user"
             val content = if (role == "user") {
                 "[${entry.senderName}] ${entry.content}"
             } else {
@@ -166,7 +167,9 @@ class DirectModelAgent(
             appendLine("当你使用网络搜索获取信息后，必须在回答中标注信息来源：")
             appendLine("- 引用网络搜索结果时，在相关内容末尾添加 [citation:数字]")
             appendLine("- 第一个搜索结果的引用编号为 [citation:1]，第二个为 [citation:2]，以此类推")
+            appendLine("- 引用标记必须放在相关内容的句末或段末")
             appendLine("- 每个重要观点都必须标注来源引用，不能遗漏")
+            appendLine("- 禁止堆砌大量引用标记")
             appendLine("- 如果你没有使用网络搜索，则不需要添加引用标记")
         }
     }

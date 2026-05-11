@@ -1,5 +1,6 @@
 package com.silk.backend
 
+import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.models.*
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -11,7 +12,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 聊天历史管理器 - 负责持久化聊天记录到文件系统
- * 
+ *
  * 安全特性：
  * 1. 原子写入：先写入临时文件，再重命名，避免写入中断导致文件损坏
  * 2. 损坏文件备份：解析失败时自动备份损坏文件，防止数据丢失
@@ -33,13 +34,13 @@ class ChatHistoryManager(
         ignoreUnknownKeys = true
     }
     private val logger = LoggerFactory.getLogger(ChatHistoryManager::class.java)
-    
+
     init {
         // 确保基础目录存在
         File(baseDir).mkdirs()
         logger.info("📁 聊天历史目录已创建: {}", baseDir)
     }
-    
+
     /**
      * 获取会话目录路径
      * 对于群组会话，统一使用 group_ 前缀格式
@@ -47,7 +48,7 @@ class ChatHistoryManager(
     private fun getSessionDir(sessionName: String): String {
         // 清理会话名称，移除不安全的字符
         val safeName = sessionName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        
+
         // 统一群组会话的目录命名格式
         // 如果 sessionName 是 UUID 格式（不带 group_ 前缀），添加 group_ 前缀
         // 这样确保与 WebSocketConfig.kt 中的 uploads 目录命名一致
@@ -56,10 +57,10 @@ class ChatHistoryManager(
         } else {
             safeName
         }
-        
+
         return "$baseDir/$normalizedSessionName"
     }
-    
+
     /**
      * 获取会话目录路径（不进行标准化，用于查找旧格式目录）
      */
@@ -75,7 +76,7 @@ class ChatHistoryManager(
     private fun getHistoryFile(sessionName: String): File {
         return File("${getSessionDir(sessionName)}/chat_history.json")
     }
-    
+
     /**
      * 备份损坏的文件
      * @param file 损坏的文件
@@ -83,7 +84,7 @@ class ChatHistoryManager(
      */
     private fun backupCorruptedFile(file: File, reason: String) {
         if (!file.exists()) return
-        
+
         val timestamp = System.currentTimeMillis()
         val backupFile = File("${file.parent}/${file.nameWithoutExtension}.corrupted_$timestamp.${file.extension}")
         try {
@@ -93,7 +94,7 @@ class ChatHistoryManager(
             logger.error("❌ 备份损坏文件失败: {}", e.message)
         }
     }
-    
+
     /**
      * 原子写入文件
      * 先写入临时文件，成功后重命名，避免写入中断导致文件损坏
@@ -119,7 +120,7 @@ class ChatHistoryManager(
             action()
         }
     }
-    
+
     /**
      * 创建新会话
      * 注意：如果会话已存在且有数据，此操作会被阻止（使用 ensureSessionExists 代替）
@@ -127,15 +128,15 @@ class ChatHistoryManager(
     fun createSession(sessionName: String): SessionData {
         val sessionDir = getSessionDir(sessionName)
         File(sessionDir).mkdirs()
-        
+
         val sessionData = SessionData(
             sessionId = generateSessionId(),
             sessionName = sessionName,
             createdAt = System.currentTimeMillis()
         )
-        
+
         saveSessionData(sessionName, sessionData)
-        
+
         // 仅在历史文件不存在时创建空历史，避免覆盖已有数据
         val historyFile = getHistoryFile(sessionName)
         if (!historyFile.exists()) {
@@ -144,11 +145,11 @@ class ChatHistoryManager(
         } else {
             logger.info("🛡️ 检测到已有历史文件，跳过空历史初始化: {}", sessionName)
         }
-        
+
         logger.info("✅ 会话已创建: {} ({})", sessionName, sessionData.sessionId)
         return sessionData
     }
-    
+
     /**
      * 确保会话存在，如果不存在则创建
      * 如果会话数据损坏，返回 null 而不是创建新会话（避免覆盖历史）
@@ -158,7 +159,7 @@ class ChatHistoryManager(
         if (existing != null) {
             return existing
         }
-        
+
         // 检查是否有损坏的文件
         val sessionFile = getSessionFile(sessionName)
         if (sessionFile.exists()) {
@@ -185,11 +186,11 @@ class ChatHistoryManager(
             logger.info("🔧 已从历史文件恢复 session 元数据: {}", sessionName)
             return recoveredSessionData
         }
-        
+
         // 文件不存在，可以安全创建
         return createSession(sessionName)
     }
-    
+
     /**
      * 加载会话数据
      * @return SessionData 或 null（如果文件不存在或损坏）
@@ -214,14 +215,14 @@ class ChatHistoryManager(
             null
         }
     }
-    
+
     /**
      * 保存会话数据（原子写入）
      */
     fun saveSessionData(sessionName: String, sessionData: SessionData) {
         val sessionDir = getSessionDir(sessionName)
         File(sessionDir).mkdirs()
-        
+
         val sessionFile = File("$sessionDir/session.json")
         try {
             atomicWrite(sessionFile, json.encodeToString(sessionData))
@@ -230,7 +231,7 @@ class ChatHistoryManager(
             logger.error("❌ 保存会话数据失败: {}", e.message)
         }
     }
-    
+
     /**
      * 加载聊天历史
      * @return ChatHistory 或 null（如果文件不存在或损坏）
@@ -261,14 +262,14 @@ class ChatHistoryManager(
             null
         }
     }
-    
+
     /**
      * 保存聊天历史（原子写入）
      */
     fun saveChatHistory(sessionName: String, chatHistory: ChatHistory) {
         val sessionDir = getSessionDir(sessionName)
         File(sessionDir).mkdirs()
-        
+
         val historyFile = File("$sessionDir/chat_history.json")
         try {
             atomicWrite(historyFile, json.encodeToString(chatHistory))
@@ -277,7 +278,7 @@ class ChatHistoryManager(
             logger.error("❌ 保存聊天历史失败: {}", e.message)
         }
     }
-    
+
     /**
      * 添加消息到历史记录
      */
@@ -295,7 +296,7 @@ class ChatHistoryManager(
             val sessionId = loadSessionData(sessionName)?.sessionId ?: sessionName
             ChatHistory(sessionId = sessionId)
         }
-        
+
         val entry = ChatHistoryEntry(
             messageId = message.id,
             senderId = message.userId,
@@ -305,11 +306,11 @@ class ChatHistoryManager(
             messageType = message.type.name,
             references = message.references
         )
-        
+
         chatHistory.messages.add(entry)
         saveChatHistory(sessionName, chatHistory)
     }
-    
+
     /**
      * 更新 session 的 AI 角色提示
      * @Silk 消息中的角色指令会被保存，用于后续 AI 回复
@@ -328,14 +329,14 @@ class ChatHistoryManager(
         saveChatHistory(sessionName, chatHistory)
         logger.debug("🎭 角色提示已更新: {} -> {}...", sessionName, rolePrompt?.take(50))
     }
-    
+
     /**
      * 获取 session 的 AI 角色提示
      */
     fun getRolePrompt(sessionName: String): String? {
         return loadChatHistory(sessionName)?.rolePrompt
     }
-    
+
     /**
      * 添加成员到会话
      * 使用 ensureSessionExists 避免在文件损坏时覆盖历史数据
@@ -378,7 +379,7 @@ class ChatHistoryManager(
             logger.debug("👤 成员已加入: {} ({})", userName, userId)
         }
     }
-    
+
     /**
      * 移除成员（标记为离线）
      */
@@ -403,7 +404,7 @@ class ChatHistoryManager(
             }
         }
     }
-    
+
     /**
      * 获取所有会话列表
      */
@@ -418,7 +419,7 @@ class ChatHistoryManager(
             emptyList()
         }
     }
-    
+
     /**
      * 删除单条消息
      * @param sessionName 会话名称
@@ -427,19 +428,19 @@ class ChatHistoryManager(
      */
     fun deleteMessage(sessionName: String, messageId: String): Boolean {
         val chatHistory = loadChatHistory(sessionName) ?: return false
-        
+
         val initialSize = chatHistory.messages.size
         chatHistory.messages.removeIf { it.messageId == messageId }
-        
+
         if (chatHistory.messages.size < initialSize) {
             saveChatHistory(sessionName, chatHistory)
             logger.info("🗑️ 消息已删除: {} (会话: {})", messageId, sessionName)
             return true
         }
-        
+
         return false
     }
-    
+
     /**
      * 批量删除消息
      * @param sessionName 会话名称
@@ -448,21 +449,21 @@ class ChatHistoryManager(
      */
     fun deleteMessages(sessionName: String, messageIds: List<String>): Int {
         if (messageIds.isEmpty()) return 0
-        
+
         val chatHistory = loadChatHistory(sessionName) ?: return 0
-        
+
         val initialSize = chatHistory.messages.size
         chatHistory.messages.removeIf { it.messageId in messageIds }
         val deletedCount = initialSize - chatHistory.messages.size
-        
+
         if (deletedCount > 0) {
             saveChatHistory(sessionName, chatHistory)
             logger.info("🗑️ 批量删除消息: {} 条 (会话: {})", deletedCount, sessionName)
         }
-        
+
         return deletedCount
     }
-    
+
     /**
      * 查找指定消息后的AI回复消息
      * 用于撤回 @silk 消息时，同时删除AI的回复
@@ -472,31 +473,29 @@ class ChatHistoryManager(
      */
     fun findAgentRepliesAfterMessage(sessionName: String, userMessageId: String): List<String> {
         val chatHistory = loadChatHistory(sessionName) ?: return emptyList()
-        
+
         // 找到用户消息的位置
         val userMessageIndex = chatHistory.messages.indexOfFirst { it.messageId == userMessageId }
         if (userMessageIndex == -1) return emptyList()
-        
+
         val userMessage = chatHistory.messages[userMessageIndex]
         val userTimestamp = userMessage.timestamp
-        
-        // AI Agent ID
-        val agentId = "silk_agent"
-        
+
+        val isAgent = { id: String -> AgentRuntime.isAgentUserId(id) }
+
         // 查找用户消息之后、连续的AI回复消息
         val agentReplies = mutableListOf<String>()
-        var foundNextUserMessage = false
-        
+
         for (i in (userMessageIndex + 1) until chatHistory.messages.size) {
             val msg = chatHistory.messages[i]
-            
+
             // 如果遇到其他用户的消息，停止查找
-            if (msg.senderId != agentId && msg.senderId != userMessage.senderId) {
+            if (!isAgent(msg.senderId) && msg.senderId != userMessage.senderId) {
                 break
             }
-            
+
             // 如果是AI的回复，添加到列表
-            if (msg.senderId == agentId) {
+            if (isAgent(msg.senderId)) {
                 // 检查是否是连续的AI回复（时间间隔在5分钟内）
                 val prevMsg = if (agentReplies.isEmpty()) userMessage else chatHistory.messages[i - 1]
                 if (msg.timestamp - prevMsg.timestamp < 5 * 60 * 1000) {
@@ -506,11 +505,11 @@ class ChatHistoryManager(
                 }
             }
         }
-        
+
         logger.debug("🔍 查找AI回复: 用户消息 {} -> 找到 {} 条AI回复", userMessageId, agentReplies.size)
         return agentReplies
     }
-    
+
     /**
      * 获取 uploads 目录路径（公开方法，供 WebSocketConfig 等模块使用）
      * @param sessionName 会话名称
@@ -522,7 +521,7 @@ class ChatHistoryManager(
         uploadDir.mkdirs()
         return uploadDir
     }
-    
+
     /**
      * 获取标准化后的会话名称（公开方法）
      * 用于调试和日志记录
@@ -535,7 +534,7 @@ class ChatHistoryManager(
             safeName
         }
     }
-    
+
     /**
      * 生成会话 ID
      */

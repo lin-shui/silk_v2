@@ -9,7 +9,6 @@
 - `ai/DirectModelAgentToolPolicyTest`：AI 工具暴露面、会话作用域、路径拒绝与审计结果。
 - `utils/WebPageDownloaderSmokeTest`：URL 提取去重、本地 HTML/PDF 下载提取与落盘 smoke，不依赖外网。
 - `UserTodoStoreTest`：待办去重、重开、模板实例化等核心生命周期逻辑。
-- `claudecode/StreamParserTest`：Claude Code Bridge 元信息格式化单测。
 
 运行方式：
 

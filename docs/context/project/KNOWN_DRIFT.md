@@ -37,3 +37,20 @@
 - Todo 规划的 canonical 文件仍是 `docs/todo-roadmap.md`
 - 它是 human-maintained roadmap，不是 agent 自动维护的执行日志
 - `docs/context/planning/TODO_ROADMAP.md` 只是 agent-facing wrapper
+
+## Agent Framework (Plan E–E4 + F1 M1-M4 Done)
+
+CC 模式已完全迁到通用 `AgentRuntime` 框架。旧 `ClaudeCodeManager` / `BridgeRegistry` / `StreamParser` / `bridge_agent.py` 已物理删除。**Plan F1 M1-M4 已落地**，Codex CLI 经 ACP 接入并完成多 agent UX 收尾：
+
+- **入口面**：`WebSocketConfig.kt`、`ChatServer.broadcast()` 只调 `AgentRuntime.{handleIfActive, cancelIfActive, isAgentMessage}`
+- **聊天执行**：`acp_adapter.py` 通过 `/agent-bridge` 端点接收 ACP 请求，复用 `Executor` 跑 Claude CLI，流式推 `session/update` 通知
+- **文件系统操作走 ACP**：`/cc-fs/cd` → `_silk/set_cwd`；`/cc-fs/list` → `_silk/list_dir`
+- **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.ccSessionId` 写入 `Workflow.agentSessions[agentType]`（per-agent）；`autoActivateForWorkflow` 用 seed 续会话
+- **Multi-agent UX（F1 M4）**：`/codex <text>` inline 文本一步切换+提问；`@codex <text>` 跨 agent 路由不再静默；`Workflow.activeAgent` 持久化，`/use` 切换落盘，下次进工作流自动恢复；前端工作流标题显示 active agent badge
+- **`/session <id>` 真正加载**：`AgentRuntime` 调 ACP `session/load`，cc_bridge 复用 `SessionManager.resume_session`，codex_bridge 新增 `codex_session_index.find_session_file`
+- **Token 重生踢连接**：`AcpRegistry.disconnect(userId)` 关闭老 ACP 连接
+- **TrustedDir bridgeId**：`resolveBridgeId(userId)` 从 `AcpRegistry.getRemoteIp` 拿，格式 `"ip:<remoteIp>"` 不变
+- **`/cc-bridge` WebSocket 端点已删除**
+- **无回退路径**：ACP 不可用时直接报"未连接"
+
+排查 CC 行为时只看 `AgentRuntime` + `acp_adapter.py`。

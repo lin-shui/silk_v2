@@ -31,7 +31,7 @@ from message_adapter import (
     build_markdown_card,
     build_streaming_card,
 )
-from streaming import StreamingManager
+from streaming import StreamingManager, _is_agent_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -356,7 +356,7 @@ class FeishuHandler:
             return
 
         # 忽略非 AI 消息（用户自己的消息回显等）
-        if sender_id != "silk_ai_agent":
+        if not _is_agent_user_id(sender_id):
             return
 
         logger.info("处理 AI 消息: type=%s, transient=%s, content=%s",

@@ -22,8 +22,9 @@
 | `frontend/androidApp/` | Android 前端 | `MainActivity.kt`, `AppState.kt`, `ApiClient.kt` |
 | `frontend/desktopApp/` | Desktop 前端 | `Main.kt`, `AppState.kt`, `ApiClient.kt` |
 | `frontend/harmonyApp/` | HarmonyOS ArkTS 前端 | `entry/src/main/ets/pages/*.ets`, `api/*.ets`, `stores/*.ets` |
-| `search/` | (Legacy) Weaviate 脚本 — 已由 Anthropic web_search + grep 替代 | `schema.py`, `indexer.py`, `start.sh` |
-| `cc_bridge/` | Claude CLI bridge | `bridge_agent.py`, `executor.py`, `session_manager.py` |
+| `search/` | (Legacy) Weaviate 脚本；当前 AI 主线已由 Anthropic web_search + grep 替代 | `schema.py`, `indexer.py`, `start.sh` |
+| `cc_bridge/` | Claude CLI ACP adapter | `acp_adapter.py`, `executor.py`, `session_manager.py`, `fs_listing.py` |
+| `codex_bridge/` | Codex CLI ACP adapter | `codex_adapter.py`, `codex_dispatcher.py`, `codex_executor.py`, `bridge.sh` |
 | `feishu_bot/` | 飞书网关 | `main.py`, `silk_client.py`, `feishu_handler.py` |
 | `docs/` | 现有项目文档与 agent workflow skill | `todo-roadmap.md`, `context/`, `skills/` |
 
@@ -34,8 +35,8 @@
 | `auth/` | 注册登录、群组/联系人服务 |
 | `database/` | Exposed tables / repositories |
 | `ai/` | AIConfig、DirectModelAgent、tool policy |
-| `search/` | (Legacy) Weaviate — 已由 AnthropicClient + grep searchContext 替代 |
-| `claudecode/` | Claude Code 模式与 bridge registry |
+| `search/` | (Legacy) Weaviate / 外部搜索；已由 AnthropicClient + grep searchContext 替代 |
+| `agents/` | Agent 框架（`core/` 路由+状态、`acp/` ACP 协议层、`adapters/` agent 描述符） |
 | `todos/` | Todo 抽取、刷新、存储、节假日逻辑 |
 | `workflow/` | Workflow JSON store |
 | `kb/` | Knowledge Base JSON store + exporter |

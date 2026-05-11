@@ -62,6 +62,9 @@ import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
+import com.silk.shared.models.isAgentUserId
+import com.silk.shared.models.SILK_AGENT_USER_ID
+import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import com.silk.shared.utils.formatMessageTimestamp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -96,17 +99,17 @@ fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsState(): State<T> {
 fun ChatScreen(appState: AppState) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    
+
     val user = appState.currentUser ?: return
     val group = appState.selectedGroup ?: return
-    
+
     // WebSocket URL - 与 BackendUrlHolder 一致（应用内设置或构建时默认）
     val baseUrl = BackendUrlHolder.getBaseUrl()
     val wsUrl = baseUrl.replaceFirst("http", "ws")
-    
+
     // 收集调试日志（只保留最后32行）
     val debugLogs = remember { mutableStateListOf<String>() }
-    
+
     // 添加日志函数（自动限制到最后32行）
     fun addLog(message: String) {
         debugLogs.add(message)
@@ -116,28 +119,28 @@ fun ChatScreen(appState: AppState) {
         }
         println(message)
     }
-    
-    val chatClient = remember { 
+
+    val chatClient = remember {
         addLog("🔧 创建 ChatClient，URL: $wsUrl")
         ChatClient(wsUrl) { logMessage ->
             addLog(logMessage)
         }
     }
-    
+
     val messages by chatClient.messages.collectAsState()
     val transientMessage by chatClient.transientMessage.collectAsState()
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
-    
+
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
-    
+
     var messageText by remember { mutableStateOf(TextFieldValue("")) }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isExiting by remember { mutableStateOf(false) }
     var showDebugInfo by remember { mutableStateOf(false) }
-    
+
     // AI 响应等待状态 - 必须在 LaunchedEffect 之前定义
     var isWaitingForAI by remember { mutableStateOf(false) }
 
@@ -152,22 +155,22 @@ fun ChatScreen(appState: AppState) {
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> micPermissionGranted.value = granted }
-    
+
     // 监控消息列表变化
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
             val last = messages.last()
             addLog("📊 消息列表+1: 总共${messages.size}条")
             addLog("   最新: ${last.userName}: ${last.content.take(20)}...")
-            
+
             // 收到 Silk 的响应时，清除等待状态
-            if (last.userName == "Silk" && isWaitingForAI) {
+            if (isAgentUserId(last.userId) && isWaitingForAI) {
                 isWaitingForAI = false
                 addLog("✅ AI 响应已收到，清除等待状态")
             }
         }
     }
-    
+
     // 监控临时消息变化
     LaunchedEffect(transientMessage) {
         if (transientMessage != null) {
@@ -176,7 +179,7 @@ fun ChatScreen(appState: AppState) {
             addLog("🗑️ 临时消息已清除")
         }
     }
-    
+
     // 文件上传相关
     var isUploading by remember { mutableStateOf(false) }
     var uploadProgress by remember { mutableStateOf("") }
@@ -184,7 +187,7 @@ fun ChatScreen(appState: AppState) {
     var folderFiles by remember { mutableStateOf<List<FileItem>>(emptyList()) }
     var processedUrls by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoadingFiles by remember { mutableStateOf(false) }
-    
+
     // 文件选择器
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -196,7 +199,7 @@ fun ChatScreen(appState: AppState) {
                 try {
                     val fileName = getFileName(context, selectedUri)
                     addLog("📎 开始上传文件: $fileName")
-                    
+
                     val inputStream = context.contentResolver.openInputStream(selectedUri)
                     if (inputStream != null) {
                         val success = uploadFile(
@@ -223,11 +226,11 @@ fun ChatScreen(appState: AppState) {
             }
         }
     }
-    
+
     // 消息选择模式
     var isSelectionMode by remember { mutableStateOf(false) }
     val selectedMessages = remember { mutableStateListOf<String>() }  // 存储选中消息的ID
-    
+
     // ✅ 转发对话框状态
     var showForwardToGroupDialog by remember { mutableStateOf(false) }
     var showForwardToContactDialog by remember { mutableStateOf(false) }
@@ -236,57 +239,57 @@ fun ChatScreen(appState: AppState) {
     var forwardResult by remember { mutableStateOf<String?>(null) }
     // ✅ 单条消息转发状态（用于 AI 消息等直接点击转发按钮的情况）
     var messageToForward by remember { mutableStateOf<Message?>(null) }
-    
+
     // 添加联系人对话框状态
     var showAddContactConfirm by remember { mutableStateOf<Message?>(null) }
     var isAddingContact by remember { mutableStateOf(false) }
     var addContactResult by remember { mutableStateOf<String?>(null) }
-    
+
     // 添加成员到群组状态
     var showAddMemberDialog by remember { mutableStateOf(false) }
     var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
     var groupMembers by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
     var isLoadingContacts by remember { mutableStateOf(false) }
     var addMemberResult by remember { mutableStateOf<String?>(null) }
-    
+
     // 消息撤回相关状态
     var recallingMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }  // 正在撤回中的消息ID集合
     var recallResult by remember { mutableStateOf<String?>(null) }  // 撤回结果提示
-    
+
     // 查看成员列表状态
     var showMembersDialog by remember { mutableStateOf(false) }
     var selectedMemberForInvite by remember { mutableStateOf<GroupMember?>(null) }
     var isInvitingMember by remember { mutableStateOf(false) }
     var inviteMemberResult by remember { mutableStateOf<String?>(null) }
-    
+
     // @ mention 功能状态（输入 @ 后弹出群成员/会话用户列表）
     var showMentionMenu by remember { mutableStateOf(false) }
     var mentionSearchText by remember { mutableStateOf("") }
     var mentionStartIndex by remember { mutableStateOf(-1) }
-    
+
     // 从消息历史和群组成员列表中提取用户列表（去重），用于 @ 提及下拉
     // 优先使用 groupMembers（包含所有群组成员），同时合并消息历史中的用户
     val sessionUsers = remember(messages, groupMembers) {
         val users = mutableSetOf<Pair<String, String>>() // (id, name)
         // 始终添加 Silk AI
-        users.add("silk_ai_agent" to "🤖 Silk")
+        users.add(SILK_AGENT_USER_ID to "🤖 $SILK_AGENT_DISPLAY_NAME")
         // 添加当前用户
         users.add(user.id to user.fullName)
         // 从群组成员列表添加所有成员
         groupMembers.forEach { member ->
-            if (member.id != "silk_ai_agent" && member.id != user.id) {
+            if (!isAgentUserId(member.id) && member.id != user.id) {
                 users.add(member.id to member.fullName)
             }
         }
         // 从消息中提取其他用户（作为补充，以防成员列表不完整）
         messages.forEach { msg ->
-            if (msg.userId != "silk_ai_agent" && msg.userId != user.id) {
+            if (!isAgentUserId(msg.userId) && msg.userId != user.id) {
                 users.add(msg.userId to msg.userName)
             }
         }
         users.toList()
     }
-    
+
     LaunchedEffect(Unit) {
         addLog("📱 应用版本: 1.0.12-robust-reconnect (Build 12)")
         addLog("📱 Android版本: ${android.os.Build.VERSION.RELEASE}")
@@ -294,29 +297,29 @@ fun ChatScreen(appState: AppState) {
         addLog("🔧 WebSocket URL: $wsUrl")
         addLog("🔧 HTTP BASE_URL: $baseUrl")
     }
-    
+
     val listState = rememberLazyListState()
-    
+
     // ✅ AI 消息展开状态管理 - 使用 Map 存储每个消息的展开状态
     val aiMessageExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
-    
+
     // ✅ 当展开/收起 AI 消息时，滚动到该消息位置
     val scopeForScroll = rememberCoroutineScope()
     fun onAIExpandChange(messageId: String, isExpanded: Boolean) {
         aiMessageExpandedStates[messageId] = isExpanded
         println("🤖 AI消息展开状态变化: messageId=$messageId, isExpanded=$isExpanded")
     }
-    
+
     // 显示连接状态
     LaunchedEffect(connectionState) {
         addLog("📊 连接状态变化: $connectionState")
     }
-    
+
     // 连接WebSocket（在后台协程中保持连接）
     LaunchedEffect(group.id) {
         // Reset flag when group changes
         hasSentDefaultInstruction = false
-        
+
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
         addLog("🔌 开始连接WebSocket...")
         addLog("   URL: $wsUrl")
@@ -325,7 +328,7 @@ fun ChatScreen(appState: AppState) {
         addLog("   群组: ${group.name}")
         addLog("   群组ID: ${group.id}")
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
-        
+
         // 并行：加载群成员 + 建立 WebSocket，互不阻塞
         launch {
             try {
@@ -336,7 +339,7 @@ fun ChatScreen(appState: AppState) {
                 addLog("❌ 加载群成员列表失败: ${e.message}")
             }
         }
-        
+
         launch {
             try {
                 addLog("⏳ 启动 chatClient.connect()...")
@@ -351,7 +354,7 @@ fun ChatScreen(appState: AppState) {
         addLog("✅ WebSocket 连接协程已启动")
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
     }
-    
+
     // 历史消息加载状态：由 ChatClient 缓冲完成后一次性刷入
     val isHistoryLoading by chatClient.isLoadingHistory.collectAsState()
     var lastMessageCount by remember { mutableStateOf(0) }
@@ -370,7 +373,7 @@ fun ChatScreen(appState: AppState) {
         }
         lastMessageCount = messages.size
     }
-    
+
     // 首次出现临时消息时，确保显示在底部
     val hasTransient = transientMessage != null
     LaunchedEffect(hasTransient) {
@@ -379,7 +382,7 @@ fun ChatScreen(appState: AppState) {
             listState.scrollToItem(0)
         }
     }
-    
+
     // 等待 AI 响应时确保显示等待状态
     LaunchedEffect(isWaitingForAI) {
         if (isWaitingForAI) {
@@ -387,22 +390,22 @@ fun ChatScreen(appState: AppState) {
             listState.scrollToItem(0)
         }
     }
-    
+
     // ✅ 使用前台服务保持 WebSocket 连接活跃
     // 前台服务会在应用切换到后台时保持连接，避免显示"连接已断开"
     val lifecycleOwner = LocalLifecycleOwner.current
     var connectionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
+
     // 跟踪是否需要重连
     var needReconnect by remember { mutableStateOf(false) }
     var lastConnectionTime by remember { mutableStateOf(0L) }
-    
+
     // 启动前台服务
     LaunchedEffect(Unit) {
         WebSocketForegroundService.start(context, group.name)
         addLog("🚀 [前台服务] 已启动 WebSocket 保活服务")
     }
-    
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -410,28 +413,28 @@ fun ChatScreen(appState: AppState) {
                     scope.launch {
                         addLog("🔄 [生命周期] 应用返回前台")
                         addLog("   当前连接状态: $connectionState")
-                        
+
                         // ✅ 如果连接已断开或正在连接中，才尝试重连
                         if (connectionState != ConnectionState.CONNECTED) {
                             addLog("🔄 [生命周期] 连接未就绪，检查是否需要重连...")
-                            
+
                             // 等待一小段时间，让连接状态稳定
                             kotlinx.coroutines.delay(500)
-                            
+
                             if (connectionState == ConnectionState.DISCONNECTED) {
                                 addLog("🔌 [生命周期] 连接已断开，尝试重新连接...")
                                 needReconnect = true
-                                
+
                                 // 取消旧的连接协程
                                 connectionJob?.cancel()
                                 kotlinx.coroutines.delay(300)
-                                
+
                                 // 启动新的连接
                                 connectionJob = scope.launch {
                                     try {
                                         addLog("🔌 建立新的WebSocket连接...")
                                         chatClient.connect(user.id, user.fullName, group.id)
-                                        
+
                                         // 等待连接建立
                                         var attempts = 0
                                         while (connectionState != ConnectionState.CONNECTED && attempts < 10) {
@@ -439,11 +442,11 @@ fun ChatScreen(appState: AppState) {
                                             attempts++
                                             addLog("⏳ 等待连接建立... (${attempts}/10)")
                                         }
-                                        
+
                                         if (connectionState == ConnectionState.CONNECTED) {
                                             addLog("✅ WebSocket重新连接成功！")
                                             lastConnectionTime = System.currentTimeMillis()
-                                            
+
                                             // 连接成功后滚动到最新消息
                                             kotlinx.coroutines.delay(300)
                                             if (messages.isNotEmpty()) {
@@ -464,7 +467,7 @@ fun ChatScreen(appState: AppState) {
                             // 确保前台服务正在运行
                             WebSocketForegroundService.start(context, group.name)
                         }
-                        
+
                         needReconnect = false
                     }
                 }
@@ -487,20 +490,20 @@ fun ChatScreen(appState: AppState) {
                 else -> {}
             }
         }
-        
+
         lifecycleOwner.lifecycle.addObserver(observer)
-        
+
         onDispose {
             scope.launch {
                 addLog("🔌 [生命周期] 离开聊天界面，清理资源...")
-                
+
                 // 停止前台服务
                 WebSocketForegroundService.stop(context)
                 addLog("🛑 [前台服务] 已停止 WebSocket 保活服务")
-                
+
                 // 断开连接
                 chatClient.disconnect()
-                
+
                 // 标记已读
                 kotlinx.coroutines.delay(300)
                 appState.currentUser?.let { user ->
@@ -515,9 +518,9 @@ fun ChatScreen(appState: AppState) {
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
-    
+
     val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
-    
+
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
@@ -548,10 +551,10 @@ fun ChatScreen(appState: AppState) {
                                     // 先断开连接，确保所有消息处理完成
                                     chatClient.disconnect()
                                     chatClient.clearMessages()
-                                    
+
                                     // 等待服务器完成所有消息处理
                                     kotlinx.coroutines.delay(500)
-                                    
+
                                     // 最后标记已读 - 在断开连接之后调用
                                     // 这样可以确保用户发送的消息已被服务器处理
                                     // 标记时间会晚于所有消息的时间戳
@@ -563,7 +566,7 @@ fun ChatScreen(appState: AppState) {
                                             println("⚠️ 标记已读失败: ${e.message}")
                                         }
                                     }
-                                    
+
                                     appState.navigateBack()
                                 }
                             }
@@ -588,9 +591,9 @@ fun ChatScreen(appState: AppState) {
                                         .filter { selectedMessages.contains(it.id) }
                                         .sortedBy { it.timestamp }
                                         .joinToString("\n\n") { "${it.userName}:\n${it.content}" }
-                                    
+
                                     if (selectedContent.isNotEmpty()) {
-                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
+                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                                             as android.content.ClipboardManager
                                         val clip = android.content.ClipData.newPlainText("消息", selectedContent)
                                         clipboard.setPrimaryClip(clip)
@@ -608,7 +611,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("📋复制", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // 💬 转发到其他 Silk 对话
                             TextButton(
                                 onClick = {
@@ -626,7 +629,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("💬转发", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // 👤 转发到联系人
                             TextButton(
                                 onClick = {
@@ -643,7 +646,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("👤私聊", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // 📤 分享到其他应用
                             TextButton(
                                 onClick = {
@@ -657,7 +660,7 @@ fun ChatScreen(appState: AppState) {
                                             )
                                             "[$time] ${msg.userName}:\n${msg.content}"
                                         }
-                                    
+
                                     if (selectedContent.isNotEmpty()) {
                                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                             type = "text/plain"
@@ -673,7 +676,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("📤分享", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // ✕ 取消选择
                             TextButton(
                                 onClick = {
@@ -687,7 +690,7 @@ fun ChatScreen(appState: AppState) {
                         }
                     } else {
                         // 正常模式的按钮
-                        
+
                         // ☑️ 选择模式按钮 - 点击进入选择模式
                         IconButton(
                             onClick = {
@@ -702,10 +705,10 @@ fun ChatScreen(appState: AppState) {
                         ) {
                             Text("☑️", fontSize = 16.sp)
                         }
-                        
+
                         // 📁 文件夹浏览器按钮
                         IconButton(
-                            onClick = { 
+                            onClick = {
                                 showFolderExplorer = true
                                 isLoadingFiles = true
                                 // 加载文件列表和 URL 清单
@@ -724,10 +727,10 @@ fun ChatScreen(appState: AppState) {
                         ) {
                             Text("📁", fontSize = 16.sp)
                         }
-                        
+
                         // 📎 上传文件按钮
                         IconButton(
-                            onClick = { 
+                            onClick = {
                                 if (!isUploading) {
                                     filePickerLauncher.launch("*/*")
                                 }
@@ -735,16 +738,16 @@ fun ChatScreen(appState: AppState) {
                             enabled = !isUploading
                         ) {
                             Text(
-                                text = if (isUploading) "⏳" else "📎", 
+                                text = if (isUploading) "⏳" else "📎",
                                 fontSize = 16.sp
                             )
                         }
-                        
+
                         // 邀请按钮
                         IconButton(onClick = { showInvitationDialog = true }) {
                             Icon(Icons.Default.Share, contentDescription = "邀请", modifier = Modifier.size(20.dp))
                         }
-                        
+
                         // ➕ 添加成员按钮
                         IconButton(
                             onClick = {
@@ -762,7 +765,7 @@ fun ChatScreen(appState: AppState) {
                         ) {
                             Text("➕", fontSize = 16.sp)
                         }
-                        
+
                         // 👥 查看成员按钮
                         IconButton(
                             onClick = {
@@ -809,7 +812,7 @@ fun ChatScreen(appState: AppState) {
                     )
                 }
             }
-            
+
             // 上传状态显示（浅灰色）
             if (isUploading && uploadProgress.isNotEmpty()) {
                 Surface(
@@ -834,7 +837,7 @@ fun ChatScreen(appState: AppState) {
                     }
                 }
             }
-            
+
             // 消息列表 - 使用 reverseLayout 让最新消息贴近输入框
             // ✅ 底部对齐：使用 Box 包裹 LazyColumn，确保内容贴底显示
             // 这样当键盘弹出时，历史信息不会滚动到屏幕外
@@ -888,7 +891,7 @@ fun ChatScreen(appState: AppState) {
                 } else {
                     // ✅ reverseLayout=true 时，第一个 item 显示在底部（靠近输入框）
                     // 所以临时消息（流式回答）放在最前面显示在最底部，状态消息紧随其后显示在回答上方
-                    
+
                     // 1️⃣ 临时消息（AI处理中）- 不支持选择
                     transientMessage?.let { message ->
                         item(key = "transient_message") {
@@ -972,7 +975,7 @@ fun ChatScreen(appState: AppState) {
                             }
                         }
                     }
-                    
+
                     // 3️⃣ 普通消息列表（反转顺序，最新的在第0位 = 显示在底部）
                     items(messages.reversed(), key = { it.id }) { message ->
                         MessageItem(
@@ -1055,7 +1058,7 @@ fun ChatScreen(appState: AppState) {
                             },
                             // 复制功能
                             onCopy = { content ->
-                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
+                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                                     as android.content.ClipboardManager
                                 val clip = android.content.ClipData.newPlainText("消息", content)
                                 clipboard.setPrimaryClip(clip)
@@ -1080,7 +1083,7 @@ fun ChatScreen(appState: AppState) {
                     }  // ✅ else 结束 - 历史加载完成后的内容
                 }  // ✅ Crossfade 结束
             }  // ✅ Box 结束 - 底部对齐容器
-            
+
             // 输入框区域
             if (connectionState == ConnectionState.CONNECTED) {
                 Surface(
@@ -1123,7 +1126,7 @@ fun ChatScreen(appState: AppState) {
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
-                        
+
                         // 输入框容器（用于 @ 提及下拉）
                         Box(modifier = Modifier.fillMaxWidth()) {
                             Column(modifier = Modifier.fillMaxWidth()) {
@@ -1154,7 +1157,7 @@ fun ChatScreen(appState: AppState) {
                                             ) {
                                                 items(filteredUsers.size) { index ->
                                                     val (userId, userName) = filteredUsers[index]
-                                                    val displayName = if (userId == "silk_ai_agent") "Silk" else userName
+                                                    val displayName = if (isAgentUserId(userId)) "Silk" else userName
                                                     Surface(
                                                         onClick = {
                                                             val beforeAt = messageText.text.substring(0, mentionStartIndex.coerceAtLeast(0))
@@ -1172,7 +1175,7 @@ fun ChatScreen(appState: AppState) {
                                                             text = userName,
                                                             modifier = Modifier.padding(10.dp, 12.dp),
                                                             style = MaterialTheme.typography.bodyMedium,
-                                                            fontWeight = if (userId == "silk_ai_agent") FontWeight.SemiBold else FontWeight.Normal
+                                                            fontWeight = if (isAgentUserId(userId)) FontWeight.SemiBold else FontWeight.Normal
                                                         )
                                                     }
                                                 }
@@ -1181,7 +1184,7 @@ fun ChatScreen(appState: AppState) {
                                     }
                                     Spacer(modifier = Modifier.height(4.dp))
                                 }
-                                
+
                                 // 输入框和发送按钮在同一行
                                 if (isVoiceRecording) {
                                     Row(
@@ -1323,7 +1326,7 @@ fun ChatScreen(appState: AppState) {
                                             tint = Color.Gray
                                         )
                                     }
-                                    
+
                                     val showStopButton = isGenerating || isWaitingForAI
                                     if (showStopButton) {
                                         Button(
@@ -1344,12 +1347,12 @@ fun ChatScreen(appState: AppState) {
                                                 if (messageText.text.isNotBlank()) {
                                                     val msgContent = messageText.text
                                                     addLog("📤 发送消息: ${msgContent.take(20)}...")
-                                                    
+
                                                     if (msgContent.lowercase().startsWith("@silk") || isSilkPrivateChat) {
                                                         isWaitingForAI = true
                                                         addLog("⏳ 开始等待 AI 响应...")
                                                     }
-                                                    
+
                                                     scope.launch {
                                                         chatClient.sendMessage(user.id, user.fullName, msgContent)
                                                         addLog("✅ 消息已发送")
@@ -1386,7 +1389,7 @@ fun ChatScreen(appState: AppState) {
             }
         }
     }
-    
+
     // 调试信息对话框
     if (showDebugInfo) {
         AlertDialog(
@@ -1429,7 +1432,7 @@ fun ChatScreen(appState: AppState) {
                 TextButton(
                     onClick = {
                         // 复制日志到剪贴板
-                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                             as android.content.ClipboardManager
                         val clip = android.content.ClipData.newPlainText(
                             "调试日志",
@@ -1448,7 +1451,7 @@ fun ChatScreen(appState: AppState) {
             }
         )
     }
-    
+
     // 邀请对话框
     if (showInvitationDialog) {
         InvitationDialog(
@@ -1456,7 +1459,7 @@ fun ChatScreen(appState: AppState) {
             onDismiss = { showInvitationDialog = false }
         )
     }
-    
+
     // 添加成员对话框
     if (showAddMemberDialog) {
         AddMemberDialog(
@@ -1479,13 +1482,13 @@ fun ChatScreen(appState: AppState) {
                     }
                 }
             },
-            onDismiss = { 
+            onDismiss = {
                 showAddMemberDialog = false
                 addMemberResult = null
             }
         )
     }
-    
+
     // 查看成员对话框
     if (showMembersDialog) {
         MembersDialog(
@@ -1504,7 +1507,7 @@ fun ChatScreen(appState: AppState) {
                         try {
                             chatClient.disconnect()
                         } catch (e: Exception) { }
-                        
+
                         // 调用API获取或创建与该联系人的对话
                         val response = ApiClient.startPrivateChat(user.id, member.id)
                         if (response.success && response.group != null) {
@@ -1523,22 +1526,22 @@ fun ChatScreen(appState: AppState) {
                     selectedMemberForInvite = member
                 }
             },
-            onDismiss = { 
+            onDismiss = {
                 showMembersDialog = false
                 selectedMemberForInvite = null
                 inviteMemberResult = null
             }
         )
     }
-    
+
     // 邀请成员加入联系人确认对话框
     selectedMemberForInvite?.let { member ->
         AlertDialog(
-            onDismissRequest = { 
-                selectedMemberForInvite = null 
+            onDismissRequest = {
+                selectedMemberForInvite = null
                 inviteMemberResult = null
             },
-            title = { 
+            title = {
                 Text(
                     "添加联系人",
                     fontWeight = FontWeight.Bold,
@@ -1553,11 +1556,11 @@ fun ChatScreen(appState: AppState) {
                 ) {
                     Text("${member.fullName} 不在您的联系人列表中。")
                     Text("是否发送联系人请求？")
-                    
+
                     if (inviteMemberResult != null) {
                         Text(
                             text = inviteMemberResult!!,
-                            color = if (inviteMemberResult!!.contains("成功") || inviteMemberResult!!.contains("已发送")) 
+                            color = if (inviteMemberResult!!.contains("成功") || inviteMemberResult!!.contains("已发送"))
                                 SilkColors.success else SilkColors.error,
                             style = MaterialTheme.typography.bodySmall
                         )
@@ -1570,16 +1573,16 @@ fun ChatScreen(appState: AppState) {
                         scope.launch {
                             isInvitingMember = true
                             inviteMemberResult = null
-                            
+
                             val response = ApiClient.sendContactRequestById(user.id, member.id)
                             inviteMemberResult = if (response.success) {
                                 "✅ 联系人请求已发送"
                             } else {
                                 "❌ ${response.message}"
                             }
-                            
+
                             isInvitingMember = false
-                            
+
                             // 成功后延迟关闭对话框
                             if (response.success) {
                                 kotlinx.coroutines.delay(1500)
@@ -1606,8 +1609,8 @@ fun ChatScreen(appState: AppState) {
             },
             dismissButton = {
                 TextButton(
-                    onClick = { 
-                        selectedMemberForInvite = null 
+                    onClick = {
+                        selectedMemberForInvite = null
                         inviteMemberResult = null
                     }
                 ) {
@@ -1616,7 +1619,7 @@ fun ChatScreen(appState: AppState) {
             }
         )
     }
-    
+
     // 文件夹浏览对话框
     if (showFolderExplorer) {
         FolderExplorerDialog(
@@ -1642,15 +1645,15 @@ fun ChatScreen(appState: AppState) {
             }
         )
     }
-    
+
     // 添加联系人确认对话框
     showAddContactConfirm?.let { clickedMessage ->
         AlertDialog(
-            onDismissRequest = { 
-                showAddContactConfirm = null 
+            onDismissRequest = {
+                showAddContactConfirm = null
                 addContactResult = null
             },
-            title = { 
+            title = {
                 Text(
                     "添加联系人",
                     fontWeight = FontWeight.Bold,
@@ -1664,11 +1667,11 @@ fun ChatScreen(appState: AppState) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("是否将 ${clickedMessage.userName} 添加为联系人？")
-                    
+
                     if (addContactResult != null) {
                         Text(
                             text = addContactResult!!,
-                            color = if (addContactResult!!.contains("成功") || addContactResult!!.contains("已发送")) 
+                            color = if (addContactResult!!.contains("成功") || addContactResult!!.contains("已发送"))
                                 SilkColors.success else SilkColors.error,
                             style = MaterialTheme.typography.bodySmall
                         )
@@ -1681,16 +1684,16 @@ fun ChatScreen(appState: AppState) {
                         scope.launch {
                             isAddingContact = true
                             addContactResult = null
-                            
+
                             val response = ApiClient.sendContactRequestById(user.id, clickedMessage.userId)
                             addContactResult = if (response.success) {
                                 "联系人请求已发送"
                             } else {
                                 response.message
                             }
-                            
+
                             isAddingContact = false
-                            
+
                             // 成功后延迟关闭对话框
                             if (response.success) {
                                 kotlinx.coroutines.delay(1500)
@@ -1717,8 +1720,8 @@ fun ChatScreen(appState: AppState) {
             },
             dismissButton = {
                 TextButton(
-                    onClick = { 
-                        showAddContactConfirm = null 
+                    onClick = {
+                        showAddContactConfirm = null
                         addContactResult = null
                     }
                 ) {
@@ -1727,7 +1730,7 @@ fun ChatScreen(appState: AppState) {
             }
         )
     }
-    
+
     // ==================== 转发到群组对话框 ====================
     if (showForwardToGroupDialog) {
         // 支持单条消息转发（AI消息）和多条消息转发（选择模式）
@@ -1736,7 +1739,7 @@ fun ChatScreen(appState: AppState) {
         } else {
             messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
         }
-        
+
         ForwardToGroupDialog(
             groups = userGroups,
             isLoading = isLoadingGroups,
@@ -1757,7 +1760,7 @@ fun ChatScreen(appState: AppState) {
                         userName = user.fullName,
                         content = forwardMessage
                     )
-                    
+
                     if (success) {
                         forwardResult = "✅ 已转发到 ${targetGroup.name}"
                         android.widget.Toast.makeText(
@@ -1784,7 +1787,7 @@ fun ChatScreen(appState: AppState) {
             result = forwardResult
         )
     }
-    
+
     // ==================== 转发到联系人对话框 ====================
     if (showForwardToContactDialog) {
         val messagesToForwardContact =
@@ -1797,7 +1800,7 @@ fun ChatScreen(appState: AppState) {
             onForward = { contact ->
                 scope.launch {
                     forwardResult = null
-                    
+
                     // 先获取或创建与联系人的私聊
                     val chatResponse = ApiClient.startPrivateChat(user.id, contact.contactId)
                     if (chatResponse.success && chatResponse.group != null) {
@@ -1809,7 +1812,7 @@ fun ChatScreen(appState: AppState) {
                             userName = user.fullName,
                             content = forwardMessage
                         )
-                        
+
                         if (success) {
                             forwardResult = "✅ 已转发给 ${contact.contactName}"
                             android.widget.Toast.makeText(
@@ -1843,7 +1846,7 @@ fun ChatScreen(appState: AppState) {
 
 /**
  * AI 消息卡片 - 专门用于 Silk AI 回复的卡片样式
- * 
+ *
  * @param isExpanded 外部控制的展开状态（由父组件管理）
  * @param onExpandChange 展开/收起状态变化回调
  */
@@ -1862,12 +1865,12 @@ fun AIMessageCardAndroid(
     val aiPreview =
         if (message.content.length > 220) message.content.take(220) + "..."
         else message.content
-    
+
     // 调试日志
     LaunchedEffect(message.id, isExpanded) {
         println("🤖 AIMessageCardAndroid: messageId=${message.id}, contentLength=${message.content.length}, isLongContent=$isLongContent, isExpanded=$isExpanded")
     }
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth(0.95f)
@@ -1898,9 +1901,9 @@ fun AIMessageCardAndroid(
                 ) {
                     Text("🤖", fontSize = 16.sp)
                 }
-                
+
                 Spacer(modifier = Modifier.width(8.dp))
-                
+
                 // 名称和时间
                 Text(
                     text = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
@@ -1909,26 +1912,26 @@ fun AIMessageCardAndroid(
                     fontWeight = FontWeight.SemiBold,
                     color = Color(0xFFC9A86C)  // 金色
                 )
-                
+
                 Spacer(modifier = Modifier.width(8.dp))
-                
+
                 Text(
                     text = timeString,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                
+
                 // 展开/折叠按钮
                 if (isLongContent && !isTransient) {
                     Spacer(modifier = Modifier.weight(1f))
-                    
+
                     Box(
                         modifier = Modifier
                             .background(
                                 color = if (effectiveExpanded) Color.Transparent else Color(0x1AC9A86C),
                                 shape = RoundedCornerShape(4.dp)
                             )
-                            .clickable { 
+                            .clickable {
                                 onExpandChange(!effectiveExpanded)
                             }
                             .padding(horizontal = 12.dp, vertical = 6.dp)
@@ -1941,17 +1944,17 @@ fun AIMessageCardAndroid(
                     }
                 }
             }
-            
+
             Spacer(modifier = Modifier.height(12.dp))
-            
+
             // 分隔线
             Divider(
                 color = Color(0xFFE8E0D4),
                 thickness = 1.dp
             )
-            
+
             Spacer(modifier = Modifier.height(12.dp))
-            
+
             // 内容区域（与 Harmony：长文折叠时底部「查看全文」，展开后底部「收起」）
             when {
                 !isLongContent || isTransient -> {
@@ -2012,18 +2015,18 @@ fun AIMessageCardAndroid(
                     }
                 }
             }
-            
+
             // 底部操作栏
             if (!isTransient) {
                 Spacer(modifier = Modifier.height(12.dp))
-                
+
                 Divider(
                     color = Color(0xFFE8E0D4).copy(alpha = 0.5f),
                     thickness = 0.5.dp
                 )
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
@@ -2037,7 +2040,7 @@ fun AIMessageCardAndroid(
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("复制", style = MaterialTheme.typography.bodySmall)
                     }
-                    
+
                     // 转发按钮
                     TextButton(
                         onClick = { onForward(message) },
@@ -2049,7 +2052,7 @@ fun AIMessageCardAndroid(
                     }
                 }
             }
-            
+
             // 临时消息状态
             if (isTransient) {
                 Spacer(modifier = Modifier.height(8.dp))
@@ -2136,7 +2139,7 @@ private fun highlightCode(code: String, language: String): AnnotatedString {
 private fun AnnotatedString.Builder.highlightLine(line: String, language: String) {
     var i = 0
     val lang = language.lowercase()
-    
+
     while (i < line.length) {
         // 跳过空格
         if (line[i].isWhitespace()) {
@@ -2144,16 +2147,16 @@ private fun AnnotatedString.Builder.highlightLine(line: String, language: String
             i++
             continue
         }
-        
+
         // 注释
-        if (line.substring(i).startsWith("//") || 
+        if (line.substring(i).startsWith("//") ||
             (lang == "python" && line[i] == '#')) {
             withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["comment"]!!)) {
                 append(line.substring(i))
             }
             return
         }
-        
+
         // 字符串字面量
         if (line[i] == '"' || line[i] == '\'' || line[i] == '`') {
             val quote = line[i]
@@ -2169,7 +2172,7 @@ private fun AnnotatedString.Builder.highlightLine(line: String, language: String
             }
             continue
         }
-        
+
         // 数字
         if (line[i].isDigit() || (line[i] == '-' && i + 1 < line.length && line[i + 1].isDigit())) {
             val start = i
@@ -2182,7 +2185,7 @@ private fun AnnotatedString.Builder.highlightLine(line: String, language: String
             }
             continue
         }
-        
+
         // 标识符（关键字、内置函数、变量）
         if (line[i].isLetter() || line[i] == '_') {
             val start = i
@@ -2219,7 +2222,7 @@ private fun AnnotatedString.Builder.highlightLine(line: String, language: String
             }
             continue
         }
-        
+
         // 操作符
         if (line[i] in setOf('+', '-', '*', '/', '=', '!', '<', '>', '&', '|', '^', '~', '?', ':')) {
             val start = i
@@ -2231,7 +2234,7 @@ private fun AnnotatedString.Builder.highlightLine(line: String, language: String
             }
             continue
         }
-        
+
         // 标点符号
         if (line[i] in setOf('(', ')', '{', '}', '[', ']', ',', ';', '.')) {
             withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["punctuation"]!!)) {
@@ -2240,7 +2243,7 @@ private fun AnnotatedString.Builder.highlightLine(line: String, language: String
             i++
             continue
         }
-        
+
         // 其他字符
         withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["variable"]!!)) {
             append(line[i])
@@ -2258,7 +2261,7 @@ private fun AnnotatedString.Builder.highlightLine(line: String, language: String
 @Composable
 fun MathFormulaAndroid(formula: String, isBlock: Boolean = false) {
     val processedFormula = remember(formula) { processMathFormula(formula) }
-    
+
     if (isBlock) {
         Card(
             modifier = Modifier
@@ -2287,26 +2290,26 @@ fun MathFormulaAndroid(formula: String, isBlock: Boolean = false) {
 
 private fun processMathFormula(formula: String): String {
     var result = formula.trim()
-    
+
     // 移除外层分隔符
     if (result.startsWith("$$") && result.endsWith("$$")) {
         result = result.removePrefix("$$").removeSuffix("$$").trim()
     } else if (result.startsWith("$") && result.endsWith("$")) {
         result = result.removePrefix("$").removeSuffix("$").trim()
     }
-    
+
     // 处理 \sqrt[n]{x} -> ⁿ√x
     val sqrtNPattern = Regex("""\\sqrt\[(\d+)\]\{([^}]+)\}""")
     result = sqrtNPattern.replace(result) { match ->
         "${match.groupValues[1]}√(${match.groupValues[2]})"
     }
-    
+
     // 处理 \sqrt{x} -> √x
     val sqrtPattern = Regex("""\\sqrt\{([^}]+)\}""")
     result = sqrtPattern.replace(result) { match ->
         "√(${match.groupValues[1]})"
     }
-    
+
     // 处理分数 \frac{a}{b} -> (a)/(b)
     val fracPattern = Regex("""\\frac\{([^{}]+)\}\{([^{}]+)\}""")
     result = fracPattern.replace(result) { match ->
@@ -2314,7 +2317,7 @@ private fun processMathFormula(formula: String): String {
         val denominator = match.groupValues[2]
         "($numerator)/($denominator)"
     }
-    
+
     // 直接替换 LaTeX 命令
     val replacements = listOf(
         // 希腊字母（小写）
@@ -2371,11 +2374,11 @@ private fun processMathFormula(formula: String): String {
         // 换行（LaTeX的 \\）
         """\\""" to "; "
     )
-    
+
     for ((latex, symbol) in replacements) {
         result = result.replace(latex, symbol)
     }
-    
+
     // Unicode 上标字符映射
     val superscriptMap = mapOf(
         '0' to '⁰', '1' to '¹', '2' to '²', '3' to '³', '4' to '⁴',
@@ -2396,7 +2399,7 @@ private fun processMathFormula(formula: String): String {
         'u' to 'ᵤ', 'v' to 'ᵥ', 'x' to 'ₓ', 'k' to 'ₖ', 'n' to 'ₙ',
         'p' to 'ₚ', 's' to 'ₛ', 't' to 'ₜ', 'j' to 'ⱼ'
     )
-    
+
     // 处理上标 ^{...}
     val upperLimitPattern = Regex("""\^\{([^}]+)\}""")
     result = upperLimitPattern.replace(result) { match ->
@@ -2404,7 +2407,7 @@ private fun processMathFormula(formula: String): String {
         val superscript = content.map { c -> superscriptMap[c] ?: c }.joinToString("")
         superscript
     }
-    
+
     // 处理下标 _{...}
     val lowerLimitPattern = Regex("""_\{([^}]+)\}""")
     result = lowerLimitPattern.replace(result) { match ->
@@ -2412,28 +2415,28 @@ private fun processMathFormula(formula: String): String {
         val subscript = content.map { c -> subscriptMap[c] ?: c }.joinToString("")
         subscript
     }
-    
+
     // 处理单字符上标 x^n
     val superSinglePattern = Regex("""\^([0-9a-zA-Z+-])""")
     result = superSinglePattern.replace(result) { match ->
         val c = match.groupValues[1][0]
         (superscriptMap[c] ?: "^$c").toString()
     }
-    
+
     // 处理单字符下标 x_n
     val subSinglePattern = Regex("""_([0-9a-zA-Z+-])""")
     result = subSinglePattern.replace(result) { match ->
         val c = match.groupValues[1][0]
         (subscriptMap[c] ?: "_$c").toString()
     }
-    
+
     // 移除未配对的花括号
     result = result.replace("{", "").replace("}", "")
-    
+
     // 清理多余的空格
     result = result.trim()
     result = result.replace(Regex("""\s+"""), " ")
-    
+
     return result
 }
 
@@ -2445,27 +2448,27 @@ private fun processMathFormula(formula: String): String {
 @Composable
 fun MarkdownTableAndroid(lines: List<String>) {
     if (lines.isEmpty()) return
-    
-    val hasHeader = lines.size > 1 && lines[1].contains("|") && 
+
+    val hasHeader = lines.size > 1 && lines[1].contains("|") &&
                     lines[1].all { it == '|' || it == '-' || it == ' ' || it == ':' }
-    
+
     val headerLine = if (hasHeader) lines[0] else ""
     val dataLines = if (hasHeader) lines.drop(2) else lines
-    
+
     val parseRow: (String) -> List<String> = { line ->
         line.split("|")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
     }
-    
+
     val headerCells = if (hasHeader) parseRow(headerLine) else emptyList()
     val rows = dataLines.map { parseRow(it) }
-    
+
     if (headerCells.isEmpty() && rows.isEmpty()) return
-    
+
     val maxCols = maxOf(headerCells.size, rows.maxOfOrNull { it.size } ?: 0)
     if (maxCols == 0) return
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -2504,7 +2507,7 @@ fun MarkdownTableAndroid(lines: List<String>) {
                 }
                 Divider(color = Color(0xFFE2E8F0), thickness = 1.dp)
             }
-            
+
             // 数据行
             rows.forEachIndexed { rowIndex, rowCells ->
                 Row(
@@ -2591,10 +2594,10 @@ fun TaskListItemAndroid(content: String, isChecked: Boolean, onToggle: (() -> Un
 
 /**
  * Markdown 内容渲染 - Android 端 (备用实现)
- * 
+ *
  * 注意: 主要渲染已改用 MarkdownWebView (WebView + KaTeX)，能正确显示数学公式
  * 此函数保留作为备用，使用简单的 Unicode 符号替换方式处理 LaTeX
- * 
+ *
  * 支持表格、数学公式、代码高亮、任务列表、链接
  */
 @Composable
@@ -2608,7 +2611,7 @@ fun MarkdownContentAndroid(content: String) {
     var tableLines = mutableListOf<String>()
     var inMathBlock = false
     var mathBlockContent = StringBuilder()
-    
+
     Column(
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -2628,7 +2631,7 @@ fun MarkdownContentAndroid(content: String) {
                         val isDollar = trimmedLine.startsWith("$$")
                         val endMarker = if (isDollar) "$$" else "\\]"
                         val startMarker = if (isDollar) "$$" else "\\["
-                        
+
                         // 检查是否是单行公式 $$...$$ 或 \[...\]
                         if (trimmedLine.endsWith(endMarker) && trimmedLine.length > startMarker.length + endMarker.length) {
                             // 单行公式
@@ -2765,7 +2768,7 @@ fun MarkdownContentAndroid(content: String) {
                 }
                 // 任务列表 - [ ] 或 [x]
                 line.trim().let { l ->
-                    l.startsWith("- [ ] ") || l.startsWith("- [x] ") || 
+                    l.startsWith("- [ ] ") || l.startsWith("- [x] ") ||
                     l.startsWith("* [ ] ") || l.startsWith("* [x] ")
                 } -> {
                     val isChecked = line.trim().contains("[x]")
@@ -2860,7 +2863,7 @@ fun MarkdownContentAndroid(content: String) {
                 }
             }
         }
-        
+
         // 处理末尾的表格
         if (inTable && tableLines.isNotEmpty()) {
             MarkdownTableAndroid(tableLines)
@@ -2874,7 +2877,7 @@ fun MarkdownContentAndroid(content: String) {
 @Composable
 fun CodeBlockAndroid(code: String, language: String) {
     val highlightedCode = remember(code, language) { highlightCode(code, language) }
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -2940,15 +2943,15 @@ fun CodeBlockAndroid(code: String, language: String) {
 @Composable
 fun InlineMarkdownAndroid(text: String, context: Context? = null) {
     val localContext = context ?: LocalContext.current
-    
+
     // 处理行内数学公式
     val processedText = remember(text) { extractInlineMath(text) }
-    
+
     val annotatedText = buildAnnotatedString {
         var remaining = processedText.first
         val mathSegments = processedText.second
         var offset = 0
-        
+
         while (remaining.isNotEmpty()) {
             // 检查当前位置是否有数学公式
             val mathAtPos = mathSegments.find { it.first == offset }
@@ -2964,7 +2967,7 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
                 remaining = if (remaining.length > mathAtPos.second.length) remaining.substring(mathAtPos.second.length) else ""
                 continue
             }
-            
+
             // 处理链接 [text](url)
             val linkStart = remaining.indexOf("[")
             if (linkStart >= 0) {
@@ -2977,10 +2980,10 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
                         if (linkStart > 0) {
                             append(remaining.substring(0, linkStart))
                         }
-                        
+
                         val linkText = remaining.substring(linkStart + 1, linkEnd)
                         val url = remaining.substring(urlStart + 1, urlEnd)
-                        
+
                         // 添加可点击的链接
                         pushStringAnnotation(tag = "URL", annotation = url)
                         withStyle(androidx.compose.ui.text.SpanStyle(
@@ -2990,13 +2993,13 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
                             append(linkText)
                         }
                         pop()
-                        
+
                         remaining = remaining.substring(urlEnd + 1)
                         continue
                     }
                 }
             }
-            
+
             // 处理自动链接 URL
             val urlPattern = Regex("""(https?://[^\s<>\[\]()]+)""")
             val urlMatch = urlPattern.find(remaining)
@@ -3005,7 +3008,7 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
                 if (matchStart > 0) {
                     append(remaining.substring(0, matchStart))
                 }
-                
+
                 val url = urlMatch.value
                 pushStringAnnotation(tag = "URL", annotation = url)
                 withStyle(androidx.compose.ui.text.SpanStyle(
@@ -3015,11 +3018,11 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
                     append(url)
                 }
                 pop()
-                
+
                 remaining = remaining.substring(urlMatch.range.last + 1)
                 continue
             }
-            
+
             // 处理粗体 **text**
             val boldStart = remaining.indexOf("**")
             if (boldStart >= 0) {
@@ -3027,7 +3030,7 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
                 if (boldStart > 0) {
                     append(remaining.substring(0, boldStart))
                 }
-                
+
                 val boldEnd = remaining.indexOf("**", boldStart + 2)
                 if (boldEnd > boldStart) {
                     val boldText = remaining.substring(boldStart + 2, boldEnd)
@@ -3038,14 +3041,14 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
                     continue
                 }
             }
-            
+
             // 处理斜体 *text*
             val italicStart = remaining.indexOf("*")
             if (italicStart >= 0 && (italicStart == 0 || remaining[italicStart - 1] != '*')) {
                 if (italicStart > 0) {
                     append(remaining.substring(0, italicStart))
                 }
-                
+
                 val italicEnd = remaining.indexOf("*", italicStart + 1)
                 if (italicEnd > italicStart && (italicEnd == remaining.length - 1 || remaining[italicEnd + 1] != '*')) {
                     val italicText = remaining.substring(italicStart + 1, italicEnd)
@@ -3056,14 +3059,14 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
                     continue
                 }
             }
-            
+
             // 处理行内代码 `code`
             val codeStart = remaining.indexOf("`")
             if (codeStart >= 0) {
                 if (codeStart > 0) {
                     append(remaining.substring(0, codeStart))
                 }
-                
+
                 val codeEnd = remaining.indexOf("`", codeStart + 1)
                 if (codeEnd > codeStart) {
                     val codeText = remaining.substring(codeStart + 1, codeEnd)
@@ -3079,13 +3082,13 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
                     continue
                 }
             }
-            
+
             // 没有特殊标记，添加剩余文本
             append(remaining)
             break
         }
     }
-    
+
     // 渲染可点击的文本
     Text(
         text = annotatedText,
@@ -3309,24 +3312,24 @@ fun MessageItem(
     val isCurrentUser = message.userId == currentUserId
     val isSystemMessage = message.type == MessageType.SYSTEM
     val isFileMessage = message.type == MessageType.FILE
-    
+
     // 是否可以撤回：只能撤回自己发送的消息，且不是 Silk 的消息，且不是系统消息
-    val canRecall = isCurrentUser && 
-                    message.userName != "Silk" && 
-                    !isSystemMessage && 
+    val canRecall = isCurrentUser &&
+                    !isAgentUserId(message.userId) &&
+                    !isSystemMessage &&
                     !isTransient
-    
+
     val timeString = formatMessageTimestamp(message.timestamp)
-    
+
     // 检测PDF下载链接
     val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
-    
+
     // ✅ 是否显示上下文菜单（非临时消息、非系统消息、文本消息）
     val canShowContextMenu = !isTransient && !isSystemMessage && message.type == MessageType.TEXT
-    
+
     // ✅ AI 消息特殊处理 - 使用专用卡片
-    val isAIMessage = message.userId == "silk_ai_agent"
-    if (isAIMessage && message.type == MessageType.TEXT && 
+    val isAIMessage = isAgentUserId(message.userId)
+    if (isAIMessage && message.type == MessageType.TEXT &&
         message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS) {
         AIMessageCardAndroid(
             message = message,
@@ -3339,14 +3342,14 @@ fun MessageItem(
         )
         return
     }
-    
+
     // ✅ 文件消息特殊处理
     if (isFileMessage) {
         val fileContent = parseAndroidFileMessageContent(message.content)
         val fileName = fileContent.fileName
         val fileSize = fileContent.fileSize
         val downloadUrl = fileContent.downloadUrl
-        
+
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = if (isCurrentUser) Alignment.End else Alignment.Start
@@ -3370,10 +3373,10 @@ fun MessageItem(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
             }
-            
+
             // 文件卡片
             Surface(
-                color = if (isCurrentUser) MaterialTheme.colorScheme.primary 
+                color = if (isCurrentUser) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.surfaceVariant,
                 shape = MaterialTheme.shapes.medium,
                 tonalElevation = 1.dp,
@@ -3395,13 +3398,13 @@ fun MessageItem(
                         fontSize = 32.sp,
                         modifier = Modifier.padding(end = 12.dp)
                     )
-                    
+
                     Column {
                         Text(
                             text = fileName,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.Medium,
-                            color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary 
+                            color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary
                                     else MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(modifier = Modifier.height(4.dp))
@@ -3414,7 +3417,7 @@ fun MessageItem(
                     }
                 }
             }
-            
+
             // 当前用户消息的时间
             if (isCurrentUser) {
                 Spacer(modifier = Modifier.height(4.dp))
@@ -3428,7 +3431,7 @@ fun MessageItem(
         }
         return
     }
-    
+
     if (isSystemMessage) {
         // 系统消息
         Box(
@@ -3462,7 +3465,7 @@ fun MessageItem(
                         modifier = Modifier.padding(horizontal = 4.dp)
                     ) {
                         // 用户名 - 可点击添加联系人（不包括 Silk）
-                        if (message.userName != "Silk" && onUserNameClick != null) {
+                        if (!isAgentUserId(message.userId) && onUserNameClick != null) {
                             Text(
                                 text = message.userName,
                                 style = MaterialTheme.typography.bodySmall.copy(
@@ -3486,9 +3489,9 @@ fun MessageItem(
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                 }
-                
+
                 var showContextMenu by remember { mutableStateOf(false) }
-                
+
                 if (showContextMenu) {
                     AlertDialog(
                         onDismissRequest = { showContextMenu = false },
@@ -3499,7 +3502,7 @@ fun MessageItem(
                                     onClick = {
                                         showContextMenu = false
                                         try {
-                                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
+                                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                                                 as android.content.ClipboardManager
                                             val clip = android.content.ClipData.newPlainText("消息", message.content)
                                             clipboard.setPrimaryClip(clip)
@@ -3508,7 +3511,7 @@ fun MessageItem(
                                     },
                                     modifier = Modifier.fillMaxWidth()
                                 ) { Text("📋 复制", color = MaterialTheme.colorScheme.onSurface) }
-                                
+
                                 TextButton(
                                     onClick = {
                                         showContextMenu = false
@@ -3518,7 +3521,7 @@ fun MessageItem(
                                     },
                                     modifier = Modifier.fillMaxWidth()
                                 ) { Text("↗ 转发", color = MaterialTheme.colorScheme.onSurface) }
-                                
+
                                 TextButton(
                                     onClick = {
                                         showContextMenu = false
@@ -3532,7 +3535,7 @@ fun MessageItem(
                                     },
                                     modifier = Modifier.fillMaxWidth()
                                 ) { Text("📤 分享", color = MaterialTheme.colorScheme.onSurface) }
-                                
+
                                 if (canRecall && !isRecalling) {
                                     TextButton(
                                         onClick = {
@@ -3542,7 +3545,7 @@ fun MessageItem(
                                         modifier = Modifier.fillMaxWidth()
                                     ) { Text("↩ 撤回", color = MaterialTheme.colorScheme.onSurface) }
                                 }
-                                
+
                                 TextButton(
                                     onClick = {
                                         showContextMenu = false
@@ -3560,7 +3563,7 @@ fun MessageItem(
                         }
                     )
                 }
-                
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = if (isCurrentUser) Arrangement.End else Arrangement.Start,
@@ -3578,7 +3581,7 @@ fun MessageItem(
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                     }
-                    
+
                     Box(
                         modifier = if (!isTransient) {
                             Modifier
@@ -3619,7 +3622,7 @@ fun MessageItem(
                         // ✅ 根据category设置背景
                         message.category == com.silk.shared.models.MessageCategory.FINAL_REPORT -> {
                             // 最终报告：正常颜色，高亮
-                            if (isCurrentUser) MaterialTheme.colorScheme.primary 
+                            if (isCurrentUser) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.surfaceVariant
                         }
                         message.category == com.silk.shared.models.MessageCategory.STEP_PROCESS ||
@@ -3647,7 +3650,7 @@ fun MessageItem(
                         val lines = message.content.split("\n")
                         var pdfUrl: String? = null
                         var fileName: String? = null
-                        
+
                         // 查找PDF路径和文件名
                         lines.forEach { line ->
                             val trimmedLine = line.trim()
@@ -3662,7 +3665,7 @@ fun MessageItem(
                                 }
                             }
                         }
-                        
+
                         // 显示消息内容（过滤掉路径行）
                         lines.forEach { line ->
                             val trimmedLine = line.trim()
@@ -3671,18 +3674,18 @@ fun MessageItem(
                                     text = line,
                                     style = MaterialTheme.typography.bodySmall,  // ✅ 统一字体大小
                                     // ✅ PDF消息是FINAL_REPORT，高亮显示
-                                    color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary 
+                                    color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary
                                             else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
-                        
+
                         // 显示下载按钮
                         if (pdfUrl != null) {
                             val fullUrl = "${BackendUrlHolder.getBaseUrl()}$pdfUrl"
-                            
+
                             Spacer(modifier = Modifier.height(8.dp))
-                            
+
                             Button(
                                 onClick = {
                                     println("📥 点击下载PDF: $fileName")
@@ -3696,13 +3699,13 @@ fun MessageItem(
                             ) {
                                 Text("📥 下载PDF报告")
                             }
-                            
+
                             if (fileName != null) {
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     text = "文件名：$fileName",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f) 
+                                    color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
                                             else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                                 )
                             }
@@ -3749,21 +3752,21 @@ fun MessageItem(
                             }
                         )
                     }
-                    
+
                     // 显示步骤信息（临时消息）
                     if (isTransient && message.currentStep != null && message.totalSteps != null) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = "步骤 ${message.currentStep}/${message.totalSteps}",
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f) 
+                            color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f)
                                     else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                         )
                     }
                 }
                 }
             }  // ✅ Box 结束（长按手势容器）
-                    
+
                     // 选中勾选图标（右侧 - 自己的消息）
                     if (isSelected && isCurrentUser) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -3777,7 +3780,7 @@ fun MessageItem(
                         }
                     }
                 }  // ✅ Row 结束（选中图标容器）
-            
+
             if (isCurrentUser) {
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
@@ -3797,14 +3800,14 @@ fun InvitationDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("邀请成员") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("分享以下信息邀请其他人加入群组：")
-                
+
                 Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant,
                     shape = MaterialTheme.shapes.small
@@ -3823,9 +3826,9 @@ fun InvitationDialog(
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = FontWeight.Bold
                         )
-                        
+
                         Divider()
-                        
+
                         Text(
                             text = "邀请码",
                             style = MaterialTheme.typography.labelSmall,
@@ -3846,17 +3849,17 @@ fun InvitationDialog(
                 onClick = {
                     val shareText = """
                         🎀 加入我的 Silk 群组！
-                        
+
                         群组名称：${group.name}
                         邀请码：${group.invitationCode}
-                        
+
                         📱 下载/访问 Silk：
                         • Android APK: ${BackendUrlHolder.getBaseUrl()}/api/files/download-apk
                         • Web 网页版: ${BackendUrlHolder.getBaseUrl().substringBeforeLast(":")}:${BuildConfig.FRONTEND_PORT}
-                        
+
                         打开 Silk，点击"加入群组"，输入邀请码即可加入！
                     """.trimIndent()
-                    
+
                     val intent = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
                         putExtra(Intent.EXTRA_TEXT, shareText)
@@ -3948,7 +3951,7 @@ fun FolderExplorerDialog(
                         }
                     }
                 }
-                
+
                 // 内容列表
                 if (isLoading) {
                     Box(
@@ -4008,7 +4011,7 @@ fun FolderExplorerDialog(
                                     onClick = { onUrlClick(url) }
                                 )
                             }
-                            
+
                             // 分隔线
                             if (files.isNotEmpty()) {
                                 item {
@@ -4016,7 +4019,7 @@ fun FolderExplorerDialog(
                                 }
                             }
                         }
-                        
+
                         // 2️⃣ 然后显示文件列表
                         if (files.isNotEmpty()) {
                             item {
@@ -4114,14 +4117,14 @@ fun FileItemCard(
         file.name.endsWith(".pdf", ignoreCase = true) -> "📄"
         file.name.endsWith(".doc", ignoreCase = true) || file.name.endsWith(".docx", ignoreCase = true) -> "📝"
         file.name.endsWith(".xls", ignoreCase = true) || file.name.endsWith(".xlsx", ignoreCase = true) -> "📊"
-        file.name.endsWith(".jpg", ignoreCase = true) || file.name.endsWith(".png", ignoreCase = true) || 
+        file.name.endsWith(".jpg", ignoreCase = true) || file.name.endsWith(".png", ignoreCase = true) ||
         file.name.endsWith(".gif", ignoreCase = true) -> "🖼️"
         file.name.endsWith(".mp3", ignoreCase = true) || file.name.endsWith(".wav", ignoreCase = true) -> "🎵"
         file.name.endsWith(".mp4", ignoreCase = true) || file.name.endsWith(".avi", ignoreCase = true) -> "🎬"
         file.name.endsWith(".zip", ignoreCase = true) || file.name.endsWith(".rar", ignoreCase = true) -> "📦"
         else -> "📎"
     }
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -4208,7 +4211,7 @@ suspend fun uploadFile(
         val boundary = "===" + System.currentTimeMillis() + "==="
         val url = URL("${BackendUrlHolder.getBaseUrl()}/api/files/upload")
         val connection = AndroidHttpCompat.openConnection(url)
-        
+
         connection.requestMethod = "POST"
         connection.doOutput = true
         connection.doInput = true
@@ -4217,29 +4220,29 @@ suspend fun uploadFile(
         connection.setRequestProperty("Connection", "Keep-Alive")
         connection.connectTimeout = 30000
         connection.readTimeout = 60000
-        
+
         val outputStream = connection.outputStream
         val writer = java.io.PrintWriter(java.io.OutputStreamWriter(outputStream, "UTF-8"), true)
-        
+
         // 写入 sessionId 字段
         writer.append("--$boundary").append("\r\n")
         writer.append("Content-Disposition: form-data; name=\"sessionId\"").append("\r\n")
         writer.append("\r\n")
         writer.append(sessionId).append("\r\n")
-        
+
         // 写入 userId 字段
         writer.append("--$boundary").append("\r\n")
         writer.append("Content-Disposition: form-data; name=\"userId\"").append("\r\n")
         writer.append("\r\n")
         writer.append(userId).append("\r\n")
-        
+
         // 写入文件部分
         writer.append("--$boundary").append("\r\n")
         writer.append("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"").append("\r\n")
         writer.append("Content-Type: application/octet-stream").append("\r\n")
         writer.append("\r\n")
         writer.flush()
-        
+
         // 写入文件内容
         val buffer = ByteArray(4096)
         var bytesRead: Int
@@ -4251,16 +4254,16 @@ suspend fun uploadFile(
         }
         outputStream.flush()
         inputStream.close()
-        
+
         // 写入结束边界
         writer.append("\r\n")
         writer.append("--$boundary--").append("\r\n")
         writer.flush()
         writer.close()
-        
+
         val responseCode = connection.responseCode
         connection.disconnect()
-        
+
         responseCode == 200 || responseCode == 201
     } catch (e: Exception) {
         e.printStackTrace()
@@ -4286,7 +4289,7 @@ suspend fun loadGroupFilesAndUrls(groupId: String): FilesAndUrls = withContext(D
         connection.requestMethod = "GET"
         connection.connectTimeout = 10000
         connection.readTimeout = 10000
-        
+
         if (connection.responseCode == 200) {
             val response = connection.inputStream.bufferedReader().readText()
             // 解析 JSON
@@ -4358,7 +4361,7 @@ fun AddMemberDialog(
     // 过滤出不在群组中的联系人
     val memberIds = groupMembers.map { it.id }.toSet()
     val availableContacts = contacts.filter { it.contactId !in memberIds }
-    
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
@@ -4378,30 +4381,30 @@ fun AddMemberDialog(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
-                
+
                 // 结果提示
                 result?.let {
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = 12.dp),
-                        color = if (it.startsWith("✅")) 
-                            Color(0xFFE8F5E9) 
-                        else 
+                        color = if (it.startsWith("✅"))
+                            Color(0xFFE8F5E9)
+                        else
                             Color(0xFFFFEBEE),
                         shape = MaterialTheme.shapes.small
                     ) {
                         Text(
                             text = it,
                             modifier = Modifier.padding(12.dp),
-                            color = if (it.startsWith("✅")) 
-                                Color(0xFF2E7D32) 
-                            else 
+                            color = if (it.startsWith("✅"))
+                                Color(0xFF2E7D32)
+                            else
                                 Color(0xFFC62828)
                         )
                     }
                 }
-                
+
                 if (isLoading) {
                     Box(
                         modifier = Modifier
@@ -4452,7 +4455,7 @@ fun AddMemberDialog(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-                                    
+
                                     Button(
                                         onClick = { onAddMember(contact) },
                                         colors = ButtonDefaults.buttonColors(
@@ -4466,7 +4469,7 @@ fun AddMemberDialog(
                         }
                     }
                 }
-                
+
                 // 关闭按钮
                 TextButton(
                     onClick = onDismiss,
@@ -4495,7 +4498,7 @@ fun MembersDialog(
     onDismiss: () -> Unit
 ) {
     val contactIds = contacts.map { it.contactId }.toSet()
-    
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
@@ -4515,7 +4518,7 @@ fun MembersDialog(
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(bottom = 16.dp)
                 )
-                
+
                 if (isLoading) {
                     Box(
                         modifier = Modifier
@@ -4543,8 +4546,8 @@ fun MembersDialog(
                         items(members) { member ->
                             val isCurrentUser = member.id == currentUserId
                             val isContact = member.id in contactIds
-                            val isSilkAI = member.id == "silk_ai_agent"
-                            
+                            val isSilkAI = isAgentUserId(member.id)
+
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -4597,7 +4600,7 @@ fun MembersDialog(
                                                 )
                                             }
                                         }
-                                        
+
                                         // 名字和状态
                                         Column {
                                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -4626,7 +4629,7 @@ fun MembersDialog(
                                             )
                                         }
                                     }
-                                    
+
                                     // 右侧操作提示
                                     if (!isCurrentUser && !isSilkAI) {
                                         Text(
@@ -4639,7 +4642,7 @@ fun MembersDialog(
                         }
                     }
                 }
-                
+
                 // 关闭按钮
                 TextButton(
                     onClick = onDismiss,
@@ -4699,9 +4702,9 @@ fun ForwardToGroupDialog(
                         color = SilkColors.textSecondary
                     )
                 }
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 // 预览选中的消息
                 Surface(
                     modifier = Modifier
@@ -4732,9 +4735,9 @@ fun ForwardToGroupDialog(
                         }
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.height(12.dp))
-                
+
                 // 结果提示
                 result?.let {
                     Text(
@@ -4744,7 +4747,7 @@ fun ForwardToGroupDialog(
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
                 }
-                
+
                 // 群组列表
                 if (isLoading) {
                     Box(
@@ -4802,7 +4805,7 @@ fun ForwardToGroupDialog(
                         }
                     }
                 }
-                
+
                 // 取消按钮
                 TextButton(
                     onClick = onDismiss,
@@ -4862,9 +4865,9 @@ fun ForwardToContactDialog(
                         color = SilkColors.textSecondary
                     )
                 }
-                
+
                 Spacer(modifier = Modifier.height(8.dp))
-                
+
                 // 预览选中的消息
                 Surface(
                     modifier = Modifier
@@ -4895,9 +4898,9 @@ fun ForwardToContactDialog(
                         }
                     }
                 }
-                
+
                 Spacer(modifier = Modifier.height(12.dp))
-                
+
                 // 结果提示
                 result?.let {
                     Text(
@@ -4907,7 +4910,7 @@ fun ForwardToContactDialog(
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
                 }
-                
+
                 // 联系人列表
                 if (isLoading) {
                     Box(
@@ -4988,7 +4991,7 @@ fun ForwardToContactDialog(
                         }
                     }
                 }
-                
+
                 // 取消按钮
                 TextButton(
                     onClick = onDismiss,
@@ -5013,7 +5016,7 @@ private fun extractInlineMath(text: String): Pair<String, List<Pair<Int, String>
     val result = StringBuilder()
     var i = 0
     var offset = 0
-    
+
     while (i < text.length) {
         // 检查是否是 \(...\) 格式的行内公式
         if (i + 1 < text.length && text[i] == '\\' && text[i + 1] == '(') {
@@ -5062,6 +5065,6 @@ private fun extractInlineMath(text: String): Pair<String, List<Pair<Int, String>
             i++
         }
     }
-    
+
     return Pair(result.toString(), mathSegments)
 }

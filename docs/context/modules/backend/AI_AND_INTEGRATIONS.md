@@ -40,9 +40,10 @@
 
 ## Claude Code Mode
 
-- `claudecode/ClaudeCodeManager.kt` 维护 per-user-per-group CC 状态
-- `BridgeRegistry.kt` 管理 backend 与外部 bridge 的 WebSocket
-- 聊天消息在 `ChatServer.broadcast()` 中先被 CC 模式拦截，再决定是否进入 Silk AI 主链
+- 入口面：`agents/core/AgentRuntime.kt`（`WebSocketConfig` 唯一调用点）
+- 执行面：`cc_bridge/acp_adapter.py`（外部进程）通过 ACP 协议连接 `/agent-bridge` 端点；`agents/acp/AcpRegistry.kt` 管理连接
+- ACP 不可用时直接报"未连接"，无 fallback
+- 详见 `integrations/CLAUDE_CODE_AND_BRIDGES.md`
 
 ## ASR
 
@@ -54,5 +55,5 @@
 - 改 tool schema / tool permission：更新后端测试
 - 改 AnthropicClient 格式转换：同步验证 convertMessage / convertTool 双向兼容
 - 改 grep searchContext：确认 accessibleSessionIds 隔离不被破坏
-- 改 CC 指令路由：同时查看 `cc_bridge/`
+- 改 Agent 指令路由：看 `agents/core/CommandRouter.kt` + adapter `cc_bridge/acp_adapter.py` / `codex_bridge/codex_adapter.py`
 - 改 ASR 协议：同步看 Web/Android/Harmony 调用端

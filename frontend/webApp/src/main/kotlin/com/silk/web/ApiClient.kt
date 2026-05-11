@@ -171,6 +171,13 @@ data class WorkflowItem(
     val updatedAt: Long = 0,
 )
 
+@Serializable
+data class AgentInfo(
+    val agentType: String,
+    val displayName: String,
+    val connected: Boolean,
+)
+
 // ==================== Knowledge Base models ====================
 
 @Serializable
@@ -220,7 +227,7 @@ object ApiClient {
         }
     private val jsonParser = Json { ignoreUnknownKeys = true }
 
-    
+
     suspend fun register(
         loginName: String,
         fullName: String,
@@ -236,7 +243,7 @@ object ApiClient {
             AuthResponse(false, "网络错误: ${e.message}")
         }
     }
-    
+
     suspend fun login(loginName: String, password: String): AuthResponse {
         return try {
             val body = """{"loginName":"$loginName","password":"$password"}"""
@@ -247,7 +254,7 @@ object ApiClient {
             AuthResponse(false, "网络错误")
         }
     }
-    
+
     suspend fun validateUser(userId: String): AuthResponse {
         return try {
             val response = get("/auth/validate/$userId")
@@ -256,7 +263,7 @@ object ApiClient {
             AuthResponse(false, "验证失败")
         }
     }
-    
+
     suspend fun getUserGroups(userId: String): GroupResponse {
         return try {
             val response = get("/groups/user/$userId")
@@ -266,7 +273,7 @@ object ApiClient {
             GroupResponse(false, "网络错误")
         }
     }
-    
+
     /**
      * 获取用户所有群组的未读消息数
      */
@@ -279,7 +286,7 @@ object ApiClient {
             UnreadCountResponse(false)
         }
     }
-    
+
     /**
      * 标记群组消息为已读
      */
@@ -293,7 +300,7 @@ object ApiClient {
             false
         }
     }
-    
+
     suspend fun createGroup(userId: String, groupName: String): GroupResponse {
         return try {
             val body = """{"userId":"$userId","groupName":"$groupName"}"""
@@ -304,7 +311,7 @@ object ApiClient {
             GroupResponse(false, "网络错误")
         }
     }
-    
+
     suspend fun joinGroup(userId: String, invitationCode: String): GroupResponse {
         return try {
             val body = """{"userId":"$userId","invitationCode":"$invitationCode"}"""
@@ -315,9 +322,9 @@ object ApiClient {
             GroupResponse(false, "网络错误")
         }
     }
-    
+
     // ==================== 联系人相关 API ====================
-    
+
     /**
      * 获取联系人列表（包含待处理请求）
      */
@@ -330,7 +337,7 @@ object ApiClient {
             ContactResponse(false, "网络错误")
         }
     }
-    
+
     /**
      * 通过电话号码搜索用户
      */
@@ -343,7 +350,7 @@ object ApiClient {
             UserSearchResult(false, message = "网络错误")
         }
     }
-    
+
     /**
      * 发送联系人请求（通过电话号码）
      */
@@ -357,7 +364,7 @@ object ApiClient {
             ContactResponse(false, "网络错误")
         }
     }
-    
+
     /**
      * 发送联系人请求（通过用户ID）
      */
@@ -371,7 +378,7 @@ object ApiClient {
             ContactResponse(false, "网络错误")
         }
     }
-    
+
     /**
      * 处理联系人请求（接受/拒绝）
      */
@@ -385,7 +392,7 @@ object ApiClient {
             ContactResponse(false, "网络错误")
         }
     }
-    
+
     /**
      * 开始/获取私聊会话
      */
@@ -399,7 +406,7 @@ object ApiClient {
             PrivateChatResponse(false, "网络错误")
         }
     }
-    
+
     /**
      * 开始/获取与 Silk AI 的专属私聊会话
      */
@@ -413,7 +420,7 @@ object ApiClient {
             PrivateChatResponse(false, "网络错误")
         }
     }
-    
+
     /**
      * 获取群组成员列表
      */
@@ -426,7 +433,7 @@ object ApiClient {
             GroupMembersResponse(false, emptyList())
         }
     }
-    
+
     /**
      * 添加成员到群组
      */
@@ -440,7 +447,7 @@ object ApiClient {
             AddMemberResponse(false, "网络错误")
         }
     }
-    
+
     /**
      * 退出群组
      */
@@ -454,7 +461,7 @@ object ApiClient {
             LeaveGroupResponse(false, "网络错误")
         }
     }
-    
+
 
     /**
      * 删除群组（仅群主可操作）
@@ -593,9 +600,9 @@ object ApiClient {
             CcStateResponse(success = false)
         }
     }
-    
+
     // ==================== 消息撤回相关 API ====================
-    
+
     /**
      * 撤回消息
      * @param groupId 群组ID
@@ -634,7 +641,7 @@ object ApiClient {
             SimpleResponse(false, "网络错误")
         }
     }
-    
+
     suspend fun deleteMessage(groupId: String, messageId: String, userId: String): SimpleResponse {
         return try {
             val body = """{"groupId":"$groupId","messageId":"$messageId","userId":"$userId"}"""
@@ -655,21 +662,21 @@ object ApiClient {
             ExportMarkdownResponse(false, "网络错误: ${e.message}")
         }
     }
-    
+
     private suspend fun post(endpoint: String, jsonBody: String): String {
         val headers = org.w3c.fetch.Headers()
         headers.append("Content-Type", "application/json")
-        
+
         val init = RequestInit(
             method = "POST",
             headers = headers,
             body = jsonBody
         )
-        
+
         val response = window.fetch("$BASE_URL$endpoint", init).await()
         return response.text().await()
     }
-    
+
     private suspend fun put(endpoint: String, jsonBody: String): String {
         val url = "$BASE_URL$endpoint"
         val response = window.fetch(url, RequestInit(
@@ -677,24 +684,24 @@ object ApiClient {
             headers = json("Content-Type" to "application/json"),
             body = jsonBody
         )).await()
-        
+
         if (!response.ok) {
             throw Exception("HTTP ${response.status}: ${response.statusText}")
         }
-        
+
         return response.text().await()
     }
-    
+
     private suspend fun delete(endpoint: String, jsonBody: String): String {
         val headers = org.w3c.fetch.Headers()
         headers.append("Content-Type", "application/json")
-        
+
         val init = RequestInit(
             method = "DELETE",
             headers = headers,
             body = jsonBody
         )
-        
+
         val response = window.fetch("$BASE_URL$endpoint", init).await()
         return response.text().await()
     }
@@ -719,6 +726,17 @@ object ApiClient {
         }
     }
 
+    /** 列出可作为 workflow agent 的选项（含 bridge agent 与 silk_chat）。失败时返回空列表。 */
+    suspend fun listAgents(userId: String): List<AgentInfo> {
+        return try {
+            val response = get("/api/agents?userId=${encodeUri(userId)}")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取 agent 列表失败:", e)
+            emptyList()
+        }
+    }
+
     /** 创建工作流的结果。Ok 携带后端落库后的 workflow；Err 携带可展示给用户的错误消息。 */
     sealed class CreateWorkflowResult {
         data class Ok(val workflow: WorkflowItem) : CreateWorkflowResult()
@@ -730,6 +748,7 @@ object ApiClient {
         description: String,
         userId: String,
         initialDir: String = "",
+        agentType: String = "claude_code",
     ): CreateWorkflowResult {
         return try {
             // 构造 JSON，使用 JsonObject 安全编码避免手动转义
@@ -739,6 +758,9 @@ object ApiClient {
                 put("description", kotlinx.serialization.json.JsonPrimitive(description))
                 if (initialDir.isNotBlank()) {
                     put("initialDir", kotlinx.serialization.json.JsonPrimitive(initialDir))
+                }
+                if (agentType.isNotBlank()) {
+                    put("agentType", kotlinx.serialization.json.JsonPrimitive(agentType))
                 }
             }
             val response = post("/api/workflows", obj.toString())
