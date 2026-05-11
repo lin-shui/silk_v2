@@ -2,7 +2,7 @@ name: Auto Enable CI Branch Merge
 
 on:
   pull_request_target:
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, edited]
 
 permissions:
   contents: read
@@ -24,23 +24,34 @@ jobs:
               return;
             }
 
-            try {
-              await github.graphql(
-                `mutation EnableAutoMerge($pullRequestId: ID!) {
-                  enablePullRequestAutoMerge(
-                    input: { pullRequestId: $pullRequestId, mergeMethod: MERGE }
-                  ) {
-                    clientMutationId
-                  }
-                }`,
-                { pullRequestId: pr.node_id }
-              );
-              core.info(`Enabled auto-merge (MERGE) for PR #${pr.number}.`);
-            } catch (error) {
-              const message = (error && error.message) || "";
-              if (/already enabled/i.test(message)) {
-                core.info(`Auto-merge already enabled for PR #${pr.number}.`);
-                return;
+            const mutation = `mutation EnableAutoMerge($pullRequestId: ID!) {
+              enablePullRequestAutoMerge(
+                input: { pullRequestId: $pullRequestId, mergeMethod: MERGE }
+              ) {
+                clientMutationId
               }
-              throw error;
+            }`;
+
+            const maxAttempts = 4;
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+              try {
+                await github.graphql(mutation, { pullRequestId: pr.node_id });
+                core.info(`Enabled auto-merge (MERGE) for PR #${pr.number}.`);
+                return;
+              } catch (error) {
+                const message = (error && error.message) || "";
+                if (/already enabled/i.test(message)) {
+                  core.info(`Auto-merge already enabled for PR #${pr.number}.`);
+                  return;
+                }
+
+                const retriable =
+                  /Head branch was modified|Resource not accessible by integration|INTERNAL|Something went wrong/i.test(message);
+                if (retriable && attempt < maxAttempts) {
+                  core.warning(`Attempt ${attempt} failed: ${message}`);
+                  await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
+                  continue;
+                }
+                throw error;
+              }
             }
