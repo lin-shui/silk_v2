@@ -1,0 +1,64 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>CyclomaticComplexMethod:GroupListScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun GroupListScreen(appState: AppState)</ID>
+    <ID>CyclomaticComplexMethod:LoginScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun LoginScreen(appState: AppState)</ID>
+    <ID>CyclomaticComplexMethod:Main.kt$@Composable fun MessageBubble( message: Message, scope: kotlinx.coroutines.CoroutineScope, currentUserId: String, isTransient: Boolean = false )</ID>
+    <ID>CyclomaticComplexMethod:Main.kt$suspend fun downloadRemoteFile( downloadUrl: String, defaultFileName: String, saveDialogTitle: String, requiredExtension: String? = null ): DownloadResult</ID>
+    <ID>CyclomaticComplexMethod:SettingsScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun SettingsScreen(appState: AppState)</ID>
+    <ID>NestedBlockDepth:InvitationDialog.kt$private fun shareViaSMS(text: String): Boolean</ID>
+    <ID>NestedBlockDepth:Main.kt$suspend fun downloadRemoteFile( downloadUrl: String, defaultFileName: String, saveDialogTitle: String, requiredExtension: String? = null ): DownloadResult</ID>
+    <ID>NestedBlockDepth:MessageContextMenu.kt$fun forwardToSMS(text: String)</ID>
+    <ID>PrintStackTrace:Main.kt$e</ID>
+    <ID>SwallowedException:Main.kt$e2: Exception</ID>
+    <ID>SwallowedException:Main.kt$e: Exception</ID>
+    <ID>SwallowedException:MessageContextMenu.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ApiClient.kt$ApiClient$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:AppState.kt$AppState$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:GroupListScreen.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:InvitationDialog.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:LoginScreen.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:Main.kt$e2: Exception</ID>
+    <ID>TooGenericExceptionCaught:Main.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:MessageContextMenu.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:SettingsScreen.kt$e: Exception</ID>
+    <ID>UnusedParameter:MessageContextMenu.kt$onCopy: () -&gt; Unit = {}</ID>
+    <ID>UnusedParameter:MessageContextMenu.kt$onForwardToSMS: () -&gt; Unit = {}</ID>
+    <ID>UnusedParameter:MessageContextMenu.kt$onForwardToWeChat: () -&gt; Unit = {}</ID>
+    <ID>UnusedPrivateMember:InvitationDialog.kt$private fun shareToWeChat(text: String): Boolean</ID>
+    <ID>UnusedPrivateMember:InvitationDialog.kt$private fun shareViaSMS(text: String): Boolean</ID>
+    <ID>UnusedPrivateProperty:GroupListScreen.kt$var isDeleteMode by remember { mutableStateOf(false) }</ID>
+    <ID>UnusedPrivateProperty:GroupListScreen.kt$var isDeleting by remember { mutableStateOf(false) }</ID>
+    <ID>UnusedPrivateProperty:GroupListScreen.kt$var selectedGroups by remember { mutableStateOf&lt;Set&lt;String&gt;&gt;(emptySet()) }</ID>
+    <ID>UnusedPrivateProperty:MessageContextMenu.kt$var showActions by remember { mutableStateOf(false) }</ID>
+    <ID>WildcardImport:ApiClient.kt$import com.silk.shared.models.*</ID>
+    <ID>WildcardImport:AppState.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.material.icons.filled.*</ID>
+    <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:GroupListScreen.kt$import com.silk.shared.models.*</ID>
+    <ID>WildcardImport:InvitationDialog.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:InvitationDialog.kt$import androidx.compose.material.icons.filled.*</ID>
+    <ID>WildcardImport:InvitationDialog.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:InvitationDialog.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:LoginScreen.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:LoginScreen.kt$import androidx.compose.material.icons.filled.*</ID>
+    <ID>WildcardImport:LoginScreen.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:LoginScreen.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:Main.kt$import androidx.compose.animation.core.*</ID>
+    <ID>WildcardImport:Main.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:Main.kt$import androidx.compose.material.icons.filled.*</ID>
+    <ID>WildcardImport:Main.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:Main.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:MessageContextMenu.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:MessageContextMenu.kt$import androidx.compose.material.icons.filled.*</ID>
+    <ID>WildcardImport:MessageContextMenu.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:MessageContextMenu.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.foundation.layout.*</ID>
+    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.material3.*</ID>
+    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.runtime.*</ID>
+    <ID>WildcardImport:SettingsScreen.kt$import com.silk.shared.models.*</ID>
+  </CurrentIssues>
+</SmellBaseline>
