@@ -258,6 +258,83 @@ class AgentRuntimeAcpIntegrationTest {
         assertTrue(messages.any { it.content.contains("拒绝") })
     }
 
+    @Test
+    fun `two groups sharing same AcpClient receive their own updates`() = runTest {
+        val transport = InMemoryAcpTransport()
+        val client = AcpClient(transport, scope = backgroundScope)
+        AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
+
+        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        AgentRuntime.autoActivateForWorkflow("u1", "g2", "claude-code")
+
+        val messagesG1 = mutableListOf<Message>()
+        val messagesG2 = mutableListOf<Message>()
+
+        // Start prompt for group 1
+        val d1 = async {
+            AgentRuntime.handleIfActive("u1", "g1", "hello g1", "Alice") { messagesG1.add(it) }
+        }
+
+        // sessionNew for g1
+        val newReq1 = json.parseToJsonElement(transport.readClientSent()).jsonObject
+        assertEquals("session/new", newReq1["method"]!!.jsonPrimitive.content)
+        val newId1 = newReq1["id"]!!.jsonPrimitive.long
+        transport.pushFromServer("""{"jsonrpc":"2.0","id":$newId1,"result":{"sessionId":"sess-g1"}}""")
+
+        // sessionPrompt for g1 — don't respond yet (keep it running)
+        val promptReq1 = json.parseToJsonElement(transport.readClientSent()).jsonObject
+        assertEquals("session/prompt", promptReq1["method"]!!.jsonPrimitive.content)
+        val promptId1 = promptReq1["id"]!!.jsonPrimitive.long
+
+        // Start prompt for group 2 (while g1 is still running)
+        val d2 = async {
+            AgentRuntime.handleIfActive("u1", "g2", "hello g2", "Alice") { messagesG2.add(it) }
+        }
+
+        // sessionNew for g2
+        val newReq2 = json.parseToJsonElement(transport.readClientSent()).jsonObject
+        assertEquals("session/new", newReq2["method"]!!.jsonPrimitive.content)
+        val newId2 = newReq2["id"]!!.jsonPrimitive.long
+        transport.pushFromServer("""{"jsonrpc":"2.0","id":$newId2,"result":{"sessionId":"sess-g2"}}""")
+
+        // sessionPrompt for g2
+        val promptReq2 = json.parseToJsonElement(transport.readClientSent()).jsonObject
+        assertEquals("session/prompt", promptReq2["method"]!!.jsonPrimitive.content)
+        val promptId2 = promptReq2["id"]!!.jsonPrimitive.long
+
+        // Push session/update for g1 — should arrive in messagesG1 only
+        transport.pushFromServer(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-g1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"reply to g1"}}}}"""
+        )
+        kotlinx.coroutines.yield()
+        // The broadcastFn is dispatched on Dispatchers.IO (real threads), so we must wait real time
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { kotlinx.coroutines.delay(100) }
+
+        // Push session/update for g2 — should arrive in messagesG2 only
+        transport.pushFromServer(
+            """{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"sess-g2","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"reply to g2"}}}}"""
+        )
+        kotlinx.coroutines.yield()
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { kotlinx.coroutines.delay(100) }
+
+        // Complete both prompts
+        transport.pushFromServer("""{"jsonrpc":"2.0","id":$promptId1,"result":{"stopReason":"end_turn"}}""")
+        transport.pushFromServer("""{"jsonrpc":"2.0","id":$promptId2,"result":{"stopReason":"end_turn"}}""")
+
+        d1.await()
+        d2.await()
+        awaitSessionIdle("u1", "g1")
+        awaitSessionIdle("u1", "g2")
+
+        // Verify: g1 messages contain "reply to g1" but not "reply to g2"
+        assertTrue(messagesG1.any { it.content.contains("reply to g1") }, "g1 should receive its own update")
+        assertFalse(messagesG1.any { it.content.contains("reply to g2") }, "g1 should NOT receive g2's update")
+
+        // Verify: g2 messages contain "reply to g2" but not "reply to g1"
+        assertTrue(messagesG2.any { it.content.contains("reply to g2") }, "g2 should receive its own update")
+        assertFalse(messagesG2.any { it.content.contains("reply to g1") }, "g2 should NOT receive g1's update")
+    }
+
     /** Wait for the background prompt coroutine to complete (session.running becomes false). */
     private suspend fun awaitSessionIdle(userId: String, groupId: String, timeoutMs: Long = 5000) {
         val deadline = System.currentTimeMillis() + timeoutMs
