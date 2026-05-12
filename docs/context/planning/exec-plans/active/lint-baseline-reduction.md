@@ -56,7 +56,7 @@
 
 - Slice 1: 已完成。清理 `frontend/shared` 的 `WildcardImport` baseline，跑 `./gradlew silkLint` 和 shared 相关编译。
 - Slice 2: 已完成。清理 backend 入口层的 `WildcardImport`，覆盖 `Application.kt`、`Routing.kt`、`routes/*`，跑 `./gradlew :backend:test`。
-- Slice 3: 清理 `frontend/webApp` 纯 import 类问题，跑 `./gradlew :frontend:webApp:nodeTest`。
+- Slice 3: 已完成。清理 `frontend/webApp` 纯 import 类问题，跑 `./gradlew :frontend:webApp:nodeTest`。
 - Slice 4: 处理 `frontend/shared` 的明确私有未使用项。
 - Slice 5: 专门评估 shared WebSocket 的异常处理规则，避免吞掉取消异常或隐藏连接失败。
 
@@ -82,6 +82,18 @@
   - `./gradlew :backend:clean :backend:test`
   - `./gradlew :backend:compileKotlin`
   - `./gradlew :backend:test`
+  - `git diff --check`
+
+### 2026-05-12 Slice 3
+
+- 清理 `frontend/webApp` 的 37 条 `WildcardImport` baseline，覆盖 Web 主源码与 `MainTest.kt`。
+- `config/lint/detekt/frontend-webApp.xml` 从 91 条降到 54 条；`frontend/webApp` 当前不再保留 `WildcardImport` baseline。
+- 没有运行全量 baseline 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次 `./gradlew :frontend:webApp:nodeTest` 暴露少量显式 import 缺口，补齐后验证通过。
+- 已验证：
+  - `./gradlew :frontend:webApp:detekt --no-daemon --stacktrace`
+  - `./gradlew :frontend:webApp:nodeTest --no-daemon --stacktrace`
+  - `./gradlew silkLint --no-daemon --stacktrace`
   - `git diff --check`
 
 ## Handoff Notes
