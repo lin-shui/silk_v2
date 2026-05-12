@@ -86,6 +86,22 @@
 - Maintenance:
   - `./gradlew silkLintBaseline` regenerates `config/lint/detekt/` baselines for intentionally accepted existing findings
 
+## CC Bridge (Python)
+
+- Command: `python3 -m pytest cc_bridge/tests/ -v`
+- Primary tests:
+  - `cc_bridge/tests/test_cc_session_index.py`
+
+## Codex Bridge (Python)
+
+- Command: `python3 -m pytest codex_bridge/tests/ -v`
+- Primary tests:
+  - `codex_bridge/tests/test_codex_session_index.py`
+  - `codex_bridge/tests/test_codex_session_load.py`
+  - `codex_bridge/tests/test_codex_dispatcher.py`
+  - `codex_bridge/tests/test_codex_executor.py`
+  - `codex_bridge/tests/test_fs_listing.py`
+
 ## When Payloads Change
 
 同时触发：

@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import platform
+import shlex
 import shutil
 import time
 from typing import Any, Callable, Coroutine
@@ -757,7 +758,7 @@ class Executor:
         if system == "Darwin":
             return ["script", "-q", "/dev/null"] + claude_args
         # Linux and others
-        shell_cmd = " ".join(_shell_quote(a) for a in claude_args)
+        shell_cmd = " ".join(shlex.quote(a) for a in claude_args)
         return ["script", "-q", "-c", shell_cmd, "/dev/null"]
 
     async def _timeout_watchdog(self, process: asyncio.subprocess.Process) -> None:
@@ -777,8 +778,6 @@ class Executor:
             pass
 
 
-def _shell_quote(arg: str) -> str:
-    """Quote a shell argument with single quotes, escaping embedded single quotes."""
-    if any(c in arg for c in (" ", '"', "'", "\n", "\t", "\\", "$", "`", "!", "#")):
-        return "'" + arg.replace("'", "'\\''") + "'"
-    return arg
+
+# _shell_quote removed — replaced by stdlib shlex.quote() which uses a
+# whitelist approach (safe: [\\w@%+=:,./-]) instead of an incomplete blacklist.

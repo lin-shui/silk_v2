@@ -104,7 +104,7 @@ class WorkflowManager(
 
     /**
      * 持久化 bridge 上一次的 sessionId + sessionStarted。后端重启后据此发起 resume，
-     * 让用户续上之前的对话历史（前提：bridge 端的 ~/.silk/cc_sessions.json 还有这个 session）。
+     * 让用户续上之前的对话历史（前提：bridge 端的本地 session 文件还在）。
      * 跳过无变化的写入，避免 prompt 高频持久化时的 I/O 抖动。
      */
     @Synchronized
