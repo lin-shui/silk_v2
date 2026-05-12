@@ -3859,6 +3859,8 @@ fun ReferenceSourcesList(
  * 4. 可折叠的长内容
  */
 @Composable
+@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS")
+@NoLiveLiterals
 fun AIMessageCard(
     message: Message,
     timeString: String,
@@ -3872,14 +3874,11 @@ fun AIMessageCard(
     onToggleSelection: (String) -> Unit = {},
     onEnterSelectionMode: (String) -> Unit = {}
 ) {
-    var isExpanded by remember(message.id) { mutableStateOf(false) }  // 默认收起
     val isLongContent = message.content.length > 500
-    val effectiveExpanded = if (isTransient) true else isExpanded
     val collapsedPreview = remember(message.content) {
         message.content.trimStart().take(200).ifBlank { "（内容已折叠，点击展开）" }
     }
-    
-    Div({
+Div({
         style {
             display(DisplayStyle.Flex)
             alignItems(AlignItems.FlexStart)
@@ -3970,10 +3969,12 @@ fun AIMessageCard(
                 }
             }
             
-            // 展开/折叠按钮（长内容时显示）
+            // 展开/收起按钮（长内容时显示，DOM 切换 display，不触发 Compose 重组）
             if (isLongContent && !isTransient) {
                 Div({ style { property("flex", "1") } }) { }
                 Span({
+                    attr("data-role", "expand-btn")
+                    attr("data-msg", message.id)
                     style {
                         fontSize(12.px)
                         color(Color(SilkColors.textSecondary))
@@ -3982,30 +3983,64 @@ fun AIMessageCard(
                         borderRadius(4.px)
                         property("transition", "all 0.2s")
                         property("user-select", "none")
-                        if (!effectiveExpanded) {
-                            property("background", "rgba(201, 168, 108, 0.1)")
-                        }
+                        property("background", "rgba(201, 168, 108, 0.1)")
                     }
                     onClick {
-                        val wasExpanded = effectiveExpanded
-                        isExpanded = !wasExpanded
-                        // 展开时延迟一帧滚动到消息头部，避免与 Compose 渲染冲突
-                        if (!wasExpanded) {
-                            kotlinx.browser.window.setTimeout({
-                                kotlinx.browser.document.getElementById("ai-msg-${message.id}")
-                                    ?.scrollIntoView(true)
-                            }, 50)
+                        val msgEl = document.getElementById("ai-msg-${message.id}")
+                        if (msgEl != null) {
+                            msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "none"
+                            msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "block"
+                            msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "none"
+                            msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "inline"
                         }
                     }
                 }) {
-                    Text(if (effectiveExpanded) "▼ 收起" else "▶ 展开")
+                    Text("📖 展开")
+                }
+                Span({
+                    attr("data-role", "collapse-btn")
+                    attr("data-msg", message.id)
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("cursor", "pointer")
+                        padding(4.px, 8.px)
+                        borderRadius(4.px)
+                        property("transition", "all 0.2s")
+                        property("user-select", "none")
+                        property("background", "rgba(201, 168, 108, 0.1)")
+                        display(DisplayStyle.None)
+                    }
+                    onClick {
+                        val msgEl = document.getElementById("ai-msg-${message.id}")
+                        if (msgEl != null) {
+                            msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "block"
+                            msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "none"
+                            msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "inline"
+                            msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "none"
+                        }
+                    }
+                }) {
+                    Text("📖 收起")
                 }
             }
         }
         
-        // 内容区域
-        if (effectiveExpanded || !isLongContent) {
+        // 内容区域 — 长内容渲染折叠+展开两个视图，DOM 切换 display（不触发 Compose 重组）
+        if (isLongContent && !isTransient) {
             Div({
+                attr("data-view", "collapsed")
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    property("font-style", "italic")
+                }
+            }) {
+                Text("$collapsedPreview...")
+            }
+            Div({
+                attr("data-view", "expanded")
+                style { display(DisplayStyle.None) }
                 classes(SilkStylesheet.aiMessageContent)
             }) {
                 MarkdownContent(
@@ -4019,43 +4054,18 @@ fun AIMessageCard(
                 )
             }
         } else {
-            // 折叠时显示摘要
             Div({
-                style {
-                    fontSize(13.px)
-                    color(Color(SilkColors.textSecondary))
-                    property("font-style", "italic")
-                }
+                classes(SilkStylesheet.aiMessageContent)
             }) {
-                Text("$collapsedPreview...")
-            }
-        }
-        // 底部居中收起按钮
-        if (isLongContent && effectiveExpanded && !isTransient) {
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    justifyContent(JustifyContent.Center)
-                    marginTop(12.px)
-                }
-            }) {
-                Span({
-                    style {
-                        fontSize(12.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("cursor", "pointer")
-                        padding(4.px, 12.px)
-                        borderRadius(4.px)
-                        property("transition", "all 0.2s")
-                        property("user-select", "none")
-                        property("background", "rgba(201, 168, 108, 0.08)")
-                    }
-                    onClick {
-                        isExpanded = false
-                    }
-                }) {
-                    Text("▲  收起")
-                }
+                MarkdownContent(
+                    content = message.content,
+                    references = message.references,
+                    referenceAnchorPrefix = "msg-${message.id}-"
+                )
+                ReferenceSourcesList(
+                    references = message.references,
+                    anchorPrefix = "msg-${message.id}-"
+                )
             }
         }
         // 底部操作栏
