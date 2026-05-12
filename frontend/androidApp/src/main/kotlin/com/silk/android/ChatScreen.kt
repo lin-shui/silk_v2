@@ -1039,13 +1039,11 @@ fun ChatScreen(appState: AppState) {
                             isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
                             onAIExpandChange = { messageId, isExpanded ->
                                 aiMessageExpandedStates[messageId] = isExpanded
-                                if (!isExpanded) {
-                                    val idx = messages.reversed().indexOfFirst { it.id == messageId }
-                                    if (idx >= 0) {
-                                        scopeForScroll.launch {
-                                            kotlinx.coroutines.delay(80)
-                                            listState.scrollToItem(idx)
-                                        }
+                                val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                if (idx >= 0) {
+                                    scopeForScroll.launch {
+                                        kotlinx.coroutines.delay(80)
+                                        listState.scrollToItem(idx)
                                     }
                                 }
                             },
@@ -1993,14 +1991,7 @@ fun AIMessageCardAndroid(
                 }
                 else -> {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 360.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            MarkdownWebView(message.content)
-                        }
+                        MarkdownWebView(message.content)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()

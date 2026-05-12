@@ -43,7 +43,7 @@
 ## AI / Tool Calling / Search
 
 - 先读：`modules/backend/AI_AND_INTEGRATIONS.md`、`integrations/SEARCH_AND_AUX_SERVICES.md`
-- 再看代码：`ai/DirectModelAgent.kt`、`ai/ToolPolicyManager.kt`、`search/WeaviateClient.kt`、`search/ExternalSearchService.kt`
+- 再看代码：`ai/DirectModelAgent.kt`、`ai/ToolPolicyManager.kt`、`ai/AnthropicClient.kt`
 - 默认验证：`./gradlew :backend:test`
 - 若改工具暴露或路径策略：必须覆盖 `DirectModelAgentToolPolicyTest`
 - 若改 AutoCLI 或引用证据格式：同步看 `DirectModelAgentAutoCliTest`、`DirectModelAgentCitationTest`

@@ -239,9 +239,23 @@ export struct ChatPage {
       result.push(transient);
     }
 
+    // 将 CC 执行完成元信息（⏱ 耗时/轮次）合并到前一条 AI 消息底部，不占独立条目
+    const merged: Message[] = [];
+    for (let i = 0; i < result.length; i++) {
+      const msg = result[i];
+      if (i > 0 && msg.type === MessageType.SYSTEM && msg.userId === 'silk_ai_agent' && /^⏱/.test(msg.content)) {
+        const prev = merged[merged.length - 1];
+        if (prev.userId === 'silk_ai_agent' && prev.type !== MessageType.SYSTEM) {
+          prev.footerContent = msg.content;
+          continue;
+        }
+      }
+      merged.push(msg);
+    }
+
     const prevCount = this.lastSyncedMessageCount;
-    this.messages = result;
-    this.messageDataSource.setData(result);
+    this.messages = merged;
+    this.messageDataSource.setData(merged);
     this.isAiGenerating = globalChatStore.isGenerating;
     this.markMessagesAsSent(confirmedOwnIds);
     const newCount = result.length;
@@ -1850,7 +1864,8 @@ export struct ChatPage {
                     onForward: (msg: Message): void => this.handleForward(msg),
                     onRetry: (msg: Message): void => this.retryMessage(msg),
                     onOpenActions: (msg: Message): void => this.openMessageActions(msg),
-                    onLongContentCollapsed: (): void => this.scrollListToMessageId(message.id)
+                    onLongContentCollapsed: (): void => this.scrollListToMessageId(message.id),
+                    onLongContentExpanded: (): void => this.scrollListToMessageId(message.id)
                   })
                 }
                 .width('100%')

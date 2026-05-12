@@ -319,6 +319,8 @@ class ChatServer(
             }
         }
         logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
+
+        val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
         
         // ✅ URL检测和网页下载索引
         if (message.type == MessageType.TEXT && !message.isTransient && !AgentRuntime.isAgentMessage(message)) {
@@ -332,7 +334,9 @@ class ChatServer(
         }
         
         // ==================== Claude Code 模式拦截 ====================
-        if (message.type == MessageType.TEXT && !message.isTransient
+        // 专属对话 [Silk] 必须走下方 Silk AI（DirectModelAgent）；否则用户若在其它群激活过 /cc，
+        // 此处会把「你好」当成 CC prompt，Bridge 未就绪时表现为空白回复。
+        if (!isSilkPrivateChat && message.type == MessageType.TEXT && !message.isTransient
             && !AgentRuntime.isAgentMessage(message)
         ) {
             val groupId = sessionName
@@ -377,8 +381,7 @@ class ChatServer(
         }
 
         // Silk AI 回复逻辑
-        // 检查是否是 Silk 专属私聊会话（群组名以 "[Silk]" 开头）
-        val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
+        // isSilkPrivateChat：群组名以 "[Silk]" 开头（已在上方计算）
         
         if (!AgentRuntime.isAgentMessage(message) && message.type == MessageType.TEXT && !message.isTransient) {
             messagesSinceAgentResponse++
@@ -660,6 +663,23 @@ class ChatServer(
         }
         broadcastSystemStatus("CLEAR_STATUS")
     }
+
+    /**
+     * Claude PTY（pty_chat）在 thinking 结束时会插入 `<!--THINKING_END-->`；若模型未产出任何正文 text_delta，
+     * 标记之后为空串，Web/Harmony 的 Markdown 可见区域会变成空白。此处补齐占位说明。
+     */
+    private fun ensureSilkReplyVisible(content: String): String {
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) {
+            return "抱歉，本次未生成有效回复，请稍后再试。"
+        }
+        val marker = "<!--THINKING_END-->"
+        val idx = trimmed.indexOf(marker)
+        if (idx < 0) return trimmed
+        val after = trimmed.substring(idx + marker.length).trim()
+        if (after.isNotEmpty()) return trimmed
+        return trimmed + "\n\n*（模型未输出正文，请重试。）*"
+    }
     
     /**
      * 生成智能回答 - 简化流程
@@ -687,14 +707,8 @@ class ChatServer(
                 appendLine("你是 Silk，一个智能助手。")
             }
             appendLine()
-            appendLine("你可以使用工具来搜索文件、搜索互联网、读取文件等。请根据用户的问题选择合适的工具。")
-            if (AIConfig.AUTOCLI_ENABLED) {
-                appendLine()
-                appendLine("【重要】你拥有 autocli 工具，可以从 55+ 个网站获取实时结构化数据（JSON），包括：")
-                appendLine("微博(weibo hot/search)、知乎(zhihu hot/search)、B站(bilibili hot/search)、小红书(xiaohongshu search/feed)、豆瓣(douban movie-hot/top250/search)、抖音等社交平台，")
-                appendLine("以及 hackernews、reddit、twitter、youtube、arxiv、bbc、bloomberg 等国际站点。")
-                appendLine("当用户询问这些平台的热门内容、热搜、排行榜或搜索特定话题时，请优先使用 autocli 工具而非 search_web。")
-            }
+            appendLine("你可以使用互联网搜索工具来查找最新信息。")
+            appendLine("对于天气、新闻、实时数据等时效性信息，你必须使用互联网搜索获取最新结果，不能仅凭训练数据回答。")
             appendLine()
             appendLine("【HarmonyOS 元服务能力】")
             appendLine("你在 HarmonyOS 系统上运行，支持调用系统元服务（免安装应用）：")
@@ -707,7 +721,7 @@ class ChatServer(
         val chatHistory = historyManager.loadChatHistory(sessionName)
         val historyMessages = chatHistory?.messages ?: emptyList()
         directModelAgent.setGroupChatHistory(historyMessages)
-        directModelAgent.loadRecentHistory(historyMessages)
+        directModelAgent.loadRecentHistory(historyMessages, SilkAgent.AGENT_ID)
         
         // 获取群组成员列表并设置到 Agent（用于统计所有成员）
         if (sessionName.startsWith("group_")) {
@@ -734,6 +748,11 @@ class ChatServer(
         }
         
         // 使用 DirectModelAgent 直接调用模型
+        // 初始化 claude CLI 进程客户端（设置群组隔离的工作目录）
+        val workspaceDir = "${AIConfig.CLAUDE_CLI_WORKSPACE_ROOT}/$sessionName"
+        java.io.File(workspaceDir).mkdirs()
+        directModelAgent.initClaudeClient(workspaceDir)
+
         var fullResponse = ""
         var agentReferences: List<com.silk.backend.models.MessageReference> = emptyList()
         try {
@@ -773,7 +792,7 @@ class ChatServer(
                         }
                     }
                     "complete" -> {
-                        fullResponse = content
+                        fullResponse = ensureSilkReplyVisible(content)
                         agentReferences = directModelAgent.lastAgentResponse?.references ?: emptyList()
                     }
                     "error" -> {
@@ -827,12 +846,8 @@ class ChatServer(
             }
             
             val agentResponse = directModelAgent.lastAgentResponse
-            if (agentResponse != null) {
-                fullResponse = agentResponse.content
-                agentReferences = agentResponse.references
-            } else {
-                fullResponse = response
-            }
+            fullResponse = ensureSilkReplyVisible(agentResponse?.content ?: response)
+            agentReferences = agentResponse?.references ?: emptyList()
             logger.debug("🏁 [generateIntelligentResponse-{}] 函数执行完成，响应长度: {}, 引用数: {}", callId, fullResponse.length, agentReferences.size)
 
             if (userId.isNotBlank() && getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true) {

@@ -22,7 +22,7 @@
 | `frontend/androidApp/` | Android 前端 | `MainActivity.kt`, `AppState.kt`, `ApiClient.kt` |
 | `frontend/desktopApp/` | Desktop 前端 | `Main.kt`, `AppState.kt`, `ApiClient.kt` |
 | `frontend/harmonyApp/` | HarmonyOS ArkTS 前端 | `entry/src/main/ets/pages/*.ets`, `api/*.ets`, `stores/*.ets` |
-| `search/` | Weaviate schema / indexing / startup 脚本 | `schema.py`, `indexer.py`, `start.sh` |
+| `search/` | Weaviate schema / indexing / startup 脚本（主线已由 Anthropic web_search + grep 替代） | `schema.py`, `indexer.py`, `start.sh` |
 | `cc_bridge/` | Claude CLI ACP adapter | `acp_adapter.py`, `executor.py`, `session_manager.py`, `fs_listing.py` |
 | `codex_bridge/` | Codex CLI ACP adapter | `codex_adapter.py`, `codex_executor.py`, `codex_session_index.py`, `fs_listing.py` |
 | `feishu_bot/` | 飞书网关 | `main.py`, `silk_client.py`, `feishu_handler.py` |
@@ -35,7 +35,7 @@
 | `auth/` | 注册登录、群组/联系人服务 |
 | `database/` | Exposed tables / repositories |
 | `ai/` | AIConfig、DirectModelAgent、tool policy |
-| `search/` | Weaviate / 外部搜索 |
+| `search/` | Weaviate / 外部搜索（主线已由 AnthropicClient + grep searchContext 替代） |
 | `agents/` | Agent 框架（`core/` 路由+状态、`acp/` ACP 协议层、`adapters/` Claude Code / Codex 描述符） |
 | `todos/` | Todo 抽取、刷新、存储、节假日逻辑 |
 | `workflow/` | Workflow JSON store |

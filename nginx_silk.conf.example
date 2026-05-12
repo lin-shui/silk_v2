@@ -1,0 +1,88 @@
+# Silk Nginx reverse proxy template
+# Copy to nginx_silk.conf and replace placeholders with values from .env:
+#   FRONTEND_HTTP_PORT  — public port for frontend (e.g. 13095)
+#   FRONTEND_INTERNAL_PORT — container/process listen port for frontend (e.g. 28005)
+#   BACKEND_HTTP_PORT   — public port for backend API (e.g. 13096)
+#   BACKEND_INTERNAL_PORT — container/process listen port for backend (e.g. 28003)
+#   YOUR_DOMAIN         — e.g. ai-silk.duckdns.org
+#
+# TLS certificate can be obtained via:
+#   certbot certonly --authenticator dns-duckdns \
+#     --dns-duckdns-token YOUR_DUCKDNS_TOKEN \
+#     -d YOUR_DOMAIN --non-interactive --agree-tos
+#   (requires: pip install certbot-dns-duckdns)
+
+server {
+    listen FRONTEND_HTTP_PORT ssl;
+    server_name YOUR_DOMAIN;
+
+    ssl_certificate /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:FRONTEND_INTERNAL_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+
+server {
+    listen BACKEND_HTTP_PORT ssl;
+    server_name YOUR_DOMAIN;
+
+    ssl_certificate /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem;
+
+    client_max_body_size 200m;
+
+    location / {
+        proxy_pass http://127.0.0.1:BACKEND_INTERNAL_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /chat {
+        proxy_pass http://127.0.0.1:BACKEND_INTERNAL_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+
+    location /ws/ {
+        proxy_pass http://127.0.0.1:BACKEND_INTERNAL_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+
+    location /agent-bridge {
+        proxy_pass http://127.0.0.1:BACKEND_INTERNAL_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400;
+        proxy_send_timeout 86400;
+    }
+}

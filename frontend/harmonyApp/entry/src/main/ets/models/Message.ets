@@ -50,6 +50,7 @@ export interface Message {
   isIncremental: boolean;    // true = 增量消息（需拼接），false = 完整消息
   category: MessageCategory; // 消息类别
   references?: Reference[];  // 引用来源列表（可选）
+  footerContent?: string;    // AI 消息的耗时/轮次等元信息（渲染在消息底部）
 }
 
 /** 判断某个 userId 是否属于 AI agent（所有 agent 的 userId 均以 _ai_agent 结尾）。 */

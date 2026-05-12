@@ -4,7 +4,6 @@
 
 - Java 17
 - Python 3
-- Docker（本地跑 Weaviate 时）
 - Android SDK（改 Android 时）
 - DevEco / hvigor / hdc（改 Harmony 时）
 

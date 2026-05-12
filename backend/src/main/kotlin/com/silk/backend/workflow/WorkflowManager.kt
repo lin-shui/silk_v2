@@ -102,6 +102,21 @@ class WorkflowManager(
         return true
     }
 
+    @Synchronized
+    fun renameWorkflow(workflowId: String, userId: String, newName: String): Workflow? {
+        val store = load()
+        val idx = store.workflows.indexOfFirst { it.id == workflowId && it.ownerId == userId }
+        if (idx < 0) return null
+        val updated = store.workflows[idx].copy(
+            name = newName,
+            updatedAt = System.currentTimeMillis()
+        )
+        store.workflows[idx] = updated
+        save(store)
+        logger.info("Renamed workflow {} to '{}'", workflowId, newName)
+        return updated
+    }
+
     /**
      * 持久化 bridge 上一次的 sessionId + sessionStarted。后端重启后据此发起 resume，
      * 让用户续上之前的对话历史（前提：bridge 端的 ~/.silk/cc_sessions.json 还有这个 session）。

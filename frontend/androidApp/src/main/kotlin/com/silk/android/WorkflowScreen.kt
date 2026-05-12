@@ -1,11 +1,15 @@
 package com.silk.android
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,7 +20,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun WorkflowScreen(appState: AppState) {
     val user = appState.currentUser ?: return
@@ -25,6 +29,14 @@ fun WorkflowScreen(appState: AppState) {
     var workflows by remember { mutableStateOf<List<WorkflowItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
+
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var workflowToDelete by remember { mutableStateOf<WorkflowItem?>(null) }
+    var showRenameDialog by remember { mutableStateOf(false) }
+    var renameText by remember { mutableStateOf("") }
+    var workflowToRename by remember { mutableStateOf<WorkflowItem?>(null) }
+    var showContextMenu by remember { mutableStateOf(false) }
+    var contextMenuWorkflow by remember { mutableStateOf<WorkflowItem?>(null) }
 
     LaunchedEffect(user.id) {
         isLoading = true
@@ -75,8 +87,15 @@ fun WorkflowScreen(appState: AppState) {
                 ) {
                     items(workflows) { wf ->
                         Card(
-                            onClick = { appState.selectWorkflow(wf) },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .combinedClickable(
+                                    onClick = { appState.selectWorkflow(wf) },
+                                    onLongClick = {
+                                        contextMenuWorkflow = wf
+                                        showContextMenu = true
+                                    },
+                                ),
                             colors = CardDefaults.cardColors(containerColor = SilkColors.cardBackground),
                         ) {
                             Row(
@@ -85,13 +104,40 @@ fun WorkflowScreen(appState: AppState) {
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(wf.name, style = MaterialTheme.typography.bodyLarge)
-                                IconButton(onClick = {
-                                    scope.launch {
-                                        ApiClient.deleteWorkflow(wf.id, user.id)
-                                        workflows = ApiClient.getWorkflows(user.id)
+                                Box {
+                                    IconButton(onClick = {
+                                        contextMenuWorkflow = wf
+                                        showContextMenu = true
+                                    }) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = "更多操作", tint = SilkColors.textSecondary)
                                     }
-                                }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "删除", tint = SilkColors.error)
+                                    DropdownMenu(
+                                        expanded = showContextMenu && contextMenuWorkflow?.id == wf.id,
+                                        onDismissRequest = {
+                                            showContextMenu = false
+                                            contextMenuWorkflow = null
+                                        }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("重命名") },
+                                            onClick = {
+                                                showContextMenu = false
+                                                workflowToRename = wf
+                                                renameText = wf.name
+                                                showRenameDialog = true
+                                            },
+                                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("删除", color = SilkColors.error) },
+                                            onClick = {
+                                                showContextMenu = false
+                                                workflowToDelete = wf
+                                                showDeleteConfirm = true
+                                            },
+                                            leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = SilkColors.error) }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -112,6 +158,80 @@ fun WorkflowScreen(appState: AppState) {
                 }
                 appState.selectWorkflow(wf)
             },
+        )
+    }
+
+    // 删除确认对话框
+    if (showDeleteConfirm && workflowToDelete != null) {
+        AlertDialog(
+            onDismissRequest = {
+                showDeleteConfirm = false
+                workflowToDelete = null
+            },
+            title = { Text("确认删除") },
+            text = { Text("确定要删除工作流 \"${workflowToDelete?.name}\" 吗？此操作不可撤销。") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val wf = workflowToDelete ?: return@Button
+                        scope.launch {
+                            ApiClient.deleteWorkflow(wf.id, user.id)
+                            workflows = ApiClient.getWorkflows(user.id)
+                        }
+                        showDeleteConfirm = false
+                        workflowToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = SilkColors.error)
+                ) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showDeleteConfirm = false
+                    workflowToDelete = null
+                }) { Text("取消") }
+            }
+        )
+    }
+
+    // 重命名对话框
+    if (showRenameDialog && workflowToRename != null) {
+        AlertDialog(
+            onDismissRequest = {
+                showRenameDialog = false
+                workflowToRename = null
+            },
+            title = { Text("重命名工作流") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    label = { Text("工作流名称") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val wf = workflowToRename ?: return@Button
+                        val trimmed = renameText.trim()
+                        if (trimmed.isBlank()) return@Button
+                        scope.launch {
+                            ApiClient.renameWorkflow(wf.id, user.id, trimmed)
+                            workflows = ApiClient.getWorkflows(user.id)
+                        }
+                        showRenameDialog = false
+                        workflowToRename = null
+                    },
+                    enabled = renameText.trim().isNotBlank()
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showRenameDialog = false
+                    workflowToRename = null
+                }) { Text("取消") }
+            }
         )
     }
 }

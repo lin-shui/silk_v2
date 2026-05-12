@@ -32,12 +32,18 @@ export struct MessageBubble {
   onRetry?: (message: Message) => void;
   /** 长文本/转发全文从展开收起到折叠后，由列表滚回本条，避免高度突变导致视口跑偏 */
   onLongContentCollapsed?: () => void;
+  /** 长文本展开后滚动到本条头部 */
+  onLongContentExpanded?: () => void;
   @Prop suggestedAction: MetaServiceIntent | null = null;
   @Prop isLastMessage: boolean = false;
   @State private isAIExpanded: boolean = false;
   @State private isForwardExpanded: boolean = false;
   @State private metaParamPickup: string = '';
   @State private metaParamDestination: string = '';
+
+  aboutToAppear() {
+    this.isAIExpanded = this.isLastMessage;
+  }
 
   private notifyLongContentCollapsed(): void {
     if (this.onLongContentCollapsed) {
@@ -331,6 +337,8 @@ export struct MessageBubble {
                 this.isAIExpanded = !this.isAIExpanded;
                 if (wasExpanded) {
                   this.notifyLongContentCollapsed();
+                } else if (this.onLongContentExpanded) {
+                  this.onLongContentExpanded();
                 }
               })
           }
@@ -386,7 +394,7 @@ export struct MessageBubble {
 
         Blank().height(10)
 
-        if (!this.isLongAIContent() || this.isLastMessage) {
+        if (!this.isLongAIContent() || this.isAIExpanded) {
           MarkdownLite({
             content: this.getSafeAIContent()
           })
@@ -417,6 +425,9 @@ export struct MessageBubble {
             .padding({ top: 6, bottom: 6 })
             .onClick(() => {
               this.isAIExpanded = true;
+              if (this.onLongContentExpanded) {
+                this.onLongContentExpanded();
+              }
             })
           }
           .width('100%')
@@ -444,6 +455,17 @@ export struct MessageBubble {
               this.isAIExpanded = false;
               this.notifyLongContentCollapsed();
             })
+          }
+          .width('100%')
+        }
+
+        // CC metadata footer（耗时/轮次）
+        if (this.message.footerContent) {
+          Blank().height(8)
+          Row() {
+            Text(this.message.footerContent)
+              .fontSize(12)
+              .fontColor(Theme.colors.textSecondary)
           }
           .width('100%')
         }

@@ -1550,10 +1550,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             }
 
             // 显示所有普通消息
+            val lastMessageId = messages.lastOrNull()?.id
             messages.forEach { message ->
                 MessageItem(
                     message = message,
                     isTransient = false,
+                    isLastMessage = message.id == lastMessageId,
                     currentUserId = user.id,
                     groupId = group.id,
                     isRecalling = message.id in recallingMessageIds,
@@ -2070,12 +2072,26 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         if (key == "Enter" && !shiftKey && !isComposing) {
                             event.preventDefault()
                             sendMessage()
+                        } else if (key == "Enter" && shiftKey) {
+                            // Shift+Enter：在光标处插入换行
+                            event.preventDefault()
+                            val input = js("document.getElementById('chat-input')")
+                            val start = input.selectionStart as? Int ?: messageText.length
+                            val end = input.selectionEnd as? Int ?: start
+                            val before = messageText.substring(0, start)
+                            val after = messageText.substring(end)
+                            messageText = "$before\n$after"
+                            // 光标移到换行后
+                            window.setTimeout({
+                                val newPos = start + 1
+                                input.setSelectionRange(newPos, newPos)
+                            }, 0)
                         }
                     }
-                    
+
                     val input = js("document.getElementById('chat-input')")
                     input?.addEventListener("keydown", handler)
-                    
+
                     onDispose {
                         input?.removeEventListener("keydown", handler)
                     }
@@ -3359,6 +3375,31 @@ private val silkMarkdownRuntimeCss = """
         background-color: #FFF0D5;
         border-color: #C9A86C;
     }
+    .silk-thinking-details {
+        margin: 8px 0;
+        background: #FAF8F4;
+        border: 1px solid #E8E0D4;
+        border-radius: 8px;
+        overflow: hidden;
+    }
+    .silk-thinking-details summary {
+        padding: 8px 12px;
+        cursor: pointer;
+        user-select: none;
+        font-size: 12px;
+        color: #8B7355;
+        font-weight: 500;
+    }
+    .silk-thinking-details[open] summary {
+        border-bottom: 1px solid #E8E0D4;
+    }
+    .silk-thinking-details > :not(summary) {
+        padding: 8px 12px;
+        font-size: 12px;
+        color: #8B7355;
+        line-height: 1.6;
+        background: #FAF8F4;
+    }
 """.trimIndent()
 
 @Suppress("UNUSED_EXPRESSION")
@@ -3483,8 +3524,8 @@ private fun createMarkdownEngine(): MarkdownIt {
 @NoLiveLiterals
 private fun createSanitizeConfig(): dynamic {
     val config = js("{}")
-    config.ADD_TAGS = arrayOf("input")
-    config.ADD_ATTR = arrayOf("checked", "disabled", "type", "class")
+    config.ADD_TAGS = arrayOf("input", "details", "summary")
+    config.ADD_ATTR = arrayOf("checked", "disabled", "type", "class", "open")
     return config
 }
 
@@ -3529,9 +3570,11 @@ private fun linkCitationMarkers(
         val ref = references.find { it.kind == kind && it.index == idx }
         if (ref != null) {
             val label = if (kind == "citation") "来源 $idx" else "资料 $idx"
-            val href = ref.url ?: "#${anchorPrefix}ref-$idx"
-            val target = if (ref.url != null) " target=\"_blank\" rel=\"noopener noreferrer\"" else ""
-            "<a href=\"$href\"$target class=\"silk-citation-chip\">$label</a>"
+            if (ref.url != null) {
+                "<a href=\"${ref.url}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"silk-citation-chip\">$label</a>"
+            } else {
+                "<span class=\"silk-citation-chip silk-citation-nav\" data-idx=\"$idx\" style=\"cursor:pointer\">$label</span>"
+            }
         } else {
             match.value
         }
@@ -3549,9 +3592,40 @@ fun MarkdownContent(
     val markdownEngine = rememberMarkdownEngine()
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
     val safeHtml = remember(content, references) {
+        // Escape < followed by non-HTML-tag characters (e.g., "<1.2m" → "&lt;1.2m")
+        // before any other processing, so DOMPurify won't strip them as invalid tags.
+        val htmlSafeContent = content.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
+        // Convert thinking section (before <!--THINKING_END-->) to collapsible <details>
+        // Note: processing on raw `content` so thinking-text escaping doesn't double-escape
+        val thinkingMarker = "<!--THINKING_END-->"
+        val withThinkingDetails = if (content.contains(thinkingMarker)) {
+            val idx = content.indexOf(thinkingMarker)
+            val thinkingText = content.substring(0, idx).trim()
+            val tailRaw = content.substring(idx + thinkingMarker.length).trimStart('\n').trim()
+            val tailEffective =
+                if (tailRaw.isBlank()) "*（本次仅有思考过程或未生成正文，请重试。）*" else tailRaw
+            val escaped = thinkingText
+                .replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;")
+                .replace("\n", "<br>")
+            "<details class=\"silk-thinking-details\" open>\n" +
+            "<summary>💭 思考过程</summary>\n" +
+            escaped + "\n</details>\n\n" +
+            tailEffective.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
+        } else {
+            htmlSafeContent
+        }
+        // Collapse excessive blank lines (3+ → 1 blank line)
+        val reducedBlanks = withThinkingDetails.replace(Regex("\\n{3,}"), "\n\n")
+        // Normalize headings missing space after # (e.g., "##一、" → "## 一、")
+        val normalizedHeadings = reducedBlanks.replace(
+            Regex("^(#{1,6})([^#\\s])", RegexOption.MULTILINE),
+            "$1 $2"
+        )
         val linked = linkCitationMarkers(
             DOMPurify.sanitize(
-                markdownEngine.render(normalizeMathBlocks(content)),
+                markdownEngine.render(normalizeMathBlocks(normalizedHeadings)),
                 createSanitizeConfig()
             ),
             references,
@@ -3573,6 +3647,8 @@ fun MarkdownContent(
             val links = element.querySelectorAll("a")
             for (index in 0 until links.length) {
                 val link = links.item(index) as? HTMLAnchorElement ?: continue
+                val href = link.getAttribute("href") ?: ""
+                if (href.startsWith("#")) continue
                 link.target = "_blank"
                 link.rel = "noopener noreferrer nofollow"
             }
@@ -3582,6 +3658,7 @@ fun MarkdownContent(
             } catch (error: Throwable) {
                 console.warn("Markdown math render failed:", error)
             }
+
         }
 
         onDispose {
@@ -3597,7 +3674,7 @@ fun ReferenceSourcesList(
 ) {
     if (references.isEmpty()) return
 
-    var isExpanded by remember { mutableStateOf(false) }
+    var isExpanded by remember { mutableStateOf(true) }
 
     Div({
         style {
@@ -3609,6 +3686,7 @@ fun ReferenceSourcesList(
         }
     }) {
         Div({
+            id("refs-toggle-$anchorPrefix")
             style {
                 display(DisplayStyle.Flex)
                 alignItems(AlignItems.Center)
@@ -3720,6 +3798,7 @@ fun AIMessageCard(
     message: Message,
     timeString: String,
     isTransient: Boolean = false,
+    isLastMessage: Boolean = false,
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {},
     onDelete: (String) -> Unit = {},
@@ -3728,7 +3807,7 @@ fun AIMessageCard(
     onToggleSelection: (String) -> Unit = {},
     onEnterSelectionMode: (String) -> Unit = {}
 ) {
-    var isExpanded by remember { mutableStateOf(false) }  // 默认收起
+    var isExpanded by remember(message.id) { mutableStateOf(isLastMessage) }  // 最后一条默认展开
     val isLongContent = message.content.length > 500
     val effectiveExpanded = if (isTransient) true else isExpanded
     val collapsedPreview = remember(message.content) {
@@ -3770,6 +3849,7 @@ fun AIMessageCard(
         
     Div({
         classes(SilkStylesheet.aiMessageCard)
+        attr("id", "ai-msg-${message.id}")
         style {
             property("flex", "1")
             property("min-width", "0")
@@ -3849,7 +3929,15 @@ fun AIMessageCard(
                         }
                     }
                     onClick {
-                        isExpanded = !effectiveExpanded
+                        val wasExpanded = effectiveExpanded
+                        isExpanded = !wasExpanded
+                        // 展开时延迟一帧滚动到消息头部，避免与 Compose 渲染冲突
+                        if (!wasExpanded) {
+                            kotlinx.browser.window.setTimeout({
+                                kotlinx.browser.document.getElementById("ai-msg-${message.id}")
+                                    ?.scrollIntoView(true)
+                            }, 50)
+                        }
                     }
                 }) {
                     Text(if (effectiveExpanded) "▼ 收起" else "▶ 展开")
@@ -3905,7 +3993,34 @@ fun AIMessageCard(
                 Text("$collapsedPreview...")
             }
         }
-        
+        // 底部居中收起按钮
+        if (isLongContent && effectiveExpanded && !isTransient) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.Center)
+                    marginTop(12.px)
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("cursor", "pointer")
+                        padding(4.px, 12.px)
+                        borderRadius(4.px)
+                        property("transition", "all 0.2s")
+                        property("user-select", "none")
+                        property("background", "rgba(201, 168, 108, 0.08)")
+                    }
+                    onClick {
+                        isExpanded = false
+                    }
+                }) {
+                    Text("▲  收起")
+                }
+            }
+        }
         // 底部操作栏
         if (!isTransient && !isSelectionMode) {
             Div({
@@ -3978,6 +4093,7 @@ fun AIMessageCard(
                     Text("🗑")
                     Text("删除")
                 }
+
                 
                 Span({
                     style {
@@ -4021,10 +4137,11 @@ fun AIMessageCard(
 
 @Composable
 fun MessageItem(
-    message: Message, 
+    message: Message,
     isTransient: Boolean = false,
     currentUserId: String = "",
     groupId: String = "",
+    isLastMessage: Boolean = false,
     isRecalling: Boolean = false,
     onRecall: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
@@ -4048,6 +4165,7 @@ fun MessageItem(
             message = message,
             timeString = timeString,
             isTransient = isTransient,
+            isLastMessage = isLastMessage,
             onCopy = onCopy,
             onForward = onForward,
             onDelete = onDelete,
@@ -4606,10 +4724,10 @@ fun TransientMessageItem(message: Message) {
     val timeString = remember(message.timestamp) {
         formatMessageTimestampForWeb(message.timestamp)
     }
-    
+
     // 循环进度动画状态
     var progress by remember { mutableStateOf(0) }
-    
+
     LaunchedEffect(Unit) {
         // 循环动画：0 → 100 → 0 不断循环
         while (true) {
@@ -4619,16 +4737,16 @@ fun TransientMessageItem(message: Message) {
             }
         }
     }
-    
+
     Div({ classes(SilkStylesheet.transientMessageCard) }) {
-        Div({ 
+        Div({
             style {
                 display(DisplayStyle.Flex)
                 property("justify-content", "space-between")
                 marginBottom(6.px)
             }
         }) {
-            Span({ 
+            Span({
                 style {
                     property("font-weight", "600")
                     color(Color(SilkColors.primaryDark))
@@ -4636,7 +4754,7 @@ fun TransientMessageItem(message: Message) {
             }) {
                 Text("${message.userName} (处理中...)")
             }
-            Span({ 
+            Span({
                 style {
                     fontSize(11.px)
                     color(Color(SilkColors.textLight))
@@ -4645,7 +4763,7 @@ fun TransientMessageItem(message: Message) {
                 Text(timeString)
             }
         }
-        
+
         // 如果有步骤信息，显示进度条
         if (message.currentStep != null && message.totalSteps != null) {
             Div({ classes(SilkStylesheet.progressBarContainer) }) {
@@ -4663,10 +4781,10 @@ fun TransientMessageItem(message: Message) {
                     Span { Text("步骤 ${message.currentStep}/${message.totalSteps}") }
                     Span { Text("处理中...") }
                 }
-                
+
                 // 进度条
                 Div({ classes(SilkStylesheet.progressBar) }) {
-                    Div({ 
+                    Div({
                         classes(SilkStylesheet.progressFill)
                         style {
                             val totalProgress = ((message.currentStep!! - 1) * 100 + progress) / message.totalSteps!!
@@ -4676,7 +4794,7 @@ fun TransientMessageItem(message: Message) {
                 }
             }
         }
-        
+
         Div({
             style {
                 color(Color(SilkColors.textSecondary))

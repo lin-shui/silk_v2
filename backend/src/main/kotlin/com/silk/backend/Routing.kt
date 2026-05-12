@@ -2299,6 +2299,34 @@ fun Application.configureRouting() {
             )
         }
 
+        put("/api/workflows/{workflowId}") {
+            val workflowId = call.parameters["workflowId"] ?: ""
+            val body = call.receiveText()
+            val json = Json { ignoreUnknownKeys = true }
+            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
+            val userId = req["userId"]?.jsonPrimitive?.content ?: ""
+            val newName = req["name"]?.jsonPrimitive?.content?.trim() ?: ""
+            if (workflowId.isBlank() || userId.isBlank() || newName.isBlank()) {
+                call.respondText(
+                    """{"success":false,"message":"Missing workflowId, userId, or name"}""",
+                    ContentType.Application.Json, HttpStatusCode.BadRequest
+                )
+                return@put
+            }
+            val updated = workflowManager.renameWorkflow(workflowId, userId, newName)
+            if (updated == null) {
+                call.respondText(
+                    """{"success":false,"message":"Workflow not found"}""",
+                    ContentType.Application.Json, HttpStatusCode.NotFound
+                )
+                return@put
+            }
+            call.respondText(
+                Json.encodeToString(Workflow.serializer(), updated),
+                ContentType.Application.Json
+            )
+        }
+
         get("/api/workflows/by-group/{groupId}") {
             val groupId = call.parameters["groupId"] ?: ""
             if (groupId.isBlank()) {

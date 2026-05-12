@@ -5,7 +5,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - 后端：Ktor JVM，承担 HTTP、WebSocket、AI/tool calling、文件路由、导出、Todo、Workflow、Knowledge Base、Audio Duplex 代理、Agent 框架（Claude Code 与 Codex 经 ACP 协议接入）。
 - 前端主线：Kotlin Multiplatform + Compose，包含 `frontend/shared`、`webApp`、`androidApp`、`desktopApp`。
 - 独立端：`frontend/harmonyApp` 为 ArkTS/ArkUI，未复用 KMP 代码。
-- 辅助服务：`search/`（Weaviate 相关脚本）、`cc_bridge/`（Claude CLI ACP adapter）、`codex_bridge/`（Codex CLI ACP adapter）、`feishu_bot/`（飞书网关）。
+- 辅助服务：`search/`（Weaviate 相关脚本，主线已由 Claude 原生 web_search + 后端 grep 替代）、`cc_bridge/`（Claude CLI ACP adapter）、`codex_bridge/`（Codex CLI ACP adapter）、`feishu_bot/`（飞书网关）。
 
 ## Primary Runtime Flow
 
@@ -17,7 +17,6 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
    - 历史回放
    - 消息持久化
    - 未读计数
-   - Weaviate 索引
    - URL/PDF 下载提取
    - Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
    - Silk AI / `DirectModelAgent` 响应
@@ -46,7 +45,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | HTTP routes | `Routing.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt` | `Routing.kt` 仍然很大，是主索引点 |
 | Chat/WebSocket | `WebSocketConfig.kt`, `ChatHistoryManager.kt` | 消息主链、历史、URL 下载 |
 | Agent framework | `agents/core/`, `agents/acp/`, `agents/adapters/` | Claude Code 与 Codex via ACP，唯一执行路径 |
-| AI/tools/search | `ai/`, `search/`, `utils/WebPageDownloader.kt` | 当前主线是 `DirectModelAgent` |
+| AI/tools/search | `ai/`（AnthropicClient + DirectModelAgent）, `utils/WebPageDownloader.kt` | Anthropic Messages API + 原生 web_search 工具 + 后端 grep 搜索 |
 | Auth/data | `auth/`, `database/`, `models/` | SQLite + Exposed |
 | Domain modules | `todos/`, `workflow/`, `trust/`, `kb/`, `export/`, `pdf/` | Todo/Workflow/TrustedDir/KB 混合文件存储 |
 | Shared client contract | `frontend/shared/` | 三端消息/文件/Audio Duplex 合同面 |

@@ -24,6 +24,11 @@ fun WorkflowScene(appState: WebAppState) {
     var selectedAgentType by remember { mutableStateOf("") }
     var showCreatePicker by remember { mutableStateOf(false) }
     var selectedWorkflow by remember { mutableStateOf<WorkflowItem?>(null) }
+    // 操作菜单状态
+    var menuWorkflow by remember { mutableStateOf<WorkflowItem?>(null) }
+    var renameTarget by remember { mutableStateOf<WorkflowItem?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var deleteTarget by remember { mutableStateOf<WorkflowItem?>(null) }
     // 创建对话框中"加载默认目录"的失败原因（一般是 Bridge 未连接）。
     // Bridge 离线时整个创建流程都会失败（后端拒绝），所以这里也用作"是否禁用创建按钮"的依据。
     var dirLoadError by remember { mutableStateOf<String?>(null) }
@@ -170,22 +175,17 @@ fun WorkflowScene(appState: WebAppState) {
                             Button({
                                 style {
                                     backgroundColor(Color("transparent"))
-                                    color(Color(SilkColors.error))
+                                    color(Color(SilkColors.textSecondary))
                                     border(0.px)
                                     property("cursor", "pointer")
-                                    fontSize(12.px)
+                                    fontSize(18.px)
+                                    padding(4.px, 8.px)
                                 }
                                 onClick { evt ->
                                     evt.stopPropagation()
-                                    scope.launch {
-                                        ApiClient.deleteWorkflow(wf.id, user.id)
-                                        if (selectedWorkflow?.id == wf.id) {
-                                            selectedWorkflow = null
-                                        }
-                                        workflows = ApiClient.getWorkflows(user.id)
-                                    }
+                                    menuWorkflow = if (menuWorkflow == wf) null else wf
                                 }
-                            }) { Text("删除") }
+                            }) { Text("⋮") }
                         }
                     }
                 }
@@ -538,6 +538,238 @@ fun WorkflowScene(appState: WebAppState) {
             },
         )
     }
+
+    // Action menu (⋮)
+    val mw = menuWorkflow
+    if (mw != null) {
+        ModalOverlay(
+            onDismiss = { menuWorkflow = null },
+            zIndex = 1001,
+        ) {
+            Div({
+                style {
+                    backgroundColor(Color.white)
+                    borderRadius(12.px)
+                    padding(16.px)
+                    width(200.px)
+                    property("box-shadow", "0 4px 16px rgba(0,0,0,0.12)")
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "4px")
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(14.px)
+                        fontWeight("bold")
+                        color(Color(SilkColors.textPrimary))
+                        padding(8.px, 12.px)
+                    }
+                }) { Text(mw.name) }
+                Div({
+                    style {
+                        height(1.px)
+                        backgroundColor(Color(SilkColors.border))
+                        margin(4.px, 0.px)
+                    }
+                }) {}
+                Button({
+                    style {
+                        backgroundColor(Color("transparent"))
+                        color(Color(SilkColors.textPrimary))
+                        border(0.px)
+                        borderRadius(6.px)
+                        padding(10.px, 12.px)
+                        property("cursor", "pointer")
+                        fontSize(14.px)
+                        property("text-align", "left")
+                    }
+                    onClick {
+                        renameTarget = mw
+                        renameText = mw.name
+                        menuWorkflow = null
+                    }
+                }) { Text("✏ 重命名") }
+                Button({
+                    style {
+                        backgroundColor(Color("transparent"))
+                        color(Color(SilkColors.error))
+                        border(0.px)
+                        borderRadius(6.px)
+                        padding(10.px, 12.px)
+                        property("cursor", "pointer")
+                        fontSize(14.px)
+                        property("text-align", "left")
+                    }
+                    onClick {
+                        deleteTarget = mw
+                        menuWorkflow = null
+                    }
+                }) { Text("🗑 删除") }
+                Button({
+                    style {
+                        backgroundColor(Color("transparent"))
+                        color(Color(SilkColors.textSecondary))
+                        border(0.px)
+                        borderRadius(6.px)
+                        padding(10.px, 12.px)
+                        property("cursor", "pointer")
+                        fontSize(14.px)
+                        property("text-align", "left")
+                    }
+                    onClick { menuWorkflow = null }
+                }) { Text("取消") }
+            }
+        }
+    }
+
+    // Rename dialog
+    val rn = renameTarget
+    if (rn != null) {
+        ModalOverlay(
+            onDismiss = {
+                renameTarget = null
+                renameText = ""
+            },
+            zIndex = 1002,
+        ) {
+            Div({
+                style {
+                    backgroundColor(Color.white)
+                    borderRadius(12.px)
+                    padding(24.px)
+                    width(380.px)
+                    property("max-width", "90vw")
+                    property("box-shadow", "0 8px 32px rgba(0,0,0,0.15)")
+                }
+            }) {
+                H3({ style { marginTop(0.px); color(Color(SilkColors.textPrimary)) } }) { Text("重命名工作流") }
+                Input(InputType.Text) {
+                    value(renameText)
+                    onInput { renameText = it.value }
+                    attr("placeholder", "工作流名称")
+                    style {
+                        width(100.percent)
+                        height(40.px)
+                        borderRadius(6.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        padding(8.px)
+                        fontSize(14.px)
+                        marginBottom(16.px)
+                        property("box-sizing", "border-box")
+                    }
+                }
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        justifyContent(JustifyContent.FlexEnd)
+                        property("gap", "8px")
+                    }
+                }) {
+                    Button({
+                        style {
+                            backgroundColor(Color(SilkColors.surface))
+                            color(Color(SilkColors.textSecondary))
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            borderRadius(6.px)
+                            padding(8.px, 16.px)
+                            property("cursor", "pointer")
+                        }
+                        onClick {
+                            renameTarget = null
+                            renameText = ""
+                        }
+                    }) { Text("取消") }
+                    Button({
+                        style {
+                            backgroundColor(Color(SilkColors.primary))
+                            color(Color.white)
+                            border(0.px)
+                            borderRadius(6.px)
+                            padding(8.px, 16.px)
+                            property("cursor", "pointer")
+                        }
+                        onClick {
+                            scope.launch {
+                                val updated = ApiClient.renameWorkflow(rn.id, user.id, renameText.trim())
+                                if (updated != null) {
+                                    workflows = ApiClient.getWorkflows(user.id)
+                                    renameTarget = null
+                                    renameText = ""
+                                } else {
+                                    kotlinx.browser.window.alert("重命名失败")
+                                }
+                            }
+                        }
+                    }) { Text("确认") }
+                }
+            }
+        }
+    }
+
+    // Delete confirmation dialog
+    val dt = deleteTarget
+    if (dt != null) {
+        ModalOverlay(
+            onDismiss = { deleteTarget = null },
+            zIndex = 1002,
+        ) {
+            Div({
+                style {
+                    backgroundColor(Color.white)
+                    borderRadius(12.px)
+                    padding(24.px)
+                    width(360.px)
+                    property("max-width", "90vw")
+                    property("box-shadow", "0 8px 32px rgba(0,0,0,0.15)")
+                }
+            }) {
+                H3({ style { marginTop(0.px); color(Color(SilkColors.error)) } }) { Text("删除工作流") }
+                P({ style { fontSize(14.px); color(Color(SilkColors.textPrimary)); marginBottom(20.px) } }) {
+                    Text("确定要删除「${dt.name}」吗？此操作不可撤销。")
+                }
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        justifyContent(JustifyContent.FlexEnd)
+                        property("gap", "8px")
+                    }
+                }) {
+                    Button({
+                        style {
+                            backgroundColor(Color(SilkColors.surface))
+                            color(Color(SilkColors.textSecondary))
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            borderRadius(6.px)
+                            padding(8.px, 16.px)
+                            property("cursor", "pointer")
+                        }
+                        onClick { deleteTarget = null }
+                    }) { Text("取消") }
+                    Button({
+                        style {
+                            backgroundColor(Color(SilkColors.error))
+                            color(Color.white)
+                            border(0.px)
+                            borderRadius(6.px)
+                            padding(8.px, 16.px)
+                            property("cursor", "pointer")
+                        }
+                        onClick {
+                            scope.launch {
+                                ApiClient.deleteWorkflow(dt.id, user.id)
+                                if (selectedWorkflow?.id == dt.id) {
+                                    selectedWorkflow = null
+                                }
+                                workflows = ApiClient.getWorkflows(user.id)
+                                deleteTarget = null
+                            }
+                        }
+                    }) { Text("删除") }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -767,14 +999,17 @@ private fun WorkflowChatPanel(
         }
     }) {
         // Persistent messages
-        messages.forEach { message ->
-            MessageItem(
-                message = message,
-                isTransient = false,
-                currentUserId = userId,
-                groupId = groupId,
-                onCopy = { content -> copyTextToClipboard(content) }
-            )
+        messages.forEachIndexed { index, message ->
+            key(message.id) {
+                MessageItem(
+                    message = message,
+                    isTransient = false,
+                    isLastMessage = index == messages.lastIndex,
+                    currentUserId = userId,
+                    groupId = groupId,
+                    onCopy = { content -> copyTextToClipboard(content) }
+                )
+            }
         }
 
         // Status messages

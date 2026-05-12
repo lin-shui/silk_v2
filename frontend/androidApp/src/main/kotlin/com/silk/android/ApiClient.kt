@@ -668,6 +668,21 @@ object ApiClient {
         }
     }
 
+    suspend fun renameWorkflow(workflowId: String, userId: String, newName: String): WorkflowItem? = withContext(Dispatchers.IO) {
+        try {
+            val body = buildJsonObject {
+                put("userId", JsonPrimitive(userId))
+                put("name", JsonPrimitive(newName))
+            }.toString()
+            val response = put("/api/workflows/$workflowId", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("重命名工作流失败: $e")
+            null
+        }
+    }
+
     suspend fun getCcState(userId: String, groupId: String): CcStateResponse = withContext(Dispatchers.IO) {
         try {
             val response = get("/users/$userId/cc-state/$groupId")

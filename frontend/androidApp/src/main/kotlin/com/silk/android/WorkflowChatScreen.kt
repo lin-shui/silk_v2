@@ -213,22 +213,21 @@ fun WorkflowChatScreen(appState: AppState) {
                             }
                         }
                         // 3. Persistent messages (reversed for reverseLayout)
+                        val lastMsgId = messages.lastOrNull()?.id
                         items(messages.reversed(), key = { it.id }) { msg ->
                             MessageItem(
                                 message = msg,
                                 currentUserId = user.id,
                                 context = context,
                                 isTransient = false,
-                                isAIExpanded = aiExpandedStates[msg.id] ?: false,
+                                isAIExpanded = aiExpandedStates[msg.id] ?: (msg.id == lastMsgId),
                                 onAIExpandChange = { messageId, isExpanded ->
                                     aiExpandedStates[messageId] = isExpanded
-                                    if (!isExpanded) {
-                                        val idx = messages.reversed().indexOfFirst { it.id == messageId }
-                                        if (idx >= 0) {
-                                            scope.launch {
-                                                kotlinx.coroutines.delay(80)
-                                                listState.scrollToItem(idx)
-                                            }
+                                    val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                    if (idx >= 0) {
+                                        scope.launch {
+                                            kotlinx.coroutines.delay(80)
+                                            listState.scrollToItem(idx)
                                         }
                                     }
                                 },

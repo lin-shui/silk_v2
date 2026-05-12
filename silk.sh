@@ -106,6 +106,8 @@ SILK_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # 加载 .env（API Key、BACKEND_HOST 等，构建 APK 时会用到）
 if [ -f "$SILK_DIR/.env" ]; then
+    # 保留预先设置的环境变量（优先级高于 .env）
+    _PRE_SET_BACKEND_BASE_URL="${BACKEND_BASE_URL:-}"
     # 转换 CRLF 为 LF 并加载
     TMP_ENV=$(mktemp)
     tr -d '\r' < "$SILK_DIR/.env" > "$TMP_ENV"
@@ -113,6 +115,11 @@ if [ -f "$SILK_DIR/.env" ]; then
     source "$TMP_ENV"
     set +a
     rm -f "$TMP_ENV"
+    # 如果调用前已设置环境变量，恢复它（覆盖 .env）
+    if [ -n "$_PRE_SET_BACKEND_BASE_URL" ]; then
+        BACKEND_BASE_URL="$_PRE_SET_BACKEND_BASE_URL"
+    fi
+    unset _PRE_SET_BACKEND_BASE_URL
 fi
 
 # Weaviate Schema 初始化用 Python
@@ -134,6 +141,9 @@ fi
 BACKEND_HTTP_PORT=${BACKEND_HTTP_PORT:-8003}
 BACKEND_PORT=${BACKEND_INTERNAL_PORT:-${BACKEND_PORT:-$BACKEND_HTTP_PORT}}
 FRONTEND_HTTP_PORT=${FRONTEND_HTTP_PORT:-${FRONTEND_PORT:-8005}}
+# 兼容旧部署：支持前端内部监听端口与公网端口分离（如 Nginx/Caddy 做 HTTPS 反向代理）
+# - FRONTEND_PORT / FRONTEND_INTERNAL_PORT: 前端进程实际监听口（默认跟随 FRONTEND_HTTP_PORT）
+# - FRONTEND_HTTP_PORT / FRONTEND_PUBLIC_PORT: 对外访问口（可为 HTTPS 终止后的公网端口）
 FRONTEND_PORT=${FRONTEND_INTERNAL_PORT:-${FRONTEND_PORT:-$FRONTEND_HTTP_PORT}}
 WEAVIATE_HTTP_PORT=${WEAVIATE_HTTP_PORT:-8008}
 WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-50051}
@@ -155,12 +165,17 @@ if [ -n "$WEAVIATE_API_KEY" ]; then
     CURL_WEAVIATE_AUTH=(-H "Authorization: Bearer $WEAVIATE_API_KEY")
 fi
 
-# Weaviate URL 处理：优先使用 .env 中的 WEAVIATE_URL，否则使用本地
-WEAVIATE_CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
 # 判断是否使用远程 Weaviate
 WEAVIATE_IS_REMOTE=false
 if [ -n "$WEAVIATE_URL" ] && [[ ! "$WEAVIATE_URL" =~ localhost|127\.0\.0\.1 ]]; then
     WEAVIATE_IS_REMOTE=true
+fi
+# 本地 Weaviate：以 WEAVIATE_HTTP_PORT 为准（与 silk 启动的原生/Docker 一致），
+# 避免 .env 里 WEAVIATE_URL 与 WEAVIATE_HTTP_PORT 端口不同步时 Schema/健康检查连错
+if [ "$WEAVIATE_IS_REMOTE" = true ]; then
+    WEAVIATE_CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
+else
+    WEAVIATE_CHECK_URL="http://localhost:$WEAVIATE_HTTP_PORT"
 fi
 # APK 输出目录
 APK_OUTPUT_DIR="$SILK_DIR/backend/static"
@@ -603,8 +618,8 @@ weaviate_stop() {
 weaviate_schema() {
     echo -e "${BLUE}初始化 Weaviate Schema...${NC}"
     
-    # 确定要检查的 Weaviate URL
-    local CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
+    # 与 WEAVIATE_CHECK_URL 一致（本地以 HTTP 端口为准）
+    local CHECK_URL="$WEAVIATE_CHECK_URL"
     
     # 检查是否已就绪
     local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "$CHECK_URL/v1/.well-known/ready" 2>/dev/null)
