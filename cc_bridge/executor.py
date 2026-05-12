@@ -307,6 +307,7 @@ def _parse_user(data: dict[str, Any]) -> ParsedLine:
             "toolUseId": tool_use_id,
             "isError": is_error,
             "summary": summary,
+            "content": content_str,
         })
 
     return ParsedLine(tool_results=results)
@@ -457,7 +458,7 @@ class Executor:
         # -- State for stream processing --
         accumulated_text = ""
         last_meta: dict[str, Any] | None = None
-        active_tool_ids: dict[str, str] = {}  # tool_use_id → log line
+        active_tool_ids: dict[str, dict[str, str]] = {}  # tool_use_id → {line, toolName}
         last_push_time = time.monotonic()
         last_push_len = 0
 
@@ -545,7 +546,10 @@ class Executor:
                 for tool_log in parsed.tool_logs:
                     tool_use_id = tool_log.get("toolUseId")
                     if tool_use_id:
-                        active_tool_ids[tool_use_id] = tool_log["line"]
+                        active_tool_ids[tool_use_id] = {
+                            "line": tool_log["line"],
+                            "toolName": tool_log.get("toolName", ""),
+                        }
                     # Thinking already handled above
                     if tool_log.get("toolName") == "thinking":
                         continue
@@ -559,10 +563,18 @@ class Executor:
                 # ---- Tool results (append checkmark/cross) ----
                 for result in parsed.tool_results:
                     tool_use_id = result.get("toolUseId", "")
-                    original_line = active_tool_ids.pop(tool_use_id, None)
-                    if original_line is not None:
-                        if result.get("isError"):
-                            summary = result.get("summary", "")
+                    info = active_tool_ids.pop(tool_use_id, None)
+                    if info is not None:
+                        original_line = info["line"]
+                        summary = result.get("summary", "")
+                        # AskUserQuestion 通过 hook deny 传回用户答案，
+                        # 实际是成功收到反馈，不应显示为 error
+                        is_ask_answered = (
+                            result.get("isError")
+                            and info["toolName"] == "AskUserQuestion"
+                            and "用户已回答" in result.get("content", "")
+                        )
+                        if result.get("isError") and not is_ask_answered:
                             suffix = f" \u2192 \u274c {summary}" if summary else " \u2192 \u274c"
                         else:
                             suffix = " \u2192 \u2705"
