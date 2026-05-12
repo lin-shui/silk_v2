@@ -129,6 +129,14 @@ CLAUDE_CODE_TIMEOUT: int = int(os.environ.get("CLAUDE_CODE_TIMEOUT", "36000"))
 CLAUDE_CODE_MAX_OUTPUT_CHARS: int = int(
     os.environ.get("CLAUDE_CODE_MAX_OUTPUT_CHARS", "30000")
 )
+_DEFAULT_PERMISSION_MODE = (
+    "none"
+    if hasattr(os, "geteuid") and os.geteuid() == 0
+    else "bypassPermissions"
+)
+CLAUDE_CODE_PERMISSION_MODE: str = os.environ.get(
+    "CLAUDE_CODE_PERMISSION_MODE", _DEFAULT_PERMISSION_MODE
+).strip()
 
 # Proxy for claude CLI subprocess only (does not affect bridge's own connections)
 CLAUDE_HTTP_PROXY: str = os.environ.get("CLAUDE_HTTP_PROXY", "")
@@ -744,9 +752,10 @@ class Executor:
 
         claude_args.extend([
             "--verbose",
-            "--permission-mode", "bypassPermissions",
             "--max-turns", str(CLAUDE_CODE_MAX_TURNS),
         ])
+        if CLAUDE_CODE_PERMISSION_MODE.lower() not in {"", "none", "off", "false", "0"}:
+            claude_args.extend(["--permission-mode", CLAUDE_CODE_PERMISSION_MODE])
 
         # Windows: run claude CLI directly (no PTY needed)
         # Linux:  script -q -c "cmd" /dev/null

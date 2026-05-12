@@ -355,10 +355,6 @@ class AcpAgentServer:
         request_id = str(uuid.uuid4())
         sess.request_id = request_id
 
-        # Terminal-event capture
-        final_result: dict[str, Any] = {}
-        done = asyncio.Event()
-
         # NOTE: on_session_upsert is called *synchronously* by the executor —
         # must be a regular `def`, not `async def`.
         def on_session_upsert(cc_sid: str, wdir: str, title: str) -> None:
@@ -366,26 +362,55 @@ class AcpAgentServer:
 
         notify_send = self._make_notify_send(sid)
 
-        async def send_with_terminal_capture(payload: dict) -> None:
-            evt = payload.get("type", "")
-            if evt == "complete":
-                logger.info("[ACP] executor complete sid=%s meta=%s", sid, payload.get("meta"))
-                final_result["stopReason"] = "end_turn"
-                final_result["meta"] = payload.get("meta") or {}
-                done.set()
-            elif evt == "cancelled":
-                logger.info("[ACP] executor cancelled sid=%s", sid)
-                final_result["stopReason"] = "cancelled"
-                done.set()
-            elif evt == "error":
-                logger.warning("[ACP] executor error sid=%s err=%s", sid, payload.get("error"))
-                final_result["error"] = {
-                    "code": -32000,
-                    "message": payload.get("error") or "executor error",
-                }
-                done.set()
-            else:
-                await notify_send(payload)
+        async def run_executor_once(cc_sid: str, resume_flag: bool) -> dict[str, Any]:
+            final_result: dict[str, Any] = {}
+            done = asyncio.Event()
+
+            logger.info(
+                "[ACP] session/prompt sid=%s cc_sid=%s resume=%s prompt_len=%d",
+                sid, cc_sid, resume_flag, len(prompt_text),
+            )
+
+            async def send_with_terminal_capture(payload: dict) -> None:
+                evt = payload.get("type", "")
+                if evt == "complete":
+                    logger.info(
+                        "[ACP] executor complete sid=%s meta=%s",
+                        sid,
+                        payload.get("meta"),
+                    )
+                    final_result["stopReason"] = "end_turn"
+                    final_result["meta"] = payload.get("meta") or {}
+                    final_result["text"] = payload.get("text") or ""
+                    done.set()
+                elif evt == "cancelled":
+                    logger.info("[ACP] executor cancelled sid=%s", sid)
+                    final_result["stopReason"] = "cancelled"
+                    done.set()
+                elif evt == "error":
+                    logger.warning("[ACP] executor error sid=%s err=%s", sid, payload.get("error"))
+                    final_result["error"] = {
+                        "code": -32000,
+                        "message": payload.get("error") or "executor error",
+                    }
+                    done.set()
+                else:
+                    await notify_send(payload)
+
+            executor_task = asyncio.create_task(
+                self.executor.execute_prompt(
+                    send=send_with_terminal_capture,
+                    request_id=request_id,
+                    prompt=prompt_text,
+                    session_id=cc_sid,
+                    working_dir=sess.cwd,
+                    resume=resume_flag,
+                    on_session_upsert=on_session_upsert,
+                )
+            )
+            executor_task.add_done_callback(_log_task_exception)
+            await done.wait()
+            return final_result
 
         # Resume an existing CC session if we already have a cc_session_id;
         # otherwise create a fresh one.
@@ -396,25 +421,25 @@ class AcpAgentServer:
             cc_session_id = str(uuid.uuid4())
             resume = False
 
-        logger.info(
-            "[ACP] session/prompt sid=%s cc_sid=%s resume=%s prompt_len=%d",
-            sid, cc_session_id, resume, len(prompt_text),
-        )
+        final_result = await run_executor_once(cc_session_id, resume)
 
-        executor_task = asyncio.create_task(
-            self.executor.execute_prompt(
-                send=send_with_terminal_capture,
-                request_id=request_id,
-                prompt=prompt_text,
-                session_id=cc_session_id,
-                working_dir=sess.cwd,
-                resume=resume,
-                on_session_upsert=on_session_upsert,
+        # Some stale/invalid resumed sessions return immediately with zero turns
+        # and empty text. Retry once with a fresh session to avoid blank UI.
+        if (
+            resume
+            and "error" not in final_result
+            and final_result.get("stopReason") == "end_turn"
+            and not (final_result.get("text") or "").strip()
+            and int((final_result.get("meta") or {}).get("numTurns", 0)) == 0
+        ):
+            fresh_cc_session_id = str(uuid.uuid4())
+            sess.cc_session_id = fresh_cc_session_id
+            logger.warning(
+                "[ACP] Empty zero-turn resume result sid=%s old_cc_sid=%s, retrying with fresh session",
+                sid,
+                cc_session_id[:8],
             )
-        )
-        executor_task.add_done_callback(_log_task_exception)
-
-        await done.wait()
+            final_result = await run_executor_once(fresh_cc_session_id, False)
 
         if "error" in final_result:
             logger.info("[ACP] sending prompt error response sid=%s msg_id=%s", sid, msg_id)
