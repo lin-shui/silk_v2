@@ -28,12 +28,17 @@ def main():
         "--session-id", str(uuid.uuid4()),
         "--disallowedTools", "Bash,Write,Edit,ExecuteCommand",
         "--no-chrome",
-        "--permission-mode", "bypassPermissions",
         "--print",
         "--output-format", "stream-json",
         "--verbose",
         "--include-partial-messages",
     ]
+
+    # root 用户下 claude CLI 拒绝 --permission-mode bypassPermissions，
+    # 非 root 时加上可跳过权限交互提示。
+    if os.getuid() != 0:
+        cmd.insert(cmd.index("--no-chrome") + 1, "--permission-mode")
+        cmd.insert(cmd.index("--permission-mode") + 1, "bypassPermissions")
 
     pid, fd = pty.fork()
 

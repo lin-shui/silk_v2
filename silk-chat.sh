@@ -148,9 +148,10 @@ build() {
     print_header "🔨 构建 WebApp"
 
     echo ""
-    echo -e "${BLUE}构建前端生产版本...${NC}"
+    echo -e "${BLUE}构建前端生产版本（webpack 打包）...${NC}"
     cd "$SILK_DIR"
-    ./gradlew :frontend:webApp:compileProductionExecutableKotlinJs --no-build-cache 2>&1 | tail -5
+    # compileProductionExecutableKotlinJs 只产出 compileSync 碎片；需 browserProductionWebpack 才会生成 dist/js/productionExecutable/webApp.js（与 silk.sh build 一致）
+    ./gradlew :frontend:webApp:browserProductionWebpack 2>&1 | tail -8
 
     if [ $? -ne 0 ]; then
         echo -e "${RED}❌ 构建失败${NC}"
@@ -159,12 +160,18 @@ build() {
 
     echo ""
     echo -e "${BLUE}复制到 backend/static/...${NC}"
-    local JS_FILE="$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable/webApp.js"
-    cp "$JS_FILE" "$SILK_DIR/backend/static/webApp.js"
+    local DIST_DIR="$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"
+    if [ ! -f "$DIST_DIR/webApp.js" ]; then
+        echo -e "${RED}❌ 未找到 $DIST_DIR/webApp.js（webpack 是否成功？）${NC}"
+        return 1
+    fi
+    mkdir -p "$SILK_DIR/backend/static"
+    cp -r "$DIST_DIR"/* "$SILK_DIR/backend/static/"
     if [ $? -eq 0 ]; then
+        local JS_FILE="$SILK_DIR/backend/static/webApp.js"
         local JS_SIZE=$(du -h "$JS_FILE" | cut -f1)
         echo -e "${GREEN}✅ WebApp 构建成功${NC}"
-        echo -e "  产物: ${CYAN}$SILK_DIR/backend/static/webApp.js${NC}"
+        echo -e "  产物: ${CYAN}$JS_FILE${NC}"
         echo -e "  大小: ${CYAN}$JS_SIZE${NC}"
     else
         echo -e "${RED}❌ 复制失败${NC}"

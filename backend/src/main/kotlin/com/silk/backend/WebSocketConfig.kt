@@ -319,6 +319,8 @@ class ChatServer(
             }
         }
         logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
+
+        val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
         
         // ✅ URL检测和网页下载索引
         if (message.type == MessageType.TEXT && !message.isTransient && !AgentRuntime.isAgentMessage(message)) {
@@ -332,7 +334,9 @@ class ChatServer(
         }
         
         // ==================== Claude Code 模式拦截 ====================
-        if (message.type == MessageType.TEXT && !message.isTransient
+        // 专属对话 [Silk] 必须走下方 Silk AI（DirectModelAgent）；否则用户若在其它群激活过 /cc，
+        // 此处会把「你好」当成 CC prompt，Bridge 未就绪时表现为空白回复。
+        if (!isSilkPrivateChat && message.type == MessageType.TEXT && !message.isTransient
             && !AgentRuntime.isAgentMessage(message)
         ) {
             val groupId = sessionName
@@ -377,8 +381,7 @@ class ChatServer(
         }
 
         // Silk AI 回复逻辑
-        // 检查是否是 Silk 专属私聊会话（群组名以 "[Silk]" 开头）
-        val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
+        // isSilkPrivateChat：群组名以 "[Silk]" 开头（已在上方计算）
         
         if (!AgentRuntime.isAgentMessage(message) && message.type == MessageType.TEXT && !message.isTransient) {
             messagesSinceAgentResponse++
@@ -660,6 +663,23 @@ class ChatServer(
         }
         broadcastSystemStatus("CLEAR_STATUS")
     }
+
+    /**
+     * Claude PTY（pty_chat）在 thinking 结束时会插入 `<!--THINKING_END-->`；若模型未产出任何正文 text_delta，
+     * 标记之后为空串，Web/Harmony 的 Markdown 可见区域会变成空白。此处补齐占位说明。
+     */
+    private fun ensureSilkReplyVisible(content: String): String {
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) {
+            return "抱歉，本次未生成有效回复，请稍后再试。"
+        }
+        val marker = "<!--THINKING_END-->"
+        val idx = trimmed.indexOf(marker)
+        if (idx < 0) return trimmed
+        val after = trimmed.substring(idx + marker.length).trim()
+        if (after.isNotEmpty()) return trimmed
+        return trimmed + "\n\n*（模型未输出正文，请重试。）*"
+    }
     
     /**
      * 生成智能回答 - 简化流程
@@ -772,7 +792,7 @@ class ChatServer(
                         }
                     }
                     "complete" -> {
-                        fullResponse = content
+                        fullResponse = ensureSilkReplyVisible(content)
                         agentReferences = directModelAgent.lastAgentResponse?.references ?: emptyList()
                     }
                     "error" -> {
@@ -826,12 +846,8 @@ class ChatServer(
             }
             
             val agentResponse = directModelAgent.lastAgentResponse
-            if (agentResponse != null) {
-                fullResponse = agentResponse.content
-                agentReferences = agentResponse.references
-            } else {
-                fullResponse = response
-            }
+            fullResponse = ensureSilkReplyVisible(agentResponse?.content ?: response)
+            agentReferences = agentResponse?.references ?: emptyList()
             logger.debug("🏁 [generateIntelligentResponse-{}] 函数执行完成，响应长度: {}, 引用数: {}", callId, fullResponse.length, agentReferences.size)
 
             if (userId.isNotBlank() && getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true) {

@@ -3597,9 +3597,13 @@ fun MarkdownContent(
         val htmlSafeContent = content.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
         // Convert thinking section (before <!--THINKING_END-->) to collapsible <details>
         // Note: processing on raw `content` so thinking-text escaping doesn't double-escape
-        val withThinkingDetails = if (content.contains("<!--THINKING_END-->")) {
-            val idx = content.indexOf("<!--THINKING_END-->")
+        val thinkingMarker = "<!--THINKING_END-->"
+        val withThinkingDetails = if (content.contains(thinkingMarker)) {
+            val idx = content.indexOf(thinkingMarker)
             val thinkingText = content.substring(0, idx).trim()
+            val tailRaw = content.substring(idx + thinkingMarker.length).trimStart('\n').trim()
+            val tailEffective =
+                if (tailRaw.isBlank()) "*（本次仅有思考过程或未生成正文，请重试。）*" else tailRaw
             val escaped = thinkingText
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")
@@ -3608,8 +3612,7 @@ fun MarkdownContent(
             "<details class=\"silk-thinking-details\" open>\n" +
             "<summary>💭 思考过程</summary>\n" +
             escaped + "\n</details>\n\n" +
-            // Response part uses htmlSafeContent version (with < escaped)
-            htmlSafeContent.substring(idx + "<!--THINKING_END-->".length).trimStart('\n')
+            tailEffective.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
         } else {
             htmlSafeContent
         }
