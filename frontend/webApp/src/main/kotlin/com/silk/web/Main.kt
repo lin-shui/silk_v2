@@ -3638,7 +3638,7 @@ private fun linkCitationMarkers(
             if (ref.url != null) {
                 "<a href=\"${ref.url}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"silk-citation-chip\">$label</a>"
             } else {
-                "<span class=\"silk-citation-chip silk-citation-nav\" data-idx=\"$idx\" style=\"cursor:pointer\">$label</span>"
+                "<a href=\"#${anchorPrefix}ref-$idx\" class=\"silk-citation-chip silk-citation-nav\" data-idx=\"$idx\">$label</a>"
             }
         } else {
             match.value

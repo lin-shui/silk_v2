@@ -39,6 +39,7 @@ import org.jetbrains.compose.web.css.fontWeight
 import org.jetbrains.compose.web.css.height
 import org.jetbrains.compose.web.css.justifyContent
 import org.jetbrains.compose.web.css.left
+import org.jetbrains.compose.web.css.margin
 import org.jetbrains.compose.web.css.marginBottom
 import org.jetbrains.compose.web.css.marginTop
 import org.jetbrains.compose.web.css.padding
@@ -54,6 +55,7 @@ import org.jetbrains.compose.web.dom.Div
 import org.jetbrains.compose.web.dom.H3
 import org.jetbrains.compose.web.dom.Input
 import org.jetbrains.compose.web.dom.Option
+import org.jetbrains.compose.web.dom.P
 import org.jetbrains.compose.web.dom.Select
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
