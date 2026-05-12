@@ -166,7 +166,9 @@ class DirectModelAgent(
             appendLine("当你使用网络搜索获取信息后，必须在回答中标注信息来源：")
             appendLine("- 引用网络搜索结果时，在相关内容末尾添加 [citation:数字]")
             appendLine("- 第一个搜索结果的引用编号为 [citation:1]，第二个为 [citation:2]，以此类推")
+            appendLine("- 引用标记必须放在相关内容的句末或段末")
             appendLine("- 每个重要观点都必须标注来源引用，不能遗漏")
+            appendLine("- 禁止堆砌大量引用标记；只为对应观点添加必要引用")
             appendLine("- 如果你没有使用网络搜索，则不需要添加引用标记")
         }
     }
