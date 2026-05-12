@@ -5,7 +5,7 @@ on:
     types: [opened, reopened, synchronize, ready_for_review, edited]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -46,7 +46,7 @@ jobs:
                 }
 
                 const retriable =
-                  /Head branch was modified|Resource not accessible by integration|INTERNAL|Something went wrong/i.test(message);
+                  /Head branch was modified|INTERNAL|Something went wrong/i.test(message);
                 if (retriable && attempt < maxAttempts) {
                   core.warning(`Attempt ${attempt} failed: ${message}`);
                   await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
