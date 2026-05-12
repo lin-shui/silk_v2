@@ -3872,7 +3872,7 @@ fun AIMessageCard(
     onToggleSelection: (String) -> Unit = {},
     onEnterSelectionMode: (String) -> Unit = {}
 ) {
-    var isExpanded by remember(message.id) { mutableStateOf(isLastMessage) }  // 最后一条默认展开
+    var isExpanded by remember(message.id) { mutableStateOf(false) }  // 默认收起
     val isLongContent = message.content.length > 500
     val effectiveExpanded = if (isTransient) true else isExpanded
     val collapsedPreview = remember(message.content) {
@@ -3922,10 +3922,6 @@ fun AIMessageCard(
                 property("outline", "2px solid ${SilkColors.primary}")
                 backgroundColor(Color("rgba(76, 175, 80, 0.05)"))
             }
-            if (isLongContent && effectiveExpanded && !isTransient) {
-                display(DisplayStyle.Flex)
-                flexDirection(FlexDirection.Column)
-            }
         }
     }) {
         // AI 头部标识
@@ -3935,9 +3931,6 @@ fun AIMessageCard(
                 alignItems(AlignItems.Center)
                 property("gap", "10px")
                 marginBottom(12.px)
-                if (isLongContent && effectiveExpanded && !isTransient) {
-                    property("flex-shrink", "0")
-                }
             }
         }) {
             // AI 图标
@@ -4012,39 +4005,18 @@ fun AIMessageCard(
         
         // 内容区域
         if (effectiveExpanded || !isLongContent) {
-            if (isLongContent && effectiveExpanded && !isTransient) {
-                Div({
-                    classes(SilkStylesheet.aiMessageContent)
-                    style {
-                        property("flex", "1")
-                        property("min-height", "0")
-                        property("overflow-y", "auto")
-                    }
-                }) {
-                    MarkdownContent(
-                        content = message.content,
-                        references = message.references,
-                        referenceAnchorPrefix = "msg-${message.id}-"
-                    )
-                    ReferenceSourcesList(
-                        references = message.references,
-                        anchorPrefix = "msg-${message.id}-"
-                    )
-                }
-            } else {
-                Div({
-                    classes(SilkStylesheet.aiMessageContent)
-                }) {
-                    MarkdownContent(
-                        content = message.content,
-                        references = message.references,
-                        referenceAnchorPrefix = "msg-${message.id}-"
-                    )
-                    ReferenceSourcesList(
-                        references = message.references,
-                        anchorPrefix = "msg-${message.id}-"
-                    )
-                }
+            Div({
+                classes(SilkStylesheet.aiMessageContent)
+            }) {
+                MarkdownContent(
+                    content = message.content,
+                    references = message.references,
+                    referenceAnchorPrefix = "msg-${message.id}-"
+                )
+                ReferenceSourcesList(
+                    references = message.references,
+                    anchorPrefix = "msg-${message.id}-"
+                )
             }
         } else {
             // 折叠时显示摘要
@@ -4096,9 +4068,6 @@ fun AIMessageCard(
                     marginTop(12.px)
                     paddingTop(8.px)
                     property("border-top", "1px solid rgba(232, 224, 212, 0.5)")
-                    if (isLongContent && effectiveExpanded && !isTransient) {
-                        property("flex-shrink", "0")
-                    }
                 }
             }) {
                 Span({
