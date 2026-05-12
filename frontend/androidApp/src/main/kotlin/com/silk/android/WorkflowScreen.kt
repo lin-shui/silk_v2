@@ -246,27 +246,30 @@ private fun CreateWorkflowDialog(
     val scope = rememberCoroutineScope()
     var newName by remember { mutableStateOf("") }
     var newInitialDir by remember { mutableStateOf("") }
-    var dirLoadError by remember { mutableStateOf<String?>(null) }
+    var bridgeConnected by remember { mutableStateOf(true) }
+    var dirWarning by remember { mutableStateOf<String?>(null) }
     var showFolderPicker by remember { mutableStateOf(false) }
     var showTrustConfirm by remember { mutableStateOf(false) }
     var trustBridgeId by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
 
-    // 打开时拉一次 Bridge 默认目录
+    // 打开时检查 Bridge 连接状态并拉默认目录
     LaunchedEffect(Unit) {
-        if (newInitialDir.isBlank()) {
-            dirLoadError = null
+        val settings = ApiClient.getCcSettings(userId)
+        bridgeConnected = settings.bridgeConnected
+        if (newInitialDir.isBlank() && bridgeConnected) {
+            dirWarning = null
             val resp = ApiClient.listCcDir(userId, null)
             if (resp.success && resp.path.isNotBlank()) {
                 newInitialDir = resp.path
             } else {
-                dirLoadError = resp.error ?: "无法获取默认目录"
+                dirWarning = resp.error ?: "无法获取默认目录"
             }
         }
     }
 
-    val canCreate = !submitting && dirLoadError == null &&
+    val canCreate = !submitting && bridgeConnected &&
                     newName.isNotBlank() && newInitialDir.isNotBlank()
 
     AlertDialog(
@@ -297,25 +300,35 @@ private fun CreateWorkflowDialog(
                         onValueChange = { newInitialDir = it },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        enabled = dirLoadError == null,
+                        enabled = bridgeConnected,
                         placeholder = {
                             Text(
-                                if (dirLoadError != null) "Bridge 未连接，请先启动 Bridge"
-                                else "加载默认目录中…",
+                                when {
+                                    !bridgeConnected -> "Bridge 未连接，请先启动 Bridge"
+                                    dirWarning != null -> "请输入或选择工作目录"
+                                    else -> "加载默认目录中…"
+                                },
                             )
                         },
                     )
                     TextButton(
                         onClick = { showFolderPicker = true },
-                        enabled = dirLoadError == null,
+                        enabled = bridgeConnected,
                     ) { Text("📂 选择") }
                 }
-                if (dirLoadError != null) {
+                if (!bridgeConnected) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "⚠ $dirLoadError。请先启动 Bridge Agent 再创建工作流。",
+                        "⚠ Bridge 未连接。请先启动 Bridge Agent 再创建工作流。",
                         style = MaterialTheme.typography.bodySmall,
                         color = SilkColors.error,
+                    )
+                } else if (dirWarning != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "⚠ $dirWarning，请手动输入或选择工作目录。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SilkColors.warning,
                     )
                 }
             }
