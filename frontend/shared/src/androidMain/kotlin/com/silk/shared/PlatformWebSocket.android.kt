@@ -1,10 +1,25 @@
 package com.silk.shared
 
-import io.ktor.client.*
-import io.ktor.client.engine.okhttp.*
-import io.ktor.client.plugins.websocket.*
-import io.ktor.websocket.*
-import kotlinx.coroutines.*
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
+import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
+import io.ktor.websocket.send
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.concurrent.atomic.AtomicBoolean
@@ -61,6 +76,8 @@ actual class PlatformWebSocket actual constructor(
         println(message)
         onLog?.invoke(message)
     }
+
+    private fun rethrowCancellation(error: CancellationException): Nothing = throw error
     
     actual val isConnected: Boolean
         get() = session != null && !isExplicitlyDisconnected.get()
@@ -115,8 +132,14 @@ actual class PlatformWebSocket actual constructor(
                         }
                     } catch (e: CancellationException) {
                         log("⏹️ [WebSocket] 连接被取消（正常断开）")
-                        throw e
-                    } catch (e: Exception) {
+                        rethrowCancellation(e)
+                    } catch (e: IOException) {
+                        log("❌ [WebSocket] 接收错误: ${e.message}")
+                        // 非正常断开，尝试重连
+                        if (!isExplicitlyDisconnected.get()) {
+                            attemptReconnect(userId, userName, groupId)
+                        }
+                    } catch (e: IllegalStateException) {
                         log("❌ [WebSocket] 接收错误: ${e.message}")
                         // 非正常断开，尝试重连
                         if (!isExplicitlyDisconnected.get()) {
@@ -124,7 +147,17 @@ actual class PlatformWebSocket actual constructor(
                         }
                     }
                 }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                rethrowCancellation(e)
+            } catch (e: IOException) {
+                isConnecting.set(false)
+                if (!isExplicitlyDisconnected.get()) {
+                    log("❌ [WebSocket] 连接失败: ${e.message}")
+                    withContext(Dispatchers.Main) { onError(e.message ?: "Unknown error") }
+                    // 尝试重连
+                    attemptReconnect(userId, userName, groupId)
+                }
+            } catch (e: IllegalStateException) {
                 isConnecting.set(false)
                 if (!isExplicitlyDisconnected.get()) {
                     log("❌ [WebSocket] 连接失败: ${e.message}")
@@ -155,12 +188,21 @@ actual class PlatformWebSocket actual constructor(
                 val now = System.currentTimeMillis()
                 if (now - lastKeepAlive > 60_000) {
                     // 超过60秒没有任何活动，发送心跳
+                    var keepAliveSent = true
                     try {
                         session?.send(Frame.Text("❤️"))
                         log("💓 [WebSocket] 发送保活心跳")
                         lastKeepAlive = now
-                    } catch (e: Exception) {
+                    } catch (e: CancellationException) {
+                        rethrowCancellation(e)
+                    } catch (e: IOException) {
                         log("⚠️ [WebSocket] 发送心跳失败: ${e.message}")
+                        keepAliveSent = false
+                    } catch (e: IllegalStateException) {
+                        log("⚠️ [WebSocket] 发送心跳失败: ${e.message}")
+                        keepAliveSent = false
+                    }
+                    if (!keepAliveSent) {
                         break
                     }
                 }
@@ -201,7 +243,15 @@ actual class PlatformWebSocket actual constructor(
         scope.launch {
             try {
                 session?.send(Frame.Text(message))
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                rethrowCancellation(e)
+            } catch (e: IOException) {
+                log("❌ [WebSocket] 发送失败: ${e.message}")
+                // 发送失败可能意味着连接断了
+                if (!isExplicitlyDisconnected.get()) {
+                    withContext(Dispatchers.Main) { onError("Send failed: ${e.message}") }
+                }
+            } catch (e: IllegalStateException) {
                 log("❌ [WebSocket] 发送失败: ${e.message}")
                 // 发送失败可能意味着连接断了
                 if (!isExplicitlyDisconnected.get()) {
@@ -219,12 +269,17 @@ actual class PlatformWebSocket actual constructor(
             try {
                 keepAliveJob?.cancel()
                 session?.close(CloseReason(CloseReason.Codes.NORMAL, "Client disconnecting"))
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                rethrowCancellation(e)
+            } catch (e: IOException) {
                 log("⚠️ [WebSocket] 关闭异常: ${e.message}")
+            } catch (e: IllegalStateException) {
+                log("⚠️ [WebSocket] 关闭异常: ${e.message}")
+            } finally {
+                job?.cancel()
+                session = null
+                isConnecting.set(false)
             }
-            job?.cancel()
-            session = null
-            isConnecting.set(false)
         }
     }
     

@@ -29,9 +29,12 @@ from typing import Any
 import websockets
 from websockets.exceptions import ConnectionClosed
 
+import pathlib
+
 from executor import Executor
 from fs_listing import list_directory
-from session_manager import SessionManager
+from cc_session_index import find_session_file, list_local_sessions
+from permission_server import PermissionServer
 
 logger = logging.getLogger("acp_bridge")
 
@@ -46,12 +49,16 @@ class AcpSession:
     """State held per ACP session id (one per workflow group on backend)."""
 
     cwd: str
-    cc_session_id: str | None = None  # Claude CLI's real session id (from `complete.meta`)
+    cli_session_id: str | None = None  # Claude CLI's real session id (from `complete.meta`)
     accumulated: str = ""  # full streamed text so far — used to compute deltas
     seen_tool_ids: set[str] = field(default_factory=set)
     cancelled: bool = False
     request_id: str | None = None  # current in-flight executor request id
 
+
+SILK_BRIDGE_DATA_DIR = pathlib.Path(
+    os.environ.get("SILK_BRIDGE_DATA_DIR", os.path.join(os.path.dirname(__file__), "data"))
+)
 
 # ---------------------------------------------------------------------------
 # ACP server
@@ -76,14 +83,165 @@ class AcpAgentServer:
 
         self.ws: websockets.WebSocketClientProtocol | None = None
         self.executor = Executor()
-        self.session_manager = SessionManager()
         self.sessions: dict[str, AcpSession] = {}
+        self._cli_to_acp: dict[str, str] = {}   # cli_session_id → acp_session_id
+        self.perm_server: PermissionServer | None = None
+
+    # ------------------------------------------------------------------
+    # PermissionServer lifecycle
+    # ------------------------------------------------------------------
+
+    def _start_permission_server(self) -> None:
+        SILK_BRIDGE_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        self.perm_server = PermissionServer(
+            on_permission_request=self._on_permission_request,
+            default_timeout=300.0,
+        )
+        port = self.perm_server.start()
+        port_file = SILK_BRIDGE_DATA_DIR / ".silk_perm_port"
+        timeout_file = SILK_BRIDGE_DATA_DIR / ".silk_perm_timeout"
+        port_file.write_text(str(port))
+        timeout_file.write_text(str(int(self.perm_server.default_timeout)))
+        self._setup_hook()
+        logger.info("[ACP] PermissionServer started on port %d", port)
+
+    def _stop_permission_server(self) -> None:
+        if self.perm_server:
+            self.perm_server.stop()
+            self.perm_server = None
+        port_file = SILK_BRIDGE_DATA_DIR / ".silk_perm_port"
+        try:
+            port_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _setup_hook(self) -> None:
+        """Register permission_hook.sh in ~/.claude/settings.json if not already present."""
+        hook_script = str(pathlib.Path(__file__).parent / "permission_hook.sh")
+        settings_path = pathlib.Path.home() / ".claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+        settings: dict = {}
+        if settings_path.exists():
+            try:
+                settings = json.loads(settings_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        hooks = settings.setdefault("hooks", {})
+        pre_hooks: list = hooks.get("PreToolUse", [])
+
+        # Check if our hook is already registered
+        for entry in pre_hooks:
+            for h in entry.get("hooks", []):
+                if h.get("command", "") == hook_script:
+                    logger.info("[ACP] Hook already registered in %s", settings_path)
+                    return
+
+        pre_hooks.append({
+            "matcher": "",
+            "hooks": [{"type": "command", "command": hook_script}],
+        })
+        hooks["PreToolUse"] = pre_hooks
+        settings["hooks"] = hooks
+        settings_path.write_text(json.dumps(settings, indent=2, ensure_ascii=False))
+        logger.info("[ACP] PreToolUse hook registered in %s", settings_path)
+
+    def _on_permission_request(
+        self,
+        session_id: str,     # CLI session ID
+        request_id: str,
+        tool_name: str,
+        tool_input: dict,
+    ) -> None:
+        """Called by PermissionServer when hook sends a permission request."""
+        # First version: only handle AskUserQuestion, auto-allow everything else
+        if tool_name != "AskUserQuestion":
+            if self.perm_server:
+                self.perm_server.resolve_request(request_id, "allow")
+            return
+
+        # Map CLI session ID → ACP session ID
+        acp_session_id = self._cli_to_acp.get(session_id)
+        if not acp_session_id:
+            logger.warning(
+                "[ACP] AskUserQuestion: no ACP session for CLI session %s",
+                session_id[:8],
+            )
+            if self.perm_server:
+                self.perm_server.resolve_request(request_id, "allow")
+            return
+
+        # Extract questions from tool_input.
+        # AskUserQuestion.questions is an array of objects:
+        #   { question: str, header: str, options: [{label, description}], multiSelect: bool }
+        # We flatten each into a display string (question text + options).
+        raw_questions = tool_input.get("questions", [])
+        questions: list[str] = []
+        for q in raw_questions:
+            if isinstance(q, dict):
+                text = q.get("question", "")
+                options = q.get("options", [])
+                if options:
+                    lines = [text]
+                    for i, opt in enumerate(options):
+                        label = opt.get("label", "") if isinstance(opt, dict) else str(opt)
+                        desc = opt.get("description", "") if isinstance(opt, dict) else ""
+                        lines.append(f"  {chr(65 + i)}. {label}" + (f" — {desc}" if desc else ""))
+                    text = "\n".join(lines)
+                if text:
+                    questions.append(text)
+            elif isinstance(q, str) and q:
+                questions.append(q)
+
+        if not questions:
+            # Fallback: try "question" (singular) field
+            q = tool_input.get("question", "")
+            if isinstance(q, str) and q:
+                questions = [q]
+
+        if not questions:
+            logger.warning("[ACP] AskUserQuestion: no valid questions in tool_input: %s", tool_input)
+            if self.perm_server:
+                self.perm_server.resolve_request(
+                    request_id, "deny", reason="AskUserQuestion 未包含有效问题。"
+                )
+            return
+
+        # Set per-question timeout (300s per question)
+        if self.perm_server:
+            self.perm_server.set_request_timeout(request_id, 300.0 * len(questions))
+
+        # Send ACP notification to backend
+        logger.info(
+            "[ACP] AskUserQuestion: forwarding %d question(s), request=%s, session=%s",
+            len(questions), request_id[:8], acp_session_id[:8],
+        )
+        asyncio.run_coroutine_threadsafe(
+            self._send_notification("session/update", {
+                "sessionId": acp_session_id,
+                "update": {
+                    "sessionUpdate": "ask_user_question",
+                    "requestId": request_id,
+                    "questions": questions,
+                },
+            }),
+            self._loop,
+        )
 
     # ------------------------------------------------------------------
     # Connect loop with exponential backoff
     # ------------------------------------------------------------------
 
     async def run(self) -> None:
+        # Must capture event loop BEFORE starting PermissionServer, because the
+        # on_permission_request callback uses asyncio.run_coroutine_threadsafe
+        # which needs self._loop to be set.
+        self._loop = asyncio.get_event_loop()
+
+        # Start permission server for PreToolUse hook
+        self._start_permission_server()
+
         connect_kw: dict[str, Any] = {
             "ping_interval": 30,
             "ping_timeout": 10,
@@ -213,6 +371,8 @@ class AcpAgentServer:
                 await self._handle_silk_set_cwd(msg_id, params)
             elif method == "_silk/list_dir":
                 await self._handle_silk_list_dir(msg_id, params)
+            elif method == "_silk/resolve_question":
+                await self._handle_silk_resolve_question(msg_id, params)
             else:
                 await self._send_error(msg_id, -32601, f"Method not found: {method}")
         except Exception as exc:
@@ -249,6 +409,7 @@ class AcpAgentServer:
                         "listLocalSessions": True,
                         "setCwd": True,
                         "listDir": True,
+                        "resolveQuestion": True,
                     },
                 },
             },
@@ -261,17 +422,17 @@ class AcpAgentServer:
     async def _handle_session_new(self, msg_id: Any, params: Any) -> None:
         p = params or {}
         cwd = p.get("cwd") or self.default_cwd
-        cc_session_id = p.get("ccSessionId")
+        cli_session_id = p.get("cliSessionId")
         acp_session_id = str(uuid.uuid4())
         sess = AcpSession(cwd=os.path.realpath(cwd))
-        if cc_session_id:
-            # backend seed：续旧 CC session（重启后从 WorkflowPersistence 拿来的 cc_session_id）
-            # 下次 session/prompt 会因 sess.cc_session_id 非空而走 resume=True
-            sess.cc_session_id = cc_session_id
+        if cli_session_id:
+            # backend seed：续旧 CLI session（重启后从 WorkflowPersistence 拿来的 cli_session_id）
+            # 下次 session/prompt 会因 sess.cli_session_id 非空而走 resume=True
+            sess.cli_session_id = cli_session_id
         self.sessions[acp_session_id] = sess
         logger.info(
-            "[ACP] session/new: %s cwd=%s cc_seed=%s",
-            acp_session_id, cwd, (cc_session_id or "")[:8],
+            "[ACP] session/new: %s cwd=%s cli_seed=%s",
+            acp_session_id, cwd, (cli_session_id or "")[:8],
         )
         await self._send_response(msg_id, {"sessionId": acp_session_id})
 
@@ -283,11 +444,9 @@ class AcpAgentServer:
         """Bind a backend ACP session to a known Claude CLI session.
 
         ``params.sessionId`` is the Claude CLI session id (or a unique prefix
-        thereof) — Silk persists these in ``~/.silk/cc_sessions.json`` via
-        :class:`SessionManager`. We look it up there; if found, we mint a
-        fresh ACP UUID and seed ``cc_session_id`` so the next prompt runs
-        ``claude --resume <session_id>``. Working directory falls back to the
-        record's persisted ``workingDir`` when the caller's ``cwd`` is empty.
+        thereof). We scan ``~/.claude/projects/`` to find the matching session
+        file. If found, we mint a fresh ACP UUID and seed ``cli_session_id``
+        so the next prompt runs ``claude --resume <session_id>``.
         """
         p = params or {}
         prefix = p.get("sessionId")
@@ -295,24 +454,21 @@ class AcpAgentServer:
         if not prefix:
             await self._send_error(msg_id, -32602, "missing sessionId")
             return
-        record = await asyncio.to_thread(self.session_manager.resume_session, prefix)
+        record = await asyncio.to_thread(find_session_file, prefix)
         if record is None:
             await self._send_error(
                 msg_id, -32602, f"claude session not found: {prefix}"
             )
             return
-        cc_session_id = record.get("sessionId") or prefix
-        # Prefer the caller's cwd; fall back to the persisted workingDir
-        # (Silk often calls session/load right after a fresh workflow open
-        # where no cwd has been negotiated yet).
+        cli_session_id = record["sessionId"]
         if not cwd:
             cwd = record.get("workingDir") or self.default_cwd
         acp_session_id = str(uuid.uuid4())
-        sess = AcpSession(cwd=os.path.realpath(cwd), cc_session_id=cc_session_id)
+        sess = AcpSession(cwd=os.path.realpath(cwd), cli_session_id=cli_session_id)
         self.sessions[acp_session_id] = sess
         logger.info(
-            "[ACP] session/load: acp=%s cc_sid=%s",
-            acp_session_id, cc_session_id[:8],
+            "[ACP] session/load: acp=%s cli_sid=%s",
+            acp_session_id, cli_session_id[:8],
         )
         await self._send_response(
             msg_id, {"sessionId": acp_session_id, "loaded": True}
@@ -357,18 +513,18 @@ class AcpAgentServer:
 
         # NOTE: on_session_upsert is called *synchronously* by the executor —
         # must be a regular `def`, not `async def`.
-        def on_session_upsert(cc_sid: str, wdir: str, title: str) -> None:
-            sess.cc_session_id = cc_sid
+        def on_session_upsert(cli_sid: str, wdir: str, title: str) -> None:
+            sess.cli_session_id = cli_sid
 
         notify_send = self._make_notify_send(sid)
 
-        async def run_executor_once(cc_sid: str, resume_flag: bool) -> dict[str, Any]:
+        async def run_executor_once(cli_sid: str, resume_flag: bool) -> dict[str, Any]:
             final_result: dict[str, Any] = {}
             done = asyncio.Event()
 
             logger.info(
-                "[ACP] session/prompt sid=%s cc_sid=%s resume=%s prompt_len=%d",
-                sid, cc_sid, resume_flag, len(prompt_text),
+                "[ACP] session/prompt sid=%s cli_sid=%s resume=%s prompt_len=%d",
+                sid, cli_sid, resume_flag, len(prompt_text),
             )
 
             async def send_with_terminal_capture(payload: dict) -> None:
@@ -402,7 +558,7 @@ class AcpAgentServer:
                     send=send_with_terminal_capture,
                     request_id=request_id,
                     prompt=prompt_text,
-                    session_id=cc_sid,
+                    session_id=cli_sid,
                     working_dir=sess.cwd,
                     resume=resume_flag,
                     on_session_upsert=on_session_upsert,
@@ -412,16 +568,29 @@ class AcpAgentServer:
             await done.wait()
             return final_result
 
-        # Resume an existing CC session if we already have a cc_session_id;
+        # Resume an existing CLI session if we already have a cli_session_id;
         # otherwise create a fresh one.
-        if sess.cc_session_id:
-            cc_session_id = sess.cc_session_id
+        if sess.cli_session_id:
+            cli_session_id = sess.cli_session_id
             resume = True
         else:
-            cc_session_id = str(uuid.uuid4())
+            cli_session_id = str(uuid.uuid4())
             resume = False
 
-        final_result = await run_executor_once(cc_session_id, resume)
+        def register_cli_session(cli_sid: str) -> None:
+            self._cli_to_acp[cli_sid] = sid
+            if self.perm_server:
+                self.perm_server.register_session(cli_sid)
+
+        def unregister_cli_session(cli_sid: str) -> None:
+            if cli_sid in self._cli_to_acp:
+                del self._cli_to_acp[cli_sid]
+            if self.perm_server:
+                self.perm_server.unregister_session(cli_sid)
+
+        active_cli_session_id = cli_session_id
+        register_cli_session(active_cli_session_id)
+        final_result = await run_executor_once(active_cli_session_id, resume)
 
         # Some stale/invalid resumed sessions return immediately with zero turns
         # and empty text. Retry once with a fresh session to avoid blank UI.
@@ -432,14 +601,18 @@ class AcpAgentServer:
             and not (final_result.get("text") or "").strip()
             and int((final_result.get("meta") or {}).get("numTurns", 0)) == 0
         ):
-            fresh_cc_session_id = str(uuid.uuid4())
-            sess.cc_session_id = fresh_cc_session_id
+            old_cli_sid = active_cli_session_id
+            fresh_cli_sid = str(uuid.uuid4())
+            sess.cli_session_id = fresh_cli_sid
+            unregister_cli_session(old_cli_sid)
+            register_cli_session(fresh_cli_sid)
+            active_cli_session_id = fresh_cli_sid
             logger.warning(
-                "[ACP] Empty zero-turn resume result sid=%s old_cc_sid=%s, retrying with fresh session",
+                "[ACP] Empty zero-turn resume result sid=%s old_cli_sid=%s, retrying with fresh session",
                 sid,
-                cc_session_id[:8],
+                old_cli_sid[:8],
             )
-            final_result = await run_executor_once(fresh_cc_session_id, False)
+            final_result = await run_executor_once(fresh_cli_sid, False)
 
         if "error" in final_result:
             logger.info("[ACP] sending prompt error response sid=%s msg_id=%s", sid, msg_id)
@@ -453,14 +626,14 @@ class AcpAgentServer:
                 "[ACP] sending prompt response sid=%s msg_id=%s stopReason=%s",
                 sid, msg_id, final_result["stopReason"],
             )
-            # 把 cc_session_id（Claude CLI 真实 session id）和耗时/费用/轮次通过 meta 报回 backend，
-            # backend 用 ccSessionId 持久化用于 resume，其余字段格式化成会话末尾的"⏱ ..."提示行。
+            # 把 cli_session_id（Claude CLI 真实 session id）和耗时/费用/轮次通过 meta 报回 backend，
+            # backend 用 cliSessionId 持久化用于 resume，其余字段格式化成会话末尾的"⏱ ..."提示行。
             response_payload: dict[str, Any] = {"stopReason": final_result["stopReason"]}
             executor_meta = final_result.get("meta") or {}
-            cc_sid = executor_meta.get("sessionId") or sess.cc_session_id
+            cli_sid = executor_meta.get("sessionId") or sess.cli_session_id
             meta_out: dict[str, Any] = {}
-            if cc_sid:
-                meta_out["ccSessionId"] = cc_sid
+            if cli_sid:
+                meta_out["cliSessionId"] = cli_sid
             for k in ("costUsd", "durationMs", "numTurns"):
                 if k in executor_meta:
                     meta_out[k] = executor_meta[k]
@@ -469,6 +642,9 @@ class AcpAgentServer:
             await self._send_response(msg_id, response_payload)
 
         sess.request_id = None
+
+        # Unregister CLI session (prompt completed)
+        unregister_cli_session(active_cli_session_id)
 
     def _make_notify_send(self, acp_session_id: str):
         """Build a `send`-style callback that emits ACP `session/update` events."""
@@ -573,7 +749,10 @@ class AcpAgentServer:
     # ------------------------------------------------------------------
 
     async def _handle_silk_list_sessions(self, msg_id: Any, params: Any) -> None:
-        sessions = self.session_manager.list_sessions()
+        cwd = os.path.realpath((params or {}).get("cwd") or "")
+        sessions = await asyncio.to_thread(list_local_sessions)
+        if cwd:
+            sessions = [s for s in sessions if os.path.realpath(s.get("workingDir", "")) == cwd]
         await self._send_response(msg_id, {"sessions": sessions})
 
     async def _handle_silk_set_cwd(self, msg_id: Any, params: Any) -> None:
@@ -588,9 +767,9 @@ class AcpAgentServer:
             return
         resolved = os.path.realpath(cwd)
         sess.cwd = resolved
-        # cwd change invalidates the underlying CC session — next prompt will
+        # cwd change invalidates the underlying CLI session — next prompt will
         # spawn a fresh one.
-        sess.cc_session_id = None
+        sess.cli_session_id = None
         logger.info("[ACP] _silk/set_cwd sid=%s cwd=%s", sid, resolved)
         await self._send_response(msg_id, {"ok": True, "path": resolved})
 
@@ -608,7 +787,7 @@ class AcpAgentServer:
         if sess is None:
             await self._send_error(msg_id, -32602, f"Unknown session: {sid}")
             return
-        if not sess.cc_session_id:
+        if not sess.cli_session_id:
             await self._send_error(msg_id, -32000, "no active session to compact")
             return
 
@@ -623,7 +802,7 @@ class AcpAgentServer:
                 capture["error"] = payload.get("error") or "compact error"
                 done.set()
 
-        def _noop_upsert(cc_sid: str, wdir: str, title: str) -> None:
+        def _noop_upsert(cli_sid: str, wdir: str, title: str) -> None:
             return None
 
         compact_task = asyncio.create_task(
@@ -631,7 +810,7 @@ class AcpAgentServer:
                 send=send,
                 request_id=str(uuid.uuid4()),
                 prompt="/compact",
-                session_id=sess.cc_session_id,
+                session_id=sess.cli_session_id,
                 working_dir=sess.cwd,
                 resume=True,
                 on_session_upsert=_noop_upsert,
@@ -644,6 +823,35 @@ class AcpAgentServer:
             await self._send_error(msg_id, -32000, capture["error"])
         else:
             await self._send_response(msg_id, {"ok": True})
+
+    async def _handle_silk_resolve_question(self, msg_id: Any, params: Any) -> None:
+        p = params or {}
+        request_id = p.get("requestId", "")
+        answer = p.get("answer", "")
+
+        if not request_id:
+            await self._send_error(msg_id, -32602, "Missing requestId")
+            return
+
+        # DENY the tool with the user's answer in the reason.
+        # In -p (non-interactive) mode, AskUserQuestion cannot collect input —
+        # if we allowed it, the tool would run but return empty.  By denying
+        # with a structured reason, the model receives the answer via the
+        # hook deny message and can proceed without re-asking.
+        formatted_reason = (
+            f"用户已回答了你的问题：\n\n"
+            f"{answer}\n\n"
+            f"请直接使用以上回答继续处理，不需要再次提问。"
+        )
+
+        if self.perm_server and self.perm_server.resolve_request(
+            request_id, "deny", reason=formatted_reason,
+        ):
+            logger.info("[ACP] resolve_question: resolved %s (deny with answer)", request_id[:8])
+            await self._send_response(msg_id, {"ok": True})
+        else:
+            logger.warning("[ACP] resolve_question: unknown request %s", request_id[:8])
+            await self._send_error(msg_id, -32602, f"Unknown request: {request_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -767,6 +975,7 @@ def main() -> None:
     try:
         loop.run_until_complete(_runner())
     finally:
+        server._stop_permission_server()
         loop.close()
 
 

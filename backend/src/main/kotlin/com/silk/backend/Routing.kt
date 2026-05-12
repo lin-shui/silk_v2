@@ -3,7 +3,49 @@ package com.silk.backend
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.auth.AuthService
 import com.silk.backend.auth.GroupService
-import com.silk.backend.database.*
+import com.silk.backend.database.AddMemberRequest
+import com.silk.backend.database.AuthResponse
+import com.silk.backend.database.CcSettingsResponse
+import com.silk.backend.database.ContactRepository
+import com.silk.backend.database.ContactResponse
+import com.silk.backend.database.CreateGroupRequest
+import com.silk.backend.database.DeleteGroupRequest
+import com.silk.backend.database.DeleteUserTodoRequest
+import com.silk.backend.database.Group
+import com.silk.backend.database.GroupMemberApi
+import com.silk.backend.database.GroupMembers
+import com.silk.backend.database.GroupMembersResponse
+import com.silk.backend.database.GroupRepository
+import com.silk.backend.database.GroupResponse
+import com.silk.backend.database.Groups
+import com.silk.backend.database.HandleContactRequestData
+import com.silk.backend.database.JoinGroupRequest
+import com.silk.backend.database.LeaveGroupRequest
+import com.silk.backend.database.LeaveGroupResponse
+import com.silk.backend.database.LoginRequest
+import com.silk.backend.database.MarkReadRequest
+import com.silk.backend.database.MemberRole
+import com.silk.backend.database.PrivateChatResponse
+import com.silk.backend.database.RecallMessageRequest
+import com.silk.backend.database.RefreshUserTodosRequest
+import com.silk.backend.database.RegisterRequest
+import com.silk.backend.database.SendContactRequestByIdData
+import com.silk.backend.database.SendContactRequestData
+import com.silk.backend.database.SendMessageRequest
+import com.silk.backend.database.SimpleResponse
+import com.silk.backend.database.StartPrivateChatRequest
+import com.silk.backend.database.StartSilkPrivateChatRequest
+import com.silk.backend.database.UnreadCountResponse
+import com.silk.backend.database.UnreadRepository
+import com.silk.backend.database.UpdateUserSettingsRequest
+import com.silk.backend.database.UpdateUserTodoRequest
+import com.silk.backend.database.UserRepository
+import com.silk.backend.database.UserSearchResult
+import com.silk.backend.database.UserSettingsRepository
+import com.silk.backend.database.UserSettingsResponse
+import com.silk.backend.database.UserTodoExtractionDiagnosticsResponse
+import com.silk.backend.database.UserTodoRefreshStatusResponse
+import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.export.ChatObsidianExporter
 import com.silk.backend.kb.KBObsidianExporter
 import com.silk.backend.kb.KnowledgeBaseManager
@@ -17,36 +59,65 @@ import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.core.AgentRegistry
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.trust.TrustedDirManager
+import com.silk.shared.models.AddTrustRequest
 import com.silk.shared.models.CcStateResponse
 import com.silk.shared.models.DirEntry
 import com.silk.shared.models.DirListingResponse
-import com.silk.shared.models.TrustedDirCheckResponse
-import com.silk.shared.models.AddTrustRequest
-import com.silk.shared.models.TrustedDirRecordDto
 import com.silk.shared.models.TrustedDirListResponse
-import io.ktor.server.application.*
-import io.ktor.server.request.*
-import io.ktor.server.response.*
-import io.ktor.server.routing.*
-import io.ktor.server.websocket.*
-import io.ktor.client.*
-import io.ktor.client.plugins.websocket.*
+import com.silk.shared.models.TrustedDirCheckResponse
+import com.silk.shared.models.TrustedDirRecordDto
+import io.ktor.client.HttpClient
+import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
-import io.ktor.websocket.*
-import io.ktor.http.*
-import kotlinx.coroutines.channels.consumeEach
+import io.ktor.http.ContentDisposition
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.Application
+import io.ktor.server.application.call
+import io.ktor.server.request.receive
+import io.ktor.server.request.receiveText
+import io.ktor.server.response.header
+import io.ktor.server.response.respond
+import io.ktor.server.response.respondFile
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.delete
+import io.ktor.server.routing.get
+import io.ktor.server.routing.post
+import io.ktor.server.routing.put
+import io.ktor.server.routing.routing
+import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
+import io.ktor.websocket.send
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.cancelAndJoin
 import io.ktor.client.engine.cio.CIO
-import kotlinx.serialization.json.*
-import org.jetbrains.exposed.sql.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.io.File
 import java.time.LocalDate
-import java.util.*
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import org.slf4j.LoggerFactory
 
@@ -158,17 +229,17 @@ suspend fun broadcastFileMessage(
 }
 
 fun Application.configureRouting() {
-    // AgentRuntime 持久化 wiring：cdSync 成功 / prompt 完成时把 workingDir + ccSessionId 写回
-    // workflow_store.json，让重启后能 seed 恢复对话。复用 Workflow.sessionId 字段存 ccSessionId。
+    // AgentRuntime 持久化 wiring：cdSync 成功 / prompt 完成时把 workingDir + cliSessionId 写回
+    // workflow_store.json，让重启后能 seed 恢复对话。复用 Workflow.sessionId 字段存 cliSessionId。
     AgentRuntime.setWorkflowPersistence(object : AgentRuntime.WorkflowPersistence {
         override fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean =
             workflowManager.updateWorkingDir(rawGroupId, workingDir)
 
-        override fun persistCcSession(rawGroupId: String, ccSessionId: String, sessionStarted: Boolean): Boolean =
-            workflowManager.updateSessionState(rawGroupId, ccSessionId, sessionStarted)
+        override fun persistCliSession(rawGroupId: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
+            workflowManager.updateSessionState(rawGroupId, cliSessionId, sessionStarted)
 
-        override fun persistCcSession(rawGroupId: String, agentType: String, ccSessionId: String, sessionStarted: Boolean): Boolean =
-            workflowManager.updateSessionState(rawGroupId, agentType, ccSessionId, sessionStarted)
+        override fun persistCliSession(rawGroupId: String, agentType: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
+            workflowManager.updateSessionState(rawGroupId, agentType, cliSessionId, sessionStarted)
 
         override fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean =
             workflowManager.updateActiveAgent(rawGroupId, agentType)
@@ -178,7 +249,7 @@ fun Application.configureRouting() {
             if (wf.workingDir.isBlank() && wf.sessionId.isBlank()) return null
             return AgentRuntime.WorkflowSeed(
                 workingDir = wf.workingDir,
-                ccSessionId = wf.sessionId.takeIf { it.isNotBlank() },
+                cliSessionId = wf.sessionId.takeIf { it.isNotBlank() },
                 sessionStarted = wf.sessionStarted,
             )
         }
@@ -186,20 +257,20 @@ fun Application.configureRouting() {
         override fun loadSeed(rawGroupId: String, agentType: String): AgentRuntime.WorkflowSeed? {
             val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
             // 优先取 per-agent state；缺失时仅当 agentType 等于 workflow 默认 agent 才回落到旧字段，
-            // 避免别的 agent 拿到不属于它的 ccSessionId 触发 resume 失败。
+            // 避免别的 agent 拿到不属于它的 cliSessionId 触发 resume 失败。
             val perAgent = wf.agentSessions[agentType]
             val defaultDash = when (wf.agentType) {
                 "claude_code" -> "claude-code"
                 else -> wf.agentType
             }
-            val ccSid = perAgent?.sessionId?.takeIf { it.isNotBlank() }
+            val cliSid = perAgent?.sessionId?.takeIf { it.isNotBlank() }
                 ?: wf.sessionId.takeIf { it.isNotBlank() && agentType == defaultDash }
             val sessionStarted = perAgent?.sessionStarted
                 ?: (wf.sessionStarted && agentType == defaultDash)
-            if (wf.workingDir.isBlank() && ccSid.isNullOrBlank()) return null
+            if (wf.workingDir.isBlank() && cliSid.isNullOrBlank()) return null
             return AgentRuntime.WorkflowSeed(
                 workingDir = wf.workingDir,
-                ccSessionId = ccSid,
+                cliSessionId = cliSid,
                 sessionStarted = sessionStarted,
             )
         }
@@ -2128,6 +2199,7 @@ fun Application.configureRouting() {
                 logger.error("❌ Agent Bridge WebSocket 错误: userId={}, agentType={}, error={}", userId, agentType, e.message)
             } finally {
                 logger.info("🔌 Agent Bridge 断开: userId={}, agentType={}", userId, agentType)
+                scope.cancel()
                 AcpRegistry.unregister(userId, agentType)
                 AgentRuntime.handleAgentDisconnect(userId, agentType)
             }
@@ -2524,6 +2596,18 @@ fun Application.configureRouting() {
                         else -> workflow.agentType
                     }
                 AgentRuntime.autoActivateForWorkflow(userId, "group_$groupId", resolvedAgent)
+
+                // Re-broadcast pending question if agent is waiting for user answer
+                val pendingSnapshot = AgentRuntime.snapshotPendingQuestion(userId, "group_$groupId")
+                if (pendingSnapshot != null) {
+                    val questionMsg = com.silk.backend.agents.core.AgentMessages.question(
+                        content = com.silk.backend.agents.core.AgentMessages.formatQuestionText(pendingSnapshot.questions),
+                        requestId = pendingSnapshot.requestId,
+                        agentUserId = pendingSnapshot.agentUserId,
+                        agentName = pendingSnapshot.agentName,
+                    )
+                    groupChatServer.broadcast(questionMsg)
+                }
             }
 
             try {

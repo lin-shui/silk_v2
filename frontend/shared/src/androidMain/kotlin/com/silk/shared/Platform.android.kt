@@ -1,8 +1,8 @@
 package com.silk.shared
 
-import io.ktor.client.*
-import io.ktor.client.engine.okhttp.*
-import io.ktor.client.plugins.websocket.*
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.websocket.WebSockets
 
 actual class Platform {
     actual val name: String = "Android ${android.os.Build.VERSION.SDK_INT}"

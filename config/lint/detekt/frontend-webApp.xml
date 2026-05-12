@@ -1,0 +1,60 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>ComplexCondition:Main.kt$message.content.isNotBlank() &amp;&amp; message.currentStep == null &amp;&amp; message.totalSteps == null &amp;&amp; !isLikelyAgentStatusContent(message.content)</ID>
+    <ID>ComplexCondition:WorkflowScene.kt$event.key == "Enter" &amp;&amp; !event.shiftKey &amp;&amp; !event.isComposing &amp;&amp; messageText.isNotBlank()</ID>
+    <ID>ComplexCondition:WorkflowScene.kt$latest.type == com.silk.shared.models.MessageType.SYSTEM &amp;&amp; (latest.content.startsWith("已切换到") || latest.content.contains("已激活") || latest.content.contains("已退出 agent"))</ID>
+    <ID>ComplexCondition:WorkflowScene.kt$message.content.isNotBlank() &amp;&amp; message.currentStep == null &amp;&amp; message.totalSteps == null &amp;&amp; !isLikelyAgentStatusContent(message.content)</ID>
+    <ID>CyclomaticComplexMethod:AudioDuplexScene.kt$@Composable fun AudioDuplexScene(appState: WebAppState)</ID>
+    <ID>CyclomaticComplexMethod:ContactsScene.kt$@Composable fun ContactsScene(appState: WebAppState)</ID>
+    <ID>CyclomaticComplexMethod:GroupListScene.kt$@Composable fun CreateGroupDialog( appState: WebAppState, strings: Strings, onDismiss: () -&gt; Unit, onGroupCreated: (Group) -&gt; Unit )</ID>
+    <ID>CyclomaticComplexMethod:GroupListScene.kt$@Composable fun GroupCard( group: Group, isHost: Boolean, isDeleteMode: Boolean = false, isSelected: Boolean = false, unreadCount: Int = 0, strings: Strings, onClick: () -&gt; Unit, onMembersClick: (() -&gt; Unit)? = null )</ID>
+    <ID>CyclomaticComplexMethod:GroupListScene.kt$@Composable fun GroupListScene(appState: WebAppState)</ID>
+    <ID>CyclomaticComplexMethod:GroupListScene.kt$@Composable fun GroupMembersListDialog( group: Group, members: List&lt;GroupMember&gt;, contacts: List&lt;Contact&gt;, currentUserId: String, isLoading: Boolean, strings: Strings, onMemberClick: (GroupMember) -&gt; Unit, onDismiss: () -&gt; Unit )</ID>
+    <ID>CyclomaticComplexMethod:GroupListScene.kt$@Composable fun JoinGroupDialog( appState: WebAppState, strings: Strings, onDismiss: () -&gt; Unit, onGroupJoined: (Group) -&gt; Unit )</ID>
+    <ID>CyclomaticComplexMethod:KnowledgeBaseScene.kt$@Composable fun KnowledgeBaseScene(appState: WebAppState)</ID>
+    <ID>CyclomaticComplexMethod:LoginScene.kt$@Composable fun LoginScene(appState: WebAppState)</ID>
+    <ID>CyclomaticComplexMethod:Main.kt$@Composable fun AIMessageCard( message: Message, timeString: String, isTransient: Boolean = false, onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {}, onDelete: (String) -&gt; Unit = {}, isSelectionMode: Boolean = false, isSelected: Boolean = false, onToggleSelection: (String) -&gt; Unit = {}, onEnterSelectionMode: (String) -&gt; Unit = {} )</ID>
+    <ID>CyclomaticComplexMethod:Main.kt$@Composable fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState)</ID>
+    <ID>CyclomaticComplexMethod:Main.kt$@Composable fun ChatScene(appState: WebAppState)</ID>
+    <ID>CyclomaticComplexMethod:Main.kt$@Composable fun MembersDialog( members: List&lt;GroupMember&gt;, contacts: List&lt;Contact&gt;, currentUserId: String, isLoading: Boolean, strings: com.silk.shared.i18n.Strings, onMemberClick: (GroupMember) -&gt; Unit, onDismiss: () -&gt; Unit )</ID>
+    <ID>CyclomaticComplexMethod:Main.kt$@Composable fun MessageItem( message: Message, isTransient: Boolean = false, currentUserId: String = "", groupId: String = "", isRecalling: Boolean = false, onRecall: (String) -&gt; Unit = {}, onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {}, onDelete: (String) -&gt; Unit = {}, isSelectionMode: Boolean = false, isSelected: Boolean = false, onToggleSelection: (String) -&gt; Unit = {}, onEnterSelectionMode: (String) -&gt; Unit = {} )</ID>
+    <ID>CyclomaticComplexMethod:SettingsScene.kt$@Composable fun SettingsScene(appState: WebAppState)</ID>
+    <ID>CyclomaticComplexMethod:WorkflowScene.kt$@Composable fun WorkflowScene(appState: WebAppState)</ID>
+    <ID>CyclomaticComplexMethod:WorkflowScene.kt$@Composable private fun FolderPickerDialog( userId: String, initialPath: String?, onDismiss: () -&gt; Unit, onConfirm: (String) -&gt; Unit, )</ID>
+    <ID>CyclomaticComplexMethod:WorkflowScene.kt$@Composable private fun WorkflowChatPanel( userId: String, userName: String, groupId: String, workflowName: String, )</ID>
+    <ID>EmptyCatchBlock:Main.kt${ }</ID>
+    <ID>LoopWithTooManyJumpStatements:Main.kt$for</ID>
+    <ID>NestedBlockDepth:ApiClient.kt$ApiClient$suspend fun createWorkflow( name: String, description: String, userId: String, initialDir: String = "", agentType: String = "claude_code", ): CreateWorkflowResult</ID>
+    <ID>SwallowedException:ApiClient.kt$ApiClient$e: Exception</ID>
+    <ID>SwallowedException:Main.kt$e: dynamic</ID>
+    <ID>TooGenericExceptionCaught:ApiClient.kt$ApiClient$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:AppState.kt$WebAppState$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ContactsScene.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:GroupListScene.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:KnowledgeBaseScene.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:LoginScene.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:Main.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:Main.kt$error: Throwable</ID>
+    <ID>TooGenericExceptionCaught:Main.kt$t: Throwable</ID>
+    <ID>TooGenericExceptionCaught:ObsidianVaultManager.kt$ObsidianVaultManager$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:SettingsScene.kt$e: Exception</ID>
+    <ID>TooGenericExceptionThrown:ApiClient.kt$ApiClient$throw Exception("HTTP ${response.status}: ${response.statusText}")</ID>
+    <ID>TopLevelPropertyNaming:Main.kt$private const val markdownRuntimeStyleId = "silk-markdown-runtime-style"</ID>
+    <ID>UnusedParameter:AudioDuplexScene.kt$appState: WebAppState</ID>
+    <ID>UnusedParameter:ContactsScene.kt$onContactAdded: () -&gt; Unit</ID>
+    <ID>UnusedParameter:GroupListScene.kt$isHost: Boolean</ID>
+    <ID>UnusedParameter:Main.kt$DOMPurify$config: dynamic = definedExternally</ID>
+    <ID>UnusedParameter:Main.kt$DOMPurify$dirty: String</ID>
+    <ID>UnusedParameter:Main.kt$HighlightJs$code: String</ID>
+    <ID>UnusedParameter:Main.kt$HighlightJs$languageName: String</ID>
+    <ID>UnusedParameter:Main.kt$HighlightJs$options: dynamic</ID>
+    <ID>UnusedParameter:Main.kt$groupId: String = ""</ID>
+    <ID>UnusedPrivateMember:Main.kt$private fun parseFileNameFromContentDisposition(contentDisposition: String?): String?</ID>
+    <ID>UnusedPrivateProperty:AudioDuplexScene.kt$val wsBaseUrl = backendWsOrigin()</ID>
+    <ID>UnusedPrivateProperty:Main.kt$var folderFiles by remember { mutableStateOf&lt;List&lt;FileInfo&gt;&gt;(emptyList()) }</ID>
+    <ID>UnusedPrivateProperty:Main.kt$var isDraggingOver by remember { mutableStateOf(false) }</ID>
+    <ID>UseCheckOrError:Main.kt$throw IllegalStateException("HTTP ${response.status}")</ID>
+  </CurrentIssues>
+</SmellBaseline>

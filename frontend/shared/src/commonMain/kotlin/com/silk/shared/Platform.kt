@@ -1,6 +1,6 @@
 package com.silk.shared
 
-import io.ktor.client.*
+import io.ktor.client.HttpClient
 
 expect class Platform() {
     val name: String

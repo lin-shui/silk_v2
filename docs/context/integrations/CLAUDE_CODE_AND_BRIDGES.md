@@ -7,7 +7,7 @@
 - `backend/agents/core/AgentRuntime.kt` — 对外门面，`WebSocketConfig` 的唯一入口
 - `backend/agents/core/CommandRouter.kt` — 命令解析（`/cc`、`/use`、`/status`、`@agent` 等）
 - `backend/agents/core/GroupAgentContext.kt` — per-(userId, groupId) 上下文，含 workingDir、currentAgentType、sessions
-- `backend/agents/core/AgentSession.kt` — per-agent 会话状态（running、queue、acpSessionId、ccSessionId）
+- `backend/agents/core/AgentSession.kt` — per-agent 会话状态（running、queue、acpSessionId、cliSessionId）
 - `backend/agents/core/AgentRegistry.kt` — agent 类型注册表
 - `backend/agents/core/AcpExtensions.kt` — Silk 私有扩展调用（`_silk/compact`、`_silk/list_local_sessions`、`_silk/set_cwd`、`_silk/list_dir`）
 - `backend/agents/adapters/claudecode/ClaudeCodeDescriptor.kt` — CC adapter 描述符
@@ -19,8 +19,9 @@
 1. **聊天**：`WebSocketConfig.broadcast()` → `AgentRuntime.handleIfActive()` → `CommandRouter.route()` → ACP `session/prompt` → adapter 跑 `Executor` → `session/update` 流式回传
 2. **/cc-fs/cd**：`Routing.kt` → `AgentRuntime.cdSync()` → ACP `_silk/set_cwd` → adapter 验证 + 返回 resolved path
 3. **/cc-fs/list**：`Routing.kt` → `AgentRuntime.listDirectory()` → ACP `_silk/list_dir` → adapter 调 `fs_listing.list_directory`
-4. **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.ccSessionId` 写入 `Workflow.agentSessions[agentType]`，并兼容镜像到旧 `Workflow.sessionId`；`activeAgent` 也随 `/use` 切换落盘
+4. **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.cliSessionId` 写入 `Workflow.agentSessions[agentType]`，并兼容镜像到旧 `Workflow.sessionId`；`activeAgent` 也随 `/use` 切换落盘
 5. **Token 重生**：`/cc-settings/generate-token` → `AcpRegistry.disconnect(userId)` 关老连接
+6. **AskUserQuestion**：CLI PreToolUse hook → `permission_hook.sh` curl → `PermissionServer` 阻塞 → ACP `session/update(ask_user_question)` → `AgentRuntime.setupAcpHandlers` 设 `pendingQuestion` → 广播问题消息 → 用户回答 → `handlePrompt` 检到 `pendingQuestion` → `handleQuestionReply` → ACP `_silk/resolve_question` → `PermissionServer.resolve_request` → hook 返回答案 → CLI 继续
 
 ACP 不可用时直接报"未连接"，无 fallback。
 
@@ -45,10 +46,12 @@ ACP 不可用时直接报"未连接"，无 fallback。
 
 主要文件：
 
-- `acp_adapter.py` — ACP server 连接 `/agent-bridge` 端点，注册到 `AcpRegistry`，复用 `Executor` 执行 Claude CLI，支持 `_silk/*` 扩展（`compact` / `list_local_sessions` / `set_cwd` / `list_dir`）
+- `acp_adapter.py` — ACP server 连接 `/agent-bridge` 端点，注册到 `AcpRegistry`，复用 `Executor` 执行 Claude CLI，支持 `_silk/*` 扩展（`compact` / `list_local_sessions` / `set_cwd` / `list_dir` / `resolve_question`）
 - `executor.py` — 实际调用 Claude CLI 的执行器
 - `session_manager.py` — 本地会话管理（`~/.silk/cc_sessions.json`）
 - `fs_listing.py` — 目录列表工具（被 `_silk/list_dir` 使用）
+- `permission_server.py` — PreToolUse hook 的本地 HTTP 权限服务器，阻塞等待用户回答
+- `permission_hook.sh` — PreToolUse hook 脚本，注册在 `~/.claude/settings.json`，转发工具调用到权限服务器
 - `bridge.sh` — 启动/停止管理脚本
 
 关键职责：
@@ -57,6 +60,7 @@ ACP 不可用时直接报"未连接"，无 fallback。
 - 在本机运行 Claude CLI
 - 保存会话到 `~/.silk/cc_sessions.json`
 - 处理来自 silk 的命令：execute / cancel / cd / list_dir / new_session / list_sessions / resume_session / compact
+- 处理 AskUserQuestion：hook 拦截 → 权限服务器 → ACP 通知 backend → 用户回答 → resolve → hook 返回
 - `working_dir_holder = [...]` 持有当前 cwd，被 `handle_cd` 修改、被 `handle_execute` / `handle_list_dir` 在消息未带 path 时作为 fallback
 
 ## `codex_bridge/`
@@ -96,6 +100,7 @@ ACP 不可用时直接报"未连接"，无 fallback。
 
 - 改 agent 指令或元信息格式：检查后端测试与对应 adapter 兼容性
 - 改 Silk message shape：确认飞书消息适配层是否仍能消费
+- 改 AskUserQuestion 或权限处理逻辑：检查 `permission_server.py`、`permission_hook.sh`、`acp_adapter.py` 的 `_on_permission_request` 和 `_handle_silk_resolve_question`
 - 新增 state 修改入口：走 `GroupAgentContext` / `AgentSession` 字段（`@Volatile`，当前不需 mutex）
 - 新增 bridge 命令类型：改 `AcpExtensions.kt` + 对应 adapter
 - 新增 RPC 风格响应：走 ACP JSON-RPC `_call()`
