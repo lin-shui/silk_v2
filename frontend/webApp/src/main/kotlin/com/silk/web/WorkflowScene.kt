@@ -41,6 +41,8 @@ import org.jetbrains.compose.web.css.justifyContent
 import org.jetbrains.compose.web.css.left
 import org.jetbrains.compose.web.css.marginBottom
 import org.jetbrains.compose.web.css.marginTop
+import org.jetbrains.compose.web.css.maxHeight
+import org.jetbrains.compose.web.css.minHeight
 import org.jetbrains.compose.web.css.padding
 import org.jetbrains.compose.web.css.percent
 import org.jetbrains.compose.web.css.position
@@ -58,6 +60,7 @@ import org.jetbrains.compose.web.dom.P
 import org.jetbrains.compose.web.dom.Select
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
+import org.jetbrains.compose.web.dom.TextArea
 
 @Composable
 fun WorkflowScene(appState: WebAppState) {
@@ -1122,10 +1125,10 @@ private fun WorkflowChatPanel(
             property("gap", "10px")
         }
     }) {
-        Input(InputType.Text) {
+        TextArea {
             value(messageText)
             onInput { messageText = it.value }
-            attr("placeholder", "向 Agent 发送消息...")
+            attr("placeholder", "向 Agent 发送消息...（Shift+Enter 换行）")
             onKeyDown { event ->
                 if (event.key == "Enter" && !event.shiftKey && !event.isComposing && messageText.isNotBlank()) {
                     event.preventDefault()
@@ -1138,13 +1141,17 @@ private fun WorkflowChatPanel(
             }
             style {
                 property("flex", "1")
-                height(40.px)
+                minHeight(40.px)
+                maxHeight(160.px)
                 borderRadius(8.px)
                 border(1.px, LineStyle.Solid, Color(SilkColors.border))
                 padding(8.px, 12.px)
                 fontSize(14.px)
                 property("box-sizing", "border-box")
                 property("outline", "none")
+                property("resize", "none")
+                property("white-space", "pre-wrap")
+                property("line-height", "1.5")
             }
         }
 
