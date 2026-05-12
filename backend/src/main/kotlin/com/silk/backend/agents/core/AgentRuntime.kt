@@ -13,6 +13,7 @@ import com.silk.backend.agents.adapters.codex.CodexDescriptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -249,6 +250,9 @@ object AgentRuntime {
             if (ctx.userId != userId) continue
             val session = ctx.sessions[agentType] ?: continue
 
+            // Clean up handlers before nulling acpSessionId
+            cleanupSessionHandlers(session)
+
             if (session.running) {
                 session.promptJob?.cancel()
                 session.promptJob = null
@@ -335,6 +339,7 @@ object AgentRuntime {
         ctx.currentAgentType = agentType
         val session = ctx.getOrCreateSession(agentType)
         // 触发命令时重置 session（和旧 /cc 行为一致：开新会话）
+        cleanupSessionHandlers(session)
         session.acpSessionId = null
         session.cliSessionId = null
         session.running = false
@@ -388,6 +393,8 @@ object AgentRuntime {
 
         when (cmd) {
             is SilkCommand.Exit -> {
+                // Clean up handlers before removing session
+                cleanupSessionHandlers(session)
                 ctx.removeSession(agentType)
                 if (ctx.sessions.isEmpty()) {
                     ctx.currentAgentType = null
@@ -400,6 +407,7 @@ object AgentRuntime {
             }
             is SilkCommand.Cancel -> handleCancel(session, broadcastFn)
             is SilkCommand.New -> {
+                cleanupSessionHandlers(session)
                 session.acpSessionId = null
                 session.cliSessionId = null
                 session.running = false
@@ -540,6 +548,8 @@ object AgentRuntime {
                         agentName = descriptor.displayName,
                     ))
                 } else {
+                    // Clean up handlers for the old ACP session before overwriting
+                    cleanupSessionHandlers(session)
                     try {
                         val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                             acp.sessionLoad(cmd.sessionIdPrefix, ctx.workingDir)
@@ -657,24 +667,59 @@ object AgentRuntime {
         // during the gap between prompts.
         session.promptJob = ctx.scope.launch {
             try {
+                // 1. Ensure acpSessionId exists (sessionNew if needed)
+                if (session.acpSessionId == null) {
+                    try {
+                        val result = acp.sessionNew(
+                            cwd = ctx.workingDir,
+                            cliSessionId = session.cliSessionId,
+                        )
+                        session.acpSessionId = result.sessionId
+                    } catch (e: Exception) {
+                        logger.error("[AgentRuntime] sessionNew 失败: userId={}, agentType={}", userId, agentType, e)
+                        broadcastFn(AgentMessages.system(
+                            "创建会话失败: ${e.message}",
+                            agentUserId = descriptor.agentUserId,
+                            agentName = descriptor.displayName,
+                        ))
+                        return@launch  // finally sets running=false
+                    }
+                }
+
+                // 2. Register handlers (acpSessionId is now known)
+                val acpSessionId = session.acpSessionId
+                if (acpSessionId == null) {
+                    broadcastFn(AgentMessages.system(
+                        "会话已断开，请重试",
+                        agentUserId = descriptor.agentUserId,
+                        agentName = descriptor.displayName,
+                    ))
+                    return@launch
+                }
                 val accumulated = StringBuilder()
-                setupAcpHandlers(acp, session, descriptor, broadcastFn, accumulated)
+                setupAcpHandlers(acp, acpSessionId, session, descriptor, broadcastFn, accumulated, ctx.scope)
+
+                // 3. Execute prompt (executeSinglePrompt no longer does sessionNew)
                 executeSinglePrompt(ctx, acp, session, descriptor, text, broadcastFn, accumulated)
 
-                // Drain queued messages one-by-one, still under running=true
-                while (true) {
-                    val next = session.messageQueue.pollFirst() ?: break
+                // 4. Drain queued messages one-by-one, still under running=true
+                var next = session.messageQueue.pollFirst()
+                while (next != null) {
                     logger.info(
                         "[AgentRuntime] drainQueue: processing next queued message, remaining={}",
                         session.messageQueue.size,
                     )
+                    val drainSessionId = session.acpSessionId ?: break
                     val nextAccumulated = StringBuilder()
-                    setupAcpHandlers(acp, session, descriptor, broadcastFn, nextAccumulated)
+                    setupAcpHandlers(acp, drainSessionId, session, descriptor, broadcastFn, nextAccumulated, ctx.scope)
                     executeSinglePrompt(ctx, acp, session, descriptor, next.text, broadcastFn, nextAccumulated)
+                    next = session.messageQueue.pollFirst()
                 }
             } finally {
                 session.running = false
                 session.promptJob = null
+                // Clean up handlers to prevent memory leak
+                cleanupSessionHandlers(session)
             }
         }
     }
@@ -692,25 +737,6 @@ object AgentRuntime {
         broadcastFn: suspend (Message) -> Unit,
         accumulated: StringBuilder,
     ) {
-        // 首次 prompt 需要 sessionNew（带 cliSessionId seed 让 adapter 续旧 CLI session）
-        if (session.acpSessionId == null) {
-            try {
-                val result = acp.sessionNew(
-                    cwd = ctx.workingDir,
-                    cliSessionId = session.cliSessionId,
-                )
-                session.acpSessionId = result.sessionId
-            } catch (e: Exception) {
-                logger.error("[AgentRuntime] sessionNew 失败: userId={}, agentType={}", session.userId, session.agentType, e)
-                broadcastFn(AgentMessages.system(
-                    "创建会话失败: ${e.message}",
-                    agentUserId = descriptor.agentUserId,
-                    agentName = descriptor.displayName,
-                ))
-                return  // caller's finally sets running=false
-            }
-        }
-
         // 发送 prompt
         val requestId = UUID.randomUUID().toString()
         session.currentRequestId = requestId
@@ -818,9 +844,8 @@ object AgentRuntime {
             }
         }
 
-        session.promptJob?.cancel()
-        session.promptJob = null
-        session.running = false
+        session.promptJob?.cancelAndJoin()
+        // finally 已完成: running=false, promptJob=null, cleanupSessionHandlers
         session.cancelled = true
         session.pendingQuestion = null
         broadcastFn(AgentMessages.status(
@@ -872,14 +897,14 @@ object AgentRuntime {
 
     private fun setupAcpHandlers(
         acp: AcpClient,
+        acpSessionId: String,
         session: AgentSession,
         descriptor: AgentDescriptor,
         broadcastFn: suspend (Message) -> Unit,
         accumulated: StringBuilder,
+        scope: CoroutineScope,
     ) {
-        acp.onSessionUpdate { notif ->
-            if (notif.sessionId != session.acpSessionId) return@onSessionUpdate
-
+        acp.onSessionUpdate(acpSessionId) { notif ->
             // Check if this is an ask_user_question and set pending state
             val kind = notif.update["sessionUpdate"]?.let {
                 (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
@@ -908,13 +933,13 @@ object AgentRuntime {
                 accumulated = accumulated,
             )
             if (msg != null) {
-                CoroutineScope(Dispatchers.IO).launch {
+                scope.launch {
                     broadcastFn(msg)
                 }
             }
         }
 
-        acp.onPermissionRequest { _ ->
+        acp.onPermissionRequest(acpSessionId) { _ ->
             // 默认自动 approve
             PermissionResponse(
                 outcome = buildJsonObject {
@@ -927,6 +952,15 @@ object AgentRuntime {
 
     private fun getAcpClient(agentType: String, userId: String): AcpClient? {
         return AcpRegistry.get(userId, agentType)
+    }
+
+    /**
+     * Clean up ACP handlers for the session's current acpSessionId (if any).
+     * Idempotent — safe to call when acpSessionId is null or the bridge is disconnected.
+     */
+    private fun cleanupSessionHandlers(session: AgentSession) {
+        val sid = session.acpSessionId ?: return
+        getAcpClient(session.agentType, session.userId)?.removeHandlers(sid)
     }
 
     // ========== Plan D proxy API ==========
@@ -1024,6 +1058,7 @@ object AgentRuntime {
             ctx.workingDir = resolvedPath
             // adapter 已经把它的 cli_session_id 设为 null；本地也重置 acpSessionId + cliSessionId
             // 让下次 prompt 走 sessionNew 重建（与旧 cdSync 重置 sessionId 行为对齐）
+            cleanupSessionHandlers(session)
             session.acpSessionId = null
             session.cliSessionId = null
             persistWorkingDirAsync(groupId, resolvedPath)
@@ -1064,12 +1099,21 @@ object AgentRuntime {
     }
 
     fun cleanupState(userId: String, groupId: String) {
-        contexts.remove(key(userId, groupId))?.scope?.cancel()
+        val ctx = contexts.remove(key(userId, groupId)) ?: return
+        for ((_, session) in ctx.sessions) {
+            cleanupSessionHandlers(session)
+        }
+        ctx.scope.cancel()
     }
 
     /** 仅供测试使用 */
     internal fun clearForTest() {
-        contexts.values.forEach { it.scope.cancel() }
+        contexts.values.forEach { ctx ->
+            for ((_, session) in ctx.sessions) {
+                cleanupSessionHandlers(session)
+            }
+            ctx.scope.cancel()
+        }
         contexts.clear()
     }
 }
