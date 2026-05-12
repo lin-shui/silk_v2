@@ -78,7 +78,7 @@ class AcpAgentServer:
     ) -> None:
         self.ws_url = _build_ws_url(ws_url, token)
         self.token = token
-        self.default_cwd = os.path.realpath(default_cwd)
+        self.default_cwd = self._resolve_default_cwd(default_cwd)
         self.tls_insecure = tls_insecure
 
         self.ws: websockets.WebSocketClientProtocol | None = None
@@ -86,6 +86,29 @@ class AcpAgentServer:
         self.sessions: dict[str, AcpSession] = {}
         self._cli_to_acp: dict[str, str] = {}   # cli_session_id → acp_session_id
         self.perm_server: PermissionServer | None = None
+
+    # ------------------------------------------------------------------
+    # default_cwd helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_default_cwd(candidate: str) -> str:
+        """Validate *candidate* and fall back to home / ``/`` if it doesn't exist."""
+        resolved = os.path.realpath(candidate)
+        if os.path.isdir(resolved):
+            return resolved
+        home = os.path.expanduser("~")
+        if os.path.isdir(home):
+            logger.warning(
+                "[ACP] default_cwd %s does not exist, falling back to %s",
+                resolved, home,
+            )
+            return home
+        logger.warning(
+            "[ACP] default_cwd %s does not exist, falling back to /",
+            resolved,
+        )
+        return "/"
 
     # ------------------------------------------------------------------
     # PermissionServer lifecycle
@@ -760,9 +783,21 @@ class AcpAgentServer:
 
     async def _handle_silk_list_dir(self, msg_id: Any, params: Any) -> None:
         p = params or {}
-        path = p.get("path") or self.default_cwd
+        explicit_path = p.get("path")
+        path = explicit_path or self.default_cwd
         show_hidden = bool(p.get("showHidden", False))
         result = list_directory(path, show_hidden)
+        # No explicit path and default failed → try home dir, then /
+        if not result.get("success") and not explicit_path:
+            for fallback in (os.path.expanduser("~"), "/"):
+                if fallback != path:
+                    result = list_directory(fallback, show_hidden)
+                    if result.get("success"):
+                        logger.info(
+                            "[ACP] _silk/list_dir: default %s unavailable, fell back to %s",
+                            path, fallback,
+                        )
+                        break
         logger.debug("[ACP] _silk/list_dir path=%s success=%s", path, result.get("success"))
         await self._send_response(msg_id, result)
 
