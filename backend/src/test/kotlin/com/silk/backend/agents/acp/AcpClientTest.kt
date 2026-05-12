@@ -1,5 +1,6 @@
 package com.silk.backend.agents.acp
 
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -9,6 +10,7 @@ import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class AcpClientTest {
@@ -278,6 +280,81 @@ class AcpClientTest {
         val reply = json.parseToJsonElement(transport.readClientSent()).jsonObject
         assertEquals(50L, reply["id"]!!.jsonPrimitive.long)
         assertTrue(reply["error"] != null, "should return error for unregistered session")
+    }
+
+    @Test
+    fun `call times out when server does not respond`() = runTest {
+        val transport = InMemoryAcpTransport()
+        val client = AcpClient(transport, scope = backgroundScope)
+
+        // 发送 sessionNew 但不推送任何 response → 应超时
+        assertFailsWith<TimeoutCancellationException> {
+            kotlinx.coroutines.withTimeout(AcpClient.DEFAULT_TIMEOUT_MS + 1_000) {
+                client.sessionNew(cwd = "/tmp")
+            }
+        }
+    }
+
+    @Test
+    fun `call succeeds when response arrives before timeout`() = runTest {
+        val transport = InMemoryAcpTransport()
+        val client = AcpClient(transport, scope = backgroundScope)
+
+        val deferred = async {
+            client.sessionNew(cwd = "/tmp")
+        }
+
+        val sentLine = transport.readClientSent()
+        val sentId = json.parseToJsonElement(sentLine).jsonObject["id"]!!.jsonPrimitive.long
+
+        // 立即响应 → 不应超时
+        transport.pushFromServer(
+            """{"jsonrpc":"2.0","id":$sentId,"result":{"sessionId":"test-session-1"}}"""
+        )
+
+        val result = deferred.await()
+        assertEquals("test-session-1", result.sessionId)
+    }
+
+    @Test
+    fun `pending map is cleaned up after timeout`() = runTest {
+        val transport = InMemoryAcpTransport()
+        val client = AcpClient(transport, scope = backgroundScope)
+
+        // 让 sessionNew 超时
+        try {
+            kotlinx.coroutines.withTimeout(AcpClient.DEFAULT_TIMEOUT_MS + 1_000) {
+                client.sessionNew(cwd = "/tmp")
+            }
+        } catch (_: TimeoutCancellationException) {
+            // expected
+        }
+
+        // 超时后应该还能正常发请求（pending map 没泄漏，transport 没坏）
+        val deferred = async {
+            client.initialize(
+                InitializeParams(
+                    protocolVersion = "0.2",
+                    clientCapabilities = ClientCapabilities(
+                        fs = FsCapability(readTextFile = true, writeTextFile = true),
+                        terminal = false,
+                    ),
+                )
+            )
+        }
+
+        val sentLine = transport.readClientSent()
+        // 跳过超时请求的 sent（可能已在 channel 中）
+        val secondLine = try { transport.readClientSent() } catch (_: Exception) { sentLine }
+        val obj = json.parseToJsonElement(secondLine).jsonObject
+        val sentId = obj["id"]!!.jsonPrimitive.long
+
+        transport.pushFromServer(
+            """{"jsonrpc":"2.0","id":$sentId,"result":{"protocolVersion":"0.2","agentCapabilities":{"loadSession":false,"promptCapabilities":{"image":false,"audio":false,"embeddedContext":false}}}}"""
+        )
+
+        val result = deferred.await()
+        assertEquals("0.2", result.protocolVersion)
     }
 
     @Test

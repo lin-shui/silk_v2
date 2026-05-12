@@ -4,6 +4,7 @@ package com.silk.backend.agents.acp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -110,7 +111,7 @@ class AcpClient(
             SessionPromptParams.serializer(),
             SessionPromptParams(sessionId = sessionId, prompt = prompt),
         )
-        val resp = call("session/prompt", params)
+        val resp = call("session/prompt", params, timeoutMs = PROMPT_TIMEOUT_MS)
         return decodeResultOrThrow(resp, SessionPromptResult.serializer())
     }
 
@@ -142,7 +143,11 @@ class AcpClient(
 
     // ---- core ----
 
-    private suspend fun call(method: String, params: JsonElement): JsonRpcResponse {
+    private suspend fun call(
+        method: String,
+        params: JsonElement,
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+    ): JsonRpcResponse {
         val id = nextId.getAndIncrement()
         val deferred = CompletableDeferred<JsonRpcResponse>()
         pending[id] = deferred
@@ -154,10 +159,21 @@ class AcpClient(
             throw e
         }
         return try {
-            deferred.await()
+            if (timeoutMs == Long.MAX_VALUE) {
+                deferred.await()
+            } else {
+                withTimeout(timeoutMs) { deferred.await() }
+            }
         } finally {
             pending.remove(id)
         }
+    }
+
+    companion object {
+        /** 控制面操作（initialize / sessionNew / sessionLoad / callExtension）的默认超时。 */
+        const val DEFAULT_TIMEOUT_MS = 30_000L
+        /** sessionPrompt 不设超时，生命周期由 session/cancel + promptJob.cancelAndJoin 管理。 */
+        const val PROMPT_TIMEOUT_MS = Long.MAX_VALUE
     }
 
     private suspend fun receiveLoop() {
