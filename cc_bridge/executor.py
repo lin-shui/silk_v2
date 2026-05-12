@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import platform
+import shlex
 import shutil
 import time
 from typing import Any, Callable, Coroutine
@@ -314,6 +315,7 @@ def _parse_user(data: dict[str, Any]) -> ParsedLine:
             "toolUseId": tool_use_id,
             "isError": is_error,
             "summary": summary,
+            "content": content_str,
         })
 
     return ParsedLine(tool_results=results)
@@ -464,7 +466,7 @@ class Executor:
         # -- State for stream processing --
         accumulated_text = ""
         last_meta: dict[str, Any] | None = None
-        active_tool_ids: dict[str, str] = {}  # tool_use_id → log line
+        active_tool_ids: dict[str, dict[str, str]] = {}  # tool_use_id → {line, toolName}
         last_push_time = time.monotonic()
         last_push_len = 0
 
@@ -552,7 +554,10 @@ class Executor:
                 for tool_log in parsed.tool_logs:
                     tool_use_id = tool_log.get("toolUseId")
                     if tool_use_id:
-                        active_tool_ids[tool_use_id] = tool_log["line"]
+                        active_tool_ids[tool_use_id] = {
+                            "line": tool_log["line"],
+                            "toolName": tool_log.get("toolName", ""),
+                        }
                     # Thinking already handled above
                     if tool_log.get("toolName") == "thinking":
                         continue
@@ -566,10 +571,18 @@ class Executor:
                 # ---- Tool results (append checkmark/cross) ----
                 for result in parsed.tool_results:
                     tool_use_id = result.get("toolUseId", "")
-                    original_line = active_tool_ids.pop(tool_use_id, None)
-                    if original_line is not None:
-                        if result.get("isError"):
-                            summary = result.get("summary", "")
+                    info = active_tool_ids.pop(tool_use_id, None)
+                    if info is not None:
+                        original_line = info["line"]
+                        summary = result.get("summary", "")
+                        # AskUserQuestion 通过 hook deny 传回用户答案，
+                        # 实际是成功收到反馈，不应显示为 error
+                        is_ask_answered = (
+                            result.get("isError")
+                            and info["toolName"] == "AskUserQuestion"
+                            and "用户已回答" in result.get("content", "")
+                        )
+                        if result.get("isError") and not is_ask_answered:
                             suffix = f" \u2192 \u274c {summary}" if summary else " \u2192 \u274c"
                         else:
                             suffix = " \u2192 \u2705"
@@ -766,7 +779,7 @@ class Executor:
         if system == "Darwin":
             return ["script", "-q", "/dev/null"] + claude_args
         # Linux and others
-        shell_cmd = " ".join(_shell_quote(a) for a in claude_args)
+        shell_cmd = " ".join(shlex.quote(a) for a in claude_args)
         return ["script", "-q", "-c", shell_cmd, "/dev/null"]
 
     async def _timeout_watchdog(self, process: asyncio.subprocess.Process) -> None:
@@ -786,8 +799,6 @@ class Executor:
             pass
 
 
-def _shell_quote(arg: str) -> str:
-    """Quote a shell argument with single quotes, escaping embedded single quotes."""
-    if any(c in arg for c in (" ", '"', "'", "\n", "\t", "\\", "$", "`", "!", "#")):
-        return "'" + arg.replace("'", "'\\''") + "'"
-    return arg
+
+# _shell_quote removed — replaced by stdlib shlex.quote() which uses a
+# whitelist approach (safe: [\\w@%+=:,./-]) instead of an incomplete blacklist.

@@ -1,22 +1,83 @@
 package com.silk.web
 
-import androidx.compose.runtime.*
-import org.jetbrains.compose.web.css.*
-import org.jetbrains.compose.web.dom.*
-import org.jetbrains.compose.web.renderComposable
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.NoLiveLiterals
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
+import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
+import com.silk.shared.models.SILK_AGENT_USER_ID
 import com.silk.shared.models.UserSettings
 import com.silk.shared.models.isAgentUserId
-import com.silk.shared.models.SILK_AGENT_USER_ID
-import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.await
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.browser.window
 import kotlinx.browser.document
+import org.jetbrains.compose.web.css.AlignItems
+import org.jetbrains.compose.web.css.Color
+import org.jetbrains.compose.web.css.DisplayStyle
+import org.jetbrains.compose.web.css.FlexDirection
+import org.jetbrains.compose.web.css.JustifyContent
+import org.jetbrains.compose.web.css.LineStyle
+import org.jetbrains.compose.web.css.Position
+import org.jetbrains.compose.web.css.Style
+import org.jetbrains.compose.web.css.StyleSheet
+import org.jetbrains.compose.web.css.alignItems
+import org.jetbrains.compose.web.css.backgroundColor
+import org.jetbrains.compose.web.css.border
+import org.jetbrains.compose.web.css.borderRadius
+import org.jetbrains.compose.web.css.color
+import org.jetbrains.compose.web.css.display
+import org.jetbrains.compose.web.css.flexDirection
+import org.jetbrains.compose.web.css.fontFamily
+import org.jetbrains.compose.web.css.fontSize
+import org.jetbrains.compose.web.css.fontStyle
+import org.jetbrains.compose.web.css.fontWeight
+import org.jetbrains.compose.web.css.gap
+import org.jetbrains.compose.web.css.height
+import org.jetbrains.compose.web.css.justifyContent
+import org.jetbrains.compose.web.css.left
+import org.jetbrains.compose.web.css.margin
+import org.jetbrains.compose.web.css.marginBottom
+import org.jetbrains.compose.web.css.marginLeft
+import org.jetbrains.compose.web.css.marginTop
+import org.jetbrains.compose.web.css.maxHeight
+import org.jetbrains.compose.web.css.maxWidth
+import org.jetbrains.compose.web.css.minWidth
+import org.jetbrains.compose.web.css.padding
+import org.jetbrains.compose.web.css.paddingBottom
+import org.jetbrains.compose.web.css.paddingLeft
+import org.jetbrains.compose.web.css.paddingTop
+import org.jetbrains.compose.web.css.percent
+import org.jetbrains.compose.web.css.position
+import org.jetbrains.compose.web.css.px
+import org.jetbrains.compose.web.css.style
+import org.jetbrains.compose.web.css.textAlign
+import org.jetbrains.compose.web.css.top
+import org.jetbrains.compose.web.css.vh
+import org.jetbrains.compose.web.css.vw
+import org.jetbrains.compose.web.css.width
+import org.jetbrains.compose.web.dom.A
+import org.jetbrains.compose.web.dom.Br
+import org.jetbrains.compose.web.dom.Button
+import org.jetbrains.compose.web.dom.Div
+import org.jetbrains.compose.web.dom.H3
+import org.jetbrains.compose.web.dom.Input
+import org.jetbrains.compose.web.dom.Span
+import org.jetbrains.compose.web.dom.Text
+import org.jetbrains.compose.web.dom.TextArea
+import org.jetbrains.compose.web.renderComposable
 import kotlin.js.Date
 import kotlin.random.Random
 import org.w3c.dom.HTMLAnchorElement
@@ -921,6 +982,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
+    val pendingQuestionId by chatClient.pendingQuestionId.collectAsState()
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
     
@@ -1538,9 +1600,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 fontSize(13.px)
                                 fontStyle("italic")
                                 marginBottom(4.px)
-                                display(DisplayStyle.Flex)
-                                alignItems(AlignItems.Center)
-                                property("gap", "8px")
+                                property("white-space", "pre-wrap")
+                                property("word-break", "break-word")
                             }
                         }) {
                             Text(status.content)
@@ -1956,7 +2017,11 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 }
                             }
                         }
-                        attr("placeholder", if (group.name.startsWith("[Silk]")) strings.silkChatInputPlaceholder else strings.messageInputPlaceholder)
+                        attr("placeholder", when {
+                            pendingQuestionId != null -> "回答 Claude Code 的问题..."
+                            group.name.startsWith("[Silk]") -> strings.silkChatInputPlaceholder
+                            else -> strings.messageInputPlaceholder
+                        })
                         attr("rows", "2")
                         attr("id", "chat-input")
                         style {
@@ -4160,7 +4225,10 @@ fun MessageItem(
     val isAIMessage = isAgentUserId(message.userId)
     
     // AI 消息使用专用卡片
-    if (isAIMessage && message.type == MessageType.TEXT && message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS) {
+    val isRegularAIText = isAIMessage && message.type == MessageType.TEXT &&
+        message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS &&
+        message.category != com.silk.shared.models.MessageCategory.AGENT_QUESTION
+    if (isRegularAIText) {
         AIMessageCard(
             message = message,
             timeString = timeString,
@@ -4184,9 +4252,10 @@ fun MessageItem(
                     !isTransient
     
     // 是否显示操作按钮：文本消息且不是临时消息
-    val showActions = message.type == MessageType.TEXT && !isTransient && 
-                      message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS
-    
+    val showActions = message.type == MessageType.TEXT && !isTransient &&
+                      message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS &&
+                      message.category != com.silk.shared.models.MessageCategory.AGENT_QUESTION
+
     // Agent 状态消息 - 灰色样式
     if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) {
         Div({
@@ -4199,6 +4268,28 @@ fun MessageItem(
                 fontSize(13.px)
                 color(Color("#757575"))
                 property("font-style", "italic")
+                property("white-space", "pre-wrap")
+                property("word-break", "break-word")
+            }
+        }) {
+            Text(message.content)
+        }
+        return
+    }
+
+    // Agent 提问消息 - 橙色警告样式
+    if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION) {
+        Div({
+            style {
+                padding(12.px, 16.px)
+                marginBottom(8.px)
+                backgroundColor(Color("#FFF8F0"))
+                borderRadius(8.px)
+                property("border-left", "3px solid #E8B86C")
+                fontSize(14.px)
+                color(Color("#5D4E37"))
+                property("white-space", "pre-wrap")
+                property("word-break", "break-word")
             }
         }) {
             Text(message.content)

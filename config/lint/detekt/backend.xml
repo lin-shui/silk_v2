@@ -209,26 +209,6 @@
     <ID>UseCheckOrError:SilkAgent.kt$SilkAgent$throw IllegalStateException("Agent not initialized")</ID>
     <ID>WildcardImport:AIStepwiseAgent.kt$import kotlinx.serialization.json.*</ID>
     <ID>WildcardImport:AcpWebSocketTransport.kt$import io.ktor.websocket.*</ID>
-    <ID>WildcardImport:Application.kt$import io.ktor.http.*</ID>
-    <ID>WildcardImport:Application.kt$import io.ktor.serialization.kotlinx.json.*</ID>
-    <ID>WildcardImport:Application.kt$import io.ktor.server.application.*</ID>
-    <ID>WildcardImport:Application.kt$import io.ktor.server.engine.*</ID>
-    <ID>WildcardImport:Application.kt$import io.ktor.server.netty.*</ID>
-    <ID>WildcardImport:Application.kt$import io.ktor.server.plugins.callloging.*</ID>
-    <ID>WildcardImport:Application.kt$import io.ktor.server.plugins.compression.*</ID>
-    <ID>WildcardImport:Application.kt$import io.ktor.server.plugins.contentnegotiation.*</ID>
-    <ID>WildcardImport:Application.kt$import io.ktor.server.plugins.cors.routing.*</ID>
-    <ID>WildcardImport:AsrRoutes.kt$import io.ktor.client.*</ID>
-    <ID>WildcardImport:AsrRoutes.kt$import io.ktor.client.engine.cio.*</ID>
-    <ID>WildcardImport:AsrRoutes.kt$import io.ktor.client.request.forms.*</ID>
-    <ID>WildcardImport:AsrRoutes.kt$import io.ktor.client.statement.*</ID>
-    <ID>WildcardImport:AsrRoutes.kt$import io.ktor.http.*</ID>
-    <ID>WildcardImport:AsrRoutes.kt$import io.ktor.http.content.*</ID>
-    <ID>WildcardImport:AsrRoutes.kt$import io.ktor.server.application.*</ID>
-    <ID>WildcardImport:AsrRoutes.kt$import io.ktor.server.request.*</ID>
-    <ID>WildcardImport:AsrRoutes.kt$import io.ktor.server.response.*</ID>
-    <ID>WildcardImport:AsrRoutes.kt$import io.ktor.server.routing.*</ID>
-    <ID>WildcardImport:AsrRoutes.kt$import kotlinx.serialization.json.*</ID>
     <ID>WildcardImport:AuthService.kt$import com.silk.backend.database.*</ID>
     <ID>WildcardImport:ChatHistoryBackupManager.kt$import com.silk.backend.models.*</ID>
     <ID>WildcardImport:ChatHistoryManager.kt$import com.silk.backend.models.*</ID>
@@ -241,26 +221,8 @@
     <ID>WildcardImport:ExternalSearchService.kt$import io.ktor.client.statement.*</ID>
     <ID>WildcardImport:ExternalSearchService.kt$import io.ktor.serialization.kotlinx.json.*</ID>
     <ID>WildcardImport:ExternalSearchService.kt$import kotlinx.serialization.json.*</ID>
-    <ID>WildcardImport:FileRoutes.kt$import io.ktor.http.*</ID>
-    <ID>WildcardImport:FileRoutes.kt$import io.ktor.http.content.*</ID>
-    <ID>WildcardImport:FileRoutes.kt$import io.ktor.server.application.*</ID>
-    <ID>WildcardImport:FileRoutes.kt$import io.ktor.server.request.*</ID>
-    <ID>WildcardImport:FileRoutes.kt$import io.ktor.server.response.*</ID>
-    <ID>WildcardImport:FileRoutes.kt$import io.ktor.server.routing.*</ID>
     <ID>WildcardImport:GroupRepository.kt$import org.jetbrains.exposed.sql.*</ID>
     <ID>WildcardImport:GroupService.kt$import com.silk.backend.database.*</ID>
-    <ID>WildcardImport:Routing.kt$import com.silk.backend.database.*</ID>
-    <ID>WildcardImport:Routing.kt$import io.ktor.client.*</ID>
-    <ID>WildcardImport:Routing.kt$import io.ktor.client.plugins.websocket.*</ID>
-    <ID>WildcardImport:Routing.kt$import io.ktor.http.*</ID>
-    <ID>WildcardImport:Routing.kt$import io.ktor.server.application.*</ID>
-    <ID>WildcardImport:Routing.kt$import io.ktor.server.request.*</ID>
-    <ID>WildcardImport:Routing.kt$import io.ktor.server.response.*</ID>
-    <ID>WildcardImport:Routing.kt$import io.ktor.server.routing.*</ID>
-    <ID>WildcardImport:Routing.kt$import io.ktor.server.websocket.*</ID>
-    <ID>WildcardImport:Routing.kt$import io.ktor.websocket.*</ID>
-    <ID>WildcardImport:Routing.kt$import kotlinx.serialization.json.*</ID>
-    <ID>WildcardImport:Routing.kt$import org.jetbrains.exposed.sql.*</ID>
     <ID>WildcardImport:SearchDrivenAgent.kt$import kotlinx.serialization.json.*</ID>
     <ID>WildcardImport:UserRepository.kt$import org.jetbrains.exposed.sql.*</ID>
     <ID>WildcardImport:UserSettingsRepository.kt$import org.jetbrains.exposed.sql.*</ID>

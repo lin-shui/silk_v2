@@ -118,6 +118,9 @@ tmp/
 __pycache__/
 *.pyc
 
+# cc_bridge runtime data (port files, hook logs)
+cc_bridge/data/
+
 # HarmonyApp local config (auto-generated from .env)
 frontend/harmonyApp/entry/src/main/ets/common/EnvConfig.ets
 docs/superpowers/

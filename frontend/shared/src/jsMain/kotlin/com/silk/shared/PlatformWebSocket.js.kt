@@ -3,7 +3,6 @@ package com.silk.shared
 import org.w3c.dom.WebSocket as BrowserWebSocket
 import org.w3c.dom.MessageEvent
 import org.w3c.dom.events.Event
-import kotlinx.browser.window
 
 actual class PlatformWebSocket actual constructor(
     private val serverUrl: String,
@@ -19,6 +18,9 @@ actual class PlatformWebSocket actual constructor(
         println(message)
         onLog?.invoke(message)
     }
+
+    private fun errorMessage(error: dynamic): String =
+        error?.message ?: error?.toString() ?: "Unknown error"
     
     actual val isConnected: Boolean
         get() = ws?.readyState == BrowserWebSocket.OPEN
@@ -31,7 +33,11 @@ actual class PlatformWebSocket actual constructor(
                 old.onerror = null
                 old.onmessage = null
                 old.onopen = null
-                try { old.close(1000, "Switching group") } catch (_: dynamic) {}
+                try {
+                    old.close(1000, "Switching group")
+                } catch (error: dynamic) {
+                    log("⚠️ [WebSocket] 旧连接关闭异常: ${errorMessage(error)}")
+                }
             }
 
             val safeUserName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")
@@ -52,7 +58,7 @@ actual class PlatformWebSocket actual constructor(
                 onDisconnected()
             }
             
-            ws?.onerror = { event: Event ->
+            ws?.onerror = { _: Event ->
                 log("❌ [WebSocket] 错误")
                 onError("WebSocket error")
             }
@@ -63,9 +69,10 @@ actual class PlatformWebSocket actual constructor(
                     onMessage(data)
                 }
             }
-        } catch (e: Exception) {
-            log("❌ [WebSocket] 创建失败: ${e.message}")
-            onError(e.message ?: "Unknown error")
+        } catch (error: dynamic) {
+            val message = errorMessage(error)
+            log("❌ [WebSocket] 创建失败: $message")
+            onError(message)
         }
     }
     
@@ -76,8 +83,8 @@ actual class PlatformWebSocket actual constructor(
             } else {
                 log("⚠️ [WebSocket] 未连接，无法发送消息")
             }
-        } catch (e: Exception) {
-            log("❌ [WebSocket] 发送失败: ${e.message}")
+        } catch (error: dynamic) {
+            log("❌ [WebSocket] 发送失败: ${errorMessage(error)}")
         }
     }
     
@@ -85,9 +92,8 @@ actual class PlatformWebSocket actual constructor(
         try {
             ws?.close(1000, "Client disconnecting")
             ws = null
-        } catch (e: Exception) {
-            log("⚠️ [WebSocket] 关闭异常: ${e.message}")
+        } catch (error: dynamic) {
+            log("⚠️ [WebSocket] 关闭异常: ${errorMessage(error)}")
         }
     }
 }
-

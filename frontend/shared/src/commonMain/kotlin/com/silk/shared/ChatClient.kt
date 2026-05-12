@@ -8,6 +8,7 @@ import kotlinx.datetime.Clock
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -54,7 +55,11 @@ class ChatClient(
     // 系统状态消息列表（用于显示搜索、索引等状态）
     private val _statusMessages = MutableStateFlow<List<Message>>(emptyList())
     val statusMessages: StateFlow<List<Message>> = _statusMessages.asStateFlow()
-    
+
+    // Agent 提问等待回答状态（AskUserQuestion requestId）
+    private val _pendingQuestionId = MutableStateFlow<String?>(null)
+    val pendingQuestionId: StateFlow<String?> = _pendingQuestionId.asStateFlow()
+
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
     
@@ -83,7 +88,7 @@ class ChatClient(
         if (oldWs != null) {
             log("🔄 [ChatClient] 静默关闭旧连接")
             webSocket = null
-            try { oldWs.disconnect() } catch (_: Exception) {}
+            oldWs.disconnect()
         }
         
         historyBuffer.clear()
@@ -146,7 +151,7 @@ class ChatClient(
                     _messages.value = (_messages.value + batch).distinctBy { it.id }
                 }
                 return
-            } catch (_: Exception) {
+            } catch (_: SerializationException) {
                 log("⚠️ [ChatClient] 批量解析失败，回退单条解析")
             }
         }
@@ -204,6 +209,7 @@ class ChatClient(
                         _statusMessages.value = emptyList()
                         _isGenerating.value = false
                         suppressTransient = false
+                        _pendingQuestionId.value = null
                     } else {
                         log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
                         if (isSilkAi) _isGenerating.value = true
@@ -251,13 +257,25 @@ class ChatClient(
                     } else {
                         log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
                     }
-                    _transientMessage.value = null
-                    _statusMessages.value = emptyList()
-                    _isGenerating.value = false
-                    suppressTransient = false
+                    // Track pending question state
+                    if (message.category == MessageCategory.AGENT_QUESTION) {
+                        val reqId = message.id.removePrefix("agent_question_")
+                        _pendingQuestionId.value = reqId
+                        // Must clear isGenerating so the send button shows (not stop button)
+                        _isGenerating.value = false
+                        _transientMessage.value = null
+                        _statusMessages.value = emptyList()
+                        suppressTransient = false
+                    } else {
+                        _transientMessage.value = null
+                        _statusMessages.value = emptyList()
+                        _isGenerating.value = false
+                        suppressTransient = false
+                        _pendingQuestionId.value = null
+                    }
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
             log("❌ [ChatClient] 解析消息失败: ${e.message}")
         }
     }
@@ -287,7 +305,7 @@ class ChatClient(
         try {
             val jsonMessage = Json.encodeToString(stopMessage)
             webSocket?.send(jsonMessage)
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
             log("❌ [ChatClient] 发送停止信号失败: ${e.message}")
         }
         
@@ -295,6 +313,7 @@ class ChatClient(
         _isGenerating.value = false
         _transientMessage.value = null
         _statusMessages.value = emptyList()
+        _pendingQuestionId.value = null
     }
     
     suspend fun sendMessage(userId: String, userName: String, content: String) {
@@ -317,23 +336,18 @@ class ChatClient(
             log("📤 [ChatClient] 发送消息: ${content.take(50)}...")
             webSocket?.send(jsonMessage)
             log("✅ [ChatClient] 消息已发送到服务器")
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
             log("❌ [ChatClient] 发送消息失败: ${e.message}")
         }
     }
     
     suspend fun disconnect() {
-        try {
-            webSocket?.disconnect()
-            webSocket = null
-            _connectionState.value = ConnectionState.DISCONNECTED
-            _isGenerating.value = false
-            suppressTransient = false
-            log("✅ [ChatClient] 已断开连接")
-        } catch (e: Exception) {
-            log("⚠️ [ChatClient] 断开连接: ${e.message}")
-            _connectionState.value = ConnectionState.DISCONNECTED
-        }
+        webSocket?.disconnect()
+        webSocket = null
+        _connectionState.value = ConnectionState.DISCONNECTED
+        _isGenerating.value = false
+        suppressTransient = false
+        log("✅ [ChatClient] 已断开连接")
     }
     
     fun clearMessages() {

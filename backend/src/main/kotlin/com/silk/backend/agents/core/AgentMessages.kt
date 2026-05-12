@@ -62,4 +62,35 @@ object AgentMessages {
         timestamp = System.currentTimeMillis(),
         type = MessageType.TEXT,
     )
+
+    fun question(
+        content: String,
+        requestId: String,
+        agentUserId: String,
+        agentName: String,
+    ) = Message(
+        id = "agent_question_$requestId",
+        userId = agentUserId,
+        userName = agentName,
+        content = content,
+        timestamp = System.currentTimeMillis(),
+        type = MessageType.TEXT,
+        isTransient = false,
+        category = MessageCategory.AGENT_QUESTION,
+    )
+
+    /** 将问题列表格式化为展示文本。供 AcpUpdateMapper 和重连恢复共用。 */
+    fun formatQuestionText(questions: List<String>): String = buildString {
+        appendLine("💬 Claude Code 想问你：")
+        appendLine()
+        if (questions.size == 1) {
+            appendLine(questions[0])
+        } else {
+            questions.forEachIndexed { i, q ->
+                appendLine("${i + 1}. $q")
+            }
+        }
+        appendLine()
+        append("⏳ 等待你的回答...")
+    }
 }

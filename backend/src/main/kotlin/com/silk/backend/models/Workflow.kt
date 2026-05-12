@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 /**
  * 单个 agent 的 per-workflow 会话状态（M4 Plan Task 3）。
- * - sessionId: 该 agent 上一次返回的 ccSessionId（让重启后的 prompt 能 resume 该 agent 的旧线程）
+ * - sessionId: 该 agent 上一次返回的 cliSessionId（让重启后的 prompt 能 resume 该 agent 的旧线程）
  * - sessionStarted: true → 下次 prompt 带 resume=true
  *
  * 与 Workflow.sessionId / sessionStarted 的关系：旧字段为 backward-compat 保留；
@@ -28,7 +28,7 @@ data class Workflow(
     val taskFocus: String = "",
     val createdAt: Long,
     val updatedAt: Long,
-    /** 持久化的工作目录，用户在创建/更改目录时落库；后端重启后用它 seed CC state 的 workingDir，避免回退到 backend 进程 cwd。 */
+    /** 持久化的工作目录，用户在创建/更改目录时落库；后端重启后用它 seed agent state 的 workingDir，避免回退到 backend 进程 cwd。 */
     val workingDir: String = "",
     /** Bridge 上一次返回的 sessionId（complete/session_resumed/new_session 都会更新）。重启后据此发起 resume，使会话历史可续。 */
     val sessionId: String = "",
