@@ -39,7 +39,6 @@ import org.jetbrains.compose.web.css.fontWeight
 import org.jetbrains.compose.web.css.height
 import org.jetbrains.compose.web.css.justifyContent
 import org.jetbrains.compose.web.css.left
-import org.jetbrains.compose.web.css.margin
 import org.jetbrains.compose.web.css.marginBottom
 import org.jetbrains.compose.web.css.marginTop
 import org.jetbrains.compose.web.css.padding
@@ -619,7 +618,8 @@ fun WorkflowScene(appState: WebAppState) {
                     style {
                         height(1.px)
                         backgroundColor(Color(SilkColors.border))
-                        margin(4.px, 0.px)
+                        marginTop(4.px)
+                        marginBottom(4.px)
                     }
                 }) {}
                 Button({
