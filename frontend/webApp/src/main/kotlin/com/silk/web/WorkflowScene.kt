@@ -54,6 +54,7 @@ import org.jetbrains.compose.web.dom.Div
 import org.jetbrains.compose.web.dom.H3
 import org.jetbrains.compose.web.dom.Input
 import org.jetbrains.compose.web.dom.Option
+import org.jetbrains.compose.web.dom.P
 import org.jetbrains.compose.web.dom.Select
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
@@ -617,7 +618,8 @@ fun WorkflowScene(appState: WebAppState) {
                     style {
                         height(1.px)
                         backgroundColor(Color(SilkColors.border))
-                        margin(4.px, 0.px)
+                        marginTop(4.px)
+                        marginBottom(4.px)
                     }
                 }) {}
                 Button({
