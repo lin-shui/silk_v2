@@ -697,7 +697,7 @@ object AgentRuntime {
                     return@launch
                 }
                 val accumulated = StringBuilder()
-                setupAcpHandlers(acp, acpSessionId, session, descriptor, broadcastFn, accumulated)
+                setupAcpHandlers(acp, acpSessionId, session, descriptor, broadcastFn, accumulated, ctx.scope)
 
                 // 3. Execute prompt (executeSinglePrompt no longer does sessionNew)
                 executeSinglePrompt(ctx, acp, session, descriptor, text, broadcastFn, accumulated)
@@ -711,7 +711,7 @@ object AgentRuntime {
                     )
                     val drainSessionId = session.acpSessionId ?: break
                     val nextAccumulated = StringBuilder()
-                    setupAcpHandlers(acp, drainSessionId, session, descriptor, broadcastFn, nextAccumulated)
+                    setupAcpHandlers(acp, drainSessionId, session, descriptor, broadcastFn, nextAccumulated, ctx.scope)
                     executeSinglePrompt(ctx, acp, session, descriptor, next.text, broadcastFn, nextAccumulated)
                     next = session.messageQueue.pollFirst()
                 }
@@ -902,6 +902,7 @@ object AgentRuntime {
         descriptor: AgentDescriptor,
         broadcastFn: suspend (Message) -> Unit,
         accumulated: StringBuilder,
+        scope: CoroutineScope,
     ) {
         acp.onSessionUpdate(acpSessionId) { notif ->
             // Check if this is an ask_user_question and set pending state
@@ -932,7 +933,7 @@ object AgentRuntime {
                 accumulated = accumulated,
             )
             if (msg != null) {
-                CoroutineScope(Dispatchers.IO).launch {
+                scope.launch {
                     broadcastFn(msg)
                 }
             }

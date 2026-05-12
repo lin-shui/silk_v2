@@ -146,9 +146,18 @@ class AcpClient(
         val id = nextId.getAndIncrement()
         val deferred = CompletableDeferred<JsonRpcResponse>()
         pending[id] = deferred
-        val req = JsonRpcRequest(id = id, method = method, params = params)
-        transport.send(json.encodeToString(JsonRpcRequest.serializer(), req))
-        return deferred.await()
+        try {
+            val req = JsonRpcRequest(id = id, method = method, params = params)
+            transport.send(json.encodeToString(JsonRpcRequest.serializer(), req))
+        } catch (e: Exception) {
+            pending.remove(id)
+            throw e
+        }
+        return try {
+            deferred.await()
+        } finally {
+            pending.remove(id)
+        }
     }
 
     private suspend fun receiveLoop() {

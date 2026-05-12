@@ -38,6 +38,7 @@ import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import io.ktor.client.engine.cio.CIO
 import kotlinx.serialization.json.*
@@ -2128,6 +2129,7 @@ fun Application.configureRouting() {
                 logger.error("❌ Agent Bridge WebSocket 错误: userId={}, agentType={}, error={}", userId, agentType, e.message)
             } finally {
                 logger.info("🔌 Agent Bridge 断开: userId={}, agentType={}", userId, agentType)
+                scope.cancel()
                 AcpRegistry.unregister(userId, agentType)
                 AgentRuntime.handleAgentDisconnect(userId, agentType)
             }
