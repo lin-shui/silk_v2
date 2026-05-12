@@ -121,3 +121,6 @@ __pycache__/
 # HarmonyApp local config (auto-generated from .env)
 frontend/harmonyApp/entry/src/main/ets/common/EnvConfig.ets
 docs/superpowers/
+
+# Nginx (environment-specific; use nginx_silk.conf.example as template)
+nginx_silk.conf

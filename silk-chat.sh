@@ -6,6 +6,7 @@
 # 用法:
 #   ./silk-chat.sh build           - 构建 WebApp 前端
 #   ./silk-chat.sh build-backend   - 构建后端 shadowJar
+#   ./silk-chat.sh build-backend-clean - clean + 全量重编 shadowJar
 #   ./silk-chat.sh build-apk       - 构建 Android APK
 #   ./silk-chat.sh build-hap       - 构建鸿蒙 HAP
 #   ./silk-chat.sh build-all       - 构建全部 (后端 + WebApp + APK + HAP)
@@ -62,9 +63,12 @@ if [ -n "$ANDROID_HOME" ]; then
     export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
 fi
 
-FRONTEND_HTTP_PORT=${FRONTEND_HTTP_PORT:-15004}
+# 端口语义与 silk.sh 一致：*_HTTP_PORT = 对外；解析后 FRONTEND_PORT / BACKEND_PORT = 进程监听口
+BACKEND_HTTP_PORT=${BACKEND_HTTP_PORT:-15003}
+BACKEND_PORT=${BACKEND_INTERNAL_PORT:-${BACKEND_PORT:-$BACKEND_HTTP_PORT}}
+FRONTEND_HTTP_PORT=${FRONTEND_HTTP_PORT:-${FRONTEND_PORT:-15004}}
 FRONTEND_PORT=${FRONTEND_INTERNAL_PORT:-${FRONTEND_PORT:-$FRONTEND_HTTP_PORT}}
-BACKEND_PORT=${BACKEND_INTERNAL_PORT:-${BACKEND_HTTP_PORT:-15003}}
+FRONTEND_PUBLIC_PORT=${FRONTEND_PUBLIC_PORT:-$FRONTEND_HTTP_PORT}
 SILK_WORKFLOW_DIR=${SILK_WORKFLOW_DIR:-"$HOME/.silk-data/workflows"}
 BACKEND_LOG="/tmp/silk_backend.log"
 FRONTEND_LOG="/tmp/silk_frontend.log"
@@ -94,7 +98,8 @@ get_pid_on_port() {
 
 get_backend_url() {
     local host="${BACKEND_HOST:-localhost}"
-    local port="${BACKEND_INTERNAL_PORT:-${BACKEND_HTTP_PORT:-15003}}"
+    # 外网/APK 下载用公网端口，不要用 BACKEND_INTERNAL_PORT
+    local port="${BACKEND_HTTP_PORT:-15003}"
     local scheme="${BACKEND_SCHEME:-http}"
     echo "${scheme}://${host}:${port}"
 }
@@ -122,6 +127,31 @@ build_backend() {
     echo -e "${BLUE}编译后端 + 打包 shadowJar...${NC}"
     cd "$SILK_DIR"
     ./gradlew :backend:shadowJar --no-build-cache 2>&1 | tail -5
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}❌ 后端构建失败${NC}"
+        return 1
+    fi
+
+    local JAR_FILE=$(ls -t "$SILK_DIR/backend/build/libs/"*-all.jar 2>/dev/null | head -1)
+    if [ -n "$JAR_FILE" ]; then
+        local JAR_SIZE=$(du -h "$JAR_FILE" | cut -f1)
+        echo -e "${GREEN}✅ 后端构建成功${NC}"
+        echo -e "  产物: ${CYAN}$JAR_FILE${NC}"
+        echo -e "  大小: ${CYAN}$JAR_SIZE${NC}"
+    else
+        echo -e "${YELLOW}⚠ 未找到 shadowJar 产物${NC}"
+    fi
+    echo ""
+}
+
+build_backend_clean() {
+    print_header "🧹 构建后端（clean + shadowJar）"
+
+    echo ""
+    echo -e "${BLUE}清理产物后全量编译 + 打包 shadowJar...${NC}"
+    cd "$SILK_DIR"
+    ./gradlew :backend:clean :backend:shadowJar --no-build-cache 2>&1 | tail -5
 
     if [ $? -ne 0 ]; then
         echo -e "${RED}❌ 后端构建失败${NC}"
@@ -441,7 +471,7 @@ build_all() {
     echo -e "${CYAN}  访问地址${NC}"
     echo -e "${CYAN}════════════════════════════════════════════${NC}"
     echo ""
-    echo -e "  前端页面: ${GREEN}http://localhost:$FRONTEND_PORT${NC}"
+    echo -e "  前端页面: ${GREEN}http://localhost:$FRONTEND_PUBLIC_PORT${NC}"
     echo ""
     print_download_urls
 }
@@ -452,6 +482,13 @@ build_all() {
 
 start() {
     print_header "🚀 启动服务"
+
+    cd "$SILK_DIR" || {
+        echo -e "${RED}❌ 无法进入项目目录: $SILK_DIR${NC}"
+        return 1
+    }
+
+    local HOST="${BACKEND_HOST:-localhost}"
 
     # ── 后端 ──
     if check_port $BACKEND_PORT; then
@@ -486,7 +523,6 @@ start() {
     for i in {1..24}; do
         sleep 5
         if check_port $BACKEND_PORT; then
-            local HOST="${BACKEND_HOST:-localhost}"
             echo -e "  ${GREEN}✅ 后端已就绪${NC}"
             break
         fi
@@ -500,10 +536,14 @@ start() {
 
     # ── 前端 ──
     echo ""
-    echo -e "${BLUE}启动前端静态服务器 (端口 $FRONTEND_PORT)...${NC}"
+    if [ "$FRONTEND_PORT" != "$FRONTEND_PUBLIC_PORT" ]; then
+        echo -e "${BLUE}启动前端静态服务器 (监听 $FRONTEND_PORT，对外访问端口 $FRONTEND_PUBLIC_PORT)...${NC}"
+    else
+        echo -e "${BLUE}启动前端静态服务器 (端口 $FRONTEND_PORT)...${NC}"
+    fi
     if check_port $FRONTEND_PORT; then
         local FPID=$(get_pid_on_port $FRONTEND_PORT)
-        echo -e "  ${YELLOW}前端端口 $FRONTEND_PORT 已被占用 (PID: $FPID)${NC}"
+        echo -e "  ${YELLOW}前端监听端口 $FRONTEND_PORT 已被占用 (PID: $FPID)${NC}"
         echo -n "  是否终止? [y/N]: "
         read -t 5 answer
         if [ "$answer" == "y" ] || [ "$answer" == "Y" ]; then
@@ -533,8 +573,14 @@ start() {
     echo -e "${GREEN}  所有服务已就绪${NC}"
     echo -e "${GREEN}════════════════════════════════════════════${NC}"
     echo ""
-    echo -e "  前端页面: ${GREEN}http://localhost:$FRONTEND_PORT${NC}"
-    echo -e "  后端:     ${GREEN}${BACKEND_SCHEME:-http}://$HOST:$BACKEND_PORT${NC}"
+    echo -e "  前端页面: ${GREEN}http://localhost:$FRONTEND_PUBLIC_PORT${NC}"
+    echo -e "  后端 API: ${GREEN}${BACKEND_SCHEME:-http}://$HOST:$BACKEND_HTTP_PORT${NC}"
+    if [ "$FRONTEND_PORT" != "$FRONTEND_PUBLIC_PORT" ] || [ "$BACKEND_PORT" != "$BACKEND_HTTP_PORT" ]; then
+        echo ""
+        echo -e "  ${YELLOW}反向代理请转发到本机实际监听口:${NC}"
+        echo -e "    公网 TCP ${FRONTEND_PUBLIC_PORT} → 127.0.0.1:${FRONTEND_PORT}（静态页）"
+        echo -e "    公网 TCP ${BACKEND_HTTP_PORT} → 127.0.0.1:${BACKEND_PORT}（API/WebSocket）"
+    fi
     echo ""
     print_download_urls
 }
@@ -576,7 +622,11 @@ stop() {
 status() {
     print_header "🔍 状态"
 
-    echo -e "${BLUE}前端 (端口 $FRONTEND_PORT)${NC}"
+    if [ "$FRONTEND_PORT" != "$FRONTEND_PUBLIC_PORT" ]; then
+        echo -e "${BLUE}前端 (监听 $FRONTEND_PORT, 对外 $FRONTEND_PUBLIC_PORT)${NC}"
+    else
+        echo -e "${BLUE}前端 (端口 $FRONTEND_PORT)${NC}"
+    fi
     if check_port $FRONTEND_PORT; then
         local FPID=$(get_pid_on_port $FRONTEND_PORT)
         echo -e "  ${GREEN}● 运行中 (PID: $FPID)${NC}"
@@ -585,7 +635,11 @@ status() {
     fi
 
     echo ""
-    echo -e "${BLUE}后端 (端口 $BACKEND_PORT)${NC}"
+    if [ "$BACKEND_PORT" != "$BACKEND_HTTP_PORT" ]; then
+        echo -e "${BLUE}后端 (监听 $BACKEND_PORT, 对外 $BACKEND_HTTP_PORT)${NC}"
+    else
+        echo -e "${BLUE}后端 (端口 $BACKEND_PORT)${NC}"
+    fi
     if check_port $BACKEND_PORT; then
         local PID=$(get_pid_on_port $BACKEND_PORT)
         echo -e "  ${GREEN}● 运行中 (PID: $PID)${NC}"
@@ -622,6 +676,9 @@ case "$1" in
     build-backend|bb)
         build_backend
         ;;
+    build-backend-clean|bbc)
+        build_backend_clean
+        ;;
     build-apk|ba)
         build_apk
         ;;
@@ -655,11 +712,12 @@ case "$1" in
         echo "用法: $0 <命令>"
         echo ""
         echo "  build, b         构建 WebApp 前端"
-        echo "  build-backend, bb 构建后端 shadowJar"
-        echo "  build-apk, ba    构建 Android APK"
+        echo "  build-backend, bb        构建后端 shadowJar"
+        echo "  build-backend-clean, bbc clean + 全量重编后端 shadowJar"
+        echo "  build-apk, ba            构建 Android APK"
         echo "  build-hap, bh    构建鸿蒙 HAP"
         echo "  build-all, ball  构建全部 (后端 + WebApp + APK + HAP)"
-        echo "  start            启动服务 (后端 $BACKEND_PORT + 前端 $FRONTEND_PORT)"
+        echo "  start            启动服务 (后端监听 $BACKEND_PORT, 前端监听 $FRONTEND_PORT)"
         echo "  stop             停止服务"
         echo "  restart, r       重启"
         echo "  status, s        检查服务状态"
