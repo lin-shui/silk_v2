@@ -4,28 +4,35 @@ import com.silk.backend.ai.AIConfig
 import com.silk.backend.broadcastSystemStatus
 import com.silk.backend.buildFileDownloadUrl
 import com.silk.backend.database.SimpleResponse
-import com.silk.backend.search.WeaviateClient
 import com.silk.backend.search.IndexDocument
-import io.ktor.http.*
-import io.ktor.http.content.*
-import io.ktor.server.application.*
-import io.ktor.server.request.*
-import io.ktor.server.response.*
-import io.ktor.server.routing.*
+import com.silk.backend.search.WeaviateClient
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import io.ktor.http.ContentDisposition
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.PartData
+import io.ktor.http.content.forEachPart
+import io.ktor.http.content.streamProvider
+import io.ktor.server.application.call
+import io.ktor.server.request.receiveMultipart
+import io.ktor.server.response.header
+import io.ktor.server.response.respond
+import io.ktor.server.response.respondFile
+import io.ktor.server.routing.Route
+import io.ktor.server.routing.delete
+import io.ktor.server.routing.get
+import io.ktor.server.routing.post
+import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.nio.file.Files
-import java.nio.file.Paths
 import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.util.*
 
 private val logger = LoggerFactory.getLogger("FileRoutes")
 private val json = Json { ignoreUnknownKeys = true }

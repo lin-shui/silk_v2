@@ -55,7 +55,7 @@
 ## Next Slices
 
 - Slice 1: 已完成。清理 `frontend/shared` 的 `WildcardImport` baseline，跑 `./gradlew silkLint` 和 shared 相关编译。
-- Slice 2: 清理 backend 入口层的 `WildcardImport`，优先 `Application.kt`、`routes/*`，跑 `./gradlew :backend:test`。
+- Slice 2: 已完成。清理 backend 入口层的 `WildcardImport`，覆盖 `Application.kt`、`Routing.kt`、`routes/*`，跑 `./gradlew :backend:test`。
 - Slice 3: 清理 `frontend/webApp` 纯 import 类问题，跑 `./gradlew :frontend:webApp:nodeTest`。
 - Slice 4: 处理 `frontend/shared` 的明确私有未使用项。
 - Slice 5: 专门评估 shared WebSocket 的异常处理规则，避免吞掉取消异常或隐藏连接失败。
@@ -70,6 +70,19 @@
 - 已验证：
   - `./gradlew silkLint --no-daemon --stacktrace --warning-mode all`
   - `./gradlew :frontend:shared:compileKotlinDesktop :frontend:shared:compileKotlinJs :frontend:shared:compileDebugKotlinAndroid --no-daemon --stacktrace --warning-mode all`
+
+### 2026-05-12 Slice 2
+
+- 清理 backend 入口层的 38 条 `WildcardImport` baseline，覆盖 `Application.kt`、`Routing.kt`、`routes/AsrRoutes.kt`、`routes/FileRoutes.kt`。
+- `config/lint/detekt/backend.xml` 从 278 条降到 240 条；其中 `WildcardImport` 剩余 35 条，已不包含 backend 入口层文件。
+- 没有运行全量 baseline 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次 `./gradlew :backend:test` 遇到 Kotlin 增量编译 stale class（`TrustedDirRecord.class` 缺失），清理 `backend/build` 后验证通过。
+- 已验证：
+  - `./gradlew silkLint`
+  - `./gradlew :backend:clean :backend:test`
+  - `./gradlew :backend:compileKotlin`
+  - `./gradlew :backend:test`
+  - `git diff --check`
 
 ## Handoff Notes
 
