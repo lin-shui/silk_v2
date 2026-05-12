@@ -9,11 +9,5 @@
     <ID>CyclomaticComplexMethod:PlatformWebSocket.android.kt$PlatformWebSocket$actual fun connect(userId: String, userName: String, groupId: String)</ID>
     <ID>CyclomaticComplexMethod:PlatformWebSocket.jvm.kt$PlatformWebSocket$actual fun connect(userId: String, userName: String, groupId: String)</ID>
     <ID>NestedBlockDepth:ChatClient.kt$ChatClient$private fun handleMessage(text: String)</ID>
-    <ID>SwallowedException:PlatformWebSocket.jvm.kt$PlatformWebSocket$e: CancellationException</ID>
-    <ID>TooGenericExceptionCaught:ChatClient.kt$ChatClient$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:PlatformWebSocket.android.kt$PlatformWebSocket$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:PlatformWebSocket.js.kt$PlatformWebSocket$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:PlatformWebSocket.jvm.kt$PlatformWebSocket$e: Exception</ID>
-    <ID>UnusedPrivateProperty:DateTimeUtils.kt$val date = Date(timestamp.toDouble())</ID>
   </CurrentIssues>
 </SmellBaseline>

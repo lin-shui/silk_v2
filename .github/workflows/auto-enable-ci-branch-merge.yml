@@ -44,6 +44,10 @@ jobs:
                   core.info(`Auto-merge already enabled for PR #${pr.number}.`);
                   return;
                 }
+                if (/Resource not accessible by integration/i.test(message)) {
+                  core.notice(`Auto-merge could not be enabled by this workflow token for PR #${pr.number}; leaving the PR open.`);
+                  return;
+                }
 
                 const retriable =
                   /Head branch was modified|INTERNAL|Something went wrong/i.test(message);

@@ -10,7 +10,6 @@ import kotlin.js.Date
  * 格式化时间戳为 HH:mm 格式 (上海时区)
  */
 actual fun formatTimeHM(timestamp: Long): String {
-    val date = Date(timestamp.toDouble())
     // 上海时区偏移：+8小时
     val shanghaiTime = Date(timestamp.toDouble() + 8 * 60 * 60 * 1000)
     val hours = shanghaiTime.getUTCHours()

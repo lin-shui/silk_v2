@@ -55,10 +55,10 @@
 ## Next Slices
 
 - Slice 1: 已完成。清理 `frontend/shared` 的 `WildcardImport` baseline，跑 `./gradlew silkLint` 和 shared 相关编译。
-- Slice 2: 清理 backend 入口层的 `WildcardImport`，优先 `Application.kt`、`routes/*`，跑 `./gradlew :backend:test`。
-- Slice 3: 清理 `frontend/webApp` 纯 import 类问题，跑 `./gradlew :frontend:webApp:nodeTest`。
-- Slice 4: 处理 `frontend/shared` 的明确私有未使用项。
-- Slice 5: 专门评估 shared WebSocket 的异常处理规则，避免吞掉取消异常或隐藏连接失败。
+- Slice 2: 已完成。清理 backend 入口层的 `WildcardImport`，覆盖 `Application.kt`、`Routing.kt`、`routes/*`，跑 `./gradlew :backend:test`。
+- Slice 3: 已完成。清理 `frontend/webApp` 纯 import 类问题，跑 `./gradlew :frontend:webApp:nodeTest`。
+- Slice 4: 已完成。清理 `frontend/shared` 的明确私有未使用项。
+- Slice 5: 已完成。收敛 shared WebSocket / ChatClient 异常处理规则，取消异常显式透传。
 
 ## Progress Log
 
@@ -70,6 +70,57 @@
 - 已验证：
   - `./gradlew silkLint --no-daemon --stacktrace --warning-mode all`
   - `./gradlew :frontend:shared:compileKotlinDesktop :frontend:shared:compileKotlinJs :frontend:shared:compileDebugKotlinAndroid --no-daemon --stacktrace --warning-mode all`
+
+### 2026-05-12 Slice 2
+
+- 清理 backend 入口层的 38 条 `WildcardImport` baseline，覆盖 `Application.kt`、`Routing.kt`、`routes/AsrRoutes.kt`、`routes/FileRoutes.kt`。
+- `config/lint/detekt/backend.xml` 从 278 条降到 240 条；其中 `WildcardImport` 剩余 35 条，已不包含 backend 入口层文件。
+- 没有运行全量 baseline 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次 `./gradlew :backend:test` 遇到 Kotlin 增量编译 stale class（`TrustedDirRecord.class` 缺失），清理 `backend/build` 后验证通过。
+- 已验证：
+  - `./gradlew silkLint`
+  - `./gradlew :backend:clean :backend:test`
+  - `./gradlew :backend:compileKotlin`
+  - `./gradlew :backend:test`
+  - `git diff --check`
+
+### 2026-05-12 Slice 3
+
+- 清理 `frontend/webApp` 的 37 条 `WildcardImport` baseline，覆盖 Web 主源码与 `MainTest.kt`。
+- `config/lint/detekt/frontend-webApp.xml` 从 91 条降到 54 条；`frontend/webApp` 当前不再保留 `WildcardImport` baseline。
+- 没有运行全量 baseline 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次 `./gradlew :frontend:webApp:nodeTest` 暴露少量显式 import 缺口，补齐后验证通过。
+- 已验证：
+  - `./gradlew :frontend:webApp:detekt --no-daemon --stacktrace`
+  - `./gradlew :frontend:webApp:nodeTest --no-daemon --stacktrace`
+  - `./gradlew silkLint --no-daemon --stacktrace`
+  - `git diff --check`
+
+### 2026-05-12 Slice 4
+
+- 清理 `frontend/shared` JS 时间格式化里的 1 条明确未使用私有值。
+- `config/lint/detekt/frontend-shared.xml` 从 13 条降到 12 条；当前已无 `UnusedPrivateProperty` baseline。
+- 没有运行全量 baseline 再生，只删除已由源码修复覆盖的 baseline 项。
+- 已验证：
+  - `./gradlew :frontend:shared:detekt :frontend:shared:compileKotlinJs --no-daemon --stacktrace`
+  - `./gradlew silkLint --no-daemon --stacktrace`
+  - `git diff --check`
+
+### 2026-05-12 Slice 5
+
+- 清理 `frontend/shared` 的 5 条异常处理 baseline：
+  - `ChatClient.kt` 改为只捕获 JSON 序列化解析失败，不再泛捕发送 / 断开路径。
+  - Android / JVM WebSocket 的 `CancellationException` 改为显式透传，连接 / 接收 / 发送 / 关闭只处理预期 IO 或状态异常。
+  - JS WebSocket 改为捕获浏览器 API 抛出的 dynamic 错误并保留可读错误信息。
+- `config/lint/detekt/frontend-shared.xml` 从 12 条降到 7 条；当前已无 `TooGenericExceptionCaught` / `SwallowedException` baseline。
+- 没有运行全量 baseline 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次 `:frontend:shared:detekt` 暴露新增 `ThrowsCount` / `LoopWithTooManyJumpStatements`，已通过小 helper 和心跳发送结果变量收敛，没有新增 baseline。
+- 已验证：
+  - `./gradlew :frontend:shared:detekt --no-daemon --stacktrace`
+  - `./gradlew :frontend:shared:detekt :frontend:shared:compileKotlinDesktop :frontend:shared:compileKotlinJs :frontend:shared:compileDebugKotlinAndroid --no-daemon --stacktrace`
+  - `./gradlew silkLint --no-daemon --stacktrace`
+  - `./gradlew :backend:compileKotlin --no-daemon --stacktrace`
+  - `git diff --check`
 
 ## Handoff Notes
 

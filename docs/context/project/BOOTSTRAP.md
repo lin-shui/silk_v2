@@ -25,7 +25,7 @@
 - 统一运维脚本：`silk.sh`
 - 快检工作流：`.github/workflows/ci-fast-validation.yml`
 - 脚本 smoke 工作流：`.github/workflows/ci-script-smoke.yml`（`build` / `build-apk` / `build-all` / `deploy` 装配 smoke，以及 `start` / `stop` 运行态 smoke）
-- CI 自动开启 auto-merge 工作流：`.github/workflows/auto-enable-ci-branch-merge.yml`（仅针对 base=`chore/ci-auto-merge` 的 PR）
+- CI 自动开启 auto-merge 工作流：`.github/workflows/auto-enable-ci-branch-merge.yml`（仅针对 base=`chore/ci-auto-merge` 的 PR；无权限启用 auto-merge 时记录 notice 并非阻塞退出）
 - Lint 配置与 baseline：`config/lint/detekt.yml`、`config/lint/detekt/`
 - Backend 测试说明：`backend/src/test/kotlin/com/silk/backend/README_TESTS.md`
 

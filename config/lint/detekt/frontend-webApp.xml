@@ -56,42 +56,5 @@
     <ID>UnusedPrivateProperty:Main.kt$var folderFiles by remember { mutableStateOf&lt;List&lt;FileInfo&gt;&gt;(emptyList()) }</ID>
     <ID>UnusedPrivateProperty:Main.kt$var isDraggingOver by remember { mutableStateOf(false) }</ID>
     <ID>UseCheckOrError:Main.kt$throw IllegalStateException("HTTP ${response.status}")</ID>
-    <ID>WildcardImport:ApiClient.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:AppState.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:AudioDuplexScene.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:AudioDuplexScene.kt$import org.jetbrains.compose.web.css.*</ID>
-    <ID>WildcardImport:AudioDuplexScene.kt$import org.jetbrains.compose.web.dom.*</ID>
-    <ID>WildcardImport:ContactsScene.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:ContactsScene.kt$import com.silk.shared.i18n.*</ID>
-    <ID>WildcardImport:ContactsScene.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:ContactsScene.kt$import org.jetbrains.compose.web.css.*</ID>
-    <ID>WildcardImport:ContactsScene.kt$import org.jetbrains.compose.web.dom.*</ID>
-    <ID>WildcardImport:GroupListScene.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:GroupListScene.kt$import com.silk.shared.i18n.*</ID>
-    <ID>WildcardImport:GroupListScene.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:GroupListScene.kt$import org.jetbrains.compose.web.css.*</ID>
-    <ID>WildcardImport:GroupListScene.kt$import org.jetbrains.compose.web.dom.*</ID>
-    <ID>WildcardImport:InvitationDialog.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:InvitationDialog.kt$import org.jetbrains.compose.web.css.*</ID>
-    <ID>WildcardImport:InvitationDialog.kt$import org.jetbrains.compose.web.dom.*</ID>
-    <ID>WildcardImport:KnowledgeBaseScene.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:KnowledgeBaseScene.kt$import org.jetbrains.compose.web.css.*</ID>
-    <ID>WildcardImport:KnowledgeBaseScene.kt$import org.jetbrains.compose.web.dom.*</ID>
-    <ID>WildcardImport:LoginScene.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:LoginScene.kt$import org.jetbrains.compose.web.css.*</ID>
-    <ID>WildcardImport:LoginScene.kt$import org.jetbrains.compose.web.dom.*</ID>
-    <ID>WildcardImport:Main.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:Main.kt$import org.jetbrains.compose.web.css.*</ID>
-    <ID>WildcardImport:Main.kt$import org.jetbrains.compose.web.dom.*</ID>
-    <ID>WildcardImport:MainTest.kt$import org.jetbrains.compose.web.css.*</ID>
-    <ID>WildcardImport:MainTest.kt$import org.jetbrains.compose.web.dom.*</ID>
-    <ID>WildcardImport:SettingsScene.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:SettingsScene.kt$import com.silk.shared.i18n.*</ID>
-    <ID>WildcardImport:SettingsScene.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:SettingsScene.kt$import org.jetbrains.compose.web.css.*</ID>
-    <ID>WildcardImport:SettingsScene.kt$import org.jetbrains.compose.web.dom.*</ID>
-    <ID>WildcardImport:WorkflowScene.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:WorkflowScene.kt$import org.jetbrains.compose.web.css.*</ID>
-    <ID>WildcardImport:WorkflowScene.kt$import org.jetbrains.compose.web.dom.*</ID>
   </CurrentIssues>
 </SmellBaseline>
