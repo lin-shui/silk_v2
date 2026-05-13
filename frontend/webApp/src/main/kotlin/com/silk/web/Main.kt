@@ -3582,6 +3582,33 @@ private fun normalizeMathBlocks(markdown: String): String {
     return output.toString()
 }
 
+/**
+ * Detect Markdown tables whose header row is missing (first table line is
+ * the separator like `|:---|:---:|---:|`). Prepend a dummy header row with
+ * empty cells so markdown-it recognises them as tables.
+ */
+private fun fixHeaderlessTables(markdown: String): String {
+    val separatorPattern = Regex("""^\|[\s:]*-{2,}[\s:]*(\|[\s:]*-{2,}[\s:]*)*\|?\s*$""")
+    val dataRowPattern = Regex("""^\|.+\|""")
+    val lines = markdown.lines()
+    val result = mutableListOf<String>()
+
+    for (i in lines.indices) {
+        val line = lines[i].trim()
+        if (separatorPattern.matches(line)) {
+            val prevIsHeader = i > 0 && dataRowPattern.containsMatchIn(lines[i - 1].trim())
+                    && !separatorPattern.matches(lines[i - 1].trim())
+            if (!prevIsHeader) {
+                val colCount = line.split("|").count { it.contains("-") }
+                val dummyHeader = (1..colCount).joinToString(" | ", "| ", " |") { " " }
+                result.add(dummyHeader)
+            }
+        }
+        result.add(lines[i])
+    }
+    return result.joinToString("\n")
+}
+
 private fun fixOrphanCodeFences(markdown: String): String {
     val lines = markdown.split("\n").toMutableList()
     var idx = 0
@@ -3789,8 +3816,10 @@ fun MarkdownContent(
                 Regex("^(#{1,6})([^#\\s])", RegexOption.MULTILINE),
                 "$1 $2"
             )
+            // Fix tables missing header row (separator as first line)
+            val fixedTables = fixHeaderlessTables(normalizedHeadings)
             // Fix orphan code fences that swallow subsequent Markdown content
-            val fixedFences = fixOrphanCodeFences(normalizedHeadings)
+            val fixedFences = fixOrphanCodeFences(fixedTables)
             // Close blockquotes before section separators (---) and Sources headers
             // so they don't get swallowed into deeply nested blockquotes
             val unquotedBlockquotes = fixedFences
