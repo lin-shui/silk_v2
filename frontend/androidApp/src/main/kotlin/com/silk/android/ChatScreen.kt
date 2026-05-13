@@ -1039,16 +1039,25 @@ fun ChatScreen(appState: AppState) {
                             isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
                             onAIExpandChange = { messageId, isExpanded ->
                                 aiMessageExpandedStates[messageId] = isExpanded
-                                val idx = messages.reversed().indexOfFirst { it.id == messageId }
-                                if (idx >= 0) {
-                                    scopeForScroll.launch {
-                                        kotlinx.coroutines.delay(80)
-                                        listState.scrollToItem(idx)
+                                if (isExpanded) {
+                                    val reversedMessages = messages.reversed()
+                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                    if (idx >= 0) {
+                                        scopeForScroll.launch {
+                                            kotlinx.coroutines.delay(80)
+                                            val offset = (if (transientMessage != null) 1 else 0) +
+                                                (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                            // scrollToItem with reverseLayout=true puts item at bottom of viewport;
+                                            // scroll one item "below" (lower index) so the target appears near the top
+                                            val targetIdx = offset + idx
+                                            listState.scrollToItem((targetIdx - 1).coerceAtLeast(0))
+                                        }
                                     }
                                 }
                             },
                             onLongContentCollapsed = { messageId ->
-                                val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                val reversedMessages = messages.reversed()
+                                val idx = reversedMessages.indexOfFirst { it.id == messageId }
                                 if (idx >= 0) {
                                     scopeForScroll.launch {
                                         kotlinx.coroutines.delay(80)
