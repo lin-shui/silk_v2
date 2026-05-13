@@ -7,6 +7,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.slf4j.LoggerFactory
 
 /**
  * 将 ACP `session/update` 通知中的 `update` 字段映射为 silk Message。
@@ -20,6 +21,8 @@ import kotlinx.serialization.json.jsonPrimitive
  * ```
  */
 object AcpUpdateMapper {
+
+    private val logger = LoggerFactory.getLogger(AcpUpdateMapper::class.java)
 
     fun map(
         update: JsonObject,
@@ -83,18 +86,49 @@ object AcpUpdateMapper {
                 )
             }
             "ask_user_question" -> {
+                logger.info("[AcpUpdateMapper] ask_user_question 原始数据: {}", update)
                 val requestId = update["requestId"]?.let {
                     (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
                 } ?: return null
-                val questions = update["questions"]?.jsonArray
-                    ?.mapNotNull { el ->
-                        (el as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-                    } ?: return null
-                AgentMessages.question(
-                    content = AgentMessages.formatQuestionText(questions),
+                val rawQuestions = update["questions"]?.jsonArray ?: return null
+
+                // Parse each element: structured object or plain string fallback
+                val structuredQuestions = rawQuestions.mapNotNull { el ->
+                    when {
+                        el is kotlinx.serialization.json.JsonObject -> {
+                            val q = el["question"]?.jsonPrimitive?.contentOrNull ?: ""
+                            val header = el["header"]?.jsonPrimitive?.contentOrNull ?: ""
+                            val options = el["options"]?.jsonArray?.mapNotNull { optEl ->
+                                (optEl as? kotlinx.serialization.json.JsonObject)?.let { obj ->
+                                    QuestionOption(
+                                        label = obj["label"]?.jsonPrimitive?.contentOrNull ?: "",
+                                        description = obj["description"]?.jsonPrimitive?.contentOrNull ?: "",
+                                    )
+                                }
+                            } ?: emptyList()
+                            StructuredQuestion(question = q, header = header, options = options)
+                        }
+                        el is kotlinx.serialization.json.JsonPrimitive -> {
+                            el.contentOrNull?.let { text ->
+                                StructuredQuestion(question = text)
+                            }
+                        }
+                        else -> null
+                    }
+                }
+                if (structuredQuestions.isEmpty()) return null
+
+                logger.info(
+                    "[AcpUpdateMapper] 解析到 requestId={}, questionCount={}, firstQ={}",
+                    requestId, structuredQuestions.size, structuredQuestions[0].question.take(60),
+                )
+                AgentMessages.questionCard(
+                    questions = structuredQuestions,
                     requestId = requestId,
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
+                    currentIndex = 0,
+                    answers = emptyMap(),
                 )
             }
             "available_commands_update" -> {

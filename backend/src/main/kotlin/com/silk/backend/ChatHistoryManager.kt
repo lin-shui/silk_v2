@@ -312,7 +312,38 @@ class ChatHistoryManager(
         chatHistory.messages.add(entry)
         saveChatHistory(sessionName, chatHistory)
     }
-    
+
+    /**
+     * 替换聊天历史中的已有消息（用于卡片更新等 action="edit" 场景）
+     */
+    fun editMessage(
+        sessionName: String,
+        message: Message,
+    ) {
+        val chatHistory = loadChatHistory(sessionName) ?: return
+
+        val entry = ChatHistoryEntry(
+            messageId = message.id,
+            senderId = message.userId,
+            senderName = message.userName,
+            content = message.content,
+            timestamp = message.timestamp,
+            messageType = message.type.name,
+            references = message.references,
+        )
+
+        val index = chatHistory.messages.indexOfFirst { it.messageId == message.id }
+        if (index >= 0) {
+            chatHistory.messages[index] = entry
+            saveChatHistory(sessionName, chatHistory)
+            logger.debug("✏️ [editMessage] 替换历史消息: {} in {}", message.id, sessionName)
+        } else {
+            logger.warn("⚠️ [editMessage] 未找到原消息，改为追加: {} in {}", message.id, sessionName)
+            chatHistory.messages.add(entry)
+            saveChatHistory(sessionName, chatHistory)
+        }
+    }
+
     /**
      * 更新 session 的 AI 角色提示
      * @Silk 消息中的角色指令会被保存，用于后续 AI 回复

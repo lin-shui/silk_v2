@@ -41,6 +41,7 @@ data class Message(
     val references: List<com.silk.backend.models.MessageReference> = emptyList(),
     val contentBlocks: List<com.silk.backend.ai.ContentBlock>? = null,  // 结构化 content block（流式 / 持久化回放）
     val interactiveOptions: List<InteractiveOption>? = null,  // 交互式按钮选项（用于 cc-connect 提问）
+    val action: String? = null  // null = 新消息(默认), "edit" = 覆盖同ID消息（CARD 编辑）
 )
 
 @Serializable
@@ -51,7 +52,7 @@ data class InteractiveOption(
 
 @Serializable
 enum class MessageType {
-    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CC_COMMAND
+    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CC_COMMAND, CARD, CARD_REPLY
 }
 
 @Serializable
@@ -317,23 +318,77 @@ class ChatServer(
             handleStopGeneration(message.userId)
             return
         }
-        
+
+        // 🃏 卡片回复：路由到 CardReplyRouter，不触发 AI/Agent 流程
+        if (message.type == MessageType.CARD_REPLY) {
+            logger.info("🃏 [broadcast] 收到卡片回复: {} from {}", message.content.take(80), message.userName)
+            // 持久化卡片回复到历史
+            if (!message.isTransient) {
+                messageHistory.add(message)
+                historyManager.addMessage(sessionName, message)
+            }
+            // 广播给所有客户端
+            val messageJson = Json.encodeToString(message)
+            allSessions().forEach { session ->
+                try { session.send(Frame.Text(messageJson)) } catch (_: Exception) {}
+            }
+            // 路由到注册的 handler
+            try {
+                val reply = Json.decodeFromString<com.silk.backend.card.CardReplyPayload>(message.content)
+                val broadcastRef: suspend (Message) -> Unit = { msg -> broadcast(msg) }
+                val expired = com.silk.backend.card.CardReplyRouter.route(sessionName, reply, broadcastRef)
+                if (expired) {
+                    // 兜底：卡片已过期，发系统提示并 disable 卡片
+                    broadcast(Message(
+                        id = java.util.UUID.randomUUID().toString(),
+                        userId = "system",
+                        userName = "系统",
+                        content = "该卡片已过期，无法处理此操作。",
+                        timestamp = System.currentTimeMillis(),
+                        type = MessageType.SYSTEM,
+                        isTransient = false,
+                    ))
+                    broadcast(Message(
+                        id = reply.cardId,
+                        userId = "system",
+                        userName = "系统",
+                        content = com.silk.backend.card.CardBuilder("已过期", template = "red")
+                            .addText("该卡片已过期。")
+                            .buildDisabled(),
+                        timestamp = System.currentTimeMillis(),
+                        type = MessageType.CARD,
+                        action = "edit",
+                    ))
+                }
+            } catch (e: Exception) {
+                logger.error("🃏 [broadcast] 卡片回复解析失败: {}", e.message)
+            }
+            return
+        }
+
         // ✅ 添加调试日志
         logger.debug("📨 [broadcast] 收到消息: ID={}, User={}, IsTransient={}, Content={}...", message.id, message.userName, message.isTransient, message.content.take(30))
         
-        // ✅ 防止重复处理：检查消息是否已经在历史中
-        if (!message.isTransient && messageHistory.any { it.id == message.id }) {
+        // ✅ 防止重复处理：检查消息是否已经在历史中（edit 消息除外）
+        if (!message.isTransient && message.action != "edit" && messageHistory.any { it.id == message.id }) {
             logger.warn("⚠️ [broadcast] 忽略重复消息: {} from {}", message.id, message.userName)
             return
         }
-        
+
         // 只有非临时消息才添加到内存历史和持久化
         if (!message.isTransient) {
-            // 添加到内存历史
-            messageHistory.add(message)
-            
-            // 持久化到文件系统
-            historyManager.addMessage(sessionName, message)
+            if (message.action == "edit") {
+                // 替换内存历史中的同 ID 消息
+                val idx = messageHistory.indexOfFirst { it.id == message.id }
+                if (idx >= 0) messageHistory[idx] = message
+                // 替换持久化历史
+                historyManager.editMessage(sessionName, message)
+            } else {
+                // 添加到内存历史
+                messageHistory.add(message)
+                // 持久化到文件系统
+                historyManager.addMessage(sessionName, message)
+            }
             logger.debug("💾 [broadcast] 消息已保存: {}", message.id)
             
             // 记录新消息用于未读追踪（提取 groupId）

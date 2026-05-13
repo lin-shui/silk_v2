@@ -11,8 +11,13 @@
   - 大多数 HTTP 路由仍在这里
   - 还挂载了 `fileRoutes()` 与 `asrRoutes()`
 - `WebSocketConfig.kt`:
-  - 定义 `Message` / `MessageType` / `MessageCategory`
+  - 定义 `Message` / `MessageType`（含 `CARD`、`CARD_REPLY`）/ `MessageCategory`
+  - `Message.action` 字段支持消息替换（`"edit"` = 覆盖同 ID 消息）
   - 定义 `ChatServer`
+- `card/` 目录：
+  - `CardModels.kt` — 交互卡片 JSON schema 数据类
+  - `CardBuilder.kt` — 卡片构造 Builder API
+  - `CardReplyRouter.kt` — 卡片回复路由注册表
 
 ## HTTP Route Groups
 

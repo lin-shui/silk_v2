@@ -18,6 +18,7 @@ data class Message(
     val references: List<MessageReference> = emptyList(),
     val contentBlocks: List<ContentBlock>? = null,  // 结构化 content block（流式 / 持久化回放）
     val interactiveOptions: List<InteractiveOption>? = null,  // 交互式按钮选项（用于 cc-connect 提问）
+    val action: String? = null  // null = 新消息(默认), "edit" = 覆盖同ID消息（CARD 编辑）
 )
 
 @Serializable
@@ -28,7 +29,7 @@ data class InteractiveOption(
 
 @Serializable
 enum class MessageType {
-    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CC_COMMAND
+    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CC_COMMAND, CARD, CARD_REPLY
 }
 
 @Serializable
