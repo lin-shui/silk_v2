@@ -760,7 +760,7 @@ build_frontend() {
         cp -r "$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"/* "$SILK_DIR/backend/static/"
         # 替换 index.html 中的时间戳占位符，每次构建不同的 ?v= 以清除浏览器缓存
         BUILD_TS=$(date +%Y%m%d%H%M%S)
-        sed -i '' "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$SILK_DIR/backend/static/index.html"
+        sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$SILK_DIR/backend/static/index.html" && rm -f "$SILK_DIR/backend/static/index.html.bak"
         echo -e "${GREEN}✅ 已更新 backend/static (build=$BUILD_TS)${NC}"
     else
         echo ""
@@ -1254,7 +1254,11 @@ start_services_internal() {
         echo -e "  ${YELLOW}前端文件不存在，请先运行: ./silk.sh build${NC}"
         return 1
     fi
-    
+
+    # 替换 index.html 中的构建时间戳占位符，确保浏览器缓存每次构建后失效
+    BUILD_TS=$(date +%Y%m%d%H%M%S)
+    sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$STATIC_DIR/index.html" && rm -f "$STATIC_DIR/index.html.bak"
+
     cd "$STATIC_DIR"
     nohup python3 -m http.server $FRONTEND_PORT --bind 0.0.0.0 > /tmp/silk_frontend.log 2>&1 &
     echo -e "  ${GREEN}前端静态服务器已启动${NC}"
@@ -1342,11 +1346,11 @@ start_services() {
         cd "$SILK_DIR"
         STATIC_DIR="$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"
         
-        # 检查是否有预编译的文件
-        if [ -f "$STATIC_DIR/webApp.js" ]; then
+        # 检查是否有预编译的文件，且比源码新（防止 Gradle 缓存提供过期产物）
+        if [ -f "$STATIC_DIR/webApp.js" ] && [ "$STATIC_DIR/webApp.js" -nt "$SILK_DIR/frontend/webApp/src/main/kotlin/com/silk/web/Main.kt" ]; then
             echo -e "  ${GREEN}使用预编译的生产版本${NC}"
         else
-            echo -e "  ${YELLOW}预编译文件不存在，正在构建...${NC}"
+            echo -e "  ${YELLOW}预编译文件不存在或已过期，正在构建...${NC}"
             ./gradlew :frontend:webApp:browserProductionWebpack > /tmp/silk_frontend_build.log 2>&1
             if [ $? -ne 0 ]; then
                 echo -e "  ${RED}前端构建失败，请检查 /tmp/silk_frontend_build.log${NC}"
@@ -1354,6 +1358,9 @@ start_services() {
             fi
             echo -e "  ${GREEN}前端构建完成${NC}"
         fi
+        # 替换 index.html 中的构建时间戳占位符，确保浏览器缓存每次构建后失效
+        BUILD_TS=$(date +%Y%m%d%H%M%S)
+        sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$STATIC_DIR/index.html" && rm -f "$STATIC_DIR/index.html.bak"
         
         # 使用Python静态服务器提供服务
         cd "$STATIC_DIR"
@@ -1521,6 +1528,9 @@ quick_restart() {
     # 启动前端 (使用预编译的生产版本)
     STATIC_DIR="$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"
     if [ -f "$STATIC_DIR/webApp.js" ]; then
+        # 替换 index.html 中的构建时间戳占位符，确保浏览器缓存每次构建后失效
+        BUILD_TS=$(date +%Y%m%d%H%M%S)
+        sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$STATIC_DIR/index.html" && rm -f "$STATIC_DIR/index.html.bak"
         cd "$STATIC_DIR"
         nohup python3 -m http.server $FRONTEND_PORT --bind 0.0.0.0 > /tmp/silk_frontend.log 2>&1 &
         echo "  前端启动中 (静态服务器)..."

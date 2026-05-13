@@ -83,7 +83,9 @@
 - 再看代码：`frontend/webApp/src/main/kotlin/com/silk/web/`
 - 默认验证：
   - `./gradlew :frontend:webApp:nodeTest`
-  - `./gradlew :frontend:webApp:compileProductionExecutableKotlinJs`
+  - `./gradlew :frontend:webApp:compileProductionExecutableKotlinJs`（编译快检；实际生产构建请用 `browserProductionWebpack`）
+- 生产构建：`./gradlew :frontend:webApp:browserProductionWebpack`（产物在 `build/dist/js/productionExecutable/`）
+- 运行：`./silk.sh start`（从 `build/dist/js/productionExecutable/` 提供静态服务）
 
 ## Android Frontend
 
