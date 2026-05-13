@@ -27,8 +27,28 @@ class AgentSession(
 
 data class QueuedMessage(val text: String, val userId: String, val userName: String)
 
+/**
+ * Claude Code AskUserQuestion 的单个选项。
+ */
+data class QuestionOption(
+    val label: String,
+    val description: String = "",
+)
+
+/**
+ * Claude Code AskUserQuestion 的单个问题（结构化）。
+ */
+data class StructuredQuestion(
+    val question: String,
+    val header: String = "",
+    val options: List<QuestionOption> = emptyList(),
+)
+
 data class PendingQuestion(
     val requestId: String,
-    val questions: List<String>,
+    /** 结构化问题列表 */
+    val questions: List<StructuredQuestion>,
+    /** 已回答的 questionIndex → 用户回答文本 */
+    val answers: MutableMap<Int, String> = mutableMapOf(),
     val receivedAt: Long = System.currentTimeMillis(),
 )

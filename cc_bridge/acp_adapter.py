@@ -172,27 +172,12 @@ class AcpAgentServer:
                 self.perm_server.resolve_request(request_id, "allow")
             return
 
-        # Extract questions from tool_input.
+        # Pass through the raw questions from tool_input without flattening.
         # AskUserQuestion.questions is an array of objects:
         #   { question: str, header: str, options: [{label, description}], multiSelect: bool }
-        # We flatten each into a display string (question text + options).
-        raw_questions = tool_input.get("questions", [])
-        questions: list[str] = []
-        for q in raw_questions:
-            if isinstance(q, dict):
-                text = q.get("question", "")
-                options = q.get("options", [])
-                if options:
-                    lines = [text]
-                    for i, opt in enumerate(options):
-                        label = opt.get("label", "") if isinstance(opt, dict) else str(opt)
-                        desc = opt.get("description", "") if isinstance(opt, dict) else ""
-                        lines.append(f"  {chr(65 + i)}. {label}" + (f" — {desc}" if desc else ""))
-                    text = "\n".join(lines)
-                if text:
-                    questions.append(text)
-            elif isinstance(q, str) and q:
-                questions.append(q)
+        # The backend (AcpUpdateMapper) handles parsing; keeping structured data
+        # allows the card system to build proper per-option buttons.
+        questions = tool_input.get("questions", [])
 
         if not questions:
             # Fallback: try "question" (singular) field

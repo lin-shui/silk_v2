@@ -1,6 +1,7 @@
 // backend/src/test/kotlin/com/silk/backend/agents/core/AcpUpdateMapperTest.kt
 package com.silk.backend.agents.core
 
+import com.silk.backend.MessageType
 import com.silk.backend.agents.adapters.claudecode.ClaudeCodeDescriptor
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -178,7 +179,7 @@ class AcpUpdateMapperTest {
     }
 
     @Test
-    fun `ask_user_question maps to question message`() {
+    fun `ask_user_question maps to card message`() {
         val sb = StringBuilder()
         val msg = AcpUpdateMapper.map(
             update = buildJsonObject {
@@ -194,13 +195,16 @@ class AcpUpdateMapperTest {
         )
         assertNotNull(msg)
         assertEquals("agent_question_test-req-123", msg.id)
+        assertEquals(MessageType.CARD, msg.type)
+        // content is now a CardBuilder JSON string containing the question text
         assertTrue(msg.content.contains("你希望用哪种方案？"))
+        assertTrue(msg.content.contains("\"header\""))
         assertFalse(msg.isTransient)
         assertEquals(com.silk.backend.MessageCategory.AGENT_QUESTION, msg.category)
     }
 
     @Test
-    fun `ask_user_question with multiple questions`() {
+    fun `ask_user_question with multiple questions produces card`() {
         val sb = StringBuilder()
         val msg = AcpUpdateMapper.map(
             update = buildJsonObject {
@@ -216,8 +220,13 @@ class AcpUpdateMapperTest {
             accumulated = sb,
         )
         assertNotNull(msg)
+        assertEquals(MessageType.CARD, msg.type)
+        // Card JSON should contain both numbered questions
         assertTrue(msg.content.contains("1."))
         assertTrue(msg.content.contains("2."))
+        // Should contain button elements for each question
+        assertTrue(msg.content.contains("问题一？"))
+        assertTrue(msg.content.contains("问题二？"))
     }
 
     @Test
