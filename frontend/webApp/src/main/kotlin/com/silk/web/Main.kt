@@ -3657,46 +3657,53 @@ fun MarkdownContent(
     val markdownEngine = rememberMarkdownEngine()
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
     val safeHtml = remember(content, references) {
-        // Escape < followed by non-HTML-tag characters (e.g., "<1.2m" → "&lt;1.2m")
-        // before any other processing, so DOMPurify won't strip them as invalid tags.
-        val htmlSafeContent = content.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
-        // Convert thinking section (before <!--THINKING_END-->) to collapsible <details>
-        // Note: processing on raw `content` so thinking-text escaping doesn't double-escape
-        val thinkingMarker = "<!--THINKING_END-->"
-        val withThinkingDetails = if (content.contains(thinkingMarker)) {
-            val idx = content.indexOf(thinkingMarker)
-            val thinkingText = content.substring(0, idx).trim()
-            val tailRaw = content.substring(idx + thinkingMarker.length).trimStart('\n').trim()
-            val tailEffective =
-                if (tailRaw.isBlank()) "*（本次仅有思考过程或未生成正文，请重试。）*" else tailRaw
-            val escaped = thinkingText
-                .replace("&", "&amp;")
+        try {
+            // Escape < followed by non-HTML-tag characters (e.g., "<1.2m" → "&lt;1.2m")
+            // before any other processing, so DOMPurify won't strip them as invalid tags.
+            val htmlSafeContent = content.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
+            // Convert thinking section (before <!--THINKING_END-->) to collapsible <details>
+            // Note: processing on raw `content` so thinking-text escaping doesn't double-escape
+            val thinkingMarker = "<!--THINKING_END-->"
+            val withThinkingDetails = if (content.contains(thinkingMarker)) {
+                val idx = content.indexOf(thinkingMarker)
+                val thinkingText = content.substring(0, idx).trim()
+                val tailRaw = content.substring(idx + thinkingMarker.length).trimStart('\n').trim()
+                val tailEffective =
+                    if (tailRaw.isBlank()) "*（本次仅有思考过程或未生成正文，请重试。）*" else tailRaw
+                val escaped = thinkingText
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace("\n", "<br>")
+                "<details class=\"silk-thinking-details\" open>\n" +
+                "<summary>💭 思考过程</summary>\n" +
+                escaped + "\n</details>\n\n" +
+                tailEffective.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
+            } else {
+                htmlSafeContent
+            }
+            // Collapse excessive blank lines (3+ → 1 blank line)
+            val reducedBlanks = withThinkingDetails.replace(Regex("\\n{3,}"), "\n\n")
+            // Normalize headings missing space after # (e.g., "##一、" → "## 一、")
+            val normalizedHeadings = reducedBlanks.replace(
+                Regex("^(#{1,6})([^#\\s])", RegexOption.MULTILINE),
+                "$1 $2"
+            )
+            val linked = linkCitationMarkers(
+                DOMPurify.sanitize(
+                    markdownEngine.render(normalizeMathBlocks(normalizedHeadings)),
+                    createSanitizeConfig()
+                ),
+                references,
+                referenceAnchorPrefix
+            )
+            linked
+        } catch (_: Throwable) {
+            // fallback: escape and display raw content
+            content.replace("&", "&amp;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;")
-                .replace("\n", "<br>")
-            "<details class=\"silk-thinking-details\" open>\n" +
-            "<summary>💭 思考过程</summary>\n" +
-            escaped + "\n</details>\n\n" +
-            tailEffective.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
-        } else {
-            htmlSafeContent
         }
-        // Collapse excessive blank lines (3+ → 1 blank line)
-        val reducedBlanks = withThinkingDetails.replace(Regex("\\n{3,}"), "\n\n")
-        // Normalize headings missing space after # (e.g., "##一、" → "## 一、")
-        val normalizedHeadings = reducedBlanks.replace(
-            Regex("^(#{1,6})([^#\\s])", RegexOption.MULTILINE),
-            "$1 $2"
-        )
-        val linked = linkCitationMarkers(
-            DOMPurify.sanitize(
-                markdownEngine.render(normalizeMathBlocks(normalizedHeadings)),
-                createSanitizeConfig()
-            ),
-            references,
-            referenceAnchorPrefix
-        )
-        linked
     }
 
     Div({
@@ -4052,6 +4059,23 @@ Div({
                     references = message.references,
                     anchorPrefix = "msg-${message.id}-"
                 )
+            }
+            // 最后一条消息默认展开，通过 DOM 操作设置初始状态（跟点击按钮同机制，避免 Compose 样式冲突）
+            LaunchedEffect(message.id, isLastMessage) {
+                val msgEl = document.getElementById("ai-msg-${message.id}")
+                if (msgEl != null) {
+                    if (isLastMessage) {
+                        msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "none"
+                        msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "block"
+                        msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "none"
+                        msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "inline"
+                    } else {
+                        msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "block"
+                        msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "none"
+                        msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "inline"
+                        msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "none"
+                    }
+                }
             }
         } else {
             Div({
