@@ -3802,7 +3802,7 @@ fun MarkdownContent(
                     .replace("<", "&lt;")
                     .replace(">", "&gt;")
                     .replace("\n", "<br>")
-                "<details class=\"silk-thinking-details\" open>\n" +
+                "<details class=\"silk-thinking-details\">\n" +
                 "<summary>💭 思考过程</summary>\n" +
                 escaped + "\n</details>\n\n" +
                 tailEffective.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
@@ -4235,6 +4235,40 @@ Div({
                     references = message.references,
                     anchorPrefix = "msg-${message.id}-"
                 )
+                // Bottom-center collapse button
+                Div({
+                    attr("data-role", "collapse-bottom-btn")
+                    style {
+                        display(DisplayStyle.Flex)
+                        property("justify-content", "center")
+                        paddingTop(8.px)
+                        paddingBottom(4.px)
+                    }
+                }) {
+                    Span({
+                        style {
+                            fontSize(12.px)
+                            color(Color(SilkColors.textSecondary))
+                            property("cursor", "pointer")
+                            padding(4.px, 16.px)
+                            borderRadius(12.px)
+                            property("transition", "all 0.2s")
+                            property("user-select", "none")
+                            property("background", "rgba(201, 168, 108, 0.1)")
+                        }
+                        onClick {
+                            val msgEl = document.getElementById("ai-msg-${message.id}")
+                            if (msgEl != null) {
+                                msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "block"
+                                msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "none"
+                                msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "inline"
+                                msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "none"
+                            }
+                        }
+                    }) {
+                        Text("▲ 收起")
+                    }
+                }
             }
             // 最后一条消息默认展开，通过 DOM 操作设置初始状态（跟点击按钮同机制，避免 Compose 样式冲突）
             LaunchedEffect(message.id, isLastMessage) {
