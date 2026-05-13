@@ -1058,7 +1058,9 @@ private fun WorkflowChatPanel(
                     isTransient = false,
                     isLastMessage = index == messages.lastIndex,
                     currentUserId = userId,
+                    currentUserName = userName,
                     groupId = groupId,
+                    chatClient = chatClient,
                     onCopy = { content -> copyTextToClipboard(content) }
                 )
             }
@@ -1104,7 +1106,9 @@ private fun WorkflowChatPanel(
                     message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                     isTransient = true,
                     currentUserId = userId,
+                    currentUserName = userName,
                     groupId = groupId,
+                    chatClient = chatClient,
                     onCopy = { content -> copyTextToClipboard(content) }
                 )
             } else {

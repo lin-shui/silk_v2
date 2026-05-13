@@ -2,8 +2,13 @@
 package com.silk.backend.agents.core
 
 import com.silk.backend.Message
+import com.silk.backend.MessageType
 import com.silk.backend.SilkAgent
 import com.silk.backend.agents.acp.AcpClient
+import com.silk.backend.card.CardReplyRouter
+import com.silk.backend.card.CardReplyHandler
+import com.silk.backend.card.CardReplyPayload
+import com.silk.backend.card.CardBuilder
 import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.acp.ContentBlock
 import com.silk.backend.agents.acp.PermissionResponse
@@ -252,6 +257,13 @@ object AgentRuntime {
 
             // Clean up handlers before nulling acpSessionId
             cleanupSessionHandlers(session)
+
+            // Clean up any pending card reply handler to prevent memory leak
+            val pending = session.pendingQuestion
+            if (pending != null) {
+                CardReplyRouter.unregister("agent_question_${pending.requestId}")
+                session.pendingQuestion = null
+            }
 
             if (session.running) {
                 session.promptJob?.cancel()
@@ -628,7 +640,10 @@ object AgentRuntime {
                 "[AgentRuntime] User reply to question: requestId={}, answerLen={}",
                 pending.requestId.take(8), text.length,
             )
-            handleQuestionReply(session, pending, text, broadcastFn)
+            // Answer the current (first unanswered) question via text input
+            val currentIdx = (0 until pending.questions.size)
+                .firstOrNull { it !in pending.answers } ?: 0
+            handleQuestionReply(session, pending, currentIdx, text, broadcastFn)
             return
         }
 
@@ -855,18 +870,72 @@ object AgentRuntime {
         ))
     }
 
+    /**
+     * 处理单题回答（多问题逐题交互 or 单问题直接完成）。
+     *
+     * @param questionIndex 当前回答的问题索引
+     * @param answerText 用户的回答文本
+     */
     private suspend fun handleQuestionReply(
         session: AgentSession,
         pending: PendingQuestion,
+        questionIndex: Int,
         answerText: String,
         broadcastFn: suspend (Message) -> Unit,
     ) {
         val descriptor = AgentRegistry.getByType(session.agentType) ?: return
-        val acp = getAcpClient(session.agentType, session.userId)
 
-        // Clear pending state immediately
+        // Record this answer (strip internal encoding prefixes like __opt__0__)
+        pending.answers[questionIndex] = AgentMessages.cleanAnswerText(answerText)
+        val total = pending.questions.size
+
+        if (pending.answers.size < total) {
+            // Not all questions answered — refresh card for next question
+            val nextIndex = (0 until total).first { it !in pending.answers }
+            logger.info(
+                "[AgentRuntime] Question {}/{} answered, advancing to {}. requestId={}",
+                pending.answers.size, total, nextIndex + 1, pending.requestId.take(8),
+            )
+            broadcastFn(AgentMessages.questionCard(
+                questions = pending.questions,
+                requestId = pending.requestId,
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+                currentIndex = nextIndex,
+                answers = pending.answers.toMap(),
+            ).copy(action = "edit"))
+            return
+        }
+
+        // All questions answered — resolve via ACP
+        val cardId = "agent_question_${pending.requestId}"
+        CardReplyRouter.unregister(cardId)
         session.pendingQuestion = null
 
+        // Build aggregated answer text (clean internal prefixes)
+        val cleanAnswer = { raw: String -> AgentMessages.cleanAnswerText(raw) }
+        val resolveText = if (total == 1) {
+            "用户选择了「${cleanAnswer(pending.answers[0] ?: "")}」。" +
+                "请按照用户的选择继续执行，不要再次调用 AskUserQuestion 询问同一个问题。"
+        } else {
+            val lines = (0 until total).map { qi ->
+                val qText = pending.questions[qi].question.take(80)
+                "${qi + 1}. $qText → 「${cleanAnswer(pending.answers[qi] ?: "")}」"
+            }
+            "用户回答了以下问题：\n${lines.joinToString("\n")}\n" +
+                "请按照用户的回答继续执行，不要再次调用 AskUserQuestion 询问同一个问题。"
+        }
+
+        // Send completed card
+        broadcastFn(AgentMessages.questionCardCompleted(
+            questions = pending.questions,
+            answers = pending.answers.toMap(),
+            requestId = pending.requestId,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+
+        val acp = getAcpClient(session.agentType, session.userId)
         if (acp == null) {
             broadcastFn(AgentMessages.system(
                 "回答发送失败: Bridge 未连接",
@@ -877,10 +946,10 @@ object AgentRuntime {
         }
 
         try {
-            AcpExtensions.resolveQuestion(acp, pending.requestId, answerText)
+            AcpExtensions.resolveQuestion(acp, pending.requestId, resolveText)
             logger.info(
-                "[AgentRuntime] Question answered: requestId={}, answerLen={}",
-                pending.requestId.take(8), answerText.length,
+                "[AgentRuntime] All {}/{} questions answered: requestId={}",
+                total, total, pending.requestId.take(8),
             )
         } catch (e: Exception) {
             logger.error(
@@ -913,16 +982,73 @@ object AgentRuntime {
                 val requestId = notif.update["requestId"]?.let {
                     (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
                 }
-                val questions = notif.update["questions"]?.jsonArray
-                    ?.mapNotNull { el ->
-                        (el as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+                val rawQuestions = notif.update["questions"]?.jsonArray
+
+                // Parse structured questions (same logic as AcpUpdateMapper)
+                val structuredQuestions = rawQuestions?.mapNotNull { el ->
+                    when {
+                        el is kotlinx.serialization.json.JsonObject -> {
+                            val q = el["question"]?.jsonPrimitive?.contentOrNull ?: ""
+                            val header = el["header"]?.jsonPrimitive?.contentOrNull ?: ""
+                            val options = el["options"]?.jsonArray?.mapNotNull { optEl ->
+                                (optEl as? kotlinx.serialization.json.JsonObject)?.let { obj ->
+                                    QuestionOption(
+                                        label = obj["label"]?.jsonPrimitive?.contentOrNull ?: "",
+                                        description = obj["description"]?.jsonPrimitive?.contentOrNull ?: "",
+                                    )
+                                }
+                            } ?: emptyList()
+                            StructuredQuestion(question = q, header = header, options = options)
+                        }
+                        el is kotlinx.serialization.json.JsonPrimitive -> {
+                            el.contentOrNull?.let { text -> StructuredQuestion(question = text) }
+                        }
+                        else -> null
                     }
-                if (requestId != null && !questions.isNullOrEmpty()) {
-                    session.pendingQuestion = PendingQuestion(requestId, questions)
+                }
+
+                if (requestId != null && !structuredQuestions.isNullOrEmpty()) {
+                    session.pendingQuestion = PendingQuestion(requestId, structuredQuestions)
                     logger.info(
                         "[AgentRuntime] pendingQuestion set: requestId={}, questionCount={}",
-                        requestId.take(8), questions.size,
+                        requestId.take(8), structuredQuestions.size,
                     )
+                    // 注册卡片回复 handler
+                    val cardId = "agent_question_$requestId"
+                    CardReplyRouter.register(cardId, object : CardReplyHandler {
+                        override suspend fun onCardReply(
+                            reply: CardReplyPayload,
+                            sessionName: String,
+                            broadcastFn: suspend (com.silk.backend.Message) -> Unit,
+                        ) {
+                            val pending = session.pendingQuestion
+                            if (pending == null || pending.requestId != requestId) return
+
+                            // Parse button value to extract question index and answer
+                            val action = reply.action
+                            val (questionIndex, answerText) = when {
+                                action.startsWith("__opt__") -> {
+                                    // Format: __opt__{qi}__{answerDisplay}
+                                    val parts = action.removePrefix("__opt__").split("__", limit = 2)
+                                    val qi = parts.getOrNull(0)?.toIntOrNull() ?: 0
+                                    val answer = parts.getOrNull(1) ?: action
+                                    qi to answer
+                                }
+                                action.startsWith("__custom__") -> {
+                                    val qi = action.removePrefix("__custom__").toIntOrNull() ?: 0
+                                    val answer = reply.inputs["custom_answer_$qi"] ?: ""
+                                    qi to answer
+                                }
+                                else -> {
+                                    // Legacy fallback: treat as answer to current question
+                                    val currentIdx = (0 until pending.questions.size)
+                                        .firstOrNull { it !in pending.answers } ?: 0
+                                    currentIdx to action
+                                }
+                            }
+                            handleQuestionReply(session, pending, questionIndex, answerText, broadcastFn)
+                        }
+                    })
                 }
             }
 
@@ -988,7 +1114,7 @@ object AgentRuntime {
 
     data class PendingQuestionSnapshot(
         val requestId: String,
-        val questions: List<String>,
+        val questions: List<StructuredQuestion>,
         val agentUserId: String,
         val agentName: String,
     )
@@ -1102,6 +1228,12 @@ object AgentRuntime {
         val ctx = contexts.remove(key(userId, groupId)) ?: return
         for ((_, session) in ctx.sessions) {
             cleanupSessionHandlers(session)
+            // Clean up any pending card reply handler to prevent memory leak
+            val pending = session.pendingQuestion
+            if (pending != null) {
+                CardReplyRouter.unregister("agent_question_${pending.requestId}")
+                session.pendingQuestion = null
+            }
         }
         ctx.scope.cancel()
     }
@@ -1111,6 +1243,11 @@ object AgentRuntime {
         contexts.values.forEach { ctx ->
             for ((_, session) in ctx.sessions) {
                 cleanupSessionHandlers(session)
+                val pending = session.pendingQuestion
+                if (pending != null) {
+                    CardReplyRouter.unregister("agent_question_${pending.requestId}")
+                    session.pendingQuestion = null
+                }
             }
             ctx.scope.cancel()
         }

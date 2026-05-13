@@ -15,12 +15,13 @@ data class Message(
     val totalSteps: Int? = null,       // 总步骤数（11）
     val isIncremental: Boolean = false, // true = 增量消息（需拼接），false = 完整消息（直接替换）
     val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度）
-    val references: List<MessageReference> = emptyList()
+    val references: List<MessageReference> = emptyList(),
+    val action: String? = null  // null = 新消息(默认), "edit" = 覆盖同ID消息
 )
 
 @Serializable
 enum class MessageType {
-    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE
+    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CARD, CARD_REPLY
 }
 
 @Serializable

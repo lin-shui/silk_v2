@@ -248,14 +248,21 @@ class ChatClient(
                     if (isSilkAi) _isGenerating.value = true
                     _transientMessage.value = message
                 }
-                // 普通消息：添加到消息列表（如果不存在）
+                // 普通消息：添加到消息列表（如果不存在），或替换（如果 action="edit"）
                 else -> {
-                    val exists = _messages.value.any { it.id == message.id }
-                    if (!exists) {
-                        log("💬 [ChatClient] 普通消息，添加到列表")
-                        _messages.value = _messages.value + message
+                    if (message.action == "edit") {
+                        log("✏️ [ChatClient] 编辑消息: ${message.id}")
+                        _messages.value = _messages.value.map {
+                            if (it.id == message.id) message else it
+                        }
                     } else {
-                        log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
+                        val exists = _messages.value.any { it.id == message.id }
+                        if (!exists) {
+                            log("💬 [ChatClient] 普通消息，添加到列表")
+                            _messages.value = _messages.value + message
+                        } else {
+                            log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
+                        }
                     }
                     // Track pending question state
                     if (message.category == MessageCategory.AGENT_QUESTION) {
@@ -340,7 +347,29 @@ class ChatClient(
             log("❌ [ChatClient] 发送消息失败: ${e.message}")
         }
     }
-    
+
+    /**
+     * 发送指定类型的消息（用于 CARD_REPLY 等非 TEXT 消息）。
+     * 不添加到本地消息列表——卡片回复由服务器广播后通过 handleMessage 统一处理。
+     */
+    suspend fun sendMessage(userId: String, userName: String, content: String, type: MessageType) {
+        val message = Message(
+            id = generateId(),
+            userId = userId,
+            userName = userName,
+            content = content,
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+            type = type,
+        )
+        try {
+            val jsonMessage = Json.encodeToString(message)
+            log("📤 [ChatClient] 发送 ${type.name} 消息: ${content.take(50)}...")
+            webSocket?.send(jsonMessage)
+        } catch (e: SerializationException) {
+            log("❌ [ChatClient] 发送 ${type.name} 消息失败: ${e.message}")
+        }
+    }
+
     suspend fun disconnect() {
         webSocket?.disconnect()
         webSocket = null
