@@ -757,8 +757,11 @@ build_frontend() {
         # 复制到 backend/static 目录
         echo ""
         echo -e "${BLUE}复制到 backend/static 目录...${NC}"
-        cp -r $SILK_DIR/frontend/webApp/build/dist/js/productionExecutable/* $SILK_DIR/backend/static/
-        echo -e "${GREEN}✅ 已更新 backend/static${NC}"
+        cp -r "$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"/* "$SILK_DIR/backend/static/"
+        # 替换 index.html 中的时间戳占位符，每次构建不同的 ?v= 以清除浏览器缓存
+        BUILD_TS=$(date +%Y%m%d%H%M%S)
+        sed -i '' "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$SILK_DIR/backend/static/index.html"
+        echo -e "${GREEN}✅ 已更新 backend/static (build=$BUILD_TS)${NC}"
     else
         echo ""
         echo -e "${RED}❌ 前端构建失败${NC}"
