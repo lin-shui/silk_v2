@@ -3632,7 +3632,27 @@ private fun fixOrphanCodeFences(markdown: String): String {
             }
 
             if (closerIdx >= 0) {
-                idx = closerIdx + 1
+                // Closed fence — check if content is actually Markdown, not code.
+                // If no language tag and content contains headings + bold/lists,
+                // the model likely wrapped prose in backticks by mistake.
+                val langTag = (opener.groupValues[2]).trim()
+                val innerLines = if (closerIdx > idx + 1) lines.subList(idx + 1, closerIdx) else emptyList()
+                val innerText = innerLines.joinToString("\n")
+                val innerHasHeadings = innerText.contains(Regex("^#{1,6}\\s", RegexOption.MULTILINE))
+                val innerHasBold = innerText.contains(Regex("\\*\\*[^*]+\\*\\*"))
+                val innerHasLists = innerText.contains(Regex("^[-*+·•]\\s+", RegexOption.MULTILINE))
+                val innerHasTable = innerText.contains(Regex("^\\|.+\\|\\s*$", RegexOption.MULTILINE))
+                val markdownSignals = listOf(innerHasHeadings, innerHasBold, innerHasLists, innerHasTable).count { it }
+
+                val isLikelyNotCode = (langTag.isEmpty() || langTag == "text" || langTag == "markdown")
+                        && markdownSignals >= 2 && innerLines.size >= 3
+
+                if (isLikelyNotCode) {
+                    lines.removeAt(closerIdx)
+                    lines.removeAt(idx)
+                } else {
+                    idx = closerIdx + 1
+                }
             } else {
                 val contentAfter = if (idx + 1 < lines.size) {
                     lines.subList(idx + 1, lines.size).joinToString("\n")
