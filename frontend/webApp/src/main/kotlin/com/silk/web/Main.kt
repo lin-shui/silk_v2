@@ -4053,6 +4053,23 @@ Div({
                     anchorPrefix = "msg-${message.id}-"
                 )
             }
+            // 最后一条消息默认展开，通过 DOM 操作设置初始状态（跟点击按钮同机制，避免 Compose 样式冲突）
+            LaunchedEffect(message.id, isLastMessage) {
+                val msgEl = document.getElementById("ai-msg-${message.id}")
+                if (msgEl != null) {
+                    if (isLastMessage) {
+                        msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "none"
+                        msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "block"
+                        msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "none"
+                        msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "inline"
+                    } else {
+                        msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "block"
+                        msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "none"
+                        msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "inline"
+                        msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "none"
+                    }
+                }
+            }
         } else {
             Div({
                 classes(SilkStylesheet.aiMessageContent)
