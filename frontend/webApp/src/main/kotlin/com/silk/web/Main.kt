@@ -3377,15 +3377,20 @@ private val silkMarkdownRuntimeCss = """
         font-size: 0.92em;
     }
     .silk-markdown.markdown-body blockquote {
-        color: #475569;
-        background: linear-gradient(180deg, rgba(59, 130, 246, 0.10), rgba(59, 130, 246, 0.04));
-        border-left: 4px solid #3B82F6;
+        color: #5D4E37;
+        background: linear-gradient(180deg, rgba(201, 168, 108, 0.12), rgba(201, 168, 108, 0.04));
+        border-left: 4px solid #C9A86C;
         border-radius: 0 12px 12px 0;
         padding: 12px 16px;
+        margin-top: 12px;
+        margin-bottom: 12px;
     }
     .silk-markdown.markdown-body blockquote blockquote {
-        background: rgba(255, 255, 255, 0.6);
-        margin-top: 12px;
+        background: transparent;
+        border-left: 2px solid #D4C5A0;
+        margin-top: 8px;
+        margin-bottom: 8px;
+        padding: 4px 12px;
     }
     .silk-markdown.markdown-body table {
         display: block;
@@ -3420,6 +3425,46 @@ private val silkMarkdownRuntimeCss = """
     }
     .silk-markdown.markdown-body img {
         max-width: 100%;
+    }
+    .silk-code-block {
+        border-radius: 12px;
+        overflow: hidden;
+        margin: 0.5em 0;
+    }
+    .silk-code-block pre.hljs {
+        border-radius: 0 !important;
+        margin: 0 !important;
+    }
+    .silk-code-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        background: #151E2C;
+        padding: 6px 16px;
+        font-size: 12px;
+        user-select: none;
+    }
+    .silk-code-lang {
+        color: #7B8CA3;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 500;
+    }
+    .silk-code-copy {
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: #7B8CA3;
+        font-size: 12px;
+        padding: 2px 10px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    .silk-code-copy:hover {
+        background: rgba(255, 255, 255, 0.16);
+        color: #CBD5E1;
     }
     .silk-citation-chip {
         display: inline-block;
@@ -3537,6 +3582,59 @@ private fun normalizeMathBlocks(markdown: String): String {
     return output.toString()
 }
 
+private fun fixOrphanCodeFences(markdown: String): String {
+    val lines = markdown.split("\n").toMutableList()
+    var idx = 0
+
+    while (idx < lines.size) {
+        val trimmed = lines[idx].trimStart()
+
+        val opener = Regex("^(`{3,}|~{3,})(\\s*[\\w+#.-]*)?\\s*$").find(trimmed)
+        if (opener != null) {
+            val fenceStr = opener.groupValues[1]
+            val fenceLen = fenceStr.length
+            val fenceChar = fenceStr[0]
+            val closePattern = Regex("^\\s*${Regex.escape(fenceChar.toString())}{$fenceLen,}\\s*$")
+
+            var closerIdx = -1
+            for (j in (idx + 1) until lines.size) {
+                if (closePattern.matches(lines[j])) {
+                    closerIdx = j
+                    break
+                }
+            }
+
+            if (closerIdx >= 0) {
+                idx = closerIdx + 1
+            } else {
+                val contentAfter = if (idx + 1 < lines.size) {
+                    lines.subList(idx + 1, lines.size).joinToString("\n")
+                } else ""
+
+                val hasMarkdownSyntax =
+                    contentAfter.contains(Regex("^#{1,6}[\\s]", RegexOption.MULTILINE)) ||
+                    contentAfter.contains(Regex("^\\|.+\\|\\s*$", RegexOption.MULTILINE)) ||
+                    contentAfter.contains(Regex("^[-*+]\\s+", RegexOption.MULTILINE)) ||
+                    contentAfter.contains(Regex("\\*\\*[^*]+\\*\\*"))
+
+                if (hasMarkdownSyntax || contentAfter.length > 500) {
+                    lines.removeAt(idx)
+                } else {
+                    lines.add("`".repeat(fenceLen))
+                    idx = lines.size
+                }
+            }
+        } else {
+            if (Regex("^(.+[^`\\s])`{3,}\\s*$").containsMatchIn(lines[idx])) {
+                lines[idx] = lines[idx].replace(Regex("`{3,}\\s*$"), "")
+            }
+            idx++
+        }
+    }
+
+    return lines.joinToString("\n")
+}
+
 private fun highlightCode(code: String, language: String): String {
     val normalizedLanguage = language
         .trim()
@@ -3544,6 +3642,8 @@ private fun highlightCode(code: String, language: String): String {
         .firstOrNull()
         ?.lowercase()
         .orEmpty()
+
+    val dataLang = if (normalizedLanguage.isNotBlank()) """ data-lang="${escapeHtml(normalizedLanguage)}"""" else ""
 
     return try {
         val highlighted = if (normalizedLanguage.isNotBlank() && HighlightJs.getLanguage(normalizedLanguage) != null) {
@@ -3556,10 +3656,10 @@ private fun highlightCode(code: String, language: String): String {
         }
 
         val className = if (normalizedLanguage.isNotBlank()) "language-${escapeHtml(normalizedLanguage)}" else ""
-        """<pre class="hljs"><code class="$className">$highlighted</code></pre>"""
+        """<pre class="hljs"$dataLang><code class="$className">$highlighted</code></pre>"""
     } catch (_: Throwable) {
         val safeLanguage = if (normalizedLanguage.isNotBlank()) """ class="language-${escapeHtml(normalizedLanguage)}"""" else ""
-        """<pre class="hljs"><code$safeLanguage>${escapeHtml(code)}</code></pre>"""
+        """<pre class="hljs"$dataLang><code$safeLanguage>${escapeHtml(code)}</code></pre>"""
     }
 }
 
@@ -3689,9 +3789,16 @@ fun MarkdownContent(
                 Regex("^(#{1,6})([^#\\s])", RegexOption.MULTILINE),
                 "$1 $2"
             )
+            // Fix orphan code fences that swallow subsequent Markdown content
+            val fixedFences = fixOrphanCodeFences(normalizedHeadings)
+            // Close blockquotes before section separators (---) and Sources headers
+            // so they don't get swallowed into deeply nested blockquotes
+            val unquotedBlockquotes = fixedFences
+                .replace(Regex("""^>\s*(-{3,})\s*$""", RegexOption.MULTILINE), "\n$1")
+                .replace(Regex("""^>\s*(\*\*Sources?:?\*\*)\s*$""", RegexOption.MULTILINE), "\n$1")
             val linked = linkCitationMarkers(
                 DOMPurify.sanitize(
-                    markdownEngine.render(normalizeMathBlocks(normalizedHeadings)),
+                    markdownEngine.render(normalizeMathBlocks(unquotedBlockquotes)),
                     createSanitizeConfig()
                 ),
                 references,
@@ -3723,6 +3830,46 @@ fun MarkdownContent(
                 if (href.startsWith("#")) continue
                 link.target = "_blank"
                 link.rel = "noopener noreferrer nofollow"
+            }
+
+            // Wrap code blocks with language label + copy button
+            val preBlocks = element.querySelectorAll("pre.hljs")
+            for (preIdx in 0 until preBlocks.length) {
+                val pre = preBlocks.item(preIdx) as? HTMLElement ?: continue
+                val lang = pre.getAttribute("data-lang") ?: ""
+
+                val wrapper = document.createElement("div") as HTMLElement
+                wrapper.className = "silk-code-block"
+
+                val header = document.createElement("div") as HTMLElement
+                header.className = "silk-code-header"
+
+                val langSpan = document.createElement("span") as HTMLElement
+                langSpan.className = "silk-code-lang"
+                langSpan.textContent = lang
+                header.appendChild(langSpan)
+
+                val copyBtn = document.createElement("button") as HTMLElement
+                copyBtn.className = "silk-code-copy"
+                copyBtn.textContent = "复制"
+                header.appendChild(copyBtn)
+
+                pre.parentNode?.insertBefore(wrapper, pre)
+                wrapper.appendChild(header)
+                wrapper.appendChild(pre)
+
+                copyBtn.addEventListener("click", { _ ->
+                    val codeText = pre.querySelector("code")?.textContent ?: ""
+                    try {
+                        val clipboard = window.navigator.asDynamic().clipboard
+                        if (clipboard != null) {
+                            clipboard.writeText(codeText).then { _: dynamic ->
+                                copyBtn.textContent = "已复制 ✓"
+                                window.setTimeout({ copyBtn.textContent = "复制" }, 1500)
+                            }
+                        }
+                    } catch (_: Throwable) { }
+                })
             }
 
             try {
