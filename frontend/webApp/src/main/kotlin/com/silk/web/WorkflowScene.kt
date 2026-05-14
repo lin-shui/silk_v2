@@ -852,6 +852,7 @@ private fun WorkflowChatPanel(
     var messageText by remember(groupId) { mutableStateOf("") }
     var workingDir by remember(groupId) { mutableStateOf("") }
     var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
+    var permissionMode by remember(groupId) { mutableStateOf("") }
     var showFolderPicker by remember(groupId) { mutableStateOf(false) }
     // 信任确认弹窗状态（替代浏览器原生 confirm）
     var showTrustConfirm by remember(groupId) { mutableStateOf(false) }
@@ -891,6 +892,7 @@ private fun WorkflowChatPanel(
         if (snap.success) {
             workingDir = snap.workingDir
             activeAgentDisplay = snap.agentDisplayName
+            permissionMode = snap.permissionMode
         }
     }
 
@@ -903,6 +905,7 @@ private fun WorkflowChatPanel(
             val snap = ApiClient.getCcState(userId, groupId)
             if (snap.success) {
                 activeAgentDisplay = snap.agentDisplayName
+                permissionMode = snap.permissionMode
             }
         }
     }
@@ -1007,6 +1010,26 @@ private fun WorkflowChatPanel(
                         }
                         attr("title", "当前激活的 Agent")
                     }) { Text(activeAgentDisplay) }
+                }
+                if (permissionMode.isNotBlank()) {
+                    val modeLabel = when (permissionMode) {
+                        "INTERACTIVE" -> "Interactive"
+                        "ACCEPT_EDITS" -> "Accept Edits"
+                        "BYPASS" -> "Bypass"
+                        else -> permissionMode
+                    }
+                    Span({
+                        style {
+                            fontSize(11.px)
+                            color(Color(SilkColors.textSecondary))
+                            property("flex-shrink", "0")
+                            property("white-space", "nowrap")
+                            property("padding", "1px 6px")
+                            property("border-radius", "4px")
+                            property("background", "rgba(0,0,0,0.04)")
+                        }
+                        attr("title", "工具权限模式")
+                    }) { Text("\uD83D\uDD12 $modeLabel") }
                 }
                 Span({
                     style {

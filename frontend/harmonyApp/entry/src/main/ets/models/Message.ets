@@ -19,7 +19,9 @@ export enum MessageCategory {
   TODO_LIST = 'TODO_LIST',     // 待办事项列表（低亮度）
   STEP_PROCESS = 'STEP_PROCESS', // 步骤执行过程（低亮度，可转发）
   FINAL_REPORT = 'FINAL_REPORT', // 最终诊断报告（高亮度）
-  AGENT_STATUS = 'AGENT_STATUS'  // Agent 工作状态（灰色，低亮度）
+  AGENT_STATUS = 'AGENT_STATUS',  // Agent 工作状态（灰色，低亮度）
+  AGENT_QUESTION = 'AGENT_QUESTION', // Agent 向用户提问（需要用户回答）
+  AGENT_PERMISSION = 'AGENT_PERMISSION' // Agent 工具权限确认（需要用户允许/拒绝）
 }
 
 /**

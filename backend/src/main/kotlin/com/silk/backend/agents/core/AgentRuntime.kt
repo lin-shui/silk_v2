@@ -65,6 +65,8 @@ object AgentRuntime {
             persistCliSession(rawGroupId, cliSessionId, sessionStarted)
         /** M4 Task 3: 持久化用户当前激活的 agent（dash form）。 */
         fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean = false
+        /** 持久化工具权限模式。 */
+        fun persistPermissionMode(rawGroupId: String, permissionMode: String): Boolean = false
         /** 启动 / 首次激活时根据 workflow record 提供 seed；返回 null 表示不是 workflow 或无值可 seed。 */
         fun loadSeed(rawGroupId: String): WorkflowSeed?
         /**
@@ -78,6 +80,7 @@ object AgentRuntime {
         val workingDir: String,
         val cliSessionId: String?,
         val sessionStarted: Boolean,
+        val permissionMode: String = "",
     )
 
     @Volatile
@@ -129,6 +132,15 @@ object AgentRuntime {
         CoroutineScope(Dispatchers.IO).launch {
             try { p.persistCliSession(stripGroupPrefix(groupId), agentType, cliSessionId, started) }
             catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 cliSessionId 失败: {}", e.message) }
+        }
+    }
+
+    /** 异步持久化工具权限模式。 */
+    private fun persistPermissionModeAsync(groupId: String, permissionMode: PermissionMode) {
+        val p = persistence ?: return
+        CoroutineScope(Dispatchers.IO).launch {
+            try { p.persistPermissionMode(stripGroupPrefix(groupId), permissionMode.name) }
+            catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 permissionMode 失败: {}", e.message) }
         }
     }
 
@@ -241,6 +253,11 @@ object AgentRuntime {
             if (seed.workingDir.isNotBlank()) ctx.workingDir = seed.workingDir
             if (!seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
                 session.cliSessionId = seed.cliSessionId
+            }
+            if (seed.permissionMode.isNotBlank()) {
+                try {
+                    session.permissionMode = PermissionMode.valueOf(seed.permissionMode)
+                } catch (_: IllegalArgumentException) { /* ignore invalid value */ }
             }
         }
         logger.info(
@@ -447,6 +464,7 @@ object AgentRuntime {
                     appendLine("运行中: ${session.running}")
                     appendLine("队列: ${session.messageQueue.size} 条")
                     appendLine("工作目录: ${ctx.workingDir}")
+                    appendLine("权限模式: ${session.permissionMode}")
                     append("ACP Session: ${session.acpSessionId ?: "未创建"}")
                 }
                 broadcastFn(AgentMessages.status(
@@ -712,7 +730,7 @@ object AgentRuntime {
                     return@launch
                 }
                 val accumulated = StringBuilder()
-                setupAcpHandlers(acp, acpSessionId, session, descriptor, broadcastFn, accumulated, ctx.scope)
+                setupAcpHandlers(acp, acpSessionId, session, descriptor, broadcastFn, accumulated, ctx.scope, ctx)
 
                 // 3. Execute prompt (executeSinglePrompt no longer does sessionNew)
                 executeSinglePrompt(ctx, acp, session, descriptor, text, broadcastFn, accumulated)
@@ -726,7 +744,7 @@ object AgentRuntime {
                     )
                     val drainSessionId = session.acpSessionId ?: break
                     val nextAccumulated = StringBuilder()
-                    setupAcpHandlers(acp, drainSessionId, session, descriptor, broadcastFn, nextAccumulated, ctx.scope)
+                    setupAcpHandlers(acp, drainSessionId, session, descriptor, broadcastFn, nextAccumulated, ctx.scope, ctx)
                     executeSinglePrompt(ctx, acp, session, descriptor, next.text, broadcastFn, nextAccumulated)
                     next = session.messageQueue.pollFirst()
                 }
@@ -1021,11 +1039,16 @@ object AgentRuntime {
         broadcastFn: suspend (Message) -> Unit,
         accumulated: StringBuilder,
         scope: CoroutineScope,
+        ctx: GroupAgentContext? = null,
     ) {
         acp.onSessionUpdate(acpSessionId) { notif ->
             // Check if this is an ask_user_question and set pending state
             val kind = notif.update["sessionUpdate"]?.let {
                 (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+            }
+            if (kind == "permission_request") {
+                handlePermissionUpdate(notif, session, descriptor, acp, broadcastFn, scope, ctx)
+                return@onSessionUpdate
             }
             if (kind == "ask_user_question") {
                 val requestId = notif.update["requestId"]?.let {
@@ -1081,6 +1104,142 @@ object AgentRuntime {
         }
     }
 
+    // ============== Permission Request Handling ==============
+
+    private val EDIT_TOOLS = setOf("Write", "Edit", "NotebookEdit")
+
+    private fun isWithinWorkingDir(filePath: String, workingDir: String): Boolean {
+        val absFile = java.io.File(filePath).canonicalPath
+        val absDir = java.io.File(workingDir).canonicalPath
+        return absFile.startsWith(absDir + java.io.File.separator) || absFile == absDir
+    }
+
+    private fun extractFilePath(toolInput: kotlinx.serialization.json.JsonObject): String? {
+        return toolInput["file_path"]?.jsonPrimitive?.contentOrNull
+            ?: toolInput["notebook_path"]?.jsonPrimitive?.contentOrNull
+    }
+
+    private fun extractToolInputMap(toolInput: kotlinx.serialization.json.JsonObject): Map<String, String?> {
+        return toolInput.entries.associate { (k, v) ->
+            k to (v as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+        }
+    }
+
+    private fun handlePermissionUpdate(
+        notif: com.silk.backend.agents.acp.SessionUpdateNotification,
+        session: AgentSession,
+        descriptor: AgentDescriptor,
+        acp: AcpClient,
+        broadcastFn: suspend (Message) -> Unit,
+        scope: CoroutineScope,
+        ctx: GroupAgentContext?,
+    ) {
+        val requestId = notif.update["requestId"]?.jsonPrimitive?.contentOrNull ?: return
+        val toolName = notif.update["toolName"]?.jsonPrimitive?.contentOrNull ?: "unknown"
+        val toolInput = notif.update["toolInput"]?.jsonObject ?: buildJsonObject {}
+
+        val mode = session.permissionMode
+        val workingDir = ctx?.workingDir ?: "/"
+
+        // Decision logic based on permission mode
+        val autoAllow = when (mode) {
+            PermissionMode.BYPASS -> true
+            PermissionMode.ACCEPT_EDITS -> {
+                if (toolName in EDIT_TOOLS) {
+                    val path = extractFilePath(toolInput)
+                    path != null && isWithinWorkingDir(path, workingDir)
+                } else {
+                    false
+                }
+            }
+            PermissionMode.INTERACTIVE -> false
+        }
+
+        if (autoAllow) {
+            scope.launch {
+                try {
+                    AcpExtensions.resolvePermission(acp, requestId, "allow")
+                    logger.info("[AgentRuntime] Permission auto-allow: tool={}, mode={}", toolName, mode)
+                } catch (e: Exception) {
+                    logger.error("[AgentRuntime] resolvePermission failed: {}", e.message)
+                }
+            }
+            return
+        }
+
+        // Show permission card and wait for user decision
+        val detail = AgentMessages.formatToolDetail(toolName, extractToolInputMap(toolInput))
+        val cardMsg = AgentMessages.permissionCard(
+            requestId = requestId,
+            toolName = toolName,
+            toolDetail = detail,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        )
+        val cardId = "agent_perm_$requestId"
+
+        CardReplyRouter.register(cardId, object : CardReplyHandler {
+            override suspend fun onCardReply(
+                reply: CardReplyPayload,
+                sessionName: String,
+                broadcastFn: suspend (Message) -> Unit,
+            ) {
+                val action = reply.action
+                val (decision, modeSwitch) = when {
+                    action.startsWith("perm_allow_") -> "allow" to null
+                    action.startsWith("perm_deny_") -> "deny" to null
+                    action.startsWith("perm_accept_edits_") -> "allow" to PermissionMode.ACCEPT_EDITS
+                    action.startsWith("perm_bypass_") -> "allow" to PermissionMode.BYPASS
+                    else -> return
+                }
+
+                CardReplyRouter.unregister(cardId)
+
+                // Apply mode switch if requested
+                if (modeSwitch != null) {
+                    session.permissionMode = modeSwitch
+                    persistPermissionModeAsync(session.groupId, modeSwitch)
+                    logger.info("[AgentRuntime] Permission mode changed to {} for session {}",
+                        modeSwitch, session.groupId)
+                }
+
+                // Build decision display text
+                val decisionText = when {
+                    modeSwitch == PermissionMode.ACCEPT_EDITS -> "允许（已切换到 Accept Edits 模式）"
+                    modeSwitch == PermissionMode.BYPASS -> "允许（已切换到 Bypass 模式）"
+                    decision == "allow" -> "允许"
+                    else -> "拒绝"
+                }
+                val reason = if (decision == "deny") "用户拒绝了此操作" else ""
+
+                // Send resolved card
+                broadcastFn(AgentMessages.permissionCardResolved(
+                    requestId = requestId,
+                    toolName = toolName,
+                    toolDetail = detail,
+                    decision = decisionText,
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
+                ))
+
+                // Resolve via ACP
+                try {
+                    AcpExtensions.resolvePermission(acp, requestId, decision, reason)
+                    logger.info("[AgentRuntime] Permission resolved: tool={}, decision={}", toolName, decision)
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                    logger.error("[AgentRuntime] resolvePermission failed: {}", e.message)
+                    broadcastFn(AgentMessages.system(
+                        "权限决定发送失败: ${e.message}",
+                        agentUserId = descriptor.agentUserId,
+                        agentName = descriptor.displayName,
+                    ))
+                }
+            }
+        })
+
+        scope.launch { broadcastFn(cardMsg) }
+    }
+
     private fun getAcpClient(agentType: String, userId: String): AcpClient? {
         return AcpRegistry.get(userId, agentType)
     }
@@ -1101,6 +1260,7 @@ object AgentRuntime {
         val running: Boolean,
         val workingDir: String,
         val agentType: String?,
+        val permissionMode: String = "",
     )
 
     fun snapshotState(userId: String, groupId: String): AgentStateSnapshot? {
@@ -1112,6 +1272,7 @@ object AgentRuntime {
             running = session?.running ?: false,
             workingDir = ctx.workingDir,
             agentType = agentType,
+            permissionMode = session?.permissionMode?.name ?: "",
         )
     }
 
