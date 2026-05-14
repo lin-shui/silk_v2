@@ -21,7 +21,7 @@
 3. **/cc-fs/list**：`Routing.kt` → `AgentRuntime.listDirectory()` → ACP `_silk/list_dir` → adapter 调 `fs_listing.list_directory`
 4. **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.cliSessionId` 写入 `Workflow.agentSessions[agentType]`，并兼容镜像到旧 `Workflow.sessionId`；`activeAgent` 也随 `/use` 切换落盘
 5. **Token 重生**：`/cc-settings/generate-token` → `AcpRegistry.disconnect(userId)` 关老连接
-6. **AskUserQuestion**：CLI PreToolUse hook → `permission_hook.sh` curl → `PermissionServer` 阻塞 → ACP `session/update(ask_user_question)` → `AgentRuntime.setupAcpHandlers` 设 `pendingQuestion` → 广播问题消息 → 用户回答 → `handlePrompt` 检到 `pendingQuestion` → `handleQuestionReply` → ACP `_silk/resolve_question` → `PermissionServer.resolve_request` → hook 返回答案 → CLI 继续
+6. **AskUserQuestion**：CLI PreToolUse hook → `permission_hook.sh` curl → `PermissionServer` 阻塞 → `acp_adapter.py` 透传结构化 questions 数组（不做扁平化）→ ACP `session/update(ask_user_question)` → `AgentRuntime.setupAcpHandlers` 解析为 `List<StructuredQuestion>`（含 question/header/options）设 `PendingQuestion` → `AcpUpdateMapper` 构建交互卡片（`AgentMessages.questionCard`，每个 option 一个按钮）→ 广播 CARD 消息 → 用户点击按钮 → CARD_REPLY → `CardReplyRouter` → 多问题状态机逐题推进（`handleQuestionReply` 记录答案、刷新卡片 action="edit"、最终聚合所有答案）→ ACP `_silk/resolve_question` → `PermissionServer.resolve_request` → hook 返回答案 → CLI 继续。用户也可通过底部文本输入框回答当前问题
 
 ACP 不可用时直接报"未连接"，无 fallback。
 

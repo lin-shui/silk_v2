@@ -20,6 +20,8 @@ import com.silk.shared.models.SILK_AGENT_USER_ID
 import com.silk.shared.models.UserSettings
 import com.silk.shared.models.isAgentUserId
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.await
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.browser.window
@@ -1618,7 +1620,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     isTransient = false,
                     isLastMessage = message.id == lastMessageId,
                     currentUserId = user.id,
+                    currentUserName = user.fullName,
                     groupId = group.id,
+                    chatClient = chatClient,
                     isRecalling = message.id in recallingMessageIds,
                     onRecall = { messageId ->
                         if (messageId !in recallingMessageIds) {
@@ -1692,7 +1696,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                         isTransient = true,
                         currentUserId = user.id,
+                        currentUserName = user.fullName,
                         groupId = group.id,
+                        chatClient = chatClient,
                         onCopy = { content ->
                             copyTextToClipboard(content)
                             console.log("✅ 消息已复制到剪贴板")
@@ -3609,72 +3615,97 @@ private fun fixHeaderlessTables(markdown: String): String {
     return result.joinToString("\n")
 }
 
+private val codeFenceOpenerPattern = Regex("^(`{3,}|~{3,})(\\s*[\\w+#.-]*)?\\s*$")
+private val inlineDanglingFencePattern = Regex("^(.+[^`\\s])`{3,}\\s*$")
+private val trailingFencePattern = Regex("`{3,}\\s*$")
+
+private fun findClosingFence(lines: List<String>, openerIndex: Int, fenceLen: Int, fenceChar: Char): Int {
+    val closePattern = Regex("^\\s*${Regex.escape(fenceChar.toString())}{$fenceLen,}\\s*$")
+    return ((openerIndex + 1) until lines.size).firstOrNull { closePattern.matches(lines[it]) } ?: -1
+}
+
+private fun likelyMarkdownProse(langTag: String, innerLines: List<String>): Boolean {
+    val innerText = innerLines.joinToString("\n")
+    val markdownSignals = listOf(
+        innerText.contains(Regex("^#{1,6}\\s", RegexOption.MULTILINE)),
+        innerText.contains(Regex("\\*\\*[^*]+\\*\\*")),
+        innerText.contains(Regex("^[-*+·•]\\s+", RegexOption.MULTILINE)),
+        innerText.contains(Regex("^\\|.+\\|\\s*$", RegexOption.MULTILINE))
+    ).count { it }
+
+    return (langTag.isEmpty() || langTag == "text" || langTag == "markdown") &&
+            markdownSignals >= 2 &&
+            innerLines.size >= 3
+}
+
+private fun handleClosedFence(lines: MutableList<String>, openerIndex: Int, closerIndex: Int, opener: MatchResult): Int {
+    val langTag = opener.groupValues[2].trim()
+    val innerLines = if (closerIndex > openerIndex + 1) {
+        lines.subList(openerIndex + 1, closerIndex)
+    } else {
+        emptyList()
+    }
+
+    return if (likelyMarkdownProse(langTag, innerLines)) {
+        lines.removeAt(closerIndex)
+        lines.removeAt(openerIndex)
+        openerIndex
+    } else {
+        closerIndex + 1
+    }
+}
+
+private fun contentAfterFence(lines: List<String>, openerIndex: Int): String {
+    return if (openerIndex + 1 < lines.size) {
+        lines.subList(openerIndex + 1, lines.size).joinToString("\n")
+    } else {
+        ""
+    }
+}
+
+private fun containsMarkdownSyntax(content: String): Boolean {
+    return content.contains(Regex("^#{1,6}[\\s]", RegexOption.MULTILINE)) ||
+            content.contains(Regex("^\\|.+\\|\\s*$", RegexOption.MULTILINE)) ||
+            content.contains(Regex("^[-*+]\\s+", RegexOption.MULTILINE)) ||
+            content.contains(Regex("\\*\\*[^*]+\\*\\*"))
+}
+
+private fun handleUnclosedFence(lines: MutableList<String>, openerIndex: Int, fenceLen: Int): Int {
+    val contentAfter = contentAfterFence(lines, openerIndex)
+    return if (containsMarkdownSyntax(contentAfter) || contentAfter.length > 500) {
+        lines.removeAt(openerIndex)
+        openerIndex
+    } else {
+        lines.add("`".repeat(fenceLen))
+        lines.size
+    }
+}
+
+private fun stripInlineDanglingFence(lines: MutableList<String>, index: Int) {
+    if (inlineDanglingFencePattern.containsMatchIn(lines[index])) {
+        lines[index] = lines[index].replace(trailingFencePattern, "")
+    }
+}
+
 private fun fixOrphanCodeFences(markdown: String): String {
     val lines = markdown.split("\n").toMutableList()
     var idx = 0
 
     while (idx < lines.size) {
         val trimmed = lines[idx].trimStart()
+        val opener = codeFenceOpenerPattern.find(trimmed)
 
-        val opener = Regex("^(`{3,}|~{3,})(\\s*[\\w+#.-]*)?\\s*$").find(trimmed)
         if (opener != null) {
             val fenceStr = opener.groupValues[1]
-            val fenceLen = fenceStr.length
-            val fenceChar = fenceStr[0]
-            val closePattern = Regex("^\\s*${Regex.escape(fenceChar.toString())}{$fenceLen,}\\s*$")
+            val closerIdx = findClosingFence(lines, idx, fenceStr.length, fenceStr[0])
 
-            var closerIdx = -1
-            for (j in (idx + 1) until lines.size) {
-                if (closePattern.matches(lines[j])) {
-                    closerIdx = j
-                    break
-                }
-            }
-
-            if (closerIdx >= 0) {
-                // Closed fence — check if content is actually Markdown, not code.
-                // If no language tag and content contains headings + bold/lists,
-                // the model likely wrapped prose in backticks by mistake.
-                val langTag = (opener.groupValues[2]).trim()
-                val innerLines = if (closerIdx > idx + 1) lines.subList(idx + 1, closerIdx) else emptyList()
-                val innerText = innerLines.joinToString("\n")
-                val innerHasHeadings = innerText.contains(Regex("^#{1,6}\\s", RegexOption.MULTILINE))
-                val innerHasBold = innerText.contains(Regex("\\*\\*[^*]+\\*\\*"))
-                val innerHasLists = innerText.contains(Regex("^[-*+·•]\\s+", RegexOption.MULTILINE))
-                val innerHasTable = innerText.contains(Regex("^\\|.+\\|\\s*$", RegexOption.MULTILINE))
-                val markdownSignals = listOf(innerHasHeadings, innerHasBold, innerHasLists, innerHasTable).count { it }
-
-                val isLikelyNotCode = (langTag.isEmpty() || langTag == "text" || langTag == "markdown")
-                        && markdownSignals >= 2 && innerLines.size >= 3
-
-                if (isLikelyNotCode) {
-                    lines.removeAt(closerIdx)
-                    lines.removeAt(idx)
-                } else {
-                    idx = closerIdx + 1
-                }
+            idx = if (closerIdx >= 0) {
+                handleClosedFence(lines, idx, closerIdx, opener)
             } else {
-                val contentAfter = if (idx + 1 < lines.size) {
-                    lines.subList(idx + 1, lines.size).joinToString("\n")
-                } else ""
-
-                val hasMarkdownSyntax =
-                    contentAfter.contains(Regex("^#{1,6}[\\s]", RegexOption.MULTILINE)) ||
-                    contentAfter.contains(Regex("^\\|.+\\|\\s*$", RegexOption.MULTILINE)) ||
-                    contentAfter.contains(Regex("^[-*+]\\s+", RegexOption.MULTILINE)) ||
-                    contentAfter.contains(Regex("\\*\\*[^*]+\\*\\*"))
-
-                if (hasMarkdownSyntax || contentAfter.length > 500) {
-                    lines.removeAt(idx)
-                } else {
-                    lines.add("`".repeat(fenceLen))
-                    idx = lines.size
-                }
+                handleUnclosedFence(lines, idx, fenceStr.length)
             }
         } else {
-            if (Regex("^(.+[^`\\s])`{3,}\\s*$").containsMatchIn(lines[idx])) {
-                lines[idx] = lines[idx].replace(Regex("`{3,}\\s*$"), "")
-            }
+            stripInlineDanglingFence(lines, idx)
             idx++
         }
     }
@@ -3793,6 +3824,134 @@ private fun linkCitationMarkers(
     }
 }
 
+private const val THINKING_END_MARKER = "<!--THINKING_END-->"
+
+private fun escapeHtmlText(text: String): String {
+    return text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+}
+
+private fun escapeInvalidTagStarts(markdown: String): String {
+    return markdown.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
+}
+
+private fun contentWithThinkingDetails(content: String): String {
+    if (!content.contains(THINKING_END_MARKER)) return escapeInvalidTagStarts(content)
+
+    val markerIndex = content.indexOf(THINKING_END_MARKER)
+    val thinkingText = content.substring(0, markerIndex).trim()
+    val tailRaw = content.substring(markerIndex + THINKING_END_MARKER.length).trimStart('\n').trim()
+    val tailEffective = if (tailRaw.isBlank()) "*（本次仅有思考过程或未生成正文，请重试。）*" else tailRaw
+    val escapedThinking = escapeHtmlText(thinkingText).replace("\n", "<br>")
+
+    return "<details class=\"silk-thinking-details\">\n" +
+            "<summary>💭 思考过程</summary>\n" +
+            escapedThinking + "\n</details>\n\n" +
+            escapeInvalidTagStarts(tailEffective)
+}
+
+private fun prepareMarkdownForRendering(content: String): String {
+    val reducedBlanks = contentWithThinkingDetails(content).replace(Regex("\\n{3,}"), "\n\n")
+    val normalizedHeadings = reducedBlanks.replace(
+        Regex("^(#{1,6})([^#\\s])", RegexOption.MULTILINE),
+        "$1 $2"
+    )
+    val fixedTables = fixHeaderlessTables(normalizedHeadings)
+    val fixedFences = fixOrphanCodeFences(fixedTables)
+    return fixedFences
+        .replace(Regex("""^>\s*(-{3,})\s*$""", RegexOption.MULTILINE), "\n$1")
+        .replace(Regex("""^>\s*(\*\*Sources?:?\*\*)\s*$""", RegexOption.MULTILINE), "\n$1")
+}
+
+private fun renderMarkdownSafely(
+    content: String,
+    references: List<com.silk.shared.models.MessageReference>,
+    referenceAnchorPrefix: String,
+    markdownEngine: MarkdownIt
+): String {
+    return try {
+        val rendered = markdownEngine.render(normalizeMathBlocks(prepareMarkdownForRendering(content)))
+        val sanitized = DOMPurify.sanitize(rendered, createSanitizeConfig())
+        linkCitationMarkers(sanitized, references, referenceAnchorPrefix)
+    } catch (_: Throwable) {
+        escapeHtmlText(content)
+    }
+}
+
+private fun decorateMarkdownLinks(element: HTMLElement) {
+    val links = element.querySelectorAll("a")
+    for (index in 0 until links.length) {
+        val link = links.item(index) as? HTMLAnchorElement ?: continue
+        val href = link.getAttribute("href") ?: ""
+        if (href.startsWith("#")) continue
+        link.target = "_blank"
+        link.rel = "noopener noreferrer nofollow"
+    }
+}
+
+private fun copyCodeBlockToClipboard(pre: HTMLElement, copyBtn: HTMLElement) {
+    val codeText = pre.querySelector("code")?.textContent ?: ""
+    try {
+        val clipboard = window.navigator.asDynamic().clipboard
+        if (clipboard != null) {
+            clipboard.writeText(codeText).then { _: dynamic ->
+                copyBtn.textContent = "已复制 ✓"
+                window.setTimeout({ copyBtn.textContent = "复制" }, 1500)
+            }
+        }
+    } catch (_: Throwable) {
+    }
+}
+
+private fun createCodeHeader(pre: HTMLElement): HTMLElement {
+    val header = document.createElement("div") as HTMLElement
+    header.className = "silk-code-header"
+
+    val langSpan = document.createElement("span") as HTMLElement
+    langSpan.className = "silk-code-lang"
+    langSpan.textContent = pre.getAttribute("data-lang") ?: ""
+    header.appendChild(langSpan)
+
+    val copyBtn = document.createElement("button") as HTMLElement
+    copyBtn.className = "silk-code-copy"
+    copyBtn.textContent = "复制"
+    copyBtn.addEventListener("click", { _ -> copyCodeBlockToClipboard(pre, copyBtn) })
+    header.appendChild(copyBtn)
+
+    return header
+}
+
+private fun wrapMarkdownCodeBlocks(element: HTMLElement) {
+    val preBlocks = element.querySelectorAll("pre.hljs")
+    for (preIdx in 0 until preBlocks.length) {
+        val pre = preBlocks.item(preIdx) as? HTMLElement ?: continue
+        val wrapper = document.createElement("div") as HTMLElement
+        wrapper.className = "silk-code-block"
+        pre.parentNode?.insertBefore(wrapper, pre)
+        wrapper.appendChild(createCodeHeader(pre))
+        wrapper.appendChild(pre)
+    }
+}
+
+private fun renderMarkdownMath(element: HTMLElement) {
+    try {
+        renderMathInElement(element, createMathRenderOptions())
+    } catch (error: Throwable) {
+        console.warn("Markdown math render failed:", error)
+    }
+}
+
+private fun updateMarkdownElement(containerId: String, safeHtml: String): HTMLElement? {
+    val element = document.getElementById(containerId) as? HTMLElement ?: return null
+    element.innerHTML = safeHtml
+    decorateMarkdownLinks(element)
+    wrapMarkdownCodeBlocks(element)
+    renderMarkdownMath(element)
+    return element
+}
+
 @Composable
 fun MarkdownContent(
     content: String,
@@ -3803,63 +3962,8 @@ fun MarkdownContent(
 
     val markdownEngine = rememberMarkdownEngine()
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
-    val safeHtml = remember(content, references) {
-        try {
-            // Escape < followed by non-HTML-tag characters (e.g., "<1.2m" → "&lt;1.2m")
-            // before any other processing, so DOMPurify won't strip them as invalid tags.
-            val htmlSafeContent = content.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
-            // Convert thinking section (before <!--THINKING_END-->) to collapsible <details>
-            // Note: processing on raw `content` so thinking-text escaping doesn't double-escape
-            val thinkingMarker = "<!--THINKING_END-->"
-            val withThinkingDetails = if (content.contains(thinkingMarker)) {
-                val idx = content.indexOf(thinkingMarker)
-                val thinkingText = content.substring(0, idx).trim()
-                val tailRaw = content.substring(idx + thinkingMarker.length).trimStart('\n').trim()
-                val tailEffective =
-                    if (tailRaw.isBlank()) "*（本次仅有思考过程或未生成正文，请重试。）*" else tailRaw
-                val escaped = thinkingText
-                    .replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-                    .replace("\n", "<br>")
-                "<details class=\"silk-thinking-details\">\n" +
-                "<summary>💭 思考过程</summary>\n" +
-                escaped + "\n</details>\n\n" +
-                tailEffective.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
-            } else {
-                htmlSafeContent
-            }
-            // Collapse excessive blank lines (3+ → 1 blank line)
-            val reducedBlanks = withThinkingDetails.replace(Regex("\\n{3,}"), "\n\n")
-            // Normalize headings missing space after # (e.g., "##一、" → "## 一、")
-            val normalizedHeadings = reducedBlanks.replace(
-                Regex("^(#{1,6})([^#\\s])", RegexOption.MULTILINE),
-                "$1 $2"
-            )
-            // Fix tables missing header row (separator as first line)
-            val fixedTables = fixHeaderlessTables(normalizedHeadings)
-            // Fix orphan code fences that swallow subsequent Markdown content
-            val fixedFences = fixOrphanCodeFences(fixedTables)
-            // Close blockquotes before section separators (---) and Sources headers
-            // so they don't get swallowed into deeply nested blockquotes
-            val unquotedBlockquotes = fixedFences
-                .replace(Regex("""^>\s*(-{3,})\s*$""", RegexOption.MULTILINE), "\n$1")
-                .replace(Regex("""^>\s*(\*\*Sources?:?\*\*)\s*$""", RegexOption.MULTILINE), "\n$1")
-            val linked = linkCitationMarkers(
-                DOMPurify.sanitize(
-                    markdownEngine.render(normalizeMathBlocks(unquotedBlockquotes)),
-                    createSanitizeConfig()
-                ),
-                references,
-                referenceAnchorPrefix
-            )
-            linked
-        } catch (_: Throwable) {
-            // fallback: escape and display raw content
-            content.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-        }
+    val safeHtml = remember(content, references, referenceAnchorPrefix) {
+        renderMarkdownSafely(content, references, referenceAnchorPrefix, markdownEngine)
     }
 
     Div({
@@ -3868,67 +3972,7 @@ fun MarkdownContent(
     }) { }
 
     DisposableEffect(containerId, safeHtml) {
-        val element = document.getElementById(containerId) as? HTMLElement
-        if (element != null) {
-            element.innerHTML = safeHtml
-
-            val links = element.querySelectorAll("a")
-            for (index in 0 until links.length) {
-                val link = links.item(index) as? HTMLAnchorElement ?: continue
-                val href = link.getAttribute("href") ?: ""
-                if (href.startsWith("#")) continue
-                link.target = "_blank"
-                link.rel = "noopener noreferrer nofollow"
-            }
-
-            // Wrap code blocks with language label + copy button
-            val preBlocks = element.querySelectorAll("pre.hljs")
-            for (preIdx in 0 until preBlocks.length) {
-                val pre = preBlocks.item(preIdx) as? HTMLElement ?: continue
-                val lang = pre.getAttribute("data-lang") ?: ""
-
-                val wrapper = document.createElement("div") as HTMLElement
-                wrapper.className = "silk-code-block"
-
-                val header = document.createElement("div") as HTMLElement
-                header.className = "silk-code-header"
-
-                val langSpan = document.createElement("span") as HTMLElement
-                langSpan.className = "silk-code-lang"
-                langSpan.textContent = lang
-                header.appendChild(langSpan)
-
-                val copyBtn = document.createElement("button") as HTMLElement
-                copyBtn.className = "silk-code-copy"
-                copyBtn.textContent = "复制"
-                header.appendChild(copyBtn)
-
-                pre.parentNode?.insertBefore(wrapper, pre)
-                wrapper.appendChild(header)
-                wrapper.appendChild(pre)
-
-                copyBtn.addEventListener("click", { _ ->
-                    val codeText = pre.querySelector("code")?.textContent ?: ""
-                    try {
-                        val clipboard = window.navigator.asDynamic().clipboard
-                        if (clipboard != null) {
-                            clipboard.writeText(codeText).then { _: dynamic ->
-                                copyBtn.textContent = "已复制 ✓"
-                                window.setTimeout({ copyBtn.textContent = "复制" }, 1500)
-                            }
-                        }
-                    } catch (_: Throwable) { }
-                })
-            }
-
-            try {
-                renderMathInElement(element, createMathRenderOptions())
-            } catch (error: Throwable) {
-                console.warn("Markdown math render failed:", error)
-            }
-
-        }
-
+        val element = updateMarkdownElement(containerId, safeHtml)
         onDispose {
             element?.innerHTML = ""
         }
@@ -4061,8 +4105,273 @@ fun ReferenceSourcesList(
  * 3. Markdown 内容优化渲染
  * 4. 可折叠的长内容
  */
+private fun setAiMessageExpanded(messageId: String, expanded: Boolean) {
+    val msgEl = document.getElementById("ai-msg-$messageId") ?: return
+    msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = if (expanded) "none" else "block"
+    msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = if (expanded) "block" else "none"
+    msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = if (expanded) "none" else "inline"
+    msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = if (expanded) "inline" else "none"
+}
+
 @Composable
-@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS")
+private fun AISelectionCheckbox(isSelected: Boolean) {
+    Div({
+        style {
+            width(20.px)
+            height(20.px)
+            borderRadius(4.px)
+            property("border", "2px solid ${if (isSelected) SilkColors.primary else SilkColors.border}")
+            backgroundColor(Color(if (isSelected) SilkColors.primary else "transparent"))
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("justify-content", "center")
+            property("flex-shrink", "0")
+            marginTop(12.px)
+            property("transition", "all 0.2s")
+            color(Color.white)
+            fontSize(12.px)
+        }
+    }) {
+        if (isSelected) Text("✓")
+    }
+}
+
+@Composable
+private fun AIMessageHeader(message: Message, timeString: String, showToggle: Boolean) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "10px")
+            marginBottom(12.px)
+        }
+    }) {
+        Div({ classes(SilkStylesheet.aiBadge) }) { Text("🤖") }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("gap", "2px")
+            }
+        }) {
+            Span({
+                style {
+                    fontWeight("600")
+                    fontSize(14.px)
+                    color(Color(SilkColors.primary))
+                    property("letter-spacing", "0.5px")
+                }
+            }) {
+                val aiDisplayName = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
+                    .let { if (it.isBlank() || it == "Silk") "Silk AI" else it }
+                Text(aiDisplayName)
+            }
+            Span({
+                style {
+                    fontSize(11.px)
+                    color(Color(SilkColors.textLight))
+                }
+            }) { Text(timeString) }
+        }
+        if (showToggle) AIMessageToggleButtons(message.id)
+    }
+}
+
+@Composable
+private fun AIMessageToggleButtons(messageId: String) {
+    Div({ style { property("flex", "1") } }) { }
+    AIMessageToggleButton(
+        label = "📖 展开",
+        role = "expand-btn",
+        messageId = messageId,
+        initiallyHidden = false,
+        expanded = true
+    )
+    AIMessageToggleButton(
+        label = "📖 收起",
+        role = "collapse-btn",
+        messageId = messageId,
+        initiallyHidden = true,
+        expanded = false
+    )
+}
+
+@Composable
+private fun AIMessageToggleButton(
+    label: String,
+    role: String,
+    messageId: String,
+    initiallyHidden: Boolean,
+    expanded: Boolean
+) {
+    Span({
+        attr("data-role", role)
+        attr("data-msg", messageId)
+        style {
+            fontSize(12.px)
+            color(Color(SilkColors.textSecondary))
+            property("cursor", "pointer")
+            padding(4.px, 8.px)
+            borderRadius(4.px)
+            property("transition", "all 0.2s")
+            property("user-select", "none")
+            property("background", "rgba(201, 168, 108, 0.1)")
+            if (initiallyHidden) display(DisplayStyle.None)
+        }
+        onClick { setAiMessageExpanded(messageId, expanded) }
+    }) {
+        Text(label)
+    }
+}
+
+@Composable
+private fun AIMessageBody(message: Message, isLongContent: Boolean, isTransient: Boolean, isLastMessage: Boolean) {
+    if (isLongContent && !isTransient) {
+        CollapsedAIMessageContent(message)
+        ExpandedAIMessageContent(message, showBottomCollapse = true)
+        LaunchedEffect(message.id, isLastMessage) {
+            setAiMessageExpanded(message.id, isLastMessage)
+        }
+    } else {
+        ExpandedAIMessageContent(message, showBottomCollapse = false)
+    }
+}
+
+@Composable
+private fun CollapsedAIMessageContent(message: Message) {
+    val collapsedPreview = remember(message.content) {
+        message.content.trimStart().take(200).ifBlank { "（内容已折叠，点击展开）" }
+    }
+    Div({
+        attr("data-view", "collapsed")
+        style {
+            fontSize(13.px)
+            color(Color(SilkColors.textSecondary))
+            property("font-style", "italic")
+        }
+    }) {
+        Text("$collapsedPreview...")
+    }
+}
+
+@Composable
+private fun ExpandedAIMessageContent(message: Message, showBottomCollapse: Boolean) {
+    Div({
+        if (showBottomCollapse) {
+            attr("data-view", "expanded")
+            style { display(DisplayStyle.None) }
+        }
+        classes(SilkStylesheet.aiMessageContent)
+    }) {
+        MarkdownContent(
+            content = message.content,
+            references = message.references,
+            referenceAnchorPrefix = "msg-${message.id}-"
+        )
+        ReferenceSourcesList(
+            references = message.references,
+            anchorPrefix = "msg-${message.id}-"
+        )
+        if (showBottomCollapse) AIMessageBottomCollapseButton(message.id)
+    }
+}
+
+@Composable
+private fun AIMessageBottomCollapseButton(messageId: String) {
+    Div({
+        attr("data-role", "collapse-bottom-btn")
+        style {
+            display(DisplayStyle.Flex)
+            property("justify-content", "center")
+            paddingTop(8.px)
+            paddingBottom(4.px)
+        }
+    }) {
+        Span({
+            style {
+                fontSize(12.px)
+                color(Color(SilkColors.textSecondary))
+                property("cursor", "pointer")
+                padding(4.px, 16.px)
+                borderRadius(12.px)
+                property("transition", "all 0.2s")
+                property("user-select", "none")
+                property("background", "rgba(201, 168, 108, 0.1)")
+            }
+            onClick { setAiMessageExpanded(messageId, false) }
+        }) {
+            Text("▲ 收起")
+        }
+    }
+}
+
+@Composable
+private fun AIMessageActions(
+    message: Message,
+    onCopy: (String) -> Unit,
+    onForward: (Message) -> Unit,
+    onDelete: (String) -> Unit,
+    onEnterSelectionMode: (String) -> Unit
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            property("justify-content", "flex-end")
+            property("gap", "6px")
+            marginTop(12.px)
+            paddingTop(8.px)
+            property("border-top", "1px solid rgba(232, 224, 212, 0.5)")
+        }
+    }) {
+        AIMessageAction("📋", "复制") { onCopy(message.content) }
+        AIMessageAction("↗", "转发") { onForward(message) }
+        AIMessageAction("🗑", "删除", color = "#E57373") {
+            if (window.confirm("确定要删除这条消息吗？")) onDelete(message.id)
+        }
+        AIMessageAction("☑", "多选") { onEnterSelectionMode(message.id) }
+    }
+}
+
+@Composable
+private fun AIMessageAction(icon: String, label: String, color: String = SilkColors.textSecondary, onClick: () -> Unit) {
+    Span({
+        style {
+            fontSize(11.px)
+            color(Color(color))
+            property("cursor", "pointer")
+            padding(4.px, 10.px)
+            borderRadius(4.px)
+            property("transition", "all 0.2s")
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "4px")
+        }
+        onClick { onClick() }
+    }) {
+        Text(icon)
+        Text(label)
+    }
+}
+
+@Composable
+private fun AITransientStatus() {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "6px")
+            marginTop(10.px)
+            fontSize(12.px)
+            color(Color(SilkColors.warning))
+        }
+    }) {
+        Text("⏳")
+        Text("生成中...")
+    }
+}
+
+@Composable
+@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS", "CyclomaticComplexMethod", "UnusedParameter")
 @NoLiveLiterals
 fun AIMessageCard(
     message: Message,
@@ -4078,369 +4387,88 @@ fun AIMessageCard(
     onEnterSelectionMode: (String) -> Unit = {}
 ) {
     val isLongContent = message.content.length > 500
-    val collapsedPreview = remember(message.content) {
-        message.content.trimStart().take(200).ifBlank { "（内容已折叠，点击展开）" }
-    }
-Div({
+    Div({
         style {
             display(DisplayStyle.Flex)
             alignItems(AlignItems.FlexStart)
             property("gap", "8px")
             if (isSelectionMode) property("cursor", "pointer")
         }
-        if (isSelectionMode) {
-            onClick { onToggleSelection(message.id) }
-        }
+        if (isSelectionMode) onClick { onToggleSelection(message.id) }
     }) {
-        if (isSelectionMode) {
-            Div({
-                style {
-                    width(20.px)
-                    height(20.px)
-                    borderRadius(4.px)
-                    property("border", "2px solid ${if (isSelected) SilkColors.primary else SilkColors.border}")
-                    backgroundColor(Color(if (isSelected) SilkColors.primary else "transparent"))
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("justify-content", "center")
-                    property("flex-shrink", "0")
-                    marginTop(12.px)
-                    property("transition", "all 0.2s")
-                    color(Color.white)
-                    fontSize(12.px)
-                }
-            }) {
-                if (isSelected) Text("✓")
-            }
-        }
-        
-    Div({
-        classes(SilkStylesheet.aiMessageCard)
-        attr("id", "ai-msg-${message.id}")
-        style {
-            property("flex", "1")
-            property("min-width", "0")
-            if (isSelected) {
-                property("outline", "2px solid ${SilkColors.primary}")
-                backgroundColor(Color("rgba(76, 175, 80, 0.05)"))
-            }
-        }
-    }) {
-        // AI 头部标识
+        if (isSelectionMode) AISelectionCheckbox(isSelected)
         Div({
+            classes(SilkStylesheet.aiMessageCard)
+            attr("id", "ai-msg-${message.id}")
             style {
-                display(DisplayStyle.Flex)
-                alignItems(AlignItems.Center)
-                property("gap", "10px")
-                marginBottom(12.px)
+                property("flex", "1")
+                property("min-width", "0")
+                if (isSelected) {
+                    property("outline", "2px solid ${SilkColors.primary}")
+                    backgroundColor(Color("rgba(76, 175, 80, 0.05)"))
+                }
             }
         }) {
-            // AI 图标
-            Div({
-                classes(SilkStylesheet.aiBadge)
-            }) {
-                Text("🤖")
+            AIMessageHeader(message, timeString, showToggle = isLongContent && !isTransient)
+            AIMessageBody(message, isLongContent, isTransient, isLastMessage)
+            if (!isTransient && !isSelectionMode) {
+                AIMessageActions(message, onCopy, onForward, onDelete, onEnterSelectionMode)
             }
-            
-            // AI 名称和时间
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    flexDirection(FlexDirection.Column)
-                    property("gap", "2px")
-                }
-            }) {
-                Span({
-                    style {
-                        fontWeight("600")
-                        fontSize(14.px)
-                        color(Color(SilkColors.primary))
-                        property("letter-spacing", "0.5px")
-                    }
-                }) {
-                    val aiDisplayName = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
-                        .let { if (it.isBlank() || it == "Silk") "Silk AI" else it }
-                    Text(aiDisplayName)
-                }
-                Span({
-                    style {
-                        fontSize(11.px)
-                        color(Color(SilkColors.textLight))
-                    }
-                }) {
-                    Text(timeString)
-                }
-            }
-            
-            // 展开/收起按钮（长内容时显示，DOM 切换 display，不触发 Compose 重组）
-            if (isLongContent && !isTransient) {
-                Div({ style { property("flex", "1") } }) { }
-                Span({
-                    attr("data-role", "expand-btn")
-                    attr("data-msg", message.id)
-                    style {
-                        fontSize(12.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("cursor", "pointer")
-                        padding(4.px, 8.px)
-                        borderRadius(4.px)
-                        property("transition", "all 0.2s")
-                        property("user-select", "none")
-                        property("background", "rgba(201, 168, 108, 0.1)")
-                    }
-                    onClick {
-                        val msgEl = document.getElementById("ai-msg-${message.id}")
-                        if (msgEl != null) {
-                            msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "none"
-                            msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "block"
-                            msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "none"
-                            msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "inline"
-                        }
-                    }
-                }) {
-                    Text("📖 展开")
-                }
-                Span({
-                    attr("data-role", "collapse-btn")
-                    attr("data-msg", message.id)
-                    style {
-                        fontSize(12.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("cursor", "pointer")
-                        padding(4.px, 8.px)
-                        borderRadius(4.px)
-                        property("transition", "all 0.2s")
-                        property("user-select", "none")
-                        property("background", "rgba(201, 168, 108, 0.1)")
-                        display(DisplayStyle.None)
-                    }
-                    onClick {
-                        val msgEl = document.getElementById("ai-msg-${message.id}")
-                        if (msgEl != null) {
-                            msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "block"
-                            msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "none"
-                            msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "inline"
-                            msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "none"
-                        }
-                    }
-                }) {
-                    Text("📖 收起")
-                }
-            }
-        }
-        
-        // 内容区域 — 长内容渲染折叠+展开两个视图，DOM 切换 display（不触发 Compose 重组）
-        if (isLongContent && !isTransient) {
-            Div({
-                attr("data-view", "collapsed")
-                style {
-                    fontSize(13.px)
-                    color(Color(SilkColors.textSecondary))
-                    property("font-style", "italic")
-                }
-            }) {
-                Text("$collapsedPreview...")
-            }
-            Div({
-                attr("data-view", "expanded")
-                style { display(DisplayStyle.None) }
-                classes(SilkStylesheet.aiMessageContent)
-            }) {
-                MarkdownContent(
-                    content = message.content,
-                    references = message.references,
-                    referenceAnchorPrefix = "msg-${message.id}-"
-                )
-                ReferenceSourcesList(
-                    references = message.references,
-                    anchorPrefix = "msg-${message.id}-"
-                )
-                // Bottom-center collapse button
-                Div({
-                    attr("data-role", "collapse-bottom-btn")
-                    style {
-                        display(DisplayStyle.Flex)
-                        property("justify-content", "center")
-                        paddingTop(8.px)
-                        paddingBottom(4.px)
-                    }
-                }) {
-                    Span({
-                        style {
-                            fontSize(12.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("cursor", "pointer")
-                            padding(4.px, 16.px)
-                            borderRadius(12.px)
-                            property("transition", "all 0.2s")
-                            property("user-select", "none")
-                            property("background", "rgba(201, 168, 108, 0.1)")
-                        }
-                        onClick {
-                            val msgEl = document.getElementById("ai-msg-${message.id}")
-                            if (msgEl != null) {
-                                msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "block"
-                                msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "none"
-                                msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "inline"
-                                msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "none"
-                            }
-                        }
-                    }) {
-                        Text("▲ 收起")
-                    }
-                }
-            }
-            // 最后一条消息默认展开，通过 DOM 操作设置初始状态（跟点击按钮同机制，避免 Compose 样式冲突）
-            LaunchedEffect(message.id, isLastMessage) {
-                val msgEl = document.getElementById("ai-msg-${message.id}")
-                if (msgEl != null) {
-                    if (isLastMessage) {
-                        msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "none"
-                        msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "block"
-                        msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "none"
-                        msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "inline"
-                    } else {
-                        msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "block"
-                        msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "none"
-                        msgEl.querySelector("[data-role='expand-btn']").asDynamic().style.display = "inline"
-                        msgEl.querySelector("[data-role='collapse-btn']").asDynamic().style.display = "none"
-                    }
-                }
-            }
-        } else {
-            Div({
-                classes(SilkStylesheet.aiMessageContent)
-            }) {
-                MarkdownContent(
-                    content = message.content,
-                    references = message.references,
-                    referenceAnchorPrefix = "msg-${message.id}-"
-                )
-                ReferenceSourcesList(
-                    references = message.references,
-                    anchorPrefix = "msg-${message.id}-"
-                )
-            }
-        }
-        // 底部操作栏
-        if (!isTransient && !isSelectionMode) {
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    property("justify-content", "flex-end")
-                    property("gap", "6px")
-                    marginTop(12.px)
-                    paddingTop(8.px)
-                    property("border-top", "1px solid rgba(232, 224, 212, 0.5)")
-                }
-            }) {
-                Span({
-                    style {
-                        fontSize(11.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("cursor", "pointer")
-                        padding(4.px, 10.px)
-                        borderRadius(4.px)
-                        property("transition", "all 0.2s")
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "4px")
-                    }
-                    onClick { onCopy(message.content) }
-                }) {
-                    Text("📋")
-                    Text("复制")
-                }
-                
-                Span({
-                    style {
-                        fontSize(11.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("cursor", "pointer")
-                        padding(4.px, 10.px)
-                        borderRadius(4.px)
-                        property("transition", "all 0.2s")
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "4px")
-                    }
-                    onClick { onForward(message) }
-                }) {
-                    Text("↗")
-                    Text("转发")
-                }
-                
-                Span({
-                    style {
-                        fontSize(11.px)
-                        color(Color("#E57373"))
-                        property("cursor", "pointer")
-                        padding(4.px, 10.px)
-                        borderRadius(4.px)
-                        property("transition", "all 0.2s")
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "4px")
-                    }
-                    onClick {
-                        if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
-                            onDelete(message.id)
-                        }
-                    }
-                }) {
-                    Text("🗑")
-                    Text("删除")
-                }
-
-                
-                Span({
-                    style {
-                        fontSize(11.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("cursor", "pointer")
-                        padding(4.px, 10.px)
-                        borderRadius(4.px)
-                        property("transition", "all 0.2s")
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "4px")
-                    }
-                    onClick { onEnterSelectionMode(message.id) }
-                }) {
-                    Text("☑")
-                    Text("多选")
-                }
-            }
-        }
-        
-        // 临时消息状态指示
-        if (isTransient) {
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("gap", "6px")
-                    marginTop(10.px)
-                    fontSize(12.px)
-                    color(Color(SilkColors.warning))
-                }
-            }) {
-                Text("⏳")
-                Text("生成中...")
-            }
+            if (isTransient) AITransientStatus()
         }
     }
-    } // close outer selection wrapper
 }
 
+/**
+ * 消息渲染模式 — 集中所有 type + category 的交叉判断，
+ * 避免在 MessageItem 中用多处提前拦截 + return 导致分支遗漏。
+ */
+private enum class MessageRenderMode {
+    AI_TEXT,          // AI 常规文本 → AIMessageCard
+    AGENT_STATUS,     // Agent 状态 → 灰色斜体
+    AGENT_QUESTION,   // Agent 文本提问 → 橙色背景
+    CARD,             // 交互卡片 → CardMessageRenderer
+    CARD_REPLY,       // 卡片回复 → 绿色摘要
+    NORMAL_TEXT,      // 普通用户消息气泡（含撤回/操作按钮）
+    FILE,             // 文件消息
+    SYSTEM_EVENT,     // JOIN / LEAVE / SYSTEM
+    NOOP,             // RECALL / STOP_GENERATE → 不渲染
+}
+
+/**
+ * 根据 message 的 type 和 category 决定渲染模式。
+ * 优先级：CARD/CARD_REPLY 类型 > category 特殊处理 > type 分支。
+ */
+private fun resolveRenderMode(message: Message): MessageRenderMode {
+    // 卡片类型最优先 — 不管 category 是什么
+    if (message.type == MessageType.CARD) return MessageRenderMode.CARD
+    if (message.type == MessageType.CARD_REPLY) return MessageRenderMode.CARD_REPLY
+
+    // category 特殊处理（只对非卡片消息生效）
+    if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) return MessageRenderMode.AGENT_STATUS
+    if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION) return MessageRenderMode.AGENT_QUESTION
+
+    // type 分支
+    return when (message.type) {
+        MessageType.TEXT -> if (isAgentUserId(message.userId)) MessageRenderMode.AI_TEXT else MessageRenderMode.NORMAL_TEXT
+        MessageType.FILE -> MessageRenderMode.FILE
+        MessageType.JOIN, MessageType.LEAVE, MessageType.SYSTEM -> MessageRenderMode.SYSTEM_EVENT
+        MessageType.RECALL, MessageType.STOP_GENERATE -> MessageRenderMode.NOOP
+        else -> MessageRenderMode.NORMAL_TEXT
+    }
+}
+
+@Suppress("CyclomaticComplexMethod", "NestedBlockDepth") // large render-mode dispatch
 @Composable
 fun MessageItem(
     message: Message,
     isTransient: Boolean = false,
     currentUserId: String = "",
+    currentUserName: String = "",
     groupId: String = "",
     isLastMessage: Boolean = false,
     isRecalling: Boolean = false,
+    chatClient: com.silk.shared.ChatClient? = null,
     onRecall: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {},
@@ -4453,85 +4481,66 @@ fun MessageItem(
     val timeString = remember(message.timestamp) {
         formatMessageTimestampForWeb(message.timestamp)
     }
-    
-    // 是否是 AI 消息
-    val isAIMessage = isAgentUserId(message.userId)
-    
-    // AI 消息使用专用卡片
-    val isRegularAIText = isAIMessage && message.type == MessageType.TEXT &&
-        message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS &&
-        message.category != com.silk.shared.models.MessageCategory.AGENT_QUESTION
-    if (isRegularAIText) {
-        AIMessageCard(
-            message = message,
-            timeString = timeString,
-            isTransient = isTransient,
-            isLastMessage = isLastMessage,
-            onCopy = onCopy,
-            onForward = onForward,
-            onDelete = onDelete,
-            isSelectionMode = isSelectionMode,
-            isSelected = isSelected,
-            onToggleSelection = onToggleSelection,
-            onEnterSelectionMode = onEnterSelectionMode
-        )
-        return
-    }
-    
-    // 是否可以撤回：只能撤回自己发送的消息，且不是 Silk 的消息
-    val canRecall = message.userId == currentUserId && 
+
+    val renderMode = resolveRenderMode(message)
+
+    when (renderMode) {
+        MessageRenderMode.AI_TEXT -> {
+            AIMessageCard(
+                message = message,
+                timeString = timeString,
+                isTransient = isTransient,
+                isLastMessage = isLastMessage,
+                onCopy = onCopy,
+                onForward = onForward,
+                onDelete = onDelete,
+                isSelectionMode = isSelectionMode,
+                isSelected = isSelected,
+                onToggleSelection = onToggleSelection,
+                onEnterSelectionMode = onEnterSelectionMode
+            )
+        }
+        MessageRenderMode.AGENT_STATUS -> {
+            Div({
+                style {
+                    padding(8.px, 16.px)
+                    marginBottom(6.px)
+                    backgroundColor(Color("#F5F5F5"))
+                    borderRadius(8.px)
+                    property("border-left", "3px solid #BDBDBD")
+                    fontSize(13.px)
+                    color(Color("#757575"))
+                    property("font-style", "italic")
+                    property("white-space", "pre-wrap")
+                    property("word-break", "break-word")
+                }
+            }) {
+                Text(message.content)
+            }
+        }
+        MessageRenderMode.AGENT_QUESTION -> {
+            Div({
+                style {
+                    padding(12.px, 16.px)
+                    marginBottom(8.px)
+                    backgroundColor(Color("#FFF8F0"))
+                    borderRadius(8.px)
+                    property("border-left", "3px solid #E8B86C")
+                    fontSize(14.px)
+                    color(Color("#5D4E37"))
+                    property("white-space", "pre-wrap")
+                    property("word-break", "break-word")
+                }
+            }) {
+                Text(message.content)
+            }
+        }
+        MessageRenderMode.NORMAL_TEXT -> {
+            val canRecall = message.userId == currentUserId &&
                     !isAgentUserId(message.userId) &&
-                    message.type == MessageType.TEXT &&
                     !isTransient
-    
-    // 是否显示操作按钮：文本消息且不是临时消息
-    val showActions = message.type == MessageType.TEXT && !isTransient &&
-                      message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS &&
-                      message.category != com.silk.shared.models.MessageCategory.AGENT_QUESTION
+            val showActions = !isTransient
 
-    // Agent 状态消息 - 灰色样式
-    if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) {
-        Div({
-            style {
-                padding(8.px, 16.px)
-                marginBottom(6.px)
-                backgroundColor(Color("#F5F5F5"))
-                borderRadius(8.px)
-                property("border-left", "3px solid #BDBDBD")
-                fontSize(13.px)
-                color(Color("#757575"))
-                property("font-style", "italic")
-                property("white-space", "pre-wrap")
-                property("word-break", "break-word")
-            }
-        }) {
-            Text(message.content)
-        }
-        return
-    }
-
-    // Agent 提问消息 - 橙色警告样式
-    if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION) {
-        Div({
-            style {
-                padding(12.px, 16.px)
-                marginBottom(8.px)
-                backgroundColor(Color("#FFF8F0"))
-                borderRadius(8.px)
-                property("border-left", "3px solid #E8B86C")
-                fontSize(14.px)
-                color(Color("#5D4E37"))
-                property("white-space", "pre-wrap")
-                property("word-break", "break-word")
-            }
-        }) {
-            Text(message.content)
-        }
-        return
-    }
-    
-    when (message.type) {
-        MessageType.TEXT -> {
             // 检测PDF下载链接
             val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
             
@@ -4802,7 +4811,7 @@ fun MessageItem(
             }
             } // close selection wrapper Div
         }
-        MessageType.FILE -> {
+        MessageRenderMode.FILE -> {
             val fileInfo = remember(message.content) {
                 parseWebFileMessageContent(message.content)
             }
@@ -5030,15 +5039,66 @@ fun MessageItem(
             }
             } // close selection wrapper Div
         }
-        MessageType.JOIN, MessageType.LEAVE, MessageType.SYSTEM -> {
+        MessageRenderMode.SYSTEM_EVENT -> {
             Div({ classes(SilkStylesheet.systemMessage) }) {
                 Text("• ${message.content} ($timeString)")
             }
         }
-        MessageType.RECALL -> {
+        MessageRenderMode.CARD -> {
+            if (chatClient != null) {
+                CardMessageRenderer(
+                    message = message,
+                    chatClient = chatClient,
+                    currentUserId = currentUserId,
+                    userName = currentUserName,
+                )
+            } else {
+                Div({ style { padding(8.px); color(Color("#999")) } }) {
+                    Text("[卡片消息]")
+                }
+            }
         }
-        MessageType.STOP_GENERATE -> {
+        MessageRenderMode.CARD_REPLY -> {
+            val replyText = try {
+                val payload = kotlinx.serialization.json.Json.parseToJsonElement(message.content)
+                    .jsonObject
+                val action = payload["action"]?.jsonPrimitive?.content ?: "unknown"
+                when {
+                    action.startsWith("__opt__") -> {
+                        // "__opt__0__Python - 简洁易用" → "Python - 简洁易用"
+                        val afterPrefix = action.removePrefix("__opt__")
+                        val idx = afterPrefix.indexOf("__")
+                        val cleanText = if (idx >= 0) afterPrefix.substring(idx + 2) else action
+                        "选择: $cleanText"
+                    }
+                    action.startsWith("__custom__") -> {
+                        val qi = action.removePrefix("__custom__")
+                        val custom = payload["inputs"]?.jsonObject?.get("custom_answer_$qi")
+                            ?.jsonPrimitive?.content ?: ""
+                        if (custom.isNotBlank()) "回复: $custom" else "回复: (自定义)"
+                    }
+                    else -> "选择: $action"
+                }
+            } catch (_: kotlinx.serialization.SerializationException) {
+                "卡片回复"
+            } catch (_: IllegalArgumentException) {
+                "卡片回复"
+            }
+            Div({
+                style {
+                    padding(6.px, 12.px)
+                    marginBottom(6.px)
+                    backgroundColor(Color("#F0F8F0"))
+                    borderRadius(8.px)
+                    fontSize(13.px)
+                    color(Color("#4a7c59"))
+                    property("font-style", "italic")
+                }
+            }) {
+                Text("\u2713 $replyText")
+            }
         }
+        MessageRenderMode.NOOP -> { }
     }
 }
 
