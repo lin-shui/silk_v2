@@ -20,6 +20,8 @@ import com.silk.shared.models.SILK_AGENT_USER_ID
 import com.silk.shared.models.UserSettings
 import com.silk.shared.models.isAgentUserId
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.await
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.browser.window
@@ -1618,7 +1620,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     isTransient = false,
                     isLastMessage = message.id == lastMessageId,
                     currentUserId = user.id,
+                    currentUserName = user.fullName,
                     groupId = group.id,
+                    chatClient = chatClient,
                     isRecalling = message.id in recallingMessageIds,
                     onRecall = { messageId ->
                         if (messageId !in recallingMessageIds) {
@@ -1692,7 +1696,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                         isTransient = true,
                         currentUserId = user.id,
+                        currentUserName = user.fullName,
                         groupId = group.id,
+                        chatClient = chatClient,
                         onCopy = { content ->
                             copyTextToClipboard(content)
                             console.log("✅ 消息已复制到剪贴板")
@@ -4365,7 +4371,7 @@ private fun AITransientStatus() {
 }
 
 @Composable
-@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS")
+@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS", "CyclomaticComplexMethod", "UnusedParameter")
 @NoLiveLiterals
 fun AIMessageCard(
     message: Message,
@@ -4413,14 +4419,56 @@ fun AIMessageCard(
     }
 }
 
+/**
+ * 消息渲染模式 — 集中所有 type + category 的交叉判断，
+ * 避免在 MessageItem 中用多处提前拦截 + return 导致分支遗漏。
+ */
+private enum class MessageRenderMode {
+    AI_TEXT,          // AI 常规文本 → AIMessageCard
+    AGENT_STATUS,     // Agent 状态 → 灰色斜体
+    AGENT_QUESTION,   // Agent 文本提问 → 橙色背景
+    CARD,             // 交互卡片 → CardMessageRenderer
+    CARD_REPLY,       // 卡片回复 → 绿色摘要
+    NORMAL_TEXT,      // 普通用户消息气泡（含撤回/操作按钮）
+    FILE,             // 文件消息
+    SYSTEM_EVENT,     // JOIN / LEAVE / SYSTEM
+    NOOP,             // RECALL / STOP_GENERATE → 不渲染
+}
+
+/**
+ * 根据 message 的 type 和 category 决定渲染模式。
+ * 优先级：CARD/CARD_REPLY 类型 > category 特殊处理 > type 分支。
+ */
+private fun resolveRenderMode(message: Message): MessageRenderMode {
+    // 卡片类型最优先 — 不管 category 是什么
+    if (message.type == MessageType.CARD) return MessageRenderMode.CARD
+    if (message.type == MessageType.CARD_REPLY) return MessageRenderMode.CARD_REPLY
+
+    // category 特殊处理（只对非卡片消息生效）
+    if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) return MessageRenderMode.AGENT_STATUS
+    if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION) return MessageRenderMode.AGENT_QUESTION
+
+    // type 分支
+    return when (message.type) {
+        MessageType.TEXT -> if (isAgentUserId(message.userId)) MessageRenderMode.AI_TEXT else MessageRenderMode.NORMAL_TEXT
+        MessageType.FILE -> MessageRenderMode.FILE
+        MessageType.JOIN, MessageType.LEAVE, MessageType.SYSTEM -> MessageRenderMode.SYSTEM_EVENT
+        MessageType.RECALL, MessageType.STOP_GENERATE -> MessageRenderMode.NOOP
+        else -> MessageRenderMode.NORMAL_TEXT
+    }
+}
+
+@Suppress("CyclomaticComplexMethod", "NestedBlockDepth") // large render-mode dispatch
 @Composable
 fun MessageItem(
     message: Message,
     isTransient: Boolean = false,
     currentUserId: String = "",
+    currentUserName: String = "",
     groupId: String = "",
     isLastMessage: Boolean = false,
     isRecalling: Boolean = false,
+    chatClient: com.silk.shared.ChatClient? = null,
     onRecall: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {},
@@ -4433,85 +4481,66 @@ fun MessageItem(
     val timeString = remember(message.timestamp) {
         formatMessageTimestampForWeb(message.timestamp)
     }
-    
-    // 是否是 AI 消息
-    val isAIMessage = isAgentUserId(message.userId)
-    
-    // AI 消息使用专用卡片
-    val isRegularAIText = isAIMessage && message.type == MessageType.TEXT &&
-        message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS &&
-        message.category != com.silk.shared.models.MessageCategory.AGENT_QUESTION
-    if (isRegularAIText) {
-        AIMessageCard(
-            message = message,
-            timeString = timeString,
-            isTransient = isTransient,
-            isLastMessage = isLastMessage,
-            onCopy = onCopy,
-            onForward = onForward,
-            onDelete = onDelete,
-            isSelectionMode = isSelectionMode,
-            isSelected = isSelected,
-            onToggleSelection = onToggleSelection,
-            onEnterSelectionMode = onEnterSelectionMode
-        )
-        return
-    }
-    
-    // 是否可以撤回：只能撤回自己发送的消息，且不是 Silk 的消息
-    val canRecall = message.userId == currentUserId && 
+
+    val renderMode = resolveRenderMode(message)
+
+    when (renderMode) {
+        MessageRenderMode.AI_TEXT -> {
+            AIMessageCard(
+                message = message,
+                timeString = timeString,
+                isTransient = isTransient,
+                isLastMessage = isLastMessage,
+                onCopy = onCopy,
+                onForward = onForward,
+                onDelete = onDelete,
+                isSelectionMode = isSelectionMode,
+                isSelected = isSelected,
+                onToggleSelection = onToggleSelection,
+                onEnterSelectionMode = onEnterSelectionMode
+            )
+        }
+        MessageRenderMode.AGENT_STATUS -> {
+            Div({
+                style {
+                    padding(8.px, 16.px)
+                    marginBottom(6.px)
+                    backgroundColor(Color("#F5F5F5"))
+                    borderRadius(8.px)
+                    property("border-left", "3px solid #BDBDBD")
+                    fontSize(13.px)
+                    color(Color("#757575"))
+                    property("font-style", "italic")
+                    property("white-space", "pre-wrap")
+                    property("word-break", "break-word")
+                }
+            }) {
+                Text(message.content)
+            }
+        }
+        MessageRenderMode.AGENT_QUESTION -> {
+            Div({
+                style {
+                    padding(12.px, 16.px)
+                    marginBottom(8.px)
+                    backgroundColor(Color("#FFF8F0"))
+                    borderRadius(8.px)
+                    property("border-left", "3px solid #E8B86C")
+                    fontSize(14.px)
+                    color(Color("#5D4E37"))
+                    property("white-space", "pre-wrap")
+                    property("word-break", "break-word")
+                }
+            }) {
+                Text(message.content)
+            }
+        }
+        MessageRenderMode.NORMAL_TEXT -> {
+            val canRecall = message.userId == currentUserId &&
                     !isAgentUserId(message.userId) &&
-                    message.type == MessageType.TEXT &&
                     !isTransient
-    
-    // 是否显示操作按钮：文本消息且不是临时消息
-    val showActions = message.type == MessageType.TEXT && !isTransient &&
-                      message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS &&
-                      message.category != com.silk.shared.models.MessageCategory.AGENT_QUESTION
+            val showActions = !isTransient
 
-    // Agent 状态消息 - 灰色样式
-    if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) {
-        Div({
-            style {
-                padding(8.px, 16.px)
-                marginBottom(6.px)
-                backgroundColor(Color("#F5F5F5"))
-                borderRadius(8.px)
-                property("border-left", "3px solid #BDBDBD")
-                fontSize(13.px)
-                color(Color("#757575"))
-                property("font-style", "italic")
-                property("white-space", "pre-wrap")
-                property("word-break", "break-word")
-            }
-        }) {
-            Text(message.content)
-        }
-        return
-    }
-
-    // Agent 提问消息 - 橙色警告样式
-    if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION) {
-        Div({
-            style {
-                padding(12.px, 16.px)
-                marginBottom(8.px)
-                backgroundColor(Color("#FFF8F0"))
-                borderRadius(8.px)
-                property("border-left", "3px solid #E8B86C")
-                fontSize(14.px)
-                color(Color("#5D4E37"))
-                property("white-space", "pre-wrap")
-                property("word-break", "break-word")
-            }
-        }) {
-            Text(message.content)
-        }
-        return
-    }
-    
-    when (message.type) {
-        MessageType.TEXT -> {
             // 检测PDF下载链接
             val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
             
@@ -4782,7 +4811,7 @@ fun MessageItem(
             }
             } // close selection wrapper Div
         }
-        MessageType.FILE -> {
+        MessageRenderMode.FILE -> {
             val fileInfo = remember(message.content) {
                 parseWebFileMessageContent(message.content)
             }
@@ -5010,15 +5039,66 @@ fun MessageItem(
             }
             } // close selection wrapper Div
         }
-        MessageType.JOIN, MessageType.LEAVE, MessageType.SYSTEM -> {
+        MessageRenderMode.SYSTEM_EVENT -> {
             Div({ classes(SilkStylesheet.systemMessage) }) {
                 Text("• ${message.content} ($timeString)")
             }
         }
-        MessageType.RECALL -> {
+        MessageRenderMode.CARD -> {
+            if (chatClient != null) {
+                CardMessageRenderer(
+                    message = message,
+                    chatClient = chatClient,
+                    currentUserId = currentUserId,
+                    userName = currentUserName,
+                )
+            } else {
+                Div({ style { padding(8.px); color(Color("#999")) } }) {
+                    Text("[卡片消息]")
+                }
+            }
         }
-        MessageType.STOP_GENERATE -> {
+        MessageRenderMode.CARD_REPLY -> {
+            val replyText = try {
+                val payload = kotlinx.serialization.json.Json.parseToJsonElement(message.content)
+                    .jsonObject
+                val action = payload["action"]?.jsonPrimitive?.content ?: "unknown"
+                when {
+                    action.startsWith("__opt__") -> {
+                        // "__opt__0__Python - 简洁易用" → "Python - 简洁易用"
+                        val afterPrefix = action.removePrefix("__opt__")
+                        val idx = afterPrefix.indexOf("__")
+                        val cleanText = if (idx >= 0) afterPrefix.substring(idx + 2) else action
+                        "选择: $cleanText"
+                    }
+                    action.startsWith("__custom__") -> {
+                        val qi = action.removePrefix("__custom__")
+                        val custom = payload["inputs"]?.jsonObject?.get("custom_answer_$qi")
+                            ?.jsonPrimitive?.content ?: ""
+                        if (custom.isNotBlank()) "回复: $custom" else "回复: (自定义)"
+                    }
+                    else -> "选择: $action"
+                }
+            } catch (_: kotlinx.serialization.SerializationException) {
+                "卡片回复"
+            } catch (_: IllegalArgumentException) {
+                "卡片回复"
+            }
+            Div({
+                style {
+                    padding(6.px, 12.px)
+                    marginBottom(6.px)
+                    backgroundColor(Color("#F0F8F0"))
+                    borderRadius(8.px)
+                    fontSize(13.px)
+                    color(Color("#4a7c59"))
+                    property("font-style", "italic")
+                }
+            }) {
+                Text("\u2713 $replyText")
+            }
         }
+        MessageRenderMode.NOOP -> { }
     }
 }
 

@@ -80,9 +80,10 @@ fun WorkflowScene(appState: WebAppState) {
     var renameTarget by remember { mutableStateOf<WorkflowItem?>(null) }
     var renameText by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<WorkflowItem?>(null) }
-    // 创建对话框中"加载默认目录"的失败原因（一般是 Bridge 未连接）。
-    // Bridge 离线时整个创建流程都会失败（后端拒绝），所以这里也用作"是否禁用创建按钮"的依据。
-    var dirLoadError by remember { mutableStateOf<String?>(null) }
+    // Bridge 是否在线（从 agent 列表判断），离线时禁用创建相关操作
+    var bridgeConnected by remember { mutableStateOf(true) }
+    // 默认目录加载失败时的非致命警告（不阻塞创建，用户仍可手动输入或选择目录）
+    var dirWarning by remember { mutableStateOf<String?>(null) }
     // 信任确认弹窗状态（替代浏览器原生 confirm）
     var showTrustConfirm by remember { mutableStateOf(false) }
     var trustConfirmPath by remember { mutableStateOf("") }
@@ -102,12 +103,13 @@ fun WorkflowScene(appState: WebAppState) {
                 newName = ""
                 newInitialDir = ""
                 selectedAgentType = ""
-                dirLoadError = null
+                dirWarning = null
             }
             is ApiClient.CreateWorkflowResult.Err -> {
                 kotlinx.browser.window.alert("创建工作流失败：${result.message}")
-                val probe = ApiClient.listCcDir(user.id, null)
-                dirLoadError = if (probe.success) null else (probe.error ?: "无法获取默认目录")
+                // 重新检查 bridge 连接状态
+                val agents = ApiClient.listAgents(user.id)
+                bridgeConnected = agents.any { it.connected }
             }
         }
     }
@@ -310,13 +312,14 @@ fun WorkflowScene(appState: WebAppState) {
                     else -> "claude_code"
                 }
             }
-            if (newInitialDir.isBlank()) {
-                dirLoadError = null
+            bridgeConnected = agents.any { it.connected }
+            if (newInitialDir.isBlank() && bridgeConnected) {
+                dirWarning = null
                 val resp = ApiClient.listCcDir(user.id, null)
                 if (resp.success && resp.path.isNotBlank()) {
                     newInitialDir = resp.path
                 } else {
-                    dirLoadError = resp.error ?: "无法获取默认目录"
+                    dirWarning = resp.error ?: "无法获取默认目录"
                 }
             }
         }
@@ -328,7 +331,7 @@ fun WorkflowScene(appState: WebAppState) {
                 newName = ""
                 newInitialDir = ""
                 selectedAgentType = ""
-                dirLoadError = null
+                dirWarning = null
             },
             zIndex = 1000,
         ) {
@@ -415,21 +418,22 @@ fun WorkflowScene(appState: WebAppState) {
                     style {
                         display(DisplayStyle.Flex)
                         property("gap", "8px")
-                        marginBottom(if (dirLoadError != null) 6.px else 16.px)
+                        marginBottom(if (!bridgeConnected || dirWarning != null) 6.px else 16.px)
                     }
                 }) {
                     Input(InputType.Text) {
                         value(newInitialDir)
                         onInput { newInitialDir = it.value }
-                        // Bridge 离线时整个创建流程都会失败（后端会拒绝），输入路径也无意义，
-                        // 因此明确引导用户先去解决 Bridge 问题，不再鼓励手动输入
                         attr(
                             "placeholder",
-                            if (dirLoadError != null) "Bridge 未连接，请先启动 Bridge"
-                            else "加载默认目录中…",
+                            when {
+                                !bridgeConnected -> "Bridge 未连接，请先启动 Bridge"
+                                dirWarning != null -> "请输入或选择工作目录"
+                                else -> "加载默认目录中…"
+                            },
                         )
-                        // Bridge 离线时禁用输入框，避免用户白费功夫
-                        if (dirLoadError != null) attr("disabled", "")
+                        // Bridge 离线时禁用输入框
+                        if (!bridgeConnected) attr("disabled", "")
                         style {
                             property("flex", "1")
                             height(40.px)
@@ -439,15 +443,14 @@ fun WorkflowScene(appState: WebAppState) {
                             fontSize(13.px)
                             fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
                             property("box-sizing", "border-box")
-                            if (dirLoadError != null) {
+                            if (!bridgeConnected) {
                                 backgroundColor(Color(SilkColors.surface))
                                 color(Color(SilkColors.textLight))
                             }
                         }
                     }
                     Button({
-                        // Bridge 离线时浏览器肯定也用不了，提前禁用更友好
-                        val pickerDisabled = dirLoadError != null
+                        val pickerDisabled = !bridgeConnected
                         if (pickerDisabled) attr("disabled", "")
                         style {
                             backgroundColor(Color("transparent"))
@@ -466,15 +469,22 @@ fun WorkflowScene(appState: WebAppState) {
                         onClick { if (!pickerDisabled) showCreatePicker = true }
                     }) { Text("\uD83D\uDCC2 选择…") }
                 }
-                // 加载失败时的小提示行
-                if (dirLoadError != null) {
+                if (!bridgeConnected) {
                     Div({
                         style {
                             fontSize(12.px)
                             color(Color(SilkColors.error))
                             marginBottom(16.px)
                         }
-                    }) { Text("⚠ ${dirLoadError}。请先启动 Bridge Agent 再创建工作流。") }
+                    }) { Text("⚠ Bridge 未连接。请先启动 Bridge Agent 再创建工作流。") }
+                } else if (dirWarning != null) {
+                    Div({
+                        style {
+                            fontSize(12.px)
+                            color(Color(SilkColors.warning))
+                            marginBottom(16.px)
+                        }
+                    }) { Text("⚠ ${dirWarning}，请手动输入或选择工作目录。") }
                 }
                 Div({
                     style {
@@ -497,11 +507,11 @@ fun WorkflowScene(appState: WebAppState) {
                             newName = ""
                             newInitialDir = ""
                             selectedAgentType = ""
-                            dirLoadError = null
+                            dirWarning = null
                         }
                     }) { Text("取消") }
                     Button({
-                        val canCreate = newName.isNotBlank() && dirLoadError == null && newInitialDir.isNotBlank()
+                        val canCreate = newName.isNotBlank() && bridgeConnected && newInitialDir.isNotBlank()
                         if (!canCreate) attr("disabled", "")
                         style {
                             backgroundColor(
@@ -517,7 +527,7 @@ fun WorkflowScene(appState: WebAppState) {
                         attr(
                             "title",
                             when {
-                                dirLoadError != null -> "Bridge 未连接，无法创建"
+                                !bridgeConnected -> "Bridge 未连接，无法创建"
                                 newName.isBlank() -> "请输入工作流名称"
                                 newInitialDir.isBlank() -> "请填写或选择工作目录"
                                 else -> "创建工作流"
@@ -1058,7 +1068,9 @@ private fun WorkflowChatPanel(
                     isTransient = false,
                     isLastMessage = index == messages.lastIndex,
                     currentUserId = userId,
+                    currentUserName = userName,
                     groupId = groupId,
+                    chatClient = chatClient,
                     onCopy = { content -> copyTextToClipboard(content) }
                 )
             }
@@ -1104,7 +1116,9 @@ private fun WorkflowChatPanel(
                     message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                     isTransient = true,
                     currentUserId = userId,
+                    currentUserName = userName,
                     groupId = groupId,
+                    chatClient = chatClient,
                     onCopy = { content -> copyTextToClipboard(content) }
                 )
             } else {

@@ -47,6 +47,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | Agent framework | `agents/core/`, `agents/acp/`, `agents/adapters/` | Claude Code 与 Codex via ACP，唯一执行路径 |
 | AI/tools/search | `ai/`（AnthropicClient + DirectModelAgent）, `utils/WebPageDownloader.kt` | Anthropic Messages API + 原生 web_search 工具 + 后端 grep 搜索 |
 | Auth/data | `auth/`, `database/`, `models/` | SQLite + Exposed |
+| Card system | `card/CardBuilder.kt`, `card/CardReplyRouter.kt`, `card/CardModels.kt` | 交互卡片构造、JSON schema、回复路由 |
 | Domain modules | `todos/`, `workflow/`, `trust/`, `kb/`, `export/`, `pdf/` | Todo/Workflow/TrustedDir/KB 混合文件存储 |
 | Shared client contract | `frontend/shared/` | 三端消息/文件/Audio Duplex 合同面 |
 | Web | `frontend/webApp/` | 当前最完整的桌面浏览器 UI |
