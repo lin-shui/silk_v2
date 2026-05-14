@@ -2265,6 +2265,45 @@ fun Application.configureRouting() {
             )
             chatServer.broadcast(statusMsg)
 
+            // Phased turn aggregation: classify reply messages into
+            // thinking / tool / answer sections and build structured
+            // markdown so the frontend renders a Cursor-like display.
+            var turnActive = false
+            val thinkingParts = mutableListOf<String>()
+            val toolParts = mutableListOf<String>()
+            var answerText = ""
+            var gotReplyAfterStream = false
+
+            fun buildStructuredContent(): String {
+                val sb = StringBuilder()
+                sb.append("<!--CC_TURN-->\n")
+
+                val hasPostThinkingContent = toolParts.isNotEmpty() || answerText.isNotEmpty()
+
+                if (thinkingParts.isNotEmpty()) {
+                    val joined = thinkingParts.joinToString("\n\n")
+                    if (hasPostThinkingContent) {
+                        sb.append(joined)
+                        sb.append("\n<!--THINKING_END-->\n\n")
+                    } else {
+                        sb.append(joined)
+                    }
+                }
+
+                if (toolParts.isNotEmpty()) {
+                    sb.append(toolParts.joinToString("\n\n"))
+                    if (answerText.isNotEmpty()) sb.append("\n\n---\n\n")
+                }
+
+                if (answerText.isNotEmpty()) {
+                    sb.append(answerText)
+                }
+
+                return sb.toString()
+            }
+
+            val ccUserName = "cc-connect (${hello.agentType})"
+
             try {
                 for (frame in incoming) {
                     val text = (frame as? Frame.Text)?.readText() ?: continue
@@ -2275,44 +2314,115 @@ fun Application.configureRouting() {
                             val reply = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                 com.silk.backend.ccconnect.ReplyMessage.serializer(), text
                             )
-                            val msg = Message(
-                                id = java.util.UUID.randomUUID().toString(),
-                                userId = "cc-connect",
-                                userName = "cc-connect (${hello.agentType})",
-                                content = reply.content,
-                                timestamp = System.currentTimeMillis(),
-                                type = MessageType.TEXT,
-                            )
-                            chatServer.broadcast(msg)
+                            if (turnActive) {
+                                val content = reply.content.trimStart()
+                                when {
+                                    content.startsWith("\uD83D\uDCAD") -> thinkingParts.add(reply.content)
+                                    content.startsWith("\uD83D\uDD27") -> toolParts.add(reply.content)
+                                    else -> {
+                                        answerText = reply.content
+                                        gotReplyAfterStream = true
+                                    }
+                                }
+                                val msg = Message(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    userId = "cc-connect",
+                                    userName = ccUserName,
+                                    content = buildStructuredContent(),
+                                    timestamp = System.currentTimeMillis(),
+                                    type = MessageType.TEXT,
+                                    isTransient = true,
+                                    isIncremental = false,
+                                )
+                                chatServer.broadcast(msg)
+                            } else {
+                                val msg = Message(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    userId = "cc-connect",
+                                    userName = ccUserName,
+                                    content = reply.content,
+                                    timestamp = System.currentTimeMillis(),
+                                    type = MessageType.TEXT,
+                                )
+                                chatServer.broadcast(msg)
+                            }
                         }
                         "reply_stream" -> {
                             val stream = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                 com.silk.backend.ccconnect.ReplyStreamMessage.serializer(), text
                             )
-                            val isIncremental = stream.incremental ?: !stream.done
-                            val msg = Message(
-                                id = java.util.UUID.randomUUID().toString(),
-                                userId = "cc-connect",
-                                userName = "cc-connect (${hello.agentType})",
-                                content = stream.content,
-                                timestamp = System.currentTimeMillis(),
-                                type = MessageType.TEXT,
-                                isTransient = !stream.done,
-                                isIncremental = isIncremental,
-                            )
-                            chatServer.broadcast(msg)
+                            if (turnActive) {
+                                answerText = stream.content
+                                gotReplyAfterStream = false
+                                val msg = Message(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    userId = "cc-connect",
+                                    userName = ccUserName,
+                                    content = buildStructuredContent(),
+                                    timestamp = System.currentTimeMillis(),
+                                    type = MessageType.TEXT,
+                                    isTransient = true,
+                                    isIncremental = false,
+                                )
+                                chatServer.broadcast(msg)
+                            } else {
+                                val isIncremental = stream.incremental ?: !stream.done
+                                val msg = Message(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    userId = "cc-connect",
+                                    userName = ccUserName,
+                                    content = stream.content,
+                                    timestamp = System.currentTimeMillis(),
+                                    type = MessageType.TEXT,
+                                    isTransient = !stream.done,
+                                    isIncremental = isIncremental,
+                                )
+                                chatServer.broadcast(msg)
+                            }
                         }
                         "status" -> {
                             val status = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                 com.silk.backend.ccconnect.StatusMessage.serializer(), text
                             )
-                            val statusText = when (status.state) {
-                                "thinking" -> "Thinking..."
-                                "tool_use" -> "Using tool: ${status.tool ?: ""}${if (status.detail != null) " — ${status.detail}" else ""}"
-                                "idle" -> "CLEAR_STATUS"
-                                else -> status.state
+                            when (status.state) {
+                                "thinking" -> {
+                                    turnActive = true
+                                    thinkingParts.clear()
+                                    toolParts.clear()
+                                    answerText = ""
+                                    gotReplyAfterStream = false
+                                    chatServer.broadcastSystemStatus("Thinking...")
+                                }
+                                "tool_use" -> {
+                                    chatServer.broadcastSystemStatus(
+                                        "Using tool: ${status.tool ?: ""}${if (status.detail != null) " — ${status.detail}" else ""}"
+                                    )
+                                }
+                                "idle" -> {
+                                    if (turnActive) {
+                                        if (gotReplyAfterStream) answerText = answerText
+                                        val finalContent = buildStructuredContent()
+                                        if (finalContent.isNotBlank() &&
+                                            finalContent != "<!--CC_TURN-->\n") {
+                                            val msg = Message(
+                                                id = java.util.UUID.randomUUID().toString(),
+                                                userId = "cc-connect",
+                                                userName = ccUserName,
+                                                content = finalContent,
+                                                timestamp = System.currentTimeMillis(),
+                                                type = MessageType.TEXT,
+                                            )
+                                            chatServer.broadcast(msg)
+                                        }
+                                        turnActive = false
+                                        thinkingParts.clear()
+                                        toolParts.clear()
+                                        answerText = ""
+                                    }
+                                    chatServer.broadcastSystemStatus("CLEAR_STATUS")
+                                }
+                                else -> chatServer.broadcastSystemStatus(status.state)
                             }
-                            chatServer.broadcastSystemStatus(statusText)
                         }
                         "pong" -> { /* keepalive response */ }
                     }

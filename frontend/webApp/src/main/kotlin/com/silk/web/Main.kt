@@ -1724,11 +1724,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
 
             // 显示临时消息（如果有）
             transientMessage?.let { message ->
+                val isStructuredCcContent = message.content.contains("<!--CC_TURN-->")
                 if (
                     message.content.isNotBlank() &&
                     message.currentStep == null &&
                     message.totalSteps == null &&
-                    !isLikelyAgentStatusContent(message.content)
+                    (isStructuredCcContent || !isLikelyAgentStatusContent(message.content))
                 ) {
                     MessageItem(
                         message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
@@ -3858,16 +3859,20 @@ fun MarkdownContent(
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
     val safeHtml = remember(content, references) {
         try {
+            // Strip the cc-connect turn routing marker (invisible to users)
+            val cleanContent = content
+                .replace("<!--CC_TURN-->\n", "")
+                .replace("<!--CC_TURN-->", "")
             // Escape < followed by non-HTML-tag characters (e.g., "<1.2m" → "&lt;1.2m")
             // before any other processing, so DOMPurify won't strip them as invalid tags.
-            val htmlSafeContent = content.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
+            val htmlSafeContent = cleanContent.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
             // Convert thinking section (before <!--THINKING_END-->) to collapsible <details>
-            // Note: processing on raw `content` so thinking-text escaping doesn't double-escape
+            // Note: processing on raw `cleanContent` so thinking-text escaping doesn't double-escape
             val thinkingMarker = "<!--THINKING_END-->"
-            val withThinkingDetails = if (content.contains(thinkingMarker)) {
-                val idx = content.indexOf(thinkingMarker)
-                val thinkingText = content.substring(0, idx).trim()
-                val tailRaw = content.substring(idx + thinkingMarker.length).trimStart('\n').trim()
+            val withThinkingDetails = if (cleanContent.contains(thinkingMarker)) {
+                val idx = cleanContent.indexOf(thinkingMarker)
+                val thinkingText = cleanContent.substring(0, idx).trim()
+                val tailRaw = cleanContent.substring(idx + thinkingMarker.length).trimStart('\n').trim()
                 val tailEffective =
                     if (tailRaw.isBlank()) "*（本次仅有思考过程或未生成正文，请重试。）*" else tailRaw
                 val escaped = thinkingText
