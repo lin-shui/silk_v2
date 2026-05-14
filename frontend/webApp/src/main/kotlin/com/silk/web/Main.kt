@@ -4371,7 +4371,7 @@ private fun AITransientStatus() {
 }
 
 @Composable
-@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS")
+@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS", "CyclomaticComplexMethod", "UnusedParameter")
 @NoLiveLiterals
 fun AIMessageCard(
     message: Message,
@@ -4458,6 +4458,7 @@ private fun resolveRenderMode(message: Message): MessageRenderMode {
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "NestedBlockDepth") // large render-mode dispatch
 @Composable
 fun MessageItem(
     message: Message,
@@ -5078,7 +5079,9 @@ fun MessageItem(
                     }
                     else -> "选择: $action"
                 }
-            } catch (_: Exception) {
+            } catch (_: kotlinx.serialization.SerializationException) {
+                "卡片回复"
+            } catch (_: IllegalArgumentException) {
                 "卡片回复"
             }
             Div({

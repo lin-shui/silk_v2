@@ -964,6 +964,55 @@ object AgentRuntime {
         }
     }
 
+    private fun parseStructuredQuestions(
+        rawQuestions: kotlinx.serialization.json.JsonArray?,
+    ): List<StructuredQuestion>? = rawQuestions?.mapNotNull { el ->
+        when {
+            el is kotlinx.serialization.json.JsonObject -> {
+                val q = el["question"]?.jsonPrimitive?.contentOrNull ?: ""
+                val header = el["header"]?.jsonPrimitive?.contentOrNull ?: ""
+                val options = el["options"]?.jsonArray?.mapNotNull { optEl ->
+                    (optEl as? kotlinx.serialization.json.JsonObject)?.let { obj ->
+                        QuestionOption(
+                            label = obj["label"]?.jsonPrimitive?.contentOrNull ?: "",
+                            description = obj["description"]?.jsonPrimitive?.contentOrNull ?: "",
+                        )
+                    }
+                } ?: emptyList()
+                StructuredQuestion(question = q, header = header, options = options)
+            }
+            el is kotlinx.serialization.json.JsonPrimitive -> {
+                el.contentOrNull?.let { text -> StructuredQuestion(question = text) }
+            }
+            else -> null
+        }
+    }
+
+    private fun parseCardReplyAction(
+        reply: CardReplyPayload,
+        pending: PendingQuestion,
+    ): Pair<Int, String> {
+        val action = reply.action
+        return when {
+            action.startsWith("__opt__") -> {
+                val parts = action.removePrefix("__opt__").split("__", limit = 2)
+                val qi = parts.getOrNull(0)?.toIntOrNull() ?: 0
+                val answer = parts.getOrNull(1) ?: action
+                qi to answer
+            }
+            action.startsWith("__custom__") -> {
+                val qi = action.removePrefix("__custom__").toIntOrNull() ?: 0
+                val answer = reply.inputs["custom_answer_$qi"] ?: ""
+                qi to answer
+            }
+            else -> {
+                val currentIdx = (0 until pending.questions.size)
+                    .firstOrNull { it !in pending.answers } ?: 0
+                currentIdx to action
+            }
+        }
+    }
+
     private fun setupAcpHandlers(
         acp: AcpClient,
         acpSessionId: String,
@@ -982,30 +1031,9 @@ object AgentRuntime {
                 val requestId = notif.update["requestId"]?.let {
                     (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
                 }
-                val rawQuestions = notif.update["questions"]?.jsonArray
-
-                // Parse structured questions (same logic as AcpUpdateMapper)
-                val structuredQuestions = rawQuestions?.mapNotNull { el ->
-                    when {
-                        el is kotlinx.serialization.json.JsonObject -> {
-                            val q = el["question"]?.jsonPrimitive?.contentOrNull ?: ""
-                            val header = el["header"]?.jsonPrimitive?.contentOrNull ?: ""
-                            val options = el["options"]?.jsonArray?.mapNotNull { optEl ->
-                                (optEl as? kotlinx.serialization.json.JsonObject)?.let { obj ->
-                                    QuestionOption(
-                                        label = obj["label"]?.jsonPrimitive?.contentOrNull ?: "",
-                                        description = obj["description"]?.jsonPrimitive?.contentOrNull ?: "",
-                                    )
-                                }
-                            } ?: emptyList()
-                            StructuredQuestion(question = q, header = header, options = options)
-                        }
-                        el is kotlinx.serialization.json.JsonPrimitive -> {
-                            el.contentOrNull?.let { text -> StructuredQuestion(question = text) }
-                        }
-                        else -> null
-                    }
-                }
+                val structuredQuestions = parseStructuredQuestions(
+                    notif.update["questions"]?.jsonArray,
+                )
 
                 if (requestId != null && !structuredQuestions.isNullOrEmpty()) {
                     session.pendingQuestion = PendingQuestion(requestId, structuredQuestions)
@@ -1013,7 +1041,6 @@ object AgentRuntime {
                         "[AgentRuntime] pendingQuestion set: requestId={}, questionCount={}",
                         requestId.take(8), structuredQuestions.size,
                     )
-                    // 注册卡片回复 handler
                     val cardId = "agent_question_$requestId"
                     CardReplyRouter.register(cardId, object : CardReplyHandler {
                         override suspend fun onCardReply(
@@ -1023,29 +1050,7 @@ object AgentRuntime {
                         ) {
                             val pending = session.pendingQuestion
                             if (pending == null || pending.requestId != requestId) return
-
-                            // Parse button value to extract question index and answer
-                            val action = reply.action
-                            val (questionIndex, answerText) = when {
-                                action.startsWith("__opt__") -> {
-                                    // Format: __opt__{qi}__{answerDisplay}
-                                    val parts = action.removePrefix("__opt__").split("__", limit = 2)
-                                    val qi = parts.getOrNull(0)?.toIntOrNull() ?: 0
-                                    val answer = parts.getOrNull(1) ?: action
-                                    qi to answer
-                                }
-                                action.startsWith("__custom__") -> {
-                                    val qi = action.removePrefix("__custom__").toIntOrNull() ?: 0
-                                    val answer = reply.inputs["custom_answer_$qi"] ?: ""
-                                    qi to answer
-                                }
-                                else -> {
-                                    // Legacy fallback: treat as answer to current question
-                                    val currentIdx = (0 until pending.questions.size)
-                                        .firstOrNull { it !in pending.answers } ?: 0
-                                    currentIdx to action
-                                }
-                            }
+                            val (questionIndex, answerText) = parseCardReplyAction(reply, pending)
                             handleQuestionReply(session, pending, questionIndex, answerText, broadcastFn)
                         }
                     })

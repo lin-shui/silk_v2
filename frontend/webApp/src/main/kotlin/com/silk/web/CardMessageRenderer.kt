@@ -1,9 +1,34 @@
 package com.silk.web
 
-import androidx.compose.runtime.*
-import org.jetbrains.compose.web.dom.*
-import org.jetbrains.compose.web.css.*
-import org.jetbrains.compose.web.attributes.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import org.jetbrains.compose.web.dom.Button
+import org.jetbrains.compose.web.dom.Div
+import org.jetbrains.compose.web.dom.Hr
+import org.jetbrains.compose.web.dom.Input
+import org.jetbrains.compose.web.dom.Span
+import org.jetbrains.compose.web.dom.Text
+import org.jetbrains.compose.web.dom.TextArea
+import org.jetbrains.compose.web.css.Color
+import org.jetbrains.compose.web.css.DisplayStyle
+import org.jetbrains.compose.web.css.backgroundColor
+import org.jetbrains.compose.web.css.borderRadius
+import org.jetbrains.compose.web.css.color
+import org.jetbrains.compose.web.css.display
+import org.jetbrains.compose.web.css.fontSize
+import org.jetbrains.compose.web.css.height
+import org.jetbrains.compose.web.css.marginBottom
+import org.jetbrains.compose.web.css.marginRight
+import org.jetbrains.compose.web.css.padding
+import org.jetbrains.compose.web.css.px
+import org.jetbrains.compose.web.css.width
+import org.jetbrains.compose.web.attributes.InputType
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.ChatClient
@@ -56,6 +81,52 @@ private val cardJson = Json { ignoreUnknownKeys = true }
 
 // ── Main Composable ──
 
+private fun buildCardReplyJson(
+    messageId: String,
+    buttonValue: String,
+    inputs: Map<String, String>,
+): String = buildJsonObject {
+    put("cardId", JsonPrimitive(messageId))
+    put("action", JsonPrimitive(buttonValue))
+    put("inputs", buildJsonObject {
+        inputs.forEach { (k, v) -> put(k, JsonPrimitive(v)) }
+    })
+}.toString()
+
+private fun shouldSkipSubmit(
+    buttonValue: String,
+    isDisabled: Boolean,
+    inputValues: Map<String, String>,
+): Boolean {
+    if (isDisabled) return true
+    if (buttonValue.startsWith("__custom__")) {
+        val qi = buttonValue.removePrefix("__custom__")
+        val customText = inputValues["custom_answer_$qi"] ?: ""
+        if (customText.isBlank()) return true
+    }
+    return false
+}
+
+private fun parseCard(content: String): CardContent? = try {
+    cardJson.decodeFromString<CardContent>(content)
+} catch (e: IllegalArgumentException) {
+    console.warn("Card parse failed: ${e.message}")
+    null
+} catch (e: kotlinx.serialization.SerializationException) {
+    console.warn("Card parse failed: ${e.message}")
+    null
+}
+
+private fun initInputDefaults(elements: List<CardElement>, inputValues: MutableMap<String, String>) {
+    elements.forEach { el ->
+        if ((el.tag == "text_input" || el.tag == "text_area") && el.name != null) {
+            if (!inputValues.containsKey(el.name)) {
+                inputValues[el.name] = el.defaultValue ?: ""
+            }
+        }
+    }
+}
+
 @Composable
 fun CardMessageRenderer(
     message: Message,
@@ -64,14 +135,7 @@ fun CardMessageRenderer(
     userName: String,
 ) {
     val scope = rememberCoroutineScope()
-
-    val card = remember(message.content) {
-        try {
-            cardJson.decodeFromString<CardContent>(message.content)
-        } catch (e: Exception) {
-            null
-        }
-    }
+    val card = remember(message.content) { parseCard(message.content) }
 
     if (card == null) {
         Div({ style { padding(8.px); color(Color("#999")) } }) {
@@ -80,26 +144,35 @@ fun CardMessageRenderer(
         return
     }
 
-    // Input field state
     val inputValues = remember { mutableStateMapOf<String, String>() }
-    LaunchedEffect(card) {
-        card.elements.forEach { el ->
-            if ((el.tag == "text_input" || el.tag == "text_area") && el.name != null) {
-                if (!inputValues.containsKey(el.name)) {
-                    inputValues[el.name] = el.defaultValue ?: ""
-                }
-            }
-        }
-    }
+    LaunchedEffect(card) { initInputDefaults(card.elements, inputValues) }
 
-    // Local disabled state: tracks the content hash at disable-time.
-    // When backend refreshes the card via action="edit" (multi-question advancing),
-    // message.content changes → disabledForContent no longer matches → auto-resets.
+    // When backend refreshes the card via action="edit", message.content changes → auto-resets
     var disabledForContent by remember { mutableStateOf<String?>(null) }
     val localDisabled = disabledForContent != null && disabledForContent == message.content
     val isDisabled = localDisabled || card.disabled
 
-    // Card outer frame
+    CardFrame(card, isDisabled) {
+        card.elements.forEach { element ->
+            CardBodyElement(element, isDisabled, inputValues) { buttonValue ->
+                if (shouldSkipSubmit(buttonValue, isDisabled, inputValues)) return@CardBodyElement
+                disabledForContent = message.content
+                val replyJson = buildCardReplyJson(message.id, buttonValue, inputValues.toMap())
+                scope.launch {
+                    chatClient.sendMessage(
+                        userId = currentUserId,
+                        userName = userName,
+                        content = replyJson,
+                        type = MessageType.CARD_REPLY,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CardFrame(card: CardContent, isDisabled: Boolean, body: @Composable () -> Unit) {
     Div({
         style {
             property("max-width", "80%")
@@ -111,7 +184,6 @@ fun CardMessageRenderer(
             marginBottom(8.px)
         }
     }) {
-        // Header
         Div({
             style {
                 property("background", templateToGradient(card.header.template))
@@ -123,49 +195,23 @@ fun CardMessageRenderer(
         }) {
             Text(card.header.title)
         }
+        Div({ style { padding(16.px) } }) { body() }
+    }
+}
 
-        // Body
-        Div({ style { padding(16.px) } }) {
-            card.elements.forEach { element ->
-                when (element.tag) {
-                    "text" -> CardTextElement(element)
-                    "divider" -> CardDividerElement()
-                    "button" -> CardButtonElement(
-                        element = element,
-                        disabled = isDisabled,
-                        onSubmit = { buttonValue ->
-                            if (isDisabled) return@CardButtonElement
-                            // Custom button with empty input — do nothing
-                            if (buttonValue.startsWith("__custom__")) {
-                                // Extract question index from value (e.g. "__custom__0" → "0")
-                                val qi = buttonValue.removePrefix("__custom__")
-                                val customText = inputValues["custom_answer_$qi"] ?: ""
-                                if (customText.isBlank()) return@CardButtonElement
-                            }
-                            disabledForContent = message.content
-                            val inputs = inputValues.toMap()
-                            val replyJson = buildJsonObject {
-                                put("cardId", JsonPrimitive(message.id))
-                                put("action", JsonPrimitive(buttonValue))
-                                put("inputs", buildJsonObject {
-                                    inputs.forEach { (k, v) -> put(k, JsonPrimitive(v)) }
-                                })
-                            }.toString()
-                            scope.launch {
-                                chatClient.sendMessage(
-                                    userId = currentUserId,
-                                    userName = userName,
-                                    content = replyJson,
-                                    type = MessageType.CARD_REPLY,
-                                )
-                            }
-                        }
-                    )
-                    "text_input" -> CardTextInputElement(element, isDisabled, inputValues)
-                    "text_area" -> CardTextAreaElement(element, isDisabled, inputValues)
-                }
-            }
-        }
+@Composable
+private fun CardBodyElement(
+    element: CardElement,
+    isDisabled: Boolean,
+    inputValues: MutableMap<String, String>,
+    onSubmit: (String) -> Unit,
+) {
+    when (element.tag) {
+        "text" -> CardTextElement(element)
+        "divider" -> CardDividerElement()
+        "button" -> CardButtonElement(element, isDisabled, onSubmit)
+        "text_input" -> CardTextInputElement(element, isDisabled, inputValues)
+        "text_area" -> CardTextAreaElement(element, isDisabled, inputValues)
     }
 }
 
@@ -195,42 +241,40 @@ private fun CardDividerElement() {
     })
 }
 
+private data class ButtonStyle(
+    val bgColor: String,
+    val textColor: String,
+    val border: String,
+    val fontWeight: String?,
+)
+
+private fun resolveButtonStyle(type: String?, disabled: Boolean): ButtonStyle {
+    if (disabled) return ButtonStyle("#f0f0f0", "#bbb", "1px solid #eee", null)
+    return when (type) {
+        "primary" -> ButtonStyle("#C9A86C", "white", "none", "500")
+        "danger" -> ButtonStyle("#e74c3c", "white", "none", "500")
+        else -> ButtonStyle("white", "#666", "1px solid #ddd", null)
+    }
+}
+
 @Composable
 private fun CardButtonElement(
     element: CardElement,
     disabled: Boolean,
     onSubmit: (String) -> Unit,
 ) {
-    val isDefaultStyle = element.type == null || element.type == "default"
-    val bgColor = when {
-        disabled -> "#f0f0f0"
-        element.type == "primary" -> "#C9A86C"
-        element.type == "danger" -> "#e74c3c"
-        else -> "white"
-    }
-    val textColor = when {
-        disabled -> "#bbb"
-        element.type == "primary" -> "white"
-        element.type == "danger" -> "white"
-        else -> "#666"
-    }
+    val style = resolveButtonStyle(element.type, disabled)
 
     Button({
         style {
             padding(8.px, 20.px)
             property("border-radius", "6px")
-            if (isDefaultStyle && !disabled) {
-                property("border", "1px solid #ddd")
-            } else if (disabled) {
-                property("border", "1px solid #eee")
-            } else {
-                property("border", "none")
-            }
-            backgroundColor(Color(bgColor))
-            color(Color(textColor))
+            property("border", style.border)
+            backgroundColor(Color(style.bgColor))
+            color(Color(style.textColor))
             fontSize(14.px)
             property("cursor", if (disabled) "not-allowed" else "pointer")
-            if (!isDefaultStyle && !disabled) property("font-weight", "500")
+            style.fontWeight?.let { property("font-weight", it) }
             marginRight(8.px)
             marginBottom(8.px)
         }

@@ -222,7 +222,7 @@ object AgentMessages {
             }
         } else {
             questions.forEachIndexed { i, sq ->
-                appendLine("${i + 1}. ${sq.question}")
+                appendLine("问题 ${i + 1}/${questions.size}: ${sq.question}")
             }
         }
         appendLine()

@@ -222,8 +222,8 @@ class AcpUpdateMapperTest {
         assertNotNull(msg)
         assertEquals(MessageType.CARD, msg.type)
         // Card JSON should contain both numbered questions
-        assertTrue(msg.content.contains("1."))
-        assertTrue(msg.content.contains("2."))
+        assertTrue(msg.content.contains("问题 1/2"))
+        assertTrue(msg.content.contains("问题 2/2"))
         // Should contain button elements for each question
         assertTrue(msg.content.contains("问题一？"))
         assertTrue(msg.content.contains("问题二？"))
