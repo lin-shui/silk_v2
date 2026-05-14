@@ -67,8 +67,11 @@ import com.silk.shared.models.SILK_AGENT_USER_ID
 import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import com.silk.shared.utils.formatMessageTimestamp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -303,12 +306,8 @@ fun ChatScreen(appState: AppState) {
     // ✅ AI 消息展开状态管理 - 使用 Map 存储每个消息的展开状态
     val aiMessageExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
     
-    // ✅ 当展开/收起 AI 消息时，滚动到该消息位置
     val scopeForScroll = rememberCoroutineScope()
-    fun onAIExpandChange(messageId: String, isExpanded: Boolean) {
-        aiMessageExpandedStates[messageId] = isExpanded
-        println("🤖 AI消息展开状态变化: messageId=$messageId, isExpanded=$isExpanded")
-    }
+    var expandScrollJob by remember { mutableStateOf<Job?>(null) }
     
     // 显示连接状态
     LaunchedEffect(connectionState) {
@@ -1038,30 +1037,62 @@ fun ChatScreen(appState: AppState) {
                             // AI 消息展开状态（默认收起，只有长内容才需要展开/收起功能）
                             isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
                             onAIExpandChange = { messageId, isExpanded ->
-                                aiMessageExpandedStates[messageId] = isExpanded
+                                val reversedMessages = messages.reversed()
+                                val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                val itemOffset = (if (transientMessage != null) 1 else 0) +
+                                    (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                val targetIdx = if (idx >= 0) itemOffset + idx else -1
+
                                 if (isExpanded) {
-                                    val reversedMessages = messages.reversed()
-                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
-                                    if (idx >= 0) {
-                                        scopeForScroll.launch {
+                                    aiMessageExpandedStates[messageId] = true
+                                    if (targetIdx >= 0) {
+                                        expandScrollJob?.cancel()
+                                        expandScrollJob = scopeForScroll.launch {
                                             kotlinx.coroutines.delay(80)
-                                            val offset = (if (transientMessage != null) 1 else 0) +
-                                                (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
-                                            // scrollToItem with reverseLayout=true puts item at bottom of viewport;
-                                            // scroll one item "below" (lower index) so the target appears near the top
-                                            val targetIdx = offset + idx
-                                            listState.scrollToItem((targetIdx - 1).coerceAtLeast(0))
+                                            listState.scrollToItem(targetIdx, 0)
+
+                                            var prevSize = listState.layoutInfo.visibleItemsInfo
+                                                .firstOrNull { it.index == targetIdx }?.size ?: 0
+                                            snapshotFlow {
+                                                listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull { it.index == targetIdx }?.size ?: 0
+                                            }
+                                            .distinctUntilChanged()
+                                            .collect { size ->
+                                                if (size > 0 && prevSize > 0 && size > prevSize) {
+                                                    listState.scroll { scrollBy((size - prevSize).toFloat()) }
+                                                }
+                                                if (size > 0) prevSize = size
+                                            }
                                         }
+                                    }
+                                } else {
+                                    expandScrollJob?.cancel()
+                                    expandScrollJob = null
+                                    if (targetIdx >= 0) {
+                                        scopeForScroll.launch {
+                                            // Reset scroll offset to 0 BEFORE collapsing,
+                                            // otherwise the large offset from expand compensation
+                                            // exceeds the collapsed item height, causing LazyColumn
+                                            // to jump to a different item.
+                                            listState.scrollToItem(targetIdx, 0)
+                                            aiMessageExpandedStates[messageId] = false
+                                        }
+                                    } else {
+                                        aiMessageExpandedStates[messageId] = false
                                     }
                                 }
                             },
                             onLongContentCollapsed = { messageId ->
+                                expandScrollJob?.cancel()
                                 val reversedMessages = messages.reversed()
                                 val idx = reversedMessages.indexOfFirst { it.id == messageId }
                                 if (idx >= 0) {
                                     scopeForScroll.launch {
                                         kotlinx.coroutines.delay(80)
-                                        listState.scrollToItem(idx)
+                                        val itemOffset = (if (transientMessage != null) 1 else 0) +
+                                            (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                        listState.scrollToItem(itemOffset + idx)
                                     }
                                 }
                             },
