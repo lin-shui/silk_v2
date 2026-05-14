@@ -2274,7 +2274,7 @@ fun Application.configureRouting() {
             var answerText = ""
             var gotReplyAfterStream = false
 
-            fun buildStructuredContent(): String {
+            fun buildStructuredContent(collapseTools: Boolean = false): String {
                 val sb = StringBuilder()
                 sb.append("<!--CC_TURN-->\n")
 
@@ -2292,7 +2292,11 @@ fun Application.configureRouting() {
 
                 if (toolParts.isNotEmpty()) {
                     sb.append(toolParts.joinToString("\n\n"))
-                    if (answerText.isNotEmpty()) sb.append("\n\n---\n\n")
+                    if (collapseTools) {
+                        sb.append("\n<!--TOOLS_END-->\n\n")
+                    } else if (answerText.isNotEmpty()) {
+                        sb.append("\n\n---\n\n")
+                    }
                 }
 
                 if (answerText.isNotEmpty()) {
@@ -2400,8 +2404,7 @@ fun Application.configureRouting() {
                                 }
                                 "idle" -> {
                                     if (turnActive) {
-                                        if (gotReplyAfterStream) answerText = answerText
-                                        val finalContent = buildStructuredContent()
+                                        val finalContent = buildStructuredContent(collapseTools = true)
                                         if (finalContent.isNotBlank() &&
                                             finalContent != "<!--CC_TURN-->\n") {
                                             val msg = Message(

@@ -3887,8 +3887,35 @@ fun MarkdownContent(
             } else {
                 htmlSafeContent
             }
+            // Convert tool-call section (before <!--TOOLS_END-->) to collapsible <details>
+            val toolsMarker = "<!--TOOLS_END-->"
+            val withToolsDetails = if (withThinkingDetails.contains(toolsMarker)) {
+                val tIdx = withThinkingDetails.indexOf(toolsMarker)
+                val beforeTools = withThinkingDetails.substring(0, tIdx)
+                val afterTools = withThinkingDetails.substring(tIdx + toolsMarker.length).trimStart('\n').trim()
+                val detailsEnd = beforeTools.lastIndexOf("</details>")
+                val (prefix, toolsRaw) = if (detailsEnd >= 0) {
+                    val cutPoint = detailsEnd + "</details>".length
+                    Pair(beforeTools.substring(0, cutPoint), beforeTools.substring(cutPoint).trim())
+                } else {
+                    Pair("", beforeTools.trim())
+                }
+                val escapedTools = toolsRaw
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                    .replace("\n", "<br>")
+                val toolsDetails = "<details class=\"silk-thinking-details\">\n" +
+                    "<summary>🔧 工具调用过程</summary>\n" +
+                    escapedTools + "\n</details>"
+                val answerEffective = if (afterTools.isBlank()) "" else "\n\n$afterTools"
+                if (prefix.isNotBlank()) "$prefix\n\n$toolsDetails$answerEffective"
+                else "$toolsDetails$answerEffective"
+            } else {
+                withThinkingDetails
+            }
             // Collapse excessive blank lines (3+ → 1 blank line)
-            val reducedBlanks = withThinkingDetails.replace(Regex("\\n{3,}"), "\n\n")
+            val reducedBlanks = withToolsDetails.replace(Regex("\\n{3,}"), "\n\n")
             // Normalize headings missing space after # (e.g., "##一、" → "## 一、")
             val normalizedHeadings = reducedBlanks.replace(
                 Regex("^(#{1,6})([^#\\s])", RegexOption.MULTILINE),
