@@ -334,6 +334,23 @@ class ChatServer(
             }
         }
         
+        // ==================== cc-connect 路由 ====================
+        // cc-connect 群组：用户消息转发给 cc-connect 适配器，跳过 Silk AI / AgentRuntime
+        val ccGroupId = sessionName.removePrefix("group_")
+        if (com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId)
+            && message.type == MessageType.TEXT && !message.isTransient
+            && message.userId != "cc-connect" && message.userId != "system"
+        ) {
+            val userMsg = com.silk.backend.ccconnect.UserMessage(
+                content = message.content,
+                userId = message.userId,
+                userName = message.userName,
+                msgId = message.id,
+            )
+            com.silk.backend.ccconnect.CcConnectRegistry.forwardToAdapter(ccGroupId, userMsg)
+            return
+        }
+
         // ==================== Claude Code 模式拦截 ====================
         // 专属对话 [Silk] 必须走下方 Silk AI（DirectModelAgent）；否则用户若在其它群激活过 /cc，
         // 此处会把「你好」当成 CC prompt，Bridge 未就绪时表现为空白回复。

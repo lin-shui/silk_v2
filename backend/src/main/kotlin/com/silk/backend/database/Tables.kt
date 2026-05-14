@@ -79,3 +79,16 @@ object UserSettingsTable : Table("user_settings") {
     
     override val primaryKey = PrimaryKey(userId)
 }
+
+/**
+ * CcConnectTokens 表：cc-connect 平台插件连接 token
+ * 每个 token 绑定一个群组，cc-connect 通过 token 认证并加入对应群组
+ */
+object CcConnectTokens : Table("ccconnect_tokens") {
+    val token = varchar("token", 64).uniqueIndex()
+    val groupId = varchar("group_id", 128)
+    val label = varchar("label", 256)
+    val createdAt = datetime("created_at").default(LocalDateTime.now())
+
+    override val primaryKey = PrimaryKey(token)
+}

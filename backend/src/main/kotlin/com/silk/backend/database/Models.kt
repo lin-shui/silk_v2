@@ -113,7 +113,8 @@ data class AuthResponse(
 @Serializable
 data class CreateGroupRequest(
     val userId: String,
-    val groupName: String // 用户输入的群组名称
+    val groupName: String,
+    val type: String? = null, // null = normal group, "ccconnect" = cc-connect group
 )
 
 /**
@@ -157,7 +158,8 @@ data class GroupResponse(
     val success: Boolean,
     val message: String,
     val group: Group? = null,
-    val groups: List<Group>? = null
+    val groups: List<Group>? = null,
+    val ccConnectToken: String? = null,
 )
 
 // ==================== 联系人相关模型 ====================

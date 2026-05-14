@@ -27,15 +27,15 @@ object DatabaseFactory {
         
         transaction(database) {
             // 创建所有表
-            SchemaUtils.create(Users, Groups, GroupMembers, Contacts, ContactRequests, UserSettingsTable)
-            // 自动添加新列，保留已有行数据，避免升级后登录/群组/设置丢失。
+            SchemaUtils.create(Users, Groups, GroupMembers, Contacts, ContactRequests, UserSettingsTable, CcConnectTokens)
             SchemaUtils.createMissingTablesAndColumns(
                 Users,
                 Groups,
                 GroupMembers,
                 Contacts,
                 ContactRequests,
-                UserSettingsTable
+                UserSettingsTable,
+                CcConnectTokens
             )
         }
         

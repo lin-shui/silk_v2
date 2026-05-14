@@ -969,6 +969,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
+    // cc-connect status for this group
+    var ccConnectInfo by remember(group.id) { mutableStateOf<CcConnectTokenInfo?>(null) }
+    LaunchedEffect(group.id) {
+        val info = ApiClient.getCcConnectTokenInfo(group.id)
+        if (info != null && info.token != null) ccConnectInfo = info
+    }
+
     // 动态生成 WebSocket URL，兼容同源代理与本地分端口开发
     val wsUrl = remember {
         val url = backendWsOrigin()
@@ -1184,9 +1191,37 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 style { 
                     property("flex", "1") 
                     property("letter-spacing", "2px")
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "8px")
                 } 
             }) {
                 Text(group.name)
+                if (ccConnectInfo != null) {
+                    Span({
+                        style {
+                            fontSize(10.px)
+                            padding(2.px, 8.px)
+                            borderRadius(4.px)
+                            property("font-weight", "600")
+                            property("letter-spacing", "0.5px")
+                            if (ccConnectInfo?.connected == true) {
+                                backgroundColor(Color("#E8F5E9"))
+                                color(Color("#2E7D32"))
+                            } else {
+                                backgroundColor(Color("#FFF3E0"))
+                                color(Color("#E65100"))
+                            }
+                        }
+                    }) {
+                        val label = if (ccConnectInfo?.connected == true) {
+                            "cc-connect (${ccConnectInfo?.agentType ?: "agent"})"
+                        } else {
+                            "cc-connect (offline)"
+                        }
+                        Text(label)
+                    }
+                }
             }
             
             // 右侧按钮组

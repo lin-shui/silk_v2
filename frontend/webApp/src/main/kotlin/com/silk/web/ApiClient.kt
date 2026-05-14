@@ -57,7 +57,17 @@ data class GroupResponse(
     val success: Boolean,
     val message: String,
     val group: Group? = null,
-    val groups: List<Group>? = null
+    val groups: List<Group>? = null,
+    val ccConnectToken: String? = null,
+)
+
+@Serializable
+data class CcConnectTokenInfo(
+    val success: Boolean = false,
+    val token: String? = null,
+    val connected: Boolean = false,
+    val agentType: String? = null,
+    val project: String? = null,
 )
 
 // ==================== 联系人相关数据模型 ====================
@@ -307,9 +317,13 @@ object ApiClient {
         }
     }
     
-    suspend fun createGroup(userId: String, groupName: String): GroupResponse {
+    suspend fun createGroup(userId: String, groupName: String, type: String? = null): GroupResponse {
         return try {
-            val body = """{"userId":"$userId","groupName":"$groupName"}"""
+            val body = if (type != null) {
+                """{"userId":"$userId","groupName":"$groupName","type":"$type"}"""
+            } else {
+                """{"userId":"$userId","groupName":"$groupName"}"""
+            }
             val response = post("/groups/create", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
@@ -326,6 +340,27 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("加入群组失败:", e)
             GroupResponse(false, "网络错误")
+        }
+    }
+
+    suspend fun getCcConnectTokenInfo(groupId: String): CcConnectTokenInfo? {
+        return try {
+            val response = get("/api/ccconnect/groups/$groupId/token-info")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取cc-connect信息失败:", e)
+            null
+        }
+    }
+
+    suspend fun regenerateCcConnectToken(groupId: String): String? {
+        return try {
+            val response = post("/api/ccconnect/groups/$groupId/regenerate-token", "{}")
+            val parsed = jsonParser.decodeFromString<CcConnectTokenInfo>(response)
+            parsed.token
+        } catch (e: Exception) {
+            console.log("重新生成token失败:", e)
+            null
         }
     }
     

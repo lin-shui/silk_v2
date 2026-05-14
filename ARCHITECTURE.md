@@ -55,6 +55,24 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | Harmony | `frontend/harmonyApp/` | 独立 ArkTS 应用，含 Todo/Workflow/KB/Audio Duplex |
 | External bridges | `cc_bridge/`, `codex_bridge/`, `feishu_bot/` | Python 服务，不在 Gradle 主工程内 |
 
+## cc-connect Integration
+
+Silk 支持通过 [cc-connect](https://github.com/chenhg5/cc-connect) 连接外部 AI 编程代理（Claude Code / Cursor / Gemini CLI / Codex 等）。
+
+**架构**：cc-connect 通过原生 silk 平台插件 (`platform/silk/silk.go`) 连接到 Silk 后端的 `/ccconnect-bridge` WebSocket 端点。不需要中间适配器进程。
+
+**用户流程**：
+1. Silk 前端创建 cc-connect 群组 → 后端生成 token
+2. 将 token 贴入 cc-connect 的 `config.toml`
+3. cc-connect 启动后自动连接 Silk 对应群组
+4. 群组内的用户消息自动路由到 cc-connect 代理
+
+**代码面**：
+- 后端：`ccconnect/CcConnectTokenRepository.kt`（token 存储）、`ccconnect/CcConnectRegistry.kt`（连接注册）、`ccconnect/CcConnectProtocol.kt`（协议数据类）
+- 路由：`Routing.kt` → `/ccconnect-bridge` WebSocket + token 管理 API
+- 消息路由：`WebSocketConfig.kt` → `CcConnectRegistry.isConnected()` 检查优先于 AgentRuntime/Silk AI
+- 插件：`cc-connect-plugin/platform/silk/silk.go`（Go，需合入 cc-connect 仓库）
+
 ## Context Docs
 
 - 上下文维护契约： [docs/context/INDEX.md](docs/context/INDEX.md)

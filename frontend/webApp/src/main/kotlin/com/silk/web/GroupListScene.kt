@@ -85,6 +85,9 @@ fun GroupListScene(appState: WebAppState) {
     // ✅ 未读消息计数
     var unreadCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     
+    // cc-connect status: groupId -> CcConnectTokenInfo
+    var ccConnectStatus by remember { mutableStateOf<Map<String, CcConnectTokenInfo>>(emptyMap()) }
+    
     // Language and strings
     var userLanguage by remember { mutableStateOf<Language>(Language.CHINESE) }
     val strings = getStrings(userLanguage)
@@ -138,6 +141,16 @@ fun GroupListScene(appState: WebAppState) {
                             console.log("✅ 未读消息: ", unreadCounts)
                         }
                     }
+                    
+                    // 加载 cc-connect 连接状态
+                    val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
+                    groups.forEach { group ->
+                        val info = ApiClient.getCcConnectTokenInfo(group.id)
+                        if (info != null && info.token != null) {
+                            statusMap[group.id] = info
+                        }
+                    }
+                    ccConnectStatus = statusMap
                 } else {
                     console.log("⚠️ 加载群组失败:", response?.message)
                 }
@@ -609,12 +622,14 @@ fun GroupListScene(appState: WebAppState) {
                     groups.forEach { group ->
                         val isSelected = group.id in selectedGroups
                         val unreadCount = unreadCounts[group.id] ?: 0
+                        val ccInfo = ccConnectStatus[group.id]
                         GroupCard(
                             group = group,
                             isHost = group.hostId == appState.currentUser?.id,
                             isDeleteMode = isDeleteMode,
                             isSelected = isSelected,
                             unreadCount = unreadCount,
+                            ccConnectInfo = ccInfo,
                             strings = strings,
                             onClick = { 
                                 if (isDeleteMode) {
@@ -687,8 +702,8 @@ fun GroupListScene(appState: WebAppState) {
                 onDismiss = { showCreateDialog = false },
                 onGroupCreated = { newGroup ->
                     groups = groups + newGroup
-                    showCreateDialog = false
-                }
+                },
+                onComplete = { showCreateDialog = false }
             )
         }
         
@@ -757,11 +772,14 @@ fun GroupCard(
     isDeleteMode: Boolean = false,
     isSelected: Boolean = false,
     unreadCount: Int = 0,
+    ccConnectInfo: CcConnectTokenInfo? = null,
     strings: Strings,
     onClick: () -> Unit,
     onMembersClick: (() -> Unit)? = null
 ) {
     val hasUnread = unreadCount > 0
+    val isCcConnect = ccConnectInfo != null
+    val ccConnected = ccConnectInfo?.connected == true
     
     Div({
         style {
@@ -847,6 +865,31 @@ fun GroupCard(
                 }) {
                     Text("[${group.invitationCode}]")
                 }
+                
+                // cc-connect status badge
+                if (isCcConnect) {
+                    Span({
+                        style {
+                            fontSize(10.px)
+                            padding(2.px, 6.px)
+                            borderRadius(4.px)
+                            property("font-weight", "600")
+                            property("letter-spacing", "0.5px")
+                            if (ccConnected) {
+                                backgroundColor(Color("#E8F5E9"))
+                                color(Color("#2E7D32"))
+                            } else {
+                                backgroundColor(Color("#FFF3E0"))
+                                color(Color("#E65100"))
+                            }
+                        }
+                        if (ccConnected) {
+                            title("${ccConnectInfo?.agentType ?: "agent"} — ${ccConnectInfo?.project ?: ""}")
+                        }
+                    }) {
+                        Text(if (ccConnected) "cc" else "cc (offline)")
+                    }
+                }
             }
             
             // 右侧按钮区域
@@ -922,17 +965,20 @@ fun CreateGroupDialog(
     appState: WebAppState,
     strings: Strings,
     onDismiss: () -> Unit,
-    onGroupCreated: (Group) -> Unit
+    onGroupCreated: (Group) -> Unit,
+    onComplete: () -> Unit = onDismiss,
 ) {
     val scope = rememberCoroutineScope()
     var groupName by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
+    var isCcConnect by remember { mutableStateOf(false) }
+    var generatedToken by remember { mutableStateOf<String?>(null) }
+    var tokenCopied by remember { mutableStateOf(false) }
     
     val userName = appState.currentUser?.fullName ?: ""
     val previewName = if (groupName.isNotBlank()) "$userName's $groupName" else ""
     
-    // 对话框遮罩
     Div({
         style {
             position(Position.Fixed)
@@ -947,7 +993,7 @@ fun CreateGroupDialog(
             property("z-index", "1000")
             property("backdrop-filter", "blur(4px)")
         }
-        onClick { onDismiss() }
+        onClick { if (generatedToken == null) onDismiss() }
     }) {
         Div({
             style {
@@ -961,141 +1007,223 @@ fun CreateGroupDialog(
             }
             onClick { it.stopPropagation() }
         }) {
-            H3({ 
-                style { 
-                    marginTop(0.px)
-                    marginBottom(24.px)
-                    color(Color(SilkColors.textPrimary))
-                    property("font-weight", "600")
-                    property("letter-spacing", "1px")
-                } 
-            }) {
-                Text(strings.createGroupTitle)
-            }
-            
-            Div({ style { marginBottom(20.px) } }) {
-                Label { 
-                    Span({
-                        style {
-                            fontSize(13.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("letter-spacing", "0.5px")
-                        }
-                    }) {
-                        Text(strings.groupName)
-                    }
-                }
-                Input(InputType.Text) {
-                    value(groupName)
-                    onInput { groupName = it.value; errorMessage = "" }
-                    style {
-                        width(100.percent)
-                        padding(14.px)
-                        fontSize(14.px)
-                        marginTop(8.px)
-                        border { 
-                            width(1.px)
-                            style(LineStyle.Solid)
-                            color(Color(SilkColors.border)) 
-                        }
-                        borderRadius(8.px)
-                        property("box-sizing", "border-box")
-                        property("background", SilkColors.surface)
-                        property("color", SilkColors.textPrimary)
-                        fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                    }
-                }
-            }
-            
-            if (previewName.isNotEmpty()) {
-                Div({
-                    style {
-                        fontSize(13.px)
-                        color(Color(SilkColors.textSecondary))
-                        marginBottom(20.px)
-                        property("font-style", "italic")
-                    }
-                }) {
-                    Text("${strings.fullName}: $previewName")
-                }
-            }
-            
-            if (errorMessage.isNotEmpty()) {
-                Div({ 
+            if (generatedToken != null) {
+                // Token display phase
+                H3({ 
                     style { 
-                        color(Color(SilkColors.error))
-                        fontSize(13.px)
-                        marginBottom(20.px)
-                        padding(12.px)
-                        backgroundColor(Color("#FDF5F5"))
-                        borderRadius(8.px)
+                        marginTop(0.px); marginBottom(16.px)
+                        color(Color(SilkColors.textPrimary))
+                        property("font-weight", "600")
                     } 
-                }) {
-                    Text(errorMessage)
+                }) { Text("cc-connect Token") }
+
+                Div({ style {
+                    padding(16.px); borderRadius(8.px)
+                    property("background", SilkColors.surface)
+                    property("border", "1px solid ${SilkColors.border}")
+                    marginBottom(16.px)
+                    property("word-break", "break-all")
+                    fontFamily("monospace"); fontSize(14.px)
+                    color(Color(SilkColors.textPrimary))
+                } }) { Text(generatedToken!!) }
+
+                Div({ style {
+                    fontSize(13.px); color(Color(SilkColors.textSecondary))
+                    marginBottom(16.px); property("line-height", "1.6")
+                } }) {
+                    Text("Paste this token into cc-connect's config.toml:")
+                    Div({ style {
+                        fontSize(12.px); padding(12.px); borderRadius(6.px)
+                        property("background", SilkColors.surface)
+                        property("border", "1px solid ${SilkColors.border}")
+                        property("overflow-x", "auto")
+                        color(Color(SilkColors.textPrimary))
+                        fontFamily("monospace")
+                        property("white-space", "pre")
+                        marginTop(8.px)
+                    } }) {
+                        Text("""[[projects.platforms]]
+type = "silk"
+[projects.platforms.options]
+server = "wss://your-server:15003/ccconnect-bridge"
+token  = "${generatedToken}"
+""")
+                    }
                 }
-            }
-            
-            Div({
-                style {
+
+                Div({ style {
                     display(DisplayStyle.Flex)
                     justifyContent(JustifyContent.FlexEnd)
                     property("gap", "12px")
+                } }) {
+                    Button({
+                        style {
+                            padding(12.px, 20.px)
+                            backgroundColor(Color(if (tokenCopied) "#4CAF50" else SilkColors.secondary))
+                            color(Color(if (tokenCopied) "white" else SilkColors.textPrimary))
+                            border { width(0.px) }; borderRadius(8.px)
+                            property("cursor", "pointer"); fontSize(14.px)
+                        }
+                        onClick {
+                            kotlinx.browser.window.navigator.clipboard.writeText(generatedToken!!)
+                            tokenCopied = true
+                        }
+                    }) { Text(if (tokenCopied) "Copied!" else "Copy Token") }
+                    Button({
+                        style {
+                            padding(12.px, 20.px)
+                            property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                            color(Color.white); border { width(0.px) }; borderRadius(8.px)
+                            property("cursor", "pointer"); fontSize(14.px); property("font-weight", "600")
+                        }
+                        onClick { onComplete() }
+                    }) { Text("Done") }
                 }
-            }) {
-                Button({
-                    style {
-                        padding(12.px, 20.px)
-                        backgroundColor(Color(SilkColors.secondary))
+            } else {
+                // Creation form phase
+                H3({ 
+                    style { 
+                        marginTop(0.px); marginBottom(24.px)
                         color(Color(SilkColors.textPrimary))
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        fontSize(14.px)
-                        property("font-weight", "500")
+                        property("font-weight", "600")
+                        property("letter-spacing", "1px")
+                    } 
+                }) { Text(strings.createGroupTitle) }
+
+                // Group type selector
+                Div({ style { marginBottom(20.px) } }) {
+                    Span({ style { fontSize(13.px); color(Color(SilkColors.textSecondary)) } }) {
+                        Text("Type")
                     }
-                    onClick { onDismiss() }
-                }) {
-                    Text(strings.cancelButton)
+                    Div({ style { display(DisplayStyle.Flex); property("gap", "8px"); marginTop(8.px) } }) {
+                        Button({
+                            style {
+                                padding(8.px, 16.px); borderRadius(6.px); fontSize(13.px)
+                                property("cursor", "pointer")
+                                if (!isCcConnect) {
+                                    property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                                    color(Color.white); border { width(0.px) }
+                                } else {
+                                    backgroundColor(Color(SilkColors.surface))
+                                    color(Color(SilkColors.textPrimary))
+                                    property("border", "1px solid ${SilkColors.border}")
+                                }
+                            }
+                            onClick { isCcConnect = false }
+                        }) { Text("Normal") }
+                        Button({
+                            style {
+                                padding(8.px, 16.px); borderRadius(6.px); fontSize(13.px)
+                                property("cursor", "pointer")
+                                if (isCcConnect) {
+                                    property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                                    color(Color.white); border { width(0.px) }
+                                } else {
+                                    backgroundColor(Color(SilkColors.surface))
+                                    color(Color(SilkColors.textPrimary))
+                                    property("border", "1px solid ${SilkColors.border}")
+                                }
+                            }
+                            onClick { isCcConnect = true }
+                        }) { Text("cc-connect") }
+                    }
+                }
+
+                Div({ style { marginBottom(20.px) } }) {
+                    Label { 
+                        Span({ style { fontSize(13.px); color(Color(SilkColors.textSecondary)); property("letter-spacing", "0.5px") } }) {
+                            Text(strings.groupName)
+                        }
+                    }
+                    Input(InputType.Text) {
+                        value(groupName)
+                        onInput { groupName = it.value; errorMessage = "" }
+                        style {
+                            width(100.percent); padding(14.px); fontSize(14.px); marginTop(8.px)
+                            border { width(1.px); style(LineStyle.Solid); color(Color(SilkColors.border)) }
+                            borderRadius(8.px)
+                            property("box-sizing", "border-box")
+                            property("background", SilkColors.surface)
+                            property("color", SilkColors.textPrimary)
+                            fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
+                        }
+                    }
                 }
                 
-                Button({
-                    style {
-                        padding(12.px, 20.px)
-                        property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", if (isLoading || groupName.isBlank()) "not-allowed" else "pointer")
-                        property("opacity", if (isLoading || groupName.isBlank()) "0.6" else "1")
-                        fontSize(14.px)
-                        property("font-weight", "600")
-                        property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.25)")
+                if (previewName.isNotEmpty() && !isCcConnect) {
+                    Div({ style { fontSize(13.px); color(Color(SilkColors.textSecondary)); marginBottom(20.px); property("font-style", "italic") } }) {
+                        Text("${strings.fullName}: $previewName")
                     }
-                    onClick {
-                        if (!isLoading && groupName.isNotBlank()) {
-                            scope.launch {
-                                isLoading = true
-                                try {
-                                    val response = appState.currentUser?.let { user ->
-                                        ApiClient.createGroup(user.id, groupName)
+                }
+
+                if (isCcConnect) {
+                    Div({ style {
+                        fontSize(12.px); color(Color(SilkColors.textSecondary))
+                        marginBottom(16.px); padding(12.px); borderRadius(8.px)
+                        property("background", SilkColors.surface)
+                        property("border", "1px solid ${SilkColors.border}")
+                        property("line-height", "1.5")
+                    } }) {
+                        Text("A token will be generated for connecting cc-connect to this group. Paste it into your cc-connect config.toml.")
+                    }
+                }
+                
+                if (errorMessage.isNotEmpty()) {
+                    Div({ style { 
+                        color(Color(SilkColors.error)); fontSize(13.px); marginBottom(20.px)
+                        padding(12.px); backgroundColor(Color("#FDF5F5")); borderRadius(8.px)
+                    } }) { Text(errorMessage) }
+                }
+                
+                Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd); property("gap", "12px") } }) {
+                    Button({
+                        style {
+                            padding(12.px, 20.px); backgroundColor(Color(SilkColors.secondary))
+                            color(Color(SilkColors.textPrimary)); border { width(0.px) }; borderRadius(8.px)
+                            property("cursor", "pointer"); fontSize(14.px); property("font-weight", "500")
+                        }
+                        onClick { onDismiss() }
+                    }) { Text(strings.cancelButton) }
+                    
+                    Button({
+                        style {
+                            padding(12.px, 20.px)
+                            property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                            color(Color.white); border { width(0.px) }; borderRadius(8.px)
+                            property("cursor", if (isLoading || groupName.isBlank()) "not-allowed" else "pointer")
+                            property("opacity", if (isLoading || groupName.isBlank()) "0.6" else "1")
+                            fontSize(14.px); property("font-weight", "600")
+                            property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.25)")
+                        }
+                        onClick {
+                            if (!isLoading && groupName.isNotBlank()) {
+                                scope.launch {
+                                    isLoading = true
+                                    try {
+                                        val type = if (isCcConnect) "ccconnect" else null
+                                        val response = appState.currentUser?.let { user ->
+                                            ApiClient.createGroup(user.id, groupName, type)
+                                        }
+                                        
+                                        if (response != null && response.success && response.group != null) {
+                                            onGroupCreated(response.group)
+                                            if (isCcConnect && response.ccConnectToken != null) {
+                                                generatedToken = response.ccConnectToken
+                                            } else {
+                                                onComplete()
+                                            }
+                                        } else {
+                                            errorMessage = response?.message ?: "创建失败"
+                                        }
+                                    } catch (e: Exception) {
+                                        errorMessage = "创建失败: ${e.message}"
+                                    } finally {
+                                        isLoading = false
                                     }
-                                    
-                                    if (response != null && response.success && response.group != null) {
-                                        console.log("群组创建成功:", response.group.name)
-                                        onGroupCreated(response.group)
-                                    } else {
-                                        errorMessage = response?.message ?: "创建失败"
-                                    }
-                                } catch (e: Exception) {
-                                    errorMessage = "创建失败: ${e.message}"
-                                } finally {
-                                    isLoading = false
                                 }
                             }
                         }
-                    }
-                }) {
-                    Text(if (isLoading) strings.creating else strings.createButton)
+                    }) { Text(if (isLoading) strings.creating else strings.createButton) }
                 }
             }
         }

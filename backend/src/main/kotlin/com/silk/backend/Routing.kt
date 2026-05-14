@@ -1086,18 +1086,14 @@ fun Application.configureRouting() {
                 val request = call.receive<CreateGroupRequest>()
                 val response = GroupService.createGroup(request)
                 
-                // 如果创建成功，发送欢迎消息到群组
-                if (response.success && response.group != null) {
-                    val welcomeMessage = buildString {
-                        append("🎉 欢迎加入群组！\n\n")
-                        append("群组名称：${response.group.name}\n")
-                        append("邀请码：${response.group.invitationCode}\n\n")
-                        append("分享邀请码，邀请朋友加入群组吧！")
-                    }
-                    // TODO: 发送欢迎消息到群组聊天室
+                if (response.success && response.group != null && request.type == "ccconnect") {
+                    val token = com.silk.backend.ccconnect.CcConnectTokenRepository.generateToken(
+                        response.group.id, response.group.name
+                    )
+                    call.respond(response.copy(ccConnectToken = token))
+                } else {
+                    call.respond(response)
                 }
-                
-                call.respond(response)
             } catch (e: Exception) {
                 logger.error("❌ 创建群组失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, GroupResponse(false, "请求格式错误"))
@@ -2203,6 +2199,179 @@ fun Application.configureRouting() {
                 AcpRegistry.unregister(userId, agentType)
                 AgentRuntime.handleAgentDisconnect(userId, agentType)
             }
+        }
+
+        // ==================== cc-connect Bridge WebSocket ====================
+
+        webSocket("/ccconnect-bridge") {
+            val token = call.request.queryParameters["token"]
+            if (token.isNullOrBlank()) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing token"))
+                return@webSocket
+            }
+            val groupId = com.silk.backend.ccconnect.CcConnectTokenRepository.findGroupIdByToken(token)
+            if (groupId == null) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid token"))
+                return@webSocket
+            }
+
+            val groupName = GroupRepository.findGroupById(groupId)?.name ?: groupId
+            logger.info("[CcConnect] WS connected: groupId={}", groupId)
+
+            // Wait for hello handshake
+            val helloFrame = incoming.receive()
+            val helloRaw = (helloFrame as? Frame.Text)?.readText() ?: run {
+                close(CloseReason(CloseReason.Codes.PROTOCOL_ERROR, "expected text frame"))
+                return@webSocket
+            }
+
+            val hello = try {
+                com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                    com.silk.backend.ccconnect.HelloMessage.serializer(), helloRaw
+                )
+            } catch (_: Exception) {
+                val ack = com.silk.backend.ccconnect.HelloAckMessage(ok = false, error = "invalid hello")
+                send(Frame.Text(com.silk.backend.ccconnect.protocolJson.encodeToString(
+                    com.silk.backend.ccconnect.HelloAckMessage.serializer(), ack
+                )))
+                close(CloseReason(CloseReason.Codes.PROTOCOL_ERROR, "invalid hello"))
+                return@webSocket
+            }
+
+            val meta = com.silk.backend.ccconnect.CcConnectConnectionMeta(
+                groupId = groupId,
+                project = hello.project,
+                agentType = hello.agentType,
+            )
+            com.silk.backend.ccconnect.CcConnectRegistry.register(groupId, this, meta)
+
+            val ack = com.silk.backend.ccconnect.HelloAckMessage(
+                ok = true, groupId = groupId, groupName = groupName
+            )
+            send(Frame.Text(com.silk.backend.ccconnect.protocolJson.encodeToString(
+                com.silk.backend.ccconnect.HelloAckMessage.serializer(), ack
+            )))
+
+            val chatServer = getGroupChatServer(groupId)
+
+            val statusMsg = Message(
+                id = java.util.UUID.randomUUID().toString(),
+                userId = "system",
+                userName = "cc-connect",
+                content = "cc-connect (${hello.agentType}) connected — project: ${hello.project}",
+                timestamp = System.currentTimeMillis(),
+                type = MessageType.SYSTEM,
+                isTransient = true,
+            )
+            chatServer.broadcast(statusMsg)
+
+            try {
+                for (frame in incoming) {
+                    val text = (frame as? Frame.Text)?.readText() ?: continue
+                    val msgType = com.silk.backend.ccconnect.parseMessageType(text) ?: continue
+
+                    when (msgType) {
+                        "reply" -> {
+                            val reply = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                com.silk.backend.ccconnect.ReplyMessage.serializer(), text
+                            )
+                            val msg = Message(
+                                id = java.util.UUID.randomUUID().toString(),
+                                userId = "cc-connect",
+                                userName = "cc-connect (${hello.agentType})",
+                                content = reply.content,
+                                timestamp = System.currentTimeMillis(),
+                                type = MessageType.TEXT,
+                            )
+                            chatServer.broadcast(msg)
+                        }
+                        "reply_stream" -> {
+                            val stream = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                com.silk.backend.ccconnect.ReplyStreamMessage.serializer(), text
+                            )
+                            val msg = Message(
+                                id = java.util.UUID.randomUUID().toString(),
+                                userId = "cc-connect",
+                                userName = "cc-connect (${hello.agentType})",
+                                content = stream.content,
+                                timestamp = System.currentTimeMillis(),
+                                type = MessageType.TEXT,
+                                isTransient = !stream.done,
+                                isIncremental = !stream.done,
+                            )
+                            chatServer.broadcast(msg)
+                        }
+                        "status" -> {
+                            val status = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                com.silk.backend.ccconnect.StatusMessage.serializer(), text
+                            )
+                            val statusText = when (status.state) {
+                                "thinking" -> "Thinking..."
+                                "tool_use" -> "Using tool: ${status.tool ?: ""}${if (status.detail != null) " — ${status.detail}" else ""}"
+                                "idle" -> "CLEAR_STATUS"
+                                else -> status.state
+                            }
+                            chatServer.broadcastSystemStatus(statusText)
+                        }
+                        "pong" -> { /* keepalive response */ }
+                    }
+                }
+            } catch (_: CancellationException) {
+            } catch (e: Exception) {
+                logger.error("[CcConnect] WS error: groupId={}, err={}", groupId, e.message)
+            } finally {
+                logger.info("[CcConnect] WS disconnected: groupId={}", groupId)
+                com.silk.backend.ccconnect.CcConnectRegistry.unregister(groupId)
+
+                val offlineMsg = Message(
+                    id = java.util.UUID.randomUUID().toString(),
+                    userId = "system",
+                    userName = "cc-connect",
+                    content = "cc-connect disconnected",
+                    timestamp = System.currentTimeMillis(),
+                    type = MessageType.SYSTEM,
+                    isTransient = true,
+                )
+                chatServer.broadcast(offlineMsg)
+            }
+        }
+
+        // ==================== cc-connect Token Management ====================
+
+        get("/api/ccconnect/groups/{groupId}/token-info") {
+            val groupId = call.parameters["groupId"] ?: run {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing groupId"))
+                return@get
+            }
+            val tokenInfo = com.silk.backend.ccconnect.CcConnectTokenRepository.getTokenForGroup(groupId)
+            val connected = com.silk.backend.ccconnect.CcConnectRegistry.isConnected(groupId)
+            val meta = com.silk.backend.ccconnect.CcConnectRegistry.getConnectionInfo(groupId)
+            val json = kotlinx.serialization.json.buildJsonObject {
+                put("success", kotlinx.serialization.json.JsonPrimitive(true))
+                put("token", kotlinx.serialization.json.JsonPrimitive(tokenInfo?.token))
+                put("connected", kotlinx.serialization.json.JsonPrimitive(connected))
+                put("agentType", kotlinx.serialization.json.JsonPrimitive(meta?.agentType))
+                put("project", kotlinx.serialization.json.JsonPrimitive(meta?.project))
+            }
+            call.respondText(json.toString(), ContentType.Application.Json)
+        }
+
+        post("/api/ccconnect/groups/{groupId}/regenerate-token") {
+            val groupId = call.parameters["groupId"] ?: run {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing groupId"))
+                return@post
+            }
+            val group = GroupRepository.findGroupById(groupId)
+            if (group == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "group not found"))
+                return@post
+            }
+            val newToken = com.silk.backend.ccconnect.CcConnectTokenRepository.regenerateToken(groupId, group.name)
+            val json = kotlinx.serialization.json.buildJsonObject {
+                put("success", kotlinx.serialization.json.JsonPrimitive(true))
+                put("token", kotlinx.serialization.json.JsonPrimitive(newToken))
+            }
+            call.respondText(json.toString(), ContentType.Application.Json)
         }
 
         // ==================== Agents API ====================
