@@ -123,6 +123,46 @@ func (p *Platform) ReconstructReplyCtx(sessionKey string) (any, error) {
 	return &replyContext{}, nil
 }
 
+// StreamingCardPlatform — aggregates an entire agent turn into a single
+// updatable message instead of sending separate messages per event.
+func (p *Platform) CreateStreamingCard(ctx context.Context, replyCtx any) (core.StreamingCard, error) {
+	return &silkStreamingCard{platform: p}, nil
+}
+
+type silkStreamingCard struct {
+	platform *Platform
+	mu       sync.Mutex
+	failed   bool
+	lastSent time.Time
+}
+
+func (c *silkStreamingCard) Update(ctx context.Context, content string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if time.Since(c.lastSent) < 500*time.Millisecond {
+		return nil
+	}
+	c.lastSent = time.Now()
+	return c.platform.sendJSON(map[string]any{
+		"type":        "reply_stream",
+		"content":     content,
+		"done":        false,
+		"incremental": false,
+	})
+}
+
+func (c *silkStreamingCard) Finalize(ctx context.Context, content string) error {
+	// Intentional error: the engine's fallback calls Reply(fullResponse) which
+	// sends only the clean answer text, without thinking/tool card metadata.
+	return fmt.Errorf("silk: finalize triggers reply fallback for clean answer")
+}
+
+func (c *silkStreamingCard) Failed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failed
+}
+
 // --- internal ---
 
 func (p *Platform) sendJSON(msg map[string]any) error {

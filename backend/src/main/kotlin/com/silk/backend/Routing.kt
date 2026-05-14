@@ -2289,6 +2289,7 @@ fun Application.configureRouting() {
                             val stream = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                 com.silk.backend.ccconnect.ReplyStreamMessage.serializer(), text
                             )
+                            val isIncremental = stream.incremental ?: !stream.done
                             val msg = Message(
                                 id = java.util.UUID.randomUUID().toString(),
                                 userId = "cc-connect",
@@ -2297,7 +2298,7 @@ fun Application.configureRouting() {
                                 timestamp = System.currentTimeMillis(),
                                 type = MessageType.TEXT,
                                 isTransient = !stream.done,
-                                isIncremental = !stream.done,
+                                isIncremental = isIncremental,
                             )
                             chatServer.broadcast(msg)
                         }

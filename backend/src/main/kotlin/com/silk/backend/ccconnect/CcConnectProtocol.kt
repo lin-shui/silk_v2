@@ -36,6 +36,7 @@ data class ReplyStreamMessage(
     val type: String = "reply_stream",
     val content: String,
     val done: Boolean = false,
+    val incremental: Boolean? = null,
 )
 
 @Serializable
