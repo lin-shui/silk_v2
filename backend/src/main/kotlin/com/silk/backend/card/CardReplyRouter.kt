@@ -39,7 +39,7 @@ object CardReplyRouter {
         }
         try {
             handler.onCardReply(reply, sessionName, broadcastFn)
-        } catch (e: Exception) {
+        } catch (e: RuntimeException) {
             logger.error("[CardReplyRouter] Handler failed for card: {}", reply.cardId, e)
         }
         return false

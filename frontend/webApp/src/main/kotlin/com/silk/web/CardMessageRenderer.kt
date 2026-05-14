@@ -68,7 +68,11 @@ fun CardMessageRenderer(
     val card = remember(message.content) {
         try {
             cardJson.decodeFromString<CardContent>(message.content)
-        } catch (e: Exception) {
+        } catch (e: IllegalArgumentException) {
+            console.warn("Card parse failed: ${e.message}")
+            null
+        } catch (e: kotlinx.serialization.SerializationException) {
+            console.warn("Card parse failed: ${e.message}")
             null
         }
     }
