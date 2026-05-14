@@ -1226,7 +1226,7 @@ object AgentRuntime {
                 try {
                     AcpExtensions.resolvePermission(acp, requestId, decision, reason)
                     logger.info("[AgentRuntime] Permission resolved: tool={}, decision={}", toolName, decision)
-                } catch (e: Exception) {
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                     logger.error("[AgentRuntime] resolvePermission failed: {}", e.message)
                     broadcastFn(AgentMessages.system(
                         "权限决定发送失败: ${e.message}",
