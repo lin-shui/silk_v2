@@ -53,6 +53,7 @@ fun WorkflowChatScreen(appState: AppState) {
 
         // AI 消息展开/收起状态（与 ChatScreen 相同的 pattern）
         val aiExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
+        val thinkingExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
 
         // Connect WebSocket
         LaunchedEffect(groupId) {
@@ -255,6 +256,44 @@ fun WorkflowChatScreen(appState: AppState) {
                                             }
                                         } else {
                                             aiExpandedStates[messageId] = false
+                                        }
+                                    }
+                                },
+                                isThinkingExpanded = thinkingExpandedStates[msg.id] ?: false,
+                                onThinkingExpandChange = { messageId, expanded ->
+                                    val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                    if (expanded) {
+                                        thinkingExpandedStates[messageId] = true
+                                        if (idx >= 0) {
+                                            scope.launch {
+                                                kotlinx.coroutines.delay(80)
+                                                listState.scrollToItem(idx, 0)
+
+                                                var prevSize = listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull { it.index == idx }?.size ?: 0
+                                                kotlinx.coroutines.withTimeoutOrNull(3000L) {
+                                                    snapshotFlow {
+                                                        listState.layoutInfo.visibleItemsInfo
+                                                            .firstOrNull { it.index == idx }?.size ?: 0
+                                                    }
+                                                    .distinctUntilChanged()
+                                                    .collect { size ->
+                                                        if (size > 0 && prevSize > 0 && size > prevSize) {
+                                                            listState.scroll { scrollBy((size - prevSize).toFloat()) }
+                                                        }
+                                                        if (size > 0) prevSize = size
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        if (idx >= 0) {
+                                            scope.launch {
+                                                listState.scrollToItem(idx, 0)
+                                                thinkingExpandedStates[messageId] = false
+                                            }
+                                        } else {
+                                            thinkingExpandedStates[messageId] = false
                                         }
                                     }
                                 },

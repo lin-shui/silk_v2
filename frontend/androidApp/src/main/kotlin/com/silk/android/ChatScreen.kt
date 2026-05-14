@@ -8,8 +8,11 @@ import android.os.Build
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -305,6 +308,8 @@ fun ChatScreen(appState: AppState) {
     
     // ✅ AI 消息展开状态管理 - 使用 Map 存储每个消息的展开状态
     val aiMessageExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
+    // 思考过程展开状态（默认折叠）
+    val thinkingExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
     
     val scopeForScroll = rememberCoroutineScope()
     var expandScrollJob by remember { mutableStateOf<Job?>(null) }
@@ -1080,6 +1085,52 @@ fun ChatScreen(appState: AppState) {
                                         }
                                     } else {
                                         aiMessageExpandedStates[messageId] = false
+                                    }
+                                }
+                            },
+                            isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
+                            onThinkingExpandChange = { messageId, expanded ->
+                                val reversedMessages = messages.reversed()
+                                val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                val itemOffset = (if (transientMessage != null) 1 else 0) +
+                                    (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                val targetIdx = if (idx >= 0) itemOffset + idx else -1
+
+                                if (expanded) {
+                                    thinkingExpandedStates[messageId] = true
+                                    if (targetIdx >= 0) {
+                                        expandScrollJob?.cancel()
+                                        expandScrollJob = scopeForScroll.launch {
+                                            kotlinx.coroutines.delay(80)
+                                            listState.scrollToItem(targetIdx, 0)
+
+                                            var prevSize = listState.layoutInfo.visibleItemsInfo
+                                                .firstOrNull { it.index == targetIdx }?.size ?: 0
+                                            kotlinx.coroutines.withTimeoutOrNull(3000L) {
+                                                snapshotFlow {
+                                                    listState.layoutInfo.visibleItemsInfo
+                                                        .firstOrNull { it.index == targetIdx }?.size ?: 0
+                                                }
+                                                .distinctUntilChanged()
+                                                .collect { size ->
+                                                    if (size > 0 && prevSize > 0 && size > prevSize) {
+                                                        listState.scroll { scrollBy((size - prevSize).toFloat()) }
+                                                    }
+                                                    if (size > 0) prevSize = size
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    expandScrollJob?.cancel()
+                                    expandScrollJob = null
+                                    if (targetIdx >= 0) {
+                                        scopeForScroll.launch {
+                                            listState.scrollToItem(targetIdx, 0)
+                                            thinkingExpandedStates[messageId] = false
+                                        }
+                                    } else {
+                                        thinkingExpandedStates[messageId] = false
                                     }
                                 }
                             },
@@ -1897,18 +1948,30 @@ fun AIMessageCardAndroid(
     isTransient: Boolean = false,
     isExpanded: Boolean = true,
     onExpandChange: (Boolean) -> Unit = {},
+    isThinkingExpanded: Boolean = false,
+    onThinkingExpandChange: (Boolean) -> Unit = {},
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {}
 ) {
-    val isLongContent = message.content.length > 500
+    val thinkingMarker = "<!--THINKING_END-->"
+    val hasThinking = message.content.contains(thinkingMarker)
+    val thinkingText = if (hasThinking) {
+        message.content.substringBefore(thinkingMarker).trim()
+    } else ""
+    val bodyContent = if (hasThinking) {
+        message.content.substringAfter(thinkingMarker).trim()
+    } else {
+        message.content
+    }
+    val isLongContent = bodyContent.length > 500
     val effectiveExpanded = if (isTransient) true else isExpanded
     val aiPreview =
-        if (message.content.length > 220) message.content.take(220) + "..."
-        else message.content
+        if (bodyContent.length > 220) bodyContent.take(220) + "..."
+        else bodyContent
     
     // 调试日志
     LaunchedEffect(message.id, isExpanded) {
-        println("🤖 AIMessageCardAndroid: messageId=${message.id}, contentLength=${message.content.length}, isLongContent=$isLongContent, isExpanded=$isExpanded")
+        println("🤖 AIMessageCardAndroid: messageId=${message.id}, bodyLength=${bodyContent.length}, isLongContent=$isLongContent, isExpanded=$isExpanded")
     }
     
     Card(
@@ -1994,11 +2057,64 @@ fun AIMessageCardAndroid(
             )
             
             Spacer(modifier = Modifier.height(12.dp))
+
+            // 思考过程折叠区域
+            if (hasThinking && thinkingText.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                        .background(
+                            color = Color(0xFFFAF8F4),
+                            shape = RoundedCornerShape(8.dp)
+                        )
+                        .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(8.dp))
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onThinkingExpandChange(!isThinkingExpanded) }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (isThinkingExpanded) "▼" else "▶",
+                            fontSize = 10.sp,
+                            color = Color(0xFF8B7355)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "\uD83D\uDCAD 思考过程",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF8B7355)
+                        )
+                    }
+                    AnimatedVisibility(
+                        visible = isThinkingExpanded,
+                        enter = expandVertically(),
+                        exit = shrinkVertically()
+                    ) {
+                        Column {
+                            Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+                            Text(
+                                text = thinkingText,
+                                fontSize = 12.sp,
+                                color = Color(0xFF8B7355),
+                                lineHeight = 18.sp,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp)
+                            )
+                        }
+                    }
+                }
+            }
             
             // 内容区域（与 Harmony：长文折叠时底部「查看全文」，展开后底部「收起」）
             when {
                 !isLongContent || isTransient -> {
-                    MarkdownWebView(message.content)
+                    MarkdownWebView(bodyContent)
                 }
                 !effectiveExpanded -> {
                     Column(modifier = Modifier.fillMaxWidth()) {
@@ -2031,7 +2147,7 @@ fun AIMessageCardAndroid(
                 }
                 else -> {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        MarkdownWebView(message.content)
+                        MarkdownWebView(bodyContent)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -3343,6 +3459,9 @@ fun MessageItem(
     // AI 消息展开状态相关参数
     isAIExpanded: Boolean = true,
     onAIExpandChange: (String, Boolean) -> Unit = { _, _ -> },
+    // AI 思考过程展开状态相关参数
+    isThinkingExpanded: Boolean = false,
+    onThinkingExpandChange: (String, Boolean) -> Unit = { _, _ -> },
     /** 长文本/转发全文收起后由列表滚回该条，与 Harmony onLongContentCollapsed 一致 */
     onLongContentCollapsed: (String) -> Unit = {},
     // 复制和转发功能相关参数
@@ -3377,6 +3496,8 @@ fun MessageItem(
             isTransient = isTransient,
             isExpanded = isAIExpanded,
             onExpandChange = { newExpanded -> onAIExpandChange(message.id, newExpanded) },
+            isThinkingExpanded = isThinkingExpanded,
+            onThinkingExpandChange = { newExpanded -> onThinkingExpandChange(message.id, newExpanded) },
             onCopy = onCopy,
             onForward = onForward
         )
