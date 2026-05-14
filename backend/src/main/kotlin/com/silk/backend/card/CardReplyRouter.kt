@@ -37,9 +37,10 @@ object CardReplyRouter {
             logger.warn("[CardReplyRouter] No handler for card: {} (expired?)", reply.cardId)
             return true
         }
+        @Suppress("TooGenericExceptionCaught") // handler is user-defined callback; must catch all
         try {
             handler.onCardReply(reply, sessionName, broadcastFn)
-        } catch (e: RuntimeException) {
+        } catch (e: Exception) {
             logger.error("[CardReplyRouter] Handler failed for card: {}", reply.cardId, e)
         }
         return false

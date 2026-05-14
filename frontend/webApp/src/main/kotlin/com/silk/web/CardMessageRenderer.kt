@@ -1,9 +1,34 @@
 package com.silk.web
 
-import androidx.compose.runtime.*
-import org.jetbrains.compose.web.dom.*
-import org.jetbrains.compose.web.css.*
-import org.jetbrains.compose.web.attributes.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import org.jetbrains.compose.web.dom.Button
+import org.jetbrains.compose.web.dom.Div
+import org.jetbrains.compose.web.dom.Hr
+import org.jetbrains.compose.web.dom.Input
+import org.jetbrains.compose.web.dom.Span
+import org.jetbrains.compose.web.dom.Text
+import org.jetbrains.compose.web.dom.TextArea
+import org.jetbrains.compose.web.css.Color
+import org.jetbrains.compose.web.css.DisplayStyle
+import org.jetbrains.compose.web.css.backgroundColor
+import org.jetbrains.compose.web.css.borderRadius
+import org.jetbrains.compose.web.css.color
+import org.jetbrains.compose.web.css.display
+import org.jetbrains.compose.web.css.fontSize
+import org.jetbrains.compose.web.css.height
+import org.jetbrains.compose.web.css.marginBottom
+import org.jetbrains.compose.web.css.marginRight
+import org.jetbrains.compose.web.css.padding
+import org.jetbrains.compose.web.css.px
+import org.jetbrains.compose.web.css.width
+import org.jetbrains.compose.web.attributes.InputType
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.ChatClient
@@ -56,6 +81,7 @@ private val cardJson = Json { ignoreUnknownKeys = true }
 
 // ── Main Composable ──
 
+@Suppress("CyclomaticComplexMethod") // Compose UI function with multiple element branches
 @Composable
 fun CardMessageRenderer(
     message: Message,
@@ -199,6 +225,7 @@ private fun CardDividerElement() {
     })
 }
 
+@Suppress("CyclomaticComplexMethod") // style branching for button states
 @Composable
 private fun CardButtonElement(
     element: CardElement,

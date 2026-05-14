@@ -964,6 +964,7 @@ object AgentRuntime {
         }
     }
 
+    @Suppress("CyclomaticComplexMethod") // ACP handler wiring is inherently branchy
     private fun setupAcpHandlers(
         acp: AcpClient,
         acpSessionId: String,
