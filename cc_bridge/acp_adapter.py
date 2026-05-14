@@ -178,28 +178,50 @@ class AcpAgentServer:
         tool_input: dict,
     ) -> None:
         """Called by PermissionServer when hook sends a permission request."""
-        # First version: only handle AskUserQuestion, auto-allow everything else
-        if tool_name != "AskUserQuestion":
-            if self.perm_server:
-                self.perm_server.resolve_request(request_id, "allow")
-            return
-
         # Map CLI session ID → ACP session ID
         acp_session_id = self._cli_to_acp.get(session_id)
         if not acp_session_id:
             logger.warning(
-                "[ACP] AskUserQuestion: no ACP session for CLI session %s",
+                "[ACP] Permission request: no ACP session for CLI session %s, auto-allow",
                 session_id[:8],
             )
             if self.perm_server:
                 self.perm_server.resolve_request(request_id, "allow")
             return
 
+        if tool_name == "AskUserQuestion":
+            self._handle_ask_user_question(acp_session_id, request_id, tool_input)
+            return
+
+        # All other tools: forward to backend for permission decision
+        if self.perm_server:
+            self.perm_server.set_request_timeout(request_id, 300.0)
+
+        logger.info(
+            "[ACP] Permission request: forwarding tool=%s, request=%s, session=%s",
+            tool_name, request_id[:8], acp_session_id[:8],
+        )
+        asyncio.run_coroutine_threadsafe(
+            self._send_notification("session/update", {
+                "sessionId": acp_session_id,
+                "update": {
+                    "sessionUpdate": "permission_request",
+                    "requestId": request_id,
+                    "toolName": tool_name,
+                    "toolInput": tool_input,
+                },
+            }),
+            self._loop,
+        )
+
+    def _handle_ask_user_question(
+        self,
+        acp_session_id: str,
+        request_id: str,
+        tool_input: dict,
+    ) -> None:
+        """Handle AskUserQuestion tool via session/update notification."""
         # Pass through the raw questions from tool_input without flattening.
-        # AskUserQuestion.questions is an array of objects:
-        #   { question: str, header: str, options: [{label, description}], multiSelect: bool }
-        # The backend (AcpUpdateMapper) handles parsing; keeping structured data
-        # allows the card system to build proper per-option buttons.
         questions = tool_input.get("questions", [])
 
         if not questions:
@@ -381,6 +403,8 @@ class AcpAgentServer:
                 await self._handle_silk_list_dir(msg_id, params)
             elif method == "_silk/resolve_question":
                 await self._handle_silk_resolve_question(msg_id, params)
+            elif method == "_silk/resolve_permission":
+                await self._handle_silk_resolve_permission(msg_id, params)
             else:
                 await self._send_error(msg_id, -32601, f"Method not found: {method}")
         except Exception as exc:
@@ -871,6 +895,28 @@ class AcpAgentServer:
             await self._send_response(msg_id, {"ok": True})
         else:
             logger.warning("[ACP] resolve_question: unknown request %s", request_id[:8])
+            await self._send_error(msg_id, -32602, f"Unknown request: {request_id}")
+
+    async def _handle_silk_resolve_permission(self, msg_id: Any, params: Any) -> None:
+        p = params or {}
+        request_id = p.get("requestId", "")
+        decision = p.get("decision", "deny")  # "allow" or "deny"
+        reason = p.get("reason", "")
+
+        if not request_id:
+            await self._send_error(msg_id, -32602, "Missing requestId")
+            return
+
+        if self.perm_server and self.perm_server.resolve_request(
+            request_id, decision, reason=reason,
+        ):
+            logger.info(
+                "[ACP] resolve_permission: resolved %s decision=%s",
+                request_id[:8], decision,
+            )
+            await self._send_response(msg_id, {"ok": True})
+        else:
+            logger.warning("[ACP] resolve_permission: unknown request %s", request_id[:8])
             await self._send_error(msg_id, -32602, f"Unknown request: {request_id}")
 
 

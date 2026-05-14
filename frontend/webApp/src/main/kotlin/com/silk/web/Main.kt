@@ -4442,7 +4442,7 @@ private enum class MessageRenderMode {
 private fun resolveRenderMode(message: Message): MessageRenderMode {
     // 卡片类型最优先 — 不管 category 是什么
     if (message.type == MessageType.CARD) return MessageRenderMode.CARD
-    if (message.type == MessageType.CARD_REPLY) return MessageRenderMode.CARD_REPLY
+    if (message.type == MessageType.CARD_REPLY) return MessageRenderMode.NOOP
 
     // category 特殊处理（只对非卡片消息生效）
     if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) return MessageRenderMode.AGENT_STATUS
@@ -5077,6 +5077,10 @@ fun MessageItem(
                             ?.jsonPrimitive?.content ?: ""
                         if (custom.isNotBlank()) "回复: $custom" else "回复: (自定义)"
                     }
+                    action.startsWith("perm_allow_") -> "允许"
+                    action.startsWith("perm_deny_") -> "拒绝"
+                    action.startsWith("perm_accept_edits_") -> "允许所有编辑"
+                    action.startsWith("perm_bypass_") -> "允许所有操作"
                     else -> "选择: $action"
                 }
             } catch (_: kotlinx.serialization.SerializationException) {

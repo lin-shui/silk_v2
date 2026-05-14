@@ -255,6 +255,7 @@ class ChatClient(
                         _messages.value = _messages.value.map {
                             if (it.id == message.id) message else it
                         }
+                        // edit 只更新已有卡片内容，不影响状态（agent 可能仍在工作中）
                     } else {
                         val exists = _messages.value.any { it.id == message.id }
                         if (!exists) {
@@ -263,22 +264,26 @@ class ChatClient(
                         } else {
                             log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
                         }
-                    }
-                    // Track pending question state
-                    if (message.category == MessageCategory.AGENT_QUESTION) {
-                        val reqId = message.id.removePrefix("agent_question_")
-                        _pendingQuestionId.value = reqId
-                        // Must clear isGenerating so the send button shows (not stop button)
-                        _isGenerating.value = false
-                        _transientMessage.value = null
-                        _statusMessages.value = emptyList()
-                        suppressTransient = false
-                    } else {
-                        _transientMessage.value = null
-                        _statusMessages.value = emptyList()
-                        _isGenerating.value = false
-                        suppressTransient = false
-                        _pendingQuestionId.value = null
+                        // 新消息到达时更新状态
+                        if (message.type == MessageType.CARD_REPLY) {
+                            // 卡片回复：agent 仍在工作中，保留状态消息
+                        } else if (message.category == MessageCategory.AGENT_QUESTION) {
+                            val reqId = message.id.removePrefix("agent_question_")
+                            _pendingQuestionId.value = reqId
+                            _isGenerating.value = false
+                            _transientMessage.value = null
+                            // 保留 statusMessages，agent 仍在工作中
+                            suppressTransient = false
+                        } else if (message.category == MessageCategory.AGENT_PERMISSION) {
+                            // 权限卡片：agent 仍在工作中，保留状态消息
+                            _transientMessage.value = null
+                        } else {
+                            _transientMessage.value = null
+                            _statusMessages.value = emptyList()
+                            _isGenerating.value = false
+                            suppressTransient = false
+                            _pendingQuestionId.value = null
+                        }
                     }
                 }
             }

@@ -32,6 +32,7 @@ enum class MessageCategory {
     FINAL_REPORT,     // 最终诊断报告（高亮度）
     AGENT_STATUS,     // Agent 工作状态（灰色，低亮度）
     AGENT_QUESTION,   // Agent 向用户提问（需要用户回答）
+    AGENT_PERMISSION, // Agent 工具权限确认（需要用户允许/拒绝）
 }
 
 @Serializable
