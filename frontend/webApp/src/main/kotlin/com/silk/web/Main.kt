@@ -1030,6 +1030,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var mentionStartIndex by remember { mutableStateOf(-1) }
     var mentionMenuPosition by remember { mutableStateOf(Pair(0.0, 0.0)) } // (left, bottom)
     
+    // cc-connect token dialog
+    var showCcConnectTokenDialog by remember { mutableStateOf(false) }
+
     // 消息撤回相关状态：正在撤回中的消息ID集合，防止重复点击
     var recallingMessageIds by remember { mutableStateOf(setOf<String>()) }
     
@@ -1205,6 +1208,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             borderRadius(4.px)
                             property("font-weight", "600")
                             property("letter-spacing", "0.5px")
+                            property("cursor", "pointer")
+                            property("transition", "opacity 0.2s ease")
                             if (ccConnectInfo?.connected == true) {
                                 backgroundColor(Color("#E8F5E9"))
                                 color(Color("#2E7D32"))
@@ -1213,6 +1218,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 color(Color("#E65100"))
                             }
                         }
+                        attr("title", "Click to view token & connection info")
+                        onClick { showCcConnectTokenDialog = true }
                     }) {
                         val label = if (ccConnectInfo?.connected == true) {
                             "cc-connect (${ccConnectInfo?.agentType ?: "agent"})"
@@ -1939,9 +1946,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     property("gap", "12px")
                 }
             }) {
-                // @Silk 快捷按钮（在 Silk 私聊中隐藏）
+                // @Silk 快捷按钮（在 Silk 私聊和 cc-connect 群组中隐藏）
                 val isSilkPrivateChat = group.name.startsWith("[Silk]")
-                if (!isSilkPrivateChat) {
+                if (!isSilkPrivateChat && ccConnectInfo == null) {
                 Div({
                     style {
                         display(DisplayStyle.Flex)
@@ -2055,6 +2062,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         attr("placeholder", when {
                             pendingQuestionId != null -> "回答 Claude Code 的问题..."
                             group.name.startsWith("[Silk]") -> strings.silkChatInputPlaceholder
+                            ccConnectInfo != null -> "Message cc-connect agent..."
                             else -> strings.messageInputPlaceholder
                         })
                         attr("rows", "2")
@@ -2681,6 +2689,16 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         )
     }
     
+    // cc-connect token info dialog
+    if (showCcConnectTokenDialog && ccConnectInfo != null) {
+        CcConnectTokenDialog(
+            groupId = group.id,
+            tokenInfo = ccConnectInfo!!,
+            onTokenRegenerated = { newInfo -> ccConnectInfo = newInfo },
+            onDismiss = { showCcConnectTokenDialog = false }
+        )
+    }
+
     // 邀请成员加入联系人确认对话框
     selectedMemberForInvite?.let { member ->
         Div({
@@ -4489,8 +4507,8 @@ fun MessageItem(
         formatMessageTimestampForWeb(message.timestamp)
     }
     
-    // 是否是 AI 消息
-    val isAIMessage = isAgentUserId(message.userId)
+    // 是否是 AI 消息（包含 cc-connect 代理回复）
+    val isAIMessage = isAgentUserId(message.userId) || message.userId == "cc-connect"
     
     // AI 消息使用专用卡片
     val isRegularAIText = isAIMessage && message.type == MessageType.TEXT &&
@@ -5253,6 +5271,189 @@ internal fun isLikelyAgentStatusContent(content: String): Boolean {
         "⏳"
     )
     return statusHints.any { hint -> text.contains(hint) }
+}
+
+@Composable
+fun CcConnectTokenDialog(
+    groupId: String,
+    tokenInfo: CcConnectTokenInfo,
+    onTokenRegenerated: (CcConnectTokenInfo) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var tokenCopied by remember { mutableStateOf(false) }
+    var isRegenerating by remember { mutableStateOf(false) }
+
+    Div({
+        style {
+            position(Position.Fixed)
+            top(0.px); left(0.px)
+            width(100.percent); height(100.vh)
+            backgroundColor(Color("rgba(74, 64, 56, 0.5)"))
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            property("z-index", "1100")
+            property("backdrop-filter", "blur(4px)")
+        }
+        onClick { onDismiss() }
+    }) {
+        Div({
+            style {
+                backgroundColor(Color(SilkColors.surfaceElevated))
+                borderRadius(16.px)
+                padding(28.px)
+                width(460.px)
+                maxWidth(90.vw)
+                property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.2)")
+                property("border", "1px solid ${SilkColors.border}")
+            }
+            onClick { it.stopPropagation() }
+        }) {
+            H3({
+                style {
+                    marginTop(0.px); marginBottom(20.px)
+                    color(Color(SilkColors.textPrimary))
+                    property("font-weight", "600")
+                }
+            }) { Text("cc-connect Token") }
+
+            // Connection status
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "8px")
+                    marginBottom(16.px)
+                }
+            }) {
+                Span({
+                    style {
+                        width(8.px); height(8.px)
+                        borderRadius(50.percent)
+                        backgroundColor(Color(if (tokenInfo.connected) "#4CAF50" else "#FF9800"))
+                        display(DisplayStyle.InlineBlock)
+                    }
+                }) {}
+                Span({
+                    style {
+                        fontSize(13.px)
+                        color(Color(SilkColors.textPrimary))
+                    }
+                }) {
+                    if (tokenInfo.connected) {
+                        Text("Connected — ${tokenInfo.agentType ?: "agent"}${if (tokenInfo.project != null) " / ${tokenInfo.project}" else ""}")
+                    } else {
+                        Text("Offline — waiting for cc-connect to connect")
+                    }
+                }
+            }
+
+            // Token display
+            Div({
+                style {
+                    padding(16.px); borderRadius(8.px)
+                    property("background", SilkColors.surface)
+                    property("border", "1px solid ${SilkColors.border}")
+                    marginBottom(16.px)
+                    property("word-break", "break-all")
+                    fontFamily("monospace"); fontSize(14.px)
+                    color(Color(SilkColors.textPrimary))
+                }
+            }) { Text(tokenInfo.token ?: "") }
+
+            // config.toml snippet
+            Div({
+                style {
+                    fontSize(13.px); color(Color(SilkColors.textSecondary))
+                    marginBottom(16.px); property("line-height", "1.6")
+                }
+            }) {
+                Text("Paste this token into cc-connect's config.toml:")
+                Div({
+                    style {
+                        fontSize(12.px); padding(12.px); borderRadius(6.px)
+                        property("background", SilkColors.surface)
+                        property("border", "1px solid ${SilkColors.border}")
+                        property("overflow-x", "auto")
+                        color(Color(SilkColors.textPrimary))
+                        fontFamily("monospace")
+                        property("white-space", "pre")
+                        marginTop(8.px)
+                    }
+                }) {
+                    Text("""[[projects.platforms]]
+type = "silk"
+[projects.platforms.options]
+server = "wss://your-server:15003/ccconnect-bridge"
+token  = "${tokenInfo.token ?: ""}"
+""")
+                }
+            }
+
+            // Action buttons
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.FlexEnd)
+                    property("gap", "12px")
+                }
+            }) {
+                Button({
+                    style {
+                        padding(10.px, 18.px)
+                        backgroundColor(Color(SilkColors.surface))
+                        color(Color(SilkColors.textSecondary))
+                        property("border", "1px solid ${SilkColors.border}")
+                        borderRadius(8.px)
+                        property("cursor", if (isRegenerating) "not-allowed" else "pointer")
+                        fontSize(13.px)
+                        property("opacity", if (isRegenerating) "0.6" else "1")
+                    }
+                    onClick {
+                        if (!isRegenerating) {
+                            scope.launch {
+                                isRegenerating = true
+                                val newToken = ApiClient.regenerateCcConnectToken(groupId)
+                                if (newToken != null) {
+                                    val updated = tokenInfo.copy(token = newToken)
+                                    onTokenRegenerated(updated)
+                                    tokenCopied = false
+                                }
+                                isRegenerating = false
+                            }
+                        }
+                    }
+                }) { Text(if (isRegenerating) "Regenerating..." else "Regenerate") }
+
+                Button({
+                    style {
+                        padding(10.px, 18.px)
+                        backgroundColor(Color(if (tokenCopied) "#4CAF50" else SilkColors.secondary))
+                        color(Color(if (tokenCopied) "white" else SilkColors.textPrimary))
+                        border { width(0.px) }; borderRadius(8.px)
+                        property("cursor", "pointer"); fontSize(13.px)
+                    }
+                    onClick {
+                        tokenInfo.token?.let { token ->
+                            kotlinx.browser.window.navigator.clipboard.writeText(token)
+                            tokenCopied = true
+                        }
+                    }
+                }) { Text(if (tokenCopied) "Copied!" else "Copy Token") }
+
+                Button({
+                    style {
+                        padding(10.px, 18.px)
+                        property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                        color(Color.white); border { width(0.px) }; borderRadius(8.px)
+                        property("cursor", "pointer"); fontSize(13.px); property("font-weight", "600")
+                    }
+                    onClick { onDismiss() }
+                }) { Text("Done") }
+            }
+        }
+    }
 }
 
 /**
