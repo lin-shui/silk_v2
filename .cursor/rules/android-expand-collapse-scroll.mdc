@@ -1,0 +1,28 @@
+---
+description: Protect AI message expand/collapse scroll anchoring in Android
+globs:
+  - frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt
+  - frontend/androidApp/src/main/kotlin/com/silk/android/WorkflowChatScreen.kt
+---
+
+# Android AI 消息展开/收起滚动锚定
+
+修改 `onAIExpandChange` 或 `AIMessageCardAndroid` 的展开/收起逻辑时，必须保持以下行为不变：
+
+## 展开（expand）
+
+- 使用 `snapshotFlow` 监听 item 在 `visibleItemsInfo` 中的 `size` 变化
+- 每当 item 因 WebView 异步加载而增高 Δh，立即 `listState.scroll { scrollBy(Δh) }` 补偿
+- 原因：`MarkdownWebView` 从 CDN 加载 JS/CSS 后异步渲染，固定延迟无法捕获最终高度
+
+## 收起（collapse）
+
+- **必须先** `listState.scrollToItem(targetIdx, 0)` 将 scroll offset 归零
+- **然后才** 设置 `aiMessageExpandedStates[messageId] = false`
+- 原因：展开补偿累积的 `firstVisibleItemScrollOffset` 远大于收起后的 item 高度，若先改状态，LazyColumn 会跳到其他消息
+
+## 禁止
+
+- 不要用固定 delay + 一次性 scrollToItem 替代 snapshotFlow 补偿（WebView 加载时间不确定）
+- 不要在 collapse 时先改状态再 scrollToItem（会导致跳转，因为 offset > collapsed height）
+- 不要移除 `expandScrollJob?.cancel()` 对旧展开任务的取消
