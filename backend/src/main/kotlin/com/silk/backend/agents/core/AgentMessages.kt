@@ -209,6 +209,90 @@ object AgentMessages {
         )
     }
 
+    /**
+     * 构建工具权限确认卡片。
+     * 展示工具名和操作详情，提供 允许/拒绝 按钮和模式升级按钮。
+     */
+    fun permissionCard(
+        requestId: String,
+        toolName: String,
+        toolDetail: String,
+        agentUserId: String,
+        agentName: String,
+    ): Message {
+        val builder = CardBuilder("🔒 $agentName 请求权限", template = "orange")
+        builder.addText("**工具**: $toolName")
+        if (toolDetail.isNotBlank()) {
+            val truncated = if (toolDetail.length > 500) toolDetail.take(500) + "..." else toolDetail
+            builder.addText(truncated)
+        }
+        builder.addDivider()
+        builder.addButton("允许", "perm_allow_$requestId", type = ButtonType.PRIMARY)
+        builder.addButton("拒绝", "perm_deny_$requestId", type = ButtonType.DANGER)
+        builder.addButton("允许所有编辑", "perm_accept_edits_$requestId", type = ButtonType.DEFAULT)
+        builder.addButton("允许所有操作", "perm_bypass_$requestId", type = ButtonType.DEFAULT)
+
+        return Message(
+            id = "agent_perm_$requestId",
+            userId = agentUserId,
+            userName = agentName,
+            content = builder.build(),
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.CARD,
+            isTransient = false,
+            category = MessageCategory.AGENT_PERMISSION,
+        )
+    }
+
+    /** 构建已处理的权限卡片（禁用态）。 */
+    fun permissionCardResolved(
+        requestId: String,
+        toolName: String,
+        toolDetail: String,
+        decision: String,
+        agentUserId: String,
+        agentName: String,
+    ): Message {
+        val template = if (decision.contains("允许")) "green" else "red"
+        val title = if (decision.contains("允许")) "✓ 已允许" else "✗ 已拒绝"
+        val builder = CardBuilder(title, template = template)
+        builder.addText("**工具**: $toolName")
+        if (toolDetail.isNotBlank()) {
+            val truncated = if (toolDetail.length > 500) toolDetail.take(500) + "..." else toolDetail
+            builder.addText(truncated)
+        }
+        builder.addText(decision)
+
+        return Message(
+            id = "agent_perm_$requestId",
+            userId = agentUserId,
+            userName = agentName,
+            content = builder.buildDisabled(),
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.CARD,
+            action = "edit",
+        )
+    }
+
+    /** 格式化工具调用的详情信息，用于权限卡片展示。 */
+    fun formatToolDetail(toolName: String, toolInput: Map<String, String?>): String = buildString {
+        when (toolName) {
+            "Bash" -> {
+                val cmd = toolInput["command"] ?: toolInput["cmd"]
+                if (cmd != null) appendLine("```\n$cmd\n```")
+            }
+            "Write", "Edit", "NotebookEdit" -> {
+                val path = toolInput["file_path"] ?: toolInput["notebook_path"]
+                if (path != null) appendLine("文件: $path")
+            }
+            else -> {
+                toolInput.entries.take(3).forEach { (k, v) ->
+                    if (!v.isNullOrBlank()) appendLine("$k: ${v.take(200)}")
+                }
+            }
+        }
+    }
+
     /** 将问题列表格式化为展示文本。供重连恢复等场景共用。 */
     fun formatQuestionText(questions: List<StructuredQuestion>): String = buildString {
         appendLine("💬 Claude Code 想问你：")

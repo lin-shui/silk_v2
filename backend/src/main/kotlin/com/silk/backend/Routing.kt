@@ -275,6 +275,9 @@ fun Application.configureRouting() {
         override fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean =
             workflowManager.updateActiveAgent(rawGroupId, agentType)
 
+        override fun persistPermissionMode(rawGroupId: String, permissionMode: String): Boolean =
+            workflowManager.updatePermissionMode(rawGroupId, permissionMode)
+
         override fun loadSeed(rawGroupId: String): AgentRuntime.WorkflowSeed? {
             val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
             if (wf.workingDir.isBlank() && wf.sessionId.isBlank()) return null
@@ -282,6 +285,7 @@ fun Application.configureRouting() {
                 workingDir = wf.workingDir,
                 cliSessionId = wf.sessionId.takeIf { it.isNotBlank() },
                 sessionStarted = wf.sessionStarted,
+                permissionMode = wf.permissionMode,
             )
         }
 
@@ -303,6 +307,7 @@ fun Application.configureRouting() {
                 workingDir = wf.workingDir,
                 cliSessionId = cliSid,
                 sessionStarted = sessionStarted,
+                permissionMode = wf.permissionMode,
             )
         }
     })
@@ -785,6 +790,7 @@ fun Application.configureRouting() {
                         bridgeConnected = bridgeConnected,
                         agentType = agentSnap.agentType ?: "",
                         agentDisplayName = descriptor?.displayName ?: "",
+                        permissionMode = agentSnap.permissionMode,
                     )
                 )
             } else {
@@ -910,6 +916,7 @@ fun Application.configureRouting() {
                             bridgeConnected = bridgeConnected,
                             agentType = snap?.agentType ?: "",
                             agentDisplayName = descriptor?.displayName ?: "",
+                            permissionMode = snap?.permissionMode ?: "",
                         )
                     )
                 }

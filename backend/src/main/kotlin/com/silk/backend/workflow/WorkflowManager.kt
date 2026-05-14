@@ -197,6 +197,23 @@ class WorkflowManager(
         return true
     }
 
+    /** 持久化工具权限模式。 */
+    @Synchronized
+    fun updatePermissionMode(groupId: String, permissionMode: String): Boolean {
+        val store = load()
+        val idx = store.workflows.indexOfFirst { it.groupId == groupId }
+        if (idx < 0) return false
+        val old = store.workflows[idx]
+        if (old.permissionMode == permissionMode) return false
+        store.workflows[idx] = old.copy(
+            permissionMode = permissionMode,
+            updatedAt = System.currentTimeMillis(),
+        )
+        save(store)
+        logger.info("Workflow {} permissionMode 持久化: {}", old.id, permissionMode)
+        return true
+    }
+
     /** workflow.agentType（underscore form）→ runtime agentType（dash form）。 */
     private fun normalizeWfAgentType(wfAgentType: String): String = when (wfAgentType) {
         "claude_code" -> "claude-code"
