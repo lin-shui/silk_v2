@@ -3888,26 +3888,34 @@ fun MarkdownContent(
                 htmlSafeContent
             }
             // Convert tool-call section (before <!--TOOLS_END-->) to collapsible <details>
+            // Tools content is rendered through markdown-it to preserve formatting.
             val toolsMarker = "<!--TOOLS_END-->"
             val withToolsDetails = if (withThinkingDetails.contains(toolsMarker)) {
                 val tIdx = withThinkingDetails.indexOf(toolsMarker)
                 val beforeTools = withThinkingDetails.substring(0, tIdx)
                 val afterTools = withThinkingDetails.substring(tIdx + toolsMarker.length).trimStart('\n').trim()
                 val detailsEnd = beforeTools.lastIndexOf("</details>")
-                val (prefix, toolsRaw) = if (detailsEnd >= 0) {
-                    val cutPoint = detailsEnd + "</details>".length
-                    Pair(beforeTools.substring(0, cutPoint), beforeTools.substring(cutPoint).trim())
-                } else {
-                    Pair("", beforeTools.trim())
-                }
-                val escapedTools = toolsRaw
-                    .replace("&", "&amp;")
-                    .replace("<", "&lt;")
-                    .replace(">", "&gt;")
-                    .replace("\n", "<br>")
+                val prefix = if (detailsEnd >= 0) beforeTools.substring(0, detailsEnd + "</details>".length) else ""
+
+                // Extract raw tools content from cleanContent (before any escaping)
+                val rawToolsStart = if (cleanContent.contains(thinkingMarker)) {
+                    cleanContent.indexOf(thinkingMarker) + thinkingMarker.length
+                } else 0
+                val rawToolsEnd = cleanContent.indexOf(toolsMarker)
+                val rawToolsContent = if (rawToolsEnd > rawToolsStart) {
+                    cleanContent.substring(rawToolsStart, rawToolsEnd).trim()
+                } else ""
+
+                val toolsRenderedHtml = if (rawToolsContent.isNotBlank()) {
+                    DOMPurify.sanitize(
+                        markdownEngine.render(rawToolsContent),
+                        createSanitizeConfig()
+                    )
+                } else ""
+
                 val toolsDetails = "<details class=\"silk-thinking-details\">\n" +
                     "<summary>🔧 工具调用过程</summary>\n" +
-                    escapedTools + "\n</details>"
+                    toolsRenderedHtml + "\n</details>"
                 val answerEffective = if (afterTools.isBlank()) "" else "\n\n$afterTools"
                 if (prefix.isNotBlank()) "$prefix\n\n$toolsDetails$answerEffective"
                 else "$toolsDetails$answerEffective"
