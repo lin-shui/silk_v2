@@ -957,6 +957,43 @@ fun GroupCard(
                 }
             }
         }
+
+        // cc-connect 工作目录（第二行）
+        val cwdText = ccConnectInfo?.cwd
+        if (isCcConnect && ccConnected && !cwdText.isNullOrBlank()) {
+            Div({
+                style {
+                    marginTop(4.px)
+                    property("padding-left", if (hasUnread && !isDeleteMode) "34px" else "0px")
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "4px")
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("opacity", "0.7")
+                    }
+                }) {
+                    Text("📁")
+                }
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("font-family", "monospace")
+                        property("overflow", "hidden")
+                        property("text-overflow", "ellipsis")
+                        property("white-space", "nowrap")
+                    }
+                    title(cwdText)
+                }) {
+                    Text(cwdText)
+                }
+            }
+        }
     }
 }
 

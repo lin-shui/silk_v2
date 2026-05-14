@@ -22,6 +22,7 @@ data class HelloMessage(
     val version: Int = 1,
     val project: String = "",
     @SerialName("agent_type") val agentType: String = "",
+    val cwd: String = "",
 )
 
 @Serializable

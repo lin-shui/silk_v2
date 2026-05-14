@@ -2242,6 +2242,7 @@ fun Application.configureRouting() {
                 groupId = groupId,
                 project = hello.project,
                 agentType = hello.agentType,
+                cwd = hello.cwd,
             )
             com.silk.backend.ccconnect.CcConnectRegistry.register(groupId, this, meta)
 
@@ -2466,6 +2467,7 @@ fun Application.configureRouting() {
                 put("connected", kotlinx.serialization.json.JsonPrimitive(connected))
                 put("agentType", kotlinx.serialization.json.JsonPrimitive(meta?.agentType))
                 put("project", kotlinx.serialization.json.JsonPrimitive(meta?.project))
+                put("cwd", kotlinx.serialization.json.JsonPrimitive(meta?.cwd))
             }
             call.respondText(json.toString(), ContentType.Application.Json)
         }

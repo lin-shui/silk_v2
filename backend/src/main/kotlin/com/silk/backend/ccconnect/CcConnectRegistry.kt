@@ -12,6 +12,7 @@ data class CcConnectConnectionMeta(
     val groupId: String,
     val project: String,
     val agentType: String,
+    val cwd: String = "",
 )
 
 data class CcConnectConnection(

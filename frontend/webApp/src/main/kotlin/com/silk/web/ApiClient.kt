@@ -68,6 +68,7 @@ data class CcConnectTokenInfo(
     val connected: Boolean = false,
     val agentType: String? = null,
     val project: String? = null,
+    val cwd: String? = null,
 )
 
 // ==================== 联系人相关数据模型 ====================

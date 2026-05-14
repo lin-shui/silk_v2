@@ -1193,40 +1193,65 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             Div({ 
                 style { 
                     property("flex", "1") 
-                    property("letter-spacing", "2px")
                     display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("gap", "8px")
+                    property("flex-direction", "column")
+                    property("gap", "2px")
                 } 
             }) {
-                Text(group.name)
-                if (ccConnectInfo != null) {
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        alignItems(AlignItems.Center)
+                        property("gap", "8px")
+                        property("letter-spacing", "2px")
+                    }
+                }) {
+                    Text(group.name)
+                    if (ccConnectInfo != null) {
+                        Span({
+                            style {
+                                fontSize(10.px)
+                                padding(2.px, 8.px)
+                                borderRadius(4.px)
+                                property("font-weight", "600")
+                                property("letter-spacing", "0.5px")
+                                property("cursor", "pointer")
+                                property("transition", "opacity 0.2s ease")
+                                if (ccConnectInfo?.connected == true) {
+                                    backgroundColor(Color("#E8F5E9"))
+                                    color(Color("#2E7D32"))
+                                } else {
+                                    backgroundColor(Color("#FFF3E0"))
+                                    color(Color("#E65100"))
+                                }
+                            }
+                            attr("title", "Click to view token & connection info")
+                            onClick { showCcConnectTokenDialog = true }
+                        }) {
+                            val label = if (ccConnectInfo?.connected == true) {
+                                "cc-connect (${ccConnectInfo?.agentType ?: "agent"})"
+                            } else {
+                                "cc-connect (offline)"
+                            }
+                            Text(label)
+                        }
+                    }
+                }
+                val cwdText = ccConnectInfo?.cwd
+                if (ccConnectInfo?.connected == true && !cwdText.isNullOrBlank()) {
                     Span({
                         style {
-                            fontSize(10.px)
-                            padding(2.px, 8.px)
-                            borderRadius(4.px)
-                            property("font-weight", "600")
-                            property("letter-spacing", "0.5px")
-                            property("cursor", "pointer")
-                            property("transition", "opacity 0.2s ease")
-                            if (ccConnectInfo?.connected == true) {
-                                backgroundColor(Color("#E8F5E9"))
-                                color(Color("#2E7D32"))
-                            } else {
-                                backgroundColor(Color("#FFF3E0"))
-                                color(Color("#E65100"))
-                            }
+                            fontSize(11.px)
+                            color(Color(SilkColors.textSecondary))
+                            property("font-family", "monospace")
+                            property("letter-spacing", "0")
+                            property("overflow", "hidden")
+                            property("text-overflow", "ellipsis")
+                            property("white-space", "nowrap")
                         }
-                        attr("title", "Click to view token & connection info")
-                        onClick { showCcConnectTokenDialog = true }
+                        title(cwdText)
                     }) {
-                        val label = if (ccConnectInfo?.connected == true) {
-                            "cc-connect (${ccConnectInfo?.agentType ?: "agent"})"
-                        } else {
-                            "cc-connect (offline)"
-                        }
-                        Text(label)
+                        Text("📁 $cwdText")
                     }
                 }
             }
