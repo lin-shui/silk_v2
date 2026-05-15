@@ -246,6 +246,11 @@ private fun CreateWorkflowDialog(
     val scope = rememberCoroutineScope()
     var newName by remember { mutableStateOf("") }
     var newInitialDir by remember { mutableStateOf("") }
+    var availableAgents by remember { mutableStateOf<List<AgentInfo>>(emptyList()) }
+    var selectedAgentType by remember { mutableStateOf("") }
+    var selectedPermMode by remember { mutableStateOf("") }
+    var agentDropdownExpanded by remember { mutableStateOf(false) }
+    var permDropdownExpanded by remember { mutableStateOf(false) }
     var bridgeConnected by remember { mutableStateOf(true) }
     var dirWarning by remember { mutableStateOf<String?>(null) }
     var showFolderPicker by remember { mutableStateOf(false) }
@@ -254,10 +259,20 @@ private fun CreateWorkflowDialog(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
 
-    // 打开时检查 Bridge 连接状态并拉默认目录
+    // 打开时检查 Bridge 连接状态、拉 agent 列表、拉默认目录
     LaunchedEffect(Unit) {
-        val settings = ApiClient.getCcSettings(userId)
-        bridgeConnected = settings.bridgeConnected
+        val agents = ApiClient.listAgents(userId)
+        availableAgents = agents
+        bridgeConnected = agents.any { it.connected }
+        if (selectedAgentType.isBlank()) {
+            val codexOk = agents.firstOrNull { it.agentType == "codex" && it.connected } != null
+            val ccOk = agents.firstOrNull { it.agentType == "claude_code" && it.connected } != null
+            selectedAgentType = when {
+                codexOk -> "codex"
+                ccOk -> "claude_code"
+                else -> "claude_code"
+            }
+        }
         if (newInitialDir.isBlank() && bridgeConnected) {
             dirWarning = null
             val resp = ApiClient.listCcDir(userId, null)
@@ -272,6 +287,14 @@ private fun CreateWorkflowDialog(
     val canCreate = !submitting && bridgeConnected &&
                     newName.isNotBlank() && newInitialDir.isNotBlank()
 
+    val permModeLabel = { mode: String ->
+        when (mode) {
+            "ACCEPT_EDITS" -> "Accept Edits"
+            "BYPASS" -> "Bypass"
+            else -> "Interactive"
+        }
+    }
+
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
         title = { Text("创建工作流") },
@@ -285,11 +308,79 @@ private fun CreateWorkflowDialog(
                     singleLine = true,
                 )
                 Spacer(Modifier.height(12.dp))
-                Text(
-                    "工作目录",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = SilkColors.textSecondary,
-                )
+
+                // Agent 选择
+                Text("Agent", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
+                Spacer(Modifier.height(4.dp))
+                Box {
+                    OutlinedTextField(
+                        value = availableAgents.firstOrNull { it.agentType == selectedAgentType }?.displayName ?: selectedAgentType,
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = { agentDropdownExpanded = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "选择")
+                            }
+                        },
+                    )
+                    DropdownMenu(
+                        expanded = agentDropdownExpanded,
+                        onDismissRequest = { agentDropdownExpanded = false },
+                    ) {
+                        availableAgents.forEach { agent ->
+                            DropdownMenuItem(
+                                text = {
+                                    val suffix = if (agent.connected) "" else "（未连接）"
+                                    Text("${agent.displayName}$suffix")
+                                },
+                                onClick = {
+                                    selectedAgentType = agent.agentType
+                                    agentDropdownExpanded = false
+                                },
+                                enabled = agent.connected,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+
+                // 权限模式
+                Text("权限模式", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
+                Spacer(Modifier.height(4.dp))
+                Box {
+                    OutlinedTextField(
+                        value = permModeLabel(selectedPermMode),
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = { permDropdownExpanded = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "选择")
+                            }
+                        },
+                    )
+                    DropdownMenu(
+                        expanded = permDropdownExpanded,
+                        onDismissRequest = { permDropdownExpanded = false },
+                    ) {
+                        listOf("" to "Interactive", "ACCEPT_EDITS" to "Accept Edits", "BYPASS" to "Bypass").forEach { (value, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    selectedPermMode = value
+                                    permDropdownExpanded = false
+                                },
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+
+                // 工作目录
+                Text("工作目录", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
                 Spacer(Modifier.height(4.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -339,6 +430,8 @@ private fun CreateWorkflowDialog(
                     if (!canCreate) return@Button
                     val initDir = newInitialDir.trim()
                     val name = newName.trim()
+                    val agentType = selectedAgentType.ifBlank { "claude_code" }
+                    val permMode = selectedPermMode
                     submitting = true
                     scope.launch {
                         try {
@@ -360,7 +453,7 @@ private fun CreateWorkflowDialog(
                                 is TrustCheckResult.Trusted -> {} // 继续
                             }
                             // 2. 已信任：直接创建
-                            performCreate(userId, name, initDir, onCreated) { msg ->
+                            performCreate(userId, name, initDir, agentType, permMode, onCreated) { msg ->
                                 errorMessage = msg
                             }
                         } finally {
@@ -404,9 +497,11 @@ private fun CreateWorkflowDialog(
                         val added = ApiClient.addTrustedDir(userId, newInitialDir.trim())
                         showTrustConfirm = false
                         if (added) {
-                            performCreate(userId, newName.trim(), newInitialDir.trim(), onCreated) { msg ->
-                                errorMessage = msg
-                            }
+                            performCreate(
+                                userId, newName.trim(), newInitialDir.trim(),
+                                selectedAgentType.ifBlank { "claude_code" }, selectedPermMode,
+                                onCreated,
+                            ) { msg -> errorMessage = msg }
                         } else {
                             errorMessage = "添加信任记录失败，请重试。"
                         }
@@ -427,10 +522,12 @@ private suspend fun performCreate(
     userId: String,
     name: String,
     initialDir: String,
+    agentType: String,
+    permissionMode: String,
     onCreated: (WorkflowItem) -> Unit,
     onError: (String) -> Unit,
 ) {
-    when (val r = ApiClient.createWorkflow(name, "", userId, initialDir)) {
+    when (val r = ApiClient.createWorkflow(name, "", userId, initialDir, agentType, permissionMode)) {
         is CreateWorkflowResult.Ok -> onCreated(r.workflow)
         is CreateWorkflowResult.Err -> onError("创建工作流失败：${r.message}")
     }

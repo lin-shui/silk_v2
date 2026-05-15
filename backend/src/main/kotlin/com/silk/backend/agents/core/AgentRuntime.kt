@@ -1222,6 +1222,20 @@ object AgentRuntime {
                     agentName = descriptor.displayName,
                 ))
 
+                // 模式切换时额外广播一条系统消息，让前端 LaunchedEffect(messages.size) 能捕获
+                if (modeSwitch != null) {
+                    val modeLabel = when (modeSwitch) {
+                        PermissionMode.ACCEPT_EDITS -> "Accept Edits"
+                        PermissionMode.BYPASS -> "Bypass"
+                        else -> modeSwitch.name
+                    }
+                    broadcastFn(AgentMessages.system(
+                        "已切换到 $modeLabel 权限模式",
+                        agentUserId = descriptor.agentUserId,
+                        agentName = descriptor.displayName,
+                    ))
+                }
+
                 // Resolve via ACP
                 try {
                     AcpExtensions.resolvePermission(acp, requestId, decision, reason)
@@ -1274,6 +1288,45 @@ object AgentRuntime {
             agentType = agentType,
             permissionMode = session?.permissionMode?.name ?: "",
         )
+    }
+
+    // ========== API-driven settings ==========
+
+    /**
+     * API-driven agent switch (like /use but without chat broadcast).
+     * Returns the descriptor on success, null if agentType not found.
+     */
+    fun switchAgent(userId: String, groupId: String, agentType: String): AgentDescriptor? {
+        val descriptor = AgentRegistry.getByType(agentType) ?: return null
+        val ctx = context(userId, groupId)
+        ctx.currentAgentType = agentType
+        val session = ctx.getOrCreateSession(agentType)
+        val seed = try {
+            persistence?.loadSeed(stripGroupPrefix(groupId), agentType)
+        } catch (e: Exception) {
+            logger.warn("[AgentRuntime] switchAgent {} loadSeed failed: {}", agentType, e.message)
+            null
+        }
+        if (seed != null && !seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
+            session.cliSessionId = seed.cliSessionId
+        }
+        persistActiveAgentAsync(groupId, agentType)
+        return descriptor
+    }
+
+    /**
+     * API-driven permission mode change.
+     * Returns true if the mode was set successfully.
+     */
+    fun setPermissionMode(userId: String, groupId: String, mode: String): Boolean {
+        val pm = try { PermissionMode.valueOf(mode) } catch (_: IllegalArgumentException) { return false }
+        val ctx = context(userId, groupId)
+        val agentType = ctx.currentAgentType ?: return false
+        val session = ctx.getOrCreateSession(agentType)
+        if (session.permissionMode == pm) return true // no-op
+        session.permissionMode = pm
+        persistPermissionModeAsync(groupId, pm)
+        return true
     }
 
     // ========== AskUserQuestion ==========
