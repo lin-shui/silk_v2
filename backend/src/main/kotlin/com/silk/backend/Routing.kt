@@ -2358,7 +2358,25 @@ fun Application.configureRouting() {
                                 com.silk.backend.ccconnect.ReplyStreamMessage.serializer(), text
                             )
                             if (turnActive) {
-                                answerText = stream.content
+                                val raw = stream.content
+                                val thinkEmoji = "\uD83D\uDCAD"
+                                val toolEmoji = "\uD83D\uDD27"
+                                if (raw.contains(thinkEmoji) || raw.contains(toolEmoji)) {
+                                    thinkingParts.clear()
+                                    toolParts.clear()
+                                    answerText = ""
+                                    val segments = raw.split(Regex("(?=\uD83D[\uDCAD\uDD27])"))
+                                    for (seg in segments) {
+                                        val trimmed = seg.trimStart()
+                                        when {
+                                            trimmed.startsWith(thinkEmoji) -> thinkingParts.add(seg.trim())
+                                            trimmed.startsWith(toolEmoji) -> toolParts.add(seg.trim())
+                                            trimmed.isNotBlank() -> answerText = seg.trim()
+                                        }
+                                    }
+                                } else {
+                                    answerText = raw
+                                }
                                 gotReplyAfterStream = false
                                 val msg = Message(
                                     id = java.util.UUID.randomUUID().toString(),
