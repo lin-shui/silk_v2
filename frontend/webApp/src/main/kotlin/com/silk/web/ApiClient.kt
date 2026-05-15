@@ -215,6 +215,38 @@ data class ExportKBResponse(
     val vaultPath: String = "",
     val fileName: String = ""
 )
+
+/** 创建工作流的结果。Ok 携带后端落库后的 workflow；Err 携带可展示给用户的错误消息。 */
+sealed class CreateWorkflowResult {
+    data class Ok(val workflow: WorkflowItem) : CreateWorkflowResult()
+    data class Err(val message: String) : CreateWorkflowResult()
+}
+
+sealed class TrustCheckResult {
+    data class Trusted(val bridgeId: String?) : TrustCheckResult()
+    data class NotTrusted(val bridgeId: String?) : TrustCheckResult()
+    object BridgeDisconnected : TrustCheckResult()
+    data class Error(val message: String) : TrustCheckResult()
+}
+
+private fun parseCreateWorkflowResponse(json: Json, response: String): CreateWorkflowResult {
+    val parsed = try {
+        kotlinx.serialization.json.Json.parseToJsonElement(response).jsonObject
+    } catch (_: Exception) { null }
+        ?: return CreateWorkflowResult.Err("服务器返回了无法识别的响应")
+
+    val success = parsed["success"]?.jsonPrimitive?.booleanOrNull
+    if (success == false) {
+        val msg = parsed["message"]?.jsonPrimitive?.contentOrNull ?: "创建失败"
+        return CreateWorkflowResult.Err(msg)
+    }
+    return try {
+        CreateWorkflowResult.Ok(json.decodeFromString<WorkflowItem>(response))
+    } catch (_: Exception) {
+        CreateWorkflowResult.Err("解析创建结果失败")
+    }
+}
+
 object ApiClient {
     private val BASE_URL: String
         get() {
@@ -768,12 +800,6 @@ object ApiClient {
         }
     }
 
-    /** 创建工作流的结果。Ok 携带后端落库后的 workflow；Err 携带可展示给用户的错误消息。 */
-    sealed class CreateWorkflowResult {
-        data class Ok(val workflow: WorkflowItem) : CreateWorkflowResult()
-        data class Err(val message: String) : CreateWorkflowResult()
-    }
-
     suspend fun createWorkflow(
         name: String,
         description: String,
@@ -783,45 +809,16 @@ object ApiClient {
         permissionMode: String = "",
     ): CreateWorkflowResult {
         return try {
-            // 构造 JSON，使用 JsonObject 安全编码避免手动转义
             val obj = kotlinx.serialization.json.buildJsonObject {
                 put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
                 put("name", kotlinx.serialization.json.JsonPrimitive(name))
                 put("description", kotlinx.serialization.json.JsonPrimitive(description))
-                if (initialDir.isNotBlank()) {
-                    put("initialDir", kotlinx.serialization.json.JsonPrimitive(initialDir))
-                }
-                if (agentType.isNotBlank()) {
-                    put("agentType", kotlinx.serialization.json.JsonPrimitive(agentType))
-                }
-                if (permissionMode.isNotBlank()) {
-                    put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
-                }
+                if (initialDir.isNotBlank()) put("initialDir", kotlinx.serialization.json.JsonPrimitive(initialDir))
+                if (agentType.isNotBlank()) put("agentType", kotlinx.serialization.json.JsonPrimitive(agentType))
+                if (permissionMode.isNotBlank()) put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
             }
             val response = post("/api/workflows", obj.toString())
-            // 响应有两种形状：
-            //   成功：Workflow 对象（有 id/groupId 等字段，无 success 字段）
-            //   失败：错误信封 {"success": false, "message": "..."}
-            // 优先用 success 字段区分，避免"错误响应恰好含 id 字段"这种 ignoreUnknownKeys 陷阱
-            val parsed = try {
-                kotlinx.serialization.json.Json.parseToJsonElement(response).jsonObject
-            } catch (_: Exception) { null }
-            if (parsed == null) {
-                CreateWorkflowResult.Err("服务器返回了无法识别的响应")
-            } else {
-                val success = parsed["success"]?.jsonPrimitive?.booleanOrNull
-                // success 字段存在且为 false → 错误信封；未出现 success 字段 → 视为 Workflow 对象
-                if (success == false) {
-                    val msg = parsed["message"]?.jsonPrimitive?.contentOrNull ?: "创建失败"
-                    CreateWorkflowResult.Err(msg)
-                } else {
-                    try {
-                        CreateWorkflowResult.Ok(jsonParser.decodeFromString<WorkflowItem>(response))
-                    } catch (_: Exception) {
-                        CreateWorkflowResult.Err("解析创建结果失败")
-                    }
-                }
-            }
+            parseCreateWorkflowResponse(jsonParser, response)
         } catch (e: Exception) {
             console.log("创建工作流失败:", e)
             CreateWorkflowResult.Err(e.message ?: "网络错误")
@@ -856,13 +853,6 @@ object ApiClient {
     }
 
     // ==================== Trusted Directory API ====================
-
-    sealed class TrustCheckResult {
-        data class Trusted(val bridgeId: String?) : TrustCheckResult()
-        data class NotTrusted(val bridgeId: String?) : TrustCheckResult()
-        object BridgeDisconnected : TrustCheckResult()
-        data class Error(val message: String) : TrustCheckResult()
-    }
 
     suspend fun checkTrustedDir(userId: String, path: String): TrustCheckResult {
         return try {

@@ -91,9 +91,9 @@ fun WorkflowChatScreen(appState: AppState) {
         // 监听新增消息，刷新 activeAgent / permissionMode 显示
         LaunchedEffect(messages.size) {
             val latest = messages.lastOrNull() ?: return@LaunchedEffect
-            if (latest.type == com.silk.shared.models.MessageType.SYSTEM &&
-                (latest.content.startsWith("已切换到") || latest.content.contains("已激活") || latest.content.contains("已退出 agent"))
-            ) {
+            val isAgentSwitchMsg = latest.content.startsWith("已切换到") ||
+                latest.content.contains("已激活") || latest.content.contains("已退出 agent")
+            if (latest.type == com.silk.shared.models.MessageType.SYSTEM && isAgentSwitchMsg) {
                 val snap = ApiClient.getCcState(user.id, groupId)
                 if (snap.success) {
                     activeAgentDisplay = snap.agentDisplayName

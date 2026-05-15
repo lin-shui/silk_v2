@@ -98,7 +98,7 @@ fun WorkflowScene(appState: WebAppState) {
         )
         workflows = ApiClient.getWorkflows(user.id)
         when (result) {
-            is ApiClient.CreateWorkflowResult.Ok -> {
+            is CreateWorkflowResult.Ok -> {
                 selectedWorkflow = result.workflow
                 showCreateDialog = false
                 newName = ""
@@ -107,7 +107,7 @@ fun WorkflowScene(appState: WebAppState) {
                 selectedPermissionMode = ""
                 dirWarning = null
             }
-            is ApiClient.CreateWorkflowResult.Err -> {
+            is CreateWorkflowResult.Err -> {
                 kotlinx.browser.window.alert("创建工作流失败：${result.message}")
                 // 重新检查 bridge 连接状态
                 val agents = ApiClient.listAgents(user.id)
@@ -572,17 +572,17 @@ fun WorkflowScene(appState: WebAppState) {
                                 // 1. 信任目录检查
                                 val trustCheck = ApiClient.checkTrustedDir(user.id, initDir)
                                 when (trustCheck) {
-                                    is ApiClient.TrustCheckResult.BridgeDisconnected -> {
+                                    is TrustCheckResult.BridgeDisconnected -> {
                                         kotlinx.browser.window.alert("Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
                                         return@launch
                                     }
-                                    is ApiClient.TrustCheckResult.NotTrusted -> {
+                                    is TrustCheckResult.NotTrusted -> {
                                         trustConfirmPath = initDir
                                         trustConfirmBridgeId = trustCheck.bridgeId
                                         showTrustConfirm = true
                                         return@launch
                                     }
-                                    is ApiClient.TrustCheckResult.Error -> {
+                                    is TrustCheckResult.Error -> {
                                         kotlinx.browser.window.alert("检查信任状态失败：${trustCheck.message}")
                                         return@launch
                                     }
@@ -1271,6 +1271,55 @@ private fun WorkflowChatPanel(
     }
 }
 
+/** applyWorkflowSettings 的返回值：成功 / 需要信任确认 / 错误。 */
+private sealed class SettingsApplyResult {
+    data class Ok(val dir: String, val agent: String, val perm: String) : SettingsApplyResult()
+    data class NeedTrust(val path: String, val bridgeId: String?) : SettingsApplyResult()
+    data class Error(val msg: String) : SettingsApplyResult()
+}
+
+/** 纯业务逻辑：cd + agent/perm 变更，不持有 Compose 状态。 */
+private suspend fun applyWorkflowSettings(
+    userId: String, groupId: String,
+    editDir: String, currentWorkingDir: String,
+    selectedAgentType: String, currentAgentDisplay: String,
+    selectedPermMode: String, currentPermissionMode: String,
+): SettingsApplyResult {
+    val resultDir = editDir.trim()
+    var newDir = currentWorkingDir
+    var newAgentDisplay = currentAgentDisplay
+    var newPermMode = currentPermissionMode
+
+    if (resultDir.isNotBlank() && resultDir != currentWorkingDir) {
+        when (val tc = ApiClient.checkTrustedDir(userId, resultDir)) {
+            is TrustCheckResult.BridgeDisconnected -> return SettingsApplyResult.Error("Bridge 未连接，无法切换目录。")
+            is TrustCheckResult.NotTrusted -> return SettingsApplyResult.NeedTrust(resultDir, tc.bridgeId)
+            is TrustCheckResult.Error -> return SettingsApplyResult.Error("检查信任状态失败：${tc.message}")
+            else -> {}
+        }
+        val cdResp = ApiClient.cdCcDir(userId, groupId, resultDir)
+        if (!cdResp.success) return SettingsApplyResult.Error("切换目录失败：${cdResp.error ?: "未知错误"}")
+        newDir = cdResp.workingDir
+    }
+
+    val currentAgentUnderscore = ApiClient.getCcState(userId, groupId).agentType.replace('-', '_')
+    val agentChanged = selectedAgentType !in listOf("", currentAgentUnderscore)
+    val permChanged = selectedPermMode != currentPermissionMode
+    if (agentChanged || permChanged) {
+        val resp = ApiClient.updateCcSettings(
+            userId, groupId,
+            activeAgent = selectedAgentType.takeIf { agentChanged },
+            permissionMode = selectedPermMode.ifBlank { "INTERACTIVE" }.takeIf { permChanged },
+        )
+        if (!resp.success) return SettingsApplyResult.Error("更新设置失败：${resp.error ?: "未知错误"}")
+        newAgentDisplay = resp.agentDisplayName
+        newPermMode = resp.permissionMode
+        if (newDir == currentWorkingDir) newDir = resp.workingDir
+    }
+
+    return SettingsApplyResult.Ok(newDir, newAgentDisplay, newPermMode)
+}
+
 /**
  * 会话设置弹窗：工作目录 / Agent / 权限模式三合一。
  */
@@ -1296,103 +1345,156 @@ private fun WorkflowSettingsDialog(
     var saving by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    // 初始化：加载 agent 列表和当前 agent 状态
     LaunchedEffect(Unit) {
-        val agents = ApiClient.listAgents(userId)
-        availableAgents = agents
-        // 从当前显示名反查 agentType
+        availableAgents = ApiClient.listAgents(userId)
         val snap = ApiClient.getCcState(userId, groupId)
         if (snap.success && snap.agentType.isNotBlank()) {
-            // agentType 从 runtime 是 dash form，转 underscore form 用于 dropdown
             selectedAgentType = snap.agentType.replace('-', '_')
         }
     }
 
-    suspend fun applyChanges() {
-        saving = true
-        errorMsg = null
-        val resultDir = editDir.trim()
-        var newDir = currentWorkingDir
-        var newAgentDisplay = currentAgentDisplay
-        var newPermMode = currentPermissionMode
-
-        try {
-            // 1. 如果目录变了，先 cd（含信任检查）
-            if (resultDir.isNotBlank() && resultDir != currentWorkingDir) {
-                val trustCheck = ApiClient.checkTrustedDir(userId, resultDir)
-                when (trustCheck) {
-                    is ApiClient.TrustCheckResult.BridgeDisconnected -> {
-                        errorMsg = "Bridge 未连接，无法切换目录。"
-                        return
-                    }
-                    is ApiClient.TrustCheckResult.NotTrusted -> {
-                        trustConfirmPath = resultDir
-                        trustConfirmBridgeId = trustCheck.bridgeId
+    fun handleApply() {
+        scope.launch {
+            saving = true
+            errorMsg = null
+            try {
+                when (val r = applyWorkflowSettings(
+                    userId, groupId, editDir, currentWorkingDir,
+                    selectedAgentType, currentAgentDisplay,
+                    selectedPermMode, currentPermissionMode,
+                )) {
+                    is SettingsApplyResult.Ok -> onApplied(r.dir, r.agent, r.perm)
+                    is SettingsApplyResult.NeedTrust -> {
+                        trustConfirmPath = r.path
+                        trustConfirmBridgeId = r.bridgeId
                         showTrustConfirm = true
-                        return
                     }
-                    is ApiClient.TrustCheckResult.Error -> {
-                        errorMsg = "检查信任状态失败：${trustCheck.message}"
-                        return
-                    }
-                    else -> {}
+                    is SettingsApplyResult.Error -> errorMsg = r.msg
                 }
-                val cdResp = ApiClient.cdCcDir(userId, groupId, resultDir)
-                if (!cdResp.success) {
-                    errorMsg = "切换目录失败：${cdResp.error ?: "未知错误"}"
-                    return
-                }
-                newDir = cdResp.workingDir
+            } finally {
+                saving = false
             }
-
-            // 2. Agent / 权限模式变化：合并为一次 API 调用
-            val currentAgentUnderscore = currentAgentDisplay.let {
-                // 从当前 snapshot 再取一次精确的 agentType
-                val s = ApiClient.getCcState(userId, groupId)
-                s.agentType.replace('-', '_')
-            }
-            val agentChanged = selectedAgentType.isNotBlank() && selectedAgentType != currentAgentUnderscore
-            val permChanged = selectedPermMode != currentPermissionMode
-            if (agentChanged || permChanged) {
-                val resp = ApiClient.updateCcSettings(
-                    userId, groupId,
-                    activeAgent = if (agentChanged) selectedAgentType else null,
-                    permissionMode = if (permChanged) selectedPermMode.ifBlank { "INTERACTIVE" } else null,
-                )
-                if (!resp.success) {
-                    errorMsg = "更新设置失败：${resp.error ?: "未知错误"}"
-                    return
-                }
-                newAgentDisplay = resp.agentDisplayName
-                newPermMode = resp.permissionMode
-                // 如果前面没 cd 过，workingDir 也从这里取
-                if (newDir == currentWorkingDir) newDir = resp.workingDir
-            }
-
-            onApplied(newDir, newAgentDisplay, newPermMode)
-        } finally {
-            saving = false
         }
     }
 
-    // 信任后重试 cd + 继续 apply
-    suspend fun applyAfterTrust() {
-        saving = true
-        errorMsg = null
-        try {
-            val added = ApiClient.addTrustedDir(userId, trustConfirmPath)
-            if (!added) {
-                errorMsg = "添加信任记录失败，请重试。"
-                return
+    fun handleTrustThenApply() {
+        scope.launch {
+            saving = true
+            errorMsg = null
+            try {
+                val added = ApiClient.addTrustedDir(userId, trustConfirmPath)
+                if (!added) { errorMsg = "添加信任记录失败，请重试。"; return@launch }
+                showTrustConfirm = false
+                // 直接调用业务逻辑而非 handleApply()，避免启动新协程导致 saving 间隙
+                when (val r = applyWorkflowSettings(
+                    userId, groupId, editDir, currentWorkingDir,
+                    selectedAgentType, currentAgentDisplay,
+                    selectedPermMode, currentPermissionMode,
+                )) {
+                    is SettingsApplyResult.Ok -> onApplied(r.dir, r.agent, r.perm)
+                    is SettingsApplyResult.NeedTrust -> {
+                        trustConfirmPath = r.path
+                        trustConfirmBridgeId = r.bridgeId
+                        showTrustConfirm = true
+                    }
+                    is SettingsApplyResult.Error -> errorMsg = r.msg
+                }
+            } finally {
+                saving = false
             }
-            showTrustConfirm = false
-            applyChanges()
-        } finally {
-            saving = false
         }
     }
 
-    // 背景遮罩
+    SettingsDialogBody(
+        availableAgents = availableAgents,
+        selectedAgentType = selectedAgentType,
+        onAgentTypeChange = { selectedAgentType = it },
+        selectedPermMode = selectedPermMode,
+        onPermModeChange = { selectedPermMode = it },
+        editDir = editDir,
+        onEditDirChange = { editDir = it },
+        onFolderPickerClick = { showFolderPicker = true },
+        errorMsg = errorMsg,
+        saving = saving,
+        onDismiss = onDismiss,
+        onSave = ::handleApply,
+    )
+
+    if (showFolderPicker) {
+        FolderPickerDialog(
+            userId = userId,
+            initialPath = editDir.ifBlank { null },
+            onDismiss = { showFolderPicker = false },
+            onConfirm = { path -> editDir = path; showFolderPicker = false },
+        )
+    }
+
+    if (showTrustConfirm) {
+        TrustConfirmDialog(
+            path = trustConfirmPath,
+            bridgeId = trustConfirmBridgeId,
+            onDismiss = { showTrustConfirm = false; saving = false },
+            onTrust = ::handleTrustThenApply,
+        )
+    }
+}
+
+@Composable
+private fun AgentSelectorField(
+    availableAgents: List<AgentInfo>,
+    selectedAgentType: String,
+    onAgentTypeChange: (String) -> Unit,
+) {
+    Span({
+        style {
+            fontSize(12.px); color(Color(SilkColors.textSecondary))
+            property("display", "block"); marginBottom(4.px)
+        }
+    }) { Text("Agent") }
+    Select({
+        style {
+            width(100.percent); height(40.px); borderRadius(6.px)
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            padding(8.px); fontSize(14.px); marginBottom(12.px)
+            property("box-sizing", "border-box"); backgroundColor(Color.white)
+        }
+        onChange { onAgentTypeChange(it.value ?: "") }
+    }) {
+        if (availableAgents.isEmpty()) {
+            Option("") { Text("加载中…") }
+        } else {
+            availableAgents.forEach { agent ->
+                Option(
+                    value = agent.agentType,
+                    attrs = {
+                        if (!agent.connected) attr("disabled", "")
+                        if (agent.agentType == selectedAgentType) attr("selected", "")
+                    },
+                ) {
+                    val suffix = if (agent.connected) "" else "（未连接）"
+                    Text("${agent.displayName}${suffix}")
+                }
+            }
+        }
+    }
+}
+
+/** 设置弹窗的表单 UI：Agent / 权限模式 / 工作目录 + 保存/取消按钮。 */
+@Composable
+private fun SettingsDialogBody(
+    availableAgents: List<AgentInfo>,
+    selectedAgentType: String,
+    onAgentTypeChange: (String) -> Unit,
+    selectedPermMode: String,
+    onPermModeChange: (String) -> Unit,
+    editDir: String,
+    onEditDirChange: (String) -> Unit,
+    onFolderPickerClick: () -> Unit,
+    errorMsg: String?,
+    saving: Boolean,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+) {
     Div({
         style {
             position(Position.Fixed)
@@ -1418,39 +1520,7 @@ private fun WorkflowSettingsDialog(
         }) {
             H3({ style { marginTop(0.px); color(Color(SilkColors.textPrimary)) } }) { Text("会话设置") }
 
-            // Agent 选择
-            Span({
-                style {
-                    fontSize(12.px); color(Color(SilkColors.textSecondary))
-                    property("display", "block"); marginBottom(4.px)
-                }
-            }) { Text("Agent") }
-            Select({
-                style {
-                    width(100.percent); height(40.px); borderRadius(6.px)
-                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                    padding(8.px); fontSize(14.px); marginBottom(12.px)
-                    property("box-sizing", "border-box"); backgroundColor(Color.white)
-                }
-                onChange { selectedAgentType = it.value ?: "" }
-            }) {
-                if (availableAgents.isEmpty()) {
-                    Option("") { Text("加载中…") }
-                } else {
-                    availableAgents.forEach { agent ->
-                        Option(
-                            value = agent.agentType,
-                            attrs = {
-                                if (!agent.connected) attr("disabled", "")
-                                if (agent.agentType == selectedAgentType) attr("selected", "")
-                            },
-                        ) {
-                            val suffix = if (agent.connected) "" else "（未连接）"
-                            Text("${agent.displayName}${suffix}")
-                        }
-                    }
-                }
-            }
+            AgentSelectorField(availableAgents, selectedAgentType, onAgentTypeChange)
 
             // 权限模式
             Span({
@@ -1466,7 +1536,7 @@ private fun WorkflowSettingsDialog(
                     padding(8.px); fontSize(14.px); marginBottom(12.px)
                     property("box-sizing", "border-box"); backgroundColor(Color.white)
                 }
-                onChange { selectedPermMode = it.value ?: "" }
+                onChange { onPermModeChange(it.value ?: "") }
             }) {
                 Option("", attrs = { if (selectedPermMode.isBlank() || selectedPermMode == "INTERACTIVE") attr("selected", "") }) { Text("Interactive") }
                 Option("ACCEPT_EDITS", attrs = { if (selectedPermMode == "ACCEPT_EDITS") attr("selected", "") }) { Text("Accept Edits") }
@@ -1487,7 +1557,7 @@ private fun WorkflowSettingsDialog(
             }) {
                 Input(InputType.Text) {
                     value(editDir)
-                    onInput { editDir = it.value }
+                    onInput { onEditDirChange(it.value) }
                     attr("placeholder", "工作目录路径")
                     style {
                         property("flex", "1"); height(40.px); borderRadius(6.px)
@@ -1506,7 +1576,7 @@ private fun WorkflowSettingsDialog(
                         property("cursor", "pointer"); fontSize(13.px)
                         property("white-space", "nowrap")
                     }
-                    onClick { showFolderPicker = true }
+                    onClick { onFolderPickerClick() }
                 }) { Text("\uD83D\uDCC2 选择…") }
             }
 
@@ -1543,36 +1613,10 @@ private fun WorkflowSettingsDialog(
                         borderRadius(6.px); padding(8.px, 16.px)
                         property("cursor", if (saving) "wait" else "pointer")
                     }
-                    onClick { scope.launch { applyChanges() } }
+                    onClick { onSave() }
                 }) { Text(if (saving) "保存中…" else "保存") }
             }
         }
-    }
-
-    // Folder Picker 子弹窗
-    if (showFolderPicker) {
-        FolderPickerDialog(
-            userId = userId,
-            initialPath = editDir.ifBlank { null },
-            onDismiss = { showFolderPicker = false },
-            onConfirm = { path ->
-                editDir = path
-                showFolderPicker = false
-            },
-        )
-    }
-
-    // 信任确认子弹窗
-    if (showTrustConfirm) {
-        TrustConfirmDialog(
-            path = trustConfirmPath,
-            bridgeId = trustConfirmBridgeId,
-            onDismiss = {
-                showTrustConfirm = false
-                saving = false
-            },
-            onTrust = { scope.launch { applyAfterTrust() } },
-        )
     }
 }
 

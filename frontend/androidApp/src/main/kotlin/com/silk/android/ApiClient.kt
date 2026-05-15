@@ -178,6 +178,15 @@ sealed class TrustCheckResult {
     data class Error(val message: String) : TrustCheckResult()
 }
 
+private fun parseCreateWorkflowResponse(json: Json, response: String): CreateWorkflowResult {
+    val obj = json.parseToJsonElement(response).jsonObject
+    if (obj["success"]?.jsonPrimitive?.booleanOrNull == false) {
+        val msg = obj["message"]?.jsonPrimitive?.contentOrNull ?: "未知错误"
+        return CreateWorkflowResult.Err(msg)
+    }
+    return CreateWorkflowResult.Ok(json.decodeFromString(response))
+}
+
 object ApiClient {
     private val baseUrl: String get() = BackendUrlHolder.getBaseUrl()
     private val jsonParser = Json { ignoreUnknownKeys = true }
@@ -660,13 +669,7 @@ object ApiClient {
                 }
             }.toString()
             val response = post("/api/workflows", body)
-            val obj = jsonParser.parseToJsonElement(response).jsonObject
-            if (obj["success"]?.jsonPrimitive?.booleanOrNull == false) {
-                val msg = obj["message"]?.jsonPrimitive?.contentOrNull ?: "未知错误"
-                CreateWorkflowResult.Err(msg)
-            } else {
-                CreateWorkflowResult.Ok(jsonParser.decodeFromString(response))
-            }
+            parseCreateWorkflowResponse(jsonParser, response)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             CreateWorkflowResult.Err(e.message ?: "网络错误")
