@@ -382,6 +382,7 @@ fun ChatScene(appState: WebAppState) {
     var userGroups by remember(user?.id) { mutableStateOf<List<Group>>(emptyList()) }
     var unreadCounts by remember(user?.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var isLoadingGroups by remember(user?.id) { mutableStateOf(true) }
+    var sidebarCcStatus by remember(user?.id) { mutableStateOf<Map<String, CcConnectTokenInfo>>(emptyMap()) }
     
     console.log("   群组:", group?.name ?: "null")
     console.log("   用户:", user?.fullName ?: "null")
@@ -408,6 +409,14 @@ fun ChatScene(appState: WebAppState) {
             if (unreadResponse.success) {
                 unreadCounts = unreadResponse.unreadCounts
             }
+            val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
+            userGroups.forEach { g ->
+                val info = ApiClient.getCcConnectTokenInfo(g.id, user.id)
+                if (info != null && info.success) {
+                    statusMap[g.id] = info
+                }
+            }
+            sidebarCcStatus = statusMap
         } catch (e: Exception) {
             console.error("❌ 加载聊天室群组列表失败:", e)
         } finally {
@@ -504,6 +513,9 @@ fun ChatScene(appState: WebAppState) {
                         userGroups.forEach { item ->
                             val isActive = item.id == group.id
                             val unread = unreadCounts[item.id] ?: 0
+                            val ccInfo = sidebarCcStatus[item.id]
+                            val isCcGroup = ccInfo != null
+                            val isSilkPrivate = item.name.startsWith("[Silk]")
                             Div({
                                 style {
                                     padding(12.px, 14.px)
@@ -548,6 +560,48 @@ fun ChatScene(appState: WebAppState) {
                                         }
                                     }) {
                                         Text(item.name)
+                                    }
+                                    val typeBadge: String? = when {
+                                        isCcGroup -> {
+                                            val raw = (ccInfo?.agentType ?: "").lowercase().trim()
+                                            when {
+                                                raw.startsWith("claude") -> "claude"
+                                                raw.startsWith("cursor") -> "cursor"
+                                                raw.startsWith("gemini") -> "gemini"
+                                                raw.startsWith("codex")  -> "codex"
+                                                raw.startsWith("copilot") -> "copilot"
+                                                raw.isBlank() -> "cc"
+                                                else -> raw
+                                            }
+                                        }
+                                        isSilkPrivate -> null
+                                        else -> "silk"
+                                    }
+                                    if (typeBadge != null) {
+                                        Span({
+                                            style {
+                                                fontSize(9.px)
+                                                padding(1.px, 5.px)
+                                                borderRadius(3.px)
+                                                property("font-weight", "600")
+                                                property("letter-spacing", "0.3px")
+                                                property("flex-shrink", "0")
+                                                if (isCcGroup) {
+                                                    if (ccInfo?.connected == true) {
+                                                        backgroundColor(Color("#E8F5E9"))
+                                                        color(Color("#2E7D32"))
+                                                    } else {
+                                                        backgroundColor(Color("#FFF3E0"))
+                                                        color(Color("#E65100"))
+                                                    }
+                                                } else {
+                                                    backgroundColor(Color("rgba(201, 168, 108, 0.15)"))
+                                                    color(Color(SilkColors.primary))
+                                                }
+                                            }
+                                        }) {
+                                            Text(if (isCcGroup && ccInfo?.connected != true) "$typeBadge ⏸" else typeBadge)
+                                        }
                                     }
                                     if (unread > 0) {
                                         Span({
