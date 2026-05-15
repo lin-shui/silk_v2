@@ -2308,7 +2308,7 @@ fun Application.configureRouting() {
                 return sb.toString()
             }
 
-            val ccUserName = "cc-connect (${hello.agentType})"
+            val ccUserName = com.silk.backend.ccconnect.agentTriggerName(hello.agentType).replaceFirstChar { it.uppercaseChar() }
 
             try {
                 for (frame in incoming) {

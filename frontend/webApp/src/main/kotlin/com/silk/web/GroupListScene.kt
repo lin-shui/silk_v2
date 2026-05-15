@@ -869,6 +869,18 @@ fun GroupCard(
                 
                 // cc-connect status badge
                 if (isCcConnect) {
+                    val badgeName = run {
+                        val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
+                        when {
+                            raw.startsWith("claude") -> "claude"
+                            raw.startsWith("cursor") -> "cursor"
+                            raw.startsWith("gemini") -> "gemini"
+                            raw.startsWith("codex")  -> "codex"
+                            raw.startsWith("copilot") -> "copilot"
+                            raw.isBlank() -> "cc"
+                            else -> raw
+                        }
+                    }
                     Span({
                         style {
                             fontSize(10.px)
@@ -888,7 +900,7 @@ fun GroupCard(
                             title("${ccConnectInfo?.agentType ?: "agent"} — ${ccConnectInfo?.project ?: ""}")
                         }
                     }) {
-                        Text(if (ccConnected) "cc" else "cc (offline)")
+                        Text(if (ccConnected) badgeName else "$badgeName (offline)")
                     }
                 }
             }

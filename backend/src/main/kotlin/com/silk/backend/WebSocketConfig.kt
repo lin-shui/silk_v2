@@ -337,7 +337,7 @@ class ChatServer(
         
         // ==================== cc-connect 路由 ====================
         // cc-connect 群组：仅 HOST / OPERATOR 的消息转发给适配器，GUEST 消息不触发命令
-        // 多人群需要 @cc 前缀触发；单人（仅群主）时所有消息直接转发
+        // 多人群需要 @-prefix 触发（@cc 通用或 @claude/@cursor 等代理特定前缀）；单人直接转发
         val ccGroupId = sessionName.removePrefix("group_")
         if (com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId)
             && message.type == MessageType.TEXT && !message.isTransient
@@ -348,13 +348,26 @@ class ChatServer(
                 val memberCount = com.silk.backend.database.GroupRepository.getGroupMemberCount(ccGroupId)
                 val isSoloMode = memberCount <= 1L
                 val content = message.content
-                val hasPrefix = content.startsWith("@cc ") || content.startsWith("@CC ")
-                        || content.equals("@cc", ignoreCase = true)
+
+                val connMeta = com.silk.backend.ccconnect.CcConnectRegistry.getConnectionInfo(ccGroupId)
+                val triggerName = com.silk.backend.ccconnect.agentTriggerName(connMeta?.agentType ?: "")
+                val prefixes = buildSet {
+                    add("@cc")
+                    if (triggerName != "cc") add("@$triggerName")
+                }
+                val matchedPrefix = prefixes.firstOrNull { p ->
+                    content.startsWith("$p ", ignoreCase = true) || content.equals(p, ignoreCase = true)
+                }
+                val hasPrefix = matchedPrefix != null
 
                 if (isSoloMode || hasPrefix) {
-                    val forwardContent = if (hasPrefix) {
-                        content.removePrefix("@cc ").removePrefix("@CC ")
-                            .removePrefix("@cc").removePrefix("@CC").trim()
+                    val forwardContent = if (hasPrefix && matchedPrefix != null) {
+                        val stripped = if (content.startsWith("$matchedPrefix ", ignoreCase = true)) {
+                            content.substring(matchedPrefix.length + 1)
+                        } else {
+                            content.substring(matchedPrefix.length)
+                        }
+                        stripped.trim()
                     } else {
                         content
                     }

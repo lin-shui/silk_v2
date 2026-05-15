@@ -1229,7 +1229,19 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             onClick { showCcConnectTokenDialog = true }
                         }) {
                             val label = if (ccConnectInfo?.connected == true) {
-                                "cc-connect (${ccConnectInfo?.agentType ?: "agent"})"
+                                val agentName = run {
+                                    val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
+                                    when {
+                                        raw.startsWith("claude") -> "Claude"
+                                        raw.startsWith("cursor") -> "Cursor"
+                                        raw.startsWith("gemini") -> "Gemini"
+                                        raw.startsWith("codex")  -> "Codex"
+                                        raw.startsWith("copilot") -> "Copilot"
+                                        raw.isBlank() -> "agent"
+                                        else -> raw
+                                    }
+                                }
+                                "cc-connect ($agentName)"
                             } else {
                                 "cc-connect (offline)"
                             }
@@ -1977,6 +1989,19 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 val currentMemberRole = groupMembers.find { it.id == user.id }?.role
                 val canTriggerCc = currentMemberRole == "HOST" || currentMemberRole == "OPERATOR"
                 val showCcButton = isCcConnectGroup && groupMembers.size >= 2 && canTriggerCc
+                val ccTriggerName = run {
+                    val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
+                    when {
+                        raw.startsWith("claude") -> "claude"
+                        raw.startsWith("cursor") -> "cursor"
+                        raw.startsWith("gemini") -> "gemini"
+                        raw.startsWith("codex")  -> "codex"
+                        raw.startsWith("copilot") -> "copilot"
+                        raw.isBlank() -> "cc"
+                        else -> raw
+                    }
+                }
+                val ccPrefix = "@$ccTriggerName"
 
                 // @Silk 快捷按钮（在 Silk 私聊和 cc-connect 群组中隐藏）
                 if (!isSilkPrivateChat && !isCcConnectGroup) {
@@ -2032,7 +2057,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
                 }
 
-                // @cc 快捷按钮（仅在 cc-connect 多人群中对 HOST/OPERATOR 显示）
+                // 代理触发按钮（按连接的代理类型显示 @claude/@cursor 等，仅多人群 HOST/OPERATOR 可见）
                 if (showCcButton) {
                 Div({
                     style {
@@ -2060,28 +2085,29 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             property("white-space", "nowrap")
                         }
                         onClick {
+                            val prefixWithSpace = "$ccPrefix "
                             val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLTextAreaElement
                             if (input != null) {
                                 val currentText = messageText
                                 val cursorPos = input.selectionStart ?: currentText.length
                                 val beforeCursor = currentText.substring(0, cursorPos)
                                 val afterCursor = currentText.substring(cursorPos)
-                                messageText = "$beforeCursor@cc $afterCursor"
+                                messageText = "$beforeCursor$prefixWithSpace$afterCursor"
                                 window.setTimeout({
-                                    val newPos = cursorPos + 4 // "@cc " length
+                                    val newPos = cursorPos + prefixWithSpace.length
                                     input.setSelectionRange(newPos, newPos)
                                     input.focus()
                                 }, 0)
                             } else {
                                 messageText = if (messageText.isEmpty() || messageText.endsWith(" ")) {
-                                    "${messageText}@cc "
+                                    "$messageText$prefixWithSpace"
                                 } else {
-                                    "${messageText} @cc "
+                                    "$messageText $prefixWithSpace"
                                 }
                             }
                         }
                     }) {
-                        Text("@cc")
+                        Text(ccPrefix)
                     }
                 }
                 }

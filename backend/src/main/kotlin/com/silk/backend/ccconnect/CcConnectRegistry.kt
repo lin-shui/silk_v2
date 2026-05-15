@@ -20,6 +20,24 @@ data class CcConnectConnection(
     val meta: CcConnectConnectionMeta,
 )
 
+/**
+ * Maps raw cc-connect agent_type values to short trigger names used as @-prefix in chat.
+ * E.g. "claudecode" → "claude", "gemini-cli" → "gemini".
+ * Unknown types are returned as-is (lowercased).
+ */
+fun agentTriggerName(agentType: String): String {
+    val lower = agentType.lowercase().trim()
+    return when {
+        lower.startsWith("claude") -> "claude"
+        lower.startsWith("cursor") -> "cursor"
+        lower.startsWith("gemini") -> "gemini"
+        lower.startsWith("codex")  -> "codex"
+        lower.startsWith("copilot") -> "copilot"
+        lower.isBlank() -> "cc"
+        else -> lower
+    }
+}
+
 object CcConnectRegistry {
 
     private val logger = LoggerFactory.getLogger(CcConnectRegistry::class.java)
