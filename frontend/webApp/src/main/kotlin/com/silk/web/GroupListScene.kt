@@ -619,8 +619,15 @@ fun GroupListScene(appState: WebAppState) {
                         }
                     }
                     
-                    // 群组列表
-                    groups.forEach { group ->
+                    // 群组列表（Silk AI → CC-Connect → Silk Groups）
+                    val silkPrivateGroups = groups.filter { it.name.startsWith("[Silk]") }
+                    val ccGroups = groups.filter { ccConnectStatus.containsKey(it.id) }
+                    val silkNormalGroups = groups.filter {
+                        !it.name.startsWith("[Silk]") && !ccConnectStatus.containsKey(it.id)
+                    }
+
+                    @Composable
+                    fun renderGroupCard(group: Group) {
                         val isSelected = group.id in selectedGroups
                         val unreadCount = unreadCounts[group.id] ?: 0
                         val ccInfo = ccConnectStatus[group.id]
@@ -632,7 +639,7 @@ fun GroupListScene(appState: WebAppState) {
                             unreadCount = unreadCount,
                             ccConnectInfo = ccInfo,
                             strings = strings,
-                            onClick = { 
+                            onClick = {
                                 if (isDeleteMode) {
                                     selectedGroups = if (isSelected) {
                                         selectedGroups - group.id
@@ -640,14 +647,13 @@ fun GroupListScene(appState: WebAppState) {
                                         selectedGroups + group.id
                                     }
                                 } else {
-                                    // 标记为已读并清除本地未读计数
                                     scope.launch {
                                         appState.currentUser?.let { user ->
                                             ApiClient.markGroupAsRead(user.id, group.id)
                                             unreadCounts = unreadCounts - group.id
                                         }
                                     }
-                                    appState.selectGroup(group) 
+                                    appState.selectGroup(group)
                                 }
                             },
                             onMembersClick = {
@@ -658,7 +664,6 @@ fun GroupListScene(appState: WebAppState) {
                                     val contactsResponse = ApiClient.getContacts(userId)
                                     contacts = contactsResponse.contacts ?: emptyList()
                                     val membersResponse = ApiClient.getGroupMembers(group.id)
-                                    // 将群主排在第一位
                                     val sortedMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
                                     groupMembers = sortedMembers
                                     isLoadingMembers = false
@@ -666,6 +671,101 @@ fun GroupListScene(appState: WebAppState) {
                                 }
                             }
                         )
+                    }
+
+                    // --- Section 1: Silk 专属对话 ---
+                    if (silkPrivateGroups.isNotEmpty()) {
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                property("gap", "8px")
+                                marginBottom(12.px)
+                            }
+                        }) {
+                            Span({
+                                style {
+                                    fontSize(12.px)
+                                    color(Color(SilkColors.primary))
+                                    property("font-weight", "700")
+                                    property("letter-spacing", "1px")
+                                    property("white-space", "nowrap")
+                                }
+                            }) { Text("Silk AI") }
+                            Div({
+                                style {
+                                    property("flex", "1")
+                                    height(1.px)
+                                    backgroundColor(Color(SilkColors.primary))
+                                    property("opacity", "0.3")
+                                }
+                            })
+                        }
+                        silkPrivateGroups.forEach { renderGroupCard(it) }
+                    }
+
+                    // --- Section 2: CC-Connect 群组 ---
+                    if (ccGroups.isNotEmpty()) {
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                property("gap", "8px")
+                                marginTop(if (silkPrivateGroups.isNotEmpty()) 16.px else 0.px)
+                                marginBottom(12.px)
+                            }
+                        }) {
+                            Span({
+                                style {
+                                    fontSize(12.px)
+                                    color(Color("#2E7D32"))
+                                    property("font-weight", "700")
+                                    property("letter-spacing", "1px")
+                                    property("white-space", "nowrap")
+                                }
+                            }) { Text("CC-Connect") }
+                            Div({
+                                style {
+                                    property("flex", "1")
+                                    height(1.px)
+                                    backgroundColor(Color("#4CAF50"))
+                                    property("opacity", "0.3")
+                                }
+                            })
+                        }
+                        ccGroups.forEach { renderGroupCard(it) }
+                    }
+
+                    // --- Section 3: Silk 普通群组 ---
+                    if (silkNormalGroups.isNotEmpty()) {
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                property("gap", "8px")
+                                marginTop(if (silkPrivateGroups.isNotEmpty() || ccGroups.isNotEmpty()) 16.px else 0.px)
+                                marginBottom(12.px)
+                            }
+                        }) {
+                            Span({
+                                style {
+                                    fontSize(12.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    property("font-weight", "700")
+                                    property("letter-spacing", "1px")
+                                    property("white-space", "nowrap")
+                                }
+                            }) { Text("Silk Groups") }
+                            Div({
+                                style {
+                                    property("flex", "1")
+                                    height(1.px)
+                                    backgroundColor(Color(SilkColors.textSecondary))
+                                    property("opacity", "0.2")
+                                }
+                            })
+                        }
+                        silkNormalGroups.forEach { renderGroupCard(it) }
                     }
                 }
             }

@@ -63,6 +63,12 @@ object AIConfig {
     // Audio Duplex (MiniCPM-o full-duplex conversation)
     val AUDIO_DUPLEX_URL: String get() = env("AUDIO_DUPLEX_URL") ?: "http://localhost:22700"
 
+    // ── 文件预处理管线 ─────────────────────────────────────────────
+    val FILE_PREPROCESS_ENABLED: Boolean get() = env("SILK_FILE_PREPROCESS_ENABLED")?.toBoolean() ?: true
+    val VISION_ENABLED: Boolean get() = env("SILK_VISION_ENABLED")?.toBoolean() ?: true
+    val VISION_MODEL: String get() = env("SILK_VISION_MODEL") ?: "claude-3-5-haiku-20241022"
+    val OCR_LANGUAGES: String get() = env("SILK_OCR_LANGUAGES") ?: "eng+chi_sim"
+
     // Weaviate 向量库地址（已弃用：改用 Claude 200K context + grep 搜索）
     val WEAVIATE_URL: String get() = env("WEAVIATE_URL") ?: ""
 

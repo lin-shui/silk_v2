@@ -227,6 +227,9 @@ class DirectModelAgent(
             }
         })
 
+        // 工作区文件同步：确保已解析的文件在工作区可用
+        syncExtractedFilesToWorkspace()
+
         // 构建工具/工作区上下文（两种路径共用）
         val toolContext = buildString {
             appendLine("## 可用工具")
@@ -237,6 +240,16 @@ class DirectModelAgent(
             appendLine("- **glob**: 查找工作区文件")
             appendLine()
             appendLine("群聊历史已保存到 `chat_history.md`，你可以用 Grep 搜索历史消息。")
+
+            val manifestFile = java.io.File(workspaceDir, "files_manifest.md")
+            if (manifestFile.exists()) {
+                appendLine()
+                appendLine("## 已上传的文件")
+                appendLine("工作区中有用户上传的文件，已自动提取为文本：")
+                appendLine("- 使用 `Read` 工具读取 `files_manifest.md` 查看文件清单")
+                appendLine("- 使用 `Read` 工具读取 `<文件名>.extracted.md` 查看具体文件内容")
+                appendLine("- 用户提到文件相关问题时，主动读取对应的 .extracted.md 文件")
+            }
         }
 
         val response = try {
@@ -264,6 +277,20 @@ class DirectModelAgent(
         conversationHistory.add(Message(role = "assistant", content = response))
         callback("complete", response, true)
         return response
+    }
+
+    private fun syncExtractedFilesToWorkspace() {
+        if (workspaceDir.isBlank()) return
+        try {
+            val sessionName = if (sessionId.startsWith("group_")) sessionId else "group_$sessionId"
+            val chatHistoryDir = System.getProperty("silk.chatHistoryDir")?.trim()?.takeIf { it.isNotEmpty() } ?: "chat_history"
+            val uploadsDir = java.io.File(java.io.File(chatHistoryDir, sessionName), "uploads")
+            if (uploadsDir.exists()) {
+                FilePreprocessor.syncAllToWorkspace(uploadsDir, workspaceDir)
+            }
+        } catch (e: Exception) {
+            logger.warn("工作区文件同步失败: {}", e.message)
+        }
     }
 
     private suspend fun chatViaClaudeProcess(

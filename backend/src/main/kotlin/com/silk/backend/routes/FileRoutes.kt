@@ -191,26 +191,29 @@ fun Route.fileRoutes() {
                             downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
                         )
                         
-                        // 发送开始索引状态
-                        broadcastSystemStatus(finalSessionId, "🔄 正在索引文件: $finalFileName ...")
+                        // 文件预处理（生成 .extracted.md 供 Claude CLI 读取）
+                        val normalizedSession = if (finalSessionId.startsWith("group_")) finalSessionId else "group_$finalSessionId"
+                        val workspaceDir = "${com.silk.backend.ai.AIConfig.CLAUDE_CLI_WORKSPACE_ROOT}/$normalizedSession"
+                        java.io.File(workspaceDir).mkdirs()
                         
-                        val indexed = indexFileToWeaviate(
+                        broadcastSystemStatus(finalSessionId, "🔄 正在解析文件: $finalFileName ...")
+                        
+                        val result = com.silk.backend.ai.FilePreprocessor.process(
                             file = targetFile,
-                            sessionId = finalSessionId,
-                            userId = finalUserId,
                             originalFileName = finalFileName,
-                            contentType = contentType
+                            sessionName = normalizedSession,
+                            workspaceDir = workspaceDir,
+                            userId = finalUserId
                         )
                         
-                        // 发送索引完成状态
-                        if (indexed) {
-                            broadcastSystemStatus(finalSessionId, "✅ 文件索引完成: $finalFileName")
+                        if (result.extractedTextFile != null) {
+                            broadcastSystemStatus(finalSessionId, "✅ 文件已解析: $finalFileName (${result.summary.take(60)})")
                         } else {
-                            broadcastSystemStatus(finalSessionId, "⚠️ 文件索引失败: $finalFileName")
+                            broadcastSystemStatus(finalSessionId, "⚠️ 文件存储完成: $finalFileName (无法提取内容)")
                         }
                     } catch (e: Exception) {
-                        logger.error("❌ 异步索引失败: ${e.message}", e)
-                        broadcastSystemStatus(finalSessionId, "❌ 文件索引异常: $finalFileName - ${e.message}")
+                        logger.error("❌ 文件预处理失败: ${e.message}", e)
+                        broadcastSystemStatus(finalSessionId, "❌ 文件处理异常: $finalFileName - ${e.message}")
                     }
                 }
                 
