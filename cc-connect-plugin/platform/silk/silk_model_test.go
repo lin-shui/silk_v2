@@ -25,6 +25,23 @@ func TestParseModelResponse_HyphenatedNames(t *testing.T) {
 	}
 }
 
+func TestParseModelResponse_ClaudeCodeDefaultUnset(t *testing.T) {
+	text := `当前模型: (未设置，使用 Agent 默认值)
+
+可用模型:
+> 1. sonnet — Claude Sonnet (balanced)
+  2. opus — Claude Opus (most capable)
+  3. haiku — Claude Haiku (fastest)`
+
+	current, models := parseModelResponse(text)
+	if current != "sonnet" {
+		t.Fatalf("current = %q, want sonnet (from > marker)", current)
+	}
+	if len(models) != 3 {
+		t.Fatalf("models len = %d, want 3", len(models))
+	}
+}
+
 func TestParseModelResponse_AliasLine(t *testing.T) {
 	text := `Current model: gpt-5.3-codex
 
