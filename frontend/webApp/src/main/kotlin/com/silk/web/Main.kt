@@ -510,7 +510,12 @@ fun ChatScene(appState: WebAppState) {
                         }
                     }
                     else -> {
-                        userGroups.forEach { item ->
+                        val silkPrivateGroups = userGroups.filter { it.name.startsWith("[Silk]") }
+                        val ccGroups = userGroups.filter { sidebarCcStatus.containsKey(it.id) }
+                        val silkNormalGroups = userGroups.filter { !it.name.startsWith("[Silk]") && !sidebarCcStatus.containsKey(it.id) }
+
+                        @Composable
+                        fun renderGroupItem(item: Group) {
                             val isActive = item.id == group.id
                             val unread = unreadCounts[item.id] ?: 0
                             val ccInfo = sidebarCcStatus[item.id]
@@ -634,6 +639,101 @@ fun ChatScene(appState: WebAppState) {
                                     Text("[${item.invitationCode}]")
                                 }
                             }
+                        }
+
+                        // --- Section 1: Silk 专属对话 ---
+                        if (silkPrivateGroups.isNotEmpty()) {
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "8px")
+                                    marginBottom(8.px)
+                                }
+                            }) {
+                                Span({
+                                    style {
+                                        fontSize(11.px)
+                                        color(Color(SilkColors.primary))
+                                        property("font-weight", "700")
+                                        property("letter-spacing", "1px")
+                                        property("white-space", "nowrap")
+                                    }
+                                }) { Text("Silk AI") }
+                                Div({
+                                    style {
+                                        property("flex", "1")
+                                        height(1.px)
+                                        backgroundColor(Color(SilkColors.primary))
+                                        property("opacity", "0.3")
+                                    }
+                                })
+                            }
+                            silkPrivateGroups.forEach { renderGroupItem(it) }
+                        }
+
+                        // --- Section 2: CC-Connect 群组 ---
+                        if (ccGroups.isNotEmpty()) {
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "8px")
+                                    marginTop(if (silkPrivateGroups.isNotEmpty()) 12.px else 0.px)
+                                    marginBottom(8.px)
+                                }
+                            }) {
+                                Span({
+                                    style {
+                                        fontSize(11.px)
+                                        color(Color("#2E7D32"))
+                                        property("font-weight", "700")
+                                        property("letter-spacing", "1px")
+                                        property("white-space", "nowrap")
+                                    }
+                                }) { Text("CC-Connect") }
+                                Div({
+                                    style {
+                                        property("flex", "1")
+                                        height(1.px)
+                                        backgroundColor(Color("#4CAF50"))
+                                        property("opacity", "0.3")
+                                    }
+                                })
+                            }
+                            ccGroups.forEach { renderGroupItem(it) }
+                        }
+
+                        // --- Section 3: Silk 普通群组 ---
+                        if (silkNormalGroups.isNotEmpty()) {
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "8px")
+                                    marginTop(if (silkPrivateGroups.isNotEmpty() || ccGroups.isNotEmpty()) 12.px else 0.px)
+                                    marginBottom(8.px)
+                                }
+                            }) {
+                                Span({
+                                    style {
+                                        fontSize(11.px)
+                                        color(Color(SilkColors.textSecondary))
+                                        property("font-weight", "700")
+                                        property("letter-spacing", "1px")
+                                        property("white-space", "nowrap")
+                                    }
+                                }) { Text("Silk Groups") }
+                                Div({
+                                    style {
+                                        property("flex", "1")
+                                        height(1.px)
+                                        backgroundColor(Color(SilkColors.textSecondary))
+                                        property("opacity", "0.2")
+                                    }
+                                })
+                            }
+                            silkNormalGroups.forEach { renderGroupItem(it) }
                         }
                     }
                 }
