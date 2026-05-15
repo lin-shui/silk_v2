@@ -1186,7 +1186,8 @@ fun Application.configureRouting() {
                 GroupMemberApi(
                     id = member.userId,
                     fullName = user?.fullName ?: member.userName,
-                    phone = user?.phoneNumber ?: ""
+                    phone = user?.phoneNumber ?: "",
+                    role = member.role.name,
                 )
             }
             call.respond(GroupMembersResponse(success = true, members = apiMembers))
@@ -2458,12 +2459,49 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing groupId"))
                 return@get
             }
+            val userId = call.request.queryParameters["userId"]
+            if (userId.isNullOrBlank()) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing userId"))
+                return@get
+            }
+            val group = GroupRepository.findGroupById(groupId)
+            if (group == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "group not found"))
+                return@get
+            }
+            if (group.hostId != userId) {
+                if (!GroupRepository.isUserInGroup(groupId, userId)) {
+                    call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "非群组成员"))
+                    return@get
+                }
+                val connected = com.silk.backend.ccconnect.CcConnectRegistry.isConnected(groupId)
+                val meta = com.silk.backend.ccconnect.CcConnectRegistry.getConnectionInfo(groupId)
+                val tokenExists = com.silk.backend.ccconnect.CcConnectTokenRepository.getTokenForGroup(groupId) != null
+                if (!tokenExists) {
+                    call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "not a cc-connect group"))
+                    return@get
+                }
+                val json = kotlinx.serialization.json.buildJsonObject {
+                    put("success", kotlinx.serialization.json.JsonPrimitive(true))
+                    put("token", kotlinx.serialization.json.JsonPrimitive(null as String?))
+                    put("connected", kotlinx.serialization.json.JsonPrimitive(connected))
+                    put("agentType", kotlinx.serialization.json.JsonPrimitive(meta?.agentType))
+                    put("project", kotlinx.serialization.json.JsonPrimitive(meta?.project))
+                    put("cwd", kotlinx.serialization.json.JsonPrimitive(meta?.cwd))
+                }
+                call.respondText(json.toString(), ContentType.Application.Json)
+                return@get
+            }
             val tokenInfo = com.silk.backend.ccconnect.CcConnectTokenRepository.getTokenForGroup(groupId)
+            if (tokenInfo == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "not a cc-connect group"))
+                return@get
+            }
             val connected = com.silk.backend.ccconnect.CcConnectRegistry.isConnected(groupId)
             val meta = com.silk.backend.ccconnect.CcConnectRegistry.getConnectionInfo(groupId)
             val json = kotlinx.serialization.json.buildJsonObject {
                 put("success", kotlinx.serialization.json.JsonPrimitive(true))
-                put("token", kotlinx.serialization.json.JsonPrimitive(tokenInfo?.token))
+                put("token", kotlinx.serialization.json.JsonPrimitive(tokenInfo.token))
                 put("connected", kotlinx.serialization.json.JsonPrimitive(connected))
                 put("agentType", kotlinx.serialization.json.JsonPrimitive(meta?.agentType))
                 put("project", kotlinx.serialization.json.JsonPrimitive(meta?.project))
@@ -2477,9 +2515,22 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing groupId"))
                 return@post
             }
+            val body = call.receiveText()
+            val bodyJson = try {
+                kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject
+            } catch (_: Exception) { null }
+            val userId = bodyJson?.get("userId")?.jsonPrimitive?.contentOrNull
+            if (userId.isNullOrBlank()) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing userId"))
+                return@post
+            }
             val group = GroupRepository.findGroupById(groupId)
             if (group == null) {
                 call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "group not found"))
+                return@post
+            }
+            if (group.hostId != userId) {
+                call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "仅群主可重新生成 token"))
                 return@post
             }
             val newToken = com.silk.backend.ccconnect.CcConnectTokenRepository.regenerateToken(groupId, group.name)
@@ -2488,6 +2539,44 @@ fun Application.configureRouting() {
                 put("token", kotlinx.serialization.json.JsonPrimitive(newToken))
             }
             call.respondText(json.toString(), ContentType.Application.Json)
+        }
+
+        post("/api/ccconnect/groups/{groupId}/set-operator") {
+            val groupId = call.parameters["groupId"] ?: run {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing groupId"))
+                return@post
+            }
+            val body = call.receiveText()
+            val bodyJson = try {
+                kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject
+            } catch (_: Exception) { null }
+            val userId = bodyJson?.get("userId")?.jsonPrimitive?.contentOrNull
+            val targetUserId = bodyJson?.get("targetUserId")?.jsonPrimitive?.contentOrNull
+            val grant = bodyJson?.get("grant")?.jsonPrimitive?.booleanOrNull
+            if (userId.isNullOrBlank() || targetUserId.isNullOrBlank() || grant == null) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing userId, targetUserId, or grant"))
+                return@post
+            }
+            val group = GroupRepository.findGroupById(groupId)
+            if (group == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "group not found"))
+                return@post
+            }
+            if (group.hostId != userId) {
+                call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "仅群主可设置 operator"))
+                return@post
+            }
+            if (targetUserId == group.hostId) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "不能修改群主角色"))
+                return@post
+            }
+            if (!GroupRepository.isUserInGroup(groupId, targetUserId)) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "目标用户不在群组中"))
+                return@post
+            }
+            val newRole = if (grant) MemberRole.OPERATOR else MemberRole.GUEST
+            val ok = GroupRepository.updateMemberRole(groupId, targetUserId, newRole)
+            call.respond(SimpleResponse(ok, if (ok) "角色已更新" else "更新失败"))
         }
 
         // ==================== Agents API ====================

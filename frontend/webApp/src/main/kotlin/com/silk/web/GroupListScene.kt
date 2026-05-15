@@ -144,9 +144,10 @@ fun GroupListScene(appState: WebAppState) {
                     
                     // 加载 cc-connect 连接状态
                     val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
+                    val currentUserId = appState.currentUser?.id ?: ""
                     groups.forEach { group ->
-                        val info = ApiClient.getCcConnectTokenInfo(group.id)
-                        if (info != null && info.token != null) {
+                        val info = ApiClient.getCcConnectTokenInfo(group.id, currentUserId)
+                        if (info != null && info.success) {
                             statusMap[group.id] = info
                         }
                     }

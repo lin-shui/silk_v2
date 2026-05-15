@@ -73,8 +73,9 @@ data class MarkReadRequest(
  */
 @Serializable
 enum class MemberRole {
-    HOST,  // 群主（管理员）
-    GUEST  // 普通成员
+    HOST,      // 群主（管理员）
+    OPERATOR,  // 可触发 CC-Connect 命令
+    GUEST      // 普通成员
 }
 
 /**
@@ -416,7 +417,8 @@ data class RefreshUserTodosRequest(
 data class GroupMemberApi(
     val id: String,       // userId
     val fullName: String,
-    val phone: String = ""
+    val phone: String = "",
+    val role: String = "GUEST",
 )
 
 /**

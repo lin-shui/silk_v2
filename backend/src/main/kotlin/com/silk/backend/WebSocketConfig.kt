@@ -18,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import com.silk.backend.database.UnreadRepository
 import com.silk.backend.database.GroupRepository
+import com.silk.backend.database.MemberRole
 import com.silk.backend.todos.GroupTodoExtractionService
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.search.WeaviateClient
@@ -335,19 +336,39 @@ class ChatServer(
         }
         
         // ==================== cc-connect 路由 ====================
-        // cc-connect 群组：用户消息转发给 cc-connect 适配器，跳过 Silk AI / AgentRuntime
+        // cc-connect 群组：仅 HOST / OPERATOR 的消息转发给适配器，GUEST 消息不触发命令
+        // 多人群需要 @cc 前缀触发；单人（仅群主）时所有消息直接转发
         val ccGroupId = sessionName.removePrefix("group_")
         if (com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId)
             && message.type == MessageType.TEXT && !message.isTransient
             && message.userId != "cc-connect" && message.userId != "system"
         ) {
-            val userMsg = com.silk.backend.ccconnect.UserMessage(
-                content = message.content,
-                userId = message.userId,
-                userName = message.userName,
-                msgId = message.id,
-            )
-            com.silk.backend.ccconnect.CcConnectRegistry.forwardToAdapter(ccGroupId, userMsg)
+            val memberRole = com.silk.backend.database.GroupRepository.getMemberRole(ccGroupId, message.userId)
+            if (memberRole == MemberRole.HOST || memberRole == MemberRole.OPERATOR) {
+                val memberCount = com.silk.backend.database.GroupRepository.getGroupMemberCount(ccGroupId)
+                val isSoloMode = memberCount <= 1L
+                val content = message.content
+                val hasPrefix = content.startsWith("@cc ") || content.startsWith("@CC ")
+                        || content.equals("@cc", ignoreCase = true)
+
+                if (isSoloMode || hasPrefix) {
+                    val forwardContent = if (hasPrefix) {
+                        content.removePrefix("@cc ").removePrefix("@CC ")
+                            .removePrefix("@cc").removePrefix("@CC").trim()
+                    } else {
+                        content
+                    }
+                    if (forwardContent.isNotBlank()) {
+                        val userMsg = com.silk.backend.ccconnect.UserMessage(
+                            content = forwardContent,
+                            userId = message.userId,
+                            userName = message.userName,
+                            msgId = message.id,
+                        )
+                        com.silk.backend.ccconnect.CcConnectRegistry.forwardToAdapter(ccGroupId, userMsg)
+                    }
+                }
+            }
             return
         }
 

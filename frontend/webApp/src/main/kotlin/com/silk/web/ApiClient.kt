@@ -130,7 +130,8 @@ data class PrivateChatResponse(
 data class GroupMember(
     val id: String,
     val fullName: String,
-    val phone: String = ""
+    val phone: String = "",
+    val role: String = "GUEST",
 )
 
 @Serializable
@@ -344,9 +345,9 @@ object ApiClient {
         }
     }
 
-    suspend fun getCcConnectTokenInfo(groupId: String): CcConnectTokenInfo? {
+    suspend fun getCcConnectTokenInfo(groupId: String, userId: String): CcConnectTokenInfo? {
         return try {
-            val response = get("/api/ccconnect/groups/$groupId/token-info")
+            val response = get("/api/ccconnect/groups/$groupId/token-info?userId=$userId")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("获取cc-connect信息失败:", e)
@@ -354,14 +355,26 @@ object ApiClient {
         }
     }
 
-    suspend fun regenerateCcConnectToken(groupId: String): String? {
+    suspend fun regenerateCcConnectToken(groupId: String, userId: String): String? {
         return try {
-            val response = post("/api/ccconnect/groups/$groupId/regenerate-token", "{}")
+            val response = post("/api/ccconnect/groups/$groupId/regenerate-token", """{"userId":"$userId"}""")
             val parsed = jsonParser.decodeFromString<CcConnectTokenInfo>(response)
             parsed.token
         } catch (e: Exception) {
             console.log("重新生成token失败:", e)
             null
+        }
+    }
+
+    suspend fun setCcConnectOperator(groupId: String, userId: String, targetUserId: String, grant: Boolean): Boolean {
+        return try {
+            val body = """{"userId":"$userId","targetUserId":"$targetUserId","grant":$grant}"""
+            val response = post("/api/ccconnect/groups/$groupId/set-operator", body)
+            val parsed = jsonParser.decodeFromString<SimpleResponse>(response)
+            parsed.success
+        } catch (e: Exception) {
+            console.log("设置operator失败:", e)
+            false
         }
     }
     

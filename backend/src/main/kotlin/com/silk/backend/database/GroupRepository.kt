@@ -223,6 +223,31 @@ object GroupRepository {
             }.count() > 0
         }
     }
+
+    fun getMemberRole(groupId: String, userId: String): MemberRole? {
+        return transaction {
+            GroupMembers.select {
+                (GroupMembers.groupId eq groupId) and (GroupMembers.userId eq userId)
+            }.singleOrNull()?.let {
+                try { MemberRole.valueOf(it[GroupMembers.role]) } catch (_: Exception) { null }
+            }
+        }
+    }
+
+    fun updateMemberRole(groupId: String, userId: String, role: MemberRole): Boolean {
+        return try {
+            transaction {
+                GroupMembers.update({
+                    (GroupMembers.groupId eq groupId) and (GroupMembers.userId eq userId)
+                }) {
+                    it[GroupMembers.role] = role.name
+                }
+            } > 0
+        } catch (e: Exception) {
+            logger.error("❌ 更新成员角色失败: groupId={}, userId={}, err={}", groupId, userId, e.message)
+            false
+        }
+    }
     
     /**
      * 获取群组的所有成员
