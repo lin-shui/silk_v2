@@ -923,6 +923,97 @@ fun Application.configureRouting() {
             }
         }
 
+        // API-driven 切换 agent / 权限模式（更改对话框用，不走聊天消息流）
+        post("/users/{userId}/cc-settings/update") {
+            val userId = call.parameters["userId"] ?: ""
+            val reqJson = try {
+                Json.parseToJsonElement(call.receiveText()).jsonObject
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    CcStateResponse(success = false, error = "请求体非法 JSON: ${e.message}")
+                )
+                return@post
+            }
+            val groupId = reqJson["groupId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (userId.isBlank() || groupId.isBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    CcStateResponse(success = false, error = "userId / groupId 不能为空")
+                )
+                return@post
+            }
+            val ccGroupId = if (groupId.startsWith("group_")) groupId else "group_$groupId"
+            val newAgent = reqJson["activeAgent"]?.jsonPrimitive?.contentOrNull
+            val newPermMode = reqJson["permissionMode"]?.jsonPrimitive?.contentOrNull
+
+            // 切换 agent
+            var agentSwitchMsg: String? = null
+            if (!newAgent.isNullOrBlank()) {
+                // 前端传 underscore form（claude_code），runtime 用 dash form（claude-code）
+                val dashType = newAgent.replace('_', '-')
+                val descriptor = AgentRuntime.switchAgent(userId, ccGroupId, dashType)
+                if (descriptor == null) {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        CcStateResponse(success = false, error = "未知 agent: $newAgent")
+                    )
+                    return@post
+                }
+                // 持久化到 workflow record（switchAgent 已持久化 runtime 侧）
+                workflowManager.updateActiveAgent(groupId, dashType)
+                agentSwitchMsg = "已切换到 ${descriptor.displayName}。"
+            }
+
+            // 切换权限模式
+            if (!newPermMode.isNullOrBlank()) {
+                val ok = AgentRuntime.setPermissionMode(userId, ccGroupId, newPermMode)
+                if (!ok) {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        CcStateResponse(success = false, error = "无效权限模式: $newPermMode（INTERACTIVE / ACCEPT_EDITS / BYPASS）")
+                    )
+                    return@post
+                }
+                workflowManager.updatePermissionMode(groupId, newPermMode)
+            }
+
+            // 广播系统消息通知前端
+            val rawGid = if (ccGroupId.startsWith("group_")) ccGroupId.removePrefix("group_") else ccGroupId
+            if (agentSwitchMsg != null) {
+                try {
+                    val snap = AgentRuntime.snapshotState(userId, ccGroupId)
+                    val desc = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
+                    getGroupChatServer(rawGid).broadcast(
+                        com.silk.backend.agents.core.AgentMessages.system(
+                            agentSwitchMsg,
+                            agentUserId = desc?.agentUserId ?: SilkAgent.AGENT_ID,
+                            agentName = desc?.displayName ?: SilkAgent.AGENT_NAME,
+                        )
+                    )
+                } catch (e: Exception) {
+                    logger.warn("广播 agent 切换提示失败: {}", e.message)
+                }
+            }
+
+            // 返回最新状态
+            val snap = AgentRuntime.snapshotState(userId, ccGroupId)
+            val bridgeConnected = isAnyBridgeConnected(userId)
+            val descriptor = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
+            call.respond(
+                CcStateResponse(
+                    success = true,
+                    active = snap?.active ?: false,
+                    running = snap?.running ?: false,
+                    workingDir = snap?.workingDir ?: "",
+                    bridgeConnected = bridgeConnected,
+                    agentType = snap?.agentType ?: "",
+                    agentDisplayName = descriptor?.displayName ?: "",
+                    permissionMode = snap?.permissionMode ?: "",
+                )
+            )
+        }
+
         // ==================== Trusted Directory API ====================
 
         get("/users/{userId}/trusted-dirs/check") {
@@ -3420,6 +3511,7 @@ fun Application.configureRouting() {
             val desc = req["description"]?.jsonPrimitive?.content ?: ""
             val agentType = req["agentType"]?.jsonPrimitive?.contentOrNull ?: "claude_code"
             val taskFocus = req["taskFocus"]?.jsonPrimitive?.contentOrNull ?: ""
+            val permissionMode = req["permissionMode"]?.jsonPrimitive?.contentOrNull ?: ""
 
             // 自动创建关联群组（工作流私聊）
             val groupName = "wf_${sanitizeFileName(name)}_${System.currentTimeMillis()}"
@@ -3489,7 +3581,11 @@ fun Application.configureRouting() {
             // 同步把 workingDir 写到 workflow record，确保返回给前端的 wf 对象包含真实路径
             val resolvedPath = (cdResult as AgentRuntime.CdResult.Ok).resolvedPath
             workflowManager.updateWorkingDir(group.id, resolvedPath)
-            val wfWithDir = wf.copy(workingDir = resolvedPath, updatedAt = System.currentTimeMillis())
+            // 创建时指定的 permissionMode 持久化到 workflow record（seed 加载时生效）
+            if (permissionMode.isNotBlank()) {
+                workflowManager.updatePermissionMode(group.id, permissionMode)
+            }
+            val wfWithDir = wf.copy(workingDir = resolvedPath, permissionMode = permissionMode, updatedAt = System.currentTimeMillis())
 
             call.respondText(
                 Json.encodeToString(Workflow.serializer(), wfWithDir),
