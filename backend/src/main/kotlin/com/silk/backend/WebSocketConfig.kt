@@ -43,7 +43,7 @@ data class Message(
 
 @Serializable
 enum class MessageType {
-    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE
+    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CC_COMMAND
 }
 
 @Serializable
@@ -335,6 +335,19 @@ class ChatServer(
             }
         }
         
+        // ==================== cc-connect 命令转发 ====================
+        // 前端发 CC_COMMAND 类型消息时，转发为 command 给 cc-connect agent（不进聊天记录）
+        val ccCmdGroupId = sessionName.removePrefix("group_")
+        if (message.type == MessageType.CC_COMMAND
+            && com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccCmdGroupId)
+        ) {
+            val memberRole = com.silk.backend.database.GroupRepository.getMemberRole(ccCmdGroupId, message.userId)
+            if (memberRole == MemberRole.HOST || memberRole == MemberRole.OPERATOR) {
+                com.silk.backend.ccconnect.CcConnectRegistry.sendCommand(ccCmdGroupId, message.content)
+            }
+            return
+        }
+
         // ==================== cc-connect 路由 ====================
         // cc-connect 群组：仅 HOST / OPERATOR 的消息转发给适配器，GUEST 消息不触发命令
         // 多人群需要 @-prefix 触发（@cc 通用或 @claude/@cursor 等代理特定前缀）；单人直接转发

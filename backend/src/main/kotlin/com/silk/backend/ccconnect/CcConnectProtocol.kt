@@ -74,6 +74,31 @@ data class PingMessage(val type: String = "ping")
 @Serializable
 data class PongMessage(val type: String = "pong")
 
+// ── cc-connect → silk (metadata) ──
+
+@Serializable
+data class CcModeOption(val key: String, val name: String)
+
+@Serializable
+data class CcModelOption(val name: String, val desc: String = "")
+
+@Serializable
+data class MetadataMessage(
+    val type: String = "metadata",
+    val mode: String? = null,
+    val model: String? = null,
+    @SerialName("available_modes") val availableModes: List<CcModeOption>? = null,
+    @SerialName("available_models") val availableModels: List<CcModelOption>? = null,
+)
+
+// ── silk → cc-connect (command) ──
+
+@Serializable
+data class CommandMessage(
+    val type: String = "command",
+    val text: String,
+)
+
 fun parseMessageType(raw: String): String? {
     return try {
         val obj = protocolJson.decodeFromString<JsonObject>(raw)

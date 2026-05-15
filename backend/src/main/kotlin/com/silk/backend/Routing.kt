@@ -2460,6 +2460,35 @@ fun Application.configureRouting() {
                             }
                         }
                         "pong" -> { /* keepalive response */ }
+                        "metadata" -> {
+                            val metadata = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                com.silk.backend.ccconnect.MetadataMessage.serializer(), text
+                            )
+                            com.silk.backend.ccconnect.CcConnectRegistry.updateMetadata(groupId, metadata)
+                            val metaJson = kotlinx.serialization.json.buildJsonObject {
+                                put("type", kotlinx.serialization.json.JsonPrimitive("cc_metadata"))
+                                put("mode", kotlinx.serialization.json.JsonPrimitive(metadata.mode))
+                                put("model", kotlinx.serialization.json.JsonPrimitive(metadata.model))
+                                put("available_modes", kotlinx.serialization.json.Json.encodeToJsonElement(
+                                    kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModeOption.serializer()),
+                                    metadata.availableModes ?: emptyList()
+                                ))
+                                put("available_models", kotlinx.serialization.json.Json.encodeToJsonElement(
+                                    kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModelOption.serializer()),
+                                    metadata.availableModels ?: emptyList()
+                                ))
+                            }
+                            val metaBroadcast = Message(
+                                id = java.util.UUID.randomUUID().toString(),
+                                userId = "system",
+                                userName = "cc-connect",
+                                content = metaJson.toString(),
+                                timestamp = System.currentTimeMillis(),
+                                type = MessageType.SYSTEM,
+                                isTransient = true,
+                            )
+                            chatServer.broadcast(metaBroadcast)
+                        }
                     }
                 }
             } catch (_: CancellationException) {
@@ -2518,6 +2547,16 @@ fun Application.configureRouting() {
                     put("agentType", kotlinx.serialization.json.JsonPrimitive(meta?.agentType))
                     put("project", kotlinx.serialization.json.JsonPrimitive(meta?.project))
                     put("cwd", kotlinx.serialization.json.JsonPrimitive(meta?.cwd))
+                    put("mode", kotlinx.serialization.json.JsonPrimitive(meta?.mode))
+                    put("model", kotlinx.serialization.json.JsonPrimitive(meta?.model))
+                    if (meta?.availableModes != null) {
+                        put("availableModes", kotlinx.serialization.json.Json.encodeToJsonElement(
+                            kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModeOption.serializer()), meta.availableModes))
+                    }
+                    if (meta?.availableModels != null) {
+                        put("availableModels", kotlinx.serialization.json.Json.encodeToJsonElement(
+                            kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModelOption.serializer()), meta.availableModels))
+                    }
                 }
                 call.respondText(json.toString(), ContentType.Application.Json)
                 return@get
@@ -2536,6 +2575,16 @@ fun Application.configureRouting() {
                 put("agentType", kotlinx.serialization.json.JsonPrimitive(meta?.agentType))
                 put("project", kotlinx.serialization.json.JsonPrimitive(meta?.project))
                 put("cwd", kotlinx.serialization.json.JsonPrimitive(meta?.cwd))
+                put("mode", kotlinx.serialization.json.JsonPrimitive(meta?.mode))
+                put("model", kotlinx.serialization.json.JsonPrimitive(meta?.model))
+                if (meta?.availableModes != null) {
+                    put("availableModes", kotlinx.serialization.json.Json.encodeToJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModeOption.serializer()), meta.availableModes))
+                }
+                if (meta?.availableModels != null) {
+                    put("availableModels", kotlinx.serialization.json.Json.encodeToJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModelOption.serializer()), meta.availableModels))
+                }
             }
             call.respondText(json.toString(), ContentType.Application.Json)
         }

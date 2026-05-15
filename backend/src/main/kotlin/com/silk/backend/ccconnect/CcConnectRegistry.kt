@@ -13,6 +13,10 @@ data class CcConnectConnectionMeta(
     val project: String,
     val agentType: String,
     val cwd: String = "",
+    val mode: String? = null,
+    val model: String? = null,
+    val availableModes: List<CcModeOption>? = null,
+    val availableModels: List<CcModelOption>? = null,
 )
 
 data class CcConnectConnection(
@@ -62,6 +66,31 @@ object CcConnectRegistry {
     fun isConnected(groupId: String): Boolean = connections.containsKey(groupId)
 
     fun getConnectionInfo(groupId: String): CcConnectConnectionMeta? = connections[groupId]?.meta
+
+    fun updateMetadata(groupId: String, metadata: MetadataMessage) {
+        val conn = connections[groupId] ?: return
+        val updated = conn.meta.copy(
+            mode = metadata.mode ?: conn.meta.mode,
+            model = metadata.model ?: conn.meta.model,
+            availableModes = metadata.availableModes ?: conn.meta.availableModes,
+            availableModels = metadata.availableModels ?: conn.meta.availableModels,
+        )
+        connections[groupId] = conn.copy(meta = updated)
+        logger.info("[CcConnect] metadata updated: groupId={}, mode={}, model={}", groupId, updated.mode, updated.model)
+    }
+
+    suspend fun sendCommand(groupId: String, text: String) {
+        val conn = connections[groupId] ?: return
+        try {
+            val json = protocolJson.encodeToString(CommandMessage.serializer(), CommandMessage(text = text))
+            conn.session.send(Frame.Text(json))
+        } catch (e: ClosedSendChannelException) {
+            logger.warn("[CcConnect] sendCommand failed (closed): groupId={}", groupId)
+            unregister(groupId)
+        } catch (e: Exception) {
+            logger.warn("[CcConnect] sendCommand failed: groupId={}, err={}", groupId, e.message)
+        }
+    }
 
     suspend fun forwardToAdapter(groupId: String, userMessage: UserMessage) {
         val conn = connections[groupId] ?: return

@@ -9,6 +9,7 @@ import com.silk.shared.models.UpdateUserSettingsRequest
 import com.silk.shared.models.UserSettingsResponse
 import kotlinx.browser.window
 import kotlinx.coroutines.await
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -62,6 +63,21 @@ data class GroupResponse(
 )
 
 @Serializable
+data class CcModeOption(val key: String, val name: String)
+
+@Serializable
+data class CcModelOption(val name: String, val desc: String = "")
+
+@Serializable
+data class CcMetadataEvent(
+    val type: String = "cc_metadata",
+    val mode: String? = null,
+    val model: String? = null,
+    @SerialName("available_modes") val availableModes: List<CcModeOption>? = null,
+    @SerialName("available_models") val availableModels: List<CcModelOption>? = null,
+)
+
+@Serializable
 data class CcConnectTokenInfo(
     val success: Boolean = false,
     val token: String? = null,
@@ -69,6 +85,10 @@ data class CcConnectTokenInfo(
     val agentType: String? = null,
     val project: String? = null,
     val cwd: String? = null,
+    val mode: String? = null,
+    val model: String? = null,
+    val availableModes: List<CcModeOption>? = null,
+    val availableModels: List<CcModelOption>? = null,
 )
 
 // ==================== 联系人相关数据模型 ====================

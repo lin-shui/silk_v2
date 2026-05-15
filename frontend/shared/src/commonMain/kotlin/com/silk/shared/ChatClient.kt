@@ -70,6 +70,9 @@ class ChatClient(
     val isLoadingHistory: StateFlow<Boolean> = _isLoadingHistory.asStateFlow()
     private val historyBuffer = mutableListOf<Message>()
     private var historyLoadStartMs: Long = 0
+
+    private val _ccMetadataJson = MutableStateFlow<String?>(null)
+    val ccMetadataJson: StateFlow<String?> = _ccMetadataJson.asStateFlow()
     
     private var suppressTransient: Boolean = false
     
@@ -163,6 +166,13 @@ class ChatClient(
             if (message.isTransient && message.type == MessageType.SYSTEM && message.content == "__history_end__") {
                 log("📜 [ChatClient] 收到 history_end 标记")
                 flushHistoryBuffer()
+                return
+            }
+
+            // cc-connect metadata 更新：不显示为聊天消息
+            if (message.isTransient && message.type == MessageType.SYSTEM && message.content.startsWith("{\"type\":\"cc_metadata\"")) {
+                log("🔧 [ChatClient] 收到 cc_metadata 更新")
+                _ccMetadataJson.value = message.content
                 return
             }
 
@@ -338,6 +348,25 @@ class ChatClient(
             log("✅ [ChatClient] 消息已发送到服务器")
         } catch (e: SerializationException) {
             log("❌ [ChatClient] 发送消息失败: ${e.message}")
+        }
+    }
+
+    fun sendCcCommand(userId: String, commandText: String) {
+        val message = Message(
+            id = generateId(),
+            userId = userId,
+            userName = "",
+            content = commandText,
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+            type = MessageType.CC_COMMAND,
+            isTransient = true,
+        )
+        try {
+            val jsonMessage = Json.encodeToString(message)
+            log("📤 [ChatClient] 发送 cc_command: $commandText")
+            webSocket?.send(jsonMessage)
+        } catch (e: SerializationException) {
+            log("❌ [ChatClient] 发送 cc_command 失败: ${e.message}")
         }
     }
     

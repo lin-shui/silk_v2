@@ -1144,6 +1144,25 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
     val pendingQuestionId by chatClient.pendingQuestionId.collectAsState()
+    val ccMetadataJson by chatClient.ccMetadataJson.collectAsState()
+
+    // Update ccConnectInfo when metadata arrives via WebSocket
+    LaunchedEffect(ccMetadataJson) {
+        val raw = ccMetadataJson ?: return@LaunchedEffect
+        try {
+            val parsed = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                .decodeFromString<CcMetadataEvent>(raw)
+            val current = ccConnectInfo ?: return@LaunchedEffect
+            ccConnectInfo = current.copy(
+                mode = parsed.mode ?: current.mode,
+                model = parsed.model ?: current.model,
+                availableModes = if (parsed.availableModes.isNullOrEmpty()) current.availableModes else parsed.availableModes,
+                availableModels = if (parsed.availableModels.isNullOrEmpty()) current.availableModels else parsed.availableModels,
+            )
+        } catch (e: Exception) {
+            console.log("cc_metadata parse error:", e)
+        }
+    }
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
     
@@ -1186,6 +1205,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     
     // cc-connect token dialog
     var showCcConnectTokenDialog by remember { mutableStateOf(false) }
+
+    // cc-connect mode/model dropdown state
+    var showModeDropdown by remember { mutableStateOf(false) }
+    var showModelDropdown by remember { mutableStateOf(false) }
 
     // 消息撤回相关状态：正在撤回中的消息ID集合，防止重复点击
     var recallingMessageIds by remember { mutableStateOf(setOf<String>()) }
@@ -2219,6 +2242,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         property("justify-content", "flex-start")
                         property("gap", "8px")
                         alignItems(AlignItems.Center)
+                        property("flex-wrap", "wrap")
                     }
                 }) {
                     Button({
@@ -2262,6 +2286,124 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }) {
                         Text(ccPrefix)
+                    }
+
+                    // mode/model badges inline with @agent button
+                    if (ccConnectInfo?.connected == true) {
+                        val modeKey = ccConnectInfo?.mode ?: ""
+                        val modelName = ccConnectInfo?.model ?: ""
+
+                        if (showModeDropdown || showModelDropdown) {
+                            Div({
+                                style {
+                                    property("position", "fixed")
+                                    property("top", "0"); property("left", "0")
+                                    property("right", "0"); property("bottom", "0")
+                                    property("z-index", "999")
+                                }
+                                onClick { showModeDropdown = false; showModelDropdown = false }
+                            })
+                        }
+
+                        // Mode
+                        if (modeKey.isNotBlank() || !ccConnectInfo?.availableModes.isNullOrEmpty()) {
+                            val modeName = ccConnectInfo?.availableModes?.find { it.key == modeKey }?.name ?: modeKey
+                            val (modeBg, modeFg, modeBorder) = when (modeKey) {
+                                "force", "bypassPermissions", "yolo" -> Triple("#FFF0F0", "#C62828", "#FFCDD2")
+                                "plan" -> Triple("#EDF4FF", "#1565C0", "#BBDEFB")
+                                "ask" -> Triple("#F0FFF0", "#2E7D32", "#C8E6C9")
+                                else -> Triple("#F7F7F7", "#555555", "#E0E0E0")
+                            }
+                            Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock) } }) {
+                                Span({
+                                    style {
+                                        fontSize(13.px); padding(4.px, 12.px); borderRadius(14.px)
+                                        property("font-weight", "500"); property("cursor", "pointer")
+                                        property("transition", "all 0.15s ease"); property("user-select", "none")
+                                        backgroundColor(Color(modeBg)); color(Color(modeFg))
+                                        property("border", "1px solid $modeBorder")
+                                    }
+                                    attr("title", "Permission mode")
+                                    onClick { showModeDropdown = !showModeDropdown; showModelDropdown = false }
+                                }) { Text("⚙ ${modeName.ifBlank { "mode" }}") }
+                                if (showModeDropdown && !ccConnectInfo?.availableModes.isNullOrEmpty()) {
+                                    Div({
+                                        style {
+                                            property("position", "absolute"); property("bottom", "100%"); property("left", "0")
+                                            property("z-index", "1000"); marginBottom(6.px)
+                                            backgroundColor(Color.white); borderRadius(10.px)
+                                            property("box-shadow", "0 4px 20px rgba(0,0,0,0.12)")
+                                            property("min-width", "180px"); padding(6.px)
+                                            property("border", "1px solid #E8E8E8")
+                                        }
+                                    }) {
+                                        Div({ style { padding(6.px, 12.px); fontSize(11.px); color(Color("#999")); property("font-weight", "500"); property("text-transform", "uppercase"); property("letter-spacing", "0.5px") } }) { Text("Mode") }
+                                        ccConnectInfo?.availableModes?.forEach { opt ->
+                                            val isCurrent = opt.key == modeKey
+                                            Div({
+                                                style {
+                                                    padding(8.px, 12.px); borderRadius(8.px); property("cursor", "pointer"); fontSize(14.px)
+                                                    if (isCurrent) { backgroundColor(Color("#F0F4FF")); property("font-weight", "600"); color(Color("#1565C0")) }
+                                                }
+                                                onClick { showModeDropdown = false; if (!isCurrent) chatClient.sendCcCommand(user.id, "/mode ${opt.key}") }
+                                                onMouseOver { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F0F4FF" else "#F5F5F5" }
+                                                onMouseOut { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F0F4FF" else "" }
+                                            }) { Text(if (isCurrent) "✓ ${opt.name}" else "  ${opt.name}") }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Model
+                        if (!ccConnectInfo?.availableModels.isNullOrEmpty()) {
+                            val shortModel = if (modelName.isNotBlank()) {
+                                modelName.split("/").last().let { n -> if (n.length > 24) n.takeLast(24) else n }
+                            } else "default"
+                            Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock) } }) {
+                                Span({
+                                    style {
+                                        fontSize(13.px); padding(4.px, 12.px); borderRadius(14.px)
+                                        property("font-weight", "500"); property("cursor", "pointer")
+                                        property("transition", "all 0.15s ease"); property("user-select", "none")
+                                        backgroundColor(Color("#F8F0FF")); color(Color("#6A1B9A"))
+                                        property("border", "1px solid #E1BEE7")
+                                    }
+                                    attr("title", if (modelName.isNotBlank()) "Model: $modelName" else "Model: agent default")
+                                    onClick { showModelDropdown = !showModelDropdown; showModeDropdown = false }
+                                }) { Text("🤖 $shortModel") }
+                                if (showModelDropdown) {
+                                    Div({
+                                        style {
+                                            property("position", "absolute"); property("bottom", "100%"); property("left", "0")
+                                            property("z-index", "1000"); marginBottom(6.px)
+                                            backgroundColor(Color.white); borderRadius(10.px)
+                                            property("box-shadow", "0 4px 20px rgba(0,0,0,0.12)")
+                                            property("min-width", "240px"); property("max-height", "320px")
+                                            property("overflow-y", "auto"); padding(6.px)
+                                            property("border", "1px solid #E8E8E8")
+                                        }
+                                    }) {
+                                        Div({ style { padding(6.px, 12.px); fontSize(11.px); color(Color("#999")); property("font-weight", "500"); property("text-transform", "uppercase"); property("letter-spacing", "0.5px") } }) { Text("Model") }
+                                        ccConnectInfo?.availableModels?.forEach { opt ->
+                                            val isCurrent = opt.name == modelName
+                                            Div({
+                                                style {
+                                                    padding(8.px, 12.px); borderRadius(8.px); property("cursor", "pointer"); fontSize(14.px)
+                                                    if (isCurrent) { backgroundColor(Color("#F3E5F5")); property("font-weight", "600"); color(Color("#6A1B9A")) }
+                                                }
+                                                onClick { showModelDropdown = false; if (!isCurrent) chatClient.sendCcCommand(user.id, "/model switch ${opt.name}") }
+                                                onMouseOver { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F3E5F5" else "#F5F5F5" }
+                                                onMouseOut { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F3E5F5" else "" }
+                                            }) {
+                                                val display = opt.name + if (opt.desc.isNotBlank()) " — ${opt.desc}" else ""
+                                                Text(if (isCurrent) "✓ $display" else "  $display")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 }
@@ -5402,6 +5544,8 @@ fun MessageItem(
         MessageType.RECALL -> {
         }
         MessageType.STOP_GENERATE -> {
+        }
+        MessageType.CC_COMMAND -> {
         }
     }
 }
