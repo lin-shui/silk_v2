@@ -188,6 +188,14 @@ private fun parseFileNameFromContentDisposition(contentDisposition: String?): St
         ?.getOrNull(1)
 }
 
+/** Strip provider prefix and middle-ellipsis long model ids for compact badges. */
+private fun compactModelId(modelId: String, maxLen: Int = 40): String {
+    val bare = modelId.substringAfterLast('/').trim()
+    if (bare.length <= maxLen) return bare
+    val keep = (maxLen - 1) / 2
+    return bare.take(keep) + "…" + bare.takeLast(maxLen - keep - 1)
+}
+
 fun main() {
     console.log("🧵 Silk 正在启动...")
     console.log("1️⃣ 准备渲染...")
@@ -2357,10 +2365,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
 
                         // Model
                         if (!ccConnectInfo?.availableModels.isNullOrEmpty()) {
-                            val shortModel = if (modelName.isNotBlank()) {
-                                modelName.split("/").last().let { n -> if (n.length > 24) n.takeLast(24) else n }
-                            } else "default"
-                            Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock) } }) {
+                            val badgeModel = if (modelName.isNotBlank()) compactModelId(modelName) else "default"
+                            val modelTitle = if (modelName.isNotBlank()) modelName else "agent default"
+                            Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock); maxWidth(320.px) } }) {
                                 Span({
                                     style {
                                         fontSize(13.px); padding(4.px, 12.px); borderRadius(14.px)
@@ -2368,10 +2375,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                         property("transition", "all 0.15s ease"); property("user-select", "none")
                                         backgroundColor(Color("#F8F0FF")); color(Color("#6A1B9A"))
                                         property("border", "1px solid #E1BEE7")
+                                        display(DisplayStyle.InlineBlock); maxWidth(100.percent)
+                                        property("overflow", "hidden"); property("text-overflow", "ellipsis")
+                                        property("white-space", "nowrap"); property("vertical-align", "middle")
+                                        property("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
                                     }
-                                    attr("title", if (modelName.isNotBlank()) "Model: $modelName" else "Model: agent default")
+                                    attr("title", "Model: $modelTitle")
                                     onClick { showModelDropdown = !showModelDropdown; showModeDropdown = false }
-                                }) { Text("🤖 $shortModel") }
+                                }) { Text("🤖 $badgeModel") }
                                 if (showModelDropdown) {
                                     Div({
                                         style {
@@ -2379,7 +2390,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                             property("z-index", "1000"); marginBottom(6.px)
                                             backgroundColor(Color.white); borderRadius(10.px)
                                             property("box-shadow", "0 4px 20px rgba(0,0,0,0.12)")
-                                            property("min-width", "240px"); property("max-height", "320px")
+                                            minWidth(360.px); property("max-width", "min(520px, 92vw)")
+                                            property("max-height", "min(420px, 60vh)")
                                             property("overflow-y", "auto"); padding(6.px)
                                             property("border", "1px solid #E8E8E8")
                                         }
@@ -2389,15 +2401,30 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                             val isCurrent = opt.name == modelName
                                             Div({
                                                 style {
-                                                    padding(8.px, 12.px); borderRadius(8.px); property("cursor", "pointer"); fontSize(14.px)
-                                                    if (isCurrent) { backgroundColor(Color("#F3E5F5")); property("font-weight", "600"); color(Color("#6A1B9A")) }
+                                                    padding(8.px, 12.px); borderRadius(8.px); property("cursor", "pointer")
+                                                    property("white-space", "normal"); property("word-break", "break-all")
+                                                    if (isCurrent) { backgroundColor(Color("#F3E5F5")); color(Color("#6A1B9A")) }
                                                 }
                                                 onClick { showModelDropdown = false; if (!isCurrent) chatClient.sendCcCommand(user.id, "/model switch ${opt.name}") }
                                                 onMouseOver { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F3E5F5" else "#F5F5F5" }
                                                 onMouseOut { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F3E5F5" else "" }
                                             }) {
-                                                val display = opt.name + if (opt.desc.isNotBlank()) " — ${opt.desc}" else ""
-                                                Text(if (isCurrent) "✓ $display" else "  $display")
+                                                Div({
+                                                    style {
+                                                        fontSize(13.px)
+                                                        if (isCurrent) property("font-weight", "600")
+                                                        property("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
+                                                        property("line-height", "1.45")
+                                                    }
+                                                }) { Text(if (isCurrent) "✓ ${opt.name}" else opt.name) }
+                                                if (opt.desc.isNotBlank()) {
+                                                    Div({
+                                                        style {
+                                                            fontSize(12.px); color(Color("#888")); marginTop(2.px)
+                                                            property("line-height", "1.35"); property("word-break", "break-word")
+                                                        }
+                                                    }) { Text(opt.desc) }
+                                                }
                                             }
                                         }
                                     }
