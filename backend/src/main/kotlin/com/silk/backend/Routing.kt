@@ -2365,13 +2365,25 @@ fun Application.configureRouting() {
                                     thinkingParts.clear()
                                     toolParts.clear()
                                     answerText = ""
-                                    val segments = raw.split(Regex("(?=\uD83D[\uDCAD\uDD27])"))
-                                    for (seg in segments) {
-                                        val trimmed = seg.trimStart()
+                                    val parts = mutableListOf<String>()
+                                    var lastPos = 0
+                                    var ci = 0
+                                    while (ci < raw.length - 1) {
+                                        if (raw[ci] == '\uD83D' && (raw[ci + 1] == '\uDCAD' || raw[ci + 1] == '\uDD27')) {
+                                            if (ci > lastPos) parts.add(raw.substring(lastPos, ci))
+                                            lastPos = ci
+                                            ci += 2
+                                        } else {
+                                            ci++
+                                        }
+                                    }
+                                    if (lastPos < raw.length) parts.add(raw.substring(lastPos))
+                                    for (part in parts) {
+                                        val trimmed = part.trimStart()
                                         when {
-                                            trimmed.startsWith(thinkEmoji) -> thinkingParts.add(seg.trim())
-                                            trimmed.startsWith(toolEmoji) -> toolParts.add(seg.trim())
-                                            trimmed.isNotBlank() -> answerText = seg.trim()
+                                            trimmed.startsWith(thinkEmoji) -> thinkingParts.add(part.trim())
+                                            trimmed.startsWith(toolEmoji) -> toolParts.add(part.trim())
+                                            trimmed.isNotBlank() -> answerText = part.trim()
                                         }
                                     }
                                 } else {
