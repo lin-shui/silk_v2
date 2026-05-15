@@ -73,6 +73,7 @@ fun WorkflowScene(appState: WebAppState) {
     var newInitialDir by remember { mutableStateOf("") }
     var availableAgents by remember { mutableStateOf<List<AgentInfo>>(emptyList()) }
     var selectedAgentType by remember { mutableStateOf("") }
+    var selectedPermissionMode by remember { mutableStateOf("") }
     var showCreatePicker by remember { mutableStateOf(false) }
     var selectedWorkflow by remember { mutableStateOf<WorkflowItem?>(null) }
     // 操作菜单状态
@@ -93,7 +94,7 @@ fun WorkflowScene(appState: WebAppState) {
     suspend fun performCreateWorkflow() {
         val agentType = selectedAgentType.ifBlank { "claude_code" }
         val result = ApiClient.createWorkflow(
-            newName.trim(), "", user.id, newInitialDir.trim(), agentType,
+            newName.trim(), "", user.id, newInitialDir.trim(), agentType, selectedPermissionMode,
         )
         workflows = ApiClient.getWorkflows(user.id)
         when (result) {
@@ -103,6 +104,7 @@ fun WorkflowScene(appState: WebAppState) {
                 newName = ""
                 newInitialDir = ""
                 selectedAgentType = ""
+                selectedPermissionMode = ""
                 dirWarning = null
             }
             is ApiClient.CreateWorkflowResult.Err -> {
@@ -405,6 +407,35 @@ fun WorkflowScene(appState: WebAppState) {
                         }
                     }
                 }
+                // 权限模式
+                Span({
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("display", "block")
+                        marginBottom(4.px)
+                    }
+                }) { Text("权限模式") }
+                Select({
+                    style {
+                        width(100.percent)
+                        height(40.px)
+                        borderRadius(6.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        padding(8.px)
+                        fontSize(14.px)
+                        marginBottom(12.px)
+                        property("box-sizing", "border-box")
+                        backgroundColor(Color.white)
+                    }
+                    onChange { event ->
+                        selectedPermissionMode = event.value ?: ""
+                    }
+                }) {
+                    Option("", attrs = { if (selectedPermissionMode.isBlank()) attr("selected", "") }) { Text("Interactive") }
+                    Option("ACCEPT_EDITS", attrs = { if (selectedPermissionMode == "ACCEPT_EDITS") attr("selected", "") }) { Text("Accept Edits") }
+                    Option("BYPASS", attrs = { if (selectedPermissionMode == "BYPASS") attr("selected", "") }) { Text("Bypass") }
+                }
                 // 工作目录
                 Span({
                     style {
@@ -507,6 +538,7 @@ fun WorkflowScene(appState: WebAppState) {
                             newName = ""
                             newInitialDir = ""
                             selectedAgentType = ""
+                            selectedPermissionMode = ""
                             dirWarning = null
                         }
                     }) { Text("取消") }
@@ -853,24 +885,7 @@ private fun WorkflowChatPanel(
     var workingDir by remember(groupId) { mutableStateOf("") }
     var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
     var permissionMode by remember(groupId) { mutableStateOf("") }
-    var showFolderPicker by remember(groupId) { mutableStateOf(false) }
-    // 信任确认弹窗状态（替代浏览器原生 confirm）
-    var showTrustConfirm by remember(groupId) { mutableStateOf(false) }
-    var trustConfirmPath by remember(groupId) { mutableStateOf("") }
-    var trustConfirmBridgeId by remember(groupId) { mutableStateOf<String?>(null) }
-
-    // 提取执行 cd 的 suspend 函数，供信任弹窗回调复用
-    suspend fun performCd(path: String) {
-        val resp = ApiClient.cdCcDir(userId, groupId, path)
-        if (resp.success) {
-            workingDir = resp.workingDir
-        } else {
-            val err = resp.error
-            if (err != null) {
-                kotlinx.browser.window.alert("切换目录失败：$err")
-            }
-        }
-    }
+    var showSettingsDialog by remember(groupId) { mutableStateOf(false) }
 
     // 拉取当前 CC 工作目录：
     // - groupId 变化时（切换工作流）
@@ -896,7 +911,9 @@ private fun WorkflowChatPanel(
         }
     }
 
-    // M4 Task 4: 监听 /use 切换后的系统消息，自动刷新 activeAgent 显示
+    // 监听新增消息，刷新 activeAgent / permissionMode 显示。
+    // 后端在 agent 切换、权限模式切换时都会广播 SYSTEM 消息（"已切换到 ..."），
+    // 新增消息改变 messages.size → 触发此 effect → 仅检查最新一条是否匹配。
     LaunchedEffect(messages.size) {
         val latest = messages.lastOrNull() ?: return@LaunchedEffect
         if (latest.type == com.silk.shared.models.MessageType.SYSTEM &&
@@ -1042,8 +1059,8 @@ private fun WorkflowChatPanel(
                         property("text-decoration", "underline")
                         property("text-decoration-style", "dotted")
                     }
-                    attr("title", "选择工作目录")
-                    onClick { showFolderPicker = true }
+                    attr("title", "会话设置")
+                    onClick { showSettingsDialog = true }
                 }) {
                     Text(if (workingDir.isBlank()) "\uD83D\uDCC2 选择目录" else "更改")
                 }
@@ -1235,59 +1252,326 @@ private fun WorkflowChatPanel(
         }
     }
 
-    // Folder Picker 弹窗
+    // 会话设置弹窗（工作目录 / Agent / 权限模式）
+    if (showSettingsDialog) {
+        WorkflowSettingsDialog(
+            userId = userId,
+            groupId = groupId,
+            currentWorkingDir = workingDir,
+            currentAgentDisplay = activeAgentDisplay,
+            currentPermissionMode = permissionMode,
+            onDismiss = { showSettingsDialog = false },
+            onApplied = { newDir, newAgentDisplay, newPermMode ->
+                workingDir = newDir
+                activeAgentDisplay = newAgentDisplay
+                permissionMode = newPermMode
+                showSettingsDialog = false
+            },
+        )
+    }
+}
+
+/**
+ * 会话设置弹窗：工作目录 / Agent / 权限模式三合一。
+ */
+@Composable
+private fun WorkflowSettingsDialog(
+    userId: String,
+    groupId: String,
+    currentWorkingDir: String,
+    currentAgentDisplay: String,
+    currentPermissionMode: String,
+    onDismiss: () -> Unit,
+    onApplied: (workingDir: String, agentDisplay: String, permissionMode: String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var editDir by remember { mutableStateOf(currentWorkingDir) }
+    var availableAgents by remember { mutableStateOf<List<AgentInfo>>(emptyList()) }
+    var selectedAgentType by remember { mutableStateOf("") }
+    var selectedPermMode by remember { mutableStateOf(currentPermissionMode) }
+    var showFolderPicker by remember { mutableStateOf(false) }
+    var showTrustConfirm by remember { mutableStateOf(false) }
+    var trustConfirmPath by remember { mutableStateOf("") }
+    var trustConfirmBridgeId by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    // 初始化：加载 agent 列表和当前 agent 状态
+    LaunchedEffect(Unit) {
+        val agents = ApiClient.listAgents(userId)
+        availableAgents = agents
+        // 从当前显示名反查 agentType
+        val snap = ApiClient.getCcState(userId, groupId)
+        if (snap.success && snap.agentType.isNotBlank()) {
+            // agentType 从 runtime 是 dash form，转 underscore form 用于 dropdown
+            selectedAgentType = snap.agentType.replace('-', '_')
+        }
+    }
+
+    suspend fun applyChanges() {
+        saving = true
+        errorMsg = null
+        val resultDir = editDir.trim()
+        var newDir = currentWorkingDir
+        var newAgentDisplay = currentAgentDisplay
+        var newPermMode = currentPermissionMode
+
+        try {
+            // 1. 如果目录变了，先 cd（含信任检查）
+            if (resultDir.isNotBlank() && resultDir != currentWorkingDir) {
+                val trustCheck = ApiClient.checkTrustedDir(userId, resultDir)
+                when (trustCheck) {
+                    is ApiClient.TrustCheckResult.BridgeDisconnected -> {
+                        errorMsg = "Bridge 未连接，无法切换目录。"
+                        return
+                    }
+                    is ApiClient.TrustCheckResult.NotTrusted -> {
+                        trustConfirmPath = resultDir
+                        trustConfirmBridgeId = trustCheck.bridgeId
+                        showTrustConfirm = true
+                        return
+                    }
+                    is ApiClient.TrustCheckResult.Error -> {
+                        errorMsg = "检查信任状态失败：${trustCheck.message}"
+                        return
+                    }
+                    else -> {}
+                }
+                val cdResp = ApiClient.cdCcDir(userId, groupId, resultDir)
+                if (!cdResp.success) {
+                    errorMsg = "切换目录失败：${cdResp.error ?: "未知错误"}"
+                    return
+                }
+                newDir = cdResp.workingDir
+            }
+
+            // 2. Agent / 权限模式变化：合并为一次 API 调用
+            val currentAgentUnderscore = currentAgentDisplay.let {
+                // 从当前 snapshot 再取一次精确的 agentType
+                val s = ApiClient.getCcState(userId, groupId)
+                s.agentType.replace('-', '_')
+            }
+            val agentChanged = selectedAgentType.isNotBlank() && selectedAgentType != currentAgentUnderscore
+            val permChanged = selectedPermMode != currentPermissionMode
+            if (agentChanged || permChanged) {
+                val resp = ApiClient.updateCcSettings(
+                    userId, groupId,
+                    activeAgent = if (agentChanged) selectedAgentType else null,
+                    permissionMode = if (permChanged) selectedPermMode.ifBlank { "INTERACTIVE" } else null,
+                )
+                if (!resp.success) {
+                    errorMsg = "更新设置失败：${resp.error ?: "未知错误"}"
+                    return
+                }
+                newAgentDisplay = resp.agentDisplayName
+                newPermMode = resp.permissionMode
+                // 如果前面没 cd 过，workingDir 也从这里取
+                if (newDir == currentWorkingDir) newDir = resp.workingDir
+            }
+
+            onApplied(newDir, newAgentDisplay, newPermMode)
+        } finally {
+            saving = false
+        }
+    }
+
+    // 信任后重试 cd + 继续 apply
+    suspend fun applyAfterTrust() {
+        saving = true
+        errorMsg = null
+        try {
+            val added = ApiClient.addTrustedDir(userId, trustConfirmPath)
+            if (!added) {
+                errorMsg = "添加信任记录失败，请重试。"
+                return
+            }
+            showTrustConfirm = false
+            applyChanges()
+        } finally {
+            saving = false
+        }
+    }
+
+    // 背景遮罩
+    Div({
+        style {
+            position(Position.Fixed)
+            property("inset", "0")
+            backgroundColor(Color("rgba(0,0,0,0.4)"))
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            property("z-index", "1000")
+        }
+        onClick { if (!saving) onDismiss() }
+    }) {
+        Div({
+            style {
+                backgroundColor(Color.white)
+                borderRadius(12.px)
+                padding(24.px)
+                width(440.px)
+                property("max-width", "90vw")
+                property("box-shadow", "0 8px 32px rgba(0,0,0,0.15)")
+            }
+            onClick { it.stopPropagation() }
+        }) {
+            H3({ style { marginTop(0.px); color(Color(SilkColors.textPrimary)) } }) { Text("会话设置") }
+
+            // Agent 选择
+            Span({
+                style {
+                    fontSize(12.px); color(Color(SilkColors.textSecondary))
+                    property("display", "block"); marginBottom(4.px)
+                }
+            }) { Text("Agent") }
+            Select({
+                style {
+                    width(100.percent); height(40.px); borderRadius(6.px)
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    padding(8.px); fontSize(14.px); marginBottom(12.px)
+                    property("box-sizing", "border-box"); backgroundColor(Color.white)
+                }
+                onChange { selectedAgentType = it.value ?: "" }
+            }) {
+                if (availableAgents.isEmpty()) {
+                    Option("") { Text("加载中…") }
+                } else {
+                    availableAgents.forEach { agent ->
+                        Option(
+                            value = agent.agentType,
+                            attrs = {
+                                if (!agent.connected) attr("disabled", "")
+                                if (agent.agentType == selectedAgentType) attr("selected", "")
+                            },
+                        ) {
+                            val suffix = if (agent.connected) "" else "（未连接）"
+                            Text("${agent.displayName}${suffix}")
+                        }
+                    }
+                }
+            }
+
+            // 权限模式
+            Span({
+                style {
+                    fontSize(12.px); color(Color(SilkColors.textSecondary))
+                    property("display", "block"); marginBottom(4.px)
+                }
+            }) { Text("权限模式") }
+            Select({
+                style {
+                    width(100.percent); height(40.px); borderRadius(6.px)
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    padding(8.px); fontSize(14.px); marginBottom(12.px)
+                    property("box-sizing", "border-box"); backgroundColor(Color.white)
+                }
+                onChange { selectedPermMode = it.value ?: "" }
+            }) {
+                Option("", attrs = { if (selectedPermMode.isBlank() || selectedPermMode == "INTERACTIVE") attr("selected", "") }) { Text("Interactive") }
+                Option("ACCEPT_EDITS", attrs = { if (selectedPermMode == "ACCEPT_EDITS") attr("selected", "") }) { Text("Accept Edits") }
+                Option("BYPASS", attrs = { if (selectedPermMode == "BYPASS") attr("selected", "") }) { Text("Bypass") }
+            }
+
+            // 工作目录
+            Span({
+                style {
+                    fontSize(12.px); color(Color(SilkColors.textSecondary))
+                    property("display", "block"); marginBottom(4.px)
+                }
+            }) { Text("工作目录") }
+            Div({
+                style {
+                    display(DisplayStyle.Flex); property("gap", "8px"); marginBottom(16.px)
+                }
+            }) {
+                Input(InputType.Text) {
+                    value(editDir)
+                    onInput { editDir = it.value }
+                    attr("placeholder", "工作目录路径")
+                    style {
+                        property("flex", "1"); height(40.px); borderRadius(6.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        padding(8.px); fontSize(13.px)
+                        fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
+                        property("box-sizing", "border-box")
+                    }
+                }
+                Button({
+                    style {
+                        backgroundColor(Color("transparent"))
+                        color(Color(SilkColors.primary))
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(6.px); padding(6.px, 10.px)
+                        property("cursor", "pointer"); fontSize(13.px)
+                        property("white-space", "nowrap")
+                    }
+                    onClick { showFolderPicker = true }
+                }) { Text("\uD83D\uDCC2 选择…") }
+            }
+
+            // 错误提示
+            errorMsg?.let { msg ->
+                Div({
+                    style { fontSize(12.px); color(Color(SilkColors.error)); marginBottom(12.px) }
+                }) { Text(msg) }
+            }
+
+            // 按钮行
+            Div({
+                style {
+                    display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd)
+                    property("gap", "8px")
+                }
+            }) {
+                Button({
+                    if (saving) attr("disabled", "")
+                    style {
+                        backgroundColor(Color(SilkColors.surface))
+                        color(Color(SilkColors.textSecondary))
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(6.px); padding(8.px, 16.px)
+                        property("cursor", "pointer")
+                    }
+                    onClick { onDismiss() }
+                }) { Text("取消") }
+                Button({
+                    if (saving) attr("disabled", "")
+                    style {
+                        backgroundColor(Color(SilkColors.primary))
+                        color(Color.white); border(0.px)
+                        borderRadius(6.px); padding(8.px, 16.px)
+                        property("cursor", if (saving) "wait" else "pointer")
+                    }
+                    onClick { scope.launch { applyChanges() } }
+                }) { Text(if (saving) "保存中…" else "保存") }
+            }
+        }
+    }
+
+    // Folder Picker 子弹窗
     if (showFolderPicker) {
         FolderPickerDialog(
             userId = userId,
-            initialPath = workingDir.ifBlank { null },
+            initialPath = editDir.ifBlank { null },
             onDismiss = { showFolderPicker = false },
-            onConfirm = { selectedPath ->
+            onConfirm = { path ->
+                editDir = path
                 showFolderPicker = false
-                scope.launch {
-                    // 1. 信任目录检查
-                    val trustCheck = ApiClient.checkTrustedDir(userId, selectedPath)
-                    when (trustCheck) {
-                        is ApiClient.TrustCheckResult.BridgeDisconnected -> {
-                            kotlinx.browser.window.alert("Bridge 未连接，无法切换目录。")
-                            return@launch
-                        }
-                        is ApiClient.TrustCheckResult.NotTrusted -> {
-                            trustConfirmPath = selectedPath
-                            trustConfirmBridgeId = trustCheck.bridgeId
-                            showTrustConfirm = true
-                            return@launch
-                        }
-                        is ApiClient.TrustCheckResult.Error -> {
-                            kotlinx.browser.window.alert("检查信任状态失败：${trustCheck.message}")
-                            return@launch
-                        }
-                        else -> {} // 已信任，继续
-                    }
-
-                    // 2. 执行 cd
-                    performCd(selectedPath)
-                }
             },
         )
     }
 
-    // 信任确认弹窗（Silk 风格，替代浏览器原生 confirm）
+    // 信任确认子弹窗
     if (showTrustConfirm) {
         TrustConfirmDialog(
             path = trustConfirmPath,
             bridgeId = trustConfirmBridgeId,
-            onDismiss = { showTrustConfirm = false },
-            onTrust = {
-                scope.launch {
-                    val added = ApiClient.addTrustedDir(userId, trustConfirmPath)
-                    if (added) {
-                        showTrustConfirm = false
-                        performCd(trustConfirmPath)
-                    } else {
-                        kotlinx.browser.window.alert("添加信任记录失败，请重试。")
-                    }
-                }
+            onDismiss = {
+                showTrustConfirm = false
+                saving = false
             },
+            onTrust = { scope.launch { applyAfterTrust() } },
         )
     }
 }

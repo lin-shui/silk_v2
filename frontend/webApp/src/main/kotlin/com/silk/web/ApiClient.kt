@@ -607,6 +607,31 @@ object ApiClient {
         }
     }
     
+    /** 更新工作流会话设置（agent / permissionMode）。 */
+    suspend fun updateCcSettings(
+        userId: String,
+        groupId: String,
+        activeAgent: String? = null,
+        permissionMode: String? = null,
+    ): CcStateResponse {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("groupId", kotlinx.serialization.json.JsonPrimitive(groupId))
+                if (!activeAgent.isNullOrBlank()) {
+                    put("activeAgent", kotlinx.serialization.json.JsonPrimitive(activeAgent))
+                }
+                if (!permissionMode.isNullOrBlank()) {
+                    put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
+                }
+            }.toString()
+            val response = post("/users/$userId/cc-settings/update", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("更新会话设置失败:", e)
+            CcStateResponse(success = false, error = e.message)
+        }
+    }
+
     // ==================== 消息撤回相关 API ====================
     
     /**
@@ -755,6 +780,7 @@ object ApiClient {
         userId: String,
         initialDir: String = "",
         agentType: String = "claude_code",
+        permissionMode: String = "",
     ): CreateWorkflowResult {
         return try {
             // 构造 JSON，使用 JsonObject 安全编码避免手动转义
@@ -767,6 +793,9 @@ object ApiClient {
                 }
                 if (agentType.isNotBlank()) {
                     put("agentType", kotlinx.serialization.json.JsonPrimitive(agentType))
+                }
+                if (permissionMode.isNotBlank()) {
+                    put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
                 }
             }
             val response = post("/api/workflows", obj.toString())
