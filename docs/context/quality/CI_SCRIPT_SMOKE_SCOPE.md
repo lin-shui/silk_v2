@@ -25,7 +25,7 @@
 - [x] `./silk.sh build`
 - [x] `:frontend:webApp:browserProductionWebpack`
 - [x] 构建产物复制到 `backend/static/`
-- [x] `backend/static/index.html` 与生产构建输出一致
+- [x] `backend/static/index.html` 与生产构建输出一致（允许 `silk.sh` 将 `__BUILD_TIMESTAMP__` 替换为真实构建时间戳）
 
 ### Android 脚本链路
 
