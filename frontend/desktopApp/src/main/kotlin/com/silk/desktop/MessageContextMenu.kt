@@ -1,22 +1,30 @@
 package com.silk.desktop
 
-import androidx.compose.foundation.ContextMenuArea
-import androidx.compose.foundation.ContextMenuItem
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Message
+import androidx.compose.material.icons.filled.Sms
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.silk.shared.models.Message
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.net.URI
-import kotlinx.coroutines.delay
-
 /**
  * 消息包装组件
  * 使用SelectionContainer提供文本选择和复制功能
@@ -209,4 +217,3 @@ fun MessageActionBar(
         }
     }
 }
-
