@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -298,6 +299,9 @@ fun ChatScreen(appState: AppState) {
     var isInvitingMember by remember { mutableStateOf(false) }
     var inviteMemberResult by remember { mutableStateOf<String?>(null) }
     
+    // 顶部栏溢出菜单
+    var showOverflowMenu by remember { mutableStateOf(false) }
+
     // @ mention 功能状态（输入 @ 后弹出群成员/会话用户列表）
     var showMentionMenu by remember { mutableStateOf(false) }
     var mentionSearchText by remember { mutableStateOf("") }
@@ -562,63 +566,45 @@ fun ChatScreen(appState: AppState) {
         topBar = {
             TopAppBar(
                 title = {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = group.name,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                modifier = Modifier.weight(1f, fill = false),
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                            )
-                            if (ccConnectInfo != null) {
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Surface(
-                                    onClick = { showCcConnectTokenDialog = true },
-                                    shape = RoundedCornerShape(4.dp),
-                                    color = if (ccConnectInfo?.connected == true) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)
-                                ) {
-                                    Text(
-                                        text = if (ccConnectInfo?.connected == true) {
-                                            val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
-                                            val agentName = when {
-                                                raw.startsWith("claude") -> "Claude"
-                                                raw.startsWith("cursor") -> "Cursor"
-                                                raw.startsWith("gemini") -> "Gemini"
-                                                raw.startsWith("codex") -> "Codex"
-                                                raw.startsWith("copilot") -> "Copilot"
-                                                raw.isBlank() -> "agent"
-                                                else -> raw
-                                            }
-                                            "cc-connect ($agentName)"
-                                        } else {
-                                            "cc-connect (offline)"
-                                        },
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = if (ccConnectInfo?.connected == true) Color(0xFF2E7D32) else Color(0xFFE65100),
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-                                        maxLines = 1
-                                    )
-                                }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = group.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            modifier = Modifier.weight(1f, fill = false),
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (ccConnectInfo != null) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                onClick = { showCcConnectTokenDialog = true },
+                                shape = RoundedCornerShape(4.dp),
+                                color = if (ccConnectInfo?.connected == true) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)
+                            ) {
+                                Text(
+                                    text = if (ccConnectInfo?.connected == true) {
+                                        val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
+                                        val agentName = when {
+                                            raw.startsWith("claude") -> "Claude"
+                                            raw.startsWith("cursor") -> "Cursor"
+                                            raw.startsWith("gemini") -> "Gemini"
+                                            raw.startsWith("codex") -> "Codex"
+                                            raw.startsWith("copilot") -> "Copilot"
+                                            raw.isBlank() -> "agent"
+                                            else -> raw
+                                        }
+                                        "cc-connect ($agentName)"
+                                    } else {
+                                        "cc-connect (offline)"
+                                    },
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (ccConnectInfo?.connected == true) Color(0xFF2E7D32) else Color(0xFFE65100),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    maxLines = 1
+                                )
                             }
                         }
-                        if (ccConnectInfo?.connected == true && !ccConnectInfo?.cwd.isNullOrBlank()) {
-                            Text(
-                                text = ccConnectInfo!!.cwd!!,
-                                style = MaterialTheme.typography.labelSmall,
-                                maxLines = 1,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                fontSize = 10.sp,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                            )
-                        }
-                        Text(
-                            text = "${messages.size} 条消息",
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
                 },
                 scrollBehavior = scrollBehavior,
@@ -671,9 +657,9 @@ fun ChatScreen(appState: AppState) {
                                         .filter { selectedMessages.contains(it.id) }
                                         .sortedBy { it.timestamp }
                                         .joinToString("\n\n") { "${it.userName}:\n${it.content}" }
-                                    
+
                                     if (selectedContent.isNotEmpty()) {
-                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
+                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                                             as android.content.ClipboardManager
                                         val clip = android.content.ClipData.newPlainText("消息", selectedContent)
                                         clipboard.setPrimaryClip(clip)
@@ -691,7 +677,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("📋复制", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // 💬 转发到其他 Silk 对话
                             TextButton(
                                 onClick = {
@@ -709,7 +695,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("💬转发", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // 👤 转发到联系人
                             TextButton(
                                 onClick = {
@@ -726,7 +712,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("👤私聊", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // 📤 分享到其他应用
                             TextButton(
                                 onClick = {
@@ -740,7 +726,7 @@ fun ChatScreen(appState: AppState) {
                                             )
                                             "[$time] ${msg.userName}:\n${msg.content}"
                                         }
-                                    
+
                                     if (selectedContent.isNotEmpty()) {
                                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                             type = "text/plain"
@@ -756,7 +742,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("📤分享", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // ✕ 取消选择
                             TextButton(
                                 onClick = {
@@ -769,99 +755,146 @@ fun ChatScreen(appState: AppState) {
                             }
                         }
                     } else {
-                        // 正常模式的按钮
-                        
-                        // ☑️ 选择模式按钮 - 点击进入选择模式
-                        IconButton(
-                            onClick = {
-                                isSelectionMode = true
-                                selectedMessages.clear()
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "已进入选择模式，点击消息进行选择",
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        ) {
-                            Text("☑️", fontSize = 16.sp)
-                        }
-                        
-                        // 📁 文件夹浏览器按钮
-                        IconButton(
-                            onClick = { 
-                                showFolderExplorer = true
-                                isLoadingFiles = true
-                                // 加载文件列表和 URL 清单
-                                scope.launch {
-                                    try {
-                                        val result = loadGroupFilesAndUrls(group.id)
-                                        folderFiles = result.files
-                                        processedUrls = result.processedUrls
-                                    } catch (e: Exception) {
-                                        addLog("❌ 加载文件列表失败: ${e.message}")
-                                    } finally {
-                                        isLoadingFiles = false
-                                    }
-                                }
-                            }
-                        ) {
-                            Text("📁", fontSize = 16.sp)
-                        }
-                        
-                        // 📎 上传文件按钮
-                        IconButton(
-                            onClick = { 
-                                if (!isUploading) {
-                                    filePickerLauncher.launch("*/*")
-                                }
-                            },
-                            enabled = !isUploading
-                        ) {
-                            Text(
-                                text = if (isUploading) "⏳" else "📎", 
-                                fontSize = 16.sp
-                            )
-                        }
-                        
-                        // 邀请按钮
+                        // 邀请/分享（最常用，保持可见）
                         IconButton(onClick = { showInvitationDialog = true }) {
                             Icon(Icons.Default.Share, contentDescription = "邀请", modifier = Modifier.size(20.dp))
                         }
-                        
-                        // ➕ 添加成员按钮
-                        IconButton(
-                            onClick = {
-                                scope.launch {
-                                    isLoadingContacts = true
-                                    val contactsResponse = ApiClient.getContacts(user.id)
-                                    contacts = contactsResponse.contacts ?: emptyList()
-                                    val membersResponse = ApiClient.getGroupMembers(group.id)
-                                    // 将群主排在第一位
-                                    groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                                    isLoadingContacts = false
-                                    showAddMemberDialog = true
-                                }
+
+                        // 溢出菜单
+                        Box {
+                            IconButton(onClick = { showOverflowMenu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "更多", modifier = Modifier.size(20.dp))
                             }
-                        ) {
-                            Text("➕", fontSize = 16.sp)
-                        }
-                        
-                        // 👥 查看成员按钮
-                        IconButton(
-                            onClick = {
-                                scope.launch {
-                                    isLoadingContacts = true
-                                    val contactsResponse = ApiClient.getContacts(user.id)
-                                    contacts = contactsResponse.contacts ?: emptyList()
-                                    val membersResponse = ApiClient.getGroupMembers(group.id)
-                                    // 将群主排在第一位
-                                    groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                                    isLoadingContacts = false
-                                    showMembersDialog = true
+                            DropdownMenu(
+                                expanded = showOverflowMenu,
+                                onDismissRequest = { showOverflowMenu = false }
+                            ) {
+                                // 显示 cwd 信息（如果存在）
+                                if (ccConnectInfo?.connected == true && !ccConnectInfo?.cwd.isNullOrBlank()) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text(
+                                                    text = "工作目录",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = ccConnectInfo!!.cwd!!,
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        },
+                                        onClick = { showOverflowMenu = false },
+                                        enabled = false
+                                    )
                                 }
+
+                                // 消息计数
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = "${messages.size} 条消息",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    },
+                                    onClick = { showOverflowMenu = false },
+                                    enabled = false
+                                )
+
+                                Divider()
+
+                                // ☑️ 选择模式
+                                DropdownMenuItem(
+                                    text = { Text("选择消息") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        isSelectionMode = true
+                                        selectedMessages.clear()
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "已进入选择模式，点击消息进行选择",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    leadingIcon = { Text("☑️", fontSize = 14.sp) }
+                                )
+
+                                // 📁 文件夹浏览器
+                                DropdownMenuItem(
+                                    text = { Text("文件浏览器") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        showFolderExplorer = true
+                                        isLoadingFiles = true
+                                        scope.launch {
+                                            try {
+                                                val result = loadGroupFilesAndUrls(group.id)
+                                                folderFiles = result.files
+                                                processedUrls = result.processedUrls
+                                            } catch (e: Exception) {
+                                                addLog("❌ 加载文件列表失败: ${e.message}")
+                                            } finally {
+                                                isLoadingFiles = false
+                                            }
+                                        }
+                                    },
+                                    leadingIcon = { Text("📁", fontSize = 14.sp) }
+                                )
+
+                                // 📎 上传文件
+                                DropdownMenuItem(
+                                    text = { Text("上传文件") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        if (!isUploading) {
+                                            filePickerLauncher.launch("*/*")
+                                        }
+                                    },
+                                    leadingIcon = { Text("📎", fontSize = 14.sp) },
+                                    enabled = !isUploading
+                                )
+
+                                // ➕ 添加成员
+                                DropdownMenuItem(
+                                    text = { Text("添加成员") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        scope.launch {
+                                            isLoadingContacts = true
+                                            val contactsResponse = ApiClient.getContacts(user.id)
+                                            contacts = contactsResponse.contacts ?: emptyList()
+                                            val membersResponse = ApiClient.getGroupMembers(group.id)
+                                            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                                            isLoadingContacts = false
+                                            showAddMemberDialog = true
+                                        }
+                                    },
+                                    leadingIcon = { Text("➕", fontSize = 14.sp) }
+                                )
+
+                                // 👥 查看成员
+                                DropdownMenuItem(
+                                    text = { Text("群组成员") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        scope.launch {
+                                            isLoadingContacts = true
+                                            val contactsResponse = ApiClient.getContacts(user.id)
+                                            contacts = contactsResponse.contacts ?: emptyList()
+                                            val membersResponse = ApiClient.getGroupMembers(group.id)
+                                            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                                            isLoadingContacts = false
+                                            showMembersDialog = true
+                                        }
+                                    },
+                                    leadingIcon = { Text("👥", fontSize = 14.sp) }
+                                )
                             }
-                        ) {
-                            Text("👥", fontSize = 16.sp)
                         }
                     }
                 },
