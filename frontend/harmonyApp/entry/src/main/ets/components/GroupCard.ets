@@ -2,12 +2,14 @@
  * 群组卡片组件
  */
 import { Group } from '../models/Group';
+import { CcConnectTokenInfo } from '../api/ApiClient';
 import { SilkTheme } from '../common/Theme';
 
 @Component
 export struct GroupCard {
   @Prop group: Group | null = null;
   @Prop isActive: boolean = false;
+  @Prop ccConnectInfo: CcConnectTokenInfo | null = null;
   onGroupClick?: (group: Group) => void;
 
   build() {
@@ -29,12 +31,38 @@ export struct GroupCard {
 
           // 群组信息
           Column() {
-            Text(this.group.name)
-              .fontSize(16)
-              .fontColor(SilkTheme.colors.textPrimary)
-              .fontWeight(FontWeight.Medium)
-              .maxLines(1)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Row() {
+              Text(this.group.name)
+                .fontSize(16)
+                .fontColor(SilkTheme.colors.textPrimary)
+                .fontWeight(FontWeight.Medium)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .layoutWeight(1)
+
+              // cc-connect badge
+              if (this.ccConnectInfo !== null) {
+                const raw = (this.ccConnectInfo.agentType || '').toLowerCase().trim();
+                let badgeName = 'cc';
+                if (raw.startsWith('claude')) badgeName = 'claude';
+                else if (raw.startsWith('cursor')) badgeName = 'cursor';
+                else if (raw.startsWith('gemini')) badgeName = 'gemini';
+                else if (raw.startsWith('codex')) badgeName = 'codex';
+                else if (raw.startsWith('copilot')) badgeName = 'copilot';
+                else if (raw.length > 0) badgeName = raw;
+
+                const isConnected = this.ccConnectInfo.connected === true;
+                Text(isConnected ? badgeName : `${badgeName} (offline)`)
+                  .fontSize(10)
+                  .fontColor(isConnected ? '#2E7D32' : '#E65100')
+                  .backgroundColor(isConnected ? '#E8F5E9' : '#FFF3E0')
+                  .borderRadius(4)
+                  .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                  .margin({ left: 8 })
+              }
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Center)
 
             Blank().height(4)
 
@@ -48,6 +76,23 @@ export struct GroupCard {
               Text(this.group.unreadCount && this.group.unreadCount > 0 ? '有新消息' : '点击进入项目')
                 .fontSize(14)
                 .fontColor(SilkTheme.colors.textLight)
+            }
+
+            // cc-connect 工作目录
+            if (this.ccConnectInfo !== null && this.ccConnectInfo.connected === true && this.ccConnectInfo.cwd) {
+              Blank().height(4)
+              Row() {
+                Text('📁')
+                  .fontSize(11)
+                Text(this.ccConnectInfo.cwd)
+                  .fontSize(11)
+                  .fontColor(SilkTheme.colors.textLight)
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .margin({ left: 4 })
+              }
+              .width('100%')
+              .alignItems(VerticalAlign.Center)
             }
           }
           .layoutWeight(1)
@@ -64,7 +109,7 @@ export struct GroupCard {
 
             if (this.group.unreadCount && this.group.unreadCount > 0) {
               Blank().height(4)
-              
+
               Text(this.group.unreadCount.toString())
                 .fontSize(12)
                 .fontColor(Color.White)
@@ -92,7 +137,7 @@ export struct GroupCard {
     const date = new Date(timestamp);
     const now = new Date();
     const diff = now.getTime() - date.getTime();
-    
+
     if (diff < 60000) { // 1分钟内
       return '刚刚';
     } else if (diff < 3600000) { // 1小时内

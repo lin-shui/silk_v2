@@ -54,6 +54,7 @@ export interface CreateGroupResponse {
   success: boolean;
   message: string;
   group?: Group;
+  ccConnectToken?: string;
 }
 
 /**

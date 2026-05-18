@@ -54,7 +54,39 @@ data class GroupResponse(
     val success: Boolean,
     val message: String,
     val group: Group? = null,
-    val groups: List<Group>? = null
+    val groups: List<Group>? = null,
+    val ccConnectToken: String? = null,
+)
+
+// ==================== cc-connect 数据模型 ====================
+
+@Serializable
+data class CcModeOption(val key: String, val name: String)
+
+@Serializable
+data class CcModelOption(val name: String, val desc: String = "")
+
+@Serializable
+data class CcMetadataEvent(
+    val type: String = "cc_metadata",
+    val mode: String? = null,
+    val model: String? = null,
+    val availableModes: List<CcModeOption>? = null,
+    val availableModels: List<CcModelOption>? = null,
+)
+
+@Serializable
+data class CcConnectTokenInfo(
+    val success: Boolean = false,
+    val token: String? = null,
+    val connected: Boolean = false,
+    val agentType: String? = null,
+    val project: String? = null,
+    val cwd: String? = null,
+    val mode: String? = null,
+    val model: String? = null,
+    val availableModes: List<CcModeOption>? = null,
+    val availableModels: List<CcModelOption>? = null,
 )
 
 // ==================== 联系人相关数据模型 ====================
@@ -116,7 +148,8 @@ data class PrivateChatResponse(
 data class GroupMember(
     val id: String,
     val fullName: String,
-    val phone: String = ""
+    val phone: String = "",
+    val role: String = "GUEST"
 )
 
 @Serializable
@@ -248,9 +281,13 @@ object ApiClient {
         }
     }
     
-    suspend fun createGroup(userId: String, groupName: String): GroupResponse = withContext(Dispatchers.IO) {
+    suspend fun createGroup(userId: String, groupName: String, type: String? = null): GroupResponse = withContext(Dispatchers.IO) {
         try {
-            val body = """{"userId":"$userId","groupName":"$groupName"}"""
+            val body = if (type != null) {
+                """{"userId":"$userId","groupName":"$groupName","type":"$type"}"""
+            } else {
+                """{"userId":"$userId","groupName":"$groupName"}"""
+            }
             val response = post("/groups/create", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
@@ -468,6 +505,30 @@ object ApiClient {
         } catch (e: Exception) {
             println("获取Bridge状态失败: $e")
             CcSettingsResponse(false, "网络错误")
+        }
+    }
+
+    // ==================== cc-connect Token / Status API ====================
+
+    suspend fun getCcConnectTokenInfo(groupId: String, userId: String): CcConnectTokenInfo? = withContext(Dispatchers.IO) {
+        try {
+            val response = get("/api/ccconnect/groups/$groupId/token-info?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("获取 cc-connect token 信息失败: $e")
+            null
+        }
+    }
+
+    suspend fun regenerateCcConnectToken(groupId: String, userId: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"groupId":"$groupId","userId":"$userId"}"""
+            val response = post("/api/ccconnect/regenerate-token", body)
+            val info = jsonParser.decodeFromString<CcConnectTokenInfo>(response)
+            info.token
+        } catch (e: Exception) {
+            println("重新生成 cc-connect token 失败: $e")
+            null
         }
     }
 

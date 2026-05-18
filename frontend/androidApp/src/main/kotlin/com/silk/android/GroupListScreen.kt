@@ -63,6 +63,9 @@ fun GroupListScreen(appState: AppState) {
     
     // ✅ 未读消息计数
     var unreadCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+
+    // cc-connect status: groupId -> CcConnectTokenInfo
+    var ccConnectStatus by remember { mutableStateOf<Map<String, CcConnectTokenInfo>>(emptyMap()) }
     
     // Language and strings
     var userLanguage by remember { mutableStateOf<Language>(Language.CHINESE) }
@@ -100,7 +103,7 @@ fun GroupListScreen(appState: AppState) {
                         // 它们只通过工作流 Tab 访问，不在 Silk 群组列表中显示
                         groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
                         println("✅ 加载了 ${groups.size} 个群组")
-                        
+
                         // 加载未读消息数
                         appState.currentUser?.let { user ->
                             val unreadResponse = ApiClient.getUnreadCounts(user.id)
@@ -109,6 +112,17 @@ fun GroupListScreen(appState: AppState) {
                                 println("✅ 未读消息: $unreadCounts")
                             }
                         }
+
+                        // 加载 cc-connect 连接状态
+                        val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
+                        val currentUserId = appState.currentUser?.id ?: ""
+                        groups.forEach { group ->
+                            val info = ApiClient.getCcConnectTokenInfo(group.id, currentUserId)
+                            if (info != null && info.success) {
+                                statusMap[group.id] = info
+                            }
+                        }
+                        ccConnectStatus = statusMap
                     }
                 } catch (e: Exception) {
                     println("❌ 加载群组异常: ${e.message}")
@@ -461,6 +475,58 @@ fun GroupListScreen(appState: AppState) {
                     }
                 }
                 else -> {
+                    // 群组列表（Silk AI → CC-Connect → Silk Groups）
+                    val silkPrivateGroups = groups.filter { it.name.startsWith("[Silk]") }
+                    val ccGroups = groups.filter { ccConnectStatus.containsKey(it.id) }
+                    val silkNormalGroups = groups.filter {
+                        !it.name.startsWith("[Silk]") && !ccConnectStatus.containsKey(it.id)
+                    }
+
+                    @Composable
+                    fun renderGroupCard(group: Group, ccInfo: CcConnectTokenInfo?) {
+                        val isSelected = group.id in selectedGroups
+                        val unreadCount = unreadCounts[group.id] ?: 0
+                        GroupCard(
+                            group = group,
+                            isHost = group.hostId == appState.currentUser?.id,
+                            isDeleteMode = isDeleteMode,
+                            isSelected = isSelected,
+                            unreadCount = unreadCount,
+                            ccConnectInfo = ccInfo,
+                            onClick = {
+                                if (isDeleteMode) {
+                                    selectedGroups = if (isSelected) {
+                                        selectedGroups - group.id
+                                    } else {
+                                        selectedGroups + group.id
+                                    }
+                                } else {
+                                    scope.launch {
+                                        appState.currentUser?.let { user ->
+                                            ApiClient.markGroupAsRead(user.id, group.id)
+                                            unreadCounts = unreadCounts - group.id
+                                        }
+                                    }
+                                    appState.selectGroup(group)
+                                }
+                            },
+                            onMembersClick = {
+                                selectedGroupForMembers = group
+                                scope.launch {
+                                    isLoadingMembers = true
+                                    val userId = appState.currentUser?.id ?: return@launch
+                                    val contactsResponse = ApiClient.getContacts(userId)
+                                    contacts = contactsResponse.contacts ?: emptyList()
+                                    val membersResponse = ApiClient.getGroupMembers(group.id)
+                                    val sortedMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                                    groupMembers = sortedMembers
+                                    isLoadingMembers = false
+                                    showMembersDialog = true
+                                }
+                            }
+                        )
+                    }
+
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(12.dp),
@@ -484,52 +550,55 @@ fun GroupListScreen(appState: AppState) {
                                 }
                             }
                         }
-                        
-                        items(groups) { group ->
-                            val isSelected = group.id in selectedGroups
-                            val unreadCount = unreadCounts[group.id] ?: 0
-                            GroupCard(
-                                group = group,
-                                isHost = group.hostId == appState.currentUser?.id,
-                                isDeleteMode = isDeleteMode,
-                                isSelected = isSelected,
-                                unreadCount = unreadCount,
-                                onClick = { 
-                                    if (isDeleteMode) {
-                                        selectedGroups = if (isSelected) {
-                                            selectedGroups - group.id
-                                        } else {
-                                            selectedGroups + group.id
-                                        }
-                                    } else {
-                                        // 标记为已读并清除本地未读计数
-                                        scope.launch {
-                                            appState.currentUser?.let { user ->
-                                                ApiClient.markGroupAsRead(user.id, group.id)
-                                                unreadCounts = unreadCounts - group.id
-                                            }
-                                        }
-                                        appState.selectGroup(group)
-                                    }
-                                },
-                                onMembersClick = {
-                                    selectedGroupForMembers = group
-                                    scope.launch {
-                                        isLoadingMembers = true
-                                        val userId = appState.currentUser?.id ?: return@launch
-                                        val contactsResponse = ApiClient.getContacts(userId)
-                                        contacts = contactsResponse.contacts ?: emptyList()
-                                        val membersResponse = ApiClient.getGroupMembers(group.id)
-                                        // 将群主排在第一位
-                                        val sortedMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                                        groupMembers = sortedMembers
-                                        isLoadingMembers = false
-                                        showMembersDialog = true
-                                    }
-                                }
-                            )
+
+                        // --- Section 1: Silk 专属对话 ---
+                        if (silkPrivateGroups.isNotEmpty()) {
+                            item {
+                                SectionHeader(
+                                    title = "Silk AI",
+                                    color = SilkColors.primary
+                                )
+                            }
+                            items(silkPrivateGroups) { group ->
+                                renderGroupCard(
+                                    group = group,
+                                    ccInfo = ccConnectStatus[group.id]
+                                )
+                            }
                         }
-                        
+
+                        // --- Section 2: CC-Connect 群组 ---
+                        if (ccGroups.isNotEmpty()) {
+                            item {
+                                SectionHeader(
+                                    title = "CC-Connect",
+                                    color = Color(0xFF2E7D32)
+                                )
+                            }
+                            items(ccGroups) { group ->
+                                renderGroupCard(
+                                    group = group,
+                                    ccInfo = ccConnectStatus[group.id]
+                                )
+                            }
+                        }
+
+                        // --- Section 3: Silk 普通群组 ---
+                        if (silkNormalGroups.isNotEmpty()) {
+                            item {
+                                SectionHeader(
+                                    title = "Silk Groups",
+                                    color = SilkColors.textSecondary
+                                )
+                            }
+                            items(silkNormalGroups) { group ->
+                                renderGroupCard(
+                                    group = group,
+                                    ccInfo = null
+                                )
+                            }
+                        }
+
                         // 添加一个加入群组的按钮（非删除模式才显示）
                         if (!isDeleteMode) {
                             item {
@@ -666,11 +735,27 @@ fun GroupCard(
     isDeleteMode: Boolean = false,
     isSelected: Boolean = false,
     unreadCount: Int = 0,
+    ccConnectInfo: CcConnectTokenInfo? = null,
     onClick: () -> Unit,
     onMembersClick: (() -> Unit)? = null
 ) {
     val hasUnread = unreadCount > 0
-    
+    val isCcConnect = ccConnectInfo != null
+    val ccConnected = ccConnectInfo?.connected == true
+
+    val badgeName = if (isCcConnect) {
+        val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
+        when {
+            raw.startsWith("claude") -> "claude"
+            raw.startsWith("cursor") -> "cursor"
+            raw.startsWith("gemini") -> "gemini"
+            raw.startsWith("codex")  -> "codex"
+            raw.startsWith("copilot") -> "copilot"
+            raw.isBlank() -> "cc"
+            else -> raw
+        }
+    } else ""
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -679,121 +764,158 @@ fun GroupCard(
         colors = CardDefaults.cardColors(
             containerColor = when {
                 isSelected -> Color(0xFFFFEBEE)
-                hasUnread -> Color(0xFFFFF8E1)  // 淡黄色背景表示有未读
+                hasUnread -> Color(0xFFFFF8E1)
                 else -> SilkColors.surfaceElevated
             }
         ),
         shape = MaterialTheme.shapes.small,
         border = when {
             isSelected -> androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFe74c3c))
-            hasUnread -> androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFFF9800))  // 橙色边框
+            hasUnread -> androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFFF9800))
             else -> null
         }
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // 左侧：群名 + 邀请码（紧凑布局）
+        Column(modifier = Modifier.fillMaxWidth()) {
             Row(
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // ✅ 未读指示器（红点 + 数字）
-                if (hasUnread && !isDeleteMode) {
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .background(
-                                color = Color(0xFFFF5722),
-                                shape = CircleShape
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (unreadCount > 99) "99+" else unreadCount.toString(),
-                            color = Color.White,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                // 左侧：群名 + badge + 邀请码
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 未读指示器
+                    if (hasUnread && !isDeleteMode) {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .background(Color(0xFFFF5722), CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (unreadCount > 99) "99+" else unreadCount.toString(),
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                
-                // 群名
-                Text(
-                    text = group.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.SemiBold,
-                    color = if (hasUnread) Color(0xFFE65100) else SilkColors.textPrimary,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                
-                Spacer(modifier = Modifier.width(8.dp))
-                
-                // 邀请码（小字体）
-                Text(
-                    text = "[${group.invitationCode}]",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = SilkColors.textSecondary,
-                    letterSpacing = 1.sp
-                )
-            }
-            
-            // 右侧按钮区域
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // ✅ 未读提示文字
-                if (hasUnread && !isDeleteMode) {
+
+                    // 群名
                     Text(
-                        text = "新消息",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFFFF5722),
-                        fontWeight = FontWeight.Bold
+                        text = group.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.SemiBold,
+                        color = if (hasUnread) Color(0xFFE65100) else SilkColors.textPrimary,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
-                }
-                
-                // 成员按钮（非删除模式下显示）
-                if (!isDeleteMode && onMembersClick != null) {
-                    Surface(
-                        onClick = { onMembersClick() },
-                        color = SilkColors.secondary.copy(alpha = 0.5f),
-                        shape = MaterialTheme.shapes.small
-                    ) {
-                        Text(
-                            text = "👥",
-                            style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-                
-                // 删除模式下显示选择指示器
-                if (isDeleteMode) {
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .background(
-                                color = if (isSelected) Color(0xFFe74c3c) else Color.LightGray,
-                                shape = androidx.compose.foundation.shape.CircleShape
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (isSelected) {
-                            Icon(
-                                Icons.Default.Check,
-                                contentDescription = "已选择",
-                                tint = Color.White,
-                                modifier = Modifier.size(16.dp)
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    // cc-connect status badge
+                    if (isCcConnect) {
+                        Surface(
+                            shape = MaterialTheme.shapes.extraSmall,
+                            color = if (ccConnected) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)
+                        ) {
+                            Text(
+                                text = if (ccConnected) badgeName else "$badgeName (offline)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (ccConnected) Color(0xFF2E7D32) else Color(0xFFE65100),
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    // 邀请码
+                    Text(
+                        text = "[${group.invitationCode}]",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SilkColors.textSecondary,
+                        letterSpacing = 1.sp
+                    )
+                }
+
+                // 右侧按钮区域
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (hasUnread && !isDeleteMode) {
+                        Text(
+                            text = "新消息",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFFF5722),
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    if (!isDeleteMode && onMembersClick != null) {
+                        Surface(
+                            onClick = { onMembersClick() },
+                            color = SilkColors.secondary.copy(alpha = 0.5f),
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text(
+                                text = "👥",
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    if (isDeleteMode) {
+                        Box(
+                            modifier = Modifier
+                                .size(24.dp)
+                                .background(
+                                    color = if (isSelected) Color(0xFFe74c3c) else Color.LightGray,
+                                    shape = CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                Icon(
+                                    Icons.Default.Check,
+                                    contentDescription = "已选择",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // cc-connect 工作目录（第二行）
+            val cwdText = ccConnectInfo?.cwd
+            if (isCcConnect && ccConnected && !cwdText.isNullOrBlank()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = if (hasUnread && !isDeleteMode) 34.dp else 12.dp, end = 12.dp, bottom = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "📁",
+                        fontSize = 11.sp
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = cwdText,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = SilkColors.textSecondary.copy(alpha = 0.7f),
+                        maxLines = 1
+                    )
                 }
             }
         }
@@ -801,85 +923,202 @@ fun GroupCard(
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun CreateGroupDialog(
     appState: AppState,
     strings: com.silk.shared.i18n.Strings,
     onDismiss: () -> Unit,
-    onGroupCreated: (Group) -> Unit
+    onGroupCreated: (Group) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
     var groupName by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    
+    var isCcConnect by remember { mutableStateOf(false) }
+    var generatedToken by remember { mutableStateOf<String?>(null) }
+    var tokenCopied by remember { mutableStateOf(false) }
+
     val userName = appState.currentUser?.fullName ?: ""
     val previewName = if (groupName.isNotBlank()) "$userName's $groupName" else ""
-    
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(strings.createGroupTitle) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = groupName,
-                    onValueChange = { groupName = it; errorMessage = "" },
-                    label = { Text(strings.groupName) },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !isLoading,
-                    singleLine = true
-                )
-                
-                if (previewName.isNotEmpty()) {
+
+    if (generatedToken != null) {
+        // Token display phase
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text("cc-connect Token", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(
-                        text = "${strings.fullName}: $previewName",
+                        text = generatedToken!!,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    )
+                    Text(
+                        text = "Paste this token into cc-connect's config.toml:",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = SilkColors.textSecondary
                     )
+                    Surface(
+                        color = SilkColors.secondary.copy(alpha = 0.3f),
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            text = """[[projects.platforms]]
+type = "silk"
+[projects.platforms.options]
+server = "wss://your-server:15003/ccconnect-bridge"
+token  = "${generatedToken}"""",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            modifier = Modifier.padding(12.dp)
+                        )
+                    }
                 }
-                
-                if (errorMessage.isNotEmpty()) {
-                    Text(
-                        text = errorMessage,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = onDismiss,
+                    colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary)
+                ) { Text("Done") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    tokenCopied = true
+                    // Android clipboard copy
+                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("cc-connect token", generatedToken))
+                }) { Text(if (tokenCopied) "Copied!" else "Copy Token") }
             }
-        },
-        confirmButton = {
-            Button(
-                onClick = {
-                    scope.launch {
-                        isLoading = true
-                        try {
-                            val response = appState.currentUser?.let { user ->
-                                ApiClient.createGroup(user.id, groupName)
-                            }
-                            
-                            if (response != null && response.success && response.group != null) {
-                                println("群组创建成功: ${response.group.name}")
-                                onGroupCreated(response.group)
-                            } else {
-                                errorMessage = response?.message ?: "创建失败"
-                            }
-                        } catch (e: Exception) {
-                            errorMessage = "创建失败: ${e.message}"
-                        } finally {
-                            isLoading = false
+        )
+    } else {
+        AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text(strings.createGroupTitle) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Group type selector
+                    Text(
+                        text = "Type",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = SilkColors.textSecondary
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !isCcConnect,
+                            onClick = { isCcConnect = false },
+                            label = { Text("Normal", fontSize = 13.sp) }
+                        )
+                        FilterChip(
+                            selected = isCcConnect,
+                            onClick = { isCcConnect = true },
+                            label = { Text("cc-connect", fontSize = 13.sp) }
+                        )
+                    }
+
+                    OutlinedTextField(
+                        value = groupName,
+                        onValueChange = { groupName = it; errorMessage = "" },
+                        label = { Text(strings.groupName) },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isLoading,
+                        singleLine = true
+                    )
+
+                    if (previewName.isNotEmpty() && !isCcConnect) {
+                        Text(
+                            text = "${strings.fullName}: $previewName",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    if (isCcConnect) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text(
+                                text = "A token will be generated for connecting cc-connect to this group. Paste it into your cc-connect config.toml.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = SilkColors.textSecondary,
+                                modifier = Modifier.padding(12.dp)
+                            )
                         }
                     }
-                },
-                enabled = !isLoading && groupName.isNotBlank()
-            ) {
-                Text(if (isLoading) strings.creating else strings.createButton)
+
+                    if (errorMessage.isNotEmpty()) {
+                        Text(
+                            text = errorMessage,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        scope.launch {
+                            isLoading = true
+                            try {
+                                val type = if (isCcConnect) "ccconnect" else null
+                                val response = appState.currentUser?.let { user ->
+                                    ApiClient.createGroup(user.id, groupName, type)
+                                }
+
+                                if (response != null && response.success && response.group != null) {
+                                    if (isCcConnect && response.ccConnectToken != null) {
+                                        generatedToken = response.ccConnectToken
+                                    } else {
+                                        onGroupCreated(response.group)
+                                    }
+                                } else {
+                                    errorMessage = response?.message ?: "创建失败"
+                                }
+                            } catch (e: Exception) {
+                                errorMessage = "创建失败: ${e.message}"
+                            } finally {
+                                isLoading = false
+                            }
+                        }
+                    },
+                    enabled = !isLoading && groupName.isNotBlank()
+                ) {
+                    Text(if (isLoading) strings.creating else strings.createButton)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss, enabled = !isLoading) {
+                    Text(strings.cancelButton)
+                }
             }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isLoading) {
-                Text(strings.cancelButton)
-            }
-        }
-    )
+        )
+    }
+}
+
+@Composable
+private fun SectionHeader(title: String, color: androidx.compose.ui.graphics.Color) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.sp
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Divider(
+            modifier = Modifier.weight(1f),
+            color = color.copy(alpha = 0.3f),
+            thickness = 1.dp
+        )
+    }
 }
 
 @Composable

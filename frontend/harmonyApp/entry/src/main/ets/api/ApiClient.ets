@@ -4,7 +4,7 @@
  */
 import http from '@ohos.net.http';
 import { User, LoginResponse, RegisterResponse } from '../models/User';
-import { Group, GroupMember } from '../models/Group';
+import { Group, GroupMember, CreateGroupResponse } from '../models/Group';
 import { UserSettings, UserSettingsResponse } from '../models/UserSettings';
 import { UserTodoItem } from '../models/UserTodoItem';
 import { API_BASE_URL, API_TIMEOUT } from '../common/Constants';
@@ -43,6 +43,7 @@ export interface CreateGroupRequest {
   name: string;
   description?: string;
   createdBy: string;
+  type?: string; // "ccconnect" 或 undefined
 }
 
 /**
@@ -112,6 +113,32 @@ interface BackendGroup {
 interface BackendCreateGroupRequest {
   userId: string;
   groupName: string;
+  type?: string;
+}
+
+// ==================== CC-Connect interfaces ====================
+
+export interface CcModeOption {
+  key: string;
+  name: string;
+}
+
+export interface CcModelOption {
+  name: string;
+  desc?: string;
+}
+
+export interface CcConnectTokenInfo {
+  success: boolean;
+  token?: string;
+  connected?: boolean;
+  agentType?: string;
+  project?: string;
+  cwd?: string;
+  mode?: string;
+  model?: string;
+  availableModes?: CcModeOption[];
+  availableModels?: CcModelOption[];
 }
 
 // ==================== Workflow & Knowledge Base interfaces ====================
@@ -360,6 +387,7 @@ interface ResponseEnvelope {
   group?: BackendGroup;
   groups?: BackendGroup[];
   settings?: UserSettings;
+  ccConnectToken?: string;
 }
 
 /**
@@ -841,12 +869,42 @@ export class ApiClient {
   /**
    * 创建新群组
    */
-  async createGroup(request: CreateGroupRequest): Promise<ApiResponse<Group>> {
-    const payload: BackendCreateGroupRequest = {
-      userId: request.createdBy,
-      groupName: request.name
-    };
-    return this.post<Group>('/groups/create', payload);
+  async createGroup(request: CreateGroupRequest): Promise<CreateGroupResponse> {
+    const httpRequest = this.createHttpRequest();
+    try {
+      const payload: BackendCreateGroupRequest = {
+        userId: request.createdBy,
+        groupName: request.name
+      };
+      if (request.type !== undefined) {
+        payload.type = request.type;
+      }
+      const opts: http.HttpRequestOptions = {
+        method: http.RequestMethod.POST,
+        header: { 'Content-Type': 'application/json' },
+        extraData: payload,
+        connectTimeout: this.timeout,
+        readTimeout: this.timeout
+      };
+      const response = await httpRequest.request(`${this.baseUrl}/groups/create`, opts);
+      if (response.responseCode === 200 || response.responseCode === 201) {
+        const resultText: string = response.result as string;
+        const parsed: ResponseEnvelope = JSON.parse(resultText) as ResponseEnvelope;
+        const normalizedGroup: Group = parsed.group ? this.normalizeGroup(parsed.group) : undefined;
+        const result: CreateGroupResponse = {
+          success: parsed.success,
+          message: parsed.message,
+          group: normalizedGroup,
+          ccConnectToken: parsed.ccConnectToken
+        };
+        return result;
+      }
+      return { success: false, message: `HTTP Error: ${response.responseCode}` };
+    } catch (error) {
+      return { success: false, message: `Request failed: ${this.stringifyError(error)}` };
+    } finally {
+      httpRequest.destroy();
+    }
   }
 
   /**
@@ -1568,6 +1626,24 @@ export class ApiClient {
       await this.postRaw(`/users/${userId}/trusted-dirs`, body);
       return true;
     } catch (_) { return false; }
+  }
+
+  // ==================== cc-connect Token / Status API ====================
+
+  async getCcConnectTokenInfo(groupId: string, userId: string): Promise<CcConnectTokenInfo | null> {
+    try {
+      const result = await this.getRaw(`/api/ccconnect/groups/${groupId}/token-info?userId=${userId}`);
+      return JSON.parse(result) as CcConnectTokenInfo;
+    } catch (_) { return null; }
+  }
+
+  async regenerateCcConnectToken(groupId: string, userId: string): Promise<string | null> {
+    try {
+      const body = JSON.stringify({ groupId: groupId, userId: userId });
+      const result = await this.postRaw('/api/ccconnect/regenerate-token', body);
+      const info = JSON.parse(result) as CcConnectTokenInfo;
+      return info.token ? info.token : null;
+    } catch (_) { return null; }
   }
 
   static getInstance(): ApiClient {

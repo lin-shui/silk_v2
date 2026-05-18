@@ -92,6 +92,7 @@ export class ChatStore {
   public onHistoryLoaded: (() => void) | null = null;
   public onConnectionStateChanged: (() => void) | null = null;
   public onError: ((error: string) => void) | null = null;
+  public onCcMetadataChanged: ((json: string) => void) | null = null;
 
   /**
    * 连接到聊天服务器
@@ -397,6 +398,12 @@ export class ChatStore {
    * 处理 WebSocket 原始数据（用于批量历史等场景）
    */
   handleRawData(data: string): void {
+    // cc_metadata 事件：CC 连接状态/模式/模型更新
+    if (data.includes('"type":"cc_metadata"')) {
+      this.onCcMetadataChanged?.(data);
+      return;
+    }
+
     // 批量历史帧：不依赖 _isHistoryLoading 状态，防止超时后历史消息被丢弃
     if (data.startsWith('[')) {
       try {

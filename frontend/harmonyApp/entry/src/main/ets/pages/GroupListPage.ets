@@ -1,8 +1,8 @@
-import { Group } from '../models/Group';
+import { Group, CreateGroupResponse } from '../models/Group';
 import { GroupCard } from '../components/GroupCard';
 import { LoadingIndicator } from '../components/LoadingIndicator';
 import { SilkColors } from '../common/Theme';
-import { apiClient as globalApiClient } from '../api/ApiClient';
+import { apiClient as globalApiClient, CcConnectTokenInfo } from '../api/ApiClient';
 import { router as appRouter } from '../common/Router';
 import { appStore as globalAppStore } from '../stores/AppStore';
 import promptAction from '@ohos.promptAction';
@@ -22,6 +22,9 @@ export struct GroupListPage {
   @State selectedLeaveGroupIds: string[] = [];
   @State isLeavingGroups: boolean = false;
   @State errorMessage: string = '';
+  @State ccConnectStatus: Record<string, CcConnectTokenInfo> = {};
+  @State createGroupType: string = '';
+  @State generatedToken: string = '';
 
   private unreadRefreshTimer: number = -1;
   private readonly appStore = globalAppStore;
@@ -74,6 +77,17 @@ export struct GroupListPage {
         nextGroups.push(group);
       }
       this.groups = nextGroups;
+
+      // 加载 cc-connect 连接状态
+      const statusMap: Record<string, CcConnectTokenInfo> = {};
+      for (let i = 0; i < nextGroups.length; i++) {
+        const group = nextGroups[i];
+        const info = await this.apiClient.getCcConnectTokenInfo(group.id, userId);
+        if (info !== null && info.success) {
+          statusMap[group.id] = info;
+        }
+      }
+      this.ccConnectStatus = statusMap;
     } catch (error) {
       this.errorMessage = '加载项目失败';
     } finally {
@@ -161,15 +175,27 @@ export struct GroupListPage {
       previousGroupIds.push(this.groups[i].id);
     }
     try {
-      const response = await this.apiClient.createGroup({
+      const createRequest: { name: string; createdBy: string; type?: string } = {
         name: trimmedName,
         createdBy: user.id
-      });
-      if (response.success && response.data) {
-        this.groups = this.groups.concat([response.data]);
-        this.showActionSheet = false;
-        this.newGroupName = '';
-        this.showToast('项目创建成功');
+      };
+      if (this.createGroupType === 'ccconnect') {
+        createRequest.type = 'ccconnect';
+      }
+      const response = await this.apiClient.createGroup(createRequest);
+      if (response.success && response.group) {
+        this.groups = this.groups.concat([response.group]);
+        if (response.ccConnectToken) {
+          // CC-Connect 群组：展示 token 供用户复制
+          this.generatedToken = response.ccConnectToken;
+          this.showToast('CC-Connect 项目已创建');
+          this.actionSheetMode = 'create_token';
+        } else {
+          this.showActionSheet = false;
+          this.newGroupName = '';
+          this.createGroupType = '';
+          this.showToast(response.ccConnectToken ? 'CC-Connect 项目已创建' : '项目创建成功');
+        }
       } else {
         const recovered = await this.recoverCreatedGroupAfterFailure(trimmedName, previousGroupIds);
         if (!recovered) {
@@ -428,6 +454,7 @@ export struct GroupListPage {
   private openCreateSheet(): void {
     this.actionSheetMode = 'create';
     this.newGroupName = '';
+    this.createGroupType = '';
     this.showActionSheet = true;
   }
 
@@ -600,20 +627,78 @@ export struct GroupListPage {
         .justifyContent(FlexAlign.Center)
       } else {
         List({ space: 8 }) {
-          ForEach(this.groups, (group: Group) => {
+          // 群组列表（Silk AI → CC-Connect → Silk Groups）
+          const silkPrivateGroups: Group[] = this.groups.filter((g: Group) => g.name.startsWith('[Silk]'));
+          const ccGroups: Group[] = this.groups.filter((g: Group) => this.ccConnectStatus[g.id] !== undefined);
+          const silkNormalGroups: Group[] = this.groups.filter((g: Group) =>
+            !g.name.startsWith('[Silk]') && this.ccConnectStatus[g.id] === undefined
+          );
+
+          // --- Section 1: Silk 专属对话 ---
+          if (silkPrivateGroups.length > 0) {
             ListItem() {
-              GroupCard({
-                group: group,
-                onGroupClick: (selectedGroup: Group): void => {
-                  void this.enterChat(selectedGroup);
-                }
-              })
-              .border({
-                width: this.isGroupSelectedForLeave(group.id) ? 2 : 0,
-                color: this.isGroupSelectedForLeave(group.id) ? SilkColors.error : SilkColors.surface
-              })
+              SectionHeader({ title: 'Silk AI', color: SilkColors.primary })
             }
-          }, (group: Group) => group.id)
+            ForEach(silkPrivateGroups, (group: Group) => {
+              ListItem() {
+                GroupCard({
+                  group: group,
+                  ccConnectInfo: null,
+                  onGroupClick: (selectedGroup: Group): void => {
+                    void this.enterChat(selectedGroup);
+                  }
+                })
+                .border({
+                  width: this.isGroupSelectedForLeave(group.id) ? 2 : 0,
+                  color: this.isGroupSelectedForLeave(group.id) ? SilkColors.error : SilkColors.surface
+                })
+              }
+            }, (group: Group) => group.id)
+          }
+
+          // --- Section 2: CC-Connect 群组 ---
+          if (ccGroups.length > 0) {
+            ListItem() {
+              SectionHeader({ title: 'CC-Connect', color: '#2E7D32' })
+            }
+            ForEach(ccGroups, (group: Group) => {
+              ListItem() {
+                GroupCard({
+                  group: group,
+                  ccConnectInfo: this.ccConnectStatus[group.id],
+                  onGroupClick: (selectedGroup: Group): void => {
+                    void this.enterChat(selectedGroup);
+                  }
+                })
+                .border({
+                  width: this.isGroupSelectedForLeave(group.id) ? 2 : 0,
+                  color: this.isGroupSelectedForLeave(group.id) ? SilkColors.error : SilkColors.surface
+                })
+              }
+            }, (group: Group) => group.id)
+          }
+
+          // --- Section 3: Silk 普通群组 ---
+          if (silkNormalGroups.length > 0) {
+            ListItem() {
+              SectionHeader({ title: 'Silk Groups', color: SilkColors.textSecondary })
+            }
+            ForEach(silkNormalGroups, (group: Group) => {
+              ListItem() {
+                GroupCard({
+                  group: group,
+                  ccConnectInfo: null,
+                  onGroupClick: (selectedGroup: Group): void => {
+                    void this.enterChat(selectedGroup);
+                  }
+                })
+                .border({
+                  width: this.isGroupSelectedForLeave(group.id) ? 2 : 0,
+                  color: this.isGroupSelectedForLeave(group.id) ? SilkColors.error : SilkColors.surface
+                })
+              }
+            }, (group: Group) => group.id)
+          }
         }
         .width('100%')
         .layoutWeight(1)
@@ -633,7 +718,7 @@ export struct GroupListPage {
     .height('100%')
     .backgroundColor(SilkColors.background)
     .bindSheet($$this.showActionSheet, this.buildActionSheet(), {
-      height: 240,
+      height: this.actionSheetMode === 'create_token' ? 340 : 240,
       backgroundColor: SilkColors.surface
     })
   }
@@ -642,6 +727,8 @@ export struct GroupListPage {
   buildActionSheet() {
     if (this.actionSheetMode === 'join') {
       this.buildJoinSheet();
+    } else if (this.actionSheetMode === 'create_token') {
+      this.buildCreateTokenSheet();
     } else {
       this.buildCreateSheet();
     }
@@ -662,12 +749,52 @@ export struct GroupListPage {
         .backgroundColor(SilkColors.background)
         .onChange((value: string) => this.newGroupName = value)
 
+      // 项目类型选择
+      Text('项目类型')
+        .fontSize(13)
+        .fontColor(SilkColors.textSecondary)
+        .margin({ top: 12, bottom: 8 })
+      Row({ space: 12 }) {
+        Button('普通项目')
+          .height(34)
+          .fontSize(13)
+          .layoutWeight(1)
+          .backgroundColor(this.createGroupType === '' ? SilkColors.primary : '#E8E0D4')
+          .fontColor(this.createGroupType === '' ? Color.White : SilkColors.textSecondary)
+          .borderRadius(17)
+          .onClick(() => {
+            this.createGroupType = '';
+          })
+
+        Button('CC-Connect')
+          .height(34)
+          .fontSize(13)
+          .layoutWeight(1)
+          .backgroundColor(this.createGroupType === 'ccconnect' ? '#2E7D32' : '#E8E0D4')
+          .fontColor(this.createGroupType === 'ccconnect' ? Color.White : SilkColors.textSecondary)
+          .borderRadius(17)
+          .onClick(() => {
+            this.createGroupType = 'ccconnect';
+          })
+      }
+      .width('100%')
+
+      if (this.createGroupType === 'ccconnect') {
+        Text('CC-Connect 项目将与外部 AI 编程助手连接，创建后需将 Token 配置到 claude.hce 文件中')
+          .fontSize(11)
+          .fontColor('#2E7D32')
+          .margin({ top: 8 })
+      }
+
       Row() {
         Button('取消')
           .width('45%')
           .backgroundColor(SilkColors.surface)
           .fontColor(SilkColors.textSecondary)
-          .onClick(() => this.showActionSheet = false)
+          .onClick(() => {
+            this.showActionSheet = false;
+            this.createGroupType = '';
+          })
 
         Button(this.isCreatingGroup ? '创建中...' : '创建')
           .width('45%')
@@ -681,6 +808,64 @@ export struct GroupListPage {
       }
       .width('100%')
       .justifyContent(FlexAlign.SpaceBetween)
+      .margin({ top: 16 })
+    }
+    .width('100%')
+    .padding(16)
+  }
+
+  @Builder
+  buildCreateTokenSheet() {
+    Column() {
+      Text('CC-Connect Token')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(SilkColors.textPrimary)
+        .margin({ bottom: 8 })
+
+      Text('请将以下 Token 配置到 claude.hce 文件中（或通过 CLI 执行 connect 命令）')
+        .fontSize(12)
+        .fontColor('#2E7D32')
+        .margin({ bottom: 16 })
+
+      Text(this.generatedToken)
+        .fontSize(14)
+        .fontColor(SilkColors.textPrimary)
+        .fontWeight(FontWeight.Medium)
+        .padding({ top: 14, bottom: 14, left: 16, right: 16 })
+        .backgroundColor(SilkColors.background)
+        .borderRadius(10)
+        .width('100%')
+
+      Text('Token 仅在创建时显示一次，请立即复制保存')
+        .fontSize(11)
+        .fontColor(SilkColors.textLight)
+        .margin({ top: 8 })
+
+      Row() {
+        Button('复制 Token')
+          .layoutWeight(1)
+          .height(40)
+          .backgroundColor(SilkColors.primary)
+          .fontColor(Color.White)
+          .margin({ right: 10 })
+          .onClick(() => {
+            this.handleCopy(this.generatedToken);
+          })
+
+        Button('完成')
+          .layoutWeight(1)
+          .height(40)
+          .backgroundColor(SilkColors.surfaceVariant)
+          .fontColor(SilkColors.textSecondary)
+          .onClick(() => {
+            this.actionSheetMode = 'create';
+            this.showActionSheet = false;
+            this.newGroupName = '';
+            this.createGroupType = '';
+          })
+      }
+      .width('100%')
       .margin({ top: 16 })
     }
     .width('100%')
