@@ -5,9 +5,11 @@ import com.silk.shared.models.LeaveGroupResponse
 import com.silk.shared.models.SimpleResponse
 import com.silk.shared.models.UpdateUserSettingsRequest
 import com.silk.shared.models.UserSettingsResponse
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -86,6 +88,24 @@ data class GroupResponse(
 object ApiClient {
     private val BASE_URL = BuildConfig.BACKEND_BASE_URL
     private val json = Json { ignoreUnknownKeys = true }
+
+    private inline fun <T> runApiCall(
+        errorPrefix: String,
+        onFailure: (String) -> T,
+        block: () -> T
+    ): T {
+        return try {
+            block()
+        } catch (e: IOException) {
+            val message = e.message ?: "IO error"
+            println("❌ $errorPrefix: $message")
+            onFailure(message)
+        } catch (e: SerializationException) {
+            val message = e.message ?: "Serialization error"
+            println("❌ $errorPrefix: $message")
+            onFailure(message)
+        }
+    }
     
     /**
      * 用户注册
@@ -96,13 +116,13 @@ object ApiClient {
         phoneNumber: String,
         password: String
     ): AuthResponse {
-        return try {
+        return runApiCall(
+            errorPrefix = "注册失败",
+            onFailure = { message -> AuthResponse(false, "网络错误: $message") }
+        ) {
             val request = RegisterRequest(loginName, fullName, phoneNumber, password)
             val response = post("/auth/register", json.encodeToString(RegisterRequest.serializer(), request))
             json.decodeFromString(AuthResponse.serializer(), response)
-        } catch (e: Exception) {
-            println("❌ 注册失败: ${e.message}")
-            AuthResponse(false, "网络错误: ${e.message}")
         }
     }
     
@@ -110,13 +130,13 @@ object ApiClient {
      * 用户登录
      */
     fun login(loginName: String, password: String): AuthResponse {
-        return try {
+        return runApiCall(
+            errorPrefix = "登录失败",
+            onFailure = { message -> AuthResponse(false, "网络错误: $message") }
+        ) {
             val request = LoginRequest(loginName, password)
             val response = post("/auth/login", json.encodeToString(LoginRequest.serializer(), request))
             json.decodeFromString(AuthResponse.serializer(), response)
-        } catch (e: Exception) {
-            println("❌ 登录失败: ${e.message}")
-            AuthResponse(false, "网络错误: ${e.message}")
         }
     }
     
@@ -124,12 +144,12 @@ object ApiClient {
      * 验证用户（重新认证）
      */
     fun validateUser(userId: String): AuthResponse {
-        return try {
+        return runApiCall(
+            errorPrefix = "验证用户失败",
+            onFailure = { message -> AuthResponse(false, "验证失败: $message") }
+        ) {
             val response = get("/auth/validate/$userId")
             json.decodeFromString(AuthResponse.serializer(), response)
-        } catch (e: Exception) {
-            println("❌ 验证用户失败: ${e.message}")
-            AuthResponse(false, "验证失败: ${e.message}")
         }
     }
     
@@ -137,13 +157,13 @@ object ApiClient {
      * 创建群组
      */
     fun createGroup(userId: String, groupName: String): GroupResponse {
-        return try {
+        return runApiCall(
+            errorPrefix = "创建群组失败",
+            onFailure = { message -> GroupResponse(false, "网络错误: $message") }
+        ) {
             val request = CreateGroupRequest(userId, groupName)
             val response = post("/groups/create", json.encodeToString(CreateGroupRequest.serializer(), request))
             json.decodeFromString(GroupResponse.serializer(), response)
-        } catch (e: Exception) {
-            println("❌ 创建群组失败: ${e.message}")
-            GroupResponse(false, "网络错误: ${e.message}")
         }
     }
     
@@ -151,13 +171,13 @@ object ApiClient {
      * 加入群组
      */
     fun joinGroup(userId: String, invitationCode: String): GroupResponse {
-        return try {
+        return runApiCall(
+            errorPrefix = "加入群组失败",
+            onFailure = { message -> GroupResponse(false, "网络错误: $message") }
+        ) {
             val request = JoinGroupRequest(userId, invitationCode)
             val response = post("/groups/join", json.encodeToString(JoinGroupRequest.serializer(), request))
             json.decodeFromString(GroupResponse.serializer(), response)
-        } catch (e: Exception) {
-            println("❌ 加入群组失败: ${e.message}")
-            GroupResponse(false, "网络错误: ${e.message}")
         }
     }
     
@@ -165,12 +185,12 @@ object ApiClient {
      * 获取用户的所有群组
      */
     fun getUserGroups(userId: String): GroupResponse {
-        return try {
+        return runApiCall(
+            errorPrefix = "获取群组列表失败",
+            onFailure = { message -> GroupResponse(false, "网络错误: $message") }
+        ) {
             val response = get("/groups/user/$userId")
             json.decodeFromString(GroupResponse.serializer(), response)
-        } catch (e: Exception) {
-            println("❌ 获取群组列表失败: ${e.message}")
-            GroupResponse(false, "网络错误: ${e.message}")
         }
     }
     
@@ -178,13 +198,13 @@ object ApiClient {
      * 退出群组
      */
     fun leaveGroup(groupId: String, userId: String): LeaveGroupResponse {
-        return try {
+        return runApiCall(
+            errorPrefix = "退出群组失败",
+            onFailure = { message -> LeaveGroupResponse(false, "网络错误: $message") }
+        ) {
             val body = """{"userId":"$userId"}"""
             val response = post("/groups/$groupId/leave", body)
             json.decodeFromString(LeaveGroupResponse.serializer(), response)
-        } catch (e: Exception) {
-            println("❌ 退出群组失败: ${e.message}")
-            LeaveGroupResponse(false, "网络错误: ${e.message}")
         }
     }
     
@@ -192,13 +212,13 @@ object ApiClient {
      * 删除群组（群主）
      */
     fun deleteGroup(groupId: String, userId: String): SimpleResponse {
-        return try {
+        return runApiCall(
+            errorPrefix = "删除群组失败",
+            onFailure = { message -> SimpleResponse(false, "网络错误: $message") }
+        ) {
             val body = """{"userId":"$userId"}"""
             val response = delete("/groups/$groupId", body)
             json.decodeFromString(SimpleResponse.serializer(), response)
-        } catch (e: Exception) {
-            println("❌ 删除群组失败: ${e.message}")
-            SimpleResponse(false, "网络错误: ${e.message}")
         }
     }
     
@@ -208,12 +228,12 @@ object ApiClient {
      * 获取用户设置
      */
     fun getUserSettings(userId: String): UserSettingsResponse {
-        return try {
+        return runApiCall(
+            errorPrefix = "获取用户设置失败",
+            onFailure = { message -> UserSettingsResponse(false, "网络错误: $message") }
+        ) {
             val response = get("/users/$userId/settings")
             json.decodeFromString(UserSettingsResponse.serializer(), response)
-        } catch (e: Exception) {
-            println("❌ 获取用户设置失败: ${e.message}")
-            UserSettingsResponse(false, "网络错误: ${e.message}")
         }
     }
     
@@ -221,14 +241,14 @@ object ApiClient {
      * 更新用户设置
      */
     fun updateUserSettings(userId: String, language: Language, defaultAgentInstruction: String): UserSettingsResponse {
-        return try {
+        return runApiCall(
+            errorPrefix = "更新用户设置失败",
+            onFailure = { message -> UserSettingsResponse(false, "网络错误: $message") }
+        ) {
             val request = UpdateUserSettingsRequest(userId, language, defaultAgentInstruction)
             val body = json.encodeToString(UpdateUserSettingsRequest.serializer(), request)
             val response = put("/users/$userId/settings", body)
             json.decodeFromString(UserSettingsResponse.serializer(), response)
-        } catch (e: Exception) {
-            println("❌ 更新用户设置失败: ${e.message}")
-            UserSettingsResponse(false, "网络错误: ${e.message}")
         }
     }
     

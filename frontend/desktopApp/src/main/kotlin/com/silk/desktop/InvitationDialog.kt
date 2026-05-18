@@ -31,9 +31,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import java.awt.HeadlessException
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
-import java.net.URI
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -191,100 +191,11 @@ private fun copyToClipboard(text: String) {
         val selection = StringSelection(text)
         clipboard.setContents(selection, null)
         println("✅ 已复制到剪贴板")
-    } catch (e: Exception) {
+    } catch (e: HeadlessException) {
         println("❌ 复制失败: ${e.message}")
-    }
-}
-
-/**
- * 分享到微信
- * 在macOS上使用URL Scheme打开微信
- */
-private fun shareToWeChat(text: String): Boolean {
-    return try {
-        val osName = System.getProperty("os.name").lowercase()
-        
-        when {
-            osName.contains("mac") -> {
-                // macOS: 使用URL Scheme打开微信
-                // 先复制文本到剪贴板，然后打开微信
-                copyToClipboard(text)
-                
-                // 尝试打开微信（需要先安装微信）
-                val command = arrayOf("open", "-a", "WeChat")
-                Runtime.getRuntime().exec(command)
-                
-                println("✅ 已打开微信，邀请信息已复制到剪贴板")
-                true
-            }
-            osName.contains("win") -> {
-                // Windows: 复制到剪贴板并提示用户
-                copyToClipboard(text)
-                println("✅ 邀请信息已复制，请手动打开微信粘贴")
-                true
-            }
-            else -> {
-                // Linux: 复制到剪贴板
-                copyToClipboard(text)
-                println("✅ 邀请信息已复制，请手动打开微信粘贴")
-                true
-            }
-        }
-    } catch (e: Exception) {
-        println("❌ 打开微信失败: ${e.message}")
-        // 即使打开微信失败，也复制到剪贴板
-        copyToClipboard(text)
-        false
-    }
-}
-
-/**
- * 通过SMS分享
- * 在macOS上使用Messages URL Scheme
- */
-private fun shareViaSMS(text: String): Boolean {
-    return try {
-        val osName = System.getProperty("os.name").lowercase()
-        
-        when {
-            osName.contains("mac") -> {
-                // macOS: 使用 Messages.app URL Scheme
-                // 格式：sms:&body=消息内容
-                val encodedText = java.net.URLEncoder.encode(text, "UTF-8")
-                val smsUrl = "sms:&body=$encodedText"
-                
-                // 使用Desktop API打开URL
-                if (java.awt.Desktop.isDesktopSupported()) {
-                    val desktop = java.awt.Desktop.getDesktop()
-                    if (desktop.isSupported(java.awt.Desktop.Action.BROWSE)) {
-                        desktop.browse(URI(smsUrl))
-                        println("✅ 已打开短信应用")
-                        return true
-                    }
-                }
-                
-                // 备用方案：使用open命令
-                val command = arrayOf("open", smsUrl)
-                Runtime.getRuntime().exec(command)
-                println("✅ 已打开短信应用")
-                true
-            }
-            osName.contains("win") -> {
-                // Windows: 复制到剪贴板
-                copyToClipboard(text)
-                println("⚠️ Windows 不支持直接打开短信，已复制到剪贴板")
-                false
-            }
-            else -> {
-                // Linux: 复制到剪贴板
-                copyToClipboard(text)
-                println("⚠️ Linux 不支持直接打开短信，已复制到剪贴板")
-                false
-            }
-        }
-    } catch (e: Exception) {
-        println("❌ 打开短信应用失败: ${e.message}")
-        copyToClipboard(text)
-        false
+    } catch (e: IllegalStateException) {
+        println("❌ 复制失败: ${e.message}")
+    } catch (e: SecurityException) {
+        println("❌ 复制失败: ${e.message}")
     }
 }

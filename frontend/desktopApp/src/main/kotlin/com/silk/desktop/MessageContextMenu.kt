@@ -22,9 +22,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.silk.shared.models.Message
+import java.awt.Desktop
+import java.awt.HeadlessException
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import java.io.IOException
 import java.net.URI
+import java.net.URISyntaxException
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 /**
  * 消息包装组件
  * 使用SelectionContainer提供文本选择和复制功能
@@ -33,10 +39,7 @@ import java.net.URI
 @Composable
 fun MessageWithContextMenu(
     content: @Composable () -> Unit,
-    message: Message,
-    onCopy: () -> Unit = {},
-    onForwardToWeChat: () -> Unit = {},
-    onForwardToSMS: () -> Unit = {}
+    message: Message
 ) {
     // 使用DisposableEffect确保每个消息的SelectionContainer正确管理
     DisposableEffect(message.id) {
@@ -57,12 +60,16 @@ fun MessageWithContextMenu(
  * 复制消息到剪贴板
  */
 fun copyMessageToClipboard(text: String) {
+    val selection = StringSelection(text)
+
     try {
-        val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        val selection = StringSelection(text)
-        clipboard.setContents(selection, null)
+        Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, null)
         println("✅ 消息已复制到剪贴板")
-    } catch (e: Exception) {
+    } catch (e: HeadlessException) {
+        println("❌ 复制失败: ${e.message}")
+    } catch (e: IllegalStateException) {
+        println("❌ 复制失败: ${e.message}")
+    } catch (e: SecurityException) {
         println("❌ 复制失败: ${e.message}")
     }
 }
@@ -71,34 +78,28 @@ fun copyMessageToClipboard(text: String) {
  * 转发消息到微信
  */
 fun forwardToWeChat(text: String) {
-    try {
-        val osName = System.getProperty("os.name").lowercase()
-        
-        // 复制消息到剪贴板
-        copyMessageToClipboard(text)
-        
-        when {
-            osName.contains("mac") -> {
-                // macOS: 打开微信
-                Runtime.getRuntime().exec(arrayOf("open", "-a", "WeChat"))
+    val osName = System.getProperty("os.name").lowercase()
+
+    copyMessageToClipboard(text)
+
+    when {
+        osName.contains("mac") -> {
+            if (launchCommand(arrayOf("open", "-a", "WeChat"))) {
                 println("✅ 已打开微信，消息已复制到剪贴板")
-            }
-            osName.contains("win") -> {
-                // Windows: 尝试启动微信
-                try {
-                    Runtime.getRuntime().exec("cmd /c start WeChat")
-                    println("✅ 已打开微信，消息已复制到剪贴板")
-                } catch (e: Exception) {
-                    println("⚠️ 请手动打开微信，消息已复制到剪贴板")
-                }
-            }
-            else -> {
-                // Linux: 只复制到剪贴板
-                println("ℹ️ 消息已复制到剪贴板，请手动打开微信粘贴")
+            } else {
+                println("⚠️ 请手动打开微信，消息已复制到剪贴板")
             }
         }
-    } catch (e: Exception) {
-        println("❌ 转发失败: ${e.message}")
+        osName.contains("win") -> {
+            if (launchCommand(arrayOf("cmd", "/c", "start", "WeChat"))) {
+                println("✅ 已打开微信，消息已复制到剪贴板")
+            } else {
+                println("⚠️ 请手动打开微信，消息已复制到剪贴板")
+            }
+        }
+        else -> {
+            println("ℹ️ 消息已复制到剪贴板，请手动打开微信粘贴")
+        }
     }
 }
 
@@ -106,39 +107,87 @@ fun forwardToWeChat(text: String) {
  * 转发消息到SMS
  */
 fun forwardToSMS(text: String) {
-    try {
-        val osName = System.getProperty("os.name").lowercase()
-        
-        when {
-            osName.contains("mac") -> {
-                // macOS: 使用Messages.app URL Scheme
-                val encodedText = java.net.URLEncoder.encode(text, "UTF-8")
-                val smsUrl = "sms:&body=$encodedText"
-                
-                // 尝试使用Desktop API
-                if (java.awt.Desktop.isDesktopSupported()) {
-                    val desktop = java.awt.Desktop.getDesktop()
-                    if (desktop.isSupported(java.awt.Desktop.Action.BROWSE)) {
-                        desktop.browse(URI(smsUrl))
-                        println("✅ 已打开短信应用")
-                        return
-                    }
-                }
-                
-                // 备用方案
-                Runtime.getRuntime().exec(arrayOf("open", smsUrl))
-                println("✅ 已打开短信应用")
-            }
-            else -> {
-                // Windows/Linux: 复制到剪贴板
-                copyMessageToClipboard(text)
-                println("ℹ️ SMS功能仅支持macOS，消息已复制到剪贴板")
-            }
-        }
-    } catch (e: Exception) {
-        println("❌ 打开短信应用失败: ${e.message}")
+    val osName = System.getProperty("os.name").lowercase()
+
+    if (!osName.contains("mac")) {
+        copyMessageToClipboard(text)
+        println("ℹ️ SMS功能仅支持macOS，消息已复制到剪贴板")
+        return
+    }
+
+    val encodedText = URLEncoder.encode(text, StandardCharsets.UTF_8)
+    val smsUrl = "sms:&body=$encodedText"
+
+    if (browseUri(smsUrl) || launchCommand(arrayOf("open", smsUrl))) {
+        println("✅ 已打开短信应用")
+    } else {
+        println("❌ 打开短信应用失败")
         copyMessageToClipboard(text)
     }
+}
+
+private fun launchCommand(command: Array<String>): Boolean {
+    return try {
+        Runtime.getRuntime().exec(command)
+        true
+    } catch (e: IOException) {
+        logSystemActionFailure("启动命令 ${command.joinToString(" ")}", e)
+        false
+    } catch (e: SecurityException) {
+        logSystemActionFailure("启动命令 ${command.joinToString(" ")}", e)
+        false
+    }
+}
+
+private fun browseUri(uri: String): Boolean {
+    if (!Desktop.isDesktopSupported()) {
+        return false
+    }
+
+    val desktop = try {
+        Desktop.getDesktop()
+    } catch (e: HeadlessException) {
+        logSystemActionFailure("获取桌面环境", e)
+        return false
+    } catch (e: UnsupportedOperationException) {
+        logSystemActionFailure("获取桌面环境", e)
+        return false
+    } catch (e: SecurityException) {
+        logSystemActionFailure("获取桌面环境", e)
+        return false
+    }
+
+    if (!desktop.isSupported(Desktop.Action.BROWSE)) {
+        return false
+    }
+
+    val targetUri = try {
+        URI(uri)
+    } catch (e: URISyntaxException) {
+        logSystemActionFailure("解析 URI $uri", e)
+        return false
+    }
+
+    return try {
+        desktop.browse(targetUri)
+        true
+    } catch (e: IOException) {
+        logSystemActionFailure("打开 URI $uri", e)
+        false
+    } catch (e: SecurityException) {
+        logSystemActionFailure("打开 URI $uri", e)
+        false
+    } catch (e: UnsupportedOperationException) {
+        logSystemActionFailure("打开 URI $uri", e)
+        false
+    } catch (e: IllegalArgumentException) {
+        logSystemActionFailure("打开 URI $uri", e)
+        false
+    }
+}
+
+private fun logSystemActionFailure(action: String, error: Throwable) {
+    println("⚠️ $action 失败: ${error.message}")
 }
 
 /**
@@ -151,7 +200,6 @@ fun MessageActionBar(
     onForwardWeChat: () -> Unit,
     onForwardSMS: () -> Unit
 ) {
-    var showActions by remember { mutableStateOf(false) }
     var showSuccessMessage by remember { mutableStateOf<String?>(null) }
     
     Box {

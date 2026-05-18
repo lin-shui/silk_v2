@@ -60,7 +60,11 @@
 - Slice 4: 已完成。清理 `frontend/shared` 的明确私有未使用项。
 - Slice 5: 已完成。收敛 shared WebSocket / ChatClient 异常处理规则，取消异常显式透传。
 - Slice 6: 已完成。清理 `frontend/desktopApp` 的 `WildcardImport`，跑 desktop detekt / test / compile 与 `silkLint`。
-- Slice 7: 候选。继续清理 `frontend/desktopApp` 的明确未使用私有成员 / 参数，避免跨模块跳跃过早进入复杂度规则。
+- Slice 7: 已完成。清理 `frontend/desktopApp` 的明确未使用私有状态 / 参数 / helper，跑 desktop detekt / test / compile 与 `silkLint`。
+- Slice 8: 已完成。清理 `frontend/desktopApp` 非 `Main.kt` / `MessageContextMenu.kt` 的低风险异常处理规则，跑 desktop detekt / test / compile 与 `silkLint`。
+- Slice 9: 已完成。清理 `frontend/desktopApp` 中 `Main.kt` / `MessageContextMenu.kt` 的异常处理、吞异常、`PrintStackTrace` 和局部嵌套深度问题，跑 desktop detekt / test / compile 与 `silkLint`。
+- Slice 10: 已完成。拆分 `frontend/desktopApp` 剩余四个复杂度 baseline，清空 desktop detekt baseline，跑 desktop detekt / test / compile 与 `silkLint`。
+- Slice 11: 候选。切到下一模块的低风险 lint 切片，优先看 `frontend/androidApp` / `frontend/webApp` 剩余非复杂度规则，继续保持“小修源码 + 手删 baseline”的节奏。
 
 ## Progress Log
 
@@ -135,10 +139,66 @@
   - `./gradlew :frontend:desktopApp:clean :frontend:desktopApp:test :frontend:desktopApp:compileKotlin silkLint`
   - `git diff --check`
 
+### 2026-05-18 Slice 7
+
+- 清理 `frontend/desktopApp` 的 9 条明确未使用 baseline：
+  - `GroupListScreen.kt` 删除未接线的删除模式状态。
+  - `MessageContextMenu.kt` 删除未使用的 `MessageWithContextMenu` 回调参数与 `showActions` 状态。
+  - `InvitationDialog.kt` 删除未接线的 WeChat / SMS 私有 helper。
+  - `Main.kt` 同步收口 `MessageWithContextMenu` 调用签名。
+- `config/lint/detekt/frontend-desktopApp.xml` 从 30 条降到 21 条；`frontend/desktopApp` 当前已无 `UnusedPrivateProperty`、`UnusedPrivateMember`、`UnusedParameter` baseline。
+- 没有运行全量 `silkLintBaseline` 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次 `:frontend:desktopApp:compileKotlin` 因 `Main.kt` 仍传旧回调参数失败，收口调用点后验证通过。
+- 已验证：
+  - `./gradlew :frontend:desktopApp:detekt`
+  - `./gradlew :frontend:desktopApp:test :frontend:desktopApp:compileKotlin silkLint`
+  - `git diff --check`
+
+### 2026-05-18 Slice 8
+
+- 清理 `frontend/desktopApp` 的 7 条低风险异常类 baseline，覆盖 `ApiClient.kt`、`AppState.kt`、`GroupListScreen.kt`、`InvitationDialog.kt`、`LoginScreen.kt`、`SettingsScreen.kt`。
+- `ApiClient.kt` 新增 `runApiCall` helper，只捕获明确的 `IOException` / `SerializationException` 并统一返回失败响应；上层 UI 不再泛捕这些已内化的网络/解析失败。
+- `AppState.kt` 的自动登录磁盘读写改为明确 `IOException` / `SerializationException` / `SecurityException`；重新校验用户路径改成直接消费 `ApiClient.validateUser()` 的失败响应。
+- `config/lint/detekt/frontend-desktopApp.xml` 从 21 条降到 14 条；`frontend/desktopApp` 当前仅剩 `Main.kt`、`MessageContextMenu.kt` 的异常类问题，以及复杂度 / 嵌套深度问题。
+- 没有运行全量 `silkLintBaseline` 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次验证时误删 `try` 后仍保留 `finally`，导致 `compileKotlin` 失败；改为显式收尾赋值后验证通过。
+- 已验证：
+  - `./gradlew :frontend:desktopApp:detekt`
+  - `./gradlew :frontend:desktopApp:test :frontend:desktopApp:compileKotlin silkLint`
+  - `git diff --check`
+
+### 2026-05-18 Slice 9
+
+- 清理 `frontend/desktopApp` 的 10 条剩余异常/嵌套类 baseline，覆盖 `Main.kt`、`MessageContextMenu.kt`。
+- `Main.kt` 的远程下载流程拆成临时文件创建、HTTP 下载、保存目标选择、落盘复制、清理五段 helper，去掉 `catch (Exception)`、`printStackTrace()` 和静默删除失败。
+- `MessageContextMenu.kt` 的剪贴板、WeChat 启动、SMS URI 打开改成显式 helper；系统调用失败统一记录原因，不再用泛捕或吞异常兜底。
+- `config/lint/detekt/frontend-desktopApp.xml` 从 14 条降到 4 条；`frontend/desktopApp` 当前只剩 `GroupListScreen.kt`、`LoginScreen.kt`、`Main.kt:MessageBubble`、`SettingsScreen.kt` 的复杂度 baseline。
+- 没有运行全量 `silkLintBaseline` 再生，只删除已由源码修复覆盖的 baseline 项。
+- 已验证：
+  - `./gradlew :frontend:desktopApp:detekt --no-daemon --stacktrace --rerun-tasks`
+  - `./gradlew :frontend:desktopApp:detekt :frontend:desktopApp:test :frontend:desktopApp:compileKotlin silkLint --no-daemon --stacktrace`
+  - `git diff --check`
+
+### 2026-05-18 Slice 10
+
+- 清理 `frontend/desktopApp` 的 4 条剩余复杂度 baseline，覆盖 `GroupListScreen.kt`、`LoginScreen.kt`、`SettingsScreen.kt`、`Main.kt:MessageBubble`。
+- `GroupListScreen.kt` 拆出顶部栏、内容区、对话框和数据加载 helper；群组列表与空态不再堆在单个 composable 中。
+- `LoginScreen.kt` 拆出认证表单、注册附加字段、提交按钮和提交 helper，登录/注册分支从主 composable 收口。
+- `SettingsScreen.kt` 拆出顶部栏、语言设置、默认指令、保存状态卡片和保存 helper；补齐拆分后 `FilterChip` 的 `ExperimentalMaterial3Api` 注解。
+- `Main.kt` 的 `MessageBubble` 拆出发送者头尾、气泡 surface、普通文本内容、诊断提示高亮 helper，保留原有文件/PDF/普通文本渲染路径。
+- `config/lint/detekt/frontend-desktopApp.xml` 从 4 条降到 0 条；`frontend/desktopApp` 当前已无 detekt baseline 项。
+- 没有运行全量 `silkLintBaseline` 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次 `:frontend:desktopApp:compileKotlin` 因新拆出的 `LanguageSettingsSection()` 缺少 `ExperimentalMaterial3Api` 注解失败，补齐后验证通过。
+- 已验证：
+  - `./gradlew :frontend:desktopApp:detekt --no-daemon --stacktrace --rerun-tasks`
+  - `./gradlew :frontend:desktopApp:detekt :frontend:desktopApp:test :frontend:desktopApp:compileKotlin silkLint --no-daemon --stacktrace`
+  - `git diff --check`
+
 ## Handoff Notes
 
 - 后续接力时先看本文件和 `config/lint/detekt/*.xml` 的剩余规则分布。
-- `frontend/desktopApp` 已清空 `WildcardImport`；下一步优先看同模块内剩余 `UnusedPrivateProperty`、`UnusedPrivateMember`、`UnusedParameter`，能继续保持低风险切片。
+- `frontend/desktopApp` 已清空 detekt baseline；如果后续 desktop 再出现 lint，只接受“新增问题直接修源码”，不要再回填 baseline。
+- 下一步切片建议回到其他模块的低风险规则，继续优先 `WildcardImport` / 未使用项 / 明确异常语义，复杂度规则仍按单文件慢拆。
 - `frontend/shared/src/iosMain` 当前在 Gradle shared module 中暂时禁用，也不在根 detekt source set 中；本计划按当前 lint 覆盖面收敛 baseline，不把未启用 iOS 源码混进每一步。
 - 如果某一步发现需要新增 baseline，先停下来判断是否应关规则、补测试或拆小 PR，不要直接把新增项写进 baseline。
 - 完成一个 slice 后，在本文件记录已完成项、剩余数量和验证命令。
