@@ -45,4 +45,6 @@ data class Workflow(
      * 让多 agent 互相切换时彼此的 resume 状态独立保留。
      */
     val agentSessions: Map<String, AgentSessionState> = emptyMap(),
+    /** 工具权限模式：INTERACTIVE / ACCEPT_EDITS / BYPASS。空串 → 默认 INTERACTIVE。 */
+    val permissionMode: String = "",
 )

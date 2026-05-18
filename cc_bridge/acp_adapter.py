@@ -78,7 +78,7 @@ class AcpAgentServer:
     ) -> None:
         self.ws_url = _build_ws_url(ws_url, token)
         self.token = token
-        self.default_cwd = os.path.realpath(default_cwd)
+        self.default_cwd = self._resolve_default_cwd(default_cwd)
         self.tls_insecure = tls_insecure
 
         self.ws: websockets.WebSocketClientProtocol | None = None
@@ -86,6 +86,29 @@ class AcpAgentServer:
         self.sessions: dict[str, AcpSession] = {}
         self._cli_to_acp: dict[str, str] = {}   # cli_session_id → acp_session_id
         self.perm_server: PermissionServer | None = None
+
+    # ------------------------------------------------------------------
+    # default_cwd helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_default_cwd(candidate: str) -> str:
+        """Validate *candidate* and fall back to home / ``/`` if it doesn't exist."""
+        resolved = os.path.realpath(candidate)
+        if os.path.isdir(resolved):
+            return resolved
+        home = os.path.expanduser("~")
+        if os.path.isdir(home):
+            logger.warning(
+                "[ACP] default_cwd %s does not exist, falling back to %s",
+                resolved, home,
+            )
+            return home
+        logger.warning(
+            "[ACP] default_cwd %s does not exist, falling back to /",
+            resolved,
+        )
+        return "/"
 
     # ------------------------------------------------------------------
     # PermissionServer lifecycle
@@ -155,44 +178,51 @@ class AcpAgentServer:
         tool_input: dict,
     ) -> None:
         """Called by PermissionServer when hook sends a permission request."""
-        # First version: only handle AskUserQuestion, auto-allow everything else
-        if tool_name != "AskUserQuestion":
-            if self.perm_server:
-                self.perm_server.resolve_request(request_id, "allow")
-            return
-
         # Map CLI session ID → ACP session ID
         acp_session_id = self._cli_to_acp.get(session_id)
         if not acp_session_id:
             logger.warning(
-                "[ACP] AskUserQuestion: no ACP session for CLI session %s",
+                "[ACP] Permission request: no ACP session for CLI session %s, auto-allow",
                 session_id[:8],
             )
             if self.perm_server:
                 self.perm_server.resolve_request(request_id, "allow")
             return
 
-        # Extract questions from tool_input.
-        # AskUserQuestion.questions is an array of objects:
-        #   { question: str, header: str, options: [{label, description}], multiSelect: bool }
-        # We flatten each into a display string (question text + options).
-        raw_questions = tool_input.get("questions", [])
-        questions: list[str] = []
-        for q in raw_questions:
-            if isinstance(q, dict):
-                text = q.get("question", "")
-                options = q.get("options", [])
-                if options:
-                    lines = [text]
-                    for i, opt in enumerate(options):
-                        label = opt.get("label", "") if isinstance(opt, dict) else str(opt)
-                        desc = opt.get("description", "") if isinstance(opt, dict) else ""
-                        lines.append(f"  {chr(65 + i)}. {label}" + (f" — {desc}" if desc else ""))
-                    text = "\n".join(lines)
-                if text:
-                    questions.append(text)
-            elif isinstance(q, str) and q:
-                questions.append(q)
+        if tool_name == "AskUserQuestion":
+            self._handle_ask_user_question(acp_session_id, request_id, tool_input)
+            return
+
+        # All other tools: forward to backend for permission decision
+        if self.perm_server:
+            self.perm_server.set_request_timeout(request_id, 300.0)
+
+        logger.info(
+            "[ACP] Permission request: forwarding tool=%s, request=%s, session=%s",
+            tool_name, request_id[:8], acp_session_id[:8],
+        )
+        asyncio.run_coroutine_threadsafe(
+            self._send_notification("session/update", {
+                "sessionId": acp_session_id,
+                "update": {
+                    "sessionUpdate": "permission_request",
+                    "requestId": request_id,
+                    "toolName": tool_name,
+                    "toolInput": tool_input,
+                },
+            }),
+            self._loop,
+        )
+
+    def _handle_ask_user_question(
+        self,
+        acp_session_id: str,
+        request_id: str,
+        tool_input: dict,
+    ) -> None:
+        """Handle AskUserQuestion tool via session/update notification."""
+        # Pass through the raw questions from tool_input without flattening.
+        questions = tool_input.get("questions", [])
 
         if not questions:
             # Fallback: try "question" (singular) field
@@ -373,6 +403,8 @@ class AcpAgentServer:
                 await self._handle_silk_list_dir(msg_id, params)
             elif method == "_silk/resolve_question":
                 await self._handle_silk_resolve_question(msg_id, params)
+            elif method == "_silk/resolve_permission":
+                await self._handle_silk_resolve_permission(msg_id, params)
             else:
                 await self._send_error(msg_id, -32601, f"Method not found: {method}")
         except Exception as exc:
@@ -775,9 +807,21 @@ class AcpAgentServer:
 
     async def _handle_silk_list_dir(self, msg_id: Any, params: Any) -> None:
         p = params or {}
-        path = p.get("path") or self.default_cwd
+        explicit_path = p.get("path")
+        path = explicit_path or self.default_cwd
         show_hidden = bool(p.get("showHidden", False))
         result = list_directory(path, show_hidden)
+        # No explicit path and default failed → try home dir, then /
+        if not result.get("success") and not explicit_path:
+            for fallback in (os.path.expanduser("~"), "/"):
+                if fallback != path:
+                    result = list_directory(fallback, show_hidden)
+                    if result.get("success"):
+                        logger.info(
+                            "[ACP] _silk/list_dir: default %s unavailable, fell back to %s",
+                            path, fallback,
+                        )
+                        break
         logger.debug("[ACP] _silk/list_dir path=%s success=%s", path, result.get("success"))
         await self._send_response(msg_id, result)
 
@@ -851,6 +895,28 @@ class AcpAgentServer:
             await self._send_response(msg_id, {"ok": True})
         else:
             logger.warning("[ACP] resolve_question: unknown request %s", request_id[:8])
+            await self._send_error(msg_id, -32602, f"Unknown request: {request_id}")
+
+    async def _handle_silk_resolve_permission(self, msg_id: Any, params: Any) -> None:
+        p = params or {}
+        request_id = p.get("requestId", "")
+        decision = p.get("decision", "deny")  # "allow" or "deny"
+        reason = p.get("reason", "")
+
+        if not request_id:
+            await self._send_error(msg_id, -32602, "Missing requestId")
+            return
+
+        if self.perm_server and self.perm_server.resolve_request(
+            request_id, decision, reason=reason,
+        ):
+            logger.info(
+                "[ACP] resolve_permission: resolved %s decision=%s",
+                request_id[:8], decision,
+            )
+            await self._send_response(msg_id, {"ok": True})
+        else:
+            logger.warning("[ACP] resolve_permission: unknown request %s", request_id[:8])
             await self._send_error(msg_id, -32602, f"Unknown request: {request_id}")
 
 

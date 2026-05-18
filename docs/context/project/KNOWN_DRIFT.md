@@ -75,3 +75,18 @@ CC 模式已完全迁到通用 `AgentRuntime` 框架。旧 `ClaudeCodeManager` /
 - **无回退路径**：ACP 不可用时直接报"未连接"
 
 排查 agent 行为时只看 `AgentRuntime` + 对应 ACP adapter（Claude Code: `cc_bridge/acp_adapter.py`；Codex: `codex_bridge/codex_adapter.py`）。
+
+## `Cc` / `cc-` 命名残留：应为 Agent-Agnostic
+
+ACP 抽象完成后，以下 API 端点、数据类、函数名仍保留了 Claude Code 时代的 `Cc` / `cc-` 前缀，实际功能已与具体 agent type 无关。待迁移时统一重命名。
+
+| 类别 | 当前命名 | 建议命名 | 涉及文件 |
+|------|---------|---------|---------|
+| 数据类 | `CcStateResponse` | `AgentStateResponse` | `frontend/shared/.../UserSettings.kt`（定义）+ 后端 `Routing.kt` + 三端 `ApiClient` |
+| 路由端点 | `GET /users/{userId}/cc-state/{groupId}` | `/agent-state/` | `Routing.kt` |
+| 路由端点 | `GET /users/{userId}/cc-fs/list` | `/agent-fs/list` | `Routing.kt` |
+| 路由端点 | `POST /users/{userId}/cc-fs/cd` | `/agent-fs/cd` | `Routing.kt` |
+| ApiClient 函数 | `getCcState()` | `getAgentState()` | 三端 `ApiClient` |
+| ApiClient 函数 | `cdCcDir()` | `cdAgentDir()` | 三端 `ApiClient` |
+| 局部变量 | `ccGroupId` | `agentGroupId` | `Routing.kt` |
+| HarmonyOS 组件 | `CcWorkflowPanel.ets` / `loadCcState()` | `AgentWorkflowPanel.ets` / `loadAgentState()` | `harmonyApp/.../CcWorkflowPanel.ets` |

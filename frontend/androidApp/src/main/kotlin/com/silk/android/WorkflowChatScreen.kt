@@ -17,7 +17,9 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,15 +44,15 @@ fun WorkflowChatScreen(appState: AppState) {
 
         var messageText by remember(groupId) { mutableStateOf(TextFieldValue("")) }
         var workingDir by remember(groupId) { mutableStateOf(workflow.workingDir) }
-        var showFolderPicker by remember(groupId) { mutableStateOf(false) }
-        var showTrustConfirm by remember(groupId) { mutableStateOf(false) }
-        var trustConfirmPath by remember(groupId) { mutableStateOf("") }
-        var trustConfirmBridgeId by remember(groupId) { mutableStateOf<String?>(null) }
+        var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
+        var permissionMode by remember(groupId) { mutableStateOf("") }
+        var showSettingsDialog by remember(groupId) { mutableStateOf(false) }
         var errorDialogMessage by remember(groupId) { mutableStateOf<String?>(null) }
         val listState = rememberLazyListState()
 
         // AI 消息展开/收起状态（与 ChatScreen 相同的 pattern）
         val aiExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
+        val thinkingExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
 
         // Connect WebSocket
         LaunchedEffect(groupId) {
@@ -63,14 +65,16 @@ fun WorkflowChatScreen(appState: AppState) {
             }
         }
 
-        // Sync working dir after WebSocket connects (autoActivateForWorkflow completes on backend)
+        // Sync working dir, agent display, permission mode after WebSocket connects
         LaunchedEffect(groupId, connectionState) {
             if (groupId.isBlank()) return@LaunchedEffect
             if (connectionState == ConnectionState.CONNECTED) {
                 kotlinx.coroutines.delay(200)
                 val snap = ApiClient.getCcState(user.id, groupId)
-                if (snap.success && snap.workingDir.isNotBlank()) {
-                    workingDir = snap.workingDir
+                if (snap.success) {
+                    if (snap.workingDir.isNotBlank()) workingDir = snap.workingDir
+                    activeAgentDisplay = snap.agentDisplayName
+                    permissionMode = snap.permissionMode
                 }
             }
         }
@@ -84,19 +88,24 @@ fun WorkflowChatScreen(appState: AppState) {
             }
         }
 
+        // 监听新增消息，刷新 activeAgent / permissionMode 显示
+        LaunchedEffect(messages.size) {
+            val latest = messages.lastOrNull() ?: return@LaunchedEffect
+            val isAgentSwitchMsg = latest.content.startsWith("已切换到") ||
+                latest.content.contains("已激活") || latest.content.contains("已退出 agent")
+            if (latest.type == com.silk.shared.models.MessageType.SYSTEM && isAgentSwitchMsg) {
+                val snap = ApiClient.getCcState(user.id, groupId)
+                if (snap.success) {
+                    activeAgentDisplay = snap.agentDisplayName
+                    permissionMode = snap.permissionMode
+                }
+            }
+        }
+
         // Auto-scroll to bottom (index 0 in reverseLayout)
         LaunchedEffect(messages.size, transientMessage, statusMessages.size) {
             if (messages.isNotEmpty() || transientMessage != null || statusMessages.isNotEmpty()) {
                 listState.animateScrollToItem(0)
-            }
-        }
-
-        suspend fun performCd(path: String) {
-            val resp = ApiClient.cdCcDir(user.id, groupId, path)
-            if (resp.success && resp.workingDir.isNotBlank()) {
-                workingDir = resp.workingDir
-            } else {
-                errorDialogMessage = resp.error ?: "切换目录失败"
             }
         }
 
@@ -110,14 +119,40 @@ fun WorkflowChatScreen(appState: AppState) {
                                 style = MaterialTheme.typography.titleMedium,
                                 color = SilkColors.textPrimary,
                             )
-                            if (workingDir.isNotBlank()) {
-                                Text(
-                                    "📁 $workingDir",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = SilkColors.textSecondary,
-                                    maxLines = 1,
-                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                if (workingDir.isNotBlank()) {
+                                    Text(
+                                        "📁 $workingDir",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = SilkColors.textSecondary,
+                                        maxLines = 1,
+                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false),
+                                    )
+                                }
+                                if (activeAgentDisplay.isNotBlank()) {
+                                    Text(
+                                        activeAgentDisplay,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = SilkColors.textSecondary,
+                                    )
+                                }
+                                if (permissionMode.isNotBlank()) {
+                                    val modeLabel = when (permissionMode) {
+                                        "INTERACTIVE" -> "Interactive"
+                                        "ACCEPT_EDITS" -> "Accept Edits"
+                                        "BYPASS" -> "Bypass"
+                                        else -> permissionMode
+                                    }
+                                    Text(
+                                        "🔒 $modeLabel",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = SilkColors.textSecondary,
+                                    )
+                                }
                             }
                             if (connectionState != ConnectionState.CONNECTED) {
                                 Text(
@@ -140,7 +175,7 @@ fun WorkflowChatScreen(appState: AppState) {
                         }
                     },
                     actions = {
-                        TextButton(onClick = { showFolderPicker = true }) {
+                        TextButton(onClick = { showSettingsDialog = true }) {
                             Text(
                                 if (workingDir.isBlank()) "📂 选择" else "更改",
                                 color = SilkColors.primary,
@@ -222,12 +257,75 @@ fun WorkflowChatScreen(appState: AppState) {
                                 isTransient = false,
                                 isAIExpanded = aiExpandedStates[msg.id] ?: (msg.id == lastMsgId),
                                 onAIExpandChange = { messageId, isExpanded ->
-                                    aiExpandedStates[messageId] = isExpanded
                                     val idx = messages.reversed().indexOfFirst { it.id == messageId }
-                                    if (idx >= 0) {
-                                        scope.launch {
-                                            kotlinx.coroutines.delay(80)
-                                            listState.scrollToItem(idx)
+                                    if (isExpanded) {
+                                        aiExpandedStates[messageId] = true
+                                        if (idx >= 0) {
+                                            scope.launch {
+                                                kotlinx.coroutines.delay(80)
+                                                listState.scrollToItem(idx, 0)
+
+                                                var prevSize = listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull { it.index == idx }?.size ?: 0
+                                                snapshotFlow {
+                                                    listState.layoutInfo.visibleItemsInfo
+                                                        .firstOrNull { it.index == idx }?.size ?: 0
+                                                }
+                                                .distinctUntilChanged()
+                                                .collect { size ->
+                                                    if (size > 0 && prevSize > 0 && size > prevSize) {
+                                                        listState.scroll { scrollBy((size - prevSize).toFloat()) }
+                                                    }
+                                                    if (size > 0) prevSize = size
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        if (idx >= 0) {
+                                            scope.launch {
+                                                listState.scrollToItem(idx, 0)
+                                                aiExpandedStates[messageId] = false
+                                            }
+                                        } else {
+                                            aiExpandedStates[messageId] = false
+                                        }
+                                    }
+                                },
+                                isThinkingExpanded = thinkingExpandedStates[msg.id] ?: false,
+                                onThinkingExpandChange = { messageId, expanded ->
+                                    val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                    if (expanded) {
+                                        thinkingExpandedStates[messageId] = true
+                                        if (idx >= 0) {
+                                            scope.launch {
+                                                kotlinx.coroutines.delay(80)
+                                                listState.scrollToItem(idx, 0)
+
+                                                var prevSize = listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull { it.index == idx }?.size ?: 0
+                                                kotlinx.coroutines.withTimeoutOrNull(3000L) {
+                                                    snapshotFlow {
+                                                        listState.layoutInfo.visibleItemsInfo
+                                                            .firstOrNull { it.index == idx }?.size ?: 0
+                                                    }
+                                                    .distinctUntilChanged()
+                                                    .collect { size ->
+                                                        if (size > 0 && prevSize > 0 && size > prevSize) {
+                                                            listState.scroll { scrollBy((size - prevSize).toFloat()) }
+                                                        }
+                                                        if (size > 0) prevSize = size
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        if (idx >= 0) {
+                                            scope.launch {
+                                                listState.scrollToItem(idx, 0)
+                                                thinkingExpandedStates[messageId] = false
+                                            }
+                                        } else {
+                                            thinkingExpandedStates[messageId] = false
                                         }
                                     }
                                 },
@@ -294,48 +392,19 @@ fun WorkflowChatScreen(appState: AppState) {
             }
         }
 
-        if (showFolderPicker) {
-            FolderPickerDialog(
+        if (showSettingsDialog) {
+            WorkflowSettingsDialog(
                 userId = user.id,
-                initialPath = workingDir.ifBlank { null },
-                onDismiss = { showFolderPicker = false },
-                onConfirm = { selectedPath ->
-                    showFolderPicker = false
-                    scope.launch {
-                        when (val tc = ApiClient.checkTrustedDir(user.id, selectedPath)) {
-                            is TrustCheckResult.BridgeDisconnected -> {
-                                errorDialogMessage = "Bridge 未连接，无法切换目录。"
-                            }
-                            is TrustCheckResult.NotTrusted -> {
-                                trustConfirmPath = selectedPath
-                                trustConfirmBridgeId = tc.bridgeId
-                                showTrustConfirm = true
-                            }
-                            is TrustCheckResult.Error -> {
-                                errorDialogMessage = "检查信任状态失败：${tc.message}"
-                            }
-                            is TrustCheckResult.Trusted -> performCd(selectedPath)
-                        }
-                    }
-                },
-            )
-        }
-
-        if (showTrustConfirm) {
-            TrustConfirmDialog(
-                path = trustConfirmPath,
-                bridgeId = trustConfirmBridgeId,
-                onDismiss = { showTrustConfirm = false },
-                onTrust = {
-                    scope.launch {
-                        val added = ApiClient.addTrustedDir(user.id, trustConfirmPath)
-                        if (added) {
-                            showTrustConfirm = false
-                            performCd(trustConfirmPath)
-                        } else {
-                            errorDialogMessage = "添加信任记录失败，请重试。"
-                        }
-                    }
+                groupId = groupId,
+                currentWorkingDir = workingDir,
+                currentAgentDisplay = activeAgentDisplay,
+                currentPermissionMode = permissionMode,
+                onDismiss = { showSettingsDialog = false },
+                onApplied = { newDir, newAgentDisplay, newPermMode ->
+                    workingDir = newDir
+                    activeAgentDisplay = newAgentDisplay
+                    permissionMode = newPermMode
+                    showSettingsDialog = false
                 },
             )
         }

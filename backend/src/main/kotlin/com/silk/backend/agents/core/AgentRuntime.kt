@@ -2,8 +2,13 @@
 package com.silk.backend.agents.core
 
 import com.silk.backend.Message
+import com.silk.backend.MessageType
 import com.silk.backend.SilkAgent
 import com.silk.backend.agents.acp.AcpClient
+import com.silk.backend.card.CardReplyRouter
+import com.silk.backend.card.CardReplyHandler
+import com.silk.backend.card.CardReplyPayload
+import com.silk.backend.card.CardBuilder
 import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.acp.ContentBlock
 import com.silk.backend.agents.acp.PermissionResponse
@@ -60,6 +65,8 @@ object AgentRuntime {
             persistCliSession(rawGroupId, cliSessionId, sessionStarted)
         /** M4 Task 3: 持久化用户当前激活的 agent（dash form）。 */
         fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean = false
+        /** 持久化工具权限模式。 */
+        fun persistPermissionMode(rawGroupId: String, permissionMode: String): Boolean = false
         /** 启动 / 首次激活时根据 workflow record 提供 seed；返回 null 表示不是 workflow 或无值可 seed。 */
         fun loadSeed(rawGroupId: String): WorkflowSeed?
         /**
@@ -73,6 +80,7 @@ object AgentRuntime {
         val workingDir: String,
         val cliSessionId: String?,
         val sessionStarted: Boolean,
+        val permissionMode: String = "",
     )
 
     @Volatile
@@ -124,6 +132,15 @@ object AgentRuntime {
         CoroutineScope(Dispatchers.IO).launch {
             try { p.persistCliSession(stripGroupPrefix(groupId), agentType, cliSessionId, started) }
             catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 cliSessionId 失败: {}", e.message) }
+        }
+    }
+
+    /** 异步持久化工具权限模式。 */
+    private fun persistPermissionModeAsync(groupId: String, permissionMode: PermissionMode) {
+        val p = persistence ?: return
+        CoroutineScope(Dispatchers.IO).launch {
+            try { p.persistPermissionMode(stripGroupPrefix(groupId), permissionMode.name) }
+            catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 permissionMode 失败: {}", e.message) }
         }
     }
 
@@ -237,6 +254,11 @@ object AgentRuntime {
             if (!seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
                 session.cliSessionId = seed.cliSessionId
             }
+            if (seed.permissionMode.isNotBlank()) {
+                try {
+                    session.permissionMode = PermissionMode.valueOf(seed.permissionMode)
+                } catch (_: IllegalArgumentException) { /* ignore invalid value */ }
+            }
         }
         logger.info(
             "[AgentRuntime] 工作流自动激活: userId={}, groupId={}, agentType={}, workingDir={}, cliSeed={}",
@@ -252,6 +274,13 @@ object AgentRuntime {
 
             // Clean up handlers before nulling acpSessionId
             cleanupSessionHandlers(session)
+
+            // Clean up any pending card reply handler to prevent memory leak
+            val pending = session.pendingQuestion
+            if (pending != null) {
+                CardReplyRouter.unregister("agent_question_${pending.requestId}")
+                session.pendingQuestion = null
+            }
 
             if (session.running) {
                 session.promptJob?.cancel()
@@ -435,6 +464,7 @@ object AgentRuntime {
                     appendLine("运行中: ${session.running}")
                     appendLine("队列: ${session.messageQueue.size} 条")
                     appendLine("工作目录: ${ctx.workingDir}")
+                    appendLine("权限模式: ${session.permissionMode}")
                     append("ACP Session: ${session.acpSessionId ?: "未创建"}")
                 }
                 broadcastFn(AgentMessages.status(
@@ -628,7 +658,10 @@ object AgentRuntime {
                 "[AgentRuntime] User reply to question: requestId={}, answerLen={}",
                 pending.requestId.take(8), text.length,
             )
-            handleQuestionReply(session, pending, text, broadcastFn)
+            // Answer the current (first unanswered) question via text input
+            val currentIdx = (0 until pending.questions.size)
+                .firstOrNull { it !in pending.answers } ?: 0
+            handleQuestionReply(session, pending, currentIdx, text, broadcastFn)
             return
         }
 
@@ -697,7 +730,7 @@ object AgentRuntime {
                     return@launch
                 }
                 val accumulated = StringBuilder()
-                setupAcpHandlers(acp, acpSessionId, session, descriptor, broadcastFn, accumulated, ctx.scope)
+                setupAcpHandlers(acp, acpSessionId, session, descriptor, broadcastFn, accumulated, ctx.scope, ctx)
 
                 // 3. Execute prompt (executeSinglePrompt no longer does sessionNew)
                 executeSinglePrompt(ctx, acp, session, descriptor, text, broadcastFn, accumulated)
@@ -711,7 +744,7 @@ object AgentRuntime {
                     )
                     val drainSessionId = session.acpSessionId ?: break
                     val nextAccumulated = StringBuilder()
-                    setupAcpHandlers(acp, drainSessionId, session, descriptor, broadcastFn, nextAccumulated, ctx.scope)
+                    setupAcpHandlers(acp, drainSessionId, session, descriptor, broadcastFn, nextAccumulated, ctx.scope, ctx)
                     executeSinglePrompt(ctx, acp, session, descriptor, next.text, broadcastFn, nextAccumulated)
                     next = session.messageQueue.pollFirst()
                 }
@@ -855,18 +888,72 @@ object AgentRuntime {
         ))
     }
 
+    /**
+     * 处理单题回答（多问题逐题交互 or 单问题直接完成）。
+     *
+     * @param questionIndex 当前回答的问题索引
+     * @param answerText 用户的回答文本
+     */
     private suspend fun handleQuestionReply(
         session: AgentSession,
         pending: PendingQuestion,
+        questionIndex: Int,
         answerText: String,
         broadcastFn: suspend (Message) -> Unit,
     ) {
         val descriptor = AgentRegistry.getByType(session.agentType) ?: return
-        val acp = getAcpClient(session.agentType, session.userId)
 
-        // Clear pending state immediately
+        // Record this answer (strip internal encoding prefixes like __opt__0__)
+        pending.answers[questionIndex] = AgentMessages.cleanAnswerText(answerText)
+        val total = pending.questions.size
+
+        if (pending.answers.size < total) {
+            // Not all questions answered — refresh card for next question
+            val nextIndex = (0 until total).first { it !in pending.answers }
+            logger.info(
+                "[AgentRuntime] Question {}/{} answered, advancing to {}. requestId={}",
+                pending.answers.size, total, nextIndex + 1, pending.requestId.take(8),
+            )
+            broadcastFn(AgentMessages.questionCard(
+                questions = pending.questions,
+                requestId = pending.requestId,
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+                currentIndex = nextIndex,
+                answers = pending.answers.toMap(),
+            ).copy(action = "edit"))
+            return
+        }
+
+        // All questions answered — resolve via ACP
+        val cardId = "agent_question_${pending.requestId}"
+        CardReplyRouter.unregister(cardId)
         session.pendingQuestion = null
 
+        // Build aggregated answer text (clean internal prefixes)
+        val cleanAnswer = { raw: String -> AgentMessages.cleanAnswerText(raw) }
+        val resolveText = if (total == 1) {
+            "用户选择了「${cleanAnswer(pending.answers[0] ?: "")}」。" +
+                "请按照用户的选择继续执行，不要再次调用 AskUserQuestion 询问同一个问题。"
+        } else {
+            val lines = (0 until total).map { qi ->
+                val qText = pending.questions[qi].question.take(80)
+                "${qi + 1}. $qText → 「${cleanAnswer(pending.answers[qi] ?: "")}」"
+            }
+            "用户回答了以下问题：\n${lines.joinToString("\n")}\n" +
+                "请按照用户的回答继续执行，不要再次调用 AskUserQuestion 询问同一个问题。"
+        }
+
+        // Send completed card
+        broadcastFn(AgentMessages.questionCardCompleted(
+            questions = pending.questions,
+            answers = pending.answers.toMap(),
+            requestId = pending.requestId,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+
+        val acp = getAcpClient(session.agentType, session.userId)
         if (acp == null) {
             broadcastFn(AgentMessages.system(
                 "回答发送失败: Bridge 未连接",
@@ -877,10 +964,10 @@ object AgentRuntime {
         }
 
         try {
-            AcpExtensions.resolveQuestion(acp, pending.requestId, answerText)
+            AcpExtensions.resolveQuestion(acp, pending.requestId, resolveText)
             logger.info(
-                "[AgentRuntime] Question answered: requestId={}, answerLen={}",
-                pending.requestId.take(8), answerText.length,
+                "[AgentRuntime] All {}/{} questions answered: requestId={}",
+                total, total, pending.requestId.take(8),
             )
         } catch (e: Exception) {
             logger.error(
@@ -895,6 +982,55 @@ object AgentRuntime {
         }
     }
 
+    private fun parseStructuredQuestions(
+        rawQuestions: kotlinx.serialization.json.JsonArray?,
+    ): List<StructuredQuestion>? = rawQuestions?.mapNotNull { el ->
+        when {
+            el is kotlinx.serialization.json.JsonObject -> {
+                val q = el["question"]?.jsonPrimitive?.contentOrNull ?: ""
+                val header = el["header"]?.jsonPrimitive?.contentOrNull ?: ""
+                val options = el["options"]?.jsonArray?.mapNotNull { optEl ->
+                    (optEl as? kotlinx.serialization.json.JsonObject)?.let { obj ->
+                        QuestionOption(
+                            label = obj["label"]?.jsonPrimitive?.contentOrNull ?: "",
+                            description = obj["description"]?.jsonPrimitive?.contentOrNull ?: "",
+                        )
+                    }
+                } ?: emptyList()
+                StructuredQuestion(question = q, header = header, options = options)
+            }
+            el is kotlinx.serialization.json.JsonPrimitive -> {
+                el.contentOrNull?.let { text -> StructuredQuestion(question = text) }
+            }
+            else -> null
+        }
+    }
+
+    private fun parseCardReplyAction(
+        reply: CardReplyPayload,
+        pending: PendingQuestion,
+    ): Pair<Int, String> {
+        val action = reply.action
+        return when {
+            action.startsWith("__opt__") -> {
+                val parts = action.removePrefix("__opt__").split("__", limit = 2)
+                val qi = parts.getOrNull(0)?.toIntOrNull() ?: 0
+                val answer = parts.getOrNull(1) ?: action
+                qi to answer
+            }
+            action.startsWith("__custom__") -> {
+                val qi = action.removePrefix("__custom__").toIntOrNull() ?: 0
+                val answer = reply.inputs["custom_answer_$qi"] ?: ""
+                qi to answer
+            }
+            else -> {
+                val currentIdx = (0 until pending.questions.size)
+                    .firstOrNull { it !in pending.answers } ?: 0
+                currentIdx to action
+            }
+        }
+    }
+
     private fun setupAcpHandlers(
         acp: AcpClient,
         acpSessionId: String,
@@ -903,26 +1039,44 @@ object AgentRuntime {
         broadcastFn: suspend (Message) -> Unit,
         accumulated: StringBuilder,
         scope: CoroutineScope,
+        ctx: GroupAgentContext? = null,
     ) {
         acp.onSessionUpdate(acpSessionId) { notif ->
             // Check if this is an ask_user_question and set pending state
             val kind = notif.update["sessionUpdate"]?.let {
                 (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
             }
+            if (kind == "permission_request") {
+                handlePermissionUpdate(notif, session, descriptor, acp, broadcastFn, scope, ctx)
+                return@onSessionUpdate
+            }
             if (kind == "ask_user_question") {
                 val requestId = notif.update["requestId"]?.let {
                     (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
                 }
-                val questions = notif.update["questions"]?.jsonArray
-                    ?.mapNotNull { el ->
-                        (el as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-                    }
-                if (requestId != null && !questions.isNullOrEmpty()) {
-                    session.pendingQuestion = PendingQuestion(requestId, questions)
+                val structuredQuestions = parseStructuredQuestions(
+                    notif.update["questions"]?.jsonArray,
+                )
+
+                if (requestId != null && !structuredQuestions.isNullOrEmpty()) {
+                    session.pendingQuestion = PendingQuestion(requestId, structuredQuestions)
                     logger.info(
                         "[AgentRuntime] pendingQuestion set: requestId={}, questionCount={}",
-                        requestId.take(8), questions.size,
+                        requestId.take(8), structuredQuestions.size,
                     )
+                    val cardId = "agent_question_$requestId"
+                    CardReplyRouter.register(cardId, object : CardReplyHandler {
+                        override suspend fun onCardReply(
+                            reply: CardReplyPayload,
+                            sessionName: String,
+                            broadcastFn: suspend (com.silk.backend.Message) -> Unit,
+                        ) {
+                            val pending = session.pendingQuestion
+                            if (pending == null || pending.requestId != requestId) return
+                            val (questionIndex, answerText) = parseCardReplyAction(reply, pending)
+                            handleQuestionReply(session, pending, questionIndex, answerText, broadcastFn)
+                        }
+                    })
                 }
             }
 
@@ -950,6 +1104,156 @@ object AgentRuntime {
         }
     }
 
+    // ============== Permission Request Handling ==============
+
+    private val EDIT_TOOLS = setOf("Write", "Edit", "NotebookEdit")
+
+    private fun isWithinWorkingDir(filePath: String, workingDir: String): Boolean {
+        val absFile = java.io.File(filePath).canonicalPath
+        val absDir = java.io.File(workingDir).canonicalPath
+        return absFile.startsWith(absDir + java.io.File.separator) || absFile == absDir
+    }
+
+    private fun extractFilePath(toolInput: kotlinx.serialization.json.JsonObject): String? {
+        return toolInput["file_path"]?.jsonPrimitive?.contentOrNull
+            ?: toolInput["notebook_path"]?.jsonPrimitive?.contentOrNull
+    }
+
+    private fun extractToolInputMap(toolInput: kotlinx.serialization.json.JsonObject): Map<String, String?> {
+        return toolInput.entries.associate { (k, v) ->
+            k to (v as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+        }
+    }
+
+    private fun handlePermissionUpdate(
+        notif: com.silk.backend.agents.acp.SessionUpdateNotification,
+        session: AgentSession,
+        descriptor: AgentDescriptor,
+        acp: AcpClient,
+        broadcastFn: suspend (Message) -> Unit,
+        scope: CoroutineScope,
+        ctx: GroupAgentContext?,
+    ) {
+        val requestId = notif.update["requestId"]?.jsonPrimitive?.contentOrNull ?: return
+        val toolName = notif.update["toolName"]?.jsonPrimitive?.contentOrNull ?: "unknown"
+        val toolInput = notif.update["toolInput"]?.jsonObject ?: buildJsonObject {}
+
+        val mode = session.permissionMode
+        val workingDir = ctx?.workingDir ?: "/"
+
+        // Decision logic based on permission mode
+        val autoAllow = when (mode) {
+            PermissionMode.BYPASS -> true
+            PermissionMode.ACCEPT_EDITS -> {
+                if (toolName in EDIT_TOOLS) {
+                    val path = extractFilePath(toolInput)
+                    path != null && isWithinWorkingDir(path, workingDir)
+                } else {
+                    false
+                }
+            }
+            PermissionMode.INTERACTIVE -> false
+        }
+
+        if (autoAllow) {
+            scope.launch {
+                try {
+                    AcpExtensions.resolvePermission(acp, requestId, "allow")
+                    logger.info("[AgentRuntime] Permission auto-allow: tool={}, mode={}", toolName, mode)
+                } catch (e: Exception) {
+                    logger.error("[AgentRuntime] resolvePermission failed: {}", e.message)
+                }
+            }
+            return
+        }
+
+        // Show permission card and wait for user decision
+        val detail = AgentMessages.formatToolDetail(toolName, extractToolInputMap(toolInput))
+        val cardMsg = AgentMessages.permissionCard(
+            requestId = requestId,
+            toolName = toolName,
+            toolDetail = detail,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        )
+        val cardId = "agent_perm_$requestId"
+
+        CardReplyRouter.register(cardId, object : CardReplyHandler {
+            override suspend fun onCardReply(
+                reply: CardReplyPayload,
+                sessionName: String,
+                broadcastFn: suspend (Message) -> Unit,
+            ) {
+                val action = reply.action
+                val (decision, modeSwitch) = when {
+                    action.startsWith("perm_allow_") -> "allow" to null
+                    action.startsWith("perm_deny_") -> "deny" to null
+                    action.startsWith("perm_accept_edits_") -> "allow" to PermissionMode.ACCEPT_EDITS
+                    action.startsWith("perm_bypass_") -> "allow" to PermissionMode.BYPASS
+                    else -> return
+                }
+
+                CardReplyRouter.unregister(cardId)
+
+                // Apply mode switch if requested
+                if (modeSwitch != null) {
+                    session.permissionMode = modeSwitch
+                    persistPermissionModeAsync(session.groupId, modeSwitch)
+                    logger.info("[AgentRuntime] Permission mode changed to {} for session {}",
+                        modeSwitch, session.groupId)
+                }
+
+                // Build decision display text
+                val decisionText = when {
+                    modeSwitch == PermissionMode.ACCEPT_EDITS -> "允许（已切换到 Accept Edits 模式）"
+                    modeSwitch == PermissionMode.BYPASS -> "允许（已切换到 Bypass 模式）"
+                    decision == "allow" -> "允许"
+                    else -> "拒绝"
+                }
+                val reason = if (decision == "deny") "用户拒绝了此操作" else ""
+
+                // Send resolved card
+                broadcastFn(AgentMessages.permissionCardResolved(
+                    requestId = requestId,
+                    toolName = toolName,
+                    toolDetail = detail,
+                    decision = decisionText,
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
+                ))
+
+                // 模式切换时额外广播一条系统消息，让前端 LaunchedEffect(messages.size) 能捕获
+                if (modeSwitch != null) {
+                    val modeLabel = when (modeSwitch) {
+                        PermissionMode.ACCEPT_EDITS -> "Accept Edits"
+                        PermissionMode.BYPASS -> "Bypass"
+                        else -> modeSwitch.name
+                    }
+                    broadcastFn(AgentMessages.system(
+                        "已切换到 $modeLabel 权限模式",
+                        agentUserId = descriptor.agentUserId,
+                        agentName = descriptor.displayName,
+                    ))
+                }
+
+                // Resolve via ACP
+                try {
+                    AcpExtensions.resolvePermission(acp, requestId, decision, reason)
+                    logger.info("[AgentRuntime] Permission resolved: tool={}, decision={}", toolName, decision)
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                    logger.error("[AgentRuntime] resolvePermission failed: {}", e.message)
+                    broadcastFn(AgentMessages.system(
+                        "权限决定发送失败: ${e.message}",
+                        agentUserId = descriptor.agentUserId,
+                        agentName = descriptor.displayName,
+                    ))
+                }
+            }
+        })
+
+        scope.launch { broadcastFn(cardMsg) }
+    }
+
     private fun getAcpClient(agentType: String, userId: String): AcpClient? {
         return AcpRegistry.get(userId, agentType)
     }
@@ -970,6 +1274,7 @@ object AgentRuntime {
         val running: Boolean,
         val workingDir: String,
         val agentType: String?,
+        val permissionMode: String = "",
     )
 
     fun snapshotState(userId: String, groupId: String): AgentStateSnapshot? {
@@ -981,14 +1286,54 @@ object AgentRuntime {
             running = session?.running ?: false,
             workingDir = ctx.workingDir,
             agentType = agentType,
+            permissionMode = session?.permissionMode?.name ?: "",
         )
+    }
+
+    // ========== API-driven settings ==========
+
+    /**
+     * API-driven agent switch (like /use but without chat broadcast).
+     * Returns the descriptor on success, null if agentType not found.
+     */
+    fun switchAgent(userId: String, groupId: String, agentType: String): AgentDescriptor? {
+        val descriptor = AgentRegistry.getByType(agentType) ?: return null
+        val ctx = context(userId, groupId)
+        ctx.currentAgentType = agentType
+        val session = ctx.getOrCreateSession(agentType)
+        val seed = try {
+            persistence?.loadSeed(stripGroupPrefix(groupId), agentType)
+        } catch (e: Exception) {
+            logger.warn("[AgentRuntime] switchAgent {} loadSeed failed: {}", agentType, e.message)
+            null
+        }
+        if (seed != null && !seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
+            session.cliSessionId = seed.cliSessionId
+        }
+        persistActiveAgentAsync(groupId, agentType)
+        return descriptor
+    }
+
+    /**
+     * API-driven permission mode change.
+     * Returns true if the mode was set successfully.
+     */
+    fun setPermissionMode(userId: String, groupId: String, mode: String): Boolean {
+        val pm = try { PermissionMode.valueOf(mode) } catch (_: IllegalArgumentException) { return false }
+        val ctx = context(userId, groupId)
+        val agentType = ctx.currentAgentType ?: return false
+        val session = ctx.getOrCreateSession(agentType)
+        if (session.permissionMode == pm) return true // no-op
+        session.permissionMode = pm
+        persistPermissionModeAsync(groupId, pm)
+        return true
     }
 
     // ========== AskUserQuestion ==========
 
     data class PendingQuestionSnapshot(
         val requestId: String,
-        val questions: List<String>,
+        val questions: List<StructuredQuestion>,
         val agentUserId: String,
         val agentName: String,
     )
@@ -1102,6 +1447,12 @@ object AgentRuntime {
         val ctx = contexts.remove(key(userId, groupId)) ?: return
         for ((_, session) in ctx.sessions) {
             cleanupSessionHandlers(session)
+            // Clean up any pending card reply handler to prevent memory leak
+            val pending = session.pendingQuestion
+            if (pending != null) {
+                CardReplyRouter.unregister("agent_question_${pending.requestId}")
+                session.pendingQuestion = null
+            }
         }
         ctx.scope.cancel()
     }
@@ -1111,6 +1462,11 @@ object AgentRuntime {
         contexts.values.forEach { ctx ->
             for ((_, session) in ctx.sessions) {
                 cleanupSessionHandlers(session)
+                val pending = session.pendingQuestion
+                if (pending != null) {
+                    CardReplyRouter.unregister("agent_question_${pending.requestId}")
+                    session.pendingQuestion = null
+                }
             }
             ctx.scope.cancel()
         }

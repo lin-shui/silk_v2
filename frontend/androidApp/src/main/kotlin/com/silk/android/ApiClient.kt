@@ -142,6 +142,13 @@ data class AppVersionInfo(
     val downloadUrl: String = ""
 )
 
+@Serializable
+data class AgentInfo(
+    val agentType: String,
+    val displayName: String,
+    val connected: Boolean,
+)
+
 // ==================== Workflow API ====================
 
 @Serializable
@@ -169,6 +176,15 @@ sealed class TrustCheckResult {
     data class NotTrusted(val bridgeId: String?) : TrustCheckResult()
     object BridgeDisconnected : TrustCheckResult()
     data class Error(val message: String) : TrustCheckResult()
+}
+
+private fun parseCreateWorkflowResponse(json: Json, response: String): CreateWorkflowResult {
+    val obj = json.parseToJsonElement(response).jsonObject
+    if (obj["success"]?.jsonPrimitive?.booleanOrNull == false) {
+        val msg = obj["message"]?.jsonPrimitive?.contentOrNull ?: "未知错误"
+        return CreateWorkflowResult.Err(msg)
+    }
+    return CreateWorkflowResult.Ok(json.decodeFromString(response))
 }
 
 object ApiClient {
@@ -636,6 +652,8 @@ object ApiClient {
         description: String,
         userId: String,
         initialDir: String,
+        agentType: String = "claude_code",
+        permissionMode: String = "",
     ): CreateWorkflowResult = withContext(Dispatchers.IO) {
         try {
             val body = buildJsonObject {
@@ -643,15 +661,15 @@ object ApiClient {
                 put("name", JsonPrimitive(name))
                 put("description", JsonPrimitive(description))
                 put("initialDir", JsonPrimitive(initialDir))
+                if (agentType.isNotBlank()) {
+                    put("agentType", JsonPrimitive(agentType))
+                }
+                if (permissionMode.isNotBlank()) {
+                    put("permissionMode", JsonPrimitive(permissionMode))
+                }
             }.toString()
             val response = post("/api/workflows", body)
-            val obj = jsonParser.parseToJsonElement(response).jsonObject
-            if (obj["success"]?.jsonPrimitive?.booleanOrNull == false) {
-                val msg = obj["message"]?.jsonPrimitive?.contentOrNull ?: "未知错误"
-                CreateWorkflowResult.Err(msg)
-            } else {
-                CreateWorkflowResult.Ok(jsonParser.decodeFromString(response))
-            }
+            parseCreateWorkflowResponse(jsonParser, response)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             CreateWorkflowResult.Err(e.message ?: "网络错误")
@@ -726,6 +744,45 @@ object ApiClient {
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             println("切换目录失败: $e")
+            CcStateResponse(success = false, error = e.message)
+        }
+    }
+
+    /** 列出可用的 agent 选项。 */
+    suspend fun listAgents(userId: String): List<AgentInfo> = withContext(Dispatchers.IO) {
+        try {
+            val encoded = java.net.URLEncoder.encode(userId, "UTF-8")
+            val response = get("/api/agents?userId=$encoded")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("列出 agent 失败: $e")
+            emptyList()
+        }
+    }
+
+    /** 更新工作流会话设置（agent / permissionMode）。 */
+    suspend fun updateCcSettings(
+        userId: String,
+        groupId: String,
+        activeAgent: String? = null,
+        permissionMode: String? = null,
+    ): CcStateResponse = withContext(Dispatchers.IO) {
+        try {
+            val body = buildJsonObject {
+                put("groupId", JsonPrimitive(groupId))
+                if (!activeAgent.isNullOrBlank()) {
+                    put("activeAgent", JsonPrimitive(activeAgent))
+                }
+                if (!permissionMode.isNullOrBlank()) {
+                    put("permissionMode", JsonPrimitive(permissionMode))
+                }
+            }.toString()
+            val response = post("/users/$userId/cc-settings/update", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("更新会话设置失败: $e")
             CcStateResponse(success = false, error = e.message)
         }
     }
