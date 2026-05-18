@@ -124,7 +124,7 @@ object SilkColors {
     const val divider = "#F0E8DC"
 }
 
-private fun backendHttpOrigin(): String {
+fun backendHttpOrigin(): String {
     val protocol = window.location.protocol
     val hostname = window.location.hostname
     val currentPort = window.location.port
