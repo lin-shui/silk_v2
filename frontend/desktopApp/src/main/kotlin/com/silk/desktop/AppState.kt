@@ -4,10 +4,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import java.io.File
+import java.io.IOException
 
 /**
  * 场景枚举
@@ -80,28 +82,23 @@ class AppState {
         val savedUser = currentUser ?: return false
         
         isValidating = true
+        val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            ApiClient.validateUser(savedUser.id)
+        }
+
         return try {
-            val response = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                ApiClient.validateUser(savedUser.id)
-            }
-            
             if (response.success && response.user != null) {
-                // 更新用户信息（可能后端数据有更新）
                 currentUser = response.user
                 println("✅ 用户验证成功: ${response.user.fullName}")
                 true
             } else {
-                // 验证失败，清除本地用户信息
                 println("❌ 用户验证失败: ${response.message}")
-                logout()
+                currentUser = null
+                selectedGroup = null
+                sceneHistory.clear()
+                currentScene = Scene.LOGIN
                 false
             }
-        } catch (e: Exception) {
-            println("❌ 验证过程异常: ${e.message}")
-            // 网络错误，暂时保留用户信息，但返回登录界面
-            currentUser = null
-            currentScene = Scene.LOGIN
-            false
         } finally {
             isValidating = false
         }
@@ -171,7 +168,9 @@ class AppState {
             val json = Json.encodeToString(user)
             userFile.writeText(json)
             println("✅ 用户信息已保存")
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            println("❌ 保存用户信息失败: ${e.message}")
+        } catch (e: SerializationException) {
             println("❌ 保存用户信息失败: ${e.message}")
         }
     }
@@ -189,7 +188,9 @@ class AppState {
                 currentScene = Scene.GROUP_LIST
                 println("✅ 自动登录: ${user.fullName}")
             }
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            println("❌ 加载用户信息失败: ${e.message}")
+        } catch (e: SerializationException) {
             println("❌ 加载用户信息失败: ${e.message}")
         }
     }
@@ -204,7 +205,7 @@ class AppState {
                 userFile.delete()
                 println("✅ 用户信息已删除")
             }
-        } catch (e: Exception) {
+        } catch (e: SecurityException) {
             println("❌ 删除用户信息失败: ${e.message}")
         }
     }
