@@ -636,7 +636,15 @@ fun GroupListScreen(appState: AppState) {
                 onDismiss = { showCreateDialog = false },
                 onGroupCreated = { newGroup ->
                     groups = groups + newGroup
-                    showCreateDialog = false
+                },
+                onCcConnectCreated = { newGroup ->
+                    scope.launch {
+                        val currentUserId = appState.currentUser?.id ?: return@launch
+                        val info = ApiClient.getCcConnectTokenInfo(newGroup.id, currentUserId)
+                        if (info != null && info.success) {
+                            ccConnectStatus = ccConnectStatus + (newGroup.id to info)
+                        }
+                    }
                 }
             )
         }
@@ -929,6 +937,7 @@ fun CreateGroupDialog(
     strings: com.silk.shared.i18n.Strings,
     onDismiss: () -> Unit,
     onGroupCreated: (Group) -> Unit,
+    onCcConnectCreated: ((Group) -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -1068,10 +1077,12 @@ token  = "${generatedToken}"""",
                                 }
 
                                 if (response != null && response.success && response.group != null) {
+                                    onGroupCreated(response.group)
                                     if (isCcConnect && response.ccConnectToken != null) {
                                         generatedToken = response.ccConnectToken
+                                        onCcConnectCreated?.invoke(response.group)
                                     } else {
-                                        onGroupCreated(response.group)
+                                        onDismiss()
                                     }
                                 } else {
                                     errorMessage = response?.message ?: "创建失败"
