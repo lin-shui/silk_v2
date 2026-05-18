@@ -37,6 +37,8 @@ export CLAUDE_HTTP_PROXY="${CLAUDE_HTTP_PROXY:-}"
 export CLAUDE_HTTPS_PROXY="${CLAUDE_HTTPS_PROXY:-}"
 # Export permission mode so executor can control --permission-mode behavior
 export CLAUDE_CODE_PERMISSION_MODE="${CLAUDE_CODE_PERMISSION_MODE:-}"
+# Export raw CLI I/O log toggle (writes stdin/stdout JSON to cli_raw.log)
+export BRIDGE_CLI_RAW_LOG="${BRIDGE_CLI_RAW_LOG:-}"
 # 可选：WSS 自签证书时设为 1（bridge.sh 会传 --tls-insecure）
 BRIDGE_TLS_INSECURE="${BRIDGE_TLS_INSECURE:-}"
 # 可选：仓库外 venv 的 python 绝对路径，例如 /Users/you/venvs/silk-bridge/bin/python3
