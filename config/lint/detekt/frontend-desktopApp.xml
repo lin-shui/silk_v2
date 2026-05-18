@@ -32,33 +32,5 @@
     <ID>UnusedPrivateProperty:GroupListScreen.kt$var isDeleting by remember { mutableStateOf(false) }</ID>
     <ID>UnusedPrivateProperty:GroupListScreen.kt$var selectedGroups by remember { mutableStateOf&lt;Set&lt;String&gt;&gt;(emptySet()) }</ID>
     <ID>UnusedPrivateProperty:MessageContextMenu.kt$var showActions by remember { mutableStateOf(false) }</ID>
-    <ID>WildcardImport:ApiClient.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:AppState.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.material.icons.filled.*</ID>
-    <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:GroupListScreen.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:InvitationDialog.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:InvitationDialog.kt$import androidx.compose.material.icons.filled.*</ID>
-    <ID>WildcardImport:InvitationDialog.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:InvitationDialog.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:LoginScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:LoginScreen.kt$import androidx.compose.material.icons.filled.*</ID>
-    <ID>WildcardImport:LoginScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:LoginScreen.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:Main.kt$import androidx.compose.animation.core.*</ID>
-    <ID>WildcardImport:Main.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:Main.kt$import androidx.compose.material.icons.filled.*</ID>
-    <ID>WildcardImport:Main.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:Main.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:MessageContextMenu.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:MessageContextMenu.kt$import androidx.compose.material.icons.filled.*</ID>
-    <ID>WildcardImport:MessageContextMenu.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:MessageContextMenu.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:SettingsScreen.kt$import com.silk.shared.models.*</ID>
   </CurrentIssues>
 </SmellBaseline>

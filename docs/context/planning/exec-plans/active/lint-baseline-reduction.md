@@ -59,6 +59,8 @@
 - Slice 3: 已完成。清理 `frontend/webApp` 纯 import 类问题，跑 `./gradlew :frontend:webApp:nodeTest`。
 - Slice 4: 已完成。清理 `frontend/shared` 的明确私有未使用项。
 - Slice 5: 已完成。收敛 shared WebSocket / ChatClient 异常处理规则，取消异常显式透传。
+- Slice 6: 已完成。清理 `frontend/desktopApp` 的 `WildcardImport`，跑 desktop detekt / test / compile 与 `silkLint`。
+- Slice 7: 候选。继续清理 `frontend/desktopApp` 的明确未使用私有成员 / 参数，避免跨模块跳跃过早进入复杂度规则。
 
 ## Progress Log
 
@@ -122,9 +124,21 @@
   - `./gradlew :backend:compileKotlin --no-daemon --stacktrace`
   - `git diff --check`
 
+### 2026-05-18 Slice 6
+
+- 清理 `frontend/desktopApp` 的 28 条 `WildcardImport` baseline，覆盖 `ApiClient.kt`、`AppState.kt`、`GroupListScreen.kt`、`InvitationDialog.kt`、`LoginScreen.kt`、`Main.kt`、`MessageContextMenu.kt`、`SettingsScreen.kt`。
+- `config/lint/detekt/frontend-desktopApp.xml` 从 58 条降到 30 条；`frontend/desktopApp` 当前已无 `WildcardImport` baseline。
+- 没有运行全量 `silkLintBaseline` 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次 `:frontend:desktopApp:compileKotlin` 命中 Kotlin 增量编译陈旧产物（`DesktopPdfReportContent.class` 缺失）；执行 `:frontend:desktopApp:clean` 后验证通过。
+- 已验证：
+  - `./gradlew :frontend:desktopApp:detekt`
+  - `./gradlew :frontend:desktopApp:clean :frontend:desktopApp:test :frontend:desktopApp:compileKotlin silkLint`
+  - `git diff --check`
+
 ## Handoff Notes
 
 - 后续接力时先看本文件和 `config/lint/detekt/*.xml` 的剩余规则分布。
+- `frontend/desktopApp` 已清空 `WildcardImport`；下一步优先看同模块内剩余 `UnusedPrivateProperty`、`UnusedPrivateMember`、`UnusedParameter`，能继续保持低风险切片。
 - `frontend/shared/src/iosMain` 当前在 Gradle shared module 中暂时禁用，也不在根 detekt source set 中；本计划按当前 lint 覆盖面收敛 baseline，不把未启用 iOS 源码混进每一步。
 - 如果某一步发现需要新增 baseline，先停下来判断是否应关规则、补测试或拆小 PR，不要直接把新增项写进 baseline。
 - 完成一个 slice 后，在本文件记录已完成项、剩余数量和验证命令。
