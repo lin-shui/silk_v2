@@ -66,6 +66,20 @@ object AcpExtensions {
         })
     }
 
+    /** ExitPlanMode plan review decision */
+    suspend fun resolvePlanReview(
+        acp: AcpClient,
+        requestId: String,
+        decision: String,
+        feedback: String = "",
+    ): JsonElement {
+        return acp.callExtension("_silk/resolve_plan_review", buildJsonObject {
+            put("requestId", requestId)
+            put("decision", decision)
+            put("feedback", feedback)
+        })
+    }
+
     /** 把 `_silk/list_local_sessions` 的 JSON 结果转成适合 Agent 状态框展示的多行文本。 */
     fun formatLocalSessionsForDisplay(result: JsonElement): String {
         val sessions = runCatching {

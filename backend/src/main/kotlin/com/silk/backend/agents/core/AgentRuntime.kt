@@ -1079,6 +1079,10 @@ object AgentRuntime {
                     })
                 }
             }
+            if (kind == "plan_review") {
+                handlePlanReviewUpdate(notif, session, descriptor, acp, broadcastFn, scope)
+                return@onSessionUpdate
+            }
 
             val msg = AcpUpdateMapper.map(
                 update = notif.update,
@@ -1218,6 +1222,7 @@ object AgentRuntime {
                     toolName = toolName,
                     toolDetail = detail,
                     decision = decisionText,
+                    approved = (decision == "allow"),
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
@@ -1244,6 +1249,73 @@ object AgentRuntime {
                     logger.error("[AgentRuntime] resolvePermission failed: {}", e.message)
                     broadcastFn(AgentMessages.system(
                         "权限决定发送失败: ${e.message}",
+                        agentUserId = descriptor.agentUserId,
+                        agentName = descriptor.displayName,
+                    ))
+                }
+            }
+        })
+
+        scope.launch { broadcastFn(cardMsg) }
+    }
+
+    @Suppress("UnusedParameter")
+    private fun handlePlanReviewUpdate(
+        notif: com.silk.backend.agents.acp.SessionUpdateNotification,
+        session: AgentSession,
+        descriptor: AgentDescriptor,
+        acp: AcpClient,
+        broadcastFn: suspend (Message) -> Unit,
+        scope: CoroutineScope,
+    ) {
+        val requestId = notif.update["requestId"]?.jsonPrimitive?.contentOrNull ?: return
+        val planContent = notif.update["planContent"]?.jsonPrimitive?.contentOrNull ?: ""
+
+        logger.info("[AgentRuntime] Plan review received: requestId={}, planLen={}", requestId.take(8), planContent.length)
+
+        val cardMsg = AgentMessages.planReviewCard(
+            requestId = requestId,
+            planContent = planContent,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        )
+        val cardId = "agent_plan_review_$requestId"
+
+        CardReplyRouter.register(cardId, object : CardReplyHandler {
+            override suspend fun onCardReply(
+                reply: CardReplyPayload,
+                sessionName: String,
+                broadcastFn: suspend (Message) -> Unit,
+            ) {
+                val action = reply.action
+                // ⚠️ plan_deny_feedback_ 必须在 plan_deny_ 之前匹配，否则会被吞掉
+                val (decision, feedback, decisionText) = when {
+                    action.startsWith("plan_allow_") -> Triple("allow", "", "批准执行")
+                    action.startsWith("plan_deny_feedback_") -> {
+                        val fb = reply.inputs["plan_feedback_$requestId"] ?: ""
+                        Triple("deny_with_feedback", fb, "拒绝并反馈: $fb")
+                    }
+                    action.startsWith("plan_deny_") -> Triple("deny", "", "拒绝")
+                    else -> return
+                }
+
+                CardReplyRouter.unregister(cardId)
+
+                broadcastFn(AgentMessages.planReviewCardResolved(
+                    requestId = requestId,
+                    decision = decisionText,
+                    approved = (decision == "allow"),
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
+                ))
+
+                try {
+                    AcpExtensions.resolvePlanReview(acp, requestId, decision, feedback)
+                    logger.info("[AgentRuntime] Plan review resolved: decision={}", decision)
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                    logger.error("[AgentRuntime] resolvePlanReview failed: {}", e.message)
+                    broadcastFn(AgentMessages.system(
+                        "计划审批决定发送失败: ${e.message}",
                         agentUserId = descriptor.agentUserId,
                         agentName = descriptor.displayName,
                     ))

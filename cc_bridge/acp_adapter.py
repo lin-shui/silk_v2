@@ -143,6 +143,11 @@ class AcpAgentServer:
                 acp_session_id, ctrl_request_id, tool_input,
             )
 
+        if tool_name == "ExitPlanMode":
+            return await self._handle_exit_plan_mode_ctrl(
+                acp_session_id, ctrl_request_id, tool_input,
+            )
+
         # Regular tool permission request
         future: asyncio.Future[dict[str, Any]] = asyncio.get_event_loop().create_future()
         self._pending_permissions[ctrl_request_id] = future
@@ -218,6 +223,46 @@ class AcpAgentServer:
             result = {"behavior": "deny", "message": "AskUserQuestion timed out."}
         finally:
             self._pending_permissions.pop(ctrl_request_id, None)
+
+        return result
+
+    async def _handle_exit_plan_mode_ctrl(
+        self,
+        acp_session_id: str,
+        ctrl_request_id: str,
+        tool_input: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Handle ExitPlanMode: show plan for user review with allow/deny/feedback."""
+        plan_content = tool_input.get("plan", "")
+
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_event_loop().create_future()
+        self._pending_permissions[ctrl_request_id] = future
+        self._pending_tool_inputs[ctrl_request_id] = tool_input
+
+        logger.info(
+            "[ACP] ExitPlanMode: forwarding plan review, request=%s, session=%s, plan_len=%d",
+            ctrl_request_id[:8], acp_session_id[:8], len(plan_content),
+        )
+        await self._send_notification("session/update", {
+            "sessionId": acp_session_id,
+            "update": {
+                "sessionUpdate": "plan_review",
+                "requestId": ctrl_request_id,
+                "planContent": plan_content,
+                "toolInput": tool_input,
+            },
+        })
+
+        try:
+            result = await asyncio.wait_for(future, timeout=600.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "[ACP] ExitPlanMode review timed out: %s", ctrl_request_id[:8]
+            )
+            result = {"behavior": "deny", "message": "Plan review timed out."}
+        finally:
+            self._pending_permissions.pop(ctrl_request_id, None)
+            self._pending_tool_inputs.pop(ctrl_request_id, None)
 
         return result
 
@@ -372,6 +417,8 @@ class AcpAgentServer:
                 await self._handle_silk_resolve_question(msg_id, params)
             elif method == "_silk/resolve_permission":
                 await self._handle_silk_resolve_permission(msg_id, params)
+            elif method == "_silk/resolve_plan_review":
+                await self._handle_silk_resolve_plan_review(msg_id, params)
             else:
                 await self._send_error(msg_id, -32601, f"Method not found: {method}")
         except Exception as exc:
@@ -853,6 +900,54 @@ class AcpAgentServer:
 
         logger.info(
             "[ACP] resolve_permission: resolved %s decision=%s",
+            request_id[:8], decision,
+        )
+        await self._send_response(msg_id, {"ok": True})
+
+    async def _handle_silk_resolve_plan_review(self, msg_id: Any, params: Any) -> None:
+        """Resolve an ExitPlanMode plan review request.
+
+        Params:
+            requestId: the control_request id
+            decision: "allow" | "deny" | "deny_with_feedback"
+            feedback: user feedback text (used when decision is "deny_with_feedback")
+        """
+        p = params or {}
+        request_id = p.get("requestId", "")
+        decision = p.get("decision", "deny")
+        feedback = p.get("feedback", "")
+
+        if not request_id:
+            await self._send_error(msg_id, -32602, "Missing requestId")
+            return
+
+        future = self._pending_permissions.get(request_id)
+        if future is None or future.done():
+            logger.warning(
+                "[ACP] resolve_plan_review: unknown request %s", request_id[:8]
+            )
+            await self._send_error(msg_id, -32602, f"Unknown request: {request_id}")
+            return
+
+        if decision == "allow":
+            original_input = self._pending_tool_inputs.get(request_id, {})
+            future.set_result({"behavior": "allow", "updatedInput": original_input})
+        elif decision == "deny_with_feedback":
+            message = (
+                f"User rejected the plan and provided feedback:\n\n"
+                f"{feedback}\n\n"
+                f"Please revise the plan based on this feedback, "
+                f"then call ExitPlanMode again for re-review."
+            )
+            future.set_result({"behavior": "deny", "message": message})
+        else:
+            future.set_result({
+                "behavior": "deny",
+                "message": "User rejected the plan.",
+            })
+
+        logger.info(
+            "[ACP] resolve_plan_review: resolved %s decision=%s",
             request_id[:8], decision,
         )
         await self._send_response(msg_id, {"ok": True})

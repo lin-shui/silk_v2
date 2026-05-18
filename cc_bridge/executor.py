@@ -21,6 +21,25 @@ from typing import Any, Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
+# Separate raw I/O logger — writes complete stdin/stdout JSON to cli_raw.log.
+# Enable via BRIDGE_CLI_RAW_LOG=1 (or any truthy value).
+# This logger is independent of BRIDGE_LOG_LEVEL so it won't pollute bridge.log.
+_raw_logger: logging.Logger | None = None
+
+
+def _init_raw_logger() -> logging.Logger | None:
+    flag = os.environ.get("BRIDGE_CLI_RAW_LOG", "").strip().lower()
+    if flag not in ("1", "true", "yes"):
+        return None
+    rl = logging.getLogger("cli_raw")
+    rl.setLevel(logging.DEBUG)
+    rl.propagate = False  # don't send to root / bridge.log
+    log_dir = os.environ.get("BRIDGE_CLI_RAW_LOG_DIR", os.path.dirname(__file__))
+    fh = logging.FileHandler(os.path.join(log_dir, "cli_raw.log"), encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03.0f %(message)s", datefmt="%H:%M:%S"))
+    rl.addHandler(fh)
+    return rl
+
 # ---------------------------------------------------------------------------
 # Configuration (env vars with defaults)
 # ---------------------------------------------------------------------------
@@ -131,6 +150,7 @@ def _die_claude_not_found(system: str, extra: str = "") -> None:
 
 
 CLAUDE_CODE_PATH: str = _detect_claude_path()
+_raw_logger = _init_raw_logger()
 CLAUDE_CODE_MAX_TURNS: int = int(os.environ.get("CLAUDE_CODE_MAX_TURNS", "100"))
 CLAUDE_CODE_TIMEOUT: int = int(os.environ.get("CLAUDE_CODE_TIMEOUT", "36000"))
 CLAUDE_CODE_MAX_OUTPUT_CHARS: int = int(
@@ -567,10 +587,8 @@ class Executor:
                     logger.info("[Executor] Non-JSON output: %s", line[:200])
                     continue
 
-                logger.debug(
-                    "[Executor] Line %d (%d chars): %s",
-                    line_count, len(line), line[:80],
-                )
+                if _raw_logger:
+                    _raw_logger.debug("STDOUT <<< %s", line)
                 parsed = parse_line(line)
 
                 # ---- Control request (permission / AskUserQuestion) ----
@@ -859,6 +877,8 @@ class Executor:
         """Write a JSON message to the process stdin."""
         assert process.stdin is not None
         data = json.dumps(payload, ensure_ascii=False) + "\n"
+        if _raw_logger:
+            _raw_logger.debug("STDIN  >>> %s", data.rstrip())
         process.stdin.write(data.encode("utf-8"))
         await process.stdin.drain()
 
