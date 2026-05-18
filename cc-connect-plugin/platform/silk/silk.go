@@ -358,7 +358,7 @@ func (p *Platform) connect(ctx context.Context) error {
 				p.handler(p, coreMsg)
 				go func() {
 					time.Sleep(2 * time.Second)
-					p.queryAndSendMetadata()
+					p.queryAndSendMetadataOnce()
 				}()
 			}
 		case "ping":
@@ -394,6 +394,17 @@ func (p *Platform) pingLoop(ctx context.Context, conn *websocket.Conn) {
 // --- metadata query ---
 
 func (p *Platform) queryAndSendMetadata() {
+	if !p.queryAndSendMetadataOnce() {
+		// If metadata was empty, retry after a delay (agent may still be loading)
+		slog.Debug("[silk] metadata empty, scheduling retry in 15s...")
+		time.AfterFunc(15*time.Second, func() {
+			p.queryAndSendMetadataOnce()
+		})
+	}
+}
+
+// Returns true if metadata was successfully collected and sent.
+func (p *Platform) queryAndSendMetadataOnce() bool {
 	// Drain any stale replies
 	select {
 	case <-p.metadataReply:
@@ -410,7 +421,7 @@ func (p *Platform) queryAndSendMetadata() {
 		Platform:   "silk",
 		ReplyCtx:   &replyContext{userID: "__silk_meta__"},
 	})
-	modeText := waitChan(p.metadataReply, 3*time.Second)
+	modeText := waitChan(p.metadataReply, 8*time.Second)
 	slog.Debug("[silk] raw /mode response", "text", modeText)
 
 	// Drain again before next query
@@ -427,7 +438,7 @@ func (p *Platform) queryAndSendMetadata() {
 		Platform:   "silk",
 		ReplyCtx:   &replyContext{userID: "__silk_meta__"},
 	})
-	modelText := waitChan(p.metadataReply, 5*time.Second)
+	modelText := waitChan(p.metadataReply, 15*time.Second)
 	slog.Debug("[silk] raw /model response", "text", modelText)
 
 	p.metadataActive.Store(false)
@@ -437,7 +448,7 @@ func (p *Platform) queryAndSendMetadata() {
 
 	if mode == "" && model == "" && len(modes) == 0 && len(models) == 0 {
 		slog.Debug("[silk] metadata query returned nothing, skipping send")
-		return
+		return false
 	}
 
 	_ = p.sendJSON(map[string]any{
@@ -449,6 +460,7 @@ func (p *Platform) queryAndSendMetadata() {
 	})
 	slog.Info("[silk] metadata sent", "mode", mode, "model", model,
 		"modes", len(modes), "models", len(models))
+	return true
 }
 
 func waitChan(ch chan string, timeout time.Duration) string {

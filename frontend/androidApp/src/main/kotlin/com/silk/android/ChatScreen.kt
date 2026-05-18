@@ -1267,60 +1267,34 @@ fun ChatScreen(appState: AppState) {
                             .fillMaxWidth()
                             .padding(8.dp)
                     ) {
-                        // @Silk / cc-connect 快捷按钮区域
+                        // cc-connect mode/model badges row (above input)
                         val isSilkPrivateChat = group.name.startsWith("[Silk]")
                         val isCcConnectGroup = ccConnectInfo != null
-
-                        // cc-connect: @agent 按钮 + mode/model badges
-                        if (isCcConnectGroup && groupMembers.size >= 2) {
-                            val currentMemberRole = groupMembers.find { it.id == user.id }?.role
-                            val canTriggerCc = currentMemberRole == "HOST" || currentMemberRole == "OPERATOR"
-                            // cc-connect: always use @cc as the trigger prefix
-                            val ccPrefix = "@cc"
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                // @agent button
-                                Surface(
-                                    onClick = {
-                                        val prefix = "$ccPrefix "
-                                        if (!messageText.text.startsWith(prefix)) {
-                                            val newText = prefix + messageText.text
-                                            messageText = TextFieldValue(newText, TextRange(newText.length))
-                                        }
-                                    },
-                                    color = Color(0x1F4CAF50),
-                                    shape = MaterialTheme.shapes.small
+                        if (isCcConnectGroup && ccConnectInfo?.connected == true) {
+                            val modeKey = ccConnectInfo?.mode ?: ""
+                            val modelName = ccConnectInfo?.model ?: ""
+                            if (modeKey.isNotBlank() || modelName.isNotBlank()
+                                || !ccConnectInfo?.availableModes.isNullOrEmpty()
+                                || !ccConnectInfo?.availableModels.isNullOrEmpty()) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.padding(bottom = 6.dp)
                                 ) {
-                                    Text(
-                                        text = ccPrefix,
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = Color(0xFF4CAF50)
-                                    )
-                                }
-
-                                // mode/model badges
-                                if (ccConnectInfo?.connected == true) {
-                                    val modeKey = ccConnectInfo?.mode ?: ""
-
                                     // Mode badge
                                     if (modeKey.isNotBlank() || !ccConnectInfo?.availableModes.isNullOrEmpty()) {
-                                        val modeName = ccConnectInfo?.availableModes?.find { it.key == modeKey }?.name ?: modeKey
+                                        val mn = ccConnectInfo?.availableModes?.find { it.key == modeKey }?.name ?: modeKey
                                         Box {
                                             Surface(
                                                 onClick = { showModeDropdown = !showModeDropdown; showModelDropdown = false },
-                                                shape = RoundedCornerShape(14.dp),
+                                                shape = RoundedCornerShape(12.dp),
                                                 color = Color(0xFFF7F7F7),
                                                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE0E0E0))
                                             ) {
                                                 Text(
-                                                    text = "⚙ ${modeName.ifBlank { "mode" }}",
-                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                                                    fontSize = 13.sp,
+                                                    text = "⚙ ${mn.ifBlank { "mode" }}",
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                                    fontSize = 11.sp,
                                                     fontWeight = FontWeight.Medium,
                                                     color = Color(0xFF555555)
                                                 )
@@ -1329,7 +1303,7 @@ fun ChatScreen(appState: AppState) {
                                             if (showModeDropdown && !ccConnectInfo?.availableModes.isNullOrEmpty()) {
                                                 Card(
                                                     modifier = Modifier
-                                                        .offset(y = (-8).dp)
+                                                        .offset(y = (-6).dp)
                                                         .width(180.dp),
                                                     elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                                                 ) {
@@ -1359,9 +1333,7 @@ fun ChatScreen(appState: AppState) {
                                             }
                                         }
                                     }
-
                                     // Model badge
-                                    val modelName = ccConnectInfo?.model ?: ""
                                     if (modelName.isNotBlank() || !ccConnectInfo?.availableModels.isNullOrEmpty()) {
                                         val badgeModel = when {
                                             modelName.startsWith("claude-sonnet-4-6") -> "Sonnet 4.6"
@@ -1376,14 +1348,14 @@ fun ChatScreen(appState: AppState) {
                                         Box {
                                             Surface(
                                                 onClick = { showModelDropdown = !showModelDropdown; showModeDropdown = false },
-                                                shape = RoundedCornerShape(14.dp),
+                                                shape = RoundedCornerShape(12.dp),
                                                 color = Color(0xFFF3E5F5),
                                                 border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFCE93D8))
                                             ) {
                                                 Text(
                                                     text = "🤖 $badgeModel",
-                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                                                    fontSize = 13.sp,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                                    fontSize = 11.sp,
                                                     fontWeight = FontWeight.Medium,
                                                     color = Color(0xFF6A1B9A)
                                                 )
@@ -1392,7 +1364,7 @@ fun ChatScreen(appState: AppState) {
                                             if (showModelDropdown && !ccConnectInfo?.availableModels.isNullOrEmpty()) {
                                                 Card(
                                                     modifier = Modifier
-                                                        .offset(y = (-8).dp)
+                                                        .offset(y = (-6).dp)
                                                         .width(240.dp),
                                                     elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
                                                 ) {
@@ -1439,37 +1411,6 @@ fun ChatScreen(appState: AppState) {
                                     }
                                 }
                             }
-
-                            Spacer(modifier = Modifier.height(8.dp))
-                        } else if (!isSilkPrivateChat && !isCcConnectGroup) {
-                            // @Silk 快捷按钮（在 Silk 私聊和 cc-connect 群组中隐藏）
-                            Surface(
-                                onClick = {
-                                    val prefix = "@Silk "
-                                    if (!messageText.text.startsWith(prefix)) {
-                                        val newText = prefix + messageText.text
-                                        val newSelection = TextRange(
-                                            start = (messageText.selection.start + prefix.length).coerceIn(0, newText.length),
-                                            end = (messageText.selection.end + prefix.length).coerceIn(0, newText.length)
-                                        )
-                                        messageText = messageText.copy(
-                                            text = newText,
-                                            selection = newSelection
-                                        )
-                                    }
-                                },
-                                color = SilkColors.primary.copy(alpha = 0.15f),
-                                shape = MaterialTheme.shapes.small
-                            ) {
-                                Text(
-                                    text = "@Silk",
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = SilkColors.primary
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.height(8.dp))
                         }
                         
                         // 输入框容器（用于 @ 提及下拉）
@@ -1598,8 +1539,60 @@ fun ChatScreen(appState: AppState) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
+                                    // @cc or @Silk trigger button (inline with input)
+                                    if (isCcConnectGroup && groupMembers.size >= 2) {
+                                        val ccPrefix = "@cc"
+                                        Surface(
+                                            onClick = {
+                                                val prefix = "$ccPrefix "
+                                                if (!messageText.text.startsWith(prefix)) {
+                                                    val newText = prefix + messageText.text
+                                                    messageText = TextFieldValue(newText, TextRange(newText.length))
+                                                }
+                                            },
+                                            color = Color(0x1F4CAF50),
+                                            shape = MaterialTheme.shapes.small
+                                        ) {
+                                            Text(
+                                                text = ccPrefix,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFF4CAF50),
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    } else if (!isSilkPrivateChat && !isCcConnectGroup) {
+                                        Surface(
+                                            onClick = {
+                                                val prefix = "@Silk "
+                                                if (!messageText.text.startsWith(prefix)) {
+                                                    val newText = prefix + messageText.text
+                                                    val newSelection = TextRange(
+                                                        start = (messageText.selection.start + prefix.length).coerceIn(0, newText.length),
+                                                        end = (messageText.selection.end + prefix.length).coerceIn(0, newText.length)
+                                                    )
+                                                    messageText = messageText.copy(
+                                                        text = newText,
+                                                        selection = newSelection
+                                                    )
+                                                }
+                                            },
+                                            color = SilkColors.primary.copy(alpha = 0.15f),
+                                            shape = MaterialTheme.shapes.small
+                                        ) {
+                                            Text(
+                                                text = "@Silk",
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = SilkColors.primary,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    }
+
                                     OutlinedTextField(
                                         value = messageText,
                                         onValueChange = { newValue ->
@@ -1632,15 +1625,6 @@ fun ChatScreen(appState: AppState) {
                                             }
                                         },
                                         modifier = Modifier.weight(1f),
-                                        placeholder = {
-                                            Text(
-                                                when {
-                                                    ccConnectInfo != null -> "Message cc-connect agent..."
-                                                    group.name.startsWith("[Silk]") -> "直接输入消息与 Silk 对话..."
-                                                    else -> "输入消息... @ 提及成员 / @silk 提问AI"
-                                                }
-                                            )
-                                        },
                                         maxLines = 3
                                     )
 
@@ -1671,12 +1655,13 @@ fun ChatScreen(appState: AppState) {
                                                 addLog("无法启动录音: ${e.message}")
                                             }
                                         },
-                                        modifier = Modifier.size(48.dp)
+                                        modifier = Modifier.size(36.dp)
                                     ) {
                                         Icon(
                                             Icons.Default.Mic,
                                             contentDescription = "语音输入",
-                                            tint = Color.Gray
+                                            tint = Color.Gray,
+                                            modifier = Modifier.size(20.dp)
                                         )
                                     }
                                     
@@ -1690,9 +1675,10 @@ fun ChatScreen(appState: AppState) {
                                             colors = ButtonDefaults.buttonColors(
                                                 containerColor = Color(0xFFFF4D4F)
                                             ),
-                                            modifier = Modifier.height(56.dp)
+                                            modifier = Modifier.height(36.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                                         ) {
-                                            Text("停止", color = Color.White)
+                                            Text("停止", color = Color.White, fontSize = 13.sp)
                                         }
                                     } else {
                                         Button(
@@ -1717,9 +1703,14 @@ fun ChatScreen(appState: AppState) {
                                             colors = ButtonDefaults.buttonColors(
                                                 containerColor = SilkColors.primary
                                             ),
-                                            modifier = Modifier.height(56.dp)
+                                            modifier = Modifier.height(36.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                                         ) {
-                                            Icon(Icons.Default.Send, contentDescription = "发送")
+                                            Icon(
+                                                Icons.Default.Send,
+                                                contentDescription = "发送",
+                                                modifier = Modifier.size(18.dp)
+                                            )
                                         }
                                     }
                                 }
