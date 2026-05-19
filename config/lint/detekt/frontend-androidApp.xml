@@ -8,7 +8,6 @@
     <ID>ComplexCondition:ChatScreen.kt$line[i].isDigit() || (line[i] == '-' &amp;&amp; i + 1 &lt; line.length &amp;&amp; line[i + 1].isDigit())</ID>
     <ID>ComplexCondition:ChatScreen.kt$messages.isEmpty() &amp;&amp; transientMessage == null &amp;&amp; statusMessages.isEmpty() &amp;&amp; !isWaitingForAI</ID>
     <ID>ComplexCondition:ChatScreen.kt$text[i] == '$' &amp;&amp; (i == 0 || text[i - 1] != '$') &amp;&amp; (i + 1 &gt;= text.length || text[i + 1] != '$')</ID>
-    <ID>CyclomaticComplexMethod:AudioDuplexScreen.kt$@Composable fun AudioDuplexScreen(appState: AppState)</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$@Composable fun AIMessageCardAndroid( message: Message, timeString: String, isTransient: Boolean = false, isExpanded: Boolean = true, onExpandChange: (Boolean) -&gt; Unit = {}, isThinkingExpanded: Boolean = false, onThinkingExpandChange: (Boolean) -&gt; Unit = {}, onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {} )</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$@Composable fun FileItemCard( file: FileItem, onClick: () -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$@Composable fun InlineMarkdownAndroid(text: String, context: Context? = null)</ID>
@@ -22,7 +21,6 @@
     <ID>CyclomaticComplexMethod:ChatScreen.kt$private fun extractInlineMath(text: String): Pair&lt;String, List&lt;Pair&lt;Int, String&gt;&gt;&gt;</ID>
     <ID>CyclomaticComplexMethod:ContactsScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ContactsScreen(appState: AppState)</ID>
     <ID>CyclomaticComplexMethod:ContactsScreen.kt$@Suppress("UNUSED_PARAMETER") @Composable fun AddContactDialog( appState: AppState, strings: com.silk.shared.i18n.Strings, onDismiss: () -&gt; Unit, onContactAdded: () -&gt; Unit // 保留以便将来刷新列表 )</ID>
-    <ID>CyclomaticComplexMethod:GroupListScreen.kt$@Composable fun GroupCard( group: Group, isHost: Boolean, isDeleteMode: Boolean = false, isSelected: Boolean = false, unreadCount: Int = 0, onClick: () -&gt; Unit, onMembersClick: (() -&gt; Unit)? = null )</ID>
     <ID>CyclomaticComplexMethod:GroupListScreen.kt$@Composable fun GroupMembersListDialog( group: Group, members: List&lt;GroupMember&gt;, contacts: List&lt;Contact&gt;, currentUserId: String, isLoading: Boolean, onMemberClick: (GroupMember) -&gt; Unit, onDismiss: () -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:GroupListScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun GroupListScreen(appState: AppState)</ID>
     <ID>CyclomaticComplexMethod:KnowledgeBaseScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun KnowledgeBaseScreen(appState: AppState)</ID>
@@ -61,13 +59,6 @@
     <ID>TooGenericExceptionCaught:VersionChecker.kt$VersionChecker$e: Exception</ID>
     <ID>TooGenericExceptionCaught:WorkflowChatScreen.kt$e: Exception</ID>
     <ID>TooGenericExceptionThrown:ApkDownloader.kt$ApkDownloader$throw RuntimeException("启动安装失败: ${e.message}")</ID>
-    <ID>UnusedParameter:AudioDuplexScreen.kt$appState: AppState</ID>
-    <ID>UnusedParameter:ChatScreen.kt$currentUser: User</ID>
-    <ID>UnusedParameter:ChatScreen.kt$groupId: String</ID>
-    <ID>UnusedParameter:GroupListScreen.kt$isHost: Boolean</ID>
-    <ID>UnusedParameter:WebSocketForegroundService.kt$WebSocketForegroundService$status: String</ID>
-    <ID>UnusedPrivateProperty:ChatScreen.kt$val canShowContextMenu = !isTransient &amp;&amp; !isSystemMessage &amp;&amp; message.type == MessageType.TEXT</ID>
-    <ID>UnusedPrivateProperty:ChatScreen.kt$var recallResult by remember { mutableStateOf&lt;String?&gt;(null) } // 撤回结果提示</ID>
     <ID>WildcardImport:ApiClient.kt$import com.silk.shared.models.*</ID>
     <ID>WildcardImport:AudioDuplexScreen.kt$import androidx.compose.foundation.layout.*</ID>
     <ID>WildcardImport:AudioDuplexScreen.kt$import androidx.compose.material3.*</ID>

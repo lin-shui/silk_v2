@@ -307,7 +307,7 @@ fun SilkApp(
                         }
                     }
                     NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScreen(appState)
-                    NavTab.AUDIO_DUPLEX -> AudioDuplexScreen(appState)
+                    NavTab.AUDIO_DUPLEX -> AudioDuplexScreen()
                 }
             }
         }
@@ -548,4 +548,3 @@ fun DownloadProgressDialog(
         dismissButton = {}
     )
 }
-
