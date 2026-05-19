@@ -490,7 +490,6 @@ fun GroupListScreen(appState: AppState) {
                             val unreadCount = unreadCounts[group.id] ?: 0
                             GroupCard(
                                 group = group,
-                                isHost = group.hostId == appState.currentUser?.id,
                                 isDeleteMode = isDeleteMode,
                                 isSelected = isSelected,
                                 unreadCount = unreadCount,
@@ -662,7 +661,6 @@ fun GroupListScreen(appState: AppState) {
 @Composable
 fun GroupCard(
     group: Group,
-    isHost: Boolean,
     isDeleteMode: Boolean = false,
     isSelected: Boolean = false,
     unreadCount: Int = 0,
@@ -670,25 +668,17 @@ fun GroupCard(
     onMembersClick: (() -> Unit)? = null
 ) {
     val hasUnread = unreadCount > 0
-    
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
         elevation = CardDefaults.cardElevation(defaultElevation = if (hasUnread) 6.dp else 2.dp),
         colors = CardDefaults.cardColors(
-            containerColor = when {
-                isSelected -> Color(0xFFFFEBEE)
-                hasUnread -> Color(0xFFFFF8E1)  // 淡黄色背景表示有未读
-                else -> SilkColors.surfaceElevated
-            }
+            containerColor = groupCardContainerColor(isSelected, hasUnread)
         ),
         shape = MaterialTheme.shapes.small,
-        border = when {
-            isSelected -> androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFe74c3c))
-            hasUnread -> androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFFF9800))  // 橙色边框
-            else -> null
-        }
+        border = groupCardBorder(isSelected, hasUnread)
     ) {
         Row(
             modifier = Modifier
@@ -702,100 +692,141 @@ fun GroupCard(
                 modifier = Modifier.weight(1f),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // ✅ 未读指示器（红点 + 数字）
-                if (hasUnread && !isDeleteMode) {
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .background(
-                                color = Color(0xFFFF5722),
-                                shape = CircleShape
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (unreadCount > 99) "99+" else unreadCount.toString(),
-                            color = Color.White,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                }
-                
-                // 群名
-                Text(
-                    text = group.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.SemiBold,
-                    color = if (hasUnread) Color(0xFFE65100) else SilkColors.textPrimary,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f, fill = false)
-                )
-                
-                Spacer(modifier = Modifier.width(8.dp))
-                
-                // 邀请码（小字体）
-                Text(
-                    text = "[${group.invitationCode}]",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = SilkColors.textSecondary,
-                    letterSpacing = 1.sp
+                GroupCardPrimaryInfo(
+                    group = group,
+                    unreadCount = unreadCount,
+                    hasUnread = hasUnread,
+                    isDeleteMode = isDeleteMode
                 )
             }
-            
-            // 右侧按钮区域
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
+            GroupCardActions(
+                hasUnread = hasUnread,
+                isDeleteMode = isDeleteMode,
+                isSelected = isSelected,
+                onMembersClick = onMembersClick
+            )
+        }
+    }
+}
+
+private fun groupCardContainerColor(isSelected: Boolean, hasUnread: Boolean): Color =
+    when {
+        isSelected -> Color(0xFFFFEBEE)
+        hasUnread -> Color(0xFFFFF8E1)
+        else -> SilkColors.surfaceElevated
+    }
+
+private fun groupCardBorder(
+    isSelected: Boolean,
+    hasUnread: Boolean
+): androidx.compose.foundation.BorderStroke? =
+    when {
+        isSelected -> androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFe74c3c))
+        hasUnread -> androidx.compose.foundation.BorderStroke(2.dp, Color(0xFFFF9800))
+        else -> null
+    }
+
+@Composable
+private fun RowScope.GroupCardPrimaryInfo(
+    group: Group,
+    unreadCount: Int,
+    hasUnread: Boolean,
+    isDeleteMode: Boolean
+) {
+    if (hasUnread && !isDeleteMode) {
+        Box(
+            modifier = Modifier
+                .size(24.dp)
+                .background(color = Color(0xFFFF5722), shape = CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = if (unreadCount > 99) "99+" else unreadCount.toString(),
+                color = Color.White,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+    }
+
+    Text(
+        text = group.name,
+        style = MaterialTheme.typography.bodyMedium,
+        fontWeight = if (hasUnread) FontWeight.Bold else FontWeight.SemiBold,
+        color = if (hasUnread) Color(0xFFE65100) else SilkColors.textPrimary,
+        maxLines = 1,
+        modifier = Modifier.weight(1f, fill = false)
+    )
+
+    Spacer(modifier = Modifier.width(8.dp))
+
+    Text(
+        text = "[${group.invitationCode}]",
+        style = MaterialTheme.typography.labelSmall,
+        color = SilkColors.textSecondary,
+        letterSpacing = 1.sp
+    )
+}
+
+@Composable
+private fun GroupCardActions(
+    hasUnread: Boolean,
+    isDeleteMode: Boolean,
+    isSelected: Boolean,
+    onMembersClick: (() -> Unit)?
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (hasUnread && !isDeleteMode) {
+            Text(
+                text = "新消息",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(0xFFFF5722),
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        if (!isDeleteMode && onMembersClick != null) {
+            Surface(
+                onClick = onMembersClick,
+                color = SilkColors.secondary.copy(alpha = 0.5f),
+                shape = MaterialTheme.shapes.small
             ) {
-                // ✅ 未读提示文字
-                if (hasUnread && !isDeleteMode) {
-                    Text(
-                        text = "新消息",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(0xFFFF5722),
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                
-                // 成员按钮（非删除模式下显示）
-                if (!isDeleteMode && onMembersClick != null) {
-                    Surface(
-                        onClick = { onMembersClick() },
-                        color = SilkColors.secondary.copy(alpha = 0.5f),
-                        shape = MaterialTheme.shapes.small
-                    ) {
-                        Text(
-                            text = "👥",
-                            style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
-                
-                // 删除模式下显示选择指示器
-                if (isDeleteMode) {
-                    Box(
-                        modifier = Modifier
-                            .size(24.dp)
-                            .background(
-                                color = if (isSelected) Color(0xFFe74c3c) else Color.LightGray,
-                                shape = androidx.compose.foundation.shape.CircleShape
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (isSelected) {
-                            Icon(
-                                Icons.Default.Check,
-                                contentDescription = "已选择",
-                                tint = Color.White,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                }
+                Text(
+                    text = "👥",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
             }
+        }
+
+        if (isDeleteMode) {
+            GroupDeleteIndicator(isSelected)
+        }
+    }
+}
+
+@Composable
+private fun GroupDeleteIndicator(isSelected: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(24.dp)
+            .background(
+                color = if (isSelected) Color(0xFFe74c3c) else Color.LightGray,
+                shape = androidx.compose.foundation.shape.CircleShape
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        if (isSelected) {
+            Icon(
+                Icons.Default.Check,
+                contentDescription = "已选择",
+                tint = Color.White,
+                modifier = Modifier.size(16.dp)
+            )
         }
     }
 }
@@ -1216,4 +1247,3 @@ fun GroupMembersListDialog(
         }
     )
 }
-

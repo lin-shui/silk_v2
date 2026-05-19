@@ -109,8 +109,7 @@ class WebSocketForegroundService : Service() {
                 stopSelf()
             }
             ACTION_UPDATE_STATUS -> {
-                val status = intent.getStringExtra(EXTRA_STATUS) ?: "已连接"
-                updateNotification(status)
+                updateNotification()
             }
         }
         return START_STICKY
@@ -164,7 +163,7 @@ class WebSocketForegroundService : Service() {
             .build()
     }
     
-    private fun updateNotification(status: String) {
+    private fun updateNotification() {
         val notification = createNotification()
         notificationManager?.notify(NOTIFICATION_ID, notification)
     }

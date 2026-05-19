@@ -260,7 +260,6 @@ fun ChatScreen(appState: AppState) {
     
     // 消息撤回相关状态
     var recallingMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }  // 正在撤回中的消息ID集合
-    var recallResult by remember { mutableStateOf<String?>(null) }  // 撤回结果提示
     
     // 查看成员列表状态
     var showMembersDialog by remember { mutableStateOf(false) }
@@ -1556,7 +1555,6 @@ fun ChatScreen(appState: AppState) {
         AddMemberDialog(
             contacts = contacts,
             groupMembers = groupMembers,
-            groupId = group.id,
             isLoading = isLoadingContacts,
             result = addMemberResult,
             onAddMember = { contact ->
@@ -1714,7 +1712,6 @@ fun ChatScreen(appState: AppState) {
     // 文件夹浏览对话框
     if (showFolderExplorer) {
         FolderExplorerDialog(
-            groupId = group.id,
             files = folderFiles,
             processedUrls = processedUrls,
             isLoading = isLoadingFiles,
@@ -1835,7 +1832,6 @@ fun ChatScreen(appState: AppState) {
             groups = userGroups,
             isLoading = isLoadingGroups,
             selectedMessages = messagesToForward,
-            currentUser = user,
             onForward = { targetGroup ->
                 scope.launch {
                     forwardResult = null
@@ -1887,7 +1883,6 @@ fun ChatScreen(appState: AppState) {
             contacts = contacts,
             isLoading = isLoadingContacts,
             selectedMessages = messagesToForwardContact,
-            currentUser = user,
             onForward = { contact ->
                 scope.launch {
                     forwardResult = null
@@ -3483,9 +3478,6 @@ fun MessageItem(
     // 检测PDF下载链接
     val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
     
-    // ✅ 是否显示上下文菜单（非临时消息、非系统消息、文本消息）
-    val canShowContextMenu = !isTransient && !isSystemMessage && message.type == MessageType.TEXT
-    
     // ✅ AI 消息特殊处理 - 使用专用卡片
     val isAIMessage = isAgentUserId(message.userId)
     if (isAIMessage && message.type == MessageType.TEXT && 
@@ -4056,7 +4048,6 @@ data class FileItem(
  */
 @Composable
 fun FolderExplorerDialog(
-    groupId: String,
     files: List<FileItem>,
     processedUrls: List<String>,
     isLoading: Boolean,
@@ -4513,7 +4504,6 @@ fun formatTimeHMS(timestamp: Long): String {
 fun AddMemberDialog(
     contacts: List<Contact>,
     groupMembers: List<GroupMember>,
-    groupId: String,
     isLoading: Boolean,
     result: String?,
     onAddMember: (Contact) -> Unit,
@@ -4827,7 +4817,6 @@ fun ForwardToGroupDialog(
     groups: List<Group>,
     isLoading: Boolean,
     selectedMessages: List<Message>,
-    currentUser: User,
     onForward: (Group) -> Unit,
     onDismiss: () -> Unit,
     result: String?
@@ -4990,7 +4979,6 @@ fun ForwardToContactDialog(
     contacts: List<Contact>,
     isLoading: Boolean,
     selectedMessages: List<Message>,
-    currentUser: User,
     onForward: (Contact) -> Unit,
     onDismiss: () -> Unit,
     result: String?

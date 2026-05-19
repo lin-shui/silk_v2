@@ -64,7 +64,8 @@
 - Slice 8: 已完成。清理 `frontend/desktopApp` 非 `Main.kt` / `MessageContextMenu.kt` 的低风险异常处理规则，跑 desktop detekt / test / compile 与 `silkLint`。
 - Slice 9: 已完成。清理 `frontend/desktopApp` 中 `Main.kt` / `MessageContextMenu.kt` 的异常处理、吞异常、`PrintStackTrace` 和局部嵌套深度问题，跑 desktop detekt / test / compile 与 `silkLint`。
 - Slice 10: 已完成。拆分 `frontend/desktopApp` 剩余四个复杂度 baseline，清空 desktop detekt baseline，跑 desktop detekt / test / compile 与 `silkLint`。
-- Slice 11: 候选。切到下一模块的低风险 lint 切片，优先看 `frontend/androidApp` / `frontend/webApp` 剩余非复杂度规则，继续保持“小修源码 + 手删 baseline”的节奏。
+- Slice 11: 已完成。清理 `frontend/androidApp` 的明确未使用参数 / 私有状态，并顺手拆掉 `AudioDuplexScreen.kt`、`GroupListScreen.kt:GroupCard` 两个被这轮签名收口带出来的复杂度 baseline，跑 android detekt / `silkLint` / `git diff --check`；Android 单测与完整编译仍受本机 `jlink` 环境阻塞。
+- Slice 12: 候选。继续切 `frontend/androidApp` / `frontend/webApp` 的低风险 lint，优先看更小文件里的 `WildcardImport` 或明确异常语义问题，继续保持“小修源码 + 手删 baseline”的节奏。
 
 ## Progress Log
 
@@ -192,6 +193,23 @@
 - 已验证：
   - `./gradlew :frontend:desktopApp:detekt --no-daemon --stacktrace --rerun-tasks`
   - `./gradlew :frontend:desktopApp:detekt :frontend:desktopApp:test :frontend:desktopApp:compileKotlin silkLint --no-daemon --stacktrace`
+  - `git diff --check`
+
+### 2026-05-19 Slice 11
+
+- 清理 `frontend/androidApp` 的 9 条 baseline，覆盖：
+  - `AudioDuplexScreen.kt` 删除未使用 `appState` 参数，并把语音双工会话启动 / WebSocket 处理 / transcript UI 拆成 helper，顺手消除该文件的复杂度 baseline。
+  - `GroupListScreen.kt` 删除 `GroupCard()` 未使用的 `isHost` 参数，并拆出主信息区 / 操作区 helper，顺手消除 `GroupCard` 复杂度 baseline。
+  - `ChatScreen.kt` 删除未接线的 `recallResult`、`canShowContextMenu`，并收口 `FolderExplorerDialog` / `AddMemberDialog` / 转发对话框的未使用参数。
+  - `WebSocketForegroundService.kt` 删除未使用的 `updateNotification(status)` 形参。
+- `config/lint/detekt/frontend-androidApp.xml` 从 113 条降到 104 条；当前已无 `UnusedParameter`、`UnusedPrivateProperty` 中本轮覆盖的条目，`CyclomaticComplexMethod` 也同步少 2 条。
+- 没有运行全量 `silkLintBaseline` 再生，只删除已由源码修复覆盖的 baseline 项。
+- `:frontend:androidApp:detekt` 与 `silkLint` 已通过。
+- `:frontend:androidApp:testDebugUnitTest` 与包含 `:frontend:androidApp:compileDebugKotlin` 的验证链路均被本机 Android 工具链阻塞：`JdkImageTransform` 调 `jlink` 处理 `android-34/core-for-system-modules.jar` 失败，落点是 `:frontend:androidApp:compileDebugJavaWithJavac`，不是本轮 Kotlin 源码错误。
+- 已验证：
+  - `./gradlew :frontend:androidApp:detekt --no-daemon --stacktrace`
+  - `./gradlew :frontend:androidApp:detekt :frontend:androidApp:testDebugUnitTest :frontend:androidApp:compileDebugKotlin silkLint --no-daemon --stacktrace`（`detekt` / `silkLint` 成功；Android test / compile 受 `jlink` 环境失败阻塞）
+  - `./gradlew :frontend:androidApp:testDebugUnitTest --no-daemon --stacktrace`（同样阻塞在 `:frontend:androidApp:compileDebugJavaWithJavac`）
   - `git diff --check`
 
 ## Handoff Notes
