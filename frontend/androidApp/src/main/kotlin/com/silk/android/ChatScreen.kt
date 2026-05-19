@@ -2456,15 +2456,15 @@ fun AIMessageCardAndroid(
     
     Card(
         modifier = Modifier
-            .fillMaxWidth(0.95f)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp),
         colors = CardDefaults.cardColors(
             containerColor = Color(0xFFF8F6F0)  // 温暖的奶白色背景
         ),
         shape = RoundedCornerShape(16.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
             // 顶部标识栏
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -4342,7 +4342,7 @@ fun MessageItem(
                     tonalElevation = if (isTransient) 0.5.dp else 1.dp  // ✅ 统一阴影
                 ) {
                     Column(
-                        modifier = Modifier.padding(if (useForwardedBubble) 0.dp else 12.dp)
+                        modifier = Modifier.padding(if (useForwardedBubble) 0.dp else 8.dp)
                     ) {
                         if (isPdfMessage) {
                         // PDF下载消息特殊处理
