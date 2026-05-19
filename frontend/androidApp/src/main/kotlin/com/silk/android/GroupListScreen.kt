@@ -91,44 +91,42 @@ fun GroupListScreen(appState: AppState) {
     // 加载群组列表和未读数（每次进入 GROUP_LIST 场景时刷新）
     LaunchedEffect(appState.currentScene) {
         if (appState.currentScene == Scene.GROUP_LIST) {
-            scope.launch {
-                isLoading = true
-                try {
-                    val response = appState.currentUser?.let { user ->
-                        ApiClient.getUserGroups(user.id)
-                    }
-                    
-                    if (response != null && response.success) {
-                        // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
-                        // 它们只通过工作流 Tab 访问，不在 Silk 群组列表中显示
-                        groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
-                        println("✅ 加载了 ${groups.size} 个群组")
-
-                        // 加载未读消息数
-                        appState.currentUser?.let { user ->
-                            val unreadResponse = ApiClient.getUnreadCounts(user.id)
-                            if (unreadResponse.success) {
-                                unreadCounts = unreadResponse.unreadCounts
-                                println("✅ 未读消息: $unreadCounts")
-                            }
-                        }
-
-                        // 加载 cc-connect 连接状态
-                        val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
-                        val currentUserId = appState.currentUser?.id ?: ""
-                        groups.forEach { group ->
-                            val info = ApiClient.getCcConnectTokenInfo(group.id, currentUserId)
-                            if (info != null && info.success) {
-                                statusMap[group.id] = info
-                            }
-                        }
-                        ccConnectStatus = statusMap
-                    }
-                } catch (e: Exception) {
-                    println("❌ 加载群组异常: ${e.message}")
-                } finally {
-                    isLoading = false
+            isLoading = true
+            try {
+                val response = appState.currentUser?.let { user ->
+                    ApiClient.getUserGroups(user.id)
                 }
+
+                if (response != null && response.success) {
+                    // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
+                    // 它们只通过工作流 Tab 访问，不在 Silk 群组列表中显示
+                    groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
+                    println("✅ 加载了 ${groups.size} 个群组")
+
+                    // 加载未读消息数
+                    appState.currentUser?.let { user ->
+                        val unreadResponse = ApiClient.getUnreadCounts(user.id)
+                        if (unreadResponse.success) {
+                            unreadCounts = unreadResponse.unreadCounts
+                            println("✅ 未读消息: $unreadCounts")
+                        }
+                    }
+
+                    // 加载 cc-connect 连接状态
+                    val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
+                    val currentUserId = appState.currentUser?.id ?: ""
+                    groups.forEach { group ->
+                        val info = ApiClient.getCcConnectTokenInfo(group.id, currentUserId)
+                        if (info != null && info.success) {
+                            statusMap[group.id] = info
+                        }
+                    }
+                    ccConnectStatus = statusMap
+                }
+            } catch (e: Exception) {
+                println("❌ 加载群组异常: ${e.message}")
+            } finally {
+                isLoading = false
             }
         }
     }
