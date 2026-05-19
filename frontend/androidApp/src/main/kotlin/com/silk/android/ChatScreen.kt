@@ -2630,14 +2630,9 @@ fun AIMessageCardAndroid(
                     ) {
                         Column {
                             Divider(color = Color(0xFFE0E0E0), thickness = 1.dp)
-                            Text(
-                                text = toolsText,
-                                fontSize = 12.sp,
-                                color = Color(0xFF666666),
-                                lineHeight = 18.sp,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp)
+                            MarkdownWebView(
+                                content = toolsText,
+                                modifier = Modifier.padding(12.dp)
                             )
                         }
                     }
