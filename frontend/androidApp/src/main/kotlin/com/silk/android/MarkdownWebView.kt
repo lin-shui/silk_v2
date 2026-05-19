@@ -123,11 +123,18 @@ private fun generateMarkdownHtml(content: String): String {
     </style>
 </head>
 <body>
+    <div id="top"></div>
     <div id="content" class="markdown-body"></div>
     <script>
     (function() {
+        function scrollToTop() {
+            var topEl = document.getElementById('top');
+            if (topEl) { topEl.scrollIntoView(true); }
+            window.scrollTo(0, 0);
+        }
+
         var hljsReady = typeof hljs !== 'undefined';
-        
+
         function renderContent() {
             try {
                 if (typeof marked === 'undefined') { setTimeout(renderContent, 50); return; }
@@ -195,7 +202,15 @@ private fun generateMarkdownHtml(content: String): String {
                     link.setAttribute('target', '_blank');
                     link.setAttribute('rel', 'noopener noreferrer');
                 });
-                
+
+                // Aggressive scroll-to-top: immediate + retries with delays
+                // to handle async rendering (KaTeX, highlight.js) that changes DOM height
+                scrollToTop();
+                setTimeout(scrollToTop, 100);
+                setTimeout(scrollToTop, 300);
+                setTimeout(scrollToTop, 700);
+                setTimeout(scrollToTop, 1500);
+
             } catch(e) {
                 console.error('Render error:', e);
                 document.getElementById('content').textContent = 'Error: ' + e.message;
@@ -219,13 +234,18 @@ fun MarkdownWebView(
 ) {
     val htmlContent = remember(content) { generateMarkdownHtml(content) }
     
+    // 确保 WebView 从顶部开始显示，不自动滚动到尾部
+    fun WebView.ensureScrollToTop() {
+        scrollTo(0, 0)
+        evaluateJavascript("window.scrollTo(0,0);", null)
+        evaluateJavascript("scrollToTop();", null)
+    }
+
     AndroidView(
         factory = { context ->
             WebView(context).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
                 settings.setSupportZoom(false)
                 settings.builtInZoomControls = false
                 settings.displayZoomControls = false
@@ -233,9 +253,17 @@ fun MarkdownWebView(
                 settings.blockNetworkLoads = false
                 settings.loadsImagesAutomatically = true
                 settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                
+
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                
+
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String) {
+                        view.ensureScrollToTop()
+                        view.postDelayed({ view.scrollTo(0, 0) }, 200)
+                        view.postDelayed({ view.scrollTo(0, 0) }, 600)
+                    }
+                }
+
                 loadDataWithBaseURL(
                     "https://cdn.jsdelivr.net",
                     htmlContent,
@@ -253,6 +281,10 @@ fun MarkdownWebView(
                 "UTF-8",
                 null
             )
+            webView.ensureScrollToTop()
+            // Retry scroll after layout to handle async rendering height changes
+            webView.postDelayed({ webView.scrollTo(0, 0) }, 200)
+            webView.postDelayed({ webView.scrollTo(0, 0) }, 600)
         },
         modifier = modifier
             .fillMaxWidth()

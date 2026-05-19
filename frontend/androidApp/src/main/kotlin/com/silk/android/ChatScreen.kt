@@ -2435,14 +2435,26 @@ fun AIMessageCardAndroid(
 
     val toolsMarker = "<!--TOOLS_END-->"
     val hasTools = afterThinking.contains(toolsMarker)
-    val toolsText = if (hasTools) {
+    val rawToolsText = if (hasTools) {
         afterThinking.substringBefore(toolsMarker).trim()
     } else ""
-    val bodyContent = if (hasTools) {
+    var bodyContent = if (hasTools) {
         afterThinking.substringAfter(toolsMarker).trim()
     } else {
         afterThinking
     }
+
+    // Fallback: if <!--TOOLS_END--> is at the end (bodyContent empty),
+    // rawToolsText includes the answer. Try to split at --- separator.
+    val toolsSep = "\n\n---\n\n"
+    val toolsText: String
+    if (hasTools && rawToolsText.isNotEmpty() && bodyContent.isEmpty() && rawToolsText.contains(toolsSep)) {
+        toolsText = rawToolsText.substringBefore(toolsSep).trim()
+        bodyContent = rawToolsText.substringAfter(toolsSep).trim()
+    } else {
+        toolsText = rawToolsText
+    }
+
     val isLongContent = bodyContent.length > 500
     val effectiveExpanded = if (isTransient) true else isExpanded
     val aiPreview =
@@ -2591,7 +2603,7 @@ fun AIMessageCardAndroid(
                 }
             }
 
-            // 工具调用过程折叠区域
+            // 工具调用过程折叠区域（点击头部展开/收起，无动画）
             if (hasTools && toolsText.isNotEmpty()) {
                 Column(
                     modifier = Modifier
@@ -2623,16 +2635,20 @@ fun AIMessageCardAndroid(
                             color = Color(0xFF666666)
                         )
                     }
-                    AnimatedVisibility(
-                        visible = isToolsExpanded,
-                        enter = expandVertically(),
-                        exit = shrinkVertically()
-                    ) {
-                        Column {
-                            Divider(color = Color(0xFFE0E0E0), thickness = 1.dp)
-                            MarkdownWebView(
-                                content = toolsText,
-                                modifier = Modifier.padding(12.dp)
+                    if (isToolsExpanded) {
+                        Divider(color = Color(0xFFE0E0E0), thickness = 1.dp)
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 320.dp)
+                                .verticalScroll(rememberScrollState())
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = toolsText,
+                                fontSize = 12.sp,
+                                lineHeight = 18.sp,
+                                color = Color(0xFF555555)
                             )
                         }
                     }
