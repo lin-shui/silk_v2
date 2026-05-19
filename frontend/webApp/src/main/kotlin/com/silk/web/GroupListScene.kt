@@ -753,7 +753,7 @@ fun GroupListScene(appState: WebAppState) {
 @Composable
 fun GroupCard(
     group: Group, 
-    isHost: Boolean, 
+    isHost: Boolean,
     isDeleteMode: Boolean = false,
     isSelected: Boolean = false,
     unreadCount: Int = 0,
@@ -764,6 +764,7 @@ fun GroupCard(
     val hasUnread = unreadCount > 0
     
     Div({
+        attr("data-host", isHost.toString())
         style {
             backgroundColor(
                 when {
