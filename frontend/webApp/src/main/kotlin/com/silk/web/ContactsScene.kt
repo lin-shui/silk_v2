@@ -385,11 +385,7 @@ fun ContactsScene(appState: WebAppState) {
         AddContactDialog(
             appState = appState,
             strings = strings,
-            onDismiss = { showAddContactDialog = false },
-            onContactAdded = {
-                showAddContactDialog = false
-                loadContacts()
-            }
+            onDismiss = { showAddContactDialog = false }
         )
     }
     
@@ -565,8 +561,7 @@ fun PendingRequestCard(request: ContactRequest, strings: Strings, onClick: () ->
 fun AddContactDialog(
     appState: WebAppState,
     strings: Strings,
-    onDismiss: () -> Unit,
-    onContactAdded: () -> Unit
+    onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var phoneNumber by remember { mutableStateOf("") }

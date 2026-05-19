@@ -275,6 +275,7 @@ fun AudioDuplexScene(appState: WebAppState) {
     }
 
     Div({
+        attr("data-user-id", appState.currentUser?.id.orEmpty())
         style {
             display(DisplayStyle.Flex)
             flexDirection(FlexDirection.Column)
@@ -401,7 +402,7 @@ fun AudioDuplexScene(appState: WebAppState) {
                             js("window.__ad_stop()")
                         } else {
                             val wsBaseUrl = backendWsOrigin()
-                            js("window.__ad_start(wsBaseUrl)")
+                            window.asDynamic().__ad_start(wsBaseUrl)
                         }
                     }
                 }

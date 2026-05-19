@@ -65,7 +65,8 @@
 - Slice 9: 已完成。清理 `frontend/desktopApp` 中 `Main.kt` / `MessageContextMenu.kt` 的异常处理、吞异常、`PrintStackTrace` 和局部嵌套深度问题，跑 desktop detekt / test / compile 与 `silkLint`。
 - Slice 10: 已完成。拆分 `frontend/desktopApp` 剩余四个复杂度 baseline，清空 desktop detekt baseline，跑 desktop detekt / test / compile 与 `silkLint`。
 - Slice 11: 已完成。清理 `frontend/androidApp` 的明确未使用参数 / 私有状态，并顺手拆掉 `AudioDuplexScreen.kt`、`GroupListScreen.kt:GroupCard` 两个被这轮签名收口带出来的复杂度 baseline，跑 android detekt / `silkLint` / `git diff --check`；Android 单测与完整编译仍受本机 `jlink` 环境阻塞。
-- Slice 12: 候选。继续切 `frontend/androidApp` / `frontend/webApp` 的低风险 lint，优先看更小文件里的 `WildcardImport` 或明确异常语义问题，继续保持“小修源码 + 手删 baseline”的节奏。
+- Slice 12: 已完成。清理 `frontend/webApp` 一批低风险未使用项 / 命名问题，保持既有复杂度 baseline 不回填，跑 web detekt / nodeTest / compile 与 `silkLint`。
+- Slice 13: 候选。继续切 `frontend/webApp` 的低风险异常语义问题，或回到 `frontend/androidApp` 的 `WildcardImport`，继续保持“小修源码 + 手删 baseline”的节奏。
 
 ## Progress Log
 
@@ -210,6 +211,21 @@
   - `./gradlew :frontend:androidApp:detekt --no-daemon --stacktrace`
   - `./gradlew :frontend:androidApp:detekt :frontend:androidApp:testDebugUnitTest :frontend:androidApp:compileDebugKotlin silkLint --no-daemon --stacktrace`（`detekt` / `silkLint` 成功；Android test / compile 受 `jlink` 环境失败阻塞）
   - `./gradlew :frontend:androidApp:testDebugUnitTest --no-daemon --stacktrace`（同样阻塞在 `:frontend:androidApp:compileDebugJavaWithJavac`）
+  - `git diff --check`
+
+### 2026-05-19 Slice 12
+
+- 清理 `frontend/webApp` 的 9 条低风险 baseline，覆盖：
+  - `AudioDuplexScene.kt` 保留原复杂度 baseline 的同时，删除未使用 `appState` baseline，并把 `wsBaseUrl` 改成通过 `window.asDynamic().__ad_start(...)` 显式消费。
+  - `ContactsScene.kt` 删除 `AddContactDialog()` 未使用的 `onContactAdded` 参数。
+  - `GroupListScene.kt` 删除 `GroupCard()` 未使用参数 baseline，同时保留原复杂度 baseline 签名。
+  - `Main.kt` 删除未接线的 `parseFileNameFromContentDisposition()`、`folderFiles`、`isDraggingOver`，移除 `MessageItem()` 未使用 `groupId` 参数，并把 markdown runtime style 常量改成全大写命名。
+- `config/lint/detekt/frontend-webApp.xml` 从 54 条降到 45 条；当前 `frontend/webApp` 已无本轮覆盖的 `UnusedPrivateMember`、`UnusedPrivateProperty`、`TopLevelPropertyNaming` baseline，`UnusedParameter` 也只剩外部 JS 声明参数。
+- 没有运行全量 `silkLintBaseline` 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次 `:frontend:webApp:detekt` 因直接删签名让 `AudioDuplexScene` / `GroupCard` 的复杂度 baseline 失配失败；改为保留原签名并以 `data-*` 属性消费参数后验证通过，没有回填 baseline。
+- 已验证：
+  - `./gradlew :frontend:webApp:detekt --no-daemon --stacktrace --warning-mode all`
+  - `./gradlew :frontend:webApp:nodeTest :frontend:webApp:compileProductionExecutableKotlinJs silkLint --no-daemon --stacktrace --warning-mode all`
   - `git diff --check`
 
 ## Handoff Notes

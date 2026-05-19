@@ -175,21 +175,6 @@ internal fun downloadAsFile(content: String, fileName: String) {
     windowJs.URL.revokeObjectURL(objectUrl)
 }
 
-private fun parseFileNameFromContentDisposition(contentDisposition: String?): String? {
-    if (contentDisposition.isNullOrBlank()) return null
-    val fileNameStar = Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE)
-        .find(contentDisposition)
-        ?.groupValues
-        ?.getOrNull(1)
-    if (!fileNameStar.isNullOrBlank()) {
-        return fileNameStar.replace("%20", " ")
-    }
-    return Regex("filename=\"?([^\";]+)\"?", RegexOption.IGNORE_CASE)
-        .find(contentDisposition)
-        ?.groupValues
-        ?.getOrNull(1)
-}
-
 fun main() {
     console.log("🧵 Silk 正在启动...")
     console.log("1️⃣ 准备渲染...")
@@ -994,11 +979,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var isExportingMarkdown by remember { mutableStateOf(false) }
     var exportMarkdownHint by remember { mutableStateOf<String?>(null) }
     var showFolderExplorer by remember { mutableStateOf(false) }
-    var folderFiles by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var isLoadingFiles by remember { mutableStateOf(false) }
-    
-    // Drag-and-drop state
-    var isDraggingOver by remember { mutableStateOf(false) }
 
     // ASR 语音输入状态
     var isVoiceRecording by remember { mutableStateOf(false) }
@@ -1621,7 +1602,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     isLastMessage = message.id == lastMessageId,
                     currentUserId = user.id,
                     currentUserName = user.fullName,
-                    groupId = group.id,
                     chatClient = chatClient,
                     isRecalling = message.id in recallingMessageIds,
                     onRecall = { messageId ->
@@ -1697,7 +1677,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         isTransient = true,
                         currentUserId = user.id,
                         currentUserName = user.fullName,
-                        groupId = group.id,
                         chatClient = chatClient,
                         onCopy = { content ->
                             copyTextToClipboard(content)
@@ -3337,7 +3316,7 @@ private external val githubMarkdownStylesheet: dynamic
 @JsNonModule
 private external val highlightStylesheet: dynamic
 
-private const val markdownRuntimeStyleId = "silk-markdown-runtime-style"
+private const val MARKDOWN_RUNTIME_STYLE_ID = "silk-markdown-runtime-style"
 
 private val silkMarkdownRuntimeCss = """
     .silk-markdown.markdown-body {
@@ -3526,10 +3505,10 @@ private fun ensureMarkdownAssetsLoaded() {
 }
 
 private fun ensureMarkdownStylesInjected() {
-    if (document.getElementById(markdownRuntimeStyleId) != null) return
+    if (document.getElementById(MARKDOWN_RUNTIME_STYLE_ID) != null) return
 
     val styleElement = document.createElement("style") as HTMLElement
-    styleElement.id = markdownRuntimeStyleId
+    styleElement.id = MARKDOWN_RUNTIME_STYLE_ID
     styleElement.textContent = silkMarkdownRuntimeCss
     document.head?.appendChild(styleElement)
 }
@@ -4465,7 +4444,6 @@ fun MessageItem(
     isTransient: Boolean = false,
     currentUserId: String = "",
     currentUserName: String = "",
-    groupId: String = "",
     isLastMessage: Boolean = false,
     isRecalling: Boolean = false,
     chatClient: com.silk.shared.ChatClient? = null,

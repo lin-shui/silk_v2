@@ -41,20 +41,11 @@
     <ID>TooGenericExceptionCaught:ObsidianVaultManager.kt$ObsidianVaultManager$e: Exception</ID>
     <ID>TooGenericExceptionCaught:SettingsScene.kt$e: Exception</ID>
     <ID>TooGenericExceptionThrown:ApiClient.kt$ApiClient$throw Exception("HTTP ${response.status}: ${response.statusText}")</ID>
-    <ID>TopLevelPropertyNaming:Main.kt$private const val markdownRuntimeStyleId = "silk-markdown-runtime-style"</ID>
-    <ID>UnusedParameter:AudioDuplexScene.kt$appState: WebAppState</ID>
-    <ID>UnusedParameter:ContactsScene.kt$onContactAdded: () -&gt; Unit</ID>
-    <ID>UnusedParameter:GroupListScene.kt$isHost: Boolean</ID>
     <ID>UnusedParameter:Main.kt$DOMPurify$config: dynamic = definedExternally</ID>
     <ID>UnusedParameter:Main.kt$DOMPurify$dirty: String</ID>
     <ID>UnusedParameter:Main.kt$HighlightJs$code: String</ID>
     <ID>UnusedParameter:Main.kt$HighlightJs$languageName: String</ID>
     <ID>UnusedParameter:Main.kt$HighlightJs$options: dynamic</ID>
-    <ID>UnusedParameter:Main.kt$groupId: String = ""</ID>
-    <ID>UnusedPrivateMember:Main.kt$private fun parseFileNameFromContentDisposition(contentDisposition: String?): String?</ID>
-    <ID>UnusedPrivateProperty:AudioDuplexScene.kt$val wsBaseUrl = backendWsOrigin()</ID>
-    <ID>UnusedPrivateProperty:Main.kt$var folderFiles by remember { mutableStateOf&lt;List&lt;FileInfo&gt;&gt;(emptyList()) }</ID>
-    <ID>UnusedPrivateProperty:Main.kt$var isDraggingOver by remember { mutableStateOf(false) }</ID>
     <ID>UseCheckOrError:Main.kt$throw IllegalStateException("HTTP ${response.status}")</ID>
   </CurrentIssues>
 </SmellBaseline>
