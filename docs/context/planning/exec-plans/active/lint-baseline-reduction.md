@@ -67,7 +67,9 @@
 - Slice 11: 已完成。清理 `frontend/androidApp` 的明确未使用参数 / 私有状态，并顺手拆掉 `AudioDuplexScreen.kt`、`GroupListScreen.kt:GroupCard` 两个被这轮签名收口带出来的复杂度 baseline，跑 android detekt / `silkLint` / `git diff --check`；Android 单测与完整编译仍受本机 `jlink` 环境阻塞。
 - Slice 12: 已完成。清理 `frontend/webApp` 一批低风险未使用项 / 命名问题，保持既有复杂度 baseline 不回填，跑 web detekt / nodeTest / compile 与 `silkLint`。
 - Slice 13: 已完成。清理 `frontend/androidApp` 一批辅助/工作流/知识库界面的 `WildcardImport`，跑 android detekt / `compileDebugKotlin` / `silkLint` / `git diff --check`；Android 单测仍受本机 `jlink` 环境阻塞。
-- Slice 14: 候选。继续切 `frontend/androidApp` 剩余 `WildcardImport`（`ChatScreen.kt`、`LoginScreen.kt`、`MainActivity.kt`、`WorkflowChatScreen.kt` 等），或转向 `frontend/webApp` 的低风险异常语义问题，继续保持“小修源码 + 手删 baseline”的节奏。
+- Slice 14: 已完成。清理 `frontend/androidApp` 中 `LoginScreen.kt`、`MainActivity.kt`、`WorkflowChatScreen.kt` 的 9 条 `WildcardImport` baseline，跑 android detekt / `compileDebugKotlin` / `silkLint` / `git diff --check`；Android 单测仍受本机 `jlink` 环境阻塞。
+- Slice 15: 已完成。清理 `frontend/androidApp` 中 `ContactsScreen.kt`、`GroupListScreen.kt`、`SettingsScreen.kt` 的 16 条 `WildcardImport` baseline，跑 android detekt / `compileDebugKotlin` / `silkLint` / `git diff --check`；Android 单测仍受本机 `jlink` 环境阻塞。
+- Slice 16: 候选。继续切 `frontend/androidApp` 剩余 `WildcardImport`（`ApiClient.kt`、`AudioDuplexScreen.kt`、`ChatScreen.kt`），或转向 `frontend/webApp` 的低风险异常语义问题，继续保持“小修源码 + 手删 baseline”的节奏。
 
 ## Progress Log
 
@@ -250,11 +252,49 @@
   - `./gradlew :frontend:androidApp:detekt :frontend:androidApp:testDebugUnitTest silkLint --no-daemon --warning-mode none --console=plain`（`detekt` / `silkLint` 成功；Android test 受 `jlink` 环境失败阻塞）
   - `git diff --check`
 
+### 2026-05-19 Slice 14
+
+- 清理 `frontend/androidApp` 的 9 条 `WildcardImport` baseline，覆盖：
+  - `LoginScreen.kt`
+  - `MainActivity.kt`
+  - `WorkflowChatScreen.kt`
+- `config/lint/detekt/frontend-androidApp.xml` 从 94 条降到 85 条；其中 `WildcardImport` 从 37 条降到 28 条。
+- 没有运行全量 `silkLintBaseline` 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次 `:frontend:androidApp:compileDebugKotlin` 只暴露本轮 Compose/runtime 显式 import 缺口（`size` / `width` / `height` / `Arrangement` / `Typography` / `snapshotFlow`），补齐后恢复通过，没有带出新的 lint/baseline。
+- `:frontend:androidApp:detekt` 与 `silkLint` 已通过。
+- `:frontend:androidApp:testDebugUnitTest` 仍受本机 Android 工具链阻塞：`JdkImageTransform` 调 `jlink` 处理 `android-34/core-for-system-modules.jar` 失败，落点仍是 `:frontend:androidApp:compileDebugJavaWithJavac`，不是本轮 Kotlin 源码错误。
+- 已验证：
+  - `./gradlew :frontend:androidApp:compileDebugKotlin --no-daemon --warning-mode none --console=plain`
+  - `./gradlew :frontend:androidApp:detekt silkLint --no-daemon --warning-mode none --console=plain`
+  - `./gradlew :frontend:androidApp:detekt :frontend:androidApp:testDebugUnitTest silkLint --no-daemon --warning-mode none --console=plain`（`detekt` / `silkLint` 成功；Android test 受 `jlink` 环境失败阻塞）
+  - `git diff --check`
+
+### 2026-05-19 Slice 15
+
+- 清理 `frontend/androidApp` 的 16 条 `WildcardImport` baseline，覆盖：
+  - `ContactsScreen.kt`
+  - `GroupListScreen.kt`
+  - `SettingsScreen.kt`
+- `config/lint/detekt/frontend-androidApp.xml` 从 85 条降到 69 条；其中 `WildcardImport` 从 28 条降到 12 条。
+- 没有运行全量 `silkLintBaseline` 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次 `:frontend:androidApp:compileDebugKotlin` 暴露两类本轮显式 import 缺口：
+  - `Language` 需要继续来自 shared models，而 `Contact` / `ContactRequest` / `Group` / `GroupMember` 继续走 android 本地包类型。
+  - `PaddingValues`、`OutlinedCard`、`RowScope`、`LinearProgressIndicator`、`heightIn`、`OutlinedTextFieldDefaults`、`isAgentUserId` 等 Compose/material/shared import 需补齐。
+- 补齐后 `:frontend:androidApp:compileDebugKotlin` 恢复通过，没有带出新的 lint/baseline；编译仅提示既有 `GroupListScreen.kt` 的几处不必要 `!!` warning。
+- `:frontend:androidApp:detekt` 与 `silkLint` 已通过。
+- `:frontend:androidApp:testDebugUnitTest` 仍受本机 Android 工具链阻塞：`JdkImageTransform` 调 `jlink` 处理 `android-34/core-for-system-modules.jar` 失败，落点仍是 `:frontend:androidApp:compileDebugJavaWithJavac`，不是本轮 Kotlin 源码错误。
+- 已验证：
+  - `./gradlew :frontend:androidApp:compileDebugKotlin --no-daemon --warning-mode none --console=plain`
+  - `./gradlew :frontend:androidApp:detekt silkLint --no-daemon --warning-mode none --console=plain`
+  - `./gradlew :frontend:androidApp:detekt :frontend:androidApp:testDebugUnitTest silkLint --no-daemon --warning-mode none --console=plain`（`detekt` / `silkLint` 成功；Android test 受 `jlink` 环境失败阻塞）
+  - `git diff --check`
+
 ## Handoff Notes
 
 - 后续接力时先看本文件和 `config/lint/detekt/*.xml` 的剩余规则分布。
 - `frontend/desktopApp` 已清空 detekt baseline；如果后续 desktop 再出现 lint，只接受“新增问题直接修源码”，不要再回填 baseline。
 - 下一步切片建议回到其他模块的低风险规则，继续优先 `WildcardImport` / 未使用项 / 明确异常语义，复杂度规则仍按单文件慢拆。
+- `frontend/androidApp` 的 `WildcardImport` 已从 47 条降到 12 条；后续优先继续处理 `ApiClient.kt`、`AudioDuplexScreen.kt`、`ChatScreen.kt`。
 - `frontend/shared/src/iosMain` 当前在 Gradle shared module 中暂时禁用，也不在根 detekt source set 中；本计划按当前 lint 覆盖面收敛 baseline，不把未启用 iOS 源码混进每一步。
 - 如果某一步发现需要新增 baseline，先停下来判断是否应关规则、补测试或拆小 PR，不要直接把新增项写进 baseline。
 - 完成一个 slice 后，在本文件记录已完成项、剩余数量和验证命令。
