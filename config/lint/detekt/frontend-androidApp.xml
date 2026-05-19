@@ -71,30 +71,5 @@
     <ID>WildcardImport:ChatScreen.kt$import androidx.compose.foundation.layout.*</ID>
     <ID>WildcardImport:ChatScreen.kt$import androidx.compose.material3.*</ID>
     <ID>WildcardImport:ChatScreen.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:ContactsScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:ContactsScreen.kt$import androidx.compose.material.icons.filled.*</ID>
-    <ID>WildcardImport:ContactsScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:ContactsScreen.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:ContactsScreen.kt$import com.silk.shared.i18n.*</ID>
-    <ID>WildcardImport:ContactsScreen.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:GroupListScreen.kt$import com.silk.shared.i18n.*</ID>
-    <ID>WildcardImport:GroupListScreen.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:LoginScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:LoginScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:LoginScreen.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:MainActivity.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:MainActivity.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:MainActivity.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:SettingsScreen.kt$import com.silk.shared.i18n.*</ID>
-    <ID>WildcardImport:SettingsScreen.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:WorkflowChatScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:WorkflowChatScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:WorkflowChatScreen.kt$import androidx.compose.runtime.*</ID>
   </CurrentIssues>
 </SmellBaseline>
