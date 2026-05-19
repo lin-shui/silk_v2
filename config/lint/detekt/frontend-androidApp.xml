@@ -82,29 +82,19 @@
     <ID>WildcardImport:GroupListScreen.kt$import androidx.compose.runtime.*</ID>
     <ID>WildcardImport:GroupListScreen.kt$import com.silk.shared.i18n.*</ID>
     <ID>WildcardImport:GroupListScreen.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:KnowledgeBaseScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:KnowledgeBaseScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:KnowledgeBaseScreen.kt$import androidx.compose.runtime.*</ID>
     <ID>WildcardImport:LoginScreen.kt$import androidx.compose.foundation.layout.*</ID>
     <ID>WildcardImport:LoginScreen.kt$import androidx.compose.material3.*</ID>
     <ID>WildcardImport:LoginScreen.kt$import androidx.compose.runtime.*</ID>
     <ID>WildcardImport:MainActivity.kt$import androidx.compose.foundation.layout.*</ID>
     <ID>WildcardImport:MainActivity.kt$import androidx.compose.material3.*</ID>
     <ID>WildcardImport:MainActivity.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:MarkdownWebView.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:MarkdownWebView.kt$import androidx.compose.runtime.*</ID>
     <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.foundation.layout.*</ID>
     <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.material3.*</ID>
     <ID>WildcardImport:SettingsScreen.kt$import androidx.compose.runtime.*</ID>
     <ID>WildcardImport:SettingsScreen.kt$import com.silk.shared.i18n.*</ID>
     <ID>WildcardImport:SettingsScreen.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:VersionChecker.kt$import kotlinx.coroutines.*</ID>
-    <ID>WildcardImport:WebSocketForegroundService.kt$import kotlinx.coroutines.*</ID>
     <ID>WildcardImport:WorkflowChatScreen.kt$import androidx.compose.foundation.layout.*</ID>
     <ID>WildcardImport:WorkflowChatScreen.kt$import androidx.compose.material3.*</ID>
     <ID>WildcardImport:WorkflowChatScreen.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:WorkflowScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:WorkflowScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:WorkflowScreen.kt$import androidx.compose.runtime.*</ID>
   </CurrentIssues>
 </SmellBaseline>

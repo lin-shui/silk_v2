@@ -66,7 +66,8 @@
 - Slice 10: 已完成。拆分 `frontend/desktopApp` 剩余四个复杂度 baseline，清空 desktop detekt baseline，跑 desktop detekt / test / compile 与 `silkLint`。
 - Slice 11: 已完成。清理 `frontend/androidApp` 的明确未使用参数 / 私有状态，并顺手拆掉 `AudioDuplexScreen.kt`、`GroupListScreen.kt:GroupCard` 两个被这轮签名收口带出来的复杂度 baseline，跑 android detekt / `silkLint` / `git diff --check`；Android 单测与完整编译仍受本机 `jlink` 环境阻塞。
 - Slice 12: 已完成。清理 `frontend/webApp` 一批低风险未使用项 / 命名问题，保持既有复杂度 baseline 不回填，跑 web detekt / nodeTest / compile 与 `silkLint`。
-- Slice 13: 候选。继续切 `frontend/webApp` 的低风险异常语义问题，或回到 `frontend/androidApp` 的 `WildcardImport`，继续保持“小修源码 + 手删 baseline”的节奏。
+- Slice 13: 已完成。清理 `frontend/androidApp` 一批辅助/工作流/知识库界面的 `WildcardImport`，跑 android detekt / `compileDebugKotlin` / `silkLint` / `git diff --check`；Android 单测仍受本机 `jlink` 环境阻塞。
+- Slice 14: 候选。继续切 `frontend/androidApp` 剩余 `WildcardImport`（`ChatScreen.kt`、`LoginScreen.kt`、`MainActivity.kt`、`WorkflowChatScreen.kt` 等），或转向 `frontend/webApp` 的低风险异常语义问题，继续保持“小修源码 + 手删 baseline”的节奏。
 
 ## Progress Log
 
@@ -226,6 +227,27 @@
 - 已验证：
   - `./gradlew :frontend:webApp:detekt --no-daemon --stacktrace --warning-mode all`
   - `./gradlew :frontend:webApp:nodeTest :frontend:webApp:compileProductionExecutableKotlinJs silkLint --no-daemon --stacktrace --warning-mode all`
+  - `git diff --check`
+
+### 2026-05-19 Slice 13
+
+- 清理 `frontend/androidApp` 的 10 条 `WildcardImport` baseline，覆盖：
+  - `KnowledgeBaseScreen.kt`
+  - `MarkdownWebView.kt`
+  - `VersionChecker.kt`
+  - `WebSocketForegroundService.kt`
+  - `WorkflowScreen.kt`
+- `config/lint/detekt/frontend-androidApp.xml` 从 104 条降到 94 条；其中 `WildcardImport` 从 47 条降到 37 条。
+- 没有运行全量 `silkLintBaseline` 再生，只删除已由源码修复覆盖的 baseline 项。
+- 首次验证暴露两处本轮 import 失配：
+  - `VersionChecker.kt` 缺少 `cancel` 扩展导入。
+  - `WorkflowScreen.kt` 不应显式导入 `weight`。
+  - 补齐后 `:frontend:androidApp:compileDebugKotlin` 恢复通过。
+- `:frontend:androidApp:detekt` 与 `silkLint` 已通过。
+- `:frontend:androidApp:testDebugUnitTest` 仍受本机 Android 工具链阻塞：`JdkImageTransform` 调 `jlink` 处理 `android-34/core-for-system-modules.jar` 失败，落点仍是 `:frontend:androidApp:compileDebugJavaWithJavac`，不是本轮 Kotlin 源码错误。
+- 已验证：
+  - `./gradlew :frontend:androidApp:compileDebugKotlin --no-daemon --warning-mode none --console=plain`
+  - `./gradlew :frontend:androidApp:detekt :frontend:androidApp:testDebugUnitTest silkLint --no-daemon --warning-mode none --console=plain`（`detekt` / `silkLint` 成功；Android test 受 `jlink` 环境失败阻塞）
   - `git diff --check`
 
 ## Handoff Notes
