@@ -65,8 +65,8 @@ ACP 不可用时直接报"未连接"，无 fallback。
 
 主要文件：
 
-- `codex_adapter.py` — ACP server 连接 `/agent-bridge?agentType=codex`，把 Silk prompt 映射到 Codex CLI
-- `codex_executor.py` — 实际调用 `codex exec --json`
+- `codex_adapter.py` — ACP server 连接 `/agent-bridge?agentType=codex`，把 Silk prompt / cancel / session-load / `_silk/*` 请求映射到 Codex CLI
+- `codex_executor.py` — 实际调用 `codex exec --json`，解析 tool/function/turn.failed 等 JSONL 事件，并受 `CODEX_TIMEOUT` 看门狗保护
 - `codex_session_index.py` — 扫描 `~/.codex/sessions/**/rollout-*.jsonl`，用于 `_silk/list_local_sessions` 与 `session/load`
 - `fs_listing.py` — 目录列表工具（与 Claude Code adapter 保持同类响应）
 - `bridge.sh` — 启动/停止管理脚本
@@ -75,8 +75,9 @@ ACP 不可用时直接报"未连接"，无 fallback。
 
 - 通过 WebSocket 连 Silk backend
 - 在本机运行 Codex CLI
+- 将 Codex JSONL 中的 agent_message / reasoning / Bash/Edit / function / built-in tool 事件映射成 ACP `session/update`
 - 从 Codex rollout JSONL 中恢复 thread/session
-- 处理来自 Silk 的 prompt / cancel / list_dir / list_sessions / session_load 等 ACP 请求
+- 处理来自 Silk 的 prompt / cancel / list_dir / list_sessions / set_cwd / session_load 等 ACP 请求
 
 ## `feishu_bot/`
 
