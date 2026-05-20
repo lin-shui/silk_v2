@@ -1,11 +1,13 @@
 import { Group, CreateGroupResponse } from '../models/Group';
 import { GroupCard } from '../components/GroupCard';
 import { LoadingIndicator } from '../components/LoadingIndicator';
+import { SectionHeader } from '../components/SectionHeader';
 import { SilkColors } from '../common/Theme';
-import { apiClient as globalApiClient, CcConnectTokenInfo } from '../api/ApiClient';
+import { apiClient as globalApiClient, CcConnectTokenInfo, CreateGroupRequest } from '../api/ApiClient';
 import { router as appRouter } from '../common/Router';
 import { appStore as globalAppStore } from '../stores/AppStore';
 import promptAction from '@ohos.promptAction';
+import pasteboard from '@ohos.pasteboard';
 
 @Component
 export struct GroupListPage {
@@ -25,6 +27,20 @@ export struct GroupListPage {
   @State ccConnectStatus: Record<string, CcConnectTokenInfo> = {};
   @State createGroupType: string = '';
   @State generatedToken: string = '';
+
+  private get silkPrivateGroups(): Group[] {
+    return this.groups.filter((g: Group) => g.name.startsWith('[Silk]'));
+  }
+
+  private get ccGroups(): Group[] {
+    return this.groups.filter((g: Group) => this.ccConnectStatus[g.id] !== undefined);
+  }
+
+  private get silkNormalGroups(): Group[] {
+    return this.groups.filter((g: Group) =>
+      !g.name.startsWith('[Silk]') && this.ccConnectStatus[g.id] === undefined
+    );
+  }
 
   private unreadRefreshTimer: number = -1;
   private readonly appStore = globalAppStore;
@@ -175,13 +191,11 @@ export struct GroupListPage {
       previousGroupIds.push(this.groups[i].id);
     }
     try {
-      const createRequest: { name: string; createdBy: string; type?: string } = {
+      const createRequest: CreateGroupRequest = {
         name: trimmedName,
-        createdBy: user.id
+        createdBy: user.id,
+        type: this.createGroupType === 'ccconnect' ? 'ccconnect' : undefined
       };
-      if (this.createGroupType === 'ccconnect') {
-        createRequest.type = 'ccconnect';
-      }
       const response = await this.apiClient.createGroup(createRequest);
       if (response.success && response.group) {
         this.groups = this.groups.concat([response.group]);
@@ -474,6 +488,17 @@ export struct GroupListPage {
     }
   }
 
+  private handleCopy(text: string): void {
+    try {
+      const pasteData = pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text);
+      const sysPasteboard = pasteboard.getSystemPasteboard();
+      sysPasteboard.setData(pasteData);
+      this.showToast('已复制到剪贴板');
+    } catch (_) {
+      this.showToast('复制失败');
+    }
+  }
+
   build() {
     Column() {
       // 顶部导航栏（对齐 Android：用户信息 + 快捷操作）
@@ -627,19 +652,13 @@ export struct GroupListPage {
         .justifyContent(FlexAlign.Center)
       } else {
         List({ space: 8 }) {
-          // 群组列表（Silk AI → CC-Connect → Silk Groups）
-          const silkPrivateGroups: Group[] = this.groups.filter((g: Group) => g.name.startsWith('[Silk]'));
-          const ccGroups: Group[] = this.groups.filter((g: Group) => this.ccConnectStatus[g.id] !== undefined);
-          const silkNormalGroups: Group[] = this.groups.filter((g: Group) =>
-            !g.name.startsWith('[Silk]') && this.ccConnectStatus[g.id] === undefined
-          );
 
           // --- Section 1: Silk 专属对话 ---
-          if (silkPrivateGroups.length > 0) {
+          if (this.silkPrivateGroups.length > 0) {
             ListItem() {
               SectionHeader({ title: 'Silk AI', color: SilkColors.primary })
             }
-            ForEach(silkPrivateGroups, (group: Group) => {
+            ForEach(this.silkPrivateGroups, (group: Group) => {
               ListItem() {
                 GroupCard({
                   group: group,
@@ -657,11 +676,11 @@ export struct GroupListPage {
           }
 
           // --- Section 2: CC-Connect 群组 ---
-          if (ccGroups.length > 0) {
+          if (this.ccGroups.length > 0) {
             ListItem() {
               SectionHeader({ title: 'CC-Connect', color: '#2E7D32' })
             }
-            ForEach(ccGroups, (group: Group) => {
+            ForEach(this.ccGroups, (group: Group) => {
               ListItem() {
                 GroupCard({
                   group: group,
@@ -679,11 +698,11 @@ export struct GroupListPage {
           }
 
           // --- Section 3: Silk 普通群组 ---
-          if (silkNormalGroups.length > 0) {
+          if (this.silkNormalGroups.length > 0) {
             ListItem() {
               SectionHeader({ title: 'Silk Groups', color: SilkColors.textSecondary })
             }
-            ForEach(silkNormalGroups, (group: Group) => {
+            ForEach(this.silkNormalGroups, (group: Group) => {
               ListItem() {
                 GroupCard({
                   group: group,

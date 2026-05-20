@@ -42,20 +42,10 @@ export struct GroupCard {
 
               // cc-connect badge
               if (this.ccConnectInfo !== null) {
-                const raw = (this.ccConnectInfo.agentType || '').toLowerCase().trim();
-                let badgeName = 'cc';
-                if (raw.startsWith('claude')) badgeName = 'claude';
-                else if (raw.startsWith('cursor')) badgeName = 'cursor';
-                else if (raw.startsWith('gemini')) badgeName = 'gemini';
-                else if (raw.startsWith('codex')) badgeName = 'codex';
-                else if (raw.startsWith('copilot')) badgeName = 'copilot';
-                else if (raw.length > 0) badgeName = raw;
-
-                const isConnected = this.ccConnectInfo.connected === true;
-                Text(isConnected ? badgeName : `${badgeName} (offline)`)
+                Text(this.getCcBadgeLabel())
                   .fontSize(10)
-                  .fontColor(isConnected ? '#2E7D32' : '#E65100')
-                  .backgroundColor(isConnected ? '#E8F5E9' : '#FFF3E0')
+                  .fontColor(this.getCcBadgeColor())
+                  .backgroundColor(this.getCcBadgeBg())
                   .borderRadius(4)
                   .padding({ left: 6, right: 6, top: 2, bottom: 2 })
                   .margin({ left: 8 })
@@ -131,6 +121,27 @@ export struct GroupCard {
         })
       }
     }
+  }
+
+  private getCcBadgeLabel(): string {
+    if (!this.ccConnectInfo) return '';
+    const raw = (this.ccConnectInfo.agentType || '').toLowerCase().trim();
+    let name = 'cc';
+    if (raw.startsWith('claude')) name = 'claude';
+    else if (raw.startsWith('cursor')) name = 'cursor';
+    else if (raw.startsWith('gemini')) name = 'gemini';
+    else if (raw.startsWith('codex')) name = 'codex';
+    else if (raw.startsWith('copilot')) name = 'copilot';
+    else if (raw.length > 0) name = raw;
+    return this.ccConnectInfo.connected === true ? name : `${name} (offline)`;
+  }
+
+  private getCcBadgeColor(): ResourceStr {
+    return this.ccConnectInfo?.connected === true ? '#2E7D32' : '#E65100';
+  }
+
+  private getCcBadgeBg(): ResourceStr {
+    return this.ccConnectInfo?.connected === true ? '#E8F5E9' : '#FFF3E0';
   }
 
   private formatTime(timestamp: number): string {

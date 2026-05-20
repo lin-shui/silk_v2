@@ -890,7 +890,7 @@ export class ApiClient {
       if (response.responseCode === 200 || response.responseCode === 201) {
         const resultText: string = response.result as string;
         const parsed: ResponseEnvelope = JSON.parse(resultText) as ResponseEnvelope;
-        const normalizedGroup: Group = parsed.group ? this.normalizeGroup(parsed.group) : undefined;
+        const normalizedGroup: Group | undefined = parsed.group ? this.normalizeGroup(parsed.group) : undefined;
         const result: CreateGroupResponse = {
           success: parsed.success,
           message: parsed.message,

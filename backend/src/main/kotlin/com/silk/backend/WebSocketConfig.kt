@@ -664,9 +664,27 @@ class ChatServer(
     /**
      * 广播系统状态消息（灰色显示）- 公开方法，供其他模块调用
      */
+    suspend fun broadcastExtractedContent(content: String, label: String) {
+        logger.debug("📄 [提取内容广播] {} ({} 字符)", label, content.length)
+        val msg = Message(
+            id = generateId(),
+            userId = SilkAgent.AGENT_ID,
+            userName = "📄 文件解析",
+            content = "**${label}**\n\n${content}",
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.SYSTEM,
+            isTransient = false,
+            category = MessageCategory.NORMAL
+        )
+        val json = Json.encodeToString(msg)
+        allSessions().forEach { session ->
+            try { session.send(Frame.Text(json)) } catch (_: Exception) {}
+        }
+    }
+
     suspend fun broadcastSystemStatus(status: String) {
         logger.debug("📢 [状态广播] {} (连接数: {})", status, allSessions().size)
-        
+
         val statusMessage = Message(
             id = generateId(),
             userId = SilkAgent.AGENT_ID,
@@ -677,7 +695,7 @@ class ChatServer(
             isTransient = true,
             category = MessageCategory.AGENT_STATUS
         )
-        
+
         val messageJson = Json.encodeToString(statusMessage)
         allSessions().forEach { session ->
             try {

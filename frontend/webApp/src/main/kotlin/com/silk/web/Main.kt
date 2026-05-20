@@ -156,6 +156,7 @@ private val jsBlobToArrayBuffer = js("(function(blob) { return blob.arrayBuffer(
 private val jsArrayBufferToBase64 = js("(function(ab) { var u8 = new Uint8Array(ab); var b = ''; for (var i = 0; i < u8.length; i++) b += String.fromCharCode(u8[i]); return btoa(b); })")
 private val jsStopTracks = js("(function(stream) { if (stream && stream.getTracks) { stream.getTracks().forEach(function(t) { t.stop(); }); } })")
 
+
 internal fun downloadAsFile(content: String, fileName: String) {
     val blob = org.w3c.files.Blob(
         arrayOf(content),
@@ -197,6 +198,267 @@ private fun compactModelId(modelId: String, maxLen: Int = 40): String {
 }
 
 fun main() {
+    console.log("showCropOverlay init")
+    js("""
+(function() {
+    window.showCropOverlay = function(dataUrl, sessionId, userId, uploadUrl) {
+        var MASK_COLOR = 'rgba(0,0,0,0.55)';
+        var SELECTION_BORDER = '#3b82f6';
+        var HANDLE_SIZE = 8;
+        var TOOLBAR_HEIGHT = 44;
+
+        var isSelecting = false;
+        var isDragging = false;
+        var startX = 0, startY = 0;
+        var endX = 0, endY = 0;
+        var hasSelection = false;
+        var dragHandle = null;
+        var dragOffsetX = 0, dragOffsetY = 0;
+
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:99999;background:' + MASK_COLOR + ';display:flex;align-items:center;justify-content:center;user-select:none;';
+
+        var img = new Image();
+        img.onload = function() {
+            var imgW = img.width;
+            var imgH = img.height;
+            var vw = window.innerWidth;
+            var vh = window.innerHeight;
+            var padX = 60;
+            var padY = 80;
+            var scale = Math.min((vw - padX) / imgW, (vh - padY) / imgH, 1);
+            var dispW = Math.round(imgW * scale);
+            var dispH = Math.round(imgH * scale);
+
+            overlay.innerHTML = '';
+
+            var wrapper = document.createElement('div');
+            wrapper.style.cssText = 'position:relative;display:inline-block;border-radius:4px;overflow:hidden;box-shadow:0 4px 40px rgba(0,0,0,0.5);';
+
+            var dispImg = document.createElement('img');
+            dispImg.src = dataUrl;
+            dispImg.style.cssText = 'display:block;width:' + dispW + 'px;height:' + dispH + 'px;';
+            wrapper.appendChild(dispImg);
+
+            var canvas = document.createElement('canvas');
+            canvas.width = dispW;
+            canvas.height = dispH;
+            canvas.style.cssText = 'position:absolute;top:0;left:0;cursor:crosshair;';
+            var ctx = canvas.getContext('2d');
+            wrapper.appendChild(canvas);
+
+            // toolbar: positioned OUTSIDE the wrapper (overflow:hidden would clip it)
+            var toolbar = document.createElement('div');
+            toolbar.style.cssText = 'margin-top:12px;display:none;align-items:center;gap:12px;background:#1e1e1e;padding:6px 16px;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.3);';
+            toolbar.innerHTML = '<span id="crop-dims" style="color:#aaa;font-size:13px;margin-right:4px;"></span>'
+                + '<button id="crop-confirm" style="background:#3b82f6;color:#fff;border:none;padding:6px 20px;border-radius:6px;font-size:14px;cursor:pointer;">✓ Confirm</button>'
+                + '<button id="crop-cancel" style="background:transparent;color:#ccc;border:1px solid #555;padding:6px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Cancel</button>';
+
+            overlay.style.flexDirection = 'column';
+            overlay.appendChild(wrapper);
+            overlay.appendChild(toolbar);
+            document.body.appendChild(overlay);
+
+            function imgCoords(e) {
+                var rect = canvas.getBoundingClientRect();
+                return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            }
+
+            function actualCoords(dispX, dispY) {
+                return { x: Math.round(dispX / scale), y: Math.round(dispY / scale) };
+            }
+
+            function clamp(v, min, max) { return Math.min(Math.max(v, min), max); }
+
+            function redraw() {
+                ctx.clearRect(0, 0, dispW, dispH);
+                if (!hasSelection) return;
+                var l = Math.min(startX, endX);
+                var t = Math.min(startY, endY);
+                var r = Math.max(startX, endX);
+                var b = Math.max(startY, endY);
+                var w = r - l;
+                var h = b - t;
+                if (w < 1 || h < 1) return;
+
+                ctx.fillStyle = MASK_COLOR;
+                ctx.fillRect(0, 0, dispW, t);
+                ctx.fillRect(0, b, dispW, dispH - b);
+                ctx.fillRect(0, t, l, h);
+                ctx.fillRect(r, t, dispW - r, h);
+
+                ctx.strokeStyle = SELECTION_BORDER;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(l, t, w, h);
+
+                ctx.fillStyle = '#fff';
+                ctx.strokeStyle = SELECTION_BORDER;
+                ctx.lineWidth = 1.5;
+                var handles = [
+                    { x: l, y: t }, { x: r, y: t },
+                    { x: l, y: b }, { x: r, y: b }
+                ];
+                for (var i = 0; i < handles.length; i++) {
+                    ctx.fillRect(handles[i].x - HANDLE_SIZE/2, handles[i].y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
+                    ctx.strokeRect(handles[i].x - HANDLE_SIZE/2, handles[i].y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
+                }
+
+                var actual = actualCoords(w, h);
+                var dimsEl = document.getElementById('crop-dims');
+                if (dimsEl) dimsEl.textContent = actual.x + ' × ' + actual.y;
+            }
+
+            function getSelectionRect() {
+                var l = Math.min(startX, endX);
+                var t = Math.min(startY, endY);
+                var r = Math.max(startX, endX);
+                var b = Math.max(startY, endY);
+                return { l: l, t: t, r: r, b: b, w: r - l, h: b - t };
+            }
+
+            function hitTest(e) {
+                var p = imgCoords(e);
+                if (!hasSelection) return null;
+                var r = getSelectionRect();
+                var hh = HANDLE_SIZE / 2;
+                if (Math.abs(p.x - r.l) <= hh && Math.abs(p.y - r.t) <= hh) return 'tl';
+                if (Math.abs(p.x - r.r) <= hh && Math.abs(p.y - r.t) <= hh) return 'tr';
+                if (Math.abs(p.x - r.l) <= hh && Math.abs(p.y - r.b) <= hh) return 'bl';
+                if (Math.abs(p.x - r.r) <= hh && Math.abs(p.y - r.b) <= hh) return 'br';
+                if (p.x >= r.l && p.x <= r.r && p.y >= r.t && p.y <= r.b) return 'move';
+                return null;
+            }
+
+            canvas.addEventListener('mousedown', function(e) {
+                var p = imgCoords(e);
+                var hit = hitTest(e);
+                if (hit === 'move') {
+                    isDragging = true;
+                    dragHandle = 'move';
+                    dragOffsetX = p.x - startX;
+                    dragOffsetY = p.y - startY;
+                    canvas.style.cursor = 'grabbing';
+                    return;
+                }
+                if (hit) {
+                    isDragging = true;
+                    dragHandle = hit;
+                    dragOffsetX = p.x;
+                    dragOffsetY = p.y;
+                    return;
+                }
+                isSelecting = true;
+                hasSelection = true;
+                startX = p.x;
+                startY = p.y;
+                endX = p.x;
+                endY = p.y;
+                toolbar.style.display = 'none';
+            });
+
+            window.addEventListener('mousemove', function(e) {
+                var p = imgCoords(e);
+                if (isSelecting) {
+                    endX = clamp(p.x, 0, dispW);
+                    endY = clamp(p.y, 0, dispH);
+                    redraw();
+                    return;
+                }
+                if (isDragging) {
+                    if (dragHandle === 'move') {
+                        var dx = p.x - dragOffsetX;
+                        var dy = p.y - dragOffsetY;
+                        var r = getSelectionRect();
+                        startX = clamp(dx, 0, dispW - r.w);
+                        startY = clamp(dy, 0, dispH - r.h);
+                        endX = startX + r.w;
+                        endY = startY + r.h;
+                    } else {
+                        var r = getSelectionRect();
+                        var fixL = Math.min(startX, endX);
+                        var fixT = Math.min(startY, endY);
+                        var fixR = Math.max(startX, endX);
+                        var fixB = Math.max(startY, endY);
+                        if (dragHandle === 'tl' || dragHandle === 'tr') startY = clamp(p.y, 0, fixB - 10);
+                        if (dragHandle === 'bl' || dragHandle === 'br') endY = clamp(p.y, fixT + 10, dispH);
+                        if (dragHandle === 'tl' || dragHandle === 'bl') startX = clamp(p.x, 0, fixR - 10);
+                        if (dragHandle === 'tr' || dragHandle === 'br') endX = clamp(p.x, fixL + 10, dispW);
+                    }
+                    redraw();
+                    return;
+                }
+                var h = hitTest(e);
+                canvas.style.cursor = h === 'move' ? 'move' : h ? 'nwse-resize' : 'crosshair';
+            });
+
+            window.addEventListener('mouseup', function(e) {
+                if (isSelecting || isDragging) {
+                    isSelecting = false;
+                    isDragging = false;
+                    dragHandle = null;
+                    var r = getSelectionRect();
+                    if (r.w > 5 && r.h > 5) {
+                        toolbar.style.display = 'flex';
+                    } else {
+                        hasSelection = false;
+                        redraw();
+                        toolbar.style.display = 'none';
+                    }
+                }
+            });
+
+            document.getElementById('crop-confirm').addEventListener('click', function() {
+                var r = getSelectionRect();
+                if (r.w < 2 || r.h < 2) return;
+                var sx = Math.round(r.l / scale);
+                var sy = Math.round(r.t / scale);
+                var sw = Math.round(r.w / scale);
+                var sh = Math.round(r.h / scale);
+                var cropCanvas = document.createElement('canvas');
+                cropCanvas.width = sw;
+                cropCanvas.height = sh;
+                var cropCtx = cropCanvas.getContext('2d');
+                var fullImg = new Image();
+                fullImg.onload = function() {
+                    cropCtx.drawImage(fullImg, sx, sy, sw, sh, 0, 0, sw, sh);
+                    cropCanvas.toBlob(function(blob) {
+                        var fd = new FormData();
+                        fd.append('sessionId', sessionId);
+                        fd.append('userId', userId);
+                        fd.append('file', blob, 'screenshot_' + Date.now() + '.png');
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', uploadUrl, true);
+                        xhr.onload = function() {
+                            if (xhr.status === 200) console.log('✅ 截图上传成功');
+                            else console.log('❌ 截图上传失败: ' + xhr.statusText);
+                        };
+                        xhr.onerror = function() { console.log('❌ 截图上传网络错误'); };
+                        xhr.send(fd);
+                        document.body.removeChild(overlay);
+                        if (window.__screenshotDone) { window.__screenshotDone(); window.__screenshotDone = undefined; }
+                    }, 'image/png');
+                };
+                fullImg.src = dataUrl;
+            });
+
+            document.getElementById('crop-cancel').addEventListener('click', function() {
+                document.body.removeChild(overlay);
+                if (window.__screenshotDone) { window.__screenshotDone(); window.__screenshotDone = undefined; }
+            });
+
+            function onKeyDown(e) {
+                if (e.key === 'Escape') {
+                    document.body.removeChild(overlay);
+                    if (window.__screenshotDone) { window.__screenshotDone(); window.__screenshotDone = undefined; }
+                    window.removeEventListener('keydown', onKeyDown);
+                }
+            }
+            window.addEventListener('keydown', onKeyDown);
+        };
+        img.src = dataUrl;
+    };
+})();
+""")
     console.log("🧵 Silk 正在启动...")
     console.log("1️⃣ 准备渲染...")
     
@@ -1177,6 +1439,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var messageText by remember { mutableStateOf("") }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
+    var isScreenshotCrop by remember { mutableStateOf(false) }
     var isExportingMarkdown by remember { mutableStateOf(false) }
     var exportMarkdownHint by remember { mutableStateOf<String?>(null) }
     var showFolderExplorer by remember { mutableStateOf(false) }
@@ -2695,6 +2958,59 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }) {
                         Text(if (isUploading) "⏳" else "📎")
+                    }
+
+                    // 📷 截屏按钮（区域截图）
+                    Button({
+                        style {
+                            padding(12.px, 14.px)
+                            backgroundColor(Color(SilkColors.secondary))
+                            color(Color(SilkColors.textPrimary))
+                            border { width(0.px) }
+                            borderRadius(8.px)
+                            property("cursor", if (isUploading) "not-allowed" else "pointer")
+                            fontSize(18.px)
+                            property("transition", "all 0.2s ease")
+                            property("opacity", if (isUploading) "0.6" else "1")
+                        }
+                        attr("title", "截取屏幕区域")
+                        onClick {
+                            if (!isUploading) {
+                                isScreenshotCrop = true
+                                val sessionId = group.id
+                                val userId = user.id
+                                val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
+                                // 注册 JS 回调以重置 Kotlin 状态（保持注册直到 JS 侧使用完毕）
+                                window.asDynamic().__screenshotDone = { isScreenshotCrop = false }
+                                js("""
+                                    (function() {
+                                        var sid = sessionId;
+                                        var uid_ = userId;
+                                        var url = uploadUrl;
+                                        navigator.mediaDevices.getDisplayMedia().then(function(stream) {
+                                            var video = document.createElement('video');
+                                            video.srcObject = stream;
+                                            video.onloadedmetadata = function() {
+                                                video.play();
+                                                var canvas = document.createElement('canvas');
+                                                canvas.width = video.videoWidth;
+                                                canvas.height = video.videoHeight;
+                                                var ctx = canvas.getContext('2d');
+                                                ctx.drawImage(video, 0, 0);
+                                                stream.getTracks().forEach(function(t) { t.stop(); });
+                                                var dataUrl = canvas.toDataURL('image/png');
+                                                window.showCropOverlay(dataUrl, sid, uid_, url);
+                                            };
+                                        }).catch(function(e) {
+                                            console.log('截图取消:', e);
+                                            if (window.__screenshotDone) { window.__screenshotDone(); window.__screenshotDone = undefined; }
+                                        });
+                                    })();
+                                """)
+                            }
+                        }
+                    }) {
+                        Text("📷")
                     }
 
                     // 🎤 语音输入按钮

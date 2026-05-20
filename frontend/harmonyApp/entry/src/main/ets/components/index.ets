@@ -10,3 +10,4 @@ export { MarkdownWeb } from './MarkdownWeb';
 export { MarkdownLite } from './MarkdownLite';
 export { MathKatexWeb } from './MathKatexWeb';
 export { AIMessageCard } from './AIMessageCard';
+export { SectionHeader } from './SectionHeader';

@@ -100,6 +100,14 @@ export struct ChatPage {
   @State private showModeSheet: boolean = false;
   @State private showModelSheet: boolean = false;
 
+  private get availableModes(): CcModeOption[] {
+    return this.ccConnectInfo?.availableModes || [];
+  }
+
+  private get availableModels(): CcModelOption[] {
+    return this.ccConnectInfo?.availableModels || [];
+  }
+
   private groupId: string = 'default_room';
   private userId: string = '';
   private userName: string = '';
@@ -230,18 +238,22 @@ export struct ChatPage {
     globalChatStore.onCcMetadataChanged = (json: string): void => {
       try {
         const parsed: Record<string, Object> = JSON.parse(json) as Record<string, Object>;
-        const current = this.ccConnectInfo ? this.ccConnectInfo : {
+        const defaultInfo: CcConnectTokenInfo = {
           success: true,
           connected: false
-        } as CcConnectTokenInfo;
+        };
+        const current = this.ccConnectInfo ? this.ccConnectInfo : defaultInfo;
         const next: CcConnectTokenInfo = {
-          ...current,
+          success: current.success,
+          connected: parsed['connected'] !== undefined ? (parsed['connected'] as boolean) : current.connected,
           mode: (parsed['mode'] as string) || current.mode || '',
           model: (parsed['model'] as string) || current.model || '',
           agentType: (parsed['agentType'] as string) || current.agentType || '',
-          connected: parsed['connected'] !== undefined ? (parsed['connected'] as boolean) : current.connected,
           availableModes: (parsed['availableModes'] as CcModeOption[]) || current.availableModes || [],
-          availableModels: (parsed['availableModels'] as CcModelOption[]) || current.availableModels || []
+          availableModels: (parsed['availableModels'] as CcModelOption[]) || current.availableModels || [],
+          cwd: current.cwd,
+          project: current.project,
+          token: current.token
         };
         this.ccConnectInfo = next;
       } catch (_e) {
@@ -2901,10 +2913,9 @@ export struct ChatPage {
         .fontColor(SilkColors.textPrimary)
         .margin({ bottom: 16 })
 
-      const modes: CcModeOption[] = this.ccConnectInfo?.availableModes || [];
-      if (modes.length > 0) {
+      if (this.availableModes.length > 0) {
         List({ space: 8 }) {
-          ForEach(modes, (mode: CcModeOption) => {
+          ForEach(this.availableModes, (mode: CcModeOption) => {
             ListItem() {
               Row() {
                 Text(mode.name || mode.key)
@@ -2964,10 +2975,9 @@ export struct ChatPage {
         .fontColor(SilkColors.textPrimary)
         .margin({ bottom: 16 })
 
-      const models: CcModelOption[] = this.ccConnectInfo?.availableModels || [];
-      if (models.length > 0) {
+      if (this.availableModels.length > 0) {
         List({ space: 8 }) {
-          ForEach(models, (model: CcModelOption) => {
+          ForEach(this.availableModels, (model: CcModelOption) => {
             ListItem() {
               Column() {
                 Row() {

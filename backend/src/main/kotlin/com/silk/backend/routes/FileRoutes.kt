@@ -1,6 +1,7 @@
 package com.silk.backend.routes
 
 import com.silk.backend.ai.AIConfig
+import com.silk.backend.broadcastExtractedContent
 import com.silk.backend.broadcastSystemStatus
 import com.silk.backend.buildFileDownloadUrl
 import com.silk.backend.database.SimpleResponse
@@ -208,6 +209,19 @@ fun Route.fileRoutes() {
                         
                         if (result.extractedTextFile != null) {
                             broadcastSystemStatus(finalSessionId, "✅ 文件已解析: $finalFileName (${result.summary.take(60)})")
+                            // 读取提取的内容并发送到聊天
+                            try {
+                                val extractedContent = result.extractedTextFile.readText()
+                                val maxLen = 4000
+                                val content = if (extractedContent.length > maxLen) {
+                                    extractedContent.take(maxLen) + "\n\n...（内容过长已截断，共 ${extractedContent.length} 字符）"
+                                } else {
+                                    extractedContent
+                                }
+                                broadcastExtractedContent(finalSessionId, content, finalFileName)
+                            } catch (e: Exception) {
+                                logger.warn("无法读取提取内容: ${e.message}")
+                            }
                         } else {
                             broadcastSystemStatus(finalSessionId, "⚠️ 文件存储完成: $finalFileName (无法提取内容)")
                         }
