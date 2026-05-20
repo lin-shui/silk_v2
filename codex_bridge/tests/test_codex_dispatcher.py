@@ -23,47 +23,56 @@ def test_thread_started_sets_state_no_updates():
     assert state.thread_id == "tid-1"
 
 
-# ---- agent_message (hold-and-flush model) ----
+# ---- agent_message (pending-messages buffering, cc-connect style) ----
 
-def test_agent_message_first_is_held_not_emitted():
-    """First agent_message is held, not immediately emitted."""
+def test_agent_message_is_buffered_not_emitted():
+    """agent_message is buffered into pending_messages, nothing emitted."""
     state = _new_state()
     updates = dispatch_event({"kind": "agent_message", "text": "hello"}, state)
-    assert updates == []  # nothing emitted yet
-    assert state.held_message == "hello"
+    assert updates == []
+    assert state.pending_messages == ["hello"]
 
 
-def test_agent_message_second_emits_first_as_thought():
-    """When a second agent_message arrives, the previous held one is emitted
-    as agent_thought_chunk (transient commentary), and the new one is held."""
-    state = _new_state()
-    state.held_message = "first commentary"
-    updates = dispatch_event({"kind": "agent_message", "text": "second commentary"}, state)
-    assert len(updates) == 1
-    assert updates[0] == {
-        "sessionUpdate": "agent_thought_chunk",
-        "content": {"type": "text", "text": "first commentary"},
-    }
-    assert state.held_message == "second commentary"
-
-
-def test_agent_message_three_messages_only_last_survives_as_held():
-    """With 3 agent_messages, the first 2 become thoughts, last is held."""
+def test_multiple_agent_messages_all_buffered():
+    """Multiple agent_messages all accumulate in pending_messages."""
     state = _new_state()
     u1 = dispatch_event({"kind": "agent_message", "text": "msg1"}, state)
     u2 = dispatch_event({"kind": "agent_message", "text": "msg2"}, state)
     u3 = dispatch_event({"kind": "agent_message", "text": "msg3"}, state)
-    assert u1 == []  # first held
-    assert len(u2) == 1 and u2[0]["sessionUpdate"] == "agent_thought_chunk"  # msg1 flushed as thought
-    assert len(u3) == 1 and u3[0]["content"]["text"] == "msg2"  # msg2 flushed as thought
-    assert state.held_message == "msg3"
+    assert u1 == []
+    assert u2 == []
+    assert u3 == []
+    assert state.pending_messages == ["msg1", "msg2", "msg3"]
 
 
-# ---- turn_completed flushes held message ----
-
-def test_turn_completed_flushes_held_as_agent_message_chunk():
+def test_tool_call_flushes_pending_as_thinking():
+    """When a tool-call event arrives, pending messages flush as thought_chunks."""
     state = _new_state()
-    state.held_message = "final answer"
+    dispatch_event({"kind": "agent_message", "text": "commentary1"}, state)
+    dispatch_event({"kind": "agent_message", "text": "commentary2"}, state)
+    updates = dispatch_event(
+        {"kind": "command_started", "tool_id": "item_1", "command": "ls"},
+        state,
+    )
+    # First 2 are thought_chunks from flush, 3rd is the tool_call
+    assert len(updates) == 3
+    assert updates[0] == {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {"type": "text", "text": "commentary1"},
+    }
+    assert updates[1] == {
+        "sessionUpdate": "agent_thought_chunk",
+        "content": {"type": "text", "text": "commentary2"},
+    }
+    assert updates[2]["sessionUpdate"] == "tool_call"
+    assert state.pending_messages == []
+
+
+# ---- turn_completed flushes pending as real reply ----
+
+def test_turn_completed_flushes_pending_as_agent_message_chunk():
+    state = _new_state()
+    dispatch_event({"kind": "agent_message", "text": "final answer"}, state)
     updates = dispatch_event(
         {"kind": "turn_completed", "input_tokens": 1, "output_tokens": 1, "reasoning_tokens": 0},
         state,
@@ -72,17 +81,82 @@ def test_turn_completed_flushes_held_as_agent_message_chunk():
         "sessionUpdate": "agent_message_chunk",
         "content": {"type": "text", "text": "final answer"},
     }]
-    assert state.held_message is None
+    assert state.pending_messages == []
     assert state.accumulated == "final answer"
 
 
-def test_turn_completed_without_held_emits_nothing():
+def test_turn_completed_flushes_multiple_pending_as_chunks():
+    """Multiple pending messages all become agent_message_chunk on turn_completed."""
+    state = _new_state()
+    dispatch_event({"kind": "agent_message", "text": "part1"}, state)
+    dispatch_event({"kind": "agent_message", "text": "part2"}, state)
+    updates = dispatch_event(
+        {"kind": "turn_completed", "input_tokens": 1, "output_tokens": 1, "reasoning_tokens": 0},
+        state,
+    )
+    assert len(updates) == 2
+    assert updates[0]["sessionUpdate"] == "agent_message_chunk"
+    assert updates[0]["content"]["text"] == "part1"
+    assert updates[1]["sessionUpdate"] == "agent_message_chunk"
+    assert updates[1]["content"]["text"] == "part2"
+    assert state.accumulated == "part1part2"
+
+
+def test_turn_completed_without_pending_emits_nothing():
     state = _new_state()
     updates = dispatch_event(
         {"kind": "turn_completed", "input_tokens": 1, "output_tokens": 1, "reasoning_tokens": 0},
         state,
     )
     assert updates == []
+
+
+# ---- turn_failed ----
+
+def test_turn_failed_flushes_pending_and_emits_error():
+    """turn_failed should flush pending messages as agent_message_chunk,
+    then emit an error thought_chunk."""
+    state = _new_state()
+    dispatch_event({"kind": "agent_message", "text": "partial"}, state)
+    updates = dispatch_event({"kind": "turn_failed", "error": "rate limit"}, state)
+    assert len(updates) == 2
+    # First: pending flushed as message_chunk
+    assert updates[0]["sessionUpdate"] == "agent_message_chunk"
+    assert updates[0]["content"]["text"] == "partial"
+    # Second: error as thought_chunk
+    assert updates[1]["sessionUpdate"] == "agent_thought_chunk"
+    assert "rate limit" in updates[1]["content"]["text"]
+    assert state.pending_messages == []
+
+
+def test_turn_failed_without_pending_emits_only_error():
+    state = _new_state()
+    updates = dispatch_event({"kind": "turn_failed", "error": "bad request"}, state)
+    assert len(updates) == 1
+    assert updates[0]["sessionUpdate"] == "agent_thought_chunk"
+    assert "bad request" in updates[0]["content"]["text"]
+
+
+# ---- error event ----
+
+def test_error_transient_is_ignored():
+    state = _new_state()
+    updates = dispatch_event(
+        {"kind": "error", "message": "Reconnecting...", "transient": True},
+        state,
+    )
+    assert updates == []
+
+
+def test_error_non_transient_emits_thought():
+    state = _new_state()
+    updates = dispatch_event(
+        {"kind": "error", "message": "API error", "transient": False},
+        state,
+    )
+    assert len(updates) == 1
+    assert updates[0]["sessionUpdate"] == "agent_thought_chunk"
+    assert "API error" in updates[0]["content"]["text"]
 
 
 # ---- reasoning ----
@@ -143,7 +217,7 @@ def test_command_completed_after_started_emits_tool_call_update():
     assert updates == [{
         "sessionUpdate": "tool_call_update",
         "toolCallId": "item_1",
-        "content": {"type": "text", "text": "/bin/bash -lc 'ls' → ✅ exit:0"},
+        "content": {"type": "text", "text": "/bin/bash -lc 'ls' \u2192 \u2705 exit:0"},
     }]
 
 
@@ -163,7 +237,7 @@ def test_command_completed_failure_emits_x_mark():
     assert updates == [{
         "sessionUpdate": "tool_call_update",
         "toolCallId": "item_2",
-        "content": {"type": "text", "text": "false → ❌ exit:1"},
+        "content": {"type": "text", "text": "false \u2192 \u274c exit:1"},
     }]
 
 
@@ -185,7 +259,7 @@ def test_command_completed_without_started_emits_both():
     assert updates[0]["sessionUpdate"] == "tool_call"
     assert updates[0]["toolCallId"] == "item_99"
     assert updates[1]["sessionUpdate"] == "tool_call_update"
-    assert "✅ exit:0" in updates[1]["content"]["text"]
+    assert "\u2705 exit:0" in updates[1]["content"]["text"]
 
 
 # ---- file_change ----
@@ -204,7 +278,7 @@ def test_file_change_started_emits_tool_call_with_file_list():
     assert updates == [{
         "sessionUpdate": "tool_call",
         "tool": "Edit",
-        "title": "修改 2 个文件: a.txt, b.txt",
+        "title": "\u4fee\u6539 2 \u4e2a\u6587\u4ef6: a.txt, b.txt",
         "toolCallId": "item_4",
     }]
     assert "item_4" in state.seen_tool_ids
@@ -220,7 +294,7 @@ def test_file_change_started_truncates_long_lists():
     )
     title = updates[0]["title"]
     # Show count; truncate filename list to first 3 + "..."
-    assert "10 个文件" in title
+    assert "10 \u4e2a\u6587\u4ef6" in title
     assert title.count("file") == 3  # first 3 names appear
     assert "..." in title
 
@@ -240,11 +314,78 @@ def test_file_change_completed_emits_tool_call_update():
     assert updates == [{
         "sessionUpdate": "tool_call_update",
         "toolCallId": "item_4",
-        "content": {"type": "text", "text": "✅ 已应用"},
+        "content": {"type": "text", "text": "\u2705 \u5df2\u5e94\u7528"},
     }]
 
 
-# ---- turn_completed ----
+# ---- function_call ----
+
+def test_function_call_started_flushes_pending_and_emits_tool_call():
+    state = _new_state()
+    dispatch_event({"kind": "agent_message", "text": "let me call a function"}, state)
+    updates = dispatch_event(
+        {"kind": "function_call_started", "tool_id": "fc_1", "name": "my_func", "arguments": '{"x":1}'},
+        state,
+    )
+    assert len(updates) == 2
+    assert updates[0]["sessionUpdate"] == "agent_thought_chunk"  # flushed pending
+    assert updates[1] == {
+        "sessionUpdate": "tool_call",
+        "tool": "my_func",
+        "title": '{"x":1}',
+        "toolCallId": "fc_1",
+    }
+
+
+def test_function_call_completed_emits_tool_call_update():
+    state = _new_state()
+    state.seen_tool_ids.add("fc_1")
+    updates = dispatch_event(
+        {
+            "kind": "function_call_completed",
+            "tool_id": "fc_1",
+            "name": "my_func",
+            "status": "completed",
+            "output": "result data",
+        },
+        state,
+    )
+    assert len(updates) == 1
+    assert updates[0]["sessionUpdate"] == "tool_call_update"
+    assert updates[0]["toolCallId"] == "fc_1"
+    assert "\u2705" in updates[0]["content"]["text"]
+
+
+# ---- tool_started / tool_completed (web_search, etc.) ----
+
+def test_tool_started_flushes_pending_and_emits_tool_call():
+    state = _new_state()
+    dispatch_event({"kind": "agent_message", "text": "searching..."}, state)
+    updates = dispatch_event(
+        {"kind": "tool_started", "tool_id": "ws_1", "tool_name": "WebSearch", "input": "python docs"},
+        state,
+    )
+    assert len(updates) == 2
+    assert updates[0]["sessionUpdate"] == "agent_thought_chunk"  # flushed pending
+    assert updates[1] == {
+        "sessionUpdate": "tool_call",
+        "tool": "WebSearch",
+        "title": "python docs",
+        "toolCallId": "ws_1",
+    }
+
+
+def test_tool_completed_emits_tool_call_update():
+    state = _new_state()
+    state.seen_tool_ids.add("ws_1")
+    updates = dispatch_event(
+        {"kind": "tool_completed", "tool_id": "ws_1", "tool_name": "WebSearch", "output": "python docs"},
+        state,
+    )
+    assert len(updates) == 1
+    assert updates[0]["sessionUpdate"] == "tool_call_update"
+    assert "WebSearch" in updates[0]["content"]["text"]
+
 
 # ---- ignore ----
 
@@ -257,9 +398,9 @@ def test_ignore_emits_no_updates():
 # ---- end-to-end fixture ----
 
 def test_full_tool_use_session_produces_expected_updates():
-    """Dispatch the whole tool_use fixture; intermediate agent_messages become
-    thought_chunks, only the last one (flushed by turn_completed) becomes
-    agent_message_chunk."""
+    """Dispatch the whole tool_use fixture; pending agent_messages before tool
+    calls become thought_chunks, after last tool call become agent_message_chunk
+    via turn_completed."""
     fixture = FIXTURE_DIR / "jsonl_tool_use.jsonl"
     state = _new_state()
     parsed = [parse_jsonl_event(json.loads(ln)) for ln in fixture.read_text().splitlines() if ln.strip()]
@@ -271,11 +412,9 @@ def test_full_tool_use_session_produces_expected_updates():
     # Expect: tool_call + tool_call_update for Bash and Edit
     assert kinds.count("tool_call") >= 2
     assert kinds.count("tool_call_update") >= 2
-    # Exactly 1 agent_message_chunk (the final answer, flushed by turn_completed)
-    assert kinds.count("agent_message_chunk") == 1
-    # Intermediate commentaries become agent_thought_chunk
-    assert kinds.count("agent_thought_chunk") >= 1
-    # The final chunk should be the last update
+    # At least 1 agent_message_chunk (the final answer, flushed by turn_completed)
+    assert kinds.count("agent_message_chunk") >= 1
+    # The final chunk should be agent_message_chunk
     assert kinds[-1] == "agent_message_chunk"
 
 
@@ -292,4 +431,4 @@ def test_full_reasoning_session_emits_thought_chunk():
     kinds = [u["sessionUpdate"] for u in all_updates]
     assert "agent_thought_chunk" in kinds
     assert "agent_message_chunk" in kinds
-    assert kinds.count("agent_message_chunk") == 1
+    assert kinds.count("agent_message_chunk") >= 1
