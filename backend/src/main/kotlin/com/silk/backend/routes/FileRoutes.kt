@@ -218,7 +218,8 @@ fun Route.fileRoutes() {
                                 } else {
                                     extractedContent
                                 }
-                                broadcastExtractedContent(finalSessionId, content, finalFileName)
+                                val downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
+                                broadcastExtractedContent(finalSessionId, content, finalFileName, downloadUrl)
                             } catch (e: Exception) {
                                 logger.warn("无法读取提取内容: ${e.message}")
                             }

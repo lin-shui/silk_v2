@@ -73,6 +73,7 @@ import org.jetbrains.compose.web.dom.Br
 import org.jetbrains.compose.web.dom.Button
 import org.jetbrains.compose.web.dom.Div
 import org.jetbrains.compose.web.dom.H3
+import org.jetbrains.compose.web.dom.Img
 import org.jetbrains.compose.web.dom.Input
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
@@ -5719,6 +5720,36 @@ fun MessageItem(
                     }
                 }
                 
+                // 图片预览（对图片文件）
+                if (webIsImageFile(fileName) && downloadUrl.isNotEmpty()) {
+                    val baseUrl = backendHttpOrigin()
+                    val fullImageUrl = "$baseUrl$downloadUrl"
+                    Div({
+                        style {
+                            borderRadius(8.px)
+                            property("overflow", "hidden")
+                            property("cursor", "pointer")
+                            property("max-width", "360px")
+                            property("border", "1px solid ${SilkColors.border}")
+                        }
+                        onClick {
+                            val w = js("window")
+                            w.open(fullImageUrl, "_blank")
+                        }
+                    }) {
+                        Img(src = fullImageUrl) {
+                            style {
+                                width(100.vw)
+                                property("max-width", "360px")
+                                property("max-height", "300px")
+                                property("object-fit", "contain")
+                                display(DisplayStyle.Block)
+                                backgroundColor(Color("#f0f0f0"))
+                            }
+                        }
+                    }
+                }
+
                 // 文件卡片
                 Div({
                     style {
@@ -5879,9 +5910,78 @@ fun MessageItem(
             }
             } // close selection wrapper Div
         }
-        MessageType.JOIN, MessageType.LEAVE, MessageType.SYSTEM -> {
+        MessageType.JOIN, MessageType.LEAVE -> {
             Div({ classes(SilkStylesheet.systemMessage) }) {
                 Text("• ${message.content} ($timeString)")
+            }
+        }
+        MessageType.SYSTEM -> {
+            // 检测是否包含图片预览标记（##PREVIEW_IMAGE:url##）
+            val previewMarker = "##PREVIEW_IMAGE:"
+            val content = message.content
+            if (content.startsWith(previewMarker)) {
+                val markerEnd = content.indexOf("##\n", previewMarker.length)
+                if (markerEnd != -1) {
+                    val imgUrl = content.substring(previewMarker.length, markerEnd)
+                    val textContent = content.substring(markerEnd + 3)
+                    val baseUrl = backendHttpOrigin()
+                    val fullUrl = "$baseUrl$imgUrl"
+
+                    Div({
+                        classes(SilkStylesheet.messageCard)
+                        style { property("flex", "1"); property("min-width", "0") }
+                    }) {
+                        Div({ classes(SilkStylesheet.messageHeader) }) {
+                            Span({ classes(SilkStylesheet.userName) }) { Text(message.userName) }
+                            Span({ classes(SilkStylesheet.timestamp) }) { Text(timeString) }
+                        }
+                        // 图片预览
+                        Div({
+                            style {
+                                borderRadius(8.px)
+                                property("overflow", "hidden")
+                                property("max-width", "360px")
+                                property("border", "1px solid ${SilkColors.border}")
+                                marginBottom(8.px)
+                                property("cursor", "pointer")
+                            }
+                            onClick { val w = js("window"); w.open(fullUrl, "_blank") }
+                        }) {
+                            Img(src = fullUrl) {
+                                style {
+                                    width(100.vw)
+                                    property("max-width", "360px")
+                                    property("max-height", "300px")
+                                    property("object-fit", "contain")
+                                    display(DisplayStyle.Block)
+                                    backgroundColor(Color("#f0f0f0"))
+                                }
+                            }
+                        }
+                        // 提取内容文字
+                        if (textContent.isNotBlank()) {
+                            Div({
+                                style {
+                                    fontSize(13.px)
+                                    color(Color(SilkColors.textPrimary))
+                                    property("line-height", "1.6")
+                                    property("white-space", "pre-wrap")
+                                    property("word-break", "break-word")
+                                }
+                            }) {
+                                Text(textContent.trimStart())
+                            }
+                        }
+                    }
+                } else {
+                    Div({ classes(SilkStylesheet.systemMessage) }) {
+                        Text("• ${content} ($timeString)")
+                    }
+                }
+            } else {
+                Div({ classes(SilkStylesheet.systemMessage) }) {
+                    Text("• ${content} ($timeString)")
+                }
             }
         }
         MessageType.RECALL -> {

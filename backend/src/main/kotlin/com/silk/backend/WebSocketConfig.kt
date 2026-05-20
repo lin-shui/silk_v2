@@ -664,13 +664,19 @@ class ChatServer(
     /**
      * 广播系统状态消息（灰色显示）- 公开方法，供其他模块调用
      */
-    suspend fun broadcastExtractedContent(content: String, label: String) {
+    suspend fun broadcastExtractedContent(content: String, label: String, downloadUrl: String = "") {
         logger.debug("📄 [提取内容广播] {} ({} 字符)", label, content.length)
+        // 嵌入图片URL，让前端可以渲染图片+提取内容的组合卡片
+        val combinedContent = if (downloadUrl.isNotBlank()) {
+            "##PREVIEW_IMAGE:$downloadUrl##\n$content"
+        } else {
+            content
+        }
         val msg = Message(
             id = generateId(),
             userId = SilkAgent.AGENT_ID,
             userName = "📄 文件解析",
-            content = "**${label}**\n\n${content}",
+            content = combinedContent,
             timestamp = System.currentTimeMillis(),
             type = MessageType.SYSTEM,
             isTransient = false,

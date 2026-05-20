@@ -111,3 +111,6 @@ fun formatWebFileSize(size: Long): String {
         else -> "${(size / gb * 10).toInt() / 10.0} GB"
     }
 }
+
+fun webIsImageFile(fileName: String): Boolean =
+    fileName.substringAfterLast(".", "").lowercase() in setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "tiff", "tif")
