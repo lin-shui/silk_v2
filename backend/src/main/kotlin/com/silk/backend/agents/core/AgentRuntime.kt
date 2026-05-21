@@ -15,6 +15,7 @@ import com.silk.backend.agents.acp.PermissionResponse
 import com.silk.backend.agents.acp.StopReason
 import com.silk.backend.agents.adapters.claudecode.ClaudeCodeDescriptor
 import com.silk.backend.agents.adapters.codex.CodexDescriptor
+import com.silk.backend.agents.adapters.cursor.CursorDescriptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -44,6 +45,7 @@ object AgentRuntime {
     init {
         AgentRegistry.register(ClaudeCodeDescriptor)
         AgentRegistry.register(CodexDescriptor)
+        AgentRegistry.register(CursorDescriptor)
     }
 
     // ========== Workflow 持久化（Plan E2） ==========
