@@ -229,6 +229,8 @@ class CursorBridgeServer:
                 await self._handle_initialize(msg_id, params)
             elif method == "session/new":
                 await self._handle_session_new(msg_id, params)
+            elif method == "session/load":
+                await self._handle_session_load(msg_id, params)
             elif method == "session/prompt":
                 await self._handle_session_prompt(msg_id, params)
             elif method == "_silk/set_cwd":
@@ -247,7 +249,7 @@ class CursorBridgeServer:
             elif method == "_silk/compact":
                 await self._send_error(msg_id, -32601, "Cursor does not support compact")
             elif method == "_silk/list_local_sessions":
-                await self._send_response(msg_id, {"sessions": []})
+                await self._handle_silk_list_sessions(msg_id, params)
             else:
                 await self._send_error(msg_id, -32601, f"Method not found: {method}")
         except Exception as exc:
@@ -271,7 +273,7 @@ class CursorBridgeServer:
         await self._send_response(msg_id, {
             "protocolVersion": "0.2",
             "agentCapabilities": {
-                "loadSession": False,
+                "loadSession": True,
                 "promptCapabilities": {
                     "image": False,
                     "audio": False,
@@ -279,7 +281,7 @@ class CursorBridgeServer:
                 },
                 "_silk": {
                     "compact": False,
-                    "listLocalSessions": False,
+                    "listLocalSessions": True,
                     "setCwd": True,
                     "listDir": True,
                     "resolveQuestion": True,
@@ -289,40 +291,99 @@ class CursorBridgeServer:
         })
 
     # ------------------------------------------------------------------
-    # session/new — 只记录 cwd，不 spawn 子进程（lazy spawn）
+    # session/new — record cwd + optional seed, spawn deferred to prompt
     # ------------------------------------------------------------------
 
     async def _handle_session_new(self, msg_id: Any, params: Any) -> None:
         p = params or {}
         cwd = p.get("cwd") or self.default_cwd
         cwd = os.path.realpath(cwd)
+        cli_session_id = p.get("cliSessionId")
         acp_session_id = str(uuid.uuid4())
 
         sess = AcpSession(cwd=cwd)
+        if cli_session_id:
+            resolved = _resolve_cursor_session_id(cli_session_id)
+            if resolved:
+                sess.cursor_session_id = resolved
+                if resolved != cli_session_id:
+                    logger.info("[Bridge] session/new seed resolved: %s → %s", cli_session_id, resolved)
+            else:
+                logger.warning("[Bridge] session/new seed not found on disk: %s", cli_session_id)
         self.sessions[acp_session_id] = sess
 
-        logger.info("[Bridge] session/new (lazy): acp=%s cwd=%s", acp_session_id, cwd)
+        logger.info(
+            "[Bridge] session/new: acp=%s cwd=%s seed=%s",
+            acp_session_id, cwd, (sess.cursor_session_id or "-")[:12],
+        )
         await self._send_response(msg_id, {"sessionId": acp_session_id})
 
     # ------------------------------------------------------------------
-    # _ensure_relay — Lazy spawn: start subprocess if not running
+    # session/load — resume existing Cursor session
     # ------------------------------------------------------------------
 
-    async def _ensure_relay(self, acp_session_id: str, sess: AcpSession) -> bool:
-        """Ensure the Cursor subprocess is running for this session.
+    async def _handle_session_load(self, msg_id: Any, params: Any) -> None:
+        """Bind a backend ACP session to an existing Cursor session ID.
 
-        If the relay is already alive, just return True.
-        If dead or None, spawn a new one (initialize + session/new).
+        Like cc_bridge/codex_bridge: mints a fresh ACP UUID whose
+        ``cursor_session_id`` is pre-set. The next ``_spawn_relay`` call
+        will use ``session/load`` instead of ``session/new`` to restore
+        context inside the Cursor subprocess.
+
+        The backend may pass a short prefix (e.g. first 8 chars). We
+        resolve it to the full UUID by scanning ``~/.cursor/acp-sessions/``.
+        """
+        p = params or {}
+        cursor_sid = p.get("sessionId")
+        cwd = p.get("cwd") or self.default_cwd
+        if not cursor_sid:
+            await self._send_error(msg_id, -32602, "missing sessionId")
+            return
+
+        # Resolve prefix → full UUID
+        resolved = _resolve_cursor_session_id(cursor_sid)
+        if resolved is None:
+            logger.warning(
+                "[Bridge] session/load: no matching session on disk for prefix=%s",
+                cursor_sid,
+            )
+            await self._send_error(
+                msg_id, -32602,
+                f"cursor session not found: {cursor_sid}",
+            )
+            return
+        if resolved != cursor_sid:
+            logger.info(
+                "[Bridge] session/load: resolved prefix %s → %s",
+                cursor_sid, resolved,
+            )
+
+        acp_session_id = str(uuid.uuid4())
+        sess = AcpSession(cwd=os.path.realpath(cwd), cursor_session_id=resolved)
+        self.sessions[acp_session_id] = sess
+        logger.info(
+            "[Bridge] session/load: acp=%s cursor_sid=%s cwd=%s",
+            acp_session_id, resolved[:12], sess.cwd,
+        )
+        await self._send_response(msg_id, {"sessionId": acp_session_id, "loaded": True})
+
+    # ------------------------------------------------------------------
+    # _spawn_relay — spawn subprocess for a single prompt
+    # ------------------------------------------------------------------
+
+    async def _spawn_relay(self, acp_session_id: str, sess: AcpSession) -> bool:
+        """Spawn a fresh Cursor subprocess for this prompt.
+
+        Always creates a new subprocess (spawn-per-prompt model).
+        If ``sess.cursor_session_id`` is set, uses ``session/load`` to
+        restore context; otherwise ``session/new``. Falls back to
+        ``session/new`` if ``session/load`` fails.
         Returns False on failure.
         """
-        if sess.relay and sess.relay.alive:
-            return True
-
-        # Cleanup stale relay
+        # Kill any stale relay from a previous prompt
         if sess.relay:
             await sess.relay.stop()
             sess.relay = None
-            sess.cursor_session_id = None
 
         try:
             relay = AcpSubprocess(
@@ -341,23 +402,47 @@ class CursorBridgeServer:
                 },
                 "clientInfo": {"name": "silk-cursor-bridge", "version": "1.0.0"},
             })
-
-            # V2 探测：记录 Cursor 是否支持 session/load
-            caps = init_result.get("agentCapabilities", {})
-            relay.supports_load_session = bool(caps.get("loadSession", False))
             logger.info(
-                "[Bridge] Cursor initialized (loadSession=%s): %s",
-                relay.supports_load_session, json.dumps(init_result)[:200],
+                "[Bridge] Cursor initialized: %s",
+                json.dumps(init_result)[:200],
             )
 
-            # 2. Create session with Cursor
+            # 2. session/load (resume) or session/new (fresh)
+            if sess.cursor_session_id:
+                logger.info(
+                    "[Bridge] _spawn_relay: attempting session/load cursor_sid=%s",
+                    sess.cursor_session_id,
+                )
+                try:
+                    load_result = await relay.call("session/load", {
+                        "sessionId": sess.cursor_session_id,
+                        "cwd": sess.cwd,
+                        "mcpServers": [],
+                    })
+                    loaded_sid = load_result.get("sessionId", sess.cursor_session_id)
+                    sess.cursor_session_id = loaded_sid
+                    logger.info(
+                        "[Bridge] session/load OK: acp=%s cursor=%s (RESUMED)",
+                        acp_session_id, sess.cursor_session_id,
+                    )
+                    return True
+                except Exception as load_exc:
+                    logger.warning(
+                        "[Bridge] session/load FAILED for cursor_sid=%s: %s — falling back to session/new",
+                        sess.cursor_session_id, load_exc,
+                    )
+                    # Fallback: create a fresh session instead
+                    sess.cursor_session_id = None
+            else:
+                logger.info("[Bridge] _spawn_relay: no cursor_session_id, using session/new")
+
             new_result = await relay.call("session/new", {
                 "cwd": sess.cwd,
                 "mcpServers": [],
             })
             sess.cursor_session_id = new_result.get("sessionId", "")
             logger.info(
-                "[Bridge] Cursor session created: acp=%s cursor=%s",
+                "[Bridge] session/new OK: acp=%s cursor=%s (FRESH)",
                 acp_session_id, sess.cursor_session_id,
             )
             return True
@@ -399,8 +484,8 @@ class CursorBridgeServer:
             await self._send_error(msg_id, -32602, f"Unknown session: {sid}")
             return
 
-        # Lazy spawn: ensure subprocess is running (auto-restart if crashed/idle-killed)
-        if not await self._ensure_relay(sid, sess):
+        # Spawn-per-prompt: always create a fresh subprocess
+        if not await self._spawn_relay(sid, sess):
             await self._send_error(msg_id, -32000, "Failed to start Cursor subprocess")
             return
 
@@ -417,10 +502,6 @@ class CursorBridgeServer:
         logger.info("[Bridge] >>> session/prompt START msg_id=%s sid=%s prompt=%s",
                     msg_id, sid[:8] if sid else "?", prompt_text[:100])
 
-        # Pause idle timer during prompt execution
-        if sess.relay._idle_task and not sess.relay._idle_task.done():
-            sess.relay._idle_task.cancel()
-
         try:
             result = await sess.relay.call(
                 "session/prompt",
@@ -432,11 +513,14 @@ class CursorBridgeServer:
             )
             stop_reason = result.get("stopReason", "end_turn")
             response: dict[str, Any] = {"stopReason": stop_reason}
-            meta = result.get("meta")
+            meta = dict(result.get("meta") or {})
+            # Inject cliSessionId for backend persistence (like cc_bridge/codex_bridge)
+            if sess.cursor_session_id:
+                meta["cliSessionId"] = sess.cursor_session_id
             if meta:
                 response["meta"] = meta
-            logger.info("[Bridge] <<< session/prompt END msg_id=%s stopReason=%s",
-                        msg_id, stop_reason)
+            logger.info("[Bridge] <<< session/prompt END msg_id=%s stopReason=%s cursor_sid=%s",
+                        msg_id, stop_reason, (sess.cursor_session_id or "?")[:8])
             await self._send_response(msg_id, response)
         except asyncio.CancelledError:
             await self._send_response(msg_id, {"stopReason": "cancelled"})
@@ -447,9 +531,10 @@ class CursorBridgeServer:
             else:
                 await self._send_error(msg_id, -32000, f"Cursor prompt error: {exc}")
         finally:
-            # Restart idle timer after prompt completes
-            if sess.relay and sess.relay.alive:
-                sess.relay.reset_idle_timer()
+            # Kill subprocess after prompt (spawn-per-prompt model)
+            if sess.relay:
+                await sess.relay.stop()
+                sess.relay = None
 
     # ------------------------------------------------------------------
     # Cursor → Backend notification relay
@@ -698,6 +783,17 @@ class CursorBridgeServer:
         await self._send_response(msg_id, result)
 
     # ------------------------------------------------------------------
+    # _silk/list_local_sessions
+    # ------------------------------------------------------------------
+
+    async def _handle_silk_list_sessions(self, msg_id: Any, params: Any) -> None:
+        cwd = os.path.realpath((params or {}).get("cwd") or "")
+        sessions = await asyncio.to_thread(_list_cursor_sessions)
+        if cwd:
+            sessions = [s for s in sessions if os.path.realpath(s.get("workingDir", "")) == cwd]
+        await self._send_response(msg_id, {"sessions": sessions})
+
+    # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
 
@@ -836,6 +932,95 @@ def _adapt_cursor_update(
         return update
 
     return update
+
+
+_CURSOR_SESSIONS_DIR = os.path.join(os.path.expanduser("~"), ".cursor", "acp-sessions")
+
+
+def _resolve_cursor_session_id(prefix: str) -> str | None:
+    """Resolve a session ID prefix to the full UUID.
+
+    Scans ``~/.cursor/acp-sessions/`` for a directory whose name starts
+    with *prefix*. If an exact match exists, return it immediately.
+    Otherwise pick the most recently modified prefix match.
+    Returns None when no match is found.
+    """
+    if not prefix:
+        return None
+    sessions_dir = _CURSOR_SESSIONS_DIR
+    if not os.path.isdir(sessions_dir):
+        return None
+
+    # Fast path: exact match
+    exact = os.path.join(sessions_dir, prefix)
+    if os.path.isdir(exact):
+        return prefix
+
+    # Prefix scan
+    best: tuple[float, str] | None = None
+    try:
+        for name in os.listdir(sessions_dir):
+            if name.startswith(prefix):
+                full = os.path.join(sessions_dir, name)
+                if os.path.isdir(full):
+                    try:
+                        mtime = os.path.getmtime(full)
+                    except OSError:
+                        mtime = 0
+                    if best is None or mtime > best[0]:
+                        best = (mtime, name)
+    except OSError:
+        return None
+
+    return best[1] if best else None
+
+
+def _list_cursor_sessions(*, max_age_days: int = 30) -> list[dict[str, Any]]:
+    """Scan ~/.cursor/acp-sessions/ and return session metadata.
+
+    Returns the same shape as cc_bridge/codex_bridge:
+    [{"sessionId", "workingDir", "title", "lastActivity"}, ...]
+    sorted by lastActivity desc.
+    """
+    import time as _time
+    sessions_dir = _CURSOR_SESSIONS_DIR
+    if not os.path.isdir(sessions_dir):
+        return []
+
+    cutoff = _time.time() - max_age_days * 86400
+    out: list[dict[str, Any]] = []
+
+    try:
+        for name in os.listdir(sessions_dir):
+            full = os.path.join(sessions_dir, name)
+            if not os.path.isdir(full):
+                continue
+            meta_path = os.path.join(full, "meta.json")
+            if not os.path.isfile(meta_path):
+                continue
+            try:
+                mtime = os.path.getmtime(full)
+                if mtime < cutoff:
+                    continue
+                with open(meta_path, "r") as f:
+                    meta = json.load(f)
+                title = meta.get("title", "")
+                cwd = meta.get("cwd", "")
+                from datetime import datetime, timezone
+                last_activity = datetime.fromtimestamp(mtime, tz=timezone.utc).isoformat()
+                out.append({
+                    "sessionId": name,
+                    "workingDir": cwd,
+                    "title": title or "(untitled)",
+                    "lastActivity": last_activity,
+                })
+            except Exception:
+                continue
+    except OSError:
+        return []
+
+    out.sort(key=lambda s: s.get("lastActivity", ""), reverse=True)
+    return out
 
 
 def _build_ws_url(server: str, token: str) -> str:
