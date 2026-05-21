@@ -28,7 +28,7 @@ object CursorDescriptor : AgentDescriptor {
     override fun extraInitializeParams(): JsonObject = buildJsonObject {
         put("_silk", buildJsonObject {
             put("compact", false)
-            put("listLocalSessions", false)
+            put("listLocalSessions", true)
             put("setCwd", true)
             put("listDir", true)
         })

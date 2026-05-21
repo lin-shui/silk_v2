@@ -138,7 +138,6 @@ class AcpSubprocess:
         self._timeout_task: asyncio.Task | None = None
         self._idle_task: asyncio.Task | None = None
         self._alive: bool = False
-        self.supports_load_session: bool = False  # V2 probe: whether Cursor supports session/load
 
     @property
     def alive(self) -> bool:
