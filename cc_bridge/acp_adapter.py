@@ -118,6 +118,7 @@ class AcpAgentServer:
 
     async def _on_permission_request(
         self,
+        acp_session_id: str,
         ctrl_request_id: str,
         tool_name: str,
         tool_input: dict[str, Any],
@@ -129,14 +130,10 @@ class AcpAgentServer:
 
         For other tools: forwards to backend for permission decision,
         waits for allow/deny response.
+
+        ``acp_session_id`` is bound via closure in ``_handle_session_prompt``
+        so that concurrent sessions are never mixed up.
         """
-        # Find the ACP session this request belongs to
-        acp_session_id = self._find_acp_session_for_request()
-        if not acp_session_id:
-            logger.warning(
-                "[ACP] Permission request with no active ACP session, auto-allow"
-            )
-            return {"behavior": "allow", "updatedInput": tool_input}
 
         if tool_name == "AskUserQuestion":
             return await self._handle_ask_user_question_ctrl(
@@ -265,13 +262,6 @@ class AcpAgentServer:
             self._pending_tool_inputs.pop(ctrl_request_id, None)
 
         return result
-
-    def _find_acp_session_for_request(self) -> str | None:
-        """Find the ACP session that currently has an active executor request."""
-        for sid, sess in self.sessions.items():
-            if sess.request_id is not None:
-                return sid
-        return None
 
     # ------------------------------------------------------------------
     # Connect loop with exponential backoff
@@ -600,7 +590,7 @@ class AcpAgentServer:
                     working_dir=sess.cwd,
                     resume=resume_flag,
                     on_session_upsert=on_session_upsert,
-                    on_permission_request=self._on_permission_request,
+                    on_permission_request=lambda rid, tn, ti, _sid=sid: self._on_permission_request(_sid, rid, tn, ti),
                 )
             )
             executor_task.add_done_callback(_log_task_exception)
