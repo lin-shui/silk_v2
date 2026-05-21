@@ -250,60 +250,24 @@ fun WorkflowChatScreen(appState: AppState) {
                         // 3. Persistent messages (reversed for reverseLayout)
                         val lastMsgId = messages.lastOrNull()?.id
                         items(messages.reversed(), key = { it.id }) { msg ->
-                            MessageItem(
-                                message = msg,
-                                currentUserId = user.id,
-                                context = context,
-                                isTransient = false,
-                                isAIExpanded = aiExpandedStates[msg.id] ?: (msg.id == lastMsgId),
-                                onAIExpandChange = { messageId, isExpanded ->
-                                    val idx = messages.reversed().indexOfFirst { it.id == messageId }
-                                    if (isExpanded) {
-                                        aiExpandedStates[messageId] = true
-                                        if (idx >= 0) {
-                                            scope.launch {
-                                                kotlinx.coroutines.delay(80)
-                                                listState.scrollToItem(idx, 0)
+                            if (!CardMessageItem(msg, chatClient, user.id, user.fullName)) {
+                                MessageItem(
+                                    message = msg,
+                                    currentUserId = user.id,
+                                    context = context,
+                                    isTransient = false,
+                                    isAIExpanded = aiExpandedStates[msg.id] ?: (msg.id == lastMsgId),
+                                    onAIExpandChange = { messageId, isExpanded ->
+                                        val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                        if (isExpanded) {
+                                            aiExpandedStates[messageId] = true
+                                            if (idx >= 0) {
+                                                scope.launch {
+                                                    kotlinx.coroutines.delay(80)
+                                                    listState.scrollToItem(idx, 0)
 
-                                                var prevSize = listState.layoutInfo.visibleItemsInfo
-                                                    .firstOrNull { it.index == idx }?.size ?: 0
-                                                snapshotFlow {
-                                                    listState.layoutInfo.visibleItemsInfo
+                                                    var prevSize = listState.layoutInfo.visibleItemsInfo
                                                         .firstOrNull { it.index == idx }?.size ?: 0
-                                                }
-                                                .distinctUntilChanged()
-                                                .collect { size ->
-                                                    if (size > 0 && prevSize > 0 && size > prevSize) {
-                                                        listState.scroll { scrollBy((size - prevSize).toFloat()) }
-                                                    }
-                                                    if (size > 0) prevSize = size
-                                                }
-                                            }
-                                        }
-                                    } else {
-                                        if (idx >= 0) {
-                                            scope.launch {
-                                                listState.scrollToItem(idx, 0)
-                                                aiExpandedStates[messageId] = false
-                                            }
-                                        } else {
-                                            aiExpandedStates[messageId] = false
-                                        }
-                                    }
-                                },
-                                isThinkingExpanded = thinkingExpandedStates[msg.id] ?: false,
-                                onThinkingExpandChange = { messageId, expanded ->
-                                    val idx = messages.reversed().indexOfFirst { it.id == messageId }
-                                    if (expanded) {
-                                        thinkingExpandedStates[messageId] = true
-                                        if (idx >= 0) {
-                                            scope.launch {
-                                                kotlinx.coroutines.delay(80)
-                                                listState.scrollToItem(idx, 0)
-
-                                                var prevSize = listState.layoutInfo.visibleItemsInfo
-                                                    .firstOrNull { it.index == idx }?.size ?: 0
-                                                kotlinx.coroutines.withTimeoutOrNull(3000L) {
                                                     snapshotFlow {
                                                         listState.layoutInfo.visibleItemsInfo
                                                             .firstOrNull { it.index == idx }?.size ?: 0
@@ -317,28 +281,66 @@ fun WorkflowChatScreen(appState: AppState) {
                                                     }
                                                 }
                                             }
+                                        } else {
+                                            if (idx >= 0) {
+                                                scope.launch {
+                                                    listState.scrollToItem(idx, 0)
+                                                    aiExpandedStates[messageId] = false
+                                                }
+                                            } else {
+                                                aiExpandedStates[messageId] = false
+                                            }
                                         }
-                                    } else {
-                                        if (idx >= 0) {
-                                            scope.launch {
-                                                listState.scrollToItem(idx, 0)
-                                                thinkingExpandedStates[messageId] = false
+                                    },
+                                    isThinkingExpanded = thinkingExpandedStates[msg.id] ?: false,
+                                    onThinkingExpandChange = { messageId, expanded ->
+                                        val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                        if (expanded) {
+                                            thinkingExpandedStates[messageId] = true
+                                            if (idx >= 0) {
+                                                scope.launch {
+                                                    kotlinx.coroutines.delay(80)
+                                                    listState.scrollToItem(idx, 0)
+
+                                                    var prevSize = listState.layoutInfo.visibleItemsInfo
+                                                        .firstOrNull { it.index == idx }?.size ?: 0
+                                                    kotlinx.coroutines.withTimeoutOrNull(3000L) {
+                                                        snapshotFlow {
+                                                            listState.layoutInfo.visibleItemsInfo
+                                                                .firstOrNull { it.index == idx }?.size ?: 0
+                                                        }
+                                                        .distinctUntilChanged()
+                                                        .collect { size ->
+                                                            if (size > 0 && prevSize > 0 && size > prevSize) {
+                                                                listState.scroll { scrollBy((size - prevSize).toFloat()) }
+                                                            }
+                                                            if (size > 0) prevSize = size
+                                                        }
+                                                    }
+                                                }
                                             }
                                         } else {
-                                            thinkingExpandedStates[messageId] = false
+                                            if (idx >= 0) {
+                                                scope.launch {
+                                                    listState.scrollToItem(idx, 0)
+                                                    thinkingExpandedStates[messageId] = false
+                                                }
+                                            } else {
+                                                thinkingExpandedStates[messageId] = false
+                                            }
                                         }
-                                    }
-                                },
-                                onLongContentCollapsed = { messageId ->
-                                    val idx = messages.reversed().indexOfFirst { it.id == messageId }
-                                    if (idx >= 0) {
-                                        scope.launch {
-                                            kotlinx.coroutines.delay(80)
-                                            listState.scrollToItem(idx)
+                                    },
+                                    onLongContentCollapsed = { messageId ->
+                                        val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                        if (idx >= 0) {
+                                            scope.launch {
+                                                kotlinx.coroutines.delay(80)
+                                                listState.scrollToItem(idx)
+                                            }
                                         }
-                                    }
-                                },
-                            )
+                                    },
+                                )
+                            }
                         }
                     }
                 }
