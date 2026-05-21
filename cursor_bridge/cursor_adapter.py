@@ -38,10 +38,43 @@ from fs_listing import list_directory
 
 logger = logging.getLogger("cursor_bridge")
 
+# Tool display icons (aligned with cc_bridge/executor.py)
+TOOL_ICONS: dict[str, str] = {
+    "Read": "\U0001f4d6",
+    "Write": "\u270d\ufe0f",
+    "Edit": "\U0001f4dd",
+    "NotebookEdit": "\U0001f4d3",
+    "Bash": "\U0001f4bb",
+    "Glob": "\U0001f50d",
+    "Grep": "\U0001f50d",
+    "Task": "\U0001f916",
+    "WebFetch": "\U0001f310",
+    "Agent": "\U0001f916",
+    "TodoWrite": "\U0001f4dd",
+    "Find": "\U0001f50d",
+}
+
+PARAM_MAX: int = 60
+
+_TERMINAL_STATUSES = frozenset({
+    "completed", "complete", "succeeded", "success", "done",
+    "failed", "error", "cancelled", "canceled",
+})
+_ERROR_STATUSES = frozenset({"failed", "error", "cancelled", "canceled"})
+_IN_PROGRESS_STATUSES = frozenset({"in_progress", "pending", "running", ""})
+
 
 # ---------------------------------------------------------------------------
 # Per-ACP-session state
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class ToolCallDisplay:
+    """Remember first tool_call line for terminal tool_call_update (cc_bridge active_tool_ids)."""
+    line: str
+    tool: str
+    kind: str
 
 
 @dataclass
@@ -53,6 +86,11 @@ class AcpSession:
     # The AcpSubprocess instance bound to this session
     relay: AcpSubprocess | None = None
     cancelled: bool = False
+    # Accumulated thinking text for this session (Cursor sends deltas,
+    # but backend replaces-in-place via stableId so we must send full text)
+    accumulated_thought: str = ""
+    # toolCallId → display line captured at tool_call (like cc_bridge active_tool_ids)
+    active_tools: dict[str, ToolCallDisplay] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +185,9 @@ class CursorBridgeServer:
             msg_id = msg.get("id")
             method = msg.get("method")
 
+            logger.debug("[Bridge] ← backend: method=%s id=%s params=%s",
+                         method, msg_id, str(msg.get("params"))[:300])
+
             if msg_id is not None and method is not None:
                 task = asyncio.create_task(self._handle_request(msg_id, method, msg.get("params")))
                 task.add_done_callback(_log_task_exception)
@@ -174,6 +215,8 @@ class CursorBridgeServer:
     async def _send_notification(self, method: str, params: Any) -> None:
         if self.ws is None:
             return
+        logger.debug("[Bridge] → backend notif: method=%s params=%s",
+                     method, str(params)[:300])
         await self.ws.send(json.dumps({"jsonrpc": "2.0", "method": method, "params": params}))
 
     # ------------------------------------------------------------------
@@ -368,6 +411,11 @@ class CursorBridgeServer:
         )
 
         sess.cancelled = False
+        sess.accumulated_thought = ""
+        sess.active_tools.clear()
+
+        logger.info("[Bridge] >>> session/prompt START msg_id=%s sid=%s prompt=%s",
+                    msg_id, sid[:8] if sid else "?", prompt_text[:100])
 
         # Pause idle timer during prompt execution
         if sess.relay._idle_task and not sess.relay._idle_task.done():
@@ -387,6 +435,8 @@ class CursorBridgeServer:
             meta = result.get("meta")
             if meta:
                 response["meta"] = meta
+            logger.info("[Bridge] <<< session/prompt END msg_id=%s stopReason=%s",
+                        msg_id, stop_reason)
             await self._send_response(msg_id, response)
         except asyncio.CancelledError:
             await self._send_response(msg_id, {"stopReason": "cancelled"})
@@ -406,15 +456,36 @@ class CursorBridgeServer:
     # ------------------------------------------------------------------
 
     def _make_notification_handler(self, acp_session_id: str):
-        """Create handler for notifications from Cursor subprocess."""
+        """Create handler for notifications from Cursor subprocess.
+
+        Cursor speaks native ACP, but its session/update format differs from
+        what the Silk backend (AcpUpdateMapper) expects in a few ways:
+
+        1. tool_call: Cursor sends ``kind`` (e.g. "bash"), backend reads ``tool``
+        2. tool_call_update: Cursor sends ``content`` as an ARRAY of blocks,
+           backend expects a single ``{type, text}`` object
+        3. thinking/reasoning: Cursor may send ``reasoning`` or
+           ``agent_thinking_chunk`` instead of ``agent_thought_chunk``;
+           backend uses a fixed stableId that replaces-in-place, so we must
+           send the accumulated full text, not just the delta
+        """
 
         async def handler(method: str, params: Any) -> None:
             if method == "session/update":
-                # Relay session/update directly — the backend understands them
-                # Replace Cursor's sessionId with our acp_session_id
                 if isinstance(params, dict):
                     params = dict(params)
                     params["sessionId"] = acp_session_id
+                    update = params.get("update")
+                    if isinstance(update, dict):
+                        update = dict(update)
+                        adapted = _adapt_cursor_update(
+                            update, self.sessions.get(acp_session_id),
+                        )
+                        if adapted is None:
+                            return
+                        params["update"] = adapted
+                update_type = params.get("update", {}).get("sessionUpdate", "?") if isinstance(params, dict) else "?"
+                logger.debug("[Bridge] relay Cursor→backend: session/update type=%s", update_type)
                 await self._send_notification("session/update", params)
             else:
                 logger.debug("[Bridge] Ignoring Cursor notification: %s", method)
@@ -655,6 +726,118 @@ class CursorBridgeServer:
 # ---------------------------------------------------------------------------
 
 
+def _adapt_cursor_update(
+    update: dict[str, Any],
+    sess: AcpSession | None,
+) -> dict[str, Any] | None:
+    """Transform Cursor's native session/update into the format AcpUpdateMapper expects.
+
+    Returns None to drop an update (e.g. in_progress tool_call_update with no UI change).
+
+    Handles format differences:
+    1. tool_call: normalize fields + remember display line (cc_bridge active_tool_ids)
+    2. tool_call_update: terminal line is ``{original_line} → ✅/❌`` like cc_bridge executor
+    3. thinking: accumulate deltas for replace-in-place stableId
+    """
+    kind = update.get("sessionUpdate", "")
+
+    # --- tool_call: format line + remember for terminal update (cc_bridge tool_log start) ---
+    if kind == "tool_call":
+        tool_call_id = update.get("toolCallId", "") or ""
+        kind_raw = update.get("kind", "") or ""
+        title = update.get("title", "") or ""
+        raw_input = update.get("rawInput")
+        tool = _normalize_tool_kind(kind_raw) or title or "Tool"
+        line = _format_cursor_tool_line(kind_raw, title, raw_input)
+
+        if sess is not None and tool_call_id and tool_call_id not in sess.active_tools:
+            sess.active_tools[tool_call_id] = ToolCallDisplay(line=line, tool=tool, kind=kind_raw)
+
+        update["tool"] = tool
+        update["title"] = line
+        logger.info(
+            "[Adapt] tool_call: tool=%s line=%s toolCallId=%s status=%s",
+            tool, line[:120], tool_call_id[:16] if tool_call_id else "?",
+            update.get("status"),
+        )
+        return update
+
+    # --- tool_call_update: cc_bridge-style terminal suffix on remembered line ---
+    if kind == "tool_call_update":
+        tool_call_id = update.get("toolCallId", "") or ""
+        status = (update.get("status") or "").lower().strip()
+        raw_content = update.get("content")
+        result_text = _flatten_tool_content(raw_content)
+
+        logger.info(
+            "[Adapt] tool_call_update BEFORE: toolCallId=%s status=%s content_type=%s",
+            tool_call_id[:16] if tool_call_id else "?",
+            status, type(raw_content).__name__,
+        )
+
+        if status in _IN_PROGRESS_STATUSES:
+            logger.debug("[Adapt] tool_call_update: drop in_progress (status=%s)", status)
+            return None
+
+        if status not in _TERMINAL_STATUSES:
+            logger.debug("[Adapt] tool_call_update: drop unknown status=%s", status)
+            return None
+
+        info: ToolCallDisplay | None = None
+        if sess is not None and tool_call_id:
+            info = sess.active_tools.pop(tool_call_id, None)
+
+        if info is not None:
+            line = info.line
+        else:
+            line = _format_cursor_tool_line(
+                update.get("kind", "") or "",
+                update.get("title", "") or "",
+                update.get("rawInput"),
+            )
+
+        is_error = (
+            status in _ERROR_STATUSES
+            or bool(update.get("isError"))
+            or bool(update.get("is_error"))
+        )
+        if is_error:
+            summary = ""
+            if result_text:
+                summary = result_text.strip().split("\n", 1)[0][:PARAM_MAX]
+            suffix = f" \u2192 \u274c {summary}" if summary else " \u2192 \u274c"
+        else:
+            suffix = " \u2192 \u2705"
+
+        terminal_line = f"{line}{suffix}"
+        update["content"] = {"type": "text", "text": terminal_line}
+        logger.info("[Adapt] tool_call_update AFTER: %s", terminal_line[:300])
+        return update
+
+    # --- thinking / reasoning → agent_thought_chunk with accumulated text ---
+    if kind in ("reasoning", "reasoning_chunk", "thinking", "agent_thinking_chunk",
+                "agent_thought_chunk"):
+        content = update.get("content", {})
+        delta = ""
+        if isinstance(content, dict):
+            delta = content.get("text", "")
+        elif isinstance(content, str):
+            delta = content
+        # Also check top-level ``text`` field
+        if not delta:
+            delta = update.get("text", "")
+
+        if sess is not None and delta:
+            sess.accumulated_thought += delta
+        full_text = sess.accumulated_thought if sess else delta
+
+        update["sessionUpdate"] = "agent_thought_chunk"
+        update["content"] = {"type": "text", "text": full_text}
+        return update
+
+    return update
+
+
 def _build_ws_url(server: str, token: str) -> str:
     host = server.rstrip("/")
     lower = host.lower()
@@ -681,14 +864,89 @@ def _resolve_cwd(candidate: str) -> str:
     return "/"
 
 
+def _normalize_tool_kind(kind: str) -> str:
+    """Map Cursor tool kinds to cc_bridge-style tool names for icons."""
+    k = (kind or "").strip()
+    if not k:
+        return ""
+    aliases = {
+        "read file": "Read",
+        "read": "Read",
+        "write": "Write",
+        "edit": "Edit",
+        "bash": "Bash",
+        "shell": "Bash",
+        "glob": "Glob",
+        "grep": "Grep",
+        "find": "Find",
+        "task": "Task",
+        "webfetch": "WebFetch",
+        "agent": "Agent",
+        "todowrite": "TodoWrite",
+    }
+    return aliases.get(k.lower(), k)
+
+
+def _format_cursor_tool_line(kind: str, title: str, raw_input: Any) -> str:
+    """Format a tool invocation line like cc_bridge format_tool_call."""
+    tool_name = _normalize_tool_kind(kind) or (title or "").strip() or "Tool"
+    icon = TOOL_ICONS.get(tool_name, "\U0001f527")
+
+    param = _summarize_tool_input(kind, raw_input)
+    title_stripped = (title or "").strip()
+    kind_lower = (kind or "").strip().lower()
+    if not param and title_stripped and title_stripped.lower() != kind_lower:
+        param = title_stripped
+
+    if len(param) > PARAM_MAX:
+        display = param[: PARAM_MAX - 3] + "..."
+    else:
+        display = param
+
+    if display:
+        return f"{icon} {tool_name} `{display}`"
+    return f"{icon} {tool_name}"
+
+
+def _flatten_tool_content(raw_content: Any) -> str:
+    """Extract text from Cursor tool_call_update content (array, object, or string)."""
+    if raw_content is None:
+        return ""
+    if isinstance(raw_content, str):
+        return raw_content
+    if isinstance(raw_content, dict):
+        if raw_content.get("type") == "text":
+            return str(raw_content.get("text", "") or "")
+        return ""
+    if isinstance(raw_content, list):
+        parts: list[str] = []
+        for block in raw_content:
+            if isinstance(block, dict):
+                inner = block.get("content")
+                if isinstance(inner, dict):
+                    t = inner.get("text", "")
+                    if t:
+                        parts.append(str(t))
+                elif isinstance(block.get("text"), str):
+                    parts.append(block["text"])
+        return "\n".join(parts)
+    return ""
+
+
 def _summarize_tool_input(kind: str, raw_input: Any) -> str:
     """Extract human-readable summary from tool input."""
     if not isinstance(raw_input, dict):
         return ""
-    for key in ("command", "file_path", "path", "pattern", "url", "query"):
+    for key in (
+        "command", "file_path", "notebook_path", "path", "pattern",
+        "description", "url", "query",
+    ):
         val = raw_input.get(key)
         if isinstance(val, str) and val:
             return val
+    for v in raw_input.values():
+        if isinstance(v, str) and v:
+            return v
     return ""
 
 
