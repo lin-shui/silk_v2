@@ -70,17 +70,20 @@ fun ContactsScene(appState: WebAppState) {
     LaunchedEffect(appState.currentUser?.id) {
         appState.currentUser?.let { user ->
             scope.launch {
-                try {
-                    val response = ApiClient.getUserSettings(user.id)
-                    if (response.success && response.settings != null) {
-                        userLanguage = response.settings!!.language
-                        console.log("✅ ContactsScene: Loaded language preference:", response.settings!!.language)
-                    } else {
-                        console.log("⚠️ ContactsScene: No user settings found, using default CHINESE")
-                    }
-                } catch (e: Exception) {
-                    console.error("❌ ContactsScene: Failed to load user settings:", e)
-                }
+                recoverSuspendNonCancellation(
+                    block = {
+                        val response = ApiClient.getUserSettings(user.id)
+                        if (response.success && response.settings != null) {
+                            userLanguage = response.settings!!.language
+                            console.log("✅ ContactsScene: Loaded language preference:", response.settings!!.language)
+                        } else {
+                            console.log("⚠️ ContactsScene: No user settings found, using default CHINESE")
+                        }
+                    },
+                    recover = { error ->
+                        console.error("❌ ContactsScene: Failed to load user settings:", error)
+                    },
+                )
             }
         }
     }
@@ -91,21 +94,23 @@ fun ContactsScene(appState: WebAppState) {
     fun loadContacts() {
         scope.launch {
             isLoading = true
-            try {
-                val response = appState.currentUser?.let { user ->
-                    ApiClient.getContacts(user.id)
-                }
-                
-                if (response != null && response.success) {
-                    contacts = response.contacts ?: emptyList()
-                    pendingRequests = response.pendingRequests ?: emptyList()
-                    console.log("✅ 加载了${contacts.size}个联系人，${pendingRequests.size}个待处理请求")
-                }
-            } catch (e: Exception) {
-                console.error("❌ 加载联系人失败:", e.message)
-            } finally {
-                isLoading = false
-            }
+            recoverSuspendNonCancellation(
+                block = {
+                    val response = appState.currentUser?.let { user ->
+                        ApiClient.getContacts(user.id)
+                    }
+
+                    if (response != null && response.success) {
+                        contacts = response.contacts ?: emptyList()
+                        pendingRequests = response.pendingRequests ?: emptyList()
+                        console.log("✅ 加载了${contacts.size}个联系人，${pendingRequests.size}个待处理请求")
+                    }
+                },
+                recover = { error ->
+                    console.error("❌ 加载联系人失败:", error.message)
+                },
+            )
+            isLoading = false
         }
     }
     

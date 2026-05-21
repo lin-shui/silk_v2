@@ -47,12 +47,15 @@ class WebAppState {
         sceneHistory.clear()
         
         // 清除可能的旧版本LocalStorage数据
-        try {
+        recoverNonCancellation(
+            block = {
             localStorage.removeItem("silk_selected_group")
             localStorage.removeItem("silk_scene")
-        } catch (e: Exception) {
-            console.log("清理LocalStorage:", e.message)
-        }
+            },
+            recover = { error ->
+                console.log("清理LocalStorage:", error.message)
+            },
+        )
         
         // 尝试从LocalStorage加载用户
         loadUserFromStorage()
@@ -147,7 +150,8 @@ class WebAppState {
         }
         
         // 检查是否有保存的用户数据
-        try {
+        return recoverNonCancellation(
+            block = {
             val json = localStorage.getItem("silk_user")
             if (json != null) {
                 val user = kotlinx.serialization.json.Json.decodeFromString<User>(json)
@@ -155,37 +159,49 @@ class WebAppState {
                 currentUser = user
                 currentScene = Scene.GROUP_LIST
                 sceneHistory.clear()
-                return true
+                true
+            } else {
+                false
             }
-        } catch (e: Exception) {
-            console.log("检查会话失败:", e.message)
+        },
+            recover = { error ->
+                console.log("检查会话失败:", error.message)
+                false
+            },
+        ).also { restored ->
+            if (!restored) {
+                console.log("🔐 没有保存的用户数据，保持在登录页")
+            }
         }
-        
-        console.log("🔐 没有保存的用户数据，保持在登录页")
-        return false
     }
     
     private fun saveUserToStorage(user: User) {
-        try {
-            val json = Json.encodeToString(user)
-            localStorage.setItem("silk_user", json)
-            console.log("用户信息已保存到LocalStorage")
-        } catch (e: Exception) {
-            console.log("保存用户信息失败:", e)
-        }
+        recoverNonCancellation(
+            block = {
+                val json = Json.encodeToString(user)
+                localStorage.setItem("silk_user", json)
+                console.log("用户信息已保存到LocalStorage")
+            },
+            recover = { error ->
+                console.log("保存用户信息失败:", error)
+            },
+        )
     }
     
     private fun loadUserFromStorage() {
-        try {
-            val json = localStorage.getItem("silk_user")
-            if (json != null) {
-                val user = Json.decodeFromString<User>(json)
-                currentUser = user
-                currentScene = Scene.GROUP_LIST
-                console.log("自动登录:", user.fullName)
-            }
-        } catch (e: Exception) {
-            console.log("加载用户信息失败:", e)
-        }
+        recoverNonCancellation(
+            block = {
+                val json = localStorage.getItem("silk_user")
+                if (json != null) {
+                    val user = Json.decodeFromString<User>(json)
+                    currentUser = user
+                    currentScene = Scene.GROUP_LIST
+                    console.log("自动登录:", user.fullName)
+                }
+            },
+            recover = { error ->
+                console.log("加载用户信息失败:", error)
+            },
+        )
     }
 }

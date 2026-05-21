@@ -1,8 +1,16 @@
 package com.silk.backend
 
-import io.ktor.server.application.*
-import io.ktor.server.websocket.*
-import io.ktor.websocket.*
+import com.silk.backend.models.MessageReference
+import io.ktor.server.application.Application
+import io.ktor.server.application.install
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.pingPeriod
+import io.ktor.server.websocket.timeout
+import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.WebSocketSession
+import io.ktor.websocket.close
 import java.time.Duration
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.launch
@@ -12,7 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.Json
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -37,7 +45,7 @@ data class Message(
     val totalSteps: Int? = null,       // 总步骤数（用于进度条）
     val isIncremental: Boolean = false, // true = 增量消息（前端需拼接），false = 完整消息（前端直接替换）
     val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度区分）
-    val references: List<com.silk.backend.models.MessageReference> = emptyList(),
+    val references: List<MessageReference> = emptyList(),
     val action: String? = null  // null = 新消息(默认), "edit" = 覆盖同ID消息
 )
 

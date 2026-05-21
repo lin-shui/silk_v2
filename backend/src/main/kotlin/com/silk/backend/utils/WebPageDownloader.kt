@@ -17,8 +17,13 @@ import org.jsoup.Jsoup
 import org.jsoup.safety.Safelist
 import org.apache.pdfbox.pdmodel.PDDocument
 import org.apache.pdfbox.text.PDFTextStripper
-import com.microsoft.playwright.*
-import kotlinx.coroutines.*
+import com.microsoft.playwright.Browser
+import com.microsoft.playwright.BrowserType
+import com.microsoft.playwright.Page
+import com.microsoft.playwright.Playwright
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
 /**

@@ -84,32 +84,37 @@ fun SettingsScene(appState: WebAppState) {
         scope.launch {
             isLoading = true
             try {
-                val response = ApiClient.getUserSettings(user.id)
-                console.log("Settings response:", response)
-                if (response.success && response.settings != null) {
-                    val loadedSettings = response.settings!!
-                    console.log("Loaded language:", loadedSettings.language)
-                    settings = loadedSettings
-                    selectedLanguage = loadedSettings.language
-                    defaultInstruction = loadedSettings.defaultAgentInstruction
-                } else {
-                    // Use defaults
-                    console.log("No settings found, using default CHINESE")
-                    selectedLanguage = Language.CHINESE
-                    defaultInstruction = "You are a helpful technical research assistant. "
-                }
-                // Load CC settings
-                val ccResponse = ApiClient.getCcSettings(user.id)
-                if (ccResponse.success) {
-                    ccBridgeToken = ccResponse.ccBridgeToken
-                    ccBridgeConnected = ccResponse.bridgeConnected
-                    ccBridgeIp = ccResponse.bridgeIp
-                }
-            } catch (e: Exception) {
-                console.error("加载设置失败:", e)
-                // Use defaults on error
-                selectedLanguage = Language.CHINESE
-                defaultInstruction = "You are a helpful technical research assistant. "
+                recoverSuspendNonCancellation(
+                    block = {
+                        val response = ApiClient.getUserSettings(user.id)
+                        console.log("Settings response:", response)
+                        if (response.success && response.settings != null) {
+                            val loadedSettings = response.settings!!
+                            console.log("Loaded language:", loadedSettings.language)
+                            settings = loadedSettings
+                            selectedLanguage = loadedSettings.language
+                            defaultInstruction = loadedSettings.defaultAgentInstruction
+                        } else {
+                            // Use defaults
+                            console.log("No settings found, using default CHINESE")
+                            selectedLanguage = Language.CHINESE
+                            defaultInstruction = "You are a helpful technical research assistant. "
+                        }
+                        // Load CC settings
+                        val ccResponse = ApiClient.getCcSettings(user.id)
+                        if (ccResponse.success) {
+                            ccBridgeToken = ccResponse.ccBridgeToken
+                            ccBridgeConnected = ccResponse.bridgeConnected
+                            ccBridgeIp = ccResponse.bridgeIp
+                        }
+                    },
+                    recover = { error ->
+                        console.error("加载设置失败:", error)
+                        // Use defaults on error
+                        selectedLanguage = Language.CHINESE
+                        defaultInstruction = "You are a helpful technical research assistant. "
+                    },
+                )
             } finally {
                 isLoading = false
             }
@@ -451,13 +456,18 @@ fun SettingsScene(appState: WebAppState) {
                                             ccTestResult = null
                                             val gen = ++ccTestGeneration
                                             try {
-                                                val resp = ApiClient.getBridgeStatus(user.id)
-                                                ccBridgeConnected = resp.bridgeConnected
-                                                ccBridgeIp = resp.bridgeIp
-                                                ccTestResult = if (resp.bridgeConnected) strings.ccTestSuccess else strings.ccTestFailed
-                                            } catch (e: Exception) {
-                                                console.error("刷新 Bridge 状态失败:", e)
-                                                ccTestResult = strings.ccTestFailed
+                                                recoverSuspendNonCancellation(
+                                                    block = {
+                                                        val resp = ApiClient.getBridgeStatus(user.id)
+                                                        ccBridgeConnected = resp.bridgeConnected
+                                                        ccBridgeIp = resp.bridgeIp
+                                                        ccTestResult = if (resp.bridgeConnected) strings.ccTestSuccess else strings.ccTestFailed
+                                                    },
+                                                    recover = { error ->
+                                                        console.error("刷新 Bridge 状态失败:", error)
+                                                        ccTestResult = strings.ccTestFailed
+                                                    },
+                                                )
                                             } finally {
                                                 ccIsTesting = false
                                             }
@@ -671,23 +681,28 @@ fun SettingsScene(appState: WebAppState) {
                                     isSaving = true
                                     saveMessage = null
                                     try {
-                                        val response = ApiClient.updateUserSettings(
-                                            userId = user.id,
-                                            language = selectedLanguage,
-                                            defaultAgentInstruction = defaultInstruction
+                                        recoverSuspendNonCancellation(
+                                            block = {
+                                                val response = ApiClient.updateUserSettings(
+                                                    userId = user.id,
+                                                    language = selectedLanguage,
+                                                    defaultAgentInstruction = defaultInstruction
+                                                )
+                                                if (response.success && response.settings != null) {
+                                                    val savedSettings = response.settings!!
+                                                    settings = savedSettings
+                                                    selectedLanguage = savedSettings.language
+                                                    defaultInstruction = savedSettings.defaultAgentInstruction
+                                                    saveMessage = strings.settingsSaved
+                                                } else {
+                                                    saveMessage = strings.settingsSaveError
+                                                }
+                                            },
+                                            recover = { error ->
+                                                console.error("保存设置失败:", error)
+                                                saveMessage = strings.settingsSaveError
+                                            },
                                         )
-                                        if (response.success && response.settings != null) {
-                                            val savedSettings = response.settings!!
-                                            settings = savedSettings
-                                            selectedLanguage = savedSettings.language
-                                            defaultInstruction = savedSettings.defaultAgentInstruction
-                                            saveMessage = strings.settingsSaved
-                                        } else {
-                                            saveMessage = strings.settingsSaveError
-                                        }
-                                    } catch (e: Exception) {
-                                        console.error("保存设置失败:", e)
-                                        saveMessage = strings.settingsSaveError
                                     } finally {
                                         isSaving = false
                                     }

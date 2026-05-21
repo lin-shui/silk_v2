@@ -188,41 +188,5 @@
     <ID>UseCheckOrError:GroupTodoExtractionService.kt$GroupTodoExtractionService$throw IllegalStateException("HTTP ${resp.statusCode()}: ${resp.body().take(200)}")</ID>
     <ID>UseCheckOrError:SilkAgent.kt$SilkAgent$throw IllegalStateException("Agent not initialized")</ID>
     <ID>UseRequire:AnthropicClient.kt$AnthropicClient$throw IllegalArgumentException( "ANTHROPIC_API_KEY 未配置。请在 .env 中设置 ANTHROPIC_API_KEY=your_key" )</ID>
-    <ID>WildcardImport:AIStepwiseAgent.kt$import kotlinx.serialization.json.*</ID>
-    <ID>WildcardImport:AcpWebSocketTransport.kt$import io.ktor.websocket.*</ID>
-    <ID>WildcardImport:AnthropicClient.kt$import kotlinx.serialization.json.*</ID>
-    <ID>WildcardImport:AuthService.kt$import com.silk.backend.database.*</ID>
-    <ID>WildcardImport:ChatHistoryBackupManager.kt$import com.silk.backend.models.*</ID>
-    <ID>WildcardImport:ChatHistoryManager.kt$import com.silk.backend.models.*</ID>
-    <ID>WildcardImport:ContactRepository.kt$import org.jetbrains.exposed.sql.*</ID>
-    <ID>WildcardImport:DirectModelAgent.kt$import kotlinx.serialization.json.*</ID>
-    <ID>WildcardImport:ExternalSearchService.kt$import io.ktor.client.*</ID>
-    <ID>WildcardImport:ExternalSearchService.kt$import io.ktor.client.engine.cio.*</ID>
-    <ID>WildcardImport:ExternalSearchService.kt$import io.ktor.client.plugins.contentnegotiation.*</ID>
-    <ID>WildcardImport:ExternalSearchService.kt$import io.ktor.client.request.*</ID>
-    <ID>WildcardImport:ExternalSearchService.kt$import io.ktor.client.statement.*</ID>
-    <ID>WildcardImport:ExternalSearchService.kt$import io.ktor.serialization.kotlinx.json.*</ID>
-    <ID>WildcardImport:ExternalSearchService.kt$import kotlinx.serialization.json.*</ID>
-    <ID>WildcardImport:GroupRepository.kt$import org.jetbrains.exposed.sql.*</ID>
-    <ID>WildcardImport:GroupService.kt$import com.silk.backend.database.*</ID>
-    <ID>WildcardImport:SearchDrivenAgent.kt$import kotlinx.serialization.json.*</ID>
-    <ID>WildcardImport:UserRepository.kt$import org.jetbrains.exposed.sql.*</ID>
-    <ID>WildcardImport:UserSettingsRepository.kt$import org.jetbrains.exposed.sql.*</ID>
-    <ID>WildcardImport:WeaviateClient.kt$import io.ktor.client.*</ID>
-    <ID>WildcardImport:WeaviateClient.kt$import io.ktor.client.call.*</ID>
-    <ID>WildcardImport:WeaviateClient.kt$import io.ktor.client.engine.cio.*</ID>
-    <ID>WildcardImport:WeaviateClient.kt$import io.ktor.client.plugins.*</ID>
-    <ID>WildcardImport:WeaviateClient.kt$import io.ktor.client.plugins.contentnegotiation.*</ID>
-    <ID>WildcardImport:WeaviateClient.kt$import io.ktor.client.request.*</ID>
-    <ID>WildcardImport:WeaviateClient.kt$import io.ktor.client.statement.*</ID>
-    <ID>WildcardImport:WeaviateClient.kt$import io.ktor.http.*</ID>
-    <ID>WildcardImport:WeaviateClient.kt$import io.ktor.serialization.kotlinx.json.*</ID>
-    <ID>WildcardImport:WeaviateClient.kt$import kotlinx.serialization.json.*</ID>
-    <ID>WildcardImport:WebPageDownloader.kt$import com.microsoft.playwright.*</ID>
-    <ID>WildcardImport:WebPageDownloader.kt$import kotlinx.coroutines.*</ID>
-    <ID>WildcardImport:WebSocketConfig.kt$import io.ktor.server.application.*</ID>
-    <ID>WildcardImport:WebSocketConfig.kt$import io.ktor.server.websocket.*</ID>
-    <ID>WildcardImport:WebSocketConfig.kt$import io.ktor.websocket.*</ID>
-    <ID>WildcardImport:WebSocketConfig.kt$import kotlinx.serialization.json.*</ID>
   </CurrentIssues>
 </SmellBaseline>

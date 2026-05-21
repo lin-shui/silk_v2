@@ -292,21 +292,24 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                                     val exported = ApiClient.exportKBEntry(selectedEntry!!.id)
                                     if (exported != null) {
                                         if (ObsidianVaultManager.isSupported()) {
-                                            try {
-                                                val handle = ObsidianVaultManager.getCachedHandleIfValid()
-                                                    ?: ObsidianVaultManager.pickVaultDirectory()
-                                                ObsidianVaultManager.saveToVault(
-                                                    handle,
-                                                    selectedTopic?.name ?: "General",
-                                                    exported.markdown,
-                                                    exported.fileName
-                                                )
-                                                saveMessage = "已导出到 Obsidian"
-                                            } catch (e: Exception) {
-                                                console.error("Obsidian export failed:", e)
-                                                downloadAsFile(exported.markdown, exported.fileName)
-                                                saveMessage = "已下载文件"
-                                            }
+                                            recoverSuspendNonCancellation(
+                                                block = {
+                                                    val handle = ObsidianVaultManager.getCachedHandleIfValid()
+                                                        ?: ObsidianVaultManager.pickVaultDirectory()
+                                                    ObsidianVaultManager.saveToVault(
+                                                        handle,
+                                                        selectedTopic?.name ?: "General",
+                                                        exported.markdown,
+                                                        exported.fileName
+                                                    )
+                                                    saveMessage = "已导出到 Obsidian"
+                                                },
+                                                recover = { error ->
+                                                    console.error("Obsidian export failed:", error)
+                                                    downloadAsFile(exported.markdown, exported.fileName)
+                                                    saveMessage = "已下载文件"
+                                                },
+                                            )
                                         } else {
                                             downloadAsFile(exported.markdown, exported.fileName)
                                             saveMessage = "已下载文件"

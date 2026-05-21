@@ -30,22 +30,9 @@
     <ID>SwallowedException:ApiClient.kt$ApiClient$e: Exception</ID>
     <ID>SwallowedException:Main.kt$e: dynamic</ID>
     <ID>TooGenericExceptionCaught:ApiClient.kt$ApiClient$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:AppState.kt$WebAppState$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:ContactsScene.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:GroupListScene.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:KnowledgeBaseScene.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:LoginScene.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:Main.kt$e: Exception</ID>
     <ID>TooGenericExceptionCaught:Main.kt$error: Throwable</ID>
     <ID>TooGenericExceptionCaught:Main.kt$t: Throwable</ID>
-    <ID>TooGenericExceptionCaught:ObsidianVaultManager.kt$ObsidianVaultManager$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:SettingsScene.kt$e: Exception</ID>
     <ID>TooGenericExceptionThrown:ApiClient.kt$ApiClient$throw Exception("HTTP ${response.status}: ${response.statusText}")</ID>
-    <ID>UnusedParameter:Main.kt$DOMPurify$config: dynamic = definedExternally</ID>
-    <ID>UnusedParameter:Main.kt$DOMPurify$dirty: String</ID>
-    <ID>UnusedParameter:Main.kt$HighlightJs$code: String</ID>
-    <ID>UnusedParameter:Main.kt$HighlightJs$languageName: String</ID>
-    <ID>UnusedParameter:Main.kt$HighlightJs$options: dynamic</ID>
     <ID>UseCheckOrError:Main.kt$throw IllegalStateException("HTTP ${response.status}")</ID>
   </CurrentIssues>
 </SmellBaseline>
