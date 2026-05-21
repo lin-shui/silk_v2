@@ -39,15 +39,18 @@ object ObsidianVaultManager {
      */
     suspend fun getCachedHandleIfValid(): dynamic {
         val h = cachedHandle ?: return null
-        return try {
-            val opts: dynamic = js("({})")
-            opts.mode = "readwrite"
-            val state = (h.queryPermission(opts) as Promise<dynamic>).await()
-            if (state.toString() == "granted") h else null
-        } catch (e: Exception) {
-            console.warn("queryPermission failed:", e)
-            null
-        }
+        return recoverSuspendNonCancellation(
+            block = {
+                val opts: dynamic = js("({})")
+                opts.mode = "readwrite"
+                val state = (h.queryPermission(opts) as Promise<dynamic>).await()
+                if (state.toString() == "granted") h else null
+            },
+            recover = { error ->
+                console.warn("queryPermission failed:", error)
+                null
+            },
+        )
     }
 
     /**

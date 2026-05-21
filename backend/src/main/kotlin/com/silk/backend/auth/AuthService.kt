@@ -1,6 +1,9 @@
 package com.silk.backend.auth
 
-import com.silk.backend.database.*
+import com.silk.backend.database.AuthResponse
+import com.silk.backend.database.LoginRequest
+import com.silk.backend.database.RegisterRequest
+import com.silk.backend.database.UserRepository
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
 
@@ -113,4 +116,3 @@ object AuthService {
         return UserRepository.findUserById(userId) != null
     }
 }
-

@@ -95,14 +95,17 @@ fun GroupListScene(appState: WebAppState) {
         if (appState.currentScene == Scene.GROUP_LIST) {
             appState.currentUser?.let { user ->
                 scope.launch {
-                    try {
-                        val response = ApiClient.getUserSettings(user.id)
-                        if (response.success && response.settings != null) {
-                            userLanguage = response.settings!!.language
-                        }
-                    } catch (e: Exception) {
-                        console.error("Failed to load user settings:", e)
-                    }
+                    recoverSuspendNonCancellation(
+                        block = {
+                            val response = ApiClient.getUserSettings(user.id)
+                            if (response.success && response.settings != null) {
+                                userLanguage = response.settings!!.language
+                            }
+                        },
+                        recover = { error ->
+                            console.error("Failed to load user settings:", error)
+                        },
+                    )
                 }
             }
         }
@@ -116,34 +119,39 @@ fun GroupListScene(appState: WebAppState) {
             
             isLoading = true
             try {
-                val response = appState.currentUser?.let { user ->
-                    console.log("   发送API请求获取群组...")
-                    ApiClient.getUserGroups(user.id)
-                }
-                
-                if (response != null && response.success) {
-                    // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
-                    // 它们应该只通过工作流 Tab 访问，不在 Silk 群组列表中显示
-                    groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
-                    console.log("✅ 加载了${groups.size}个群组")
-                    groups.forEach { group ->
-                        console.log("   - ${group.name} (${group.invitationCode})")
-                    }
-                    
-                    // 加载未读消息数
-                    appState.currentUser?.let { user ->
-                        val unreadResponse = ApiClient.getUnreadCounts(user.id)
-                        if (unreadResponse.success) {
-                            unreadCounts = unreadResponse.unreadCounts
-                            console.log("✅ 未读消息: ", unreadCounts)
+                recoverSuspendNonCancellation(
+                    block = {
+                        val response = appState.currentUser?.let { user ->
+                            console.log("   发送API请求获取群组...")
+                            ApiClient.getUserGroups(user.id)
                         }
-                    }
-                } else {
-                    console.log("⚠️ 加载群组失败:", response?.message)
-                }
-            } catch (e: Exception) {
-                console.error("❌ 加载群组异常:", e.message)
-                console.error("   详细错误:", e)
+
+                        if (response != null && response.success) {
+                            // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
+                            // 它们应该只通过工作流 Tab 访问，不在 Silk 群组列表中显示
+                            groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
+                            console.log("✅ 加载了${groups.size}个群组")
+                            groups.forEach { group ->
+                                console.log("   - ${group.name} (${group.invitationCode})")
+                            }
+
+                            // 加载未读消息数
+                            appState.currentUser?.let { user ->
+                                val unreadResponse = ApiClient.getUnreadCounts(user.id)
+                                if (unreadResponse.success) {
+                                    unreadCounts = unreadResponse.unreadCounts
+                                    console.log("✅ 未读消息: ", unreadCounts)
+                                }
+                            }
+                        } else {
+                            console.log("⚠️ 加载群组失败:", response?.message)
+                        }
+                    },
+                    recover = { error ->
+                        console.error("❌ 加载群组异常:", error.message)
+                        console.error("   详细错误:", error)
+                    },
+                )
             } finally {
                 isLoading = false
                 console.log("📋 群组加载完成，isLoading =", isLoading)
@@ -1077,18 +1085,23 @@ fun CreateGroupDialog(
                             scope.launch {
                                 isLoading = true
                                 try {
-                                    val response = appState.currentUser?.let { user ->
-                                        ApiClient.createGroup(user.id, groupName)
-                                    }
-                                    
-                                    if (response != null && response.success && response.group != null) {
-                                        console.log("群组创建成功:", response.group.name)
-                                        onGroupCreated(response.group)
-                                    } else {
-                                        errorMessage = response?.message ?: "创建失败"
-                                    }
-                                } catch (e: Exception) {
-                                    errorMessage = "创建失败: ${e.message}"
+                                    recoverSuspendNonCancellation(
+                                        block = {
+                                            val response = appState.currentUser?.let { user ->
+                                                ApiClient.createGroup(user.id, groupName)
+                                            }
+
+                                            if (response != null && response.success && response.group != null) {
+                                                console.log("群组创建成功:", response.group.name)
+                                                onGroupCreated(response.group)
+                                            } else {
+                                                errorMessage = response?.message ?: "创建失败"
+                                            }
+                                        },
+                                        recover = { error ->
+                                            errorMessage = "创建失败: ${error.message}"
+                                        },
+                                    )
                                 } finally {
                                     isLoading = false
                                 }
@@ -1253,18 +1266,23 @@ fun JoinGroupDialog(
                             scope.launch {
                                 isLoading = true
                                 try {
-                                    val response = appState.currentUser?.let { user ->
-                                        ApiClient.joinGroup(user.id, invitationCode)
-                                    }
-                                    
-                                    if (response != null && response.success && response.group != null) {
-                                        console.log("加入群组成功:", response.group.name)
-                                        onGroupJoined(response.group)
-                                    } else {
-                                        errorMessage = response?.message ?: "加入失败"
-                                    }
-                                } catch (e: Exception) {
-                                    errorMessage = "加入失败: ${e.message}"
+                                    recoverSuspendNonCancellation(
+                                        block = {
+                                            val response = appState.currentUser?.let { user ->
+                                                ApiClient.joinGroup(user.id, invitationCode)
+                                            }
+
+                                            if (response != null && response.success && response.group != null) {
+                                                console.log("加入群组成功:", response.group.name)
+                                                onGroupJoined(response.group)
+                                            } else {
+                                                errorMessage = response?.message ?: "加入失败"
+                                            }
+                                        },
+                                        recover = { error ->
+                                            errorMessage = "加入失败: ${error.message}"
+                                        },
+                                    )
                                 } finally {
                                     isLoading = false
                                 }

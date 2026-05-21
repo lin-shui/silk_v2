@@ -387,16 +387,21 @@ fun ChatScene(appState: WebAppState) {
     suspend fun refreshSidebarGroups() {
         isLoadingGroups = true
         try {
-            val groupsResponse = ApiClient.getUserGroups(user.id)
-            if (groupsResponse.success) {
-                userGroups = (groupsResponse.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
-            }
-            val unreadResponse = ApiClient.getUnreadCounts(user.id)
-            if (unreadResponse.success) {
-                unreadCounts = unreadResponse.unreadCounts
-            }
-        } catch (e: Exception) {
-            console.error("❌ 加载聊天室群组列表失败:", e)
+            recoverSuspendNonCancellation(
+                block = {
+                    val groupsResponse = ApiClient.getUserGroups(user.id)
+                    if (groupsResponse.success) {
+                        userGroups = (groupsResponse.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
+                    }
+                    val unreadResponse = ApiClient.getUnreadCounts(user.id)
+                    if (unreadResponse.success) {
+                        unreadCounts = unreadResponse.unreadCounts
+                    }
+                },
+                recover = { error ->
+                    console.error("❌ 加载聊天室群组列表失败:", error)
+                },
+            )
         } finally {
             isLoadingGroups = false
         }
@@ -409,14 +414,17 @@ fun ChatScene(appState: WebAppState) {
     LaunchedEffect(user.id) {
         while (true) {
             kotlinx.coroutines.delay(30000)
-            try {
-                val unreadResponse = ApiClient.getUnreadCounts(user.id)
-                if (unreadResponse.success) {
-                    unreadCounts = unreadResponse.unreadCounts
-                }
-            } catch (e: Exception) {
-                console.error("❌ 刷新未读消息失败:", e)
-            }
+            recoverSuspendNonCancellation(
+                block = {
+                    val unreadResponse = ApiClient.getUnreadCounts(user.id)
+                    if (unreadResponse.success) {
+                        unreadCounts = unreadResponse.unreadCounts
+                    }
+                },
+                recover = { error ->
+                    console.error("❌ 刷新未读消息失败:", error)
+                },
+            )
         }
     }
     
@@ -944,14 +952,17 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     LaunchedEffect(user.id, appState.currentScene) {
         if (appState.currentScene == Scene.CHAT_ROOM) {
             scope.launch {
-                try {
-                    val response = ApiClient.getUserSettings(user.id)
-                    if (response.success && response.settings != null) {
-                        userLanguage = response.settings!!.language
-                    }
-                } catch (e: Exception) {
-                    console.error("Failed to load user settings:", e)
-                }
+                recoverSuspendNonCancellation(
+                    block = {
+                        val response = ApiClient.getUserSettings(user.id)
+                        if (response.success && response.settings != null) {
+                            userLanguage = response.settings!!.language
+                        }
+                    },
+                    recover = { error ->
+                        console.error("Failed to load user settings:", error)
+                    },
+                )
             }
         }
     }
@@ -1411,15 +1422,18 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         title("重新选择 Obsidian Vault 目录")
                         onClick {
                             scope.launch {
-                                try {
-                                    ObsidianVaultManager.clearCachedHandle()
-                                    ObsidianVaultManager.pickVaultDirectory()
-                                    exportMarkdownHint = "Vault 目录已更新"
-                                } catch (e: Exception) {
-                                    if (e.message?.contains("abort", ignoreCase = true) != true) {
-                                        exportMarkdownHint = "更换目录失败: ${e.message}"
-                                    }
-                                }
+                                recoverSuspendNonCancellation(
+                                    block = {
+                                        ObsidianVaultManager.clearCachedHandle()
+                                        ObsidianVaultManager.pickVaultDirectory()
+                                        exportMarkdownHint = "Vault 目录已更新"
+                                    },
+                                    recover = { error ->
+                                        if (error.message?.contains("abort", ignoreCase = true) != true) {
+                                            exportMarkdownHint = "更换目录失败: ${error.message}"
+                                        }
+                                    },
+                                )
                             }
                         }
                     }) {
@@ -1609,13 +1623,18 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             recallingMessageIds = recallingMessageIds + messageId
                             scope.launch {
                                 try {
-                                    val response = ApiClient.recallMessage(group.id, messageId, user.id)
-                                    if (!response.success) {
-                                        window.alert("撤回失败: ${response.message}")
-                                    }
-                                } catch (e: Exception) {
-                                    console.error("❌ 撤回消息失败:", e)
-                                    window.alert("撤回失败: ${e.message}")
+                                    recoverSuspendNonCancellation(
+                                        block = {
+                                            val response = ApiClient.recallMessage(group.id, messageId, user.id)
+                                            if (!response.success) {
+                                                window.alert("撤回失败: ${response.message}")
+                                            }
+                                        },
+                                        recover = { error ->
+                                            console.error("❌ 撤回消息失败:", error)
+                                            window.alert("撤回失败: ${error.message}")
+                                        },
+                                    )
                                 } finally {
                                     recallingMessageIds = recallingMessageIds - messageId
                                 }
@@ -1638,15 +1657,18 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     },
                     onDelete = { messageId ->
                         scope.launch {
-                            try {
-                                val response = ApiClient.deleteMessage(group.id, messageId, user.id)
-                                if (!response.success) {
-                                    window.alert("删除失败: ${response.message}")
-                                }
-                            } catch (e: Exception) {
-                                console.error("❌ 删除消息失败:", e)
-                                window.alert("删除失败: ${e.message}")
-                            }
+                            recoverSuspendNonCancellation(
+                                block = {
+                                    val response = ApiClient.deleteMessage(group.id, messageId, user.id)
+                                    if (!response.success) {
+                                        window.alert("删除失败: ${response.message}")
+                                    }
+                                },
+                                recover = { error ->
+                                    console.error("❌ 删除消息失败:", error)
+                                    window.alert("删除失败: ${error.message}")
+                                },
+                            )
                         }
                     },
                     isSelectionMode = isSelectionMode,
@@ -3288,17 +3310,11 @@ private external val markdownItTaskLists: dynamic
 
 @JsModule("highlight.js")
 @JsNonModule
-private external object HighlightJs {
-    fun highlight(code: String, options: dynamic): dynamic
-    fun highlightAuto(code: String): dynamic
-    fun getLanguage(languageName: String): dynamic
-}
+private external val highlightJsModule: dynamic
 
 @JsModule("dompurify")
 @JsNonModule
-private external object DOMPurify {
-    fun sanitize(dirty: String, config: dynamic = definedExternally): String
-}
+private external val domPurifyModule: dynamic
 
 @JsModule("katex/contrib/auto-render")
 @JsNonModule
@@ -3315,6 +3331,14 @@ private external val githubMarkdownStylesheet: dynamic
 @JsModule("highlight.js/styles/github-dark.css")
 @JsNonModule
 private external val highlightStylesheet: dynamic
+
+private fun highlightJsGetLanguage(languageName: String): dynamic = highlightJsModule.getLanguage(languageName)
+
+private fun highlightJsHighlight(code: String, options: dynamic): dynamic = highlightJsModule.highlight(code, options)
+
+private fun highlightJsHighlightAuto(code: String): dynamic = highlightJsModule.highlightAuto(code)
+
+private fun sanitizeHtml(dirty: String, config: dynamic): String = domPurifyModule.sanitize(dirty, config) as String
 
 private const val MARKDOWN_RUNTIME_STYLE_ID = "silk-markdown-runtime-style"
 
@@ -3703,13 +3727,13 @@ private fun highlightCode(code: String, language: String): String {
     val dataLang = if (normalizedLanguage.isNotBlank()) """ data-lang="${escapeHtml(normalizedLanguage)}"""" else ""
 
     return try {
-        val highlighted = if (normalizedLanguage.isNotBlank() && HighlightJs.getLanguage(normalizedLanguage) != null) {
+        val highlighted = if (normalizedLanguage.isNotBlank() && highlightJsGetLanguage(normalizedLanguage) != null) {
             val options = js("{}")
             options.language = normalizedLanguage
             options.ignoreIllegals = true
-            HighlightJs.highlight(code, options).value as String
+            highlightJsHighlight(code, options).value as String
         } else {
-            HighlightJs.highlightAuto(code).value as String
+            highlightJsHighlightAuto(code).value as String
         }
 
         val className = if (normalizedLanguage.isNotBlank()) "language-${escapeHtml(normalizedLanguage)}" else ""
@@ -3852,7 +3876,7 @@ private fun renderMarkdownSafely(
 ): String {
     return try {
         val rendered = markdownEngine.render(normalizeMathBlocks(prepareMarkdownForRendering(content)))
-        val sanitized = DOMPurify.sanitize(rendered, createSanitizeConfig())
+        val sanitized = sanitizeHtml(rendered, createSanitizeConfig())
         linkCitationMarkers(sanitized, references, referenceAnchorPrefix)
     } catch (_: Throwable) {
         escapeHtmlText(content)

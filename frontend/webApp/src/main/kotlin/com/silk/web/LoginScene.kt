@@ -344,25 +344,27 @@ fun LoginScene(appState: WebAppState) {
                         scope.launch {
                             isLoading = true
                             errorMessage = ""
-                            
-                            try {
-                                val response = if (isLogin) {
-                                    ApiClient.login(loginName, password)
-                                } else {
-                                    ApiClient.register(loginName, fullName, phoneNumber, password)
-                                }
-                                
-                                if (response.success && response.user != null) {
-                                    console.log("${if (isLogin) "登录" else "注册"}成功:", response.user.fullName)
-                                    appState.setUser(response.user)
-                                } else {
-                                    errorMessage = response.message
-                                }
-                            } catch (e: Exception) {
-                                errorMessage = "操作失败: ${e.message}"
-                            } finally {
-                                isLoading = false
-                            }
+
+                            recoverSuspendNonCancellation(
+                                block = {
+                                    val response = if (isLogin) {
+                                        ApiClient.login(loginName, password)
+                                    } else {
+                                        ApiClient.register(loginName, fullName, phoneNumber, password)
+                                    }
+
+                                    if (response.success && response.user != null) {
+                                        console.log("${if (isLogin) "登录" else "注册"}成功:", response.user.fullName)
+                                        appState.setUser(response.user)
+                                    } else {
+                                        errorMessage = response.message
+                                    }
+                                },
+                                recover = { error ->
+                                    errorMessage = "操作失败: ${error.message}"
+                                },
+                            )
+                            isLoading = false
                         }
                     }
                 }

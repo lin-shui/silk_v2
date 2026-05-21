@@ -59,17 +59,5 @@
     <ID>TooGenericExceptionCaught:VersionChecker.kt$VersionChecker$e: Exception</ID>
     <ID>TooGenericExceptionCaught:WorkflowChatScreen.kt$e: Exception</ID>
     <ID>TooGenericExceptionThrown:ApkDownloader.kt$ApkDownloader$throw RuntimeException("启动安装失败: ${e.message}")</ID>
-    <ID>WildcardImport:ApiClient.kt$import com.silk.shared.models.*</ID>
-    <ID>WildcardImport:AudioDuplexScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:AudioDuplexScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:AudioDuplexScreen.kt$import androidx.compose.runtime.*</ID>
-    <ID>WildcardImport:AudioDuplexScreen.kt$import io.ktor.client.*</ID>
-    <ID>WildcardImport:AudioDuplexScreen.kt$import io.ktor.client.plugins.websocket.*</ID>
-    <ID>WildcardImport:AudioDuplexScreen.kt$import io.ktor.websocket.*</ID>
-    <ID>WildcardImport:AudioDuplexScreen.kt$import kotlinx.coroutines.*</ID>
-    <ID>WildcardImport:AudioDuplexScreen.kt$import kotlinx.serialization.json.*</ID>
-    <ID>WildcardImport:ChatScreen.kt$import androidx.compose.foundation.layout.*</ID>
-    <ID>WildcardImport:ChatScreen.kt$import androidx.compose.material3.*</ID>
-    <ID>WildcardImport:ChatScreen.kt$import androidx.compose.runtime.*</ID>
   </CurrentIssues>
 </SmellBaseline>
