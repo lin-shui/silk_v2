@@ -188,6 +188,9 @@ class ChatClient(
                 if (message.category == MessageCategory.AGENT_STATUS &&
                     message.content.startsWith("CLEAR_STATUS")) {
                     _statusMessages.value = emptyList()
+                    _isGenerating.value = false
+                    suppressTransient = false
+                    _pendingQuestionId.value = null
                 }
                 return
             }

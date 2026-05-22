@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import time
 import json
 import logging
 import os
@@ -347,6 +348,7 @@ class AcpAgentServer:
 
     async def _handle_session_prompt(self, msg_id: Any, params: Any) -> None:
         """Run a Codex prompt and stream tool/message updates back."""
+        t0 = time.monotonic()
         acp_session_id = params.get("sessionId")
         prompt_blocks = params.get("prompt") or []
         sess = self.sessions.get(acp_session_id)
@@ -407,7 +409,8 @@ class AcpAgentServer:
                         sess.cli_session_id = dstate.thread_id
 
                     # Send response right away — don't wait for process exit
-                    await self._send_prompt_response(msg_id, sess, usage, "end_turn")
+                    await self._send_prompt_response(msg_id, sess, usage, "end_turn",
+                                                     duration_ms=int((time.monotonic() - t0) * 1000))
                     response_sent = True
                     break
 
@@ -420,7 +423,8 @@ class AcpAgentServer:
                     if dstate.thread_id and not sess.cli_session_id:
                         sess.cli_session_id = dstate.thread_id
 
-                    await self._send_prompt_response(msg_id, sess, usage, "end_turn")
+                    await self._send_prompt_response(msg_id, sess, usage, "end_turn",
+                                                     duration_ms=int((time.monotonic() - t0) * 1000))
                     response_sent = True
                     break
 
@@ -459,7 +463,8 @@ class AcpAgentServer:
             else:
                 if sess.cancelled:
                     stop_reason = "cancelled"
-                await self._send_prompt_response(msg_id, sess, usage, stop_reason)
+                await self._send_prompt_response(msg_id, sess, usage, stop_reason,
+                                                 duration_ms=int((time.monotonic() - t0) * 1000))
 
     def _send_prompt_response(
         self,
@@ -467,6 +472,7 @@ class AcpAgentServer:
         sess: AcpSession,
         usage: dict[str, int],
         stop_reason: str,
+        duration_ms: int = 0,
     ):
         """Build and send the session/prompt JSON-RPC response."""
         result = {
@@ -476,6 +482,7 @@ class AcpAgentServer:
                 "inputTokens": usage["input_tokens"],
                 "outputTokens": usage["output_tokens"],
                 "reasoningTokens": usage["reasoning_tokens"],
+                "durationMs": duration_ms,
             },
         }
         return self._send_response(msg_id, result)

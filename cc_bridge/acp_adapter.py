@@ -27,6 +27,7 @@ import os
 import signal
 import ssl
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -520,6 +521,7 @@ class AcpAgentServer:
     # ------------------------------------------------------------------
 
     async def _handle_session_prompt(self, msg_id: Any, params: Any) -> None:
+        t0 = time.monotonic()
         sid = (params or {}).get("sessionId")
         sess = self.sessions.get(sid) if sid else None
         if sess is None:
@@ -640,9 +642,10 @@ class AcpAgentServer:
             meta_out: dict[str, Any] = {}
             if cli_sid:
                 meta_out["cliSessionId"] = cli_sid
-            for k in ("costUsd", "durationMs", "numTurns"):
+            for k in ("costUsd", "numTurns"):
                 if k in executor_meta:
                     meta_out[k] = executor_meta[k]
+            meta_out["durationMs"] = int((time.monotonic() - t0) * 1000)
             if meta_out:
                 response_payload["meta"] = meta_out
             await self._send_response(msg_id, response_payload)
