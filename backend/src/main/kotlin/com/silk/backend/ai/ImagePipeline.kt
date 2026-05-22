@@ -1,5 +1,10 @@
 package com.silk.backend.ai
 
+import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -27,6 +32,9 @@ object ImagePipeline {
         encodeDefaults = true
     }
 
+    /** Fire-and-forget scope for background vision processing */
+    private val visionScope = CoroutineScope(Dispatchers.IO + CoroutineName("vision-async"))
+
     fun process(
         file: File,
         originalFileName: String,
@@ -40,23 +48,25 @@ object ImagePipeline {
         val dimensions = getImageDimensions(file)
 
         var ocrText = ""
-        var visionDescription = ""
 
         if (isOcrAvailable()) {
             ocrText = runOcr(file, config.ocrLanguages)
         }
 
+        // Launch vision asynchronously — won't block the response
         if (config.visionEnabled && visionAvailable()) {
-            visionDescription = callVisionApi(file, config.visionModel)
+            visionScope.launch {
+                processVisionAsync(file, originalFileName, uploadsDir, config)
+            }
         }
 
         val extractedFile = File(uploadsDir, "$originalFileName.extracted.md")
-        extractedFile.writeText(buildMarkdown(originalFileName, ext, sizeStr, dimensions, ocrText, visionDescription))
+        extractedFile.writeText(buildMarkdown(originalFileName, ext, sizeStr, dimensions, ocrText, ""))
 
-        val summary = buildSummary(ocrText, visionDescription)
-        val method = buildMethodString(ocrText.isNotBlank(), visionDescription.isNotBlank())
+        val summary = buildSummary(ocrText, "")
+        val method = buildMethodString(ocrText.isNotBlank(), false)
 
-        logger.info("图片处理完成: {} (OCR: {} 字符, Vision: {} 字符)", originalFileName, ocrText.length, visionDescription.length)
+        logger.info("图片处理完成 (OCR): {} (OCR: {} 字符, Vision: 异步进行中)", originalFileName, ocrText.length)
 
         return PreprocessResult(
             extractedTextFile = extractedFile,
@@ -64,6 +74,45 @@ object ImagePipeline {
             imageCount = 1,
             method = method
         )
+    }
+
+    /**
+     * 后台运行 Vision API，完成后重写 extracted markdown 文件，
+     * 把 OCR + Vision 内容合并写入。
+     */
+    private suspend fun processVisionAsync(
+        file: File,
+        originalFileName: String,
+        uploadsDir: File,
+        config: PreprocessConfig
+    ) {
+        val ext = originalFileName.substringAfterLast(".", "").lowercase()
+        val sizeStr = FilePreprocessor.formatFileSize(file.length())
+        val dimensions = getImageDimensions(file)
+
+        logger.info("Vision 异步处理开始: {}", originalFileName)
+        val visionDescription = callVisionApi(file, config.visionModel)
+
+        if (visionDescription.isBlank()) {
+            logger.info("Vision 未返回结果: {}", originalFileName)
+            return
+        }
+
+        withContext(Dispatchers.IO) {
+            val extractedFile = File(uploadsDir, "$originalFileName.extracted.md")
+
+            // 从已有文件中提取 OCR 文本
+            var ocrText = ""
+            if (extractedFile.exists()) {
+                val content = extractedFile.readText()
+                val ocrMatch = Regex("""## OCR 提取的文字\s+([\s\S]*?)(?=\n## |\Z)""").find(content)
+                ocrText = ocrMatch?.groupValues?.get(1)?.trim() ?: ""
+            }
+
+            // 重写为 OCR + Vision 完整内容
+            extractedFile.writeText(buildMarkdown(originalFileName, ext, sizeStr, dimensions, ocrText, visionDescription))
+            logger.info("Vision 异步处理完成: {} (+{} 字符)", originalFileName, visionDescription.length)
+        }
     }
 
     private fun getImageDimensions(file: File): String {
@@ -169,7 +218,7 @@ object ImagePipeline {
                 .header("Content-Type", "application/json")
                 .header("x-api-key", AIConfig.ANTHROPIC_API_KEY)
                 .header("anthropic-version", "2023-06-01")
-                .timeout(Duration.ofSeconds(60))
+                .timeout(Duration.ofSeconds(180))
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
                 .build()
 
@@ -232,7 +281,7 @@ object ImagePipeline {
                 .uri(URI.create(url))
                 .header("Content-Type", "application/json")
                 .header("Authorization", "Bearer $apiKey")
-                .timeout(Duration.ofSeconds(60))
+                .timeout(Duration.ofSeconds(300))
                 .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
                 .build()
 
