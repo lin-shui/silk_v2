@@ -356,7 +356,7 @@ private suspend fun applyWorkflowSettings(
     return SettingsApplyResult.Ok(newDir, newAgentDisplay, newPermMode)
 }
 
-private fun permModeLabel(mode: String): String = when (mode) {
+internal fun permModeLabel(mode: String): String = when (mode) {
     "ACCEPT_EDITS" -> "Accept Edits"
     "BYPASS" -> "Bypass"
     else -> "Interactive"

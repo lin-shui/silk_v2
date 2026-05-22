@@ -26,6 +26,7 @@ import os
 import signal
 import ssl
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -477,6 +478,7 @@ class CursorBridgeServer:
     # ------------------------------------------------------------------
 
     async def _handle_session_prompt(self, msg_id: Any, params: Any) -> None:
+        t0 = time.monotonic()
         p = params or {}
         sid = p.get("sessionId")
         sess = self.sessions.get(sid)
@@ -517,8 +519,8 @@ class CursorBridgeServer:
             # Inject cliSessionId for backend persistence (like cc_bridge/codex_bridge)
             if sess.cursor_session_id:
                 meta["cliSessionId"] = sess.cursor_session_id
-            if meta:
-                response["meta"] = meta
+            meta["durationMs"] = int((time.monotonic() - t0) * 1000)
+            response["meta"] = meta
             logger.info("[Bridge] <<< session/prompt END msg_id=%s stopReason=%s cursor_sid=%s",
                         msg_id, stop_reason, (sess.cursor_session_id or "?")[:8])
             await self._send_response(msg_id, response)
