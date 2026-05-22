@@ -67,6 +67,8 @@ object AIConfig {
     val FILE_PREPROCESS_ENABLED: Boolean get() = env("SILK_FILE_PREPROCESS_ENABLED")?.toBoolean() ?: true
     val VISION_ENABLED: Boolean get() = env("SILK_VISION_ENABLED")?.toBoolean() ?: true
     val VISION_MODEL: String get() = env("SILK_VISION_MODEL") ?: "claude-3-5-haiku-20241022"
+    val VISION_BASE_URL: String get() = env("SILK_VISION_BASE_URL") ?: ""
+    val VISION_API_KEY: String get() = env("SILK_VISION_API_KEY") ?: ""
     val OCR_LANGUAGES: String get() = env("SILK_OCR_LANGUAGES") ?: "eng+chi_sim"
 
     // Weaviate 向量库地址（已弃用：改用 Claude 200K context + grep 搜索）

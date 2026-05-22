@@ -46,7 +46,7 @@ object ImagePipeline {
             ocrText = runOcr(file, config.ocrLanguages)
         }
 
-        if (config.visionEnabled && AIConfig.ANTHROPIC_API_KEY.isNotBlank()) {
+        if (config.visionEnabled && visionAvailable()) {
             visionDescription = callVisionApi(file, config.visionModel)
         }
 
@@ -115,9 +115,20 @@ object ImagePipeline {
         }
     }
 
+    private fun visionAvailable(): Boolean =
+        AIConfig.ANTHROPIC_API_KEY.isNotBlank() || AIConfig.VISION_BASE_URL.isNotBlank()
+
     private fun callVisionApi(file: File, model: String): String {
+        return when {
+            AIConfig.ANTHROPIC_API_KEY.isNotBlank() -> callAnthropicVision(file, model)
+            AIConfig.VISION_BASE_URL.isNotBlank() -> callOpenAiCompatibleVision(file, model)
+            else -> ""
+        }
+    }
+
+    private fun callAnthropicVision(file: File, model: String): String {
         return try {
-            logger.debug("调用 Vision API: {}, 模型: {}", file.name, model)
+            logger.debug("调用 Vision API (Anthropic): {}, 模型: {}", file.name, model)
 
             val imageBytes = file.readBytes()
             val base64Image = Base64.getEncoder().encodeToString(imageBytes)
@@ -174,6 +185,72 @@ object ImagePipeline {
             }
         } catch (e: Exception) {
             logger.error("Vision API 调用失败: {}", e.message)
+            ""
+        }
+    }
+
+    private fun callOpenAiCompatibleVision(file: File, model: String): String {
+        return try {
+            logger.debug("调用 Vision API (OpenAI 兼容): {}, 模型: {}", file.name, model)
+
+            val imageBytes = file.readBytes()
+            val base64Image = Base64.getEncoder().encodeToString(imageBytes)
+            val mediaType = when (file.extension.lowercase()) {
+                "png" -> "image/png"
+                "gif" -> "image/gif"
+                "webp" -> "image/webp"
+                else -> "image/jpeg"
+            }
+
+            val requestBody = buildJsonObject {
+                put("model", model)
+                put("max_tokens", 2048)
+                putJsonArray("messages") {
+                    addJsonObject {
+                        put("role", "user")
+                        putJsonArray("content") {
+                            addJsonObject {
+                                put("type", "image_url")
+                                putJsonObject("image_url") {
+                                    put("url", "data:$mediaType;base64,$base64Image")
+                                }
+                            }
+                            addJsonObject {
+                                put("type", "text")
+                                put("text", "请用中文详细描述这张图片的内容，包括：文字内容、图表数据、布局结构、关键视觉元素等所有可见信息。如果图片中有文字，请完整转录。")
+                            }
+                        }
+                    }
+                }
+            }
+
+            val baseUrl = AIConfig.VISION_BASE_URL.trimEnd('/')
+            val url = "$baseUrl/chat/completions"
+            val apiKey = AIConfig.VISION_API_KEY.ifBlank { "sk-no-key" }
+
+            val request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer $apiKey")
+                .timeout(Duration.ofSeconds(60))
+                .POST(HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                .build()
+
+            val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+
+            if (response.statusCode() == 200) {
+                val body = json.parseToJsonElement(response.body()).jsonObject
+                val choices = body["choices"]?.jsonArray
+                val text = choices?.firstOrNull()?.jsonObject
+                    ?.get("message")?.jsonObject
+                    ?.get("content")?.jsonPrimitive?.content
+                text ?: ""
+            } else {
+                logger.warn("Vision API (OpenAI) 返回 {}: {}", response.statusCode(), response.body().take(200))
+                ""
+            }
+        } catch (e: Exception) {
+            logger.error("Vision API (OpenAI) 调用失败: {}", e.message)
             ""
         }
     }
