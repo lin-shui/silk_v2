@@ -98,7 +98,7 @@ object AgentRuntime {
 
     /**
      * 把 ACP `session/prompt` response 里的 meta（adapter 携带的 cost/duration/turns/cliSessionId）
-     * 格式化成会话末尾的 "⏱ 费用: $X | 耗时: Xs | 轮次: N | 会话: XXXXXXXX..." 提示行。
+     * 格式化成会话末尾的 "⏱ 费用: $X | 耗时: Xs | 轮次: N | 会话: XXXXXXXXXXXXXXXX..." 提示行。
      * 字段缺失或为零值时跳过；都为空返回空串。
      */
     private fun formatPromptMeta(
@@ -114,7 +114,7 @@ object AgentRuntime {
         if (cost > 0) parts.add("费用: ${"$"}%.4f".format(cost))
         if (duration > 0) parts.add("耗时: %.1fs".format(duration / 1000.0))
         if (turns > 0) parts.add("轮次: $turns")
-        if (sid.isNotBlank()) parts.add("会话: ${sid.take(8)}...")
+        if (sid.isNotBlank()) parts.add("会话: ${sid.take(16)}...")
         val joined = parts.joinToString(" | ")
         return if (joined.isNotBlank()) "⏱ $joined" else ""
     }

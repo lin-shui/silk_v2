@@ -885,7 +885,14 @@ private fun WorkflowChatPanel(
     var workingDir by remember(groupId) { mutableStateOf("") }
     var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
     var permissionMode by remember(groupId) { mutableStateOf("") }
-    var showSettingsDialog by remember(groupId) { mutableStateOf(false) }
+    var availableAgents by remember(groupId) { mutableStateOf<List<AgentInfo>>(emptyList()) }
+    var showFolderPicker by remember(groupId) { mutableStateOf(false) }
+    var showTrustConfirm by remember(groupId) { mutableStateOf(false) }
+    var trustConfirmPath by remember(groupId) { mutableStateOf("") }
+    var trustConfirmBridgeId by remember(groupId) { mutableStateOf<String?>(null) }
+    var showPermModeDropdown by remember(groupId) { mutableStateOf(false) }
+    var showAgentDropdown by remember(groupId) { mutableStateOf(false) }
+    var switchError by remember(groupId) { mutableStateOf<String?>(null) }
 
     // 拉取当前 CC 工作目录：
     // - groupId 变化时（切换工作流）
@@ -909,6 +916,7 @@ private fun WorkflowChatPanel(
             activeAgentDisplay = snap.agentDisplayName
             permissionMode = snap.permissionMode
         }
+        availableAgents = ApiClient.listAgents(userId)
     }
 
     // 监听新增消息，刷新 activeAgent / permissionMode 显示。
@@ -1013,41 +1021,6 @@ private fun WorkflowChatPanel(
                         attr("title", workingDir)
                     }) { Text("\uD83D\uDCC1 $workingDir") }
                 }
-                // M4 Task 4: 显示当前激活的 agent（/use 切换后实时更新）
-                if (activeAgentDisplay.isNotBlank()) {
-                    Span({
-                        style {
-                            fontSize(11.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("flex-shrink", "0")
-                            property("white-space", "nowrap")
-                            property("padding", "1px 6px")
-                            property("border-radius", "4px")
-                            property("background", "rgba(0,0,0,0.04)")
-                        }
-                        attr("title", "当前激活的 Agent")
-                    }) { Text(activeAgentDisplay) }
-                }
-                if (permissionMode.isNotBlank()) {
-                    val modeLabel = when (permissionMode) {
-                        "INTERACTIVE" -> "Interactive"
-                        "ACCEPT_EDITS" -> "Accept Edits"
-                        "BYPASS" -> "Bypass"
-                        else -> permissionMode
-                    }
-                    Span({
-                        style {
-                            fontSize(11.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("flex-shrink", "0")
-                            property("white-space", "nowrap")
-                            property("padding", "1px 6px")
-                            property("border-radius", "4px")
-                            property("background", "rgba(0,0,0,0.04)")
-                        }
-                        attr("title", "工具权限模式")
-                    }) { Text("\uD83D\uDD12 $modeLabel") }
-                }
                 Span({
                     style {
                         fontSize(11.px)
@@ -1059,10 +1032,10 @@ private fun WorkflowChatPanel(
                         property("text-decoration", "underline")
                         property("text-decoration-style", "dotted")
                     }
-                    attr("title", "会话设置")
-                    onClick { showSettingsDialog = true }
+                    attr("title", "切换工作目录")
+                    onClick { showFolderPicker = true }
                 }) {
-                    Text(if (workingDir.isBlank()) "\uD83D\uDCC2 选择目录" else "更改")
+                    Text("更改")
                 }
             }
         }
@@ -1175,10 +1148,230 @@ private fun WorkflowChatPanel(
             property("border-top", "1px solid ${SilkColors.border}")
             backgroundColor(Color(SilkColors.surfaceElevated))
             display(DisplayStyle.Flex)
-            alignItems(AlignItems.Center)
-            property("gap", "10px")
+            flexDirection(FlexDirection.Column)
+            property("gap", "6px")
         }
     }) {
+        // Badge row: new session + permission mode + agent quick-switch
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                property("gap", "6px")
+                property("position", "relative")
+            }
+        }) {
+            // New session badge
+            Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock) } }) {
+                Span({
+                    style {
+                        fontSize(12.px)
+                        fontWeight("500")
+                        color(Color("#1565C0"))
+                        backgroundColor(Color("#E3F2FD"))
+                        border(1.px, LineStyle.Solid, Color("#90CAF9"))
+                        borderRadius(12.px)
+                        padding(2.px, 10.px)
+                        property("cursor", "pointer")
+                        property("user-select", "none")
+                    }
+                    onClick {
+                        scope.launch {
+                            chatClient.sendMessage(userId, userName, "/new")
+                        }
+                    }
+                }) { Text("新会话") }
+            }
+
+            // Permission mode badge
+                if (permissionMode.isNotBlank()) {
+                    val modeLabel = when (permissionMode) {
+                        "INTERACTIVE" -> "Interactive"
+                        "ACCEPT_EDITS" -> "Accept Edits"
+                        "BYPASS" -> "Bypass"
+                        else -> permissionMode
+                    }
+                    Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock) } }) {
+                        Span({
+                            style {
+                                fontSize(12.px)
+                                fontWeight("500")
+                                color(Color("#555555"))
+                                backgroundColor(Color("#F7F7F7"))
+                                border(1.px, LineStyle.Solid, Color("#E0E0E0"))
+                                borderRadius(12.px)
+                                padding(2.px, 10.px)
+                                property("cursor", "pointer")
+                                property("user-select", "none")
+                            }
+                            onClick {
+                                showPermModeDropdown = !showPermModeDropdown
+                                showAgentDropdown = false
+                            }
+                        }) { Text(modeLabel) }
+
+                        if (showPermModeDropdown) {
+                            Div({
+                                style {
+                                    property("position", "absolute")
+                                    bottom(28.px)
+                                    property("left", "0")
+                                    backgroundColor(Color.white)
+                                    border(1.px, LineStyle.Solid, Color("#E0E0E0"))
+                                    borderRadius(8.px)
+                                    property("box-shadow", "0 4px 12px rgba(0,0,0,0.12)")
+                                    property("z-index", "100")
+                                    property("min-width", "140px")
+                                    padding(4.px)
+                                }
+                            }) {
+                                listOf(
+                                    "INTERACTIVE" to "Interactive",
+                                    "ACCEPT_EDITS" to "Accept Edits",
+                                    "BYPASS" to "Bypass",
+                                ).forEach { (value, label) ->
+                                    val isCurrent = value == permissionMode ||
+                                        (value == "INTERACTIVE" && permissionMode.isBlank())
+                                    Div({
+                                        style {
+                                            padding(8.px, 12.px)
+                                            borderRadius(4.px)
+                                            fontSize(14.px)
+                                            property("cursor", "pointer")
+                                            fontWeight(if (isCurrent) "600" else "normal")
+                                            color(if (isCurrent) Color(SilkColors.primary) else Color("#333333"))
+                                            if (isCurrent) backgroundColor(Color("#F0F4FF"))
+                                        }
+                                        onClick {
+                                            showPermModeDropdown = false
+                                            if (!isCurrent) {
+                                                scope.launch {
+                                                    val resp = ApiClient.updateCcSettings(
+                                                        userId, groupId,
+                                                        permissionMode = value,
+                                                    )
+                                                    if (resp.success) {
+                                                        permissionMode = resp.permissionMode
+                                                    } else {
+                                                        switchError = resp.error ?: "切换失败"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }) {
+                                        Text(if (isCurrent) "\u2713 $label" else "  $label")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Agent badge
+                if (activeAgentDisplay.isNotBlank()) {
+                    Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock) } }) {
+                        Span({
+                            style {
+                                fontSize(12.px)
+                                fontWeight("500")
+                                color(Color("#6A1B9A"))
+                                backgroundColor(Color("#F3E5F5"))
+                                border(1.px, LineStyle.Solid, Color("#CE93D8"))
+                                borderRadius(12.px)
+                                padding(2.px, 10.px)
+                                property("cursor", "pointer")
+                                property("user-select", "none")
+                            }
+                            onClick {
+                                showAgentDropdown = !showAgentDropdown
+                                showPermModeDropdown = false
+                            }
+                        }) { Text(activeAgentDisplay) }
+
+                        if (showAgentDropdown) {
+                            Div({
+                                style {
+                                    property("position", "absolute")
+                                    bottom(28.px)
+                                    property("left", "0")
+                                    backgroundColor(Color.white)
+                                    border(1.px, LineStyle.Solid, Color("#E0E0E0"))
+                                    borderRadius(8.px)
+                                    property("box-shadow", "0 4px 12px rgba(0,0,0,0.12)")
+                                    property("z-index", "100")
+                                    property("min-width", "180px")
+                                    padding(4.px)
+                                }
+                            }) {
+                                availableAgents.forEach { agent ->
+                                    val isCurrent = activeAgentDisplay.contains(agent.displayName) ||
+                                        activeAgentDisplay.contains(agent.agentType)
+                                    Div({
+                                        style {
+                                            padding(8.px, 12.px)
+                                            borderRadius(4.px)
+                                            fontSize(14.px)
+                                            property("cursor", if (agent.connected) "pointer" else "default")
+                                            fontWeight(if (isCurrent) "600" else "normal")
+                                            color(when {
+                                                isCurrent -> Color("#6A1B9A")
+                                                !agent.connected -> Color("#BDBDBD")
+                                                else -> Color("#333333")
+                                            })
+                                            if (isCurrent) backgroundColor(Color("#F3E5F5"))
+                                            if (!agent.connected) property("opacity", "0.6")
+                                        }
+                                        onClick {
+                                            if (!isCurrent && agent.connected) {
+                                                showAgentDropdown = false
+                                                scope.launch {
+                                                    val resp = ApiClient.updateCcSettings(
+                                                        userId, groupId,
+                                                        activeAgent = agent.agentType,
+                                                    )
+                                                    if (resp.success) {
+                                                        activeAgentDisplay = resp.agentDisplayName
+                                                        permissionMode = resp.permissionMode
+                                                    } else {
+                                                        switchError = resp.error ?: "切换失败"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }) {
+                                        val suffix = if (!agent.connected) "（未连接）" else ""
+                                        Text(if (isCurrent) "\u2713 ${agent.displayName}$suffix" else "  ${agent.displayName}$suffix")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Error toast
+                switchError?.let { err ->
+                    Span({
+                        style {
+                            fontSize(11.px)
+                            color(Color("#F44336"))
+                        }
+                    }) { Text(err) }
+                    // Auto-clear after display
+                    LaunchedEffect(err) {
+                        kotlinx.coroutines.delay(3000)
+                        switchError = null
+                    }
+                }
+        }
+
+        // Input row
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                property("gap", "10px")
+            }
+        }) {
         TextArea {
             value(messageText)
             onInput { messageText = it.value }
@@ -1250,22 +1443,65 @@ private fun WorkflowChatPanel(
                 }
             }) { Text("发送") }
         }
+        } // close input row Div
     }
 
-    // 会话设置弹窗（工作目录 / Agent / 权限模式）
-    if (showSettingsDialog) {
-        WorkflowSettingsDialog(
+    // Folder picker dialog (direct, no settings wrapper)
+    if (showFolderPicker) {
+        FolderPickerDialog(
             userId = userId,
-            groupId = groupId,
-            currentWorkingDir = workingDir,
-            currentAgentDisplay = activeAgentDisplay,
-            currentPermissionMode = permissionMode,
-            onDismiss = { showSettingsDialog = false },
-            onApplied = { newDir, newAgentDisplay, newPermMode ->
-                workingDir = newDir
-                activeAgentDisplay = newAgentDisplay
-                permissionMode = newPermMode
-                showSettingsDialog = false
+            initialPath = workingDir.ifBlank { null },
+            onDismiss = { showFolderPicker = false },
+            onConfirm = { selectedPath ->
+                showFolderPicker = false
+                if (selectedPath != workingDir) {
+                    scope.launch {
+                        when (val tc = ApiClient.checkTrustedDir(userId, selectedPath)) {
+                            is TrustCheckResult.BridgeDisconnected ->
+                                switchError = "Bridge 未连接，无法切换目录。"
+                            is TrustCheckResult.NotTrusted -> {
+                                trustConfirmPath = selectedPath
+                                trustConfirmBridgeId = tc.bridgeId
+                                showTrustConfirm = true
+                            }
+                            is TrustCheckResult.Error ->
+                                switchError = "检查信任状态失败：${tc.message}"
+                            is TrustCheckResult.Trusted -> {
+                                val cdResp = ApiClient.cdCcDir(userId, groupId, selectedPath)
+                                if (cdResp.success) {
+                                    workingDir = cdResp.workingDir
+                                } else {
+                                    switchError = "切换目录失败：${cdResp.error ?: "未知错误"}"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        )
+    }
+
+    if (showTrustConfirm) {
+        TrustConfirmDialog(
+            path = trustConfirmPath,
+            bridgeId = trustConfirmBridgeId,
+            onDismiss = { showTrustConfirm = false },
+            onTrust = {
+                scope.launch {
+                    val added = ApiClient.addTrustedDir(userId, trustConfirmPath)
+                    if (!added) {
+                        switchError = "添加信任记录失败，请重试。"
+                        showTrustConfirm = false
+                        return@launch
+                    }
+                    showTrustConfirm = false
+                    val cdResp = ApiClient.cdCcDir(userId, groupId, trustConfirmPath)
+                    if (cdResp.success) {
+                        workingDir = cdResp.workingDir
+                    } else {
+                        switchError = "切换目录失败：${cdResp.error ?: "未知错误"}"
+                    }
+                }
             },
         )
     }
@@ -1274,6 +1510,7 @@ private fun WorkflowChatPanel(
 /**
  * 会话设置弹窗：工作目录 / Agent / 权限模式三合一。
  */
+@Suppress("UnusedPrivateMember")
 @Composable
 private fun WorkflowSettingsDialog(
     userId: String,

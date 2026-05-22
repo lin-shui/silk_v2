@@ -1,9 +1,11 @@
 package com.silk.android
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Send
@@ -13,7 +15,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
@@ -46,8 +50,14 @@ fun WorkflowChatScreen(appState: AppState) {
         var workingDir by remember(groupId) { mutableStateOf(workflow.workingDir) }
         var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
         var permissionMode by remember(groupId) { mutableStateOf("") }
-        var showSettingsDialog by remember(groupId) { mutableStateOf(false) }
+        var showFolderPicker by remember(groupId) { mutableStateOf(false) }
+        var showTrustConfirm by remember(groupId) { mutableStateOf(false) }
+        var trustConfirmPath by remember(groupId) { mutableStateOf("") }
+        var trustConfirmBridgeId by remember(groupId) { mutableStateOf<String?>(null) }
         var errorDialogMessage by remember(groupId) { mutableStateOf<String?>(null) }
+        var availableAgents by remember(groupId) { mutableStateOf<List<AgentInfo>>(emptyList()) }
+        var showPermModeDropdown by remember(groupId) { mutableStateOf(false) }
+        var showAgentDropdown by remember(groupId) { mutableStateOf(false) }
         val listState = rememberLazyListState()
 
         // AI 消息展开/收起状态（与 ChatScreen 相同的 pattern）
@@ -76,6 +86,7 @@ fun WorkflowChatScreen(appState: AppState) {
                     activeAgentDisplay = snap.agentDisplayName
                     permissionMode = snap.permissionMode
                 }
+                availableAgents = ApiClient.listAgents(user.id)
             }
         }
 
@@ -119,40 +130,14 @@ fun WorkflowChatScreen(appState: AppState) {
                                 style = MaterialTheme.typography.titleMedium,
                                 color = SilkColors.textPrimary,
                             )
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                if (workingDir.isNotBlank()) {
-                                    Text(
-                                        "📁 $workingDir",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = SilkColors.textSecondary,
-                                        maxLines = 1,
-                                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false),
-                                    )
-                                }
-                                if (activeAgentDisplay.isNotBlank()) {
-                                    Text(
-                                        activeAgentDisplay,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = SilkColors.textSecondary,
-                                    )
-                                }
-                                if (permissionMode.isNotBlank()) {
-                                    val modeLabel = when (permissionMode) {
-                                        "INTERACTIVE" -> "Interactive"
-                                        "ACCEPT_EDITS" -> "Accept Edits"
-                                        "BYPASS" -> "Bypass"
-                                        else -> permissionMode
-                                    }
-                                    Text(
-                                        "🔒 $modeLabel",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = SilkColors.textSecondary,
-                                    )
-                                }
+                            if (workingDir.isNotBlank()) {
+                                Text(
+                                    workingDir,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = SilkColors.textSecondary,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                )
                             }
                             if (connectionState != ConnectionState.CONNECTED) {
                                 Text(
@@ -175,9 +160,9 @@ fun WorkflowChatScreen(appState: AppState) {
                         }
                     },
                     actions = {
-                        TextButton(onClick = { showSettingsDialog = true }) {
+                        TextButton(onClick = { showFolderPicker = true }) {
                             Text(
-                                if (workingDir.isBlank()) "📂 选择" else "更改",
+                                "更改",
                                 color = SilkColors.primary,
                             )
                         }
@@ -351,42 +336,210 @@ fun WorkflowChatScreen(appState: AppState) {
                     tonalElevation = 2.dp,
                     color = SilkColors.surfaceElevated,
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        OutlinedTextField(
-                            value = messageText,
-                            onValueChange = { messageText = it },
-                            placeholder = { Text("向 Agent 发送消息...") },
-                            modifier = Modifier.weight(1f),
-                            maxLines = 3,
-                        )
-                        if (isGenerating) {
-                            Button(
-                                onClick = { chatClient.stopGeneration(user.id, user.fullName) },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4D4F)),
-                                modifier = Modifier.height(56.dp),
-                            ) { Text("停止", color = Color.White) }
-                        } else {
-                            Button(
+                        // Badge row: new session + permission mode + agent quick-switch
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.padding(bottom = 6.dp),
+                        ) {
+                            // New session badge
+                            Surface(
                                 onClick = {
-                                    val text = messageText.text.trim()
-                                    if (text.isNotEmpty()) {
-                                        scope.launch {
-                                            chatClient.sendMessage(user.id, user.fullName, text)
-                                        }
-                                        messageText = TextFieldValue("")
+                                    scope.launch {
+                                        chatClient.sendMessage(user.id, user.fullName, "/new")
                                     }
                                 },
-                                enabled = messageText.text.isNotBlank(),
-                                colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
-                                modifier = Modifier.height(56.dp),
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFFE3F2FD),
+                                border = BorderStroke(1.dp, Color(0xFF90CAF9)),
                             ) {
-                                Icon(Icons.Default.Send, contentDescription = "发送", tint = Color.White)
+                                Text(
+                                    text = "新会话",
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = Color(0xFF1565C0),
+                                )
+                            }
+
+                        if (permissionMode.isNotBlank() || activeAgentDisplay.isNotBlank()) {
+                                // Permission mode badge
+                                if (permissionMode.isNotBlank()) {
+                                    Box {
+                                        Surface(
+                                            onClick = {
+                                                showPermModeDropdown = !showPermModeDropdown
+                                                showAgentDropdown = false
+                                            },
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = Color(0xFFF7F7F7),
+                                            border = BorderStroke(1.dp, Color(0xFFE0E0E0)),
+                                        ) {
+                                            Text(
+                                                text = permModeLabel(permissionMode),
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = Color(0xFF555555),
+                                            )
+                                        }
+                                        DropdownMenu(
+                                            expanded = showPermModeDropdown,
+                                            onDismissRequest = { showPermModeDropdown = false },
+                                        ) {
+                                            listOf(
+                                                "" to "Interactive",
+                                                "ACCEPT_EDITS" to "Accept Edits",
+                                                "BYPASS" to "Bypass",
+                                            ).forEach { (value, label) ->
+                                                val isCurrent = value == permissionMode ||
+                                                    (value == "" && permissionMode == "INTERACTIVE")
+                                                DropdownMenuItem(
+                                                    text = {
+                                                        Text(
+                                                            text = if (isCurrent) "\u2713 $label" else "  $label",
+                                                            fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                                                            color = if (isCurrent) SilkColors.primary else Color.Unspecified,
+                                                        )
+                                                    },
+                                                    onClick = {
+                                                        showPermModeDropdown = false
+                                                        if (!isCurrent) {
+                                                            val newMode = value.ifBlank { "INTERACTIVE" }
+                                                            scope.launch {
+                                                                val resp = ApiClient.updateCcSettings(
+                                                                    user.id, groupId,
+                                                                    permissionMode = newMode,
+                                                                )
+                                                                if (resp.success) {
+                                                                    permissionMode = resp.permissionMode
+                                                                } else {
+                                                                    android.widget.Toast.makeText(
+                                                                        context,
+                                                                        resp.error ?: "切换失败",
+                                                                        android.widget.Toast.LENGTH_SHORT,
+                                                                    ).show()
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Agent badge
+                                if (activeAgentDisplay.isNotBlank()) {
+                                    Box {
+                                        Surface(
+                                            onClick = {
+                                                showAgentDropdown = !showAgentDropdown
+                                                showPermModeDropdown = false
+                                            },
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = Color(0xFFF3E5F5),
+                                            border = BorderStroke(1.dp, Color(0xFFCE93D8)),
+                                        ) {
+                                            Text(
+                                                text = activeAgentDisplay,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = Color(0xFF6A1B9A),
+                                            )
+                                        }
+                                        DropdownMenu(
+                                            expanded = showAgentDropdown,
+                                            onDismissRequest = { showAgentDropdown = false },
+                                        ) {
+                                            availableAgents.forEach { agent ->
+                                                val isCurrent = activeAgentDisplay.contains(agent.displayName) ||
+                                                    activeAgentDisplay.contains(agent.agentType)
+                                                DropdownMenuItem(
+                                                    text = {
+                                                        Text(
+                                                            text = if (isCurrent) "\u2713 ${agent.displayName}"
+                                                                   else "  ${agent.displayName}",
+                                                            fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                                                            color = when {
+                                                                isCurrent -> Color(0xFF6A1B9A)
+                                                                !agent.connected -> Color.Gray
+                                                                else -> Color.Unspecified
+                                                            },
+                                                        )
+                                                    },
+                                                    onClick = {
+                                                        showAgentDropdown = false
+                                                        if (!isCurrent && agent.connected) {
+                                                            scope.launch {
+                                                                val resp = ApiClient.updateCcSettings(
+                                                                    user.id, groupId,
+                                                                    activeAgent = agent.agentType,
+                                                                )
+                                                                if (resp.success) {
+                                                                    activeAgentDisplay = resp.agentDisplayName
+                                                                    permissionMode = resp.permissionMode
+                                                                } else {
+                                                                    android.widget.Toast.makeText(
+                                                                        context,
+                                                                        resp.error ?: "切换失败",
+                                                                        android.widget.Toast.LENGTH_SHORT,
+                                                                    ).show()
+                                                                }
+                                                            }
+                                                        }
+                                                    },
+                                                    enabled = agent.connected,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Input field + send/stop button
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedTextField(
+                                value = messageText,
+                                onValueChange = { messageText = it },
+                                placeholder = { Text("向 Agent 发送消息...") },
+                                modifier = Modifier.weight(1f),
+                                maxLines = 3,
+                            )
+                            if (isGenerating) {
+                                Button(
+                                    onClick = { chatClient.stopGeneration(user.id, user.fullName) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4D4F)),
+                                    modifier = Modifier.height(56.dp),
+                                ) { Text("停止", color = Color.White) }
+                            } else {
+                                Button(
+                                    onClick = {
+                                        val text = messageText.text.trim()
+                                        if (text.isNotEmpty()) {
+                                            scope.launch {
+                                                chatClient.sendMessage(user.id, user.fullName, text)
+                                            }
+                                            messageText = TextFieldValue("")
+                                        }
+                                    },
+                                    enabled = messageText.text.isNotBlank(),
+                                    colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+                                    modifier = Modifier.height(56.dp),
+                                ) {
+                                    Icon(Icons.Default.Send, contentDescription = "发送", tint = Color.White)
+                                }
                             }
                         }
                     }
@@ -394,19 +547,61 @@ fun WorkflowChatScreen(appState: AppState) {
             }
         }
 
-        if (showSettingsDialog) {
-            WorkflowSettingsDialog(
+        if (showFolderPicker) {
+            FolderPickerDialog(
                 userId = user.id,
-                groupId = groupId,
-                currentWorkingDir = workingDir,
-                currentAgentDisplay = activeAgentDisplay,
-                currentPermissionMode = permissionMode,
-                onDismiss = { showSettingsDialog = false },
-                onApplied = { newDir, newAgentDisplay, newPermMode ->
-                    workingDir = newDir
-                    activeAgentDisplay = newAgentDisplay
-                    permissionMode = newPermMode
-                    showSettingsDialog = false
+                initialPath = workingDir.ifBlank { null },
+                onDismiss = { showFolderPicker = false },
+                onConfirm = { selectedPath ->
+                    showFolderPicker = false
+                    if (selectedPath != workingDir) {
+                        scope.launch {
+                            when (val tc = ApiClient.checkTrustedDir(user.id, selectedPath)) {
+                                is TrustCheckResult.BridgeDisconnected ->
+                                    errorDialogMessage = "Bridge 未连接，无法切换目录。"
+                                is TrustCheckResult.NotTrusted -> {
+                                    trustConfirmPath = selectedPath
+                                    trustConfirmBridgeId = tc.bridgeId
+                                    showTrustConfirm = true
+                                }
+                                is TrustCheckResult.Error ->
+                                    errorDialogMessage = "检查信任状态失败：${tc.message}"
+                                is TrustCheckResult.Trusted -> {
+                                    val cdResp = ApiClient.cdCcDir(user.id, groupId, selectedPath)
+                                    if (cdResp.success) {
+                                        workingDir = cdResp.workingDir
+                                    } else {
+                                        errorDialogMessage = "切换目录失败：${cdResp.error ?: "未知错误"}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+            )
+        }
+
+        if (showTrustConfirm) {
+            TrustConfirmDialog(
+                path = trustConfirmPath,
+                bridgeId = trustConfirmBridgeId,
+                onDismiss = { showTrustConfirm = false },
+                onTrust = {
+                    scope.launch {
+                        val added = ApiClient.addTrustedDir(user.id, trustConfirmPath)
+                        if (!added) {
+                            errorDialogMessage = "添加信任记录失败，请重试。"
+                            showTrustConfirm = false
+                            return@launch
+                        }
+                        showTrustConfirm = false
+                        val cdResp = ApiClient.cdCcDir(user.id, groupId, trustConfirmPath)
+                        if (cdResp.success) {
+                            workingDir = cdResp.workingDir
+                        } else {
+                            errorDialogMessage = "切换目录失败：${cdResp.error ?: "未知错误"}"
+                        }
+                    }
                 },
             )
         }
