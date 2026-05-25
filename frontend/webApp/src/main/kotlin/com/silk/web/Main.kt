@@ -1100,9 +1100,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     try {
                         ApiClient.markGroupAsRead(user.id, group.id)
                         console.log("✅ 清理：已标记群组为已读")
-                    } catch (_: dynamic) {}
+                    } catch (error: dynamic) {
+                        console.warn("⚠️ 清理：标记群组已读失败:", error)
+                    }
                 }
-            } catch (_: dynamic) {}
+            } catch (error: dynamic) {
+                console.warn("⚠️ 清理：启动已读标记协程失败:", error)
+            }
         }
     }
     
@@ -1150,7 +1154,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             chatClient.disconnect()
                             console.log("✅ WebSocket已断开")
                         } catch (e: dynamic) {
-                            console.log("ℹ️ WebSocket断开（忽略错误）")
+                            console.log("ℹ️ WebSocket断开失败（忽略错误）:", e)
                         }
                         
                         // 2. 等待服务器完成所有消息处理
@@ -1162,7 +1166,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             ApiClient.markGroupAsRead(user.id, group.id)
                             console.log("✅ 已标记群组为已读")
                         } catch (e: dynamic) {
-                            console.log("⚠️ 标记已读失败")
+                            console.log("⚠️ 标记已读失败:", e)
                         }
                         
                         // 4. 返回到群组列表
@@ -1342,51 +1346,59 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             isExportingMarkdown = true
                             exportMarkdownHint = "正在导出..."
                             try {
-                                var vaultHandle: dynamic = null
-                                if (ObsidianVaultManager.isSupported()) {
-                                    vaultHandle = ObsidianVaultManager.getCachedHandleIfValid()
-                                    if (vaultHandle == null) {
-                                        exportMarkdownHint = "请选择 Obsidian Vault 目录..."
-                                        vaultHandle = ObsidianVaultManager.pickVaultDirectory()
-                                    }
-                                }
+                                recoverSuspendNonCancellation(
+                                    block = {
+                                        var vaultHandle: dynamic = null
+                                        if (ObsidianVaultManager.isSupported()) {
+                                            vaultHandle = ObsidianVaultManager.getCachedHandleIfValid()
+                                            if (vaultHandle == null) {
+                                                exportMarkdownHint = "请选择 Obsidian Vault 目录..."
+                                                vaultHandle = ObsidianVaultManager.pickVaultDirectory()
+                                            }
+                                        }
 
-                                exportMarkdownHint = "正在获取聊天记录..."
-                                val result = ApiClient.exportGroupMarkdown(group.id, user.id)
-                                if (!result.success) {
-                                    exportMarkdownHint = "导出失败：${result.message}"
-                                    window.alert("导出失败：${result.message}")
-                                    return@launch
-                                }
-                                val fileName = result.fileName.ifBlank { "silk_group_${group.id}.md" }
+                                        exportMarkdownHint = "正在获取聊天记录..."
+                                        val result = ApiClient.exportGroupMarkdown(group.id, user.id)
+                                        if (!result.success) {
+                                            exportMarkdownHint = "导出失败：${result.message}"
+                                            window.alert("导出失败：${result.message}")
+                                            return@recoverSuspendNonCancellation
+                                        }
+                                        val fileName = result.fileName.ifBlank { "silk_group_${group.id}.md" }
 
-                                if (vaultHandle != null) {
-                                    exportMarkdownHint = "正在写入 Vault..."
-                                    try {
-                                        val relativePath = ObsidianVaultManager.saveToVault(
-                                            vaultHandle, group.name, result.markdown, fileName
-                                        )
-                                        console.log("✅ 已导出到 Obsidian Vault:", relativePath)
-                                        exportMarkdownHint = "已导出: $relativePath"
-                                    } catch (t: Throwable) {
-                                        console.warn("Vault 写入失败，回退到下载:", t)
-                                        downloadAsFile(result.markdown, fileName)
-                                        exportMarkdownHint = "Vault写入失败，已下载：$fileName"
-                                    }
-                                } else {
-                                    downloadAsFile(result.markdown, fileName)
-                                    console.log("✅ 聊天记录已导出:", fileName)
-                                    exportMarkdownHint = "导出成功：$fileName"
-                                }
-                            } catch (t: Throwable) {
-                                val msg = t.message ?: t.toString()
-                                if (msg.contains("abort", ignoreCase = true)) {
-                                    exportMarkdownHint = "已取消"
-                                } else {
-                                    console.error("❌ 导出异常:", t)
-                                    exportMarkdownHint = "导出异常: $msg"
-                                    window.alert("导出失败: $msg")
-                                }
+                                        if (vaultHandle != null) {
+                                            exportMarkdownHint = "正在写入 Vault..."
+                                            recoverSuspendNonCancellation(
+                                                block = {
+                                                    val relativePath = ObsidianVaultManager.saveToVault(
+                                                        vaultHandle, group.name, result.markdown, fileName
+                                                    )
+                                                    console.log("✅ 已导出到 Obsidian Vault:", relativePath)
+                                                    exportMarkdownHint = "已导出: $relativePath"
+                                                },
+                                                recover = { error ->
+                                                    console.warn("Vault 写入失败，回退到下载:", error)
+                                                    downloadAsFile(result.markdown, fileName)
+                                                    exportMarkdownHint = "Vault写入失败，已下载：$fileName"
+                                                },
+                                            )
+                                        } else {
+                                            downloadAsFile(result.markdown, fileName)
+                                            console.log("✅ 聊天记录已导出:", fileName)
+                                            exportMarkdownHint = "导出成功：$fileName"
+                                        }
+                                    },
+                                    recover = { error ->
+                                        val msg = error.message ?: error.toString()
+                                        if (msg.contains("abort", ignoreCase = true)) {
+                                            exportMarkdownHint = "已取消"
+                                        } else {
+                                            console.error("❌ 导出异常:", error)
+                                            exportMarkdownHint = "导出异常: $msg"
+                                            window.alert("导出失败: $msg")
+                                        }
+                                    },
+                                )
                             } finally {
                                 isExportingMarkdown = false
                             }
@@ -1688,12 +1700,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
 
             // 显示临时消息（如果有）
             transientMessage?.let { message ->
-                if (
-                    message.content.isNotBlank() &&
-                    message.currentStep == null &&
-                    message.totalSteps == null &&
-                    !isLikelyAgentStatusContent(message.content)
-                ) {
+                if (shouldRenderInlineTransientMessage(message)) {
                     MessageItem(
                         message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                         isTransient = true,
@@ -2307,23 +2314,32 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                             isTranscribing = true
                                             scope.launch {
                                                 try {
-                                                    val blob = jsCreateBlob(chunks)
-                                                    val arrayBuffer = jsBlobToArrayBuffer(blob)
-                                                        .unsafeCast<kotlin.js.Promise<dynamic>>().await()
-                                                    val base64 = jsArrayBufferToBase64(arrayBuffer) as String
-                                                    console.log("[ASR] base64 长度:", base64.length)
-                                                    val result = ApiClient.transcribeAudio(base64, "webm")
-                                                    console.log("[ASR] 结果: success=${result.success}, text=${result.text.take(50)}")
-                                                    if (result.success && result.text.isNotBlank()) {
-                                                        messageText = if (messageText.isNotBlank()) "$messageText ${result.text}" else result.text
-                                                    } else {
-                                                        console.log("[ASR] 失败:", result.error ?: "未知错误")
-                                                    }
-                                                } catch (t: Throwable) {
-                                                    console.log("[ASR] 识别出错:", t)
+                                                    recoverSuspendNonCancellation(
+                                                        block = {
+                                                            val blob = jsCreateBlob(chunks)
+                                                            val arrayBuffer = jsBlobToArrayBuffer(blob)
+                                                                .unsafeCast<kotlin.js.Promise<dynamic>>().await()
+                                                            val base64 = jsArrayBufferToBase64(arrayBuffer) as String
+                                                            console.log("[ASR] base64 长度:", base64.length)
+                                                            val result = ApiClient.transcribeAudio(base64, "webm")
+                                                            console.log("[ASR] 结果: success=${result.success}, text=${result.text.take(50)}")
+                                                            if (result.success && result.text.isNotBlank()) {
+                                                                messageText = if (messageText.isNotBlank()) "$messageText ${result.text}" else result.text
+                                                            } else {
+                                                                console.log("[ASR] 失败:", result.error ?: "未知错误")
+                                                            }
+                                                        },
+                                                        recover = { error ->
+                                                            console.log("[ASR] 识别出错:", error)
+                                                        },
+                                                    )
                                                 } finally {
                                                     isTranscribing = false
-                                                    try { jsStopTracks(stream) } catch (_: dynamic) {}
+                                                    try {
+                                                        jsStopTracks(stream)
+                                                    } catch (error: dynamic) {
+                                                        console.warn("[ASR] 停止音轨失败:", error)
+                                                    }
                                                     console.log("[ASR] 流程结束")
                                                 }
                                             }
@@ -2629,7 +2645,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         // 先断开当前WebSocket
                         try {
                             chatClient.disconnect()
-                        } catch (e: dynamic) { }
+                        } catch (error: dynamic) {
+                            console.warn("⚠️ 跳转私聊前断开 WebSocket 失败:", error)
+                        }
                         
                         // 调用API获取或创建与该联系人的对话
                         val response = ApiClient.startPrivateChat(user.id, member.id)
@@ -2977,19 +2995,22 @@ fun FolderExplorerDialog(
         isLoading = true
         errorMessage = null
         try {
-            console.log("📁 请求文件列表:", apiUrl)
-            val response = window.fetch(apiUrl).await()
-            if (!response.ok) {
-                throw IllegalStateException("HTTP ${response.status}")
-            }
-            val body = response.text().await()
-            val parsed = parseWebFolderContents(body)
-            files = parsed.files
-            processedUrls = parsed.processedUrls
-            console.log("📁 加载完成:", files.size, "文件,", processedUrls.size, "URL")
-        } catch (t: Throwable) {
-            console.error("❌ 获取文件列表失败:", t)
-            errorMessage = t.message ?: "获取失败"
+            recoverSuspendNonCancellation(
+                block = {
+                    console.log("📁 请求文件列表:", apiUrl)
+                    val response = window.fetch(apiUrl).await()
+                    check(response.ok) { "HTTP ${response.status}" }
+                    val body = response.text().await()
+                    val parsed = parseWebFolderContents(body)
+                    files = parsed.files
+                    processedUrls = parsed.processedUrls
+                    console.log("📁 加载完成:", files.size, "文件,", processedUrls.size, "URL")
+                },
+                recover = { error ->
+                    console.error("❌ 获取文件列表失败:", error)
+                    errorMessage = error.message ?: "获取失败"
+                },
+            )
         } finally {
             isLoading = false
         }
@@ -3551,40 +3572,51 @@ private data class MathDelimiter(
     val close: String
 )
 
+private data class MathBlockMatch(
+    val renderedBlock: String,
+    val nextCursor: Int,
+)
+
 private val mathDelimiters = listOf(
     MathDelimiter("$$", "$$"),
     MathDelimiter("\\[", "\\]"),
     MathDelimiter("\\(", "\\)")
 )
 
+private fun findMathBlockMatch(markdown: String, cursor: Int): MathBlockMatch? {
+    return mathDelimiters.firstNotNullOfOrNull { delimiter ->
+        if (!markdown.startsWith(delimiter.open, cursor)) {
+            return@firstNotNullOfOrNull null
+        }
+
+        val contentStart = cursor + delimiter.open.length
+        val closingIndex = markdown.indexOf(delimiter.close, contentStart)
+        if (closingIndex == -1) {
+            return@firstNotNullOfOrNull null
+        }
+
+        val innerContent = markdown.substring(contentStart, closingIndex)
+            // markdown-it 会把数学环境中的 `\\` 吃成 `\`，这里先补一层转义。
+            .replace("\\\\", "\\\\\\\\")
+        MathBlockMatch(
+            renderedBlock = delimiter.open + innerContent + delimiter.close,
+            nextCursor = closingIndex + delimiter.close.length,
+        )
+    }
+}
+
 private fun normalizeMathBlocks(markdown: String): String {
     val output = StringBuilder()
     var cursor = 0
 
     while (cursor < markdown.length) {
-        var matched = false
-
-        for (delimiter in mathDelimiters) {
-            if (!markdown.startsWith(delimiter.open, cursor)) continue
-
-            val contentStart = cursor + delimiter.open.length
-            val closingIndex = markdown.indexOf(delimiter.close, contentStart)
-            if (closingIndex == -1) continue
-
-            val innerContent = markdown.substring(contentStart, closingIndex)
-                // markdown-it 会把数学环境中的 `\\` 吃成 `\`，这里先补一层转义。
-                .replace("\\\\", "\\\\\\\\")
-            output.append(delimiter.open)
-            output.append(innerContent)
-            output.append(delimiter.close)
-            cursor = closingIndex + delimiter.close.length
-            matched = true
-            break
-        }
-
-        if (!matched) {
+        val mathBlock = findMathBlockMatch(markdown, cursor)
+        if (mathBlock == null) {
             output.append(markdown[cursor])
             cursor += 1
+        } else {
+            output.append(mathBlock.renderedBlock)
+            cursor = mathBlock.nextCursor
         }
     }
 
@@ -3886,11 +3918,12 @@ private fun renderMarkdownSafely(
 private fun decorateMarkdownLinks(element: HTMLElement) {
     val links = element.querySelectorAll("a")
     for (index in 0 until links.length) {
-        val link = links.item(index) as? HTMLAnchorElement ?: continue
-        val href = link.getAttribute("href") ?: ""
-        if (href.startsWith("#")) continue
-        link.target = "_blank"
-        link.rel = "noopener noreferrer nofollow"
+        val link = links.item(index) as? HTMLAnchorElement
+        val href = link?.getAttribute("href").orEmpty()
+        if (link != null && !href.startsWith("#")) {
+            link.target = "_blank"
+            link.rel = "noopener noreferrer nofollow"
+        }
     }
 }
 
@@ -3929,21 +3962,26 @@ private fun createCodeHeader(pre: HTMLElement): HTMLElement {
 private fun wrapMarkdownCodeBlocks(element: HTMLElement) {
     val preBlocks = element.querySelectorAll("pre.hljs")
     for (preIdx in 0 until preBlocks.length) {
-        val pre = preBlocks.item(preIdx) as? HTMLElement ?: continue
-        val wrapper = document.createElement("div") as HTMLElement
-        wrapper.className = "silk-code-block"
-        pre.parentNode?.insertBefore(wrapper, pre)
-        wrapper.appendChild(createCodeHeader(pre))
-        wrapper.appendChild(pre)
+        val pre = preBlocks.item(preIdx) as? HTMLElement
+        if (pre != null) {
+            val wrapper = document.createElement("div") as HTMLElement
+            wrapper.className = "silk-code-block"
+            pre.parentNode?.insertBefore(wrapper, pre)
+            wrapper.appendChild(createCodeHeader(pre))
+            wrapper.appendChild(pre)
+        }
     }
 }
 
 private fun renderMarkdownMath(element: HTMLElement) {
-    try {
-        renderMathInElement(element, createMathRenderOptions())
-    } catch (error: Throwable) {
-        console.warn("Markdown math render failed:", error)
-    }
+    recoverNonCancellation(
+        block = {
+            renderMathInElement(element, createMathRenderOptions())
+        },
+        recover = { error ->
+            console.warn("Markdown math render failed:", error)
+        },
+    )
 }
 
 private fun updateMarkdownElement(containerId: String, safeHtml: String): HTMLElement? {
@@ -5284,6 +5322,24 @@ internal fun isLikelyAgentStatusContent(content: String): Boolean {
         "⏳"
     )
     return statusHints.any { hint -> text.contains(hint) }
+}
+
+internal fun shouldRenderInlineTransientMessage(message: Message): Boolean {
+    return message.content.isNotBlank() &&
+            message.currentStep == null &&
+            message.totalSteps == null &&
+            !isLikelyAgentStatusContent(message.content)
+}
+
+internal fun isWorkflowAgentLifecycleMessage(message: Message): Boolean {
+    if (message.type != com.silk.shared.models.MessageType.SYSTEM) {
+        return false
+    }
+
+    val content = message.content
+    return content.startsWith("已切换到") ||
+            content.contains("已激活") ||
+            content.contains("已退出 agent")
 }
 
 /**

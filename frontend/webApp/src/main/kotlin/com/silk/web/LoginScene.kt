@@ -44,6 +44,138 @@ import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Style
 import org.jetbrains.compose.web.dom.Text
 
+private const val DEFAULT_AUTH_ERROR_PREFIX = "操作失败: "
+
+@Composable
+private fun AuthField(
+    label: String,
+    type: InputType<*>,
+    value: String,
+    placeholder: String,
+    isLoading: Boolean,
+    onValueChange: (String) -> Unit,
+) {
+    Div({ style { marginBottom(20.px) } }) {
+        Label {
+            Span({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    property("letter-spacing", "0.5px")
+                }
+            }) {
+                Text(label)
+            }
+        }
+        Input(type) {
+            this.value(value)
+            onInput { onValueChange(it.value?.toString().orEmpty()) }
+            style {
+                width(100.percent)
+                padding(14.px)
+                fontSize(14.px)
+                marginTop(8.px)
+                border {
+                    width(1.px)
+                    style(LineStyle.Solid)
+                    color(Color(SilkColors.border))
+                }
+                borderRadius(8.px)
+                property("box-sizing", "border-box")
+                property("background", SilkColors.surface)
+                property("color", SilkColors.textPrimary)
+                property("transition", "all 0.2s ease")
+                fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
+            }
+            if (!isLoading) {
+                attr("placeholder", placeholder)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RegistrationFields(
+    fullName: String,
+    phoneNumber: String,
+    isLoading: Boolean,
+    onFullNameChange: (String) -> Unit,
+    onPhoneNumberChange: (String) -> Unit,
+) {
+    AuthField(
+        label = "姓名",
+        type = InputType.Text,
+        value = fullName,
+        placeholder = "请输入姓名",
+        isLoading = isLoading,
+        onValueChange = onFullNameChange,
+    )
+    AuthField(
+        label = "手机号",
+        type = InputType.Text,
+        value = phoneNumber,
+        placeholder = "请输入手机号",
+        isLoading = isLoading,
+        onValueChange = onPhoneNumberChange,
+    )
+}
+
+@Composable
+private fun AuthErrorMessage(message: String) {
+    Div({
+        style {
+            color(Color(SilkColors.error))
+            fontSize(13.px)
+            marginBottom(20.px)
+            textAlign("center")
+            padding(12.px)
+            backgroundColor(Color("#FDF5F5"))
+            borderRadius(8.px)
+            property("border", "1px solid ${SilkColors.error}")
+        }
+    }) {
+        Text(message)
+    }
+}
+
+private suspend fun submitAuth(
+    appState: WebAppState,
+    isLogin: Boolean,
+    loginName: String,
+    password: String,
+    fullName: String,
+    phoneNumber: String,
+    setErrorMessage: (String) -> Unit,
+) {
+    recoverSuspendNonCancellation(
+        block = {
+            val response = if (isLogin) {
+                ApiClient.login(loginName, password)
+            } else {
+                ApiClient.register(loginName, fullName, phoneNumber, password)
+            }
+
+            if (response.success && response.user != null) {
+                console.log("${if (isLogin) "登录" else "注册"}成功:", response.user.fullName)
+                appState.setUser(response.user)
+            } else {
+                setErrorMessage(response.message)
+            }
+        },
+        recover = { error ->
+            setErrorMessage(DEFAULT_AUTH_ERROR_PREFIX + error.message)
+        },
+    )
+}
+
+private fun authSubmitButtonText(isLoading: Boolean, isLogin: Boolean): String {
+    return when {
+        isLoading -> "处理中..."
+        isLogin -> "登 录"
+        else -> "注 册"
+    }
+}
+
 @Composable
 fun LoginScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
@@ -151,177 +283,38 @@ fun LoginScene(appState: WebAppState) {
             }) {
                 Text(if (isLogin) "欢迎回来" else "创建账号")
             }
-            
-            // 登录名
-            Div({ style { marginBottom(20.px) } }) {
-                Label { 
-                    Span({
-                        style {
-                            fontSize(13.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("letter-spacing", "0.5px")
-                        }
-                    }) {
-                        Text("登录名")
-                    }
-                }
-                Input(InputType.Text) {
-                    value(loginName)
-                    onInput { loginName = it.value }
-                    style {
-                        width(100.percent)
-                        padding(14.px)
-                        fontSize(14.px)
-                        marginTop(8.px)
-                        border {
-                            width(1.px)
-                            style(LineStyle.Solid)
-                            color(Color(SilkColors.border))
-                        }
-                        borderRadius(8.px)
-                        property("box-sizing", "border-box")
-                        property("background", SilkColors.surface)
-                        property("color", SilkColors.textPrimary)
-                        property("transition", "all 0.2s ease")
-                        fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                    }
-                    if (!isLoading) {
-                        attr("placeholder", "请输入登录名")
-                    }
-                }
-            }
-            
-            // 密码
-            Div({ style { marginBottom(20.px) } }) {
-                Label { 
-                    Span({
-                        style {
-                            fontSize(13.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("letter-spacing", "0.5px")
-                        }
-                    }) {
-                        Text("密码")
-                    }
-                }
-                Input(InputType.Password) {
-                    value(password)
-                    onInput { password = it.value }
-                    style {
-                        width(100.percent)
-                        padding(14.px)
-                        fontSize(14.px)
-                        marginTop(8.px)
-                        border {
-                            width(1.px)
-                            style(LineStyle.Solid)
-                            color(Color(SilkColors.border))
-                        }
-                        borderRadius(8.px)
-                        property("box-sizing", "border-box")
-                        property("background", SilkColors.surface)
-                        property("color", SilkColors.textPrimary)
-                        property("transition", "all 0.2s ease")
-                        fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                    }
-                    if (!isLoading) {
-                        attr("placeholder", "请输入密码")
-                    }
-                }
-            }
-            
-            // 注册时的额外字段
+
+            AuthField(
+                label = "登录名",
+                type = InputType.Text,
+                value = loginName,
+                placeholder = "请输入登录名",
+                isLoading = isLoading,
+                onValueChange = { loginName = it },
+            )
+            AuthField(
+                label = "密码",
+                type = InputType.Password,
+                value = password,
+                placeholder = "请输入密码",
+                isLoading = isLoading,
+                onValueChange = { password = it },
+            )
+
             if (!isLogin) {
-                Div({ style { marginBottom(20.px) } }) {
-                    Label { 
-                        Span({
-                            style {
-                                fontSize(13.px)
-                                color(Color(SilkColors.textSecondary))
-                                property("letter-spacing", "0.5px")
-                            }
-                        }) {
-                            Text("姓名")
-                        }
-                    }
-                    Input(InputType.Text) {
-                        value(fullName)
-                        onInput { fullName = it.value }
-                        style {
-                            width(100.percent)
-                            padding(14.px)
-                            fontSize(14.px)
-                            marginTop(8.px)
-                            border {
-                                width(1.px)
-                                style(LineStyle.Solid)
-                                color(Color(SilkColors.border))
-                            }
-                            borderRadius(8.px)
-                            property("box-sizing", "border-box")
-                            property("background", SilkColors.surface)
-                            property("color", SilkColors.textPrimary)
-                            fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                        }
-                        attr("placeholder", "请输入姓名")
-                    }
-                }
-                
-                Div({ style { marginBottom(20.px) } }) {
-                    Label { 
-                        Span({
-                            style {
-                                fontSize(13.px)
-                                color(Color(SilkColors.textSecondary))
-                                property("letter-spacing", "0.5px")
-                            }
-                        }) {
-                            Text("手机号")
-                        }
-                    }
-                    Input(InputType.Text) {
-                        value(phoneNumber)
-                        onInput { phoneNumber = it.value }
-                        style {
-                            width(100.percent)
-                            padding(14.px)
-                            fontSize(14.px)
-                            marginTop(8.px)
-                            border {
-                                width(1.px)
-                                style(LineStyle.Solid)
-                                color(Color(SilkColors.border))
-                            }
-                            borderRadius(8.px)
-                            property("box-sizing", "border-box")
-                            property("background", SilkColors.surface)
-                            property("color", SilkColors.textPrimary)
-                            fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                        }
-                        attr("placeholder", "请输入手机号")
-                    }
-                }
+                RegistrationFields(
+                    fullName = fullName,
+                    phoneNumber = phoneNumber,
+                    isLoading = isLoading,
+                    onFullNameChange = { fullName = it },
+                    onPhoneNumberChange = { phoneNumber = it },
+                )
             }
-            
-            // 错误提示
+
             if (errorMessage.isNotEmpty()) {
-                Div({
-                    style {
-                        color(Color(SilkColors.error))
-                        fontSize(13.px)
-                        marginBottom(20.px)
-                        textAlign("center")
-                        padding(12.px)
-                        backgroundColor(Color("#FDF5F5"))
-                        borderRadius(8.px)
-                        property("border", "1px solid ${SilkColors.error}")
-                    }
-                }) {
-                    Text(errorMessage)
-                }
+                AuthErrorMessage(errorMessage)
             }
-            
-            // 登录/注册按钮
+
             Button({
                 style {
                     width(100.percent)
@@ -344,35 +337,23 @@ fun LoginScene(appState: WebAppState) {
                         scope.launch {
                             isLoading = true
                             errorMessage = ""
-
-                            recoverSuspendNonCancellation(
-                                block = {
-                                    val response = if (isLogin) {
-                                        ApiClient.login(loginName, password)
-                                    } else {
-                                        ApiClient.register(loginName, fullName, phoneNumber, password)
-                                    }
-
-                                    if (response.success && response.user != null) {
-                                        console.log("${if (isLogin) "登录" else "注册"}成功:", response.user.fullName)
-                                        appState.setUser(response.user)
-                                    } else {
-                                        errorMessage = response.message
-                                    }
-                                },
-                                recover = { error ->
-                                    errorMessage = "操作失败: ${error.message}"
-                                },
+                            submitAuth(
+                                appState = appState,
+                                isLogin = isLogin,
+                                loginName = loginName,
+                                password = password,
+                                fullName = fullName,
+                                phoneNumber = phoneNumber,
+                                setErrorMessage = { errorMessage = it },
                             )
                             isLoading = false
                         }
                     }
                 }
             }) {
-                Text(if (isLoading) "处理中..." else if (isLogin) "登 录" else "注 册")
+                Text(authSubmitButtonText(isLoading, isLogin))
             }
-            
-            // 切换登录/注册
+
             Div({
                 style {
                     textAlign("center")

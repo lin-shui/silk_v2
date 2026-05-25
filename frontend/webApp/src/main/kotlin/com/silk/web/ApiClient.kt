@@ -247,6 +247,24 @@ private fun parseCreateWorkflowResponse(json: Json, response: String): CreateWor
     }
 }
 
+private fun buildCreateWorkflowPayload(
+    userId: String,
+    name: String,
+    description: String,
+    initialDir: String,
+    agentType: String,
+    permissionMode: String,
+): String {
+    return kotlinx.serialization.json.buildJsonObject {
+        put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+        put("name", kotlinx.serialization.json.JsonPrimitive(name))
+        put("description", kotlinx.serialization.json.JsonPrimitive(description))
+        if (initialDir.isNotBlank()) put("initialDir", kotlinx.serialization.json.JsonPrimitive(initialDir))
+        if (agentType.isNotBlank()) put("agentType", kotlinx.serialization.json.JsonPrimitive(agentType))
+        if (permissionMode.isNotBlank()) put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
+    }.toString()
+}
+
 object ApiClient {
     private val BASE_URL: String
         get() {
@@ -749,7 +767,7 @@ object ApiClient {
         )).await()
         
         if (!response.ok) {
-            throw Exception("HTTP ${response.status}: ${response.statusText}")
+            error("HTTP ${response.status}: ${response.statusText}")
         }
         
         return response.text().await()
@@ -808,21 +826,19 @@ object ApiClient {
         agentType: String = "claude_code",
         permissionMode: String = "",
     ): CreateWorkflowResult {
-        return try {
-            val obj = kotlinx.serialization.json.buildJsonObject {
-                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
-                put("name", kotlinx.serialization.json.JsonPrimitive(name))
-                put("description", kotlinx.serialization.json.JsonPrimitive(description))
-                if (initialDir.isNotBlank()) put("initialDir", kotlinx.serialization.json.JsonPrimitive(initialDir))
-                if (agentType.isNotBlank()) put("agentType", kotlinx.serialization.json.JsonPrimitive(agentType))
-                if (permissionMode.isNotBlank()) put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
-            }
-            val response = post("/api/workflows", obj.toString())
-            parseCreateWorkflowResponse(jsonParser, response)
-        } catch (e: Exception) {
-            console.log("创建工作流失败:", e)
-            CreateWorkflowResult.Err(e.message ?: "网络错误")
-        }
+        return recoverSuspendNonCancellation(
+            block = {
+                val response = post(
+                    "/api/workflows",
+                    buildCreateWorkflowPayload(userId, name, description, initialDir, agentType, permissionMode)
+                )
+                parseCreateWorkflowResponse(jsonParser, response)
+            },
+            recover = { error ->
+                console.log("创建工作流失败:", error)
+                CreateWorkflowResult.Err(error.message ?: "网络错误")
+            },
+        )
     }
 
     suspend fun renameWorkflow(workflowId: String, userId: String, newName: String): WorkflowItem? {
