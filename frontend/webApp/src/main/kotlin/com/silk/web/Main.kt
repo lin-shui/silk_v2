@@ -2778,14 +2778,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 for (i in 0 until items.length) {
                                     val item = items[i]
                                     if (item.kind == "file" && item.type.startsWith("image/")) {
-                                        event.preventDefault()
                                         val fileBlob = item.getAsFile()
                                         if (fileBlob != null && !isUploading) {
                                             isUploading = true
                                             val sid = group.id
                                             val uid = user.id
                                             val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
-                                            // 用 window 暂存状态，JS 代码读取
                                             val w = js("window")
                                             w.__pasteSid = sid
                                             w.__pasteUid = uid
