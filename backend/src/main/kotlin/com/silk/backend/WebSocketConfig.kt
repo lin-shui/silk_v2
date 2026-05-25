@@ -682,10 +682,7 @@ class ChatServer(
             isTransient = false,
             category = MessageCategory.NORMAL
         )
-        val json = Json.encodeToString(msg)
-        allSessions().forEach { session ->
-            try { session.send(Frame.Text(json)) } catch (_: Exception) {}
-        }
+        broadcast(msg)
     }
 
     suspend fun broadcastSystemStatus(status: String) {
