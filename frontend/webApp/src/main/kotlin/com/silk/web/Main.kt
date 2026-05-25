@@ -1440,6 +1440,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var messageText by remember { mutableStateOf("") }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
+    var pendingPasteImage by remember { mutableStateOf<dynamic?>(null) }
+    var pendingPasteImageUrl by remember { mutableStateOf<String?>(null) }
     var isScreenshotCrop by remember { mutableStateOf(false) }
     var isExportingMarkdown by remember { mutableStateOf(false) }
     var exportMarkdownHint by remember { mutableStateOf<String?>(null) }
@@ -2701,17 +2703,105 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 
                 // 第一行：输入框占据整行
                 // 发送消息的函数
-                val sendMessage: () -> Unit = {
-                    if (messageText.isNotBlank()) {
-                        val msg = messageText
+                                val sendMessage: () -> Unit = {
+                    val text = messageText
+                    val pendingImg = pendingPasteImage
+                    if (text.isNotBlank() || pendingImg != null) {
                         messageText = ""
+                        pendingPasteImage = null
+                        val pendingUrl = pendingPasteImageUrl
+                        pendingPasteImageUrl = null
+                        if (pendingUrl != null) {
+                            js("window.URL.revokeObjectURL(pendingUrl)")
+                        }
                         scope.launch {
-                            chatClient.sendMessage(user.id, user.fullName, msg)
+                            if (pendingImg != null) {
+                                isUploading = true
+                                val sid = group.id
+                                val uid = user.id
+                                val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
+                                val w = js("window")
+                                w.__sendSid = sid
+                                w.__sendUid = uid
+                                w.__sendUrl = uploadUrl
+                                w.__sendFile = pendingImg
+                                w.__sendText = text
+                                w.__sendScope = scope
+                                w.__sendUser = user
+                                w.__sendChatClient = chatClient
+                                                                js("""
+                                    var fd = new FormData();
+                                    fd.append("sessionId", window.__sendSid);
+                                    fd.append("userId", window.__sendUid);
+                                    fd.append("file", window.__sendFile);
+                                    var xhr = new XMLHttpRequest();
+                                    xhr.open("POST", window.__sendUrl, true);
+                                    xhr.onload = function() {
+                                        isUploading = false;
+                                        if (window.__sendText) {
+                                            window.__sendScope.launch(function() {
+                                                window.__sendChatClient.sendMessage(window.__sendUser.id, window.__sendUser.fullName, window.__sendText);
+                                            });
+                                        }
+                                    };
+                                    xhr.onerror = function() { isUploading = false; };
+                                    xhr.send(fd);
+                                """)
+                            } else if (text.isNotBlank()) {
+                                chatClient.sendMessage(user.id, user.fullName, text)
+                            }
                         }
                     }
                 }
+
                 
-                // 输入框容器（用于定位 mention 菜单）
+                                // 粘贴图片预览
+                if (pendingPasteImageUrl != null) {
+                    Div({
+                        style {
+                            display(DisplayStyle.Flex)
+                            alignItems(AlignItems.Center)
+                            property("gap", "8px")
+                            padding(8.px, 12.px)
+                            marginBottom(8.px)
+                            backgroundColor(Color("rgba(201, 168, 108, 0.08)"))
+                            borderRadius(8.px)
+                            property("border", "1px solid rgba(201, 168, 108, 0.25)")
+                        }
+                    }) {
+                        Img(src = pendingPasteImageUrl!!) {
+                            style {
+                                width(60.px)
+                                height(60.px)
+                                property("object-fit", "cover")
+                                borderRadius(4.px)
+                            }
+                        }
+                        Span({
+                            style {
+                                fontSize(13.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("flex", "1")
+                            }
+                        }) { Text("Send with image") }
+                        Span({
+                            style {
+                                fontSize(16.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("cursor", "pointer")
+                                padding(4.px)
+                            }
+                            onClick {
+                                val url = pendingPasteImageUrl
+                                pendingPasteImage = null
+                                pendingPasteImageUrl = null
+                                if (url != null) { js("window.URL.revokeObjectURL(url)") }
+                            }
+                        }) { Text("x") }
+                    }
+                }
+
+// 输入框容器（用于定位 mention 菜单）
                 Div({
                     style {
                         property("position", "relative")
@@ -2769,47 +2859,20 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }
                     
-                    // 粘贴图片处理（从剪贴板粘贴图片时自动上传）
+                                        // 粘贴图片处理（存入待发送队列，不立即上传）
                     DisposableEffect(Unit) {
                         val handler: (org.w3c.dom.events.Event) -> Unit = { event ->
                             val clipboardEvent = event.asDynamic()
                             val items = clipboardEvent.clipboardData?.items
                             if (items != null) {
-                                for (i in 0 until items.length) {
-                                    val item = items[i]
+                                for (idx in 0 until items.length) {
+                                    val item = items[idx]
                                     if (item.kind == "file" && item.type.startsWith("image/")) {
+                                        event.preventDefault()
                                         val fileBlob = item.getAsFile()
-                                        if (fileBlob != null && !isUploading) {
-                                            isUploading = true
-                                            val sid = group.id
-                                            val uid = user.id
-                                            val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
-                                            val w = js("window")
-                                            w.__pasteSid = sid
-                                            w.__pasteUid = uid
-                                            w.__pasteUrl = uploadUrl
-                                            w.__pasteFile = fileBlob
-                                            js("""
-                                                (function() {
-                                                    var fd = new FormData();
-                                                    fd.append("sessionId", window.__pasteSid);
-                                                    fd.append("userId", window.__pasteUid);
-                                                    fd.append("file", window.__pasteFile);
-                                                    var xhr = new XMLHttpRequest();
-                                                    xhr.open("POST", window.__pasteUrl, true);
-                                                    xhr.onload = function() {
-                                                        if (xhr.status === 200) console.log("📎 粘贴图片上传成功");
-                                                        else console.error("📎 粘贴图片上传失败:", xhr.status);
-                                                        window.__pasteDone();
-                                                    };
-                                                    xhr.onerror = function() {
-                                                        console.error("📎 粘贴图片上传失败");
-                                                        window.__pasteDone();
-                                                    };
-                                                    xhr.send(fd);
-                                                })();
-                                            """)
-                                            w.__pasteDone = { isUploading = false }
+                                        if (fileBlob != null) {
+                                            pendingPasteImage = fileBlob
+                                            pendingPasteImageUrl = js("window.URL.createObjectURL(fileBlob)").toString()
                                         }
                                         break
                                     }
@@ -2822,6 +2885,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             input?.removeEventListener("paste", handler)
                         }
                     }
+
                     
                     // @ Mention 下拉菜单 - 使用 fixed 定位避免被 overflow:hidden 裁剪
                     if (showMentionMenu) {
