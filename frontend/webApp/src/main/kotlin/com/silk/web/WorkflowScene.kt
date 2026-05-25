@@ -62,6 +62,13 @@ import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
 import org.jetbrains.compose.web.dom.TextArea
 
+private fun shouldSubmitWorkflowMessage(event: dynamic, messageText: String): Boolean {
+    return event.key == "Enter" &&
+            !event.shiftKey &&
+            !event.isComposing &&
+            messageText.isNotBlank()
+}
+
 @Composable
 fun WorkflowScene(appState: WebAppState) {
     val user = appState.currentUser ?: return
@@ -924,9 +931,7 @@ private fun WorkflowChatPanel(
     // 新增消息改变 messages.size → 触发此 effect → 仅检查最新一条是否匹配。
     LaunchedEffect(messages.size) {
         val latest = messages.lastOrNull() ?: return@LaunchedEffect
-        if (latest.type == com.silk.shared.models.MessageType.SYSTEM &&
-            (latest.content.startsWith("已切换到") || latest.content.contains("已激活") || latest.content.contains("已退出 agent"))
-        ) {
+        if (isWorkflowAgentLifecycleMessage(latest)) {
             val snap = ApiClient.getCcState(userId, groupId)
             if (snap.success) {
                 activeAgentDisplay = snap.agentDisplayName
@@ -1118,12 +1123,7 @@ private fun WorkflowChatPanel(
 
         // Transient (streaming) message
         transientMessage?.let { message ->
-            if (
-                message.content.isNotBlank() &&
-                message.currentStep == null &&
-                message.totalSteps == null &&
-                !isLikelyAgentStatusContent(message.content)
-            ) {
+            if (shouldRenderInlineTransientMessage(message)) {
                 MessageItem(
                     message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                     isTransient = true,
@@ -1375,7 +1375,7 @@ private fun WorkflowChatPanel(
             onInput { messageText = it.value }
             attr("placeholder", "向 Agent 发送消息...（Shift+Enter 换行）")
             onKeyDown { event ->
-                if (event.key == "Enter" && !event.shiftKey && !event.isComposing && messageText.isNotBlank()) {
+                if (shouldSubmitWorkflowMessage(event, messageText)) {
                     event.preventDefault()
                     val text = messageText.trim()
                     messageText = ""

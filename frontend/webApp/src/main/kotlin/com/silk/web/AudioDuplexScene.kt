@@ -243,6 +243,151 @@ private val jsInitSession = js("""
 })();
 """)
 
+private fun parseTranscriptItems(state: dynamic): List<TranscriptItem> {
+    val newItems: Array<dynamic> = state.newTranscripts as Array<dynamic>
+    return newItems.map { item ->
+        TranscriptItem(
+            role = item.role as String,
+            text = item.text as String,
+            timestamp = item.timestamp as Long,
+        )
+    }
+}
+
+private fun audioDuplexStatusColor(statusText: String): String {
+    return when {
+        statusText.contains("对话中") -> "#FF4D4F"
+        statusText.contains("异常") || statusText.contains("不可用") -> "#FF4D4F"
+        else -> SilkColors.textLight
+    }
+}
+
+private fun audioDuplexButtonColor(statusText: String): String {
+    return when {
+        statusText.contains("对话中") -> "#FF4D4F"
+        statusText.contains("连接") || statusText.contains("排队") || statusText.contains("准备") -> "#FAAD14"
+        statusText.contains("异常") || statusText.contains("断开") || statusText.contains("不可用") -> "#999999"
+        else -> SilkColors.primary
+    }
+}
+
+@Composable
+private fun AudioTranscriptPane(transcript: List<TranscriptItem>) {
+    Div({
+        style {
+            property("flex", "1")
+            property("overflow-y", "auto")
+            width(100.percent)
+            padding(16.px, 16.px, 8.px, 16.px)
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+        }
+    }) {
+        if (transcript.isEmpty()) {
+            AudioTranscriptEmptyState()
+        } else {
+            transcript.forEach { item ->
+                AudioTranscriptBubble(item)
+            }
+        }
+    }
+}
+
+@Composable
+private fun AudioTranscriptEmptyState() {
+    Div({
+        style {
+            property("flex", "1")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+        }
+    }) {
+        Span({
+            style { fontSize(48.px); opacity(0.3) }
+        }) { Text("📞") }
+        Span({
+            style {
+                fontSize(14.px)
+                color(Color(SilkColors.textLight))
+                marginTop(8.px)
+            }
+        }) { Text("点击下方按钮开始语音对话") }
+    }
+}
+
+@Composable
+private fun AudioTranscriptBubble(item: TranscriptItem) {
+    Div({
+        style {
+            width(100.percent)
+            padding(12.px)
+            marginBottom(6.px)
+            backgroundColor(if (item.role == "ai") Color(SilkColors.secondary) else Color(SilkColors.surface))
+            borderRadius(12.px)
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.FlexStart)
+            property("word-break", "break-word")
+        }
+    }) {
+        Span({
+            style {
+                fontSize(20.px)
+                marginRight(8.px)
+                property("flex-shrink", "0")
+            }
+        }) { Text(if (item.role == "ai") "🤖" else "👑") }
+        Span({
+            style {
+                fontSize(14.px)
+                color(Color(SilkColors.textPrimary))
+            }
+        }) { Text(item.text) }
+    }
+}
+
+@Composable
+private fun AudioStatusText(statusText: String) {
+    Span({
+        style {
+            fontSize(14.px)
+            color(Color(audioDuplexStatusColor(statusText)))
+            margin(0.px, 0.px, 12.px, 0.px)
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+        }
+    }) { Text(statusText) }
+}
+
+@Composable
+private fun AudioCallButton(statusText: String, onClick: () -> Unit) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            paddingBottom(40.px)
+        }
+    }) {
+        Button({
+            style {
+                width(100.px)
+                height(100.px)
+                borderRadius(50.px)
+                fontSize(48.px)
+                border(0.px)
+                property("cursor", "pointer")
+                property("transition", "all 0.2s ease")
+                property("box-shadow", "0 4px 16px rgba(0,0,0,0.15)")
+                backgroundColor(Color(audioDuplexButtonColor(statusText)))
+            }
+            onClick { onClick() }
+        }) {
+            Text("📞")
+        }
+    }
+}
+
 @Composable
 fun AudioDuplexScene(appState: WebAppState) {
     var statusText by remember { mutableStateOf("点击开始语音对话") }
@@ -258,15 +403,8 @@ fun AudioDuplexScene(appState: WebAppState) {
             val state: dynamic = js("window.__ad_getState()")
             if (state != null) {
                 statusText = state.statusText as String
-                val newItems: Array<dynamic> = state.newTranscripts as Array<dynamic>
-                if (newItems.isNotEmpty()) {
-                    val additions = newItems.map { item ->
-                        TranscriptItem(
-                            role = item.role as String,
-                            text = item.text as String,
-                            timestamp = item.timestamp as Long
-                        )
-                    }
+                val additions = parseTranscriptItems(state)
+                if (additions.isNotEmpty()) {
                     transcript = transcript + additions
                 }
             }
@@ -283,131 +421,18 @@ fun AudioDuplexScene(appState: WebAppState) {
             backgroundColor(Color(SilkColors.background))
         }
     }) {
-        // 对话记录区域
-        Div({
-            style {
-                property("flex", "1")
-                property("overflow-y", "auto")
-                width(100.percent)
-                padding(16.px, 16.px, 8.px, 16.px)
-                display(DisplayStyle.Flex)
-                flexDirection(FlexDirection.Column)
-            }
-        }) {
-            if (transcript.isEmpty()) {
-                Div({
-                    style {
-                        property("flex", "1")
-                        display(DisplayStyle.Flex)
-                        flexDirection(FlexDirection.Column)
-                        justifyContent(JustifyContent.Center)
-                        alignItems(AlignItems.Center)
-                    }
-                }) {
-                    Span({
-                        style { fontSize(48.px); opacity(0.3) }
-                    }) { Text("📞") }
-                    Span({
-                        style {
-                            fontSize(14.px)
-                            color(Color(SilkColors.textLight))
-                            marginTop(8.px)
-                        }
-                    }) { Text("点击下方按钮开始语音对话") }
+        AudioTranscriptPane(transcript)
+        AudioStatusText(statusText)
+        AudioCallButton(statusText = statusText) {
+            scope.launch {
+                val state: dynamic = js("window.__ad_getState()")
+                val currentState: String = state?.state as? String ?: "IDLE"
+                if (currentState == "STREAMING") {
+                    js("window.__ad_stop()")
+                } else {
+                    val wsBaseUrl = backendWsOrigin()
+                    window.asDynamic().__ad_start(wsBaseUrl)
                 }
-            } else {
-                transcript.forEach { item ->
-                    Div({
-                        style {
-                            width(100.percent)
-                            padding(12.px)
-                            marginBottom(6.px)
-                            backgroundColor(
-                                if (item.role == "ai") Color(SilkColors.secondary)
-                                else Color(SilkColors.surface)
-                            )
-                            borderRadius(12.px)
-                            display(DisplayStyle.Flex)
-                            alignItems(AlignItems.FlexStart)
-                            property("word-break", "break-word")
-                        }
-                    }) {
-                        Span({
-                            style {
-                                fontSize(20.px)
-                                marginRight(8.px)
-                                property("flex-shrink", "0")
-                            }
-                        }) { Text(if (item.role == "ai") "🤖" else "👑") }
-                        Span({
-                            style {
-                                fontSize(14.px)
-                                color(Color(SilkColors.textPrimary))
-                            }
-                        }) { Text(item.text) }
-                    }
-                }
-            }
-        }
-
-        // 状态文字
-        Span({
-            style {
-                fontSize(14.px)
-                color(
-                    when {
-                        statusText.contains("对话中") -> Color("#FF4D4F")
-                        statusText.contains("异常") || statusText.contains("不可用") -> Color("#FF4D4F")
-                        else -> Color(SilkColors.textLight)
-                    }
-                )
-                margin(0.px, 0.px, 12.px, 0.px)
-                display(DisplayStyle.Flex)
-                justifyContent(JustifyContent.Center)
-            }
-        }) { Text(statusText) }
-
-        // 大圆形按钮
-        Div({
-            style {
-                display(DisplayStyle.Flex)
-                justifyContent(JustifyContent.Center)
-                paddingBottom(40.px)
-            }
-        }) {
-            Button({
-                style {
-                    width(100.px)
-                    height(100.px)
-                    borderRadius(50.px)
-                    fontSize(48.px)
-                    border(0.px)
-                    property("cursor", "pointer")
-                    property("transition", "all 0.2s ease")
-                    property("box-shadow", "0 4px 16px rgba(0,0,0,0.15)")
-                    backgroundColor(Color(
-                        when {
-                            statusText.contains("对话中") -> "#FF4D4F"
-                            statusText.contains("连接") || statusText.contains("排队") || statusText.contains("准备") -> "#FAAD14"
-                            statusText.contains("异常") || statusText.contains("断开") || statusText.contains("不可用") -> "#999999"
-                            else -> SilkColors.primary
-                        }
-                    ))
-                }
-                onClick {
-                    scope.launch {
-                        val state: dynamic = js("window.__ad_getState()")
-                        val currentState: String = state?.state as? String ?: "IDLE"
-                        if (currentState == "STREAMING") {
-                            js("window.__ad_stop()")
-                        } else {
-                            val wsBaseUrl = backendWsOrigin()
-                            window.asDynamic().__ad_start(wsBaseUrl)
-                        }
-                    }
-                }
-            }) {
-                Text("📞")
             }
         }
     }
