@@ -2769,6 +2769,62 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }
                     
+                    // 粘贴图片处理（从剪贴板粘贴图片时自动上传）
+                    DisposableEffect(Unit) {
+                        val handler: (org.w3c.dom.events.Event) -> Unit = { event ->
+                            val clipboardEvent = event.asDynamic()
+                            val items = clipboardEvent.clipboardData?.items
+                            if (items != null) {
+                                for (i in 0 until items.length) {
+                                    val item = items[i]
+                                    if (item.kind == "file" && item.type.startsWith("image/")) {
+                                        event.preventDefault()
+                                        val fileBlob = item.getAsFile()
+                                        if (fileBlob != null && !isUploading) {
+                                            isUploading = true
+                                            val sid = group.id
+                                            val uid = user.id
+                                            val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
+                                            // 用 window 暂存状态，JS 代码读取
+                                            val w = js("window")
+                                            w.__pasteSid = sid
+                                            w.__pasteUid = uid
+                                            w.__pasteUrl = uploadUrl
+                                            w.__pasteFile = fileBlob
+                                            js("""
+                                                (function() {
+                                                    var fd = new FormData();
+                                                    fd.append("sessionId", window.__pasteSid);
+                                                    fd.append("userId", window.__pasteUid);
+                                                    fd.append("file", window.__pasteFile);
+                                                    var xhr = new XMLHttpRequest();
+                                                    xhr.open("POST", window.__pasteUrl, true);
+                                                    xhr.onload = function() {
+                                                        if (xhr.status === 200) console.log("📎 粘贴图片上传成功");
+                                                        else console.error("📎 粘贴图片上传失败:", xhr.status);
+                                                        window.__pasteDone();
+                                                    };
+                                                    xhr.onerror = function() {
+                                                        console.error("📎 粘贴图片上传失败");
+                                                        window.__pasteDone();
+                                                    };
+                                                    xhr.send(fd);
+                                                })();
+                                            """)
+                                            w.__pasteDone = { isUploading = false }
+                                        }
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                        val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLElement
+                        input?.addEventListener("paste", handler)
+                        onDispose {
+                            input?.removeEventListener("paste", handler)
+                        }
+                    }
+                    
                     // @ Mention 下拉菜单 - 使用 fixed 定位避免被 overflow:hidden 裁剪
                     if (showMentionMenu) {
                         Div({
