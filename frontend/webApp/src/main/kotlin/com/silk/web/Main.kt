@@ -5750,7 +5750,8 @@ fun MessageItem(
                     }
                 }
 
-                // 文件卡片
+                // 文件卡片（图片已有预览，不再显示冗余文件卡）
+                if (!webIsImageFile(fileName)) {
                 Div({
                     style {
                         display(DisplayStyle.Flex)
@@ -5853,6 +5854,7 @@ fun MessageItem(
                         Text("⬇")
                     }
                 }
+                } // end if-not-image
                 
                 // 文件消息操作按钮行
                 if (!isTransient && !isSelectionMode) {

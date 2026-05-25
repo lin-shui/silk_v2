@@ -270,12 +270,22 @@ fun Route.fileRoutes() {
             val contentType = Files.probeContentType(file.toPath()) 
                 ?: ContentType.Application.OctetStream.toString()
             
-            call.response.header(
-                HttpHeaders.ContentDisposition,
+            // 图片用 Inline（浏览器展示），非图片用 Attachment（下载）
+            val isImage = contentType.startsWith("image/")
+            val disposition = if (isImage) {
+                ContentDisposition.Inline.withParameter(
+                    ContentDisposition.Parameters.FileName, 
+                    fileId
+                )
+            } else {
                 ContentDisposition.Attachment.withParameter(
                     ContentDisposition.Parameters.FileName, 
                     fileId
-                ).toString()
+                )
+            }
+            call.response.header(
+                HttpHeaders.ContentDisposition,
+                disposition.toString()
             )
             
             call.respondFile(file)
