@@ -39,7 +39,8 @@ object ImagePipeline {
         file: File,
         originalFileName: String,
         uploadsDir: File,
-        config: PreprocessConfig
+        config: PreprocessConfig,
+        onVisionComplete: (suspend (content: String, visionText: String) -> Unit)? = null
     ): PreprocessResult {
         logger.info("图片管线开始处理: {}", originalFileName)
 
@@ -56,7 +57,7 @@ object ImagePipeline {
         // Launch vision asynchronously — won't block the response
         if (config.visionEnabled && visionAvailable()) {
             visionScope.launch {
-                processVisionAsync(file, originalFileName, uploadsDir, config)
+                processVisionAsync(file, originalFileName, uploadsDir, config, onVisionComplete)
             }
         }
 
@@ -84,7 +85,8 @@ object ImagePipeline {
         file: File,
         originalFileName: String,
         uploadsDir: File,
-        config: PreprocessConfig
+        config: PreprocessConfig,
+        onComplete: (suspend (content: String, visionText: String) -> Unit)? = null
     ) {
         val ext = originalFileName.substringAfterLast(".", "").lowercase()
         val sizeStr = FilePreprocessor.formatFileSize(file.length())
@@ -110,8 +112,10 @@ object ImagePipeline {
             }
 
             // 重写为 OCR + Vision 完整内容
-            extractedFile.writeText(buildMarkdown(originalFileName, ext, sizeStr, dimensions, ocrText, visionDescription))
+            val fullContent = buildMarkdown(originalFileName, ext, sizeStr, dimensions, ocrText, visionDescription)
+            extractedFile.writeText(fullContent)
             logger.info("Vision 异步处理完成: {} (+{} 字符)", originalFileName, visionDescription.length)
+            onComplete?.invoke(fullContent, visionDescription)
         }
     }
 

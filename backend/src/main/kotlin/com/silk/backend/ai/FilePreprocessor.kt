@@ -34,7 +34,8 @@ object FilePreprocessor {
         sessionName: String,
         workspaceDir: String,
         userId: String = "",
-        config: PreprocessConfig = PreprocessConfig()
+        config: PreprocessConfig = PreprocessConfig(),
+        onVisionComplete: (suspend (content: String, visionText: String) -> Unit)? = null
     ): PreprocessResult = withContext(Dispatchers.IO) {
         if (!config.enabled) {
             logger.info("文件预处理已禁用，跳过: {}", originalFileName)
@@ -66,7 +67,7 @@ object FilePreprocessor {
         try {
             val result = when {
                 ext in PDF_EXTENSIONS -> PdfPipeline.process(file, originalFileName, uploadsDir, config)
-                ext in IMAGE_EXTENSIONS -> ImagePipeline.process(file, originalFileName, uploadsDir, config)
+                ext in IMAGE_EXTENSIONS -> ImagePipeline.process(file, originalFileName, uploadsDir, config, onVisionComplete)
                 else -> processTextOrSkip(file, originalFileName, uploadsDir)
             }
 

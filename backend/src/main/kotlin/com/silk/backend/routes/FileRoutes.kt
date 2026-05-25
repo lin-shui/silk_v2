@@ -204,7 +204,12 @@ fun Route.fileRoutes() {
                             originalFileName = finalFileName,
                             sessionName = normalizedSession,
                             workspaceDir = workspaceDir,
-                            userId = finalUserId
+                            userId = finalUserId,
+                            onVisionComplete = { updatedContent, _ ->
+                                val downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
+                                broadcastSystemStatus(finalSessionId, "✅ Vision 分析完成: $finalFileName")
+                                broadcastExtractedContent(finalSessionId, updatedContent, finalFileName, downloadUrl)
+                            }
                         )
                         
                         if (result.extractedTextFile != null) {
