@@ -62,6 +62,14 @@ import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
 import org.jetbrains.compose.web.dom.TextArea
 
+
+private fun shouldSubmitWorkflowMessage(event: org.jetbrains.compose.web.events.SyntheticKeyboardEvent, messageText: String): Boolean {
+    if (event.key != "Enter") return false
+    if (event.shiftKey) return false
+    val isComposing = event.nativeEvent.asDynamic().isComposing == true
+    return !isComposing && messageText.isNotBlank()
+}
+
 @Composable
 fun WorkflowScene(appState: WebAppState) {
     val user = appState.currentUser ?: return
@@ -1377,7 +1385,7 @@ private fun WorkflowChatPanel(
             onInput { messageText = it.value }
             attr("placeholder", "向 Agent 发送消息...（Shift+Enter 换行）")
             onKeyDown { event ->
-                if (event.key == "Enter" && !event.shiftKey && !event.isComposing && messageText.isNotBlank()) {
+                if (shouldSubmitWorkflowMessage(event, messageText)) {
                     event.preventDefault()
                     val text = messageText.trim()
                     messageText = ""
