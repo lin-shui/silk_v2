@@ -2,11 +2,7 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
-    <ID>CyclomaticComplexMethod:GroupListScene.kt$@Composable fun GroupListScene(appState: WebAppState)</ID>
     <ID>CyclomaticComplexMethod:Main.kt$@Composable fun AIMessageCard( message: Message, timeString: String, isTransient: Boolean = false, isLastMessage: Boolean = false, onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {}, onDelete: (String) -&gt; Unit = {}, isSelectionMode: Boolean = false, isSelected: Boolean = false, onToggleSelection: (String) -&gt; Unit = {}, onEnterSelectionMode: (String) -&gt; Unit = {} )</ID>
-    <ID>CyclomaticComplexMethod:Main.kt$@Composable fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState)</ID>
-    <ID>CyclomaticComplexMethod:Main.kt$@Composable fun ChatScene(appState: WebAppState)</ID>
-    <ID>CyclomaticComplexMethod:Main.kt$@Composable fun MembersDialog( members: List&lt;GroupMember&gt;, contacts: List&lt;Contact&gt;, currentUserId: String, isLoading: Boolean, strings: com.silk.shared.i18n.Strings, onMemberClick: (GroupMember) -&gt; Unit, onDismiss: () -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:Main.kt$@Composable fun MessageItem( message: Message, isTransient: Boolean = false, currentUserId: String = "", groupId: String = "", isLastMessage: Boolean = false, isRecalling: Boolean = false, onRecall: (String) -&gt; Unit = {}, onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {}, onDelete: (String) -&gt; Unit = {}, isSelectionMode: Boolean = false, isSelected: Boolean = false, onToggleSelection: (String) -&gt; Unit = {}, onEnterSelectionMode: (String) -&gt; Unit = {} )</ID>
     <ID>SwallowedException:ApiClient.kt$ApiClient$e: Exception</ID>
     <ID>TooGenericExceptionCaught:ApiClient.kt$ApiClient$e: Exception</ID>
