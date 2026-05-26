@@ -895,7 +895,7 @@ class ChatServer(
      * 广播合并的 Vision 回复（图片预览 + 文字，单条 SYSTEM 消息）
      */
     /**
-     * 广播用户消息（带图片预览，单条 SYSTEM 消息）
+     * 广播用户消息（图片预览 + 文字，单条 SYSTEM 消息）
      */
     suspend fun broadcastUserMessage(userId: String, userName: String, previewContent: String) {
         val msg = Message(
@@ -921,19 +921,14 @@ class ChatServer(
         text: String,
         callId: Long
     ) {
-        val combinedMsgContent = if (pendingImg.downloadUrl.isNotBlank()) {
-            "##PREVIEW_IMAGE:${pendingImg.downloadUrl}##\n$text"
-        } else {
-            text
-        }
-        
+        // 只回复文字，不重复加图片（用户的图片已在上方消息中显示）
         val finalMessage = Message(
             id = generateId(),
             userId = SilkAgent.AGENT_ID,
             userName = "${SilkAgent.AGENT_NAME} (图片分析)",
-            content = combinedMsgContent,
+            content = text,
             timestamp = System.currentTimeMillis(),
-            type = MessageType.SYSTEM,
+            type = MessageType.TEXT,
             isTransient = false
         )
         messageHistory.add(finalMessage)
