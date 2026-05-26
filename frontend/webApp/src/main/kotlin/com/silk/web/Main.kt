@@ -6087,6 +6087,111 @@ fun MessageItem(
                             }
                         }
                     }
+                    // 底部操作栏
+                    if (!isTransient && !isSelectionMode) {
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                property("justify-content", "flex-end")
+                                property("gap", "6px")
+                                marginTop(12.px)
+                                paddingTop(8.px)
+                                property("border-top", "1px solid rgba(232, 224, 212, 0.5)")
+                            }
+                        }) {
+                            Span({
+                                style {
+                                    fontSize(11.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    property("cursor", "pointer")
+                                    padding(4.px, 10.px)
+                                    borderRadius(4.px)
+                                    property("transition", "all 0.2s")
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "4px")
+                                }
+                                onClick { onCopy(textContent.ifBlank { message.content }) }
+                            }) {
+                                Text("📋")
+                                Text("复制")
+                            }
+                            Span({
+                                style {
+                                    fontSize(11.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    property("cursor", "pointer")
+                                    padding(4.px, 10.px)
+                                    borderRadius(4.px)
+                                    property("transition", "all 0.2s")
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "4px")
+                                }
+                                onClick { onForward(message) }
+                            }) {
+                                Text("↗")
+                                Text("转发")
+                            }
+                            if (message.userId == currentUserId && !isAgentUserId(message.userId)) {
+                                Span({
+                                    style {
+                                        fontSize(11.px)
+                                        color(Color(SilkColors.textSecondary))
+                                        property("cursor", "pointer")
+                                        padding(4.px, 10.px)
+                                        borderRadius(4.px)
+                                        property("transition", "all 0.2s")
+                                        display(DisplayStyle.Flex)
+                                        alignItems(AlignItems.Center)
+                                        property("gap", "4px")
+                                    }
+                                    onClick { onRecall(message.id) }
+                                }) {
+                                    Text("↩")
+                                    Text("撤回")
+                                }
+                            }
+                            Span({
+                                style {
+                                    fontSize(11.px)
+                                    color(Color("#E57373"))
+                                    property("cursor", "pointer")
+                                    padding(4.px, 10.px)
+                                    borderRadius(4.px)
+                                    property("transition", "all 0.2s")
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "4px")
+                                }
+                                onClick {
+                                    if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
+                                        onDelete(message.id)
+                                    }
+                                }
+                            }) {
+                                Text("🗑")
+                                Text("删除")
+                            }
+                            Span({
+                                style {
+                                    fontSize(11.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    property("cursor", "pointer")
+                                    padding(4.px, 10.px)
+                                    borderRadius(4.px)
+                                    property("transition", "all 0.2s")
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "4px")
+                                }
+                                onClick { onToggleSelection(message.id) }
+                            }) {
+                                Text("☑")
+                                Text("多选")
+                            }
+                        }
+                    }
                 } else {
                     Div({ classes(SilkStylesheet.systemMessage) }) {
                         Text("• ${content} ($timeString)")
