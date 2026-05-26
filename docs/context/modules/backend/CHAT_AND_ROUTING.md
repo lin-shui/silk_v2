@@ -71,7 +71,8 @@
 5. 广播到所有 session
 7. 对普通文本异步触发 URL/PDF 处理
 8. Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
-9. Silk AI / `DirectModelAgent` 响应
+9. `/recall` 命令交给 `UserHistoryAgent`，在 per-user hardlink workspace 中只读检索历史会话
+10. Silk AI / `DirectModelAgent` 响应
 
 ## Contracts Visible To Clients
 
