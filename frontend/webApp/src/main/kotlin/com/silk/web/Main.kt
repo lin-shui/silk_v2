@@ -5289,7 +5289,7 @@ Div({
             Div({
                 style {
                     display(DisplayStyle.Flex)
-                    property("justify-content", "flex-end")
+                    property("justify-content", "flex-start")
                     property("gap", "6px")
                     marginTop(12.px)
                     paddingTop(8.px)
@@ -6043,7 +6043,14 @@ fun MessageItem(
 
                     Div({
                         classes(SilkStylesheet.messageCard)
-                        style { property("flex", "1"); property("min-width", "0") }
+                        style {
+                            property("flex", "1")
+                            property("min-width", "0")
+                            if (message.userId == currentUserId) {
+                                property("max-width", "75%")
+                                property("margin-left", "auto")
+                            }
+                        }
                     }) {
                         Div({ classes(SilkStylesheet.messageHeader) }) {
                             Span({ classes(SilkStylesheet.userName) }) { Text(message.userName) }
@@ -6092,7 +6099,7 @@ fun MessageItem(
                         Div({
                             style {
                                 display(DisplayStyle.Flex)
-                                property("justify-content", "flex-end")
+                                property("justify-content", if (message.userId == currentUserId) "flex-end" else "flex-start")
                                 property("gap", "6px")
                                 marginTop(12.px)
                                 paddingTop(8.px)
