@@ -423,18 +423,7 @@ fun main() {
                 fullImg.onload = function() {
                     cropCtx.drawImage(fullImg, sx, sy, sw, sh, 0, 0, sw, sh);
                     cropCanvas.toBlob(function(blob) {
-                        var fd = new FormData();
-                        fd.append('sessionId', sessionId);
-                        fd.append('userId', userId);
-                        fd.append('file', blob, 'screenshot_' + Date.now() + '.png');
-                        var xhr = new XMLHttpRequest();
-                        xhr.open('POST', uploadUrl, true);
-                        xhr.onload = function() {
-                            if (xhr.status === 200) console.log('✅ 截图上传成功');
-                            else console.log('❌ 截图上传失败: ' + xhr.statusText);
-                        };
-                        xhr.onerror = function() { console.log('❌ 截图上传网络错误'); };
-                        xhr.send(fd);
+                        window.__pendingScreenshotBlob = blob;
                         document.body.removeChild(overlay);
                         if (window.__screenshotDone) { window.__screenshotDone(); window.__screenshotDone = undefined; }
                     }, 'image/png');
@@ -3100,7 +3089,15 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 val userId = user.id
                                 val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
                                 // 注册 JS 回调以重置 Kotlin 状态（保持注册直到 JS 侧使用完毕）
-                                window.asDynamic().__screenshotDone = { isScreenshotCrop = false }
+                                window.asDynamic().__screenshotDone = {
+                                    val blob = js("window.__pendingScreenshotBlob")
+                                    if (blob != null) {
+                                        pendingPasteImage = blob
+                                        pendingPasteImageUrl = js("window.URL.createObjectURL(blob)").toString()
+                                        js("window.__pendingScreenshotBlob = null")
+                                    }
+                                    isScreenshotCrop = false
+                                }
                                 js("""
                                     (function() {
                                         var sid = sessionId;
