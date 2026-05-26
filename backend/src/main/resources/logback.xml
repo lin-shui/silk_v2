@@ -52,4 +52,7 @@
     <!-- <logger name="com.silk.backend.ai.DirectModelAgent" level="DEBUG" additivity="false">
         <appender-ref ref="AGENT_IO"/>
     </logger> -->
+    <!-- <logger name="com.silk.backend.ai.UserHistoryAgent" level="DEBUG" additivity="false">
+        <appender-ref ref="AGENT_IO"/>
+    </logger> -->
 </configuration>

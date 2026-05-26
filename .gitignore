@@ -68,6 +68,10 @@ backend_test.log
 # Workflow runtime persistence (per-user data, should not be tracked)
 backend/workflows/
 
+# User history workspace views (hardlinked runtime data)
+user_workspace_views/
+backend/user_workspace_views/
+
 # Large binary files (download separately)
 search/weaviate
 search/weaviate.zip

@@ -20,6 +20,7 @@
 | Session history | `chat_history/<session>/session.json`, `chat_history.json` | WebSocket 历史回放 |
 | Uploaded files | `chat_history/<session>/uploads/` | 文件消息、下载 |
 | URL dedupe | `chat_history/<session>/uploads/processed_urls.txt` | URL/PDF 下载去重 |
+| User history workspace views | `user_workspace_views/user_<user>/` | `UserWorkspaceManager` 为 `/recall` 创建 hardlink 视图，映射该用户可访问的 `chat_history/group_<group>/` |
 | User todos | `chat_history/user_todos/*.json` or `-Dsilk.userTodoBaseDir=...` | `UserTodoStore`（兼容旧 `backend/chat_history/user_todos` / `../chat_history/user_todos` 查找） |
 | Workflow store | `~/.silk-data/workflows/workflow_store.json`, `SILK_WORKFLOW_DIR`, or `-Dsilk.workflowDir=...` | `WorkflowManager` |
 | Trusted directories | `~/.silk-data/workflows/trusted_dirs.json` (co-located with workflow store) | `TrustedDirManager` |

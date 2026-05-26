@@ -31,6 +31,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - 聊天历史：`chat_history/<session>/session.json`、`chat_history.json`
 - 上传文件：`chat_history/<session>/uploads/`
 - URL 去重缓存：`processed_urls.txt`
+- 用户历史 workspace 视图：`user_workspace_views/user_<user>/`（通过 hardlink 映射该用户可访问的 `chat_history/group_<group>/`，供 `/recall` 只读检索）
 - 用户 Todo：`chat_history/user_todos/<user>.json`
 - Workflow：`~/.silk-data/workflows/workflow_store.json`（可用 `SILK_WORKFLOW_DIR` 或 `-Dsilk.workflowDir=...` 覆盖）
 - TrustedDir：`~/.silk-data/workflows/trusted_dirs.json`（与 Workflow 目录同源）
