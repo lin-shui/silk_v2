@@ -8,7 +8,8 @@
 
 - `config/lint/detekt/*.xml`
 - `frontend/androidApp/src/main/kotlin/com/silk/android/`
-- 后续候选：`backend/src/main/kotlin/com/silk/backend/`、`frontend/webApp/src/main/kotlin/com/silk/web/`
+- `frontend/webApp/src/main/kotlin/com/silk/web/`
+- 后续候选：`backend/src/main/kotlin/com/silk/backend/`
 
 ## Guardrails
 
@@ -35,18 +36,18 @@
 
 ## Current Snapshot
 
-当前 detekt baseline 余量（2026-05-26，Slice 36 后）：
+当前 detekt baseline 余量（2026-05-26，Slice 40 后）：
 
 - `backend.xml`: 186
 - `frontend-androidApp.xml`: 57
-- `frontend-webApp.xml`: 8
+- `frontend-webApp.xml`: 4
 - `frontend-shared.xml`: 7
 - `frontend-desktopApp.xml`: 0
 
 当前关键分布：
 
 - `frontend/androidApp` 已无 `WildcardImport` baseline，剩余主要是 `CyclomaticComplexMethod` 22、`TooGenericExceptionCaught` 11、`SwallowedException` 7。
-- `frontend/webApp` 已无 `WildcardImport`、`UnusedParameter`、`EmptyCatchBlock`、`UseCheckOrError`、`LoopWithTooManyJumpStatements` 与 `ComplexCondition` baseline；剩余主要是 `CyclomaticComplexMethod` 6（`Main.kt` 5、`GroupListScene.kt` 1），以及 `ApiClient.kt` 上 2 条签名级异常语义 baseline。
+- `frontend/webApp` 已无 `WildcardImport`、`UnusedParameter`、`EmptyCatchBlock`、`UseCheckOrError`、`LoopWithTooManyJumpStatements` 与 `ComplexCondition` baseline；剩余主要是 `CyclomaticComplexMethod` 2（均在 `Main.kt`），以及 `ApiClient.kt` 上 2 条签名级异常语义 baseline。
 - `backend` 已无 `WildcardImport` baseline；剩余主要是 `CyclomaticComplexMethod` 34、`TooGenericExceptionCaught` 33、`ConstructorParameterNaming` 16、`NestedBlockDepth` 14、`UnusedPrivateMember` 13。
 
 ## Current Status
@@ -71,12 +72,16 @@
 - Slice 34 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-34.md](../completed/2026-05-26-lint-baseline-reduction-slice-34.md)。
 - Slice 35 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-35.md](../completed/2026-05-26-lint-baseline-reduction-slice-35.md)。
 - Slice 36 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-36.md](../completed/2026-05-26-lint-baseline-reduction-slice-36.md)。
+- Slice 37 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-37.md](../completed/2026-05-26-lint-baseline-reduction-slice-37.md)。
+- Slice 38 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-38.md](../completed/2026-05-26-lint-baseline-reduction-slice-38.md)。
+- Slice 39 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-39.md](../completed/2026-05-26-lint-baseline-reduction-slice-39.md)。
+- Slice 40 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-40.md](../completed/2026-05-26-lint-baseline-reduction-slice-40.md)。
 - Android 侧已知 `jlink` / `JdkImageTransform` 阻塞保持不变；当前 active plan 继续优先选择不依赖该链路的窄 slice。
 
 ## Next Slices
 
-- Slice 37 候选：继续留在 `frontend/webApp`，优先处理 `GroupListScene(appState: WebAppState)` 这最后一条群组页顶层复杂度；对话框、成员弹窗和卡片 helper 已经拆好，适合顺着 scene 编排继续收口。
-- Slice 38 候选：回到 Android，优先处理 `ApiClient.kt`、`AudioDuplexScreen.kt`、`ChatScreen.kt` 的异常语义规则（`TooGenericExceptionCaught` / `SwallowedException`），但继续避开会把整文件泛 catch 一次性摊开的重构。
+- Slice 41 候选：继续留在 `frontend/webApp`，优先处理 `Main.kt` 的 `MessageItem(...)` 或 `AIMessageCard(...)` 其中一条，但只做单个消息卡片层的条件收口，不把两条一起摊开。
+- Slice 42 候选：回到 Android，优先处理 `ApiClient.kt`、`AudioDuplexScreen.kt`、`ChatScreen.kt` 的异常语义规则（`TooGenericExceptionCaught` / `SwallowedException`），但继续避开会把整文件泛 catch 一次性摊开的重构。
 - 如果继续留在 backend，下一轮不要再按“大范围机械清理”切；优先选单文件的 `UnusedPrivateMember` / `UnusedParameter` 或明确异常语义问题。
 - 复杂度规则继续按单文件慢拆，不和异常语义 / import 收敛混在同一 slice。
 
@@ -90,7 +95,10 @@
 - `SettingsScene.kt` 已经把顶部栏、语言/默认指令区、CC Bridge 区块、保存提示和底部按钮拆成独立 helper；后续继续加设置项时优先往这些 section 扩展，不要把分支重新堆回主 composable。
 - `KnowledgeBaseScene.kt` 已经把主题栏、条目栏、编辑器与创建弹窗拆成独立 helper；后续改知识库页时优先复用这些 section 和文件级动作 helper，不要再把保存/导出/创建分支塞回主 composable。
 - `AudioDuplexScene.kt` 已经把 transcript pane、空态、状态文案和拨号按钮拆成独立 helper；后续改音频双工页时优先沿着这些 helper 扩展，不要回退成单函数堆逻辑。
-- `GroupListScene.kt` 已经把 create/join dialog 的壳层、输入区、错误区、按钮区，以及成员弹窗的内容区/成员 display helper 拆开；后续继续改群组页时优先沿这些 helper 扩展，不要把条件重新塞回对话框主 composable。
+- `Main.kt` 的 `ChatScene(...)` 已经把 missing-context、sidebar header/content/card、unread badge，以及 sidebar 刷新/未读轮询 effect 拆成独立 helper；后续改聊天页外围群组 sidebar 时优先沿这些 helper 扩展，不要把分支重新塞回 `ChatScene(...)`。
+- `Main.kt` 的 `ChatAppWithGroup(...)` 已经把 language/session effects、顶部 header、选择模式工具栏、常规操作工具栏、连接状态条，以及转发/成员邀请/上传输入等 overlays 拆成独立 helper；后续改聊天页 host 层时优先沿这些 helper 扩展，不要把 toolbar、dialog 和 upload 分支重新塞回主 composable。
+- `Main.kt` 的 `MembersDialog(...)` 已经把 overlay、surface、状态体和单成员行拆成独立 helper，并把成员交互状态抽成 `MembersDialogMemberState`；后续改成员弹窗时优先沿这些 helper 扩展，不要把成员判定和 icon/status 分支重新塞回主 dialog。
+- `GroupListScene.kt` 已经把顶层 scene 编排拆成 effect、header、content、overlay 与小型 suspend helper，且 create/join dialog 壳层、输入区、错误区、按钮区，以及成员弹窗内容区/成员 display helper 都已独立；后续继续改群组页时优先沿这些 helper 扩展，不要把条件重新塞回顶层 scene 或对话框主 composable。
 - `WorkflowScene.kt` 的 `FolderPickerDialog(...)` 已经把 header、breadcrumbs、列表区和 footer 拆成独立 helper；后续继续改目录选择器时优先沿这些 helper 扩展，不要把 UI 分支重新塞回主 dialog。
 - `WorkflowScene.kt` 的 `WorkflowChatPanel(...)` 已经把 header、消息区、badge/dropdown、输入区和目录/信任弹窗入口拆成独立 helper；后续继续改工作流聊天面板时优先在这些 helper 上扩展，不要把 agent 切换、目录切换和发送逻辑重新堆回主 composable。
 - `WorkflowScene.kt` 的 `WorkflowScene(appState: WebAppState)` 已经把左侧列表、右侧主面板、创建流程和管理弹窗编排拆成独立 helper；后续继续改工作流 scene 时优先在这些 host/helper 上扩展，不要把 create/trust/menu/rename/delete 分支重新塞回顶层 scene。
