@@ -96,7 +96,13 @@ object ImagePipeline {
         val visionDescription = callVisionApi(file, config.visionModel)
 
         if (visionDescription.isBlank()) {
-            logger.info("Vision 未返回结果: {}", originalFileName)
+            logger.info("Vision 未返回结果(或失败)，回退广播 OCR 结果: {}", originalFileName)
+            withContext(Dispatchers.IO) {
+                val extractedFile = File(uploadsDir, "$originalFileName.extracted.md")
+                if (extractedFile.exists()) {
+                    onComplete?.invoke(extractedFile.readText(), "")
+                }
+            }
             return
         }
 

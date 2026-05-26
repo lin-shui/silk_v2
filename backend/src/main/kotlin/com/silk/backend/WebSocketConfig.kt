@@ -666,12 +666,8 @@ class ChatServer(
      */
     suspend fun broadcastExtractedContent(content: String, label: String, downloadUrl: String = "") {
         logger.debug("📄 [提取内容广播] {} ({} 字符)", label, content.length)
-        // 嵌入图片URL，让前端可以渲染图片+提取内容的组合卡片
-        val combinedContent = if (downloadUrl.isNotBlank()) {
-            "##PREVIEW_IMAGE:$downloadUrl##\n$content"
-        } else {
-            content
-        }
+        // 文件消息已有图片预览，提取内容不再重复加图片
+        val combinedContent = content
         val msg = Message(
             id = generateId(),
             userId = SilkAgent.AGENT_ID,

@@ -207,26 +207,31 @@ fun Route.fileRoutes() {
                             userId = finalUserId,
                             onVisionComplete = { updatedContent, _ ->
                                 val downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
-                                broadcastSystemStatus(finalSessionId, "✅ Vision 分析完成: $finalFileName")
+                                broadcastSystemStatus(finalSessionId, "✅ 图片解析完成: $finalFileName")
                                 broadcastExtractedContent(finalSessionId, updatedContent, finalFileName, downloadUrl)
                             }
                         )
                         
                         if (result.extractedTextFile != null) {
-                            broadcastSystemStatus(finalSessionId, "✅ 文件已解析: $finalFileName (${result.summary.take(60)})")
-                            // 读取提取的内容并发送到聊天
-                            try {
-                                val extractedContent = result.extractedTextFile.readText()
-                                val maxLen = 4000
-                                val content = if (extractedContent.length > maxLen) {
-                                    extractedContent.take(maxLen) + "\n\n...（内容过长已截断，共 ${extractedContent.length} 字符）"
-                                } else {
-                                    extractedContent
+                            // 如果有 vision（异步后台跑），OCR 中间结果不广播，等 vision 完成后一次广播
+                            val visionWillRun = com.silk.backend.ai.AIConfig.VISION_ENABLED &&
+                                (com.silk.backend.ai.AIConfig.ANTHROPIC_API_KEY.isNotBlank() || com.silk.backend.ai.AIConfig.VISION_BASE_URL.isNotBlank())
+                            if (!visionWillRun) {
+                                broadcastSystemStatus(finalSessionId, "✅ 文件已解析: $finalFileName (${result.summary.take(60)})")
+                                // 读取提取的内容并发送到聊天
+                                try {
+                                    val extractedContent = result.extractedTextFile.readText()
+                                    val maxLen = 4000
+                                    val content = if (extractedContent.length > maxLen) {
+                                        extractedContent.take(maxLen) + "\n\n...（内容过长已截断，共 ${extractedContent.length} 字符）"
+                                    } else {
+                                        extractedContent
+                                    }
+                                    val downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
+                                    broadcastExtractedContent(finalSessionId, content, finalFileName, downloadUrl)
+                                } catch (e: Exception) {
+                                    logger.warn("无法读取提取内容: ${e.message}")
                                 }
-                                val downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
-                                broadcastExtractedContent(finalSessionId, content, finalFileName, downloadUrl)
-                            } catch (e: Exception) {
-                                logger.warn("无法读取提取内容: ${e.message}")
                             }
                         } else {
                             broadcastSystemStatus(finalSessionId, "⚠️ 文件存储完成: $finalFileName (无法提取内容)")
