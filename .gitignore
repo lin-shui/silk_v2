@@ -68,6 +68,10 @@ backend/workflows/
 user_workspace_views/
 backend/user_workspace_views/
 
+# Claude CLI agent workspaces (runtime data)
+chat_workspaces/
+backend/chat_workspaces/
+
 # Large binary files (download separately)
 search/weaviate
 search/weaviate.zip
