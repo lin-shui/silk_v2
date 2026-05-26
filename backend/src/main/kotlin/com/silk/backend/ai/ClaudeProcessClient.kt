@@ -1,5 +1,6 @@
 package com.silk.backend.ai
 
+import com.silk.backend.EnvLoader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
@@ -126,6 +127,11 @@ class ClaudeProcessClient(
             )
             if (strictSettingsFile.exists()) {
                 env["CLAUDE_STRICT_SETTINGS"] = strictSettingsFile.absolutePath
+            }
+            // 注入代理环境变量，确保 claude CLI 子进程能访问 Anthropic API
+            listOf("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy",
+                   "CLAUDE_HTTPS_PROXY", "CLAUDE_HTTP_PROXY", "NO_PROXY", "no_proxy").forEach { key ->
+                (System.getenv(key) ?: EnvLoader.get(key))?.takeIf { it.isNotBlank() }?.let { env[key] = it }
             }
             val processBuilder = ProcessBuilder(cmd)
                 .directory(File(absWorkspaceDir))
