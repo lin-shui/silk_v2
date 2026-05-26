@@ -1783,6 +1783,7 @@ class ChatServer(
     private suspend fun sendFinalHistoryRecallResponse(fullResponse: String) {
         if (fullResponse.isBlank()) return
         val finalMsg = buildSilkTextMessage(fullResponse)
+        messageHistory.add(finalMsg)
         sendMessageToAllSessions(finalMsg)
         historyManager.addMessage(sessionName, finalMsg)
     }
