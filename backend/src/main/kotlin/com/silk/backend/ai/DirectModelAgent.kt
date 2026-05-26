@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import org.slf4j.LoggerFactory
+import java.io.File
 
 /**
  * 直接调用 Claude 的 Agent。
@@ -19,6 +20,27 @@ class DirectModelAgent(
     private val sessionId: String = "default"
 ) {
     private val logger = LoggerFactory.getLogger(DirectModelAgent::class.java)
+
+    /**
+     * 以 DEBUG 级别记录完整的 prompt 和 response。
+     * 平时不输出；需要调试时在 logback.xml 中将本类设为 DEBUG 即可。
+     */
+    private fun logPromptAndResponse(
+        path: String,
+        prompt: String,
+        response: String,
+        durationMs: Long
+    ) {
+        if (!logger.isDebugEnabled) return
+        logger.debug(
+            "[IO] session={}  path={}  duration={}ms\n" +
+            ">>> PROMPT ({} chars) >>>\n{}\n" +
+            "<<< RESPONSE ({} chars) <<<\n{}",
+            sessionId, path, durationMs,
+            prompt.length, prompt,
+            response.length, response
+        )
+    }
 
     /** Claude CLI 进程客户端 */
     private lateinit var claudeProcessClient: ClaudeProcessClient
@@ -342,10 +364,13 @@ class DirectModelAgent(
             appendLine("Assistant:")
         }
 
-        return claudeProcessClient.streamCompletion(
+        val startTime = System.currentTimeMillis()
+        val result = claudeProcessClient.streamCompletion(
             fullPrompt = fullPrompt,
             callback = callback,
         )
+        logPromptAndResponse("claude-cli", fullPrompt, result, System.currentTimeMillis() - startTime)
+        return result
     }
 
     private suspend fun chatViaAnthropicApi(
@@ -362,6 +387,18 @@ class DirectModelAgent(
             appendLine(toolContext)
         }
         val nonSystemMessages = conversationHistory.filter { it.role != "system" }
+
+        val apiPromptForLog = buildString {
+            appendLine("[System]")
+            appendLine(mergedSystem)
+            appendLine()
+            for (msg in nonSystemMessages) {
+                appendLine("[${msg.role}]")
+                appendLine(msg.content)
+                appendLine()
+            }
+        }
+        val apiStartTime = System.currentTimeMillis()
 
         val client = AnthropicClient(apiKey = apiKey)
 
@@ -407,6 +444,7 @@ class DirectModelAgent(
                 result.content.take(300).replace('\n', ' '))
         }
 
+        logPromptAndResponse("anthropic-api", apiPromptForLog, result.content, System.currentTimeMillis() - apiStartTime)
         return result.content
     }
 
