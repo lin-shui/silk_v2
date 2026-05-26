@@ -2710,27 +2710,26 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                         if (pendingImg != null) {
                             isUploading = true
+                            // 图片+文字一起通过 HTTP 上传，后端保存后广播单条 ##PREVIEW_IMAGE 消息
                             val w = js("window")
                             w.__upGid = group.id
                             w.__upUid = user.id
                             w.__upUrl = "${backendHttpOrigin()}/api/files/upload"
                             w.__upFile = pendingImg
+                            w.__upText = if (text.isNotBlank()) text else ""
                             js("""
                                 var fd = new FormData();
                                 fd.append("sessionId", window.__upGid);
                                 fd.append("userId", window.__upUid);
                                 fd.append("file", window.__upFile);
+                                fd.append("text", window.__upText);
                                 var xhr = new XMLHttpRequest();
                                 xhr.open("POST", window.__upUrl, true);
-                                xhr.onload = function() { isUploading = false; };
-                                xhr.onerror = function() { isUploading = false; };
+                                xhr.onload = function() { window.__upIsUploading = false; };
+                                xhr.onerror = function() { window.__upIsUploading = false; };
                                 xhr.send(fd);
                             """)
-                            if (text.isNotBlank()) {
-                                scope.launch {
-                                    chatClient.sendMessage(user.id, user.fullName, text)
-                                }
-                            }
+                            js("window.__upIsUploading = true;")
                         }
                     }
                 }

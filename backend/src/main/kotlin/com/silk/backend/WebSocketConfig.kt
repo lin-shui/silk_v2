@@ -62,6 +62,16 @@ data class User(
     val name: String
 )
 
+/** 待处理图片状态（用于图片+文字合并发送给 vision 模型） */
+data class PendingImageState(
+    val userId: String,
+    val ocrText: String,
+    val imageFileName: String,
+    val imageFile: java.io.File,
+    val downloadUrl: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 class ChatServer(
     private val sessionName: String = "default_room",
     private val isSilkChatWorkflow: Boolean = false
@@ -129,6 +139,29 @@ class ChatServer(
         } catch (e: Exception) {
             logger.warn("⚠️ 加载历史消息到内存失败: {}", e.message)
         }
+    }
+
+    // ── 待处理图片状态（图片+文字合并发给 vision 模型） ──
+    private val pendingImages = ConcurrentHashMap<String, PendingImageState>()
+
+    fun setPendingImage(userId: String, ocrText: String, fileName: String, file: java.io.File, downloadUrl: String) {
+        val key = "$sessionName:$userId"
+        pendingImages[key] = PendingImageState(userId, ocrText, fileName, file, downloadUrl)
+        logger.info("📸 设置待处理图片: session={}, user={}, file={}", sessionName, userId, fileName)
+    }
+
+    fun getAndRemovePendingImage(userId: String): PendingImageState? {
+        val key = "$sessionName:$userId"
+        val state = pendingImages[key]
+        if (state != null) {
+            pendingImages.remove(key)
+            logger.info("📸 取出待处理图片: session={}, user={}", sessionName, userId)
+        }
+        return state
+    }
+
+    fun hasPendingImage(userId: String): Boolean {
+        return pendingImages.containsKey("$sessionName:$userId")
     }
     
     // 保存已处理的URL到文件
@@ -445,7 +478,62 @@ class ChatServer(
             }
         }
 
-        // Silk AI 回复逻辑
+        // ==================== Vision 图片+文字合并处理 ====================
+        // 检测 ##VISION_IMG: 标记（前端将图片 base64 嵌入消息内容，一次性发来）
+        val visionImgMarker = "##VISION_IMG:"
+        if (message.type == MessageType.TEXT && !message.isTransient && message.content.startsWith(visionImgMarker)) {
+            val markerEnd = message.content.indexOf("##", visionImgMarker.length)
+            if (markerEnd != -1) {
+                val base64Data = message.content.substring(visionImgMarker.length, markerEnd)
+                val userText = message.content.substring(markerEnd + 2)
+                
+                logger.info("📸 收到 WebSocket 内嵌图片: {} base64 字符 + {} 文字字符", base64Data.length, userText.length)
+                
+                // 保存图片到文件（用于预览和持久化）
+                val uploadDir = historyManager.getUploadsDir(sessionName)
+                uploadDir.mkdirs()
+                val imageBytes = try {
+                    val dataPart = base64Data.substringAfter(",")
+                    java.util.Base64.getDecoder().decode(dataPart)
+                } catch (e: Exception) {
+                    logger.error("❌ base64 解码失败: {}", e.message)
+                    null
+                }
+                
+                if (imageBytes != null) {
+                    val ext = when {
+                        base64Data.contains("image/png") -> "png"
+                        base64Data.contains("image/gif") -> "gif"
+                        base64Data.contains("image/webp") -> "webp"
+                        else -> "jpg"
+                    }
+                    val timestamp = System.currentTimeMillis()
+                    val fileName = "vision_${timestamp}.${ext}"
+                    val savedFile = java.io.File(uploadDir, fileName)
+                    savedFile.writeBytes(imageBytes)
+                    
+                    val downloadUrl = "/api/files/download/${sessionName.removePrefix("group_")}/${savedFile.name}"
+                    logger.info("📸 已保存 vision 图片: {} -> {}", savedFile.absolutePath, downloadUrl)
+                    
+                    // 调 Vision API
+                    activeAiJob?.cancel()
+                    activeAiJob = CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            handleVisionImageAndText(savedFile, base64Data, userText.trim(), downloadUrl, message.userId)
+                        } catch (e: CancellationException) {
+                            logger.info("🛑 Vision 生成已被取消")
+                        } catch (e: Exception) {
+                            logger.error("❌ Vision 处理异常: {}", e.message)
+                        } finally {
+                            activeAiJob = null
+                        }
+                    }
+                    return  // 已处理，不再走下面 AI 回复流程
+                }
+            }
+        }
+        
+                // Silk AI 回复逻辑
         // isSilkPrivateChat：群组名以 "[Silk]" 开头（已在上方计算）
         
         if (!AgentRuntime.isAgentMessage(message) && message.type == MessageType.TEXT && !message.isTransient) {
@@ -506,21 +594,50 @@ class ChatServer(
                         }
                     }
                 } else {
+                    
                     // 普通问题 - 使用搜索 + AI 回复
                     val logPrefix = if (isSilkPrivateChat) "[Silk私聊]" else "[@silk]"
                     logger.debug("💬 [broadcast] {} 问题: {}...", logPrefix, silkContent.take(50))
                     
-                    activeAiJob?.cancel()
-                    activeAiJob = CoroutineScope(Dispatchers.IO).launch {
-                        try {
-                            generateIntelligentResponse(silkContent, message.userId)
-                        } catch (e: CancellationException) {
-                            logger.info("🛑 AI 生成已被用户取消")
-                        } catch (e: Exception) {
-                            logger.error("❌ 生成AI回答异常: {}", e.message)
-                            e.printStackTrace()
-                        } finally {
-                            activeAiJob = null
+                    // ✅ 检查是否有待处理的图片（图片+文字合并发给 vision 模型）
+                    var pendingImg = getAndRemovePendingImage(message.userId)
+                    // 如果文字先到，短暂等待图片处理完成（OCR 可能比文字慢几十ms）
+                    if (pendingImg == null) {
+                        kotlinx.coroutines.delay(500)
+                        pendingImg = getAndRemovePendingImage(message.userId)
+                        if (pendingImg != null) {
+                            logger.info("📸 等待后取到待处理图片: user={}", message.userId)
+                        }
+                    }
+                    if (pendingImg != null) {
+                        logger.info("📸 检测到待处理图片，将图片+文字合并发送给 vision 模型: user={}", message.userId)
+                        activeAiJob?.cancel()
+                        activeAiJob = CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                sendAgentStatus("🤖 正在结合图片分析您的问题...")
+                                handleCombinedVisionAndText(pendingImg, silkContent, message.userId)
+                            } catch (e: CancellationException) {
+                                logger.info("🛑 Vision+文字生成已被用户取消")
+                            } catch (e: Exception) {
+                                logger.error("❌ Vision+文字生成异常: {}", e.message)
+                                e.printStackTrace()
+                            } finally {
+                                activeAiJob = null
+                            }
+                        }
+                    } else {
+                        activeAiJob?.cancel()
+                        activeAiJob = CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                generateIntelligentResponse(silkContent, message.userId)
+                            } catch (e: CancellationException) {
+                                logger.info("🛑 AI 生成已被用户取消")
+                            } catch (e: Exception) {
+                                logger.error("❌ 生成AI回答异常: {}", e.message)
+                                e.printStackTrace()
+                            } finally {
+                                activeAiJob = null
+                            }
                         }
                     }
                 }
@@ -769,6 +886,398 @@ class ChatServer(
      * 直接调用模型，让模型使用其内置的 tool 能力（搜索文件、浏览器等）
      * 不再执行复杂的三层搜索流程
      */
+
+    /**
+     * 处理图片+文字合并的 vision 请求
+     * 当用户上传图片并附带文字时，将图片（OCR 文字）+ 用户文字一起发送给 vision 模型
+     */
+    /**
+     * 广播合并的 Vision 回复（图片预览 + 文字，单条 SYSTEM 消息）
+     */
+    /**
+     * 广播用户消息（带图片预览，单条 SYSTEM 消息）
+     */
+    suspend fun broadcastUserMessage(userId: String, userName: String, previewContent: String) {
+        val msg = Message(
+            id = generateId(),
+            userId = userId,
+            userName = userName,
+            content = previewContent,
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.SYSTEM,
+            isTransient = false
+        )
+        messageHistory.add(msg)
+        historyManager.addMessage(sessionName, msg)
+        val msgJson = kotlinx.serialization.json.Json.encodeToString(msg)
+        allSessions().forEach { session ->
+            try { session.send(io.ktor.websocket.Frame.Text(msgJson)) } catch (_: Exception) {}
+        }
+        logger.info("📸 [broadcastUserMessage] 已广播用户消息: {} 字符", previewContent.length)
+    }
+    
+    suspend fun broadcastCombinedVisionResult(
+        pendingImg: PendingImageState,
+        text: String,
+        callId: Long
+    ) {
+        val combinedMsgContent = if (pendingImg.downloadUrl.isNotBlank()) {
+            "##PREVIEW_IMAGE:${pendingImg.downloadUrl}##\n$text"
+        } else {
+            text
+        }
+        
+        val finalMessage = Message(
+            id = generateId(),
+            userId = SilkAgent.AGENT_ID,
+            userName = "${SilkAgent.AGENT_NAME} (图片分析)",
+            content = combinedMsgContent,
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.SYSTEM,
+            isTransient = false
+        )
+        messageHistory.add(finalMessage)
+        historyManager.addMessage(sessionName, finalMessage)
+        
+        val messageJson = kotlinx.serialization.json.Json.encodeToString(finalMessage)
+        allSessions().forEach { session ->
+            try { session.send(io.ktor.websocket.Frame.Text(messageJson)) } catch (_: Exception) {}
+        }
+        logger.info("✅ [CombinedVision-{}] 广播完成: {} 字符", callId, text.length)
+    }
+    
+    /**
+     * 处理 WebSocket 内嵌的 Vision 图片+文字
+     * 前端将图片 base64 嵌入消息（##VISION_IMG:data:...##用户文字），后端在此统一处理
+     */
+    suspend fun handleVisionImageAndText(
+        imageFile: java.io.File,
+        base64Data: String,
+        userText: String,
+        downloadUrl: String,
+        userId: String
+    ) {
+        val callId = System.currentTimeMillis()
+        logger.info("🤖 [VisionWS-{}] 开始处理 WebSocket 内嵌图片", callId)
+        
+        try {
+            if (!imageFile.exists()) {
+                sendAgentStatus("❌ 图片文件不存在")
+                return
+            }
+            
+            val imageBytes = imageFile.readBytes()
+            val base64Image = java.util.Base64.getEncoder().encodeToString(imageBytes)
+            val ext = imageFile.extension.lowercase()
+            val mediaType = when (ext) {
+                "png" -> "image/png"
+                "gif" -> "image/gif"
+                "webp" -> "image/webp"
+                else -> "image/jpeg"
+            }
+            
+            val combinedPrompt = if (userText.isNotBlank()) userText else "请用中文详细描述这张图片的内容"
+            
+            // 优先 Anthropic API，其次 OpenAI 兼容 API
+            val visionText = if (com.silk.backend.ai.AIConfig.ANTHROPIC_API_KEY.isNotBlank()) {
+                // Anthropic API
+                sendAgentStatus("🤖 正在分析图片...")
+                
+                val requestBody = kotlinx.serialization.json.buildJsonObject {
+                    put("model", com.silk.backend.ai.AIConfig.VISION_MODEL)
+                    put("max_tokens", 4096)
+                    putJsonArray("messages") {
+                        addJsonObject {
+                            put("role", "user")
+                            putJsonArray("content") {
+                                addJsonObject {
+                                    put("type", "image")
+                                    putJsonObject("source") {
+                                        put("type", "base64")
+                                        put("media_type", mediaType)
+                                        put("data", base64Image)
+                                    }
+                                }
+                                addJsonObject {
+                                    put("type", "text")
+                                    put("text", combinedPrompt)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                val baseUrl = com.silk.backend.ai.AIConfig.ANTHROPIC_API_BASE_URL.trimEnd('/')
+                val httpRequest = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create("$baseUrl/v1/messages"))
+                    .header("Content-Type", "application/json")
+                    .header("x-api-key", com.silk.backend.ai.AIConfig.ANTHROPIC_API_KEY)
+                    .header("anthropic-version", "2023-06-01")
+                    .timeout(java.time.Duration.ofSeconds(300))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                    .build()
+                
+                val httpClient = java.net.http.HttpClient.newBuilder()
+                    .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                    .connectTimeout(java.time.Duration.ofSeconds(30))
+                    .build()
+                
+                val response = httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
+                
+                if (response.statusCode() == 200) {
+                    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                    val body = json.parseToJsonElement(response.body()).jsonObject
+                    body["content"]?.jsonArray?.firstOrNull()?.jsonObject
+                        ?.get("text")?.jsonPrimitive?.content ?: ""
+                } else {
+                    val errMsg = response.body().take(200)
+                    logger.warn("⚠️ [VisionWS-{}] Anthropic API 返回 {}: {}", callId, response.statusCode(), errMsg)
+                    "⚠️ Vision API 返回 ${response.statusCode()}"
+                }
+            } else if (com.silk.backend.ai.AIConfig.VISION_BASE_URL.isNotBlank()) {
+                // OpenAI 兼容 API
+                sendAgentStatus("🤖 正在分析图片...")
+                
+                val requestBody = kotlinx.serialization.json.buildJsonObject {
+                    put("model", com.silk.backend.ai.AIConfig.VISION_MODEL)
+                    put("max_tokens", 4096)
+                    putJsonArray("messages") {
+                        addJsonObject {
+                            put("role", "user")
+                            putJsonArray("content") {
+                                addJsonObject {
+                                    put("type", "image_url")
+                                    putJsonObject("image_url") {
+                                        put("url", "data:$mediaType;base64,$base64Image")
+                                    }
+                                }
+                                addJsonObject {
+                                    put("type", "text")
+                                    put("text", combinedPrompt)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                val baseUrl = com.silk.backend.ai.AIConfig.VISION_BASE_URL.trimEnd('/')
+                val url = "$baseUrl/chat/completions"
+                val apiKey = com.silk.backend.ai.AIConfig.VISION_API_KEY.ifBlank { "sk-no-key" }
+                
+                val httpRequest = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer $apiKey")
+                    .timeout(java.time.Duration.ofSeconds(300))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                    .build()
+                
+                val httpClient = java.net.http.HttpClient.newBuilder()
+                    .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                    .connectTimeout(java.time.Duration.ofSeconds(30))
+                    .build()
+                
+                val response = httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
+                
+                if (response.statusCode() == 200) {
+                    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                    val body = json.parseToJsonElement(response.body()).jsonObject
+                    body["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+                        ?.get("message")?.jsonObject
+                        ?.get("content")?.jsonPrimitive?.content ?: ""
+                } else {
+                    val errMsg = response.body().take(200)
+                    logger.warn("⚠️ [VisionWS-{}] OpenAI API 返回 {}: {}", callId, response.statusCode(), errMsg)
+                    "⚠️ Vision API 返回 ${response.statusCode()}"
+                }
+            } else {
+                "⚠️ 未配置 Vision 模型"
+            }
+            
+            sendAgentStatus("CLEAR_STATUS")
+            
+            // 用 PendingImageState 构造临时对象来复用 broadcastCombinedVisionResult
+            val tmpState = PendingImageState(userId, "", imageFile.name, imageFile, downloadUrl)
+            broadcastCombinedVisionResult(tmpState, visionText, callId)
+            logger.info("✅ [VisionWS-{}] Vision 处理完成", callId)
+            
+        } catch (e: java.util.concurrent.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.error("❌ [VisionWS-{}] 处理失败: {}", callId, e.message, e)
+            sendAgentStatus("❌ 图片分析失败: ${e.message}")
+        }
+    }
+    
+    private suspend fun handleCombinedVisionAndText(
+        pendingImg: PendingImageState,
+        userText: String,
+        userId: String
+    ) {
+        val callId = System.currentTimeMillis()
+        logger.info("🤖 [CombinedVision-{}] 开始合并处理图片+文字", callId)
+        
+        try {
+            val imageFile = pendingImg.imageFile
+            if (!imageFile.exists()) {
+                sendAgentStatus("❌ 图片文件已不存在")
+                return
+            }
+            
+            // 读取图片
+            val imageBytes = imageFile.readBytes()
+            val base64Image = java.util.Base64.getEncoder().encodeToString(imageBytes)
+            val ext = imageFile.extension.lowercase()
+            val mediaType = when (ext) {
+                "png" -> "image/png"
+                "gif" -> "image/gif"
+                "webp" -> "image/webp"
+                else -> "image/jpeg"
+            }
+            
+            // 构建 prompt：只使用用户问题，图片由模型自行理解
+            val combinedPrompt = if (userText.isNotBlank()) {
+                userText
+            } else {
+                "请用中文详细描述这张图片的内容"
+            }
+            
+            if (com.silk.backend.ai.AIConfig.ANTHROPIC_API_KEY.isNotBlank()) {
+                // Anthropic API
+                sendAgentStatus("🤖 正在分析图片...")
+                
+                val requestBody = kotlinx.serialization.json.buildJsonObject {
+                    put("model", com.silk.backend.ai.AIConfig.VISION_MODEL)
+                    put("max_tokens", 4096)
+                    putJsonArray("messages") {
+                        addJsonObject {
+                            put("role", "user")
+                            putJsonArray("content") {
+                                addJsonObject {
+                                    put("type", "image")
+                                    putJsonObject("source") {
+                                        put("type", "base64")
+                                        put("media_type", mediaType)
+                                        put("data", base64Image)
+                                    }
+                                }
+                                addJsonObject {
+                                    put("type", "text")
+                                    put("text", combinedPrompt)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                val baseUrl = com.silk.backend.ai.AIConfig.ANTHROPIC_API_BASE_URL.trimEnd('/')
+                val httpRequest = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create("$baseUrl/v1/messages"))
+                    .header("Content-Type", "application/json")
+                    .header("x-api-key", com.silk.backend.ai.AIConfig.ANTHROPIC_API_KEY)
+                    .header("anthropic-version", "2023-06-01")
+                    .timeout(java.time.Duration.ofSeconds(300))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                    .build()
+                
+                val httpClient = java.net.http.HttpClient.newBuilder()
+                    .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                    .connectTimeout(java.time.Duration.ofSeconds(30))
+                    .build()
+                
+                val response = httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
+                
+                if (response.statusCode() == 200) {
+                    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                    val body = json.parseToJsonElement(response.body()).jsonObject
+                    val text = body["content"]?.jsonArray?.firstOrNull()?.jsonObject
+                        ?.get("text")?.jsonPrimitive?.content ?: ""
+                    
+                    sendAgentStatus("CLEAR_STATUS")
+                    broadcastCombinedVisionResult(pendingImg, text.ifEmpty { "抱歉，未能分析图片内容" }, callId)
+                } else {
+                    val errBody = response.body().take(200)
+                    logger.warn("⚠️ [CombinedVision-{}] Vision API 返回 {}: {}", callId, response.statusCode(), errBody)
+                    val errText = "⚠️ Vision API 返回 ${response.statusCode()}，请检查模型配置。\n\n**错误信息**: $errBody"
+                    // 仍然广播带图片预览的 SYSTEM 消息，即使 API 失败
+                    broadcastCombinedVisionResult(pendingImg, errText, callId)
+                }
+            } else if (com.silk.backend.ai.AIConfig.VISION_BASE_URL.isNotBlank()) {
+                // OpenAI 兼容 API
+                sendAgentStatus("🤖 正在分析图片...")
+                
+                val requestBody = kotlinx.serialization.json.buildJsonObject {
+                    put("model", com.silk.backend.ai.AIConfig.VISION_MODEL)
+                    put("max_tokens", 4096)
+                    putJsonArray("messages") {
+                        addJsonObject {
+                            put("role", "user")
+                            putJsonArray("content") {
+                                addJsonObject {
+                                    put("type", "image_url")
+                                    putJsonObject("image_url") {
+                                        put("url", "data:$mediaType;base64,$base64Image")
+                                    }
+                                }
+                                addJsonObject {
+                                    put("type", "text")
+                                    put("text", combinedPrompt)
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                val baseUrl = com.silk.backend.ai.AIConfig.VISION_BASE_URL.trimEnd('/')
+                val url = "$baseUrl/chat/completions"
+                val apiKey = com.silk.backend.ai.AIConfig.VISION_API_KEY.ifBlank { "sk-no-key" }
+                
+                val httpRequest = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer $apiKey")
+                    .timeout(java.time.Duration.ofSeconds(300))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                    .build()
+                
+                val httpClient = java.net.http.HttpClient.newBuilder()
+                    .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                    .connectTimeout(java.time.Duration.ofSeconds(30))
+                    .build()
+                
+                val response = httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
+                
+                if (response.statusCode() == 200) {
+                    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                    val body = json.parseToJsonElement(response.body()).jsonObject
+                    val text = body["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+                        ?.get("message")?.jsonObject
+                        ?.get("content")?.jsonPrimitive?.content ?: ""
+                    
+                    sendAgentStatus("CLEAR_STATUS")
+                    broadcastCombinedVisionResult(pendingImg, text.ifEmpty { "抱歉，未能分析图片内容" }, callId)
+                } else {
+                    val errBody = response.body().take(200)
+                    logger.warn("⚠️ [CombinedVision-{}] Vision API 返回 {}: {}", callId, response.statusCode(), errBody)
+                    val errText = "⚠️ Vision API 返回 ${response.statusCode()}，请检查模型配置。\n\n**错误信息**: $errBody"
+                    broadcastCombinedVisionResult(pendingImg, errText, callId)
+                }
+            } else {
+                // 没有 vision 模型配置，fallback 到文字模型
+                logger.warn("⚠️ [CombinedVision-{}] 未配置 vision 模型，回退到文字模型", callId)
+                sendAgentStatus("⚠️ 未配置 Vision 模型，使用文字模型回答")
+                broadcastCombinedVisionResult(pendingImg, "⚠️ 未配置 Vision 模型。\n\n" + userText.ifBlank { "请用中文详细描述这张图片的内容" }, callId)
+            }
+        } catch (e: java.util.concurrent.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.error("❌ [CombinedVision-{}] 处理失败: {}", callId, e.message, e)
+            val errText = "❌ 图片分析失败: ${e.message}\n\n已使用文字模式回答，请稍后重试。"
+            broadcastCombinedVisionResult(pendingImg, errText, callId)
+            // 额外用文字模型再试一次
+            try { generateIntelligentResponse(userText, userId) } catch (_: Exception) {}
+        }
+    }
     private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "") {
         val callId = System.currentTimeMillis()
         logger.info("🤖 [Agent-{}] 开始直接调用模型 (userId={})", callId, userId)

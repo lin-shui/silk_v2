@@ -3,6 +3,7 @@ package com.silk.backend.routes
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.broadcastExtractedContent
 import com.silk.backend.broadcastSystemStatus
+import com.silk.backend.getGroupChatServer
 import com.silk.backend.buildFileDownloadUrl
 import com.silk.backend.database.SimpleResponse
 import com.silk.backend.search.IndexDocument
@@ -93,6 +94,7 @@ fun Route.fileRoutes() {
                 var fileName: String? = null
                 var fileBytes: ByteArray? = null
                 var contentType: String? = null
+                var userTextInput: String? = null
                 
                 multipart.forEachPart { part ->
                     when (part) {
@@ -100,6 +102,7 @@ fun Route.fileRoutes() {
                             when (part.name) {
                                 "sessionId" -> sessionId = part.value
                                 "userId" -> userId = part.value
+                                "text" -> userTextInput = part.value
                             }
                         }
                         is PartData.FileItem -> {
@@ -160,37 +163,86 @@ fun Route.fileRoutes() {
                 val user = com.silk.backend.database.UserRepository.findUserById(userId!!)
                 val userName = user?.fullName ?: "用户"
                 
-                // 先返回上传成功响应（不阻塞用户）
-                call.respond(HttpStatusCode.OK, FileUploadResponse(
-                    success = true,
-                    fileId = safeFileName,
-                    fileName = fileName!!,
-                    filePath = targetFile.absolutePath,
-                    downloadUrl = buildFileDownloadUrl(sessionId!!, safeFileName),
-                    timestamp = timestamp,
-                    indexed = false, // 先返回 false，异步索引完成后通过 WebSocket 通知
-                    message = "文件已上传，正在索引..."
-                ))
-                
-                // ✅ 发送文件消息到聊天室（让所有群成员都能看到）
                 val finalSessionId = sessionId!!
                 val finalUserId = userId!!
                 val finalUserName = userName
                 val finalFileName = fileName!!
                 val finalSafeFileName = safeFileName
+                val isImageFile = finalFileName.let { name ->
+                    val ext = name.substringAfterLast(".", "").lowercase()
+                    setOf("jpg", "jpeg", "png", "gif", "webp", "bmp").contains(ext)
+                }
+                
+                // 广播用户合并消息（图片预览 + 文字，单条 SYSTEM 消息）
+                val downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
                 val fileSize = fileBytes!!.size.toLong()
+                val userTextForMsg = userTextInput?.trim() ?: ""
+                val previewContent = if (userTextForMsg.isNotBlank()) {
+                    "##PREVIEW_IMAGE:${downloadUrl}##\n${userTextForMsg}"
+                } else {
+                    "##PREVIEW_IMAGE:${downloadUrl}##\n*图片*"
+                }
+                
+                try {
+                    val chatSvr = getGroupChatServer(finalSessionId)
+                    chatSvr.broadcastUserMessage(finalUserId, finalUserName, previewContent)
+                    logger.info("📸 已广播用户合并消息: {} + {}", finalFileName, userTextForMsg.take(50))
+                    
+                    // 在后端协程中处理 vision（不走 WebSocket）
+                    val finalUserText = userTextForMsg
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            chatSvr.handleVisionImageAndText(
+                                targetFile, "", finalUserText, downloadUrl, finalUserId
+                            )
+                        } catch (e: Exception) {
+                            logger.error("❌ Vision 异步处理失败: {}", e.message, e)
+                            chatSvr.broadcastCombinedVisionResult(
+                                com.silk.backend.PendingImageState(finalUserId, "", finalFileName, targetFile, downloadUrl),
+                                "⚠️ Vision 分析出错: ${e.message}",
+                                System.currentTimeMillis()
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    logger.error("❌ 广播用户消息失败: {}", e.message, e)
+                    // 兜底：尝试广播 FILE 消息
+                    try {
+                        com.silk.backend.broadcastFileMessage(
+                            groupId = finalSessionId, userId = finalUserId, userName = finalUserName,
+                            fileName = finalFileName, fileSize = fileSize,
+                            downloadUrl = downloadUrl
+                        )
+                    } catch (_: Exception) {}
+                }
+                
+                // 先返回上传成功响应（不阻塞用户）
+                call.respond(HttpStatusCode.OK, FileUploadResponse(
+                    success = true,
+                    fileId = safeFileName,
+                    fileName = finalFileName,
+                    filePath = targetFile.absolutePath,
+                    downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName),
+                    timestamp = timestamp,
+                    indexed = false,
+                    message = "文件已上传，正在索引..."
+                ))
+                
                 
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
-                        // 广播文件消息到聊天室
-                        com.silk.backend.broadcastFileMessage(
-                            groupId = finalSessionId,
-                            userId = finalUserId,
-                            userName = finalUserName,
-                            fileName = finalFileName,
-                            fileSize = fileSize,
-                            downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
-                        )
+                        // 有 text 字段就不广播单独 FILE 消息（已经通过 ##PREVIEW_IMAGE 显示了）
+                        val hasUserText = userTextInput?.trim().isNullOrBlank().not()
+                        if (!hasUserText) {
+                            com.silk.backend.broadcastFileMessage(
+                                groupId = finalSessionId,
+                                userId = finalUserId,
+                                userName = finalUserName,
+                                fileName = finalFileName,
+                                fileSize = fileSize,
+                                downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
+                            )
+                        }
                         
                         // 文件预处理（生成 .extracted.md 供 Claude CLI 读取）
                         val normalizedSession = if (finalSessionId.startsWith("group_")) finalSessionId else "group_$finalSessionId"
@@ -206,32 +258,40 @@ fun Route.fileRoutes() {
                             workspaceDir = workspaceDir,
                             userId = finalUserId,
                             onVisionComplete = { updatedContent, _ ->
-                                val downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
-                                broadcastSystemStatus(finalSessionId, "✅ 图片解析完成: $finalFileName")
-                                broadcastExtractedContent(finalSessionId, updatedContent, finalFileName, downloadUrl)
+                                // 检查待处理图片是否已被 text 消息消费（发给 vision 模型了）
+                                val chatSvr = getGroupChatServer(finalSessionId)
+                                if (chatSvr != null && chatSvr.hasPendingImage(finalUserId)) {
+                                    // 待处理图片还在，说明 text 还没到，vision 正常广播
+                                    val downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
+                                    broadcastSystemStatus(finalSessionId, "✅ 图片解析完成: $finalFileName")
+                                    broadcastExtractedContent(finalSessionId, updatedContent, finalFileName, downloadUrl)
+                                } else {
+                                    // 待处理图片已被 text 消费，不再广播冗余的 vision 结果
+                                    logger.debug("📸 Vision 异步结果已由 text 合并处理，跳过广播: {}", finalFileName)
+                                }
                             }
                         )
                         
                         if (result.extractedTextFile != null) {
-                            // 如果有 vision（异步后台跑），OCR 中间结果不广播，等 vision 完成后一次广播
-                            val visionWillRun = com.silk.backend.ai.AIConfig.VISION_ENABLED &&
-                                (com.silk.backend.ai.AIConfig.ANTHROPIC_API_KEY.isNotBlank() || com.silk.backend.ai.AIConfig.VISION_BASE_URL.isNotBlank())
-                            if (!visionWillRun) {
-                                broadcastSystemStatus(finalSessionId, "✅ 文件已解析: $finalFileName (${result.summary.take(60)})")
-                                // 读取提取的内容并发送到聊天
-                                try {
-                                    val extractedContent = result.extractedTextFile.readText()
-                                    val maxLen = 4000
-                                    val content = if (extractedContent.length > maxLen) {
-                                        extractedContent.take(maxLen) + "\n\n...（内容过长已截断，共 ${extractedContent.length} 字符）"
-                                    } else {
-                                        extractedContent
-                                    }
-                                    val downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
-                                    broadcastExtractedContent(finalSessionId, content, finalFileName, downloadUrl)
-                                } catch (e: Exception) {
-                                    logger.warn("无法读取提取内容: ${e.message}")
+                            // 读取 OCR 提取结果并广播给用户展示
+                            try {
+                                val extractedContent = result.extractedTextFile.readText()
+                                
+                                // 从提取内容中提取 OCR 文本部分
+                                val ocrMatch = Regex("""## OCR 提取的文字\s+([\s\S]*?)(?=\n## |\Z)""").find(extractedContent)
+                                val ocrText = ocrMatch?.groupValues?.get(1)?.trim() ?: ""
+                                
+                                // OCR 结果不再单独广播（vision 回复会一并处理）
+                                broadcastSystemStatus(finalSessionId, "✅ 文件已解析: $finalFileName")
+                                
+                                // 更新待处理图片的 OCR 文字（供 ChatServer 使用）
+                                val chatSvr = getGroupChatServer(finalSessionId)
+                                if (chatSvr != null) {
+                                    // 更新已有 pendingImage 的 OCR 文字（虽然当前已不再发给 vision 模型）
+                                    logger.info("📸 OCR 文字已提取完成: {} 字符", ocrText.length)
                                 }
+                            } catch (e: Exception) {
+                                logger.warn("无法读取提取内容: ${e.message}")
                             }
                         } else {
                             broadcastSystemStatus(finalSessionId, "⚠️ 文件存储完成: $finalFileName (无法提取内容)")
