@@ -63,11 +63,13 @@ import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
 import org.jetbrains.compose.web.dom.TextArea
 
+
 private fun shouldSubmitWorkflowMessage(event: dynamic, messageText: String): Boolean {
-    return event.key == "Enter" &&
-            !event.shiftKey &&
-            !event.isComposing &&
-            messageText.isNotBlank()
+    if (event.key != "Enter") return false
+    if (event.shiftKey == true) return false
+    val nativeEvent = event.nativeEvent.asDynamic()
+    val isComposing = (nativeEvent.isComposing as? Boolean) ?: false
+    return !isComposing && messageText.isNotBlank()
 }
 
 @Composable

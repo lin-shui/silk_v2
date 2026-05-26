@@ -84,6 +84,8 @@ class ChatServer(
     }
     // 直接调用模型的 Agent（简化流程：让模型自动使用 tool 能力）
     private val directModelAgent = com.silk.backend.ai.DirectModelAgent(sessionId = sessionName)
+    // 用户历史回忆 Agent（/recall 命令使用）
+    private val userHistoryAgent = com.silk.backend.ai.UserHistoryAgent()
     private var messagesSinceAgentResponse = 0
     private var isAgentJoined = false
     
@@ -505,11 +507,30 @@ class ChatServer(
                             activeAiJob = null
                         }
                     }
+                } else if (silkContent.startsWith("/recall ") || silkContent.startsWith("/recall\n")) {
+                    // /recall 命令 - 查询用户历史会话
+                    val recallQuery = silkContent.removePrefix("/recall").trim()
+                    logger.info("[/recall] userId={}, query={}...", message.userId, recallQuery.take(50))
+
+                    activeAiJob?.cancel()
+                    activeAiJob = CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            sendAgentStatus("正在搜索历史会话...")
+                            generateHistoryRecallResponse(recallQuery, message.userId)
+                        } catch (e: CancellationException) {
+                            logger.info("[/recall] 已被用户取消")
+                        } catch (e: Exception) {
+                            logger.error("[/recall] 异常: {}", e.message)
+                            sendAgentStatus("历史查询失败: ${e.message}")
+                        } finally {
+                            activeAiJob = null
+                        }
+                    }
                 } else {
                     // 普通问题 - 使用搜索 + AI 回复
                     val logPrefix = if (isSilkPrivateChat) "[Silk私聊]" else "[@silk]"
                     logger.debug("💬 [broadcast] {} 问题: {}...", logPrefix, silkContent.take(50))
-                    
+
                     activeAiJob?.cancel()
                     activeAiJob = CoroutineScope(Dispatchers.IO).launch {
                         try {
@@ -745,6 +766,30 @@ class ChatServer(
         if (after.isNotEmpty()) return trimmed
         return trimmed + "\n\n*（模型未输出正文，请重试。）*"
     }
+
+    private suspend fun sendMessageToAllSessions(message: Message) {
+        val messageJson = Json.encodeToString(message)
+        allSessions().forEach { session ->
+            try { session.send(Frame.Text(messageJson)) } catch (_: Exception) {}
+        }
+    }
+
+    private fun buildSilkTextMessage(
+        content: String,
+        isTransient: Boolean = false,
+        isIncremental: Boolean = false,
+    ): Message {
+        return Message(
+            id = generateId(),
+            userId = SilkAgent.AGENT_ID,
+            userName = SilkAgent.AGENT_NAME,
+            content = content,
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.TEXT,
+            isTransient = isTransient,
+            isIncremental = isIncremental
+        )
+    }
     
     /**
      * 生成智能回答 - 简化流程
@@ -954,7 +999,49 @@ class ChatServer(
             }
         }
     }
-    
+
+    /**
+     * 生成历史回忆回复 - 通过 UserHistoryAgent 在用户 workspace 中搜索历史会话
+     */
+    private suspend fun generateHistoryRecallResponse(query: String, userId: String) {
+        val callId = System.currentTimeMillis()
+        logger.info("[/recall-{}] userId={}, query={}...", callId, userId, query.take(50))
+
+        try {
+            val fullResponse = userHistoryAgent.queryWithHistory(
+                userId = userId,
+                userMessage = query,
+            ) { _, content, isComplete ->
+                sendHistoryRecallDelta(content, isComplete)
+            }
+
+            sendFinalHistoryRecallResponse(fullResponse)
+            logger.info("[/recall-{}] 完成, responseLen={}", callId, fullResponse.length)
+        } catch (e: CancellationException) {
+            logger.info("[/recall-{}] 已取消", callId)
+            throw e
+        } catch (e: Exception) {
+            logger.error("[/recall-{}] 失败: {}", callId, e.message)
+            sendMessageToAllSessions(buildSilkTextMessage("历史查询失败: ${e.message}"))
+        }
+    }
+
+    private suspend fun sendHistoryRecallDelta(content: String, isComplete: Boolean) {
+        val message = buildSilkTextMessage(
+            content = content,
+            isTransient = !isComplete,
+            isIncremental = true,
+        )
+        sendMessageToAllSessions(message)
+    }
+
+    private suspend fun sendFinalHistoryRecallResponse(fullResponse: String) {
+        if (fullResponse.isBlank()) return
+        val finalMsg = buildSilkTextMessage(fullResponse)
+        sendMessageToAllSessions(finalMsg)
+        historyManager.addMessage(sessionName, finalMsg)
+    }
+
     /**
      * 执行智能诊断（根据历史决定完整诊断或快速更新）
      */
