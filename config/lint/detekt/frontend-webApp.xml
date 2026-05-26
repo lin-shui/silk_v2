@@ -2,19 +2,12 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
-    <ID>CyclomaticComplexMethod:GroupListScene.kt$@Composable fun CreateGroupDialog( appState: WebAppState, strings: Strings, onDismiss: () -&gt; Unit, onGroupCreated: (Group) -&gt; Unit )</ID>
-    <ID>CyclomaticComplexMethod:GroupListScene.kt$@Composable fun GroupCard( group: Group, isHost: Boolean, isDeleteMode: Boolean = false, isSelected: Boolean = false, unreadCount: Int = 0, strings: Strings, onClick: () -&gt; Unit, onMembersClick: (() -&gt; Unit)? = null )</ID>
     <ID>CyclomaticComplexMethod:GroupListScene.kt$@Composable fun GroupListScene(appState: WebAppState)</ID>
-    <ID>CyclomaticComplexMethod:GroupListScene.kt$@Composable fun GroupMembersListDialog( group: Group, members: List&lt;GroupMember&gt;, contacts: List&lt;Contact&gt;, currentUserId: String, isLoading: Boolean, strings: Strings, onMemberClick: (GroupMember) -&gt; Unit, onDismiss: () -&gt; Unit )</ID>
-    <ID>CyclomaticComplexMethod:GroupListScene.kt$@Composable fun JoinGroupDialog( appState: WebAppState, strings: Strings, onDismiss: () -&gt; Unit, onGroupJoined: (Group) -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:Main.kt$@Composable fun AIMessageCard( message: Message, timeString: String, isTransient: Boolean = false, isLastMessage: Boolean = false, onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {}, onDelete: (String) -&gt; Unit = {}, isSelectionMode: Boolean = false, isSelected: Boolean = false, onToggleSelection: (String) -&gt; Unit = {}, onEnterSelectionMode: (String) -&gt; Unit = {} )</ID>
     <ID>CyclomaticComplexMethod:Main.kt$@Composable fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState)</ID>
     <ID>CyclomaticComplexMethod:Main.kt$@Composable fun ChatScene(appState: WebAppState)</ID>
     <ID>CyclomaticComplexMethod:Main.kt$@Composable fun MembersDialog( members: List&lt;GroupMember&gt;, contacts: List&lt;Contact&gt;, currentUserId: String, isLoading: Boolean, strings: com.silk.shared.i18n.Strings, onMemberClick: (GroupMember) -&gt; Unit, onDismiss: () -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:Main.kt$@Composable fun MessageItem( message: Message, isTransient: Boolean = false, currentUserId: String = "", groupId: String = "", isLastMessage: Boolean = false, isRecalling: Boolean = false, onRecall: (String) -&gt; Unit = {}, onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {}, onDelete: (String) -&gt; Unit = {}, isSelectionMode: Boolean = false, isSelected: Boolean = false, onToggleSelection: (String) -&gt; Unit = {}, onEnterSelectionMode: (String) -&gt; Unit = {} )</ID>
-    <ID>CyclomaticComplexMethod:WorkflowScene.kt$@Composable fun WorkflowScene(appState: WebAppState)</ID>
-    <ID>CyclomaticComplexMethod:WorkflowScene.kt$@Composable private fun FolderPickerDialog( userId: String, initialPath: String?, onDismiss: () -&gt; Unit, onConfirm: (String) -&gt; Unit, )</ID>
-    <ID>CyclomaticComplexMethod:WorkflowScene.kt$@Composable private fun WorkflowChatPanel( userId: String, userName: String, groupId: String, workflowName: String, )</ID>
     <ID>SwallowedException:ApiClient.kt$ApiClient$e: Exception</ID>
     <ID>TooGenericExceptionCaught:ApiClient.kt$ApiClient$e: Exception</ID>
   </CurrentIssues>

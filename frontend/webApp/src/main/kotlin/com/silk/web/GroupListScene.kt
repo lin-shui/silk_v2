@@ -770,32 +770,24 @@ fun GroupCard(
     onMembersClick: (() -> Unit)? = null
 ) {
     val hasUnread = unreadCount > 0
-    
+    val visualState = buildGroupCardVisualState(
+        isSelected = isSelected,
+        hasUnread = hasUnread,
+        isDeleteMode = isDeleteMode,
+        unreadCount = unreadCount,
+    )
+
     Div({
         attr("data-host", isHost.toString())
         style {
-            backgroundColor(
-                when {
-                    isSelected -> Color("#FFEBEE")
-                    hasUnread -> Color("#FFF8E1")  // 淡黄色背景表示有未读
-                    else -> Color(SilkColors.surfaceElevated)
-                }
-            )
+            backgroundColor(Color(visualState.backgroundColor))
             borderRadius(8.px)
             padding(10.px, 14.px)
             marginBottom(8.px)
-            property("box-shadow", 
-                if (hasUnread) "0 2px 8px rgba(255, 152, 0, 0.3)" else "0 1px 4px rgba(169, 137, 77, 0.06)"
-            )
+            property("box-shadow", visualState.boxShadow)
             property("cursor", "pointer")
             property("transition", "all 0.2s ease")
-            property("border", 
-                when {
-                    isSelected -> "2px solid #e74c3c"
-                    hasUnread -> "2px solid #FF9800"  // 橙色边框
-                    else -> "1px solid ${SilkColors.border}"
-                }
-            )
+            property("border", visualState.border)
         }
         onClick { onClick() }
     }) {
@@ -815,38 +807,16 @@ fun GroupCard(
                     property("flex", "1")
                 }
             }) {
-                // ✅ 未读指示器（红点 + 数字）
-                if (hasUnread && !isDeleteMode) {
-                    Span({
-                        style {
-                            display(DisplayStyle.Flex)
-                            alignItems(AlignItems.Center)
-                            justifyContent(JustifyContent.Center)
-                            width(24.px)
-                            height(24.px)
-                            backgroundColor(Color("#FF5722"))
-                            borderRadius(50.percent)
-                            color(Color.white)
-                            fontSize(10.px)
-                            property("font-weight", "bold")
-                        }
-                    }) {
-                        Text(if (unreadCount > 99) "99+" else unreadCount.toString())
-                    }
-                }
-                
-                // 群名
+                GroupCardUnreadBadge(visualState)
                 Span({
                     style {
                         fontSize(14.px)
-                        property("font-weight", if (hasUnread) "700" else "600")
-                        color(Color(if (hasUnread) "#E65100" else SilkColors.textPrimary))
+                        property("font-weight", visualState.nameFontWeight)
+                        color(Color(visualState.nameColor))
                     }
                 }) {
                     Text(group.name)
                 }
-                
-                // 邀请码（小字体）
                 Span({
                     style {
                         fontSize(11.px)
@@ -857,71 +827,175 @@ fun GroupCard(
                     Text("[${group.invitationCode}]")
                 }
             }
-            
-            // 右侧按钮区域
-            Div({
+            GroupCardActions(
+                visualState = visualState,
+                newMessageLabel = strings.newMessage,
+                onMembersClick = onMembersClick,
+            )
+        }
+    }
+}
+
+private data class GroupCardVisualState(
+    val backgroundColor: String,
+    val boxShadow: String,
+    val border: String,
+    val nameFontWeight: String,
+    val nameColor: String,
+    val unreadBadgeText: String?,
+    val showUnreadLabel: Boolean,
+    val deleteIndicatorColor: String?,
+    val showDeleteCheckmark: Boolean,
+)
+
+private fun buildGroupCardVisualState(
+    isSelected: Boolean,
+    hasUnread: Boolean,
+    isDeleteMode: Boolean,
+    unreadCount: Int,
+): GroupCardVisualState = GroupCardVisualState(
+    backgroundColor = groupCardBackgroundColor(isSelected, hasUnread),
+    boxShadow = if (hasUnread) "0 2px 8px rgba(255, 152, 0, 0.3)" else "0 1px 4px rgba(169, 137, 77, 0.06)",
+    border = groupCardBorder(isSelected, hasUnread),
+    nameFontWeight = if (hasUnread) "700" else "600",
+    nameColor = if (hasUnread) "#E65100" else SilkColors.textPrimary,
+    unreadBadgeText = unreadBadgeText(hasUnread, isDeleteMode, unreadCount),
+    showUnreadLabel = hasUnread && !isDeleteMode,
+    deleteIndicatorColor = deleteIndicatorColor(isDeleteMode, isSelected),
+    showDeleteCheckmark = isDeleteMode && isSelected,
+)
+
+private fun groupCardBackgroundColor(isSelected: Boolean, hasUnread: Boolean): String = when {
+    isSelected -> "#FFEBEE"
+    hasUnread -> "#FFF8E1"
+    else -> SilkColors.surfaceElevated
+}
+
+private fun groupCardBorder(isSelected: Boolean, hasUnread: Boolean): String = when {
+    isSelected -> "2px solid #e74c3c"
+    hasUnread -> "2px solid #FF9800"
+    else -> "1px solid ${SilkColors.border}"
+}
+
+private fun unreadBadgeText(
+    hasUnread: Boolean,
+    isDeleteMode: Boolean,
+    unreadCount: Int,
+): String? {
+    if (!hasUnread || isDeleteMode) {
+        return null
+    }
+    return if (unreadCount > 99) "99+" else unreadCount.toString()
+}
+
+private fun deleteIndicatorColor(
+    isDeleteMode: Boolean,
+    isSelected: Boolean,
+): String? {
+    if (!isDeleteMode) {
+        return null
+    }
+    return if (isSelected) "#e74c3c" else "#ddd"
+}
+
+@Composable
+private fun GroupCardUnreadBadge(visualState: GroupCardVisualState) {
+    val unreadText = visualState.unreadBadgeText ?: return
+
+    Span({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            justifyContent(JustifyContent.Center)
+            width(24.px)
+            height(24.px)
+            backgroundColor(Color("#FF5722"))
+            borderRadius(50.percent)
+            color(Color.white)
+            fontSize(10.px)
+            property("font-weight", "bold")
+        }
+    }) {
+        Text(unreadText)
+    }
+}
+
+@Composable
+private fun GroupCardActions(
+    visualState: GroupCardVisualState,
+    newMessageLabel: String,
+    onMembersClick: (() -> Unit)?,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "8px")
+        }
+    }) {
+        if (visualState.showUnreadLabel) {
+            Span({
                 style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("gap", "8px")
+                    fontSize(11.px)
+                    color(Color("#FF5722"))
+                    property("font-weight", "bold")
                 }
             }) {
-                // ✅ 未读提示文字
-                if (hasUnread && !isDeleteMode) {
-                    Span({
-                        style {
-                            fontSize(11.px)
-                            color(Color("#FF5722"))
-                            property("font-weight", "bold")
-                        }
-                    }) {
-                        Text(strings.newMessage)
-                    }
-                }
-                
-                // 成员按钮（非删除模式下显示）
-                if (!isDeleteMode && onMembersClick != null) {
-                    Button({
-                        style {
-                            padding(4.px, 10.px)
-                            backgroundColor(Color(SilkColors.secondary))
-                            color(Color(SilkColors.textPrimary))
-                            border { width(0.px) }
-                            borderRadius(4.px)
-                            property("cursor", "pointer")
-                            fontSize(12.px)
-                        }
-                        onClick { 
-                            it.stopPropagation()
-                            onMembersClick() 
-                        }
-                    }) {
-                        Text("👥")
-                    }
-                }
-                
-                // 删除模式下显示选择指示器
-                if (isDeleteMode) {
-                    Div({
-                        style {
-                            width(22.px)
-                            height(22.px)
-                            borderRadius(50.percent)
-                            backgroundColor(if (isSelected) Color("#e74c3c") else Color("#ddd"))
-                            display(DisplayStyle.Flex)
-                            justifyContent(JustifyContent.Center)
-                            alignItems(AlignItems.Center)
-                            color(Color.white)
-                            fontSize(14.px)
-                            property("font-weight", "bold")
-                        }
-                    }) {
-                        if (isSelected) {
-                            Text("✓")
-                        }
-                    }
-                }
+                Text(newMessageLabel)
             }
+        }
+
+        if (visualState.deleteIndicatorColor == null) {
+            GroupCardMembersButton(onMembersClick)
+        } else {
+            GroupCardDeleteIndicator(visualState)
+        }
+    }
+}
+
+@Composable
+private fun GroupCardMembersButton(onMembersClick: (() -> Unit)?) {
+    if (onMembersClick == null) {
+        return
+    }
+
+    Button({
+        style {
+            padding(4.px, 10.px)
+            backgroundColor(Color(SilkColors.secondary))
+            color(Color(SilkColors.textPrimary))
+            border { width(0.px) }
+            borderRadius(4.px)
+            property("cursor", "pointer")
+            fontSize(12.px)
+        }
+        onClick {
+            it.stopPropagation()
+            onMembersClick()
+        }
+    }) {
+        Text("👥")
+    }
+}
+
+@Composable
+private fun GroupCardDeleteIndicator(visualState: GroupCardVisualState) {
+    Div({
+        style {
+            width(22.px)
+            height(22.px)
+            borderRadius(50.percent)
+            backgroundColor(Color(visualState.deleteIndicatorColor ?: "#ddd"))
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            color(Color.white)
+            fontSize(14.px)
+            property("font-weight", "bold")
+        }
+    }) {
+        if (visualState.showDeleteCheckmark) {
+            Text("✓")
         }
     }
 }
@@ -937,182 +1011,44 @@ fun CreateGroupDialog(
     var groupName by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    
+
     val userName = appState.currentUser?.fullName ?: ""
     val previewName = if (groupName.isNotBlank()) "$userName's $groupName" else ""
-    
-    // 对话框遮罩
-    Div({
-        style {
-            position(Position.Fixed)
-            top(0.px)
-            left(0.px)
-            width(100.percent)
-            height(100.vh)
-            backgroundColor(Color("rgba(74, 64, 56, 0.5)"))
-            display(DisplayStyle.Flex)
-            justifyContent(JustifyContent.Center)
-            alignItems(AlignItems.Center)
-            property("z-index", "1000")
-            property("backdrop-filter", "blur(4px)")
-        }
-        onClick { onDismiss() }
-    }) {
-        Div({
-            style {
-                backgroundColor(Color(SilkColors.surfaceElevated))
-                borderRadius(16.px)
-                padding(28.px)
-                width(420.px)
-                maxWidth(90.vw)
-                property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.2)")
-                property("border", "1px solid ${SilkColors.border}")
-            }
-            onClick { it.stopPropagation() }
-        }) {
-            H3({ 
-                style { 
-                    marginTop(0.px)
-                    marginBottom(24.px)
-                    color(Color(SilkColors.textPrimary))
-                    property("font-weight", "600")
-                    property("letter-spacing", "1px")
-                } 
-            }) {
-                Text(strings.createGroupTitle)
-            }
-            
-            Div({ style { marginBottom(20.px) } }) {
-                Label { 
-                    Span({
-                        style {
-                            fontSize(13.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("letter-spacing", "0.5px")
-                        }
-                    }) {
-                        Text(strings.groupName)
-                    }
-                }
-                Input(InputType.Text) {
-                    value(groupName)
-                    onInput { groupName = it.value; errorMessage = "" }
-                    style {
-                        width(100.percent)
-                        padding(14.px)
-                        fontSize(14.px)
-                        marginTop(8.px)
-                        border { 
-                            width(1.px)
-                            style(LineStyle.Solid)
-                            color(Color(SilkColors.border)) 
-                        }
-                        borderRadius(8.px)
-                        property("box-sizing", "border-box")
-                        property("background", SilkColors.surface)
-                        property("color", SilkColors.textPrimary)
-                        fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                    }
-                }
-            }
-            
-            if (previewName.isNotEmpty()) {
-                Div({
-                    style {
-                        fontSize(13.px)
-                        color(Color(SilkColors.textSecondary))
-                        marginBottom(20.px)
-                        property("font-style", "italic")
-                    }
-                }) {
-                    Text("${strings.fullName}: $previewName")
-                }
-            }
-            
-            if (errorMessage.isNotEmpty()) {
-                Div({ 
-                    style { 
-                        color(Color(SilkColors.error))
-                        fontSize(13.px)
-                        marginBottom(20.px)
-                        padding(12.px)
-                        backgroundColor(Color("#FDF5F5"))
-                        borderRadius(8.px)
-                    } 
-                }) {
-                    Text(errorMessage)
-                }
-            }
-            
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    justifyContent(JustifyContent.FlexEnd)
-                    property("gap", "12px")
-                }
-            }) {
-                Button({
-                    style {
-                        padding(12.px, 20.px)
-                        backgroundColor(Color(SilkColors.secondary))
-                        color(Color(SilkColors.textPrimary))
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        fontSize(14.px)
-                        property("font-weight", "500")
-                    }
-                    onClick { onDismiss() }
-                }) {
-                    Text(strings.cancelButton)
-                }
-                
-                Button({
-                    style {
-                        padding(12.px, 20.px)
-                        property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", if (isLoading || groupName.isBlank()) "not-allowed" else "pointer")
-                        property("opacity", if (isLoading || groupName.isBlank()) "0.6" else "1")
-                        fontSize(14.px)
-                        property("font-weight", "600")
-                        property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.25)")
-                    }
-                    onClick {
-                        if (!isLoading && groupName.isNotBlank()) {
-                            scope.launch {
-                                isLoading = true
-                                try {
-                                    recoverSuspendNonCancellation(
-                                        block = {
-                                            val response = appState.currentUser?.let { user ->
-                                                ApiClient.createGroup(user.id, groupName)
-                                            }
 
-                                            if (response != null && response.success && response.group != null) {
-                                                console.log("群组创建成功:", response.group.name)
-                                                onGroupCreated(response.group)
-                                            } else {
-                                                errorMessage = response?.message ?: "创建失败"
-                                            }
-                                        },
-                                        recover = { error ->
-                                            errorMessage = "创建失败: ${error.message}"
-                                        },
-                                    )
-                                } finally {
-                                    isLoading = false
-                                }
-                            }
-                        }
-                    }
-                }) {
-                    Text(if (isLoading) strings.creating else strings.createButton)
-                }
-            }
+    GroupDialogCard(title = strings.createGroupTitle, onDismiss = onDismiss) {
+        GroupDialogTextField(
+            label = strings.groupName,
+            value = groupName,
+            placeholder = null,
+            fontSizePx = 14,
+            onValueChange = { value ->
+                groupName = value
+                errorMessage = ""
+            },
+        )
+
+        if (previewName.isNotEmpty()) {
+            GroupDialogPreview(strings.fullName, previewName)
         }
+
+        GroupDialogErrorMessage(errorMessage)
+
+        GroupDialogActions(
+            cancelLabel = strings.cancelButton,
+            confirmLabel = if (isLoading) strings.creating else strings.createButton,
+            isConfirmEnabled = !isLoading && groupName.isNotBlank(),
+            onDismiss = onDismiss,
+            onConfirm = {
+                createGroupFromDialog(
+                    scope = scope,
+                    appState = appState,
+                    groupName = groupName,
+                    setLoading = { isLoading = it },
+                    setError = { errorMessage = it },
+                    onGroupCreated = onGroupCreated,
+                )
+            },
+        )
     }
 }
 
@@ -1127,173 +1063,41 @@ fun JoinGroupDialog(
     var invitationCode by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
-    
-    Div({
-        style {
-            position(Position.Fixed)
-            top(0.px)
-            left(0.px)
-            width(100.percent)
-            height(100.vh)
-            backgroundColor(Color("rgba(74, 64, 56, 0.5)"))
-            display(DisplayStyle.Flex)
-            justifyContent(JustifyContent.Center)
-            alignItems(AlignItems.Center)
-            property("z-index", "1000")
-            property("backdrop-filter", "blur(4px)")
-        }
-        onClick { onDismiss() }
-    }) {
-        Div({
-            style {
-                backgroundColor(Color(SilkColors.surfaceElevated))
-                borderRadius(16.px)
-                padding(28.px)
-                width(420.px)
-                maxWidth(90.vw)
-                property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.2)")
-                property("border", "1px solid ${SilkColors.border}")
-            }
-            onClick { it.stopPropagation() }
-        }) {
-            H3({ 
-                style { 
-                    marginTop(0.px)
-                    marginBottom(24.px)
-                    color(Color(SilkColors.textPrimary))
-                    property("font-weight", "600")
-                    property("letter-spacing", "1px")
-                } 
-            }) {
-                Text(strings.joinGroupTitle)
-            }
-            
-            Div({ style { marginBottom(20.px) } }) {
-                Label { 
-                    Span({
-                        style {
-                            fontSize(13.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("letter-spacing", "0.5px")
-                        }
-                    }) {
-                        Text(strings.invitationCode)
-                    }
-                }
-                Input(InputType.Text) {
-                    value(invitationCode)
-                    onInput { 
-                        invitationCode = it.value.uppercase().take(6)
-                        errorMessage = ""
-                    }
-                    style {
-                        width(100.percent)
-                        padding(14.px)
-                        fontSize(16.px)
-                        marginTop(8.px)
-                        border { 
-                            width(1.px)
-                            style(LineStyle.Solid)
-                            color(Color(SilkColors.border)) 
-                        }
-                        borderRadius(8.px)
-                        property("box-sizing", "border-box")
-                        property("text-transform", "uppercase")
-                        property("letter-spacing", "4px")
-                        property("text-align", "center")
-                        property("background", SilkColors.surface)
-                        property("color", SilkColors.textPrimary)
-                        fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                    }
-                    attr("placeholder", strings.invitationCodePlaceholder)
-                    attr("maxlength", "6")
-                }
-            }
-            
-            if (errorMessage.isNotEmpty()) {
-                Div({ 
-                    style { 
-                        color(Color(SilkColors.error))
-                        fontSize(13.px)
-                        marginBottom(20.px)
-                        padding(12.px)
-                        backgroundColor(Color("#FDF5F5"))
-                        borderRadius(8.px)
-                    } 
-                }) {
-                    Text(errorMessage)
-                }
-            }
-            
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    justifyContent(JustifyContent.FlexEnd)
-                    property("gap", "12px")
-                }
-            }) {
-                Button({
-                    style {
-                        padding(12.px, 20.px)
-                        backgroundColor(Color(SilkColors.secondary))
-                        color(Color(SilkColors.textPrimary))
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        fontSize(14.px)
-                        property("font-weight", "500")
-                    }
-                    onClick { onDismiss() }
-                }) {
-                    Text(strings.cancelButton)
-                }
-                
-                Button({
-                    style {
-                        padding(12.px, 20.px)
-                        property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", if (isLoading || invitationCode.length != 6) "not-allowed" else "pointer")
-                        property("opacity", if (isLoading || invitationCode.length != 6) "0.6" else "1")
-                        fontSize(14.px)
-                        property("font-weight", "600")
-                        property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.25)")
-                    }
-                    onClick {
-                        if (!isLoading && invitationCode.length == 6) {
-                            scope.launch {
-                                isLoading = true
-                                try {
-                                    recoverSuspendNonCancellation(
-                                        block = {
-                                            val response = appState.currentUser?.let { user ->
-                                                ApiClient.joinGroup(user.id, invitationCode)
-                                            }
 
-                                            if (response != null && response.success && response.group != null) {
-                                                console.log("加入群组成功:", response.group.name)
-                                                onGroupJoined(response.group)
-                                            } else {
-                                                errorMessage = response?.message ?: "加入失败"
-                                            }
-                                        },
-                                        recover = { error ->
-                                            errorMessage = "加入失败: ${error.message}"
-                                        },
-                                    )
-                                } finally {
-                                    isLoading = false
-                                }
-                            }
-                        }
-                    }
-                }) {
-                    Text(if (isLoading) strings.joining else strings.joinButton)
-                }
-            }
-        }
+    GroupDialogCard(title = strings.joinGroupTitle, onDismiss = onDismiss) {
+        GroupDialogTextField(
+            label = strings.invitationCode,
+            value = invitationCode,
+            placeholder = strings.invitationCodePlaceholder,
+            fontSizePx = 16,
+            maxLength = 6,
+            isCentered = true,
+            letterSpacingPx = 4,
+            textTransform = "uppercase",
+            onValueChange = { value ->
+                invitationCode = value.uppercase().take(6)
+                errorMessage = ""
+            },
+        )
+
+        GroupDialogErrorMessage(errorMessage)
+
+        GroupDialogActions(
+            cancelLabel = strings.cancelButton,
+            confirmLabel = if (isLoading) strings.joining else strings.joinButton,
+            isConfirmEnabled = !isLoading && invitationCode.length == 6,
+            onDismiss = onDismiss,
+            onConfirm = {
+                joinGroupFromDialog(
+                    scope = scope,
+                    appState = appState,
+                    invitationCode = invitationCode,
+                    setLoading = { isLoading = it },
+                    setError = { errorMessage = it },
+                    onGroupJoined = onGroupJoined,
+                )
+            },
+        )
     }
 }
 
@@ -1312,7 +1116,298 @@ fun GroupMembersListDialog(
     onDismiss: () -> Unit
 ) {
     val contactIds = contacts.map { it.contactId }.toSet()
-    
+
+    GroupMembersDialogCard(
+        title = "👥 ${strings.groupMembersTitle} ${group.name}",
+        closeLabel = strings.closeButton,
+        onDismiss = onDismiss,
+    ) {
+        GroupMembersDialogContent(
+            members = members,
+            groupHostId = group.hostId,
+            currentUserId = currentUserId,
+            contactIds = contactIds,
+            isLoading = isLoading,
+            noMembersLabel = strings.noMembers,
+            onMemberClick = onMemberClick,
+            hostLabel = strings.host,
+            currentUserLabel = strings.me,
+        )
+    }
+}
+
+@Composable
+private fun GroupDialogCard(
+    title: String,
+    onDismiss: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Div({
+        style {
+            position(Position.Fixed)
+            top(0.px)
+            left(0.px)
+            width(100.percent)
+            height(100.vh)
+            backgroundColor(Color("rgba(74, 64, 56, 0.5)"))
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            property("z-index", "1000")
+            property("backdrop-filter", "blur(4px)")
+        }
+        onClick { onDismiss() }
+    }) {
+        Div({
+            style {
+                backgroundColor(Color(SilkColors.surfaceElevated))
+                borderRadius(16.px)
+                padding(28.px)
+                width(420.px)
+                maxWidth(90.vw)
+                property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.2)")
+                property("border", "1px solid ${SilkColors.border}")
+            }
+            onClick { it.stopPropagation() }
+        }) {
+            H3({
+                style {
+                    marginTop(0.px)
+                    marginBottom(24.px)
+                    color(Color(SilkColors.textPrimary))
+                    property("font-weight", "600")
+                    property("letter-spacing", "1px")
+                }
+            }) {
+                Text(title)
+            }
+
+            content()
+        }
+    }
+}
+
+@Composable
+private fun GroupDialogTextField(
+    label: String,
+    value: String,
+    placeholder: String?,
+    fontSizePx: Int,
+    onValueChange: (String) -> Unit,
+    maxLength: Int? = null,
+    isCentered: Boolean = false,
+    letterSpacingPx: Int? = null,
+    textTransform: String? = null,
+) {
+    Div({ style { marginBottom(20.px) } }) {
+        Label {
+            Span({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    property("letter-spacing", "0.5px")
+                }
+            }) {
+                Text(label)
+            }
+        }
+        Input(InputType.Text) {
+            value(value)
+            onInput { onValueChange(it.value) }
+            style {
+                width(100.percent)
+                padding(14.px)
+                fontSize(fontSizePx.px)
+                marginTop(8.px)
+                border {
+                    width(1.px)
+                    style(LineStyle.Solid)
+                    color(Color(SilkColors.border))
+                }
+                borderRadius(8.px)
+                property("box-sizing", "border-box")
+                property("background", SilkColors.surface)
+                property("color", SilkColors.textPrimary)
+                fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
+                if (isCentered) {
+                    property("text-align", "center")
+                }
+                letterSpacingPx?.let { property("letter-spacing", "${it}px") }
+                textTransform?.let { property("text-transform", it) }
+            }
+            placeholder?.let { attr("placeholder", it) }
+            maxLength?.let { attr("maxlength", it.toString()) }
+        }
+    }
+}
+
+@Composable
+private fun GroupDialogPreview(label: String, value: String) {
+    Div({
+        style {
+            fontSize(13.px)
+            color(Color(SilkColors.textSecondary))
+            marginBottom(20.px)
+            property("font-style", "italic")
+        }
+    }) {
+        Text("$label: $value")
+    }
+}
+
+@Composable
+private fun GroupDialogErrorMessage(message: String) {
+    if (message.isEmpty()) {
+        return
+    }
+
+    Div({
+        style {
+            color(Color(SilkColors.error))
+            fontSize(13.px)
+            marginBottom(20.px)
+            padding(12.px)
+            backgroundColor(Color("#FDF5F5"))
+            borderRadius(8.px)
+        }
+    }) {
+        Text(message)
+    }
+}
+
+@Composable
+private fun GroupDialogActions(
+    cancelLabel: String,
+    confirmLabel: String,
+    isConfirmEnabled: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val confirmCursor = if (isConfirmEnabled) "pointer" else "not-allowed"
+    val confirmOpacity = if (isConfirmEnabled) "1" else "0.6"
+
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.FlexEnd)
+            property("gap", "12px")
+        }
+    }) {
+        Button({
+            style {
+                padding(12.px, 20.px)
+                backgroundColor(Color(SilkColors.secondary))
+                color(Color(SilkColors.textPrimary))
+                border { width(0.px) }
+                borderRadius(8.px)
+                property("cursor", "pointer")
+                fontSize(14.px)
+                property("font-weight", "500")
+            }
+            onClick { onDismiss() }
+        }) {
+            Text(cancelLabel)
+        }
+
+        Button({
+            style {
+                padding(12.px, 20.px)
+                property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                color(Color.white)
+                border { width(0.px) }
+                borderRadius(8.px)
+                property("cursor", confirmCursor)
+                property("opacity", confirmOpacity)
+                fontSize(14.px)
+                property("font-weight", "600")
+                property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.25)")
+            }
+            onClick {
+                if (isConfirmEnabled) {
+                    onConfirm()
+                }
+            }
+        }) {
+            Text(confirmLabel)
+        }
+    }
+}
+
+private fun createGroupFromDialog(
+    scope: kotlinx.coroutines.CoroutineScope,
+    appState: WebAppState,
+    groupName: String,
+    setLoading: (Boolean) -> Unit,
+    setError: (String) -> Unit,
+    onGroupCreated: (Group) -> Unit,
+) {
+    scope.launch {
+        setLoading(true)
+        try {
+            recoverSuspendNonCancellation(
+                block = {
+                    val response = appState.currentUser?.let { user ->
+                        ApiClient.createGroup(user.id, groupName)
+                    }
+
+                    if (response != null && response.success && response.group != null) {
+                        console.log("群组创建成功:", response.group.name)
+                        onGroupCreated(response.group)
+                    } else {
+                        setError(response?.message ?: "创建失败")
+                    }
+                },
+                recover = { error ->
+                    setError("创建失败: ${error.message}")
+                },
+            )
+        } finally {
+            setLoading(false)
+        }
+    }
+}
+
+private fun joinGroupFromDialog(
+    scope: kotlinx.coroutines.CoroutineScope,
+    appState: WebAppState,
+    invitationCode: String,
+    setLoading: (Boolean) -> Unit,
+    setError: (String) -> Unit,
+    onGroupJoined: (Group) -> Unit,
+) {
+    scope.launch {
+        setLoading(true)
+        try {
+            recoverSuspendNonCancellation(
+                block = {
+                    val response = appState.currentUser?.let { user ->
+                        ApiClient.joinGroup(user.id, invitationCode)
+                    }
+
+                    if (response != null && response.success && response.group != null) {
+                        console.log("加入群组成功:", response.group.name)
+                        onGroupJoined(response.group)
+                    } else {
+                        setError(response?.message ?: "加入失败")
+                    }
+                },
+                recover = { error ->
+                    setError("加入失败: ${error.message}")
+                },
+            )
+        } finally {
+            setLoading(false)
+        }
+    }
+}
+
+@Composable
+private fun GroupMembersDialogCard(
+    title: String,
+    closeLabel: String,
+    onDismiss: () -> Unit,
+    content: @Composable () -> Unit,
+) {
     Div({
         style {
             position(Position.Fixed)
@@ -1342,7 +1437,6 @@ fun GroupMembersListDialog(
             }
             onClick { it.stopPropagation() }
         }) {
-            // 标题
             H3({
                 style {
                     margin(0.px, 0.px, 16.px, 0.px)
@@ -1351,170 +1445,11 @@ fun GroupMembersListDialog(
                     property("font-weight", "600")
                 }
             }) {
-                Text("👥 ${strings.groupMembersTitle} ${group.name}")
+                Text(title)
             }
-            
-            if (isLoading) {
-                Div({
-                    style {
-                        property("text-align", "center")
-                        padding(20.px)
-                        color(Color(SilkColors.textSecondary))
-                    }
-                }) {
-                    Text("加载中...")
-                }
-            } else if (members.isEmpty()) {
-                Div({
-                    style {
-                        property("text-align", "center")
-                        padding(20.px)
-                        color(Color(SilkColors.textSecondary))
-                    }
-                }) {
-                    Text(strings.noMembers)
-                }
-            } else {
-                // 成员列表
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        flexDirection(FlexDirection.Column)
-                        property("gap", "8px")
-                    }
-                }) {
-                    members.forEach { member ->
-                        val isHost = member.id == group.hostId
-                        val isCurrentUser = member.id == currentUserId
-                        val isContact = member.id in contactIds
-                        val isSilkAI = isAgentUserId(member.id)
-                        
-                        Div({
-                            style {
-                                display(DisplayStyle.Flex)
-                                justifyContent(JustifyContent.SpaceBetween)
-                                alignItems(AlignItems.Center)
-                                padding(10.px, 12.px)
-                                backgroundColor(
-                                    if (isHost) Color("rgba(201, 168, 108, 0.1)") 
-                                    else Color(SilkColors.surface)
-                                )
-                                borderRadius(8.px)
-                                if (!isCurrentUser && !isSilkAI) {
-                                    property("cursor", "pointer")
-                                }
-                            }
-                            if (!isCurrentUser && !isSilkAI) {
-                                onClick { onMemberClick(member) }
-                            }
-                        }) {
-                            // 左侧：头像 + 信息
-                            Div({
-                                style {
-                                    display(DisplayStyle.Flex)
-                                    alignItems(AlignItems.Center)
-                                    property("gap", "10px")
-                                }
-                            }) {
-                                // 头像
-                                Div({
-                                    style {
-                                        width(32.px)
-                                        height(32.px)
-                                        borderRadius(6.px)
-                                        backgroundColor(
-                                            when {
-                                                isSilkAI -> Color(SilkColors.info)
-                                                isHost -> Color(SilkColors.primary)
-                                                isContact -> Color(SilkColors.success)
-                                                else -> Color(SilkColors.textSecondary)
-                                            }
-                                        )
-                                        display(DisplayStyle.Flex)
-                                        justifyContent(JustifyContent.Center)
-                                        alignItems(AlignItems.Center)
-                                        color(Color.white)
-                                        fontSize(14.px)
-                                    }
-                                }) {
-                                    Text(
-                                        when {
-                                            isSilkAI -> "🤖"
-                                            isHost -> "👑"
-                                            isContact -> "✓"
-                                            else -> member.fullName.firstOrNull()?.toString() ?: "?"
-                                        }
-                                    )
-                                }
-                                
-                                // 名字和状态
-                                Div {
-                                    Div({
-                                        style {
-                                            fontSize(13.px)
-                                            color(Color(SilkColors.textPrimary))
-                                            property("font-weight", if (isHost) "600" else "400")
-                                        }
-                                    }) {
-                                        Text(member.fullName)
-                                        if (isHost) {
-                                            Span({
-                                                style {
-                                                    fontSize(11.px)
-                                                    color(Color(SilkColors.primary))
-                                                    marginLeft(4.px)
-                                                }
-                                            }) {
-                                                Text(strings.host)
-                                            }
-                                        }
-                                        if (isCurrentUser) {
-                                            Span({
-                                                style {
-                                                    fontSize(11.px)
-                                                    color(Color(SilkColors.textSecondary))
-                                                    marginLeft(4.px)
-                                                }
-                                            }) {
-                                                Text(strings.me)
-                                            }
-                                        }
-                                    }
-                                    Div({
-                                        style {
-                                            fontSize(11.px)
-                                            color(Color(SilkColors.textSecondary))
-                                            marginTop(2.px)
-                                        }
-                                    }) {
-                                        Text(
-                                            when {
-                                                isSilkAI -> "AI 助手"
-                                                isCurrentUser -> "当前用户"
-                                                isContact -> "联系人 · 点击聊天"
-                                                else -> "点击添加联系人"
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                            
-                            // 右侧操作提示
-                            if (!isCurrentUser && !isSilkAI) {
-                                Div({
-                                    style {
-                                        fontSize(16.px)
-                                    }
-                                }) {
-                                    Text(if (isContact) "💬" else "➕")
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // 关闭按钮
+
+            content()
+
             Button({
                 style {
                     width(100.percent)
@@ -1530,8 +1465,275 @@ fun GroupMembersListDialog(
                 }
                 onClick { onDismiss() }
             }) {
-                Text(strings.closeButton)
+                Text(closeLabel)
             }
         }
+    }
+}
+
+@Composable
+private fun GroupMembersDialogContent(
+    members: List<GroupMember>,
+    groupHostId: String,
+    currentUserId: String,
+    contactIds: Set<String>,
+    isLoading: Boolean,
+    noMembersLabel: String,
+    onMemberClick: (GroupMember) -> Unit,
+    hostLabel: String,
+    currentUserLabel: String,
+) {
+    when {
+        isLoading -> GroupMembersDialogMessage("加载中...")
+        members.isEmpty() -> GroupMembersDialogMessage(noMembersLabel)
+        else -> {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "8px")
+                }
+            }) {
+                members.forEach { member ->
+                    GroupMemberRow(
+                        member = member,
+                        displayState = buildGroupMemberDisplayState(
+                            member = member,
+                            groupHostId = groupHostId,
+                            currentUserId = currentUserId,
+                            contactIds = contactIds,
+                        ),
+                        hostLabel = hostLabel,
+                        currentUserLabel = currentUserLabel,
+                        onMemberClick = onMemberClick,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupMembersDialogMessage(message: String) {
+    Div({
+        style {
+            property("text-align", "center")
+            padding(20.px)
+            color(Color(SilkColors.textSecondary))
+        }
+    }) {
+        Text(message)
+    }
+}
+
+private data class GroupMemberDisplayState(
+    val isHost: Boolean,
+    val isCurrentUser: Boolean,
+    val isContact: Boolean,
+    val isSilkAI: Boolean,
+    val avatarColor: String,
+    val avatarText: String,
+    val statusText: String,
+    val actionHint: String?,
+)
+
+private enum class GroupMemberAvatarKind {
+    AI,
+    HOST,
+    CONTACT,
+    DEFAULT,
+}
+
+private fun buildGroupMemberDisplayState(
+    member: GroupMember,
+    groupHostId: String,
+    currentUserId: String,
+    contactIds: Set<String>,
+): GroupMemberDisplayState {
+    val isHost = member.id == groupHostId
+    val isCurrentUser = member.id == currentUserId
+    val isContact = member.id in contactIds
+    val isSilkAI = isAgentUserId(member.id)
+    val avatarKind = resolveGroupMemberAvatarKind(
+        isSilkAI = isSilkAI,
+        isHost = isHost,
+        isContact = isContact,
+    )
+
+    return GroupMemberDisplayState(
+        isHost = isHost,
+        isCurrentUser = isCurrentUser,
+        isContact = isContact,
+        isSilkAI = isSilkAI,
+        avatarColor = avatarColorFor(avatarKind),
+        avatarText = avatarTextFor(avatarKind, member.fullName),
+        statusText = memberStatusText(
+            isSilkAI = isSilkAI,
+            isCurrentUser = isCurrentUser,
+            isContact = isContact,
+        ),
+        actionHint = memberActionHint(
+            isCurrentUser = isCurrentUser,
+            isSilkAI = isSilkAI,
+            isContact = isContact,
+        ),
+    )
+}
+
+private fun resolveGroupMemberAvatarKind(
+    isSilkAI: Boolean,
+    isHost: Boolean,
+    isContact: Boolean,
+): GroupMemberAvatarKind = when {
+    isSilkAI -> GroupMemberAvatarKind.AI
+    isHost -> GroupMemberAvatarKind.HOST
+    isContact -> GroupMemberAvatarKind.CONTACT
+    else -> GroupMemberAvatarKind.DEFAULT
+}
+
+private fun avatarColorFor(kind: GroupMemberAvatarKind): String = when (kind) {
+    GroupMemberAvatarKind.AI -> SilkColors.info
+    GroupMemberAvatarKind.HOST -> SilkColors.primary
+    GroupMemberAvatarKind.CONTACT -> SilkColors.success
+    GroupMemberAvatarKind.DEFAULT -> SilkColors.textSecondary
+}
+
+private fun avatarTextFor(kind: GroupMemberAvatarKind, fullName: String): String = when (kind) {
+    GroupMemberAvatarKind.AI -> "🤖"
+    GroupMemberAvatarKind.HOST -> "👑"
+    GroupMemberAvatarKind.CONTACT -> "✓"
+    GroupMemberAvatarKind.DEFAULT -> fullName.firstOrNull()?.toString() ?: "?"
+}
+
+private fun memberStatusText(
+    isSilkAI: Boolean,
+    isCurrentUser: Boolean,
+    isContact: Boolean,
+): String = when {
+    isSilkAI -> "AI 助手"
+    isCurrentUser -> "当前用户"
+    isContact -> "联系人 · 点击聊天"
+    else -> "点击添加联系人"
+}
+
+private fun memberActionHint(
+    isCurrentUser: Boolean,
+    isSilkAI: Boolean,
+    isContact: Boolean,
+): String? = when {
+    isCurrentUser || isSilkAI -> null
+    isContact -> "💬"
+    else -> "➕"
+}
+
+@Composable
+private fun GroupMemberRow(
+    member: GroupMember,
+    displayState: GroupMemberDisplayState,
+    hostLabel: String,
+    currentUserLabel: String,
+    onMemberClick: (GroupMember) -> Unit,
+) {
+    val isClickable = displayState.actionHint != null
+    val background = if (displayState.isHost) "rgba(201, 168, 108, 0.1)" else SilkColors.surface
+    val fontWeight = if (displayState.isHost) "600" else "400"
+
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.SpaceBetween)
+            alignItems(AlignItems.Center)
+            padding(10.px, 12.px)
+            backgroundColor(Color(background))
+            borderRadius(8.px)
+            if (isClickable) {
+                property("cursor", "pointer")
+            }
+        }
+        if (isClickable) {
+            onClick { onMemberClick(member) }
+        }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                property("gap", "10px")
+            }
+        }) {
+            Div({
+                style {
+                    width(32.px)
+                    height(32.px)
+                    borderRadius(6.px)
+                    backgroundColor(Color(displayState.avatarColor))
+                    display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.Center)
+                    alignItems(AlignItems.Center)
+                    color(Color.white)
+                    fontSize(14.px)
+                }
+            }) {
+                Text(displayState.avatarText)
+            }
+
+            Div {
+                Div({
+                    style {
+                        fontSize(13.px)
+                        color(Color(SilkColors.textPrimary))
+                        property("font-weight", fontWeight)
+                    }
+                }) {
+                    Text(member.fullName)
+                    GroupMemberBadge(isVisible = displayState.isHost, text = hostLabel, color = SilkColors.primary)
+                    GroupMemberBadge(
+                        isVisible = displayState.isCurrentUser,
+                        text = currentUserLabel,
+                        color = SilkColors.textSecondary,
+                    )
+                }
+                Div({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textSecondary))
+                        marginTop(2.px)
+                    }
+                }) {
+                    Text(displayState.statusText)
+                }
+            }
+        }
+
+        displayState.actionHint?.let { hint ->
+            Div({
+                style {
+                    fontSize(16.px)
+                }
+            }) {
+                Text(hint)
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupMemberBadge(
+    isVisible: Boolean,
+    text: String,
+    color: String,
+) {
+    if (!isVisible) {
+        return
+    }
+
+    Span({
+        style {
+            fontSize(11.px)
+            color(Color(color))
+            marginLeft(4.px)
+        }
+    }) {
+        Text(text)
     }
 }
