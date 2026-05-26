@@ -2703,47 +2703,51 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         if (pendingUrl != null) {
                             js("window.URL.revokeObjectURL(pendingUrl)")
                         }
-                        scope.launch {
-                            if (pendingImg != null) {
-                                isUploading = true
-                                val sid = group.id
-                                val uid = user.id
-                                val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
-                                val w = js("window")
-                                w.__sendSid = sid
-                                w.__sendUid = uid
-                                w.__sendUrl = uploadUrl
-                                w.__sendFile = pendingImg
-                                w.__sendText = text
-                                w.__sendScope = scope
-                                w.__sendUser = user
-                                w.__sendChatClient = chatClient
-                                                                js("""
-                                    var fd = new FormData();
-                                    fd.append("sessionId", window.__sendSid);
-                                    fd.append("userId", window.__sendUid);
-                                    fd.append("file", window.__sendFile);
-                                    var xhr = new XMLHttpRequest();
-                                    xhr.open("POST", window.__sendUrl, true);
-                                    xhr.onload = function() {
-                                        isUploading = false;
-                                        if (window.__sendText) {
-                                            window.__sendScope.launch(function() {
-                                                window.__sendChatClient.sendMessage(window.__sendUser.id, window.__sendUser.fullName, window.__sendText);
-                                            });
-                                        }
-                                    };
-                                    xhr.onerror = function() { isUploading = false; };
-                                    xhr.send(fd);
-                                """)
-                            } else if (text.isNotBlank()) {
+                        if (pendingImg != null) {
+                            isUploading = true
+                            val sid = group.id
+                            val uid = user.id
+                            val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
+                            val w = js("window")
+                            w.__upSid = sid
+                            w.__upUid = uid
+                            w.__upUrl = uploadUrl
+                            w.__upFile = pendingImg
+                            w.__upText = text
+                            w.__upSendText = { t: String ->
+                                scope.launch {
+                                    chatClient.sendMessage(user.id, user.fullName, t)
+                                }
+                            }
+                            js("""
+                                var fd = new FormData();
+                                fd.append("sessionId", window.__upSid);
+                                fd.append("userId", window.__upUid);
+                                fd.append("file", window.__upFile);
+                                var xhr = new XMLHttpRequest();
+                                xhr.open("POST", window.__upUrl, true);
+                                xhr.onload = function() {
+                                    if (xhr.status === 200 && window.__upText && window.__upSendText) {
+                                        window.__upSendText(window.__upText);
+                                    }
+                                    isUploading = false;
+                                };
+                                xhr.onerror = function() { isUploading = false; };
+                                xhr.send(fd);
+                            """)
+                        } else if (text.isNotBlank()) {
+                            scope.launch {
                                 chatClient.sendMessage(user.id, user.fullName, text)
                             }
                         }
                     }
                 }
 
+
+
+
                 
+
                                 // 粘贴图片预览
                 if (pendingPasteImageUrl != null) {
                     Div({
