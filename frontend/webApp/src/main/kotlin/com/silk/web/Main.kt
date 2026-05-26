@@ -6099,8 +6099,32 @@ fun MessageItem(
                     }
                 }
             } else {
-                Div({ classes(SilkStylesheet.systemMessage) }) {
-                    Text("• ${content} ($timeString)")
+                // 文件解析/提取内容卡片
+                if (content.startsWith("# 图片:") || content.contains("## OCR")) {
+                    Div({
+                        classes(SilkStylesheet.messageCard)
+                        style { property("flex", "1"); property("min-width", "0") }
+                    }) {
+                        Div({ classes(SilkStylesheet.messageHeader) }) {
+                            Span({ classes(SilkStylesheet.userName) }) { Text(message.userName) }
+                            Span({ classes(SilkStylesheet.timestamp) }) { Text(timeString) }
+                        }
+                        Div({
+                            style {
+                                fontSize(13.px)
+                                color(Color(SilkColors.textPrimary))
+                                property("line-height", "1.6")
+                                property("white-space", "pre-wrap")
+                                property("word-break", "break-word")
+                            }
+                        }) {
+                            Text(content)
+                        }
+                    }
+                } else {
+                    Div({ classes(SilkStylesheet.systemMessage) }) {
+                        Text("• ${content} ($timeString)")
+                    }
                 }
             }
         }
