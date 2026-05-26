@@ -1026,6 +1026,11 @@ object ApiClient {
             AsrResult(false, "", "语音识别失败: ${e.message}")
         }
     }
+
+    suspend fun deleteFile(sessionId: String, fileId: String): SimpleResponse {
+        val response = delete("/api/files/$sessionId/$fileId", "{}")
+        return jsonParser.decodeFromString(response)
+    }
 }
 
 data class AsrResult(val success: Boolean, val text: String, val error: String? = null)

@@ -3887,8 +3887,10 @@ fun FolderExplorerDialog(
     var processedUrls by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var refreshTrigger by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
     
-    LaunchedEffect(groupId) {
+    LaunchedEffect(groupId, refreshTrigger) {
         val apiUrl = "${backendHttpOrigin()}/api/files/list/$groupId"
         isLoading = true
         errorMessage = null
@@ -4181,6 +4183,14 @@ fun FolderExplorerDialog(
                                 }
                             }
                             
+                            // 操作按钮组
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    property("gap", "8px")
+                                    alignItems(AlignItems.Center)
+                                }
+                            }) {
                             // 下载按钮
                             Button({
                                 style {
@@ -4202,6 +4212,37 @@ fun FolderExplorerDialog(
                                 }
                             }) {
                                 Text("⬇️ ${strings.download}")
+                            }
+                            // 删除文件
+                            Span({
+                                style {
+                                    padding(8.px, 12.px)
+                                    color(Color("#E57373"))
+                                    property("cursor", "pointer")
+                                    fontSize(13.px)
+                                    property("transition", "all 0.2s ease")
+                                    property("border-radius", "4px")
+                                }
+                                onClick {
+                                    if (kotlinx.browser.window.confirm("确定删除 ${fileName} 吗？")) {
+                                        scope.launch {
+                                            try {
+                                                // 从下载链接解析 fileId: /api/files/download/{sessionId}/{fileId}
+                                                val parts = downloadUrl.split("/")
+                                                val fileId = parts.lastOrNull() ?: fileName
+                                                val sessionId = groupId
+                                                ApiClient.deleteFile(sessionId, fileId)
+                                                // 刷新文件列表
+                                                refreshTrigger = refreshTrigger + 1
+                                            } catch (e: Exception) {
+                                                console.error("删除文件失败:", e)
+                                            }
+                                        }
+                                    }
+                                }
+                            }) {
+                                Text("🗑")
+                            }
                             }
                         }
                     }
