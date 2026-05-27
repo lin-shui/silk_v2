@@ -39,6 +39,7 @@ def main():
     if os.getuid() != 0:
         cmd.insert(cmd.index("--no-chrome") + 1, "--permission-mode")
         cmd.insert(cmd.index("--permission-mode") + 1, "bypassPermissions")
+        cmd.insert(cmd.index("--permission-mode") + 2, "--allow-dangerously-skip-permissions")
 
     pid, fd = pty.fork()
 

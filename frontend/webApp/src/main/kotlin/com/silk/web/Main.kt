@@ -5574,6 +5574,10 @@ fun MessageItem(
                 style {
                     property("flex", "1")
                     property("min-width", "0")
+                    if (message.userId == currentUserId) {
+                        property("max-width", "75%")
+                        property("margin-left", "auto")
+                    }
                     if (isSelected) {
                         backgroundColor(Color("rgba(76, 175, 80, 0.10)"))
                         property("outline", "2px solid ${SilkColors.primary}")
@@ -5724,7 +5728,7 @@ fun MessageItem(
                     Div({
                         style {
                             display(DisplayStyle.Flex)
-                            property("justify-content", "flex-end")
+                            property("justify-content", if (message.userId == currentUserId) "flex-end" else "flex-start")
                             property("gap", "6px")
                             marginTop(8.px)
                             property("opacity", "0.5")

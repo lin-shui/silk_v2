@@ -29,7 +29,7 @@ _log "=== Permission request: tool=${TOOL_NAME} session=${SESSION_ID:0:8} ==="
 
 # Whitelist: read-only and internal tools pass through
 case "$TOOL_NAME" in
-    Read|Glob|Grep|TodoWrite)
+    Read|Glob|Grep|TodoWrite|WebSearch|WebFetch)
         _log "Read-only tool (${TOOL_NAME}), auto-allow"
         exit 0
         ;;
