@@ -125,7 +125,7 @@ class UserWorkspaceManager(
                 appendLine("## ${cleanGroupName(group.name)}")
                 appendLine("- 目录: group_${group.id}/")
                 appendLine("- 群组类型: ${inferGroupType(group.name)}")
-                appendLine("- 创建时间: ${group.createdAt}")
+                appendLine("- 创建时间: ${formatCreatedAt(group.createdAt)}")
                 if (sessionInfo != null) {
                     val memberNames = sessionInfo.members
                         .filter { it.leftAt == null }
@@ -181,8 +181,18 @@ class UserWorkspaceManager(
 
     private fun formatTimestamp(ts: Long): String {
         val instant = java.time.Instant.ofEpochMilli(ts)
-        val zoned = instant.atZone(java.time.ZoneId.systemDefault())
-        return java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").format(zoned)
+        val zoned = instant.atZone(java.time.ZoneId.of("Asia/Shanghai"))
+        return java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").format(zoned) + " UTC+8"
+    }
+
+    /** 将 LocalDateTime.toString() 格式的创建时间统一为 "yyyy-MM-dd HH:mm:ss UTC+8" */
+    private fun formatCreatedAt(createdAt: String): String {
+        return try {
+            val ldt = java.time.LocalDateTime.parse(createdAt.trim())
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").format(ldt) + " UTC+8"
+        } catch (_: Exception) {
+            createdAt
+        }
     }
 
     private fun inferGroupType(name: String): String = when {
