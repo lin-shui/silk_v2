@@ -17,7 +17,10 @@ object GroupService {
         if (request.groupName.isBlank()) {
             return GroupResponse(false, "群组名称不能为空")
         }
-        
+        if (request.groupName.trimStart().startsWith("[Silk]")) {
+            return GroupResponse(false, "群组名称不能以 [Silk] 开头，该前缀为系统保留")
+        }
+
         // 验证用户是否存在
         val user = UserRepository.findUserById(request.userId)
         if (user == null) {

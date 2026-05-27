@@ -680,22 +680,26 @@ class ChatServer(
                         }
                     }
                 } else if (silkContent.startsWith("/recall ") || silkContent.startsWith("/recall\n")) {
-                    // /recall 命令 - 查询用户历史会话
-                    val recallQuery = silkContent.removePrefix("/recall").trim()
-                    logger.info("[/recall] userId={}, query={}...", message.userId, recallQuery.take(50))
+                    // /recall 命令 - 仅限 Silk 专属对话使用（防止在群聊中泄露用户隐私）
+                    if (!isSilkPrivateChat) {
+                        sendMessageToAllSessions(buildSilkTextMessage("/recall 仅可在 Silk 专属对话中使用，请切换到专属对话后再试"))
+                    } else {
+                        val recallQuery = silkContent.removePrefix("/recall").trim()
+                        logger.info("[/recall] userId={}, query={}...", message.userId, recallQuery.take(50))
 
-                    activeAiJob?.cancel()
-                    activeAiJob = CoroutineScope(Dispatchers.IO).launch {
-                        try {
-                            sendAgentStatus("正在搜索历史会话...")
-                            generateHistoryRecallResponse(recallQuery, message.userId)
-                        } catch (e: CancellationException) {
-                            logger.info("[/recall] 已被用户取消")
-                        } catch (e: Exception) {
-                            logger.error("[/recall] 异常: {}", e.message)
-                            sendAgentStatus("历史查询失败: ${e.message}")
-                        } finally {
-                            activeAiJob = null
+                        activeAiJob?.cancel()
+                        activeAiJob = CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                sendMessageToAllSessions(buildSilkTextMessage("正在搜索历史会话...", isTransient = true))
+                                generateHistoryRecallResponse(recallQuery, message.userId)
+                            } catch (e: CancellationException) {
+                                logger.info("[/recall] 已被用户取消")
+                            } catch (e: Exception) {
+                                logger.error("[/recall] 异常: {}", e.message)
+                                sendAgentStatus("历史查询失败: ${e.message}")
+                            } finally {
+                                activeAiJob = null
+                            }
                         }
                     }
                 } else {
