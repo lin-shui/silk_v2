@@ -38,7 +38,8 @@ data class Message(
     val totalSteps: Int? = null,       // 总步骤数（用于进度条）
     val isIncremental: Boolean = false, // true = 增量消息（前端需拼接），false = 完整消息（前端直接替换）
     val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度区分）
-    val references: List<com.silk.backend.models.MessageReference> = emptyList()
+    val references: List<com.silk.backend.models.MessageReference> = emptyList(),
+    val contentBlocks: List<com.silk.backend.ai.ContentBlock>? = null  // 结构化 content block（流式 / 持久化回放）
 )
 
 @Serializable
@@ -1374,6 +1375,28 @@ class ChatServer(
                                 session.send(Frame.Text(messageJson))
                             } catch (e: Exception) {
                                 logger.error("📤 [流式-{}] 发送失败: {}", callId, e.message)
+                            }
+                        }
+                    }
+                    "blocks_state" -> {
+                        val blocks = Json.decodeFromString<List<com.silk.backend.ai.ContentBlock>>(content)
+                        val blockMessage = Message(
+                            id = "streaming_${System.currentTimeMillis()}",
+                            userId = SilkAgent.AGENT_ID,
+                            userName = SilkAgent.AGENT_NAME,
+                            content = "",
+                            timestamp = System.currentTimeMillis(),
+                            type = MessageType.TEXT,
+                            isTransient = true,
+                            isIncremental = false,
+                            contentBlocks = blocks
+                        )
+                        val messageJson = Json.encodeToString(blockMessage)
+                        allSessions().forEach { session ->
+                            try {
+                                session.send(Frame.Text(messageJson))
+                            } catch (e: Exception) {
+                                logger.error("📤 [blocks_state-{}] 发送失败: {}", callId, e.message)
                             }
                         }
                     }

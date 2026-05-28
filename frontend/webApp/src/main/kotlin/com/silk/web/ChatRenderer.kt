@@ -154,9 +154,20 @@ fun StructuredContent(content: String, references: List<MessageReference>, msgId
 @Composable
 fun ThinkingBlock(content: String, isComplete: Boolean = false) {
     var expanded by remember { mutableStateOf(false) }
+    var elapsedSeconds by remember { mutableStateOf(0L) }
+    val startEpochMs = remember { kotlin.js.Date.now().toLong() }
 
-    // Show "Thinking" during streaming, "Thought" when done (claudian-style)
-    val label = if (isComplete) "Thought" else "Thinking..."
+    LaunchedEffect(isComplete) {
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            elapsedSeconds = (kotlin.js.Date.now().toLong() - startEpochMs) / 1000
+            if (isComplete) break
+        }
+    }
+
+    // Show "Thinking for Xs" during streaming, "Thought for Xs" when done (claudian-style)
+    val label = if (isComplete) "Thought for ${elapsedSeconds}s"
+                else "Thinking... (${elapsedSeconds}s)"
 
     Div({
         style {

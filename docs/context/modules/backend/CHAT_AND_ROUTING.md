@@ -74,6 +74,7 @@
   - 后端 `WebSocketConfig.kt`
   - 共享前端 `frontend/shared/.../models/Message.kt`
 - HTTP 响应/请求 DTO 中的 CC 模块（`CcStateResponse` / `DirEntry` / `DirListingResponse`）只在 `frontend/shared/.../models/UserSettings.kt` 一处定义；backend 通过 `implementation(project(":frontend:shared"))` 直接 import。新增字段改一处即可。
+- WebSocket `blocks_state` 消息：后端流式发送完整 content block 列表（含 type/content/isComplete），前端替换前一次列表。类型包括 `thinking`（ThinkingBlock 折叠渲染）、`text`（MarkdownContent）、`tool_use`（ToolCallBlock）。
 - 文件消息 payload 同时影响：
   - `routes/FileRoutes.kt`
   - `backend/BackendFileContractTest.kt`

@@ -3,6 +3,7 @@ package com.silk.shared
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageCategory
 import com.silk.shared.models.MessageType
+import com.silk.shared.models.ContentBlock
 import com.silk.shared.models.isAgentUserId
 import kotlinx.datetime.Clock
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -65,6 +66,9 @@ class ChatClient(
     
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
+
+    private val _transientContentBlocks = MutableStateFlow<List<ContentBlock>>(emptyList())
+    val transientContentBlocks: StateFlow<List<ContentBlock>> = _transientContentBlocks.asStateFlow()
     
     private val _isLoadingHistory = MutableStateFlow(false)
     val isLoadingHistory: StateFlow<Boolean> = _isLoadingHistory.asStateFlow()
@@ -207,10 +211,15 @@ class ChatClient(
                 message.type == MessageType.RECALL -> {
                     log("🗑️ [ChatClient] 收到撤回消息: ${message.content}")
                     val messageIdsToRemove = message.content.split(",").map { it.trim() }
-                    _messages.value = _messages.value.filter { msg -> 
-                        msg.id !in messageIdsToRemove 
+                    _messages.value = _messages.value.filter { msg ->
+                        msg.id !in messageIdsToRemove
                     }
                     log("🗑️ [ChatClient] 已移除 ${messageIdsToRemove.size} 条消息")
+                }
+                // 结构化 content blocks（流式替换完整 block 列表）
+                message.isTransient && message.contentBlocks != null -> {
+                    _transientContentBlocks.value = message.contentBlocks
+                    if (isSilkAi) _isGenerating.value = true
                 }
                 // Agent 状态消息：添加到状态消息列表（灰色显示）
                 message.category == MessageCategory.AGENT_STATUS -> {
@@ -220,6 +229,7 @@ class ChatClient(
                         _isGenerating.value = false
                         suppressTransient = false
                         _pendingQuestionId.value = null
+                        _transientContentBlocks.value = emptyList()  // 清除内容块
                     } else {
                         log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
                         if (isSilkAi) _isGenerating.value = true
@@ -275,11 +285,13 @@ class ChatClient(
                         _isGenerating.value = false
                         _transientMessage.value = null
                         _statusMessages.value = emptyList()
+                        _transientContentBlocks.value = emptyList()
                         suppressTransient = false
                     } else {
                         _transientMessage.value = null
                         _statusMessages.value = emptyList()
                         _isGenerating.value = false
+                        _transientContentBlocks.value = emptyList()
                         suppressTransient = false
                         _pendingQuestionId.value = null
                     }
@@ -324,6 +336,7 @@ class ChatClient(
         _transientMessage.value = null
         _statusMessages.value = emptyList()
         _pendingQuestionId.value = null
+        _transientContentBlocks.value = emptyList()
     }
     
     suspend fun sendMessage(userId: String, userName: String, content: String) {
@@ -387,11 +400,13 @@ class ChatClient(
         _isLoadingHistory.value = false
         historyBuffer.clear()
         suppressTransient = false
+        _transientContentBlocks.value = emptyList()
     }
     
     fun clearTransientOnly() {
         log("🗑️ [ChatClient] 只清空临时消息")
         _transientMessage.value = null
+        _transientContentBlocks.value = emptyList()
     }
     
     private fun generateId(): String {

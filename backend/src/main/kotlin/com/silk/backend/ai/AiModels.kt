@@ -42,3 +42,17 @@ data class ToolDefinition(
     val description: String,
     val parameters: JsonObject
 )
+
+/**
+ * 结构化 content block，用于流式传输 thinking/text/tool_use 内容。
+ * 对应 Anthropic Messages API 的 content block 概念。
+ */
+@Serializable
+data class ContentBlock(
+    val index: Int,
+    val type: String,          // "thinking", "text", "tool_use"
+    val content: String = "",
+    val isComplete: Boolean = false,
+    val toolName: String = "",
+    val toolId: String = ""
+)

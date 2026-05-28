@@ -12,7 +12,8 @@
 ## Anthropic Client
 
 - `ai/AnthropicClient.kt` 封装与 Anthropic Messages API 的通信：
-  - SSE 流式解析（content_block_start/delta/stop + message_delta）
+  - SSE 流式解析（content_block_start/delta/stop + message_delta，含 thinking_delta）
+  - 结构化 content block 追踪：流式过程中维护 `streamingBlocks` 映射（thinking/text/tool_use），通过 `blocks_state` 回调每步推送到前端实时渲染
   - 内部 Message ↔ Anthropic 格式双向转换
   - 工具定义转换（custom tools → {name, description, input_schema}，web_search → 原生 `web_search_20260209`）
   - tool_use 收集与残缺 JSON 修复

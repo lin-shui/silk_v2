@@ -15,7 +15,8 @@ data class Message(
     val totalSteps: Int? = null,       // 总步骤数（11）
     val isIncremental: Boolean = false, // true = 增量消息（需拼接），false = 完整消息（直接替换）
     val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度）
-    val references: List<MessageReference> = emptyList()
+    val references: List<MessageReference> = emptyList(),
+    val contentBlocks: List<ContentBlock>? = null  // 结构化 content block（流式 / 持久化回放）
 )
 
 @Serializable
@@ -41,6 +42,17 @@ data class MessageReference(
     val url: String? = null,
     val snippet: String? = null,
     val path: String? = null
+)
+
+/** 结构化 content block，对应 Anthropic Messages API 的 content block 概念。 */
+@Serializable
+data class ContentBlock(
+    val index: Int,
+    val type: String,          // "thinking", "text", "tool_use"
+    val content: String = "",
+    val isComplete: Boolean = false,
+    val toolName: String = "",
+    val toolId: String = ""
 )
 
 @Serializable

@@ -19,6 +19,7 @@ import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import com.silk.shared.models.SILK_AGENT_USER_ID
 import com.silk.shared.models.UserSettings
 import com.silk.shared.models.isAgentUserId
+import com.silk.shared.models.ContentBlock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.await
 import kotlinx.coroutines.withTimeoutOrNull
@@ -1406,6 +1407,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val isGenerating by chatClient.isGenerating.collectAsState()
     val pendingQuestionId by chatClient.pendingQuestionId.collectAsState()
     val ccMetadataJson by chatClient.ccMetadataJson.collectAsState()
+    val contentBlocks by chatClient.transientContentBlocks.collectAsState()
 
     // Update ccConnectInfo when metadata arrives via WebSocket
     LaunchedEffect(ccMetadataJson) {
@@ -2231,6 +2233,22 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     )
                 } else {
                     TransientMessageItem(message)
+                }
+            }
+
+            // 显示流式 content blocks（thinking / tool_use / text 结构化渲染）
+            if (contentBlocks.isNotEmpty()) {
+                Div({
+                    classes(SilkStylesheet.aiMessageContent)
+                    style { property("margin-top", "4px") }
+                }) {
+                    for (block in contentBlocks) {
+                        when (block.type) {
+                            "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete)
+                            "text" -> MarkdownContent(content = block.content, references = emptyList())
+                            "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = "")
+                        }
+                    }
                 }
             }
         }
@@ -5207,7 +5225,19 @@ Div({
         }
         
         // 内容区域 — 长内容渲染折叠+展开两个视图，DOM 切换 display（不触发 Compose 重组）
-        if (isLongContent && !isTransient) {
+        message.contentBlocks?.let { blocks ->
+            // 持久化消息回放：从结构化 content blocks 渲染
+            Div({ classes(SilkStylesheet.aiMessageContent) }) {
+                for (block in blocks) {
+                    when (block.type) {
+                        "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete)
+                        "text" -> MarkdownContent(content = block.content, references = message.references)
+                        "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = "")
+                    }
+                }
+            }
+        } ?: run {
+            if (isLongContent && !isTransient) {
             Div({
                 attr("data-view", "collapsed")
                 style {
@@ -5284,7 +5314,7 @@ Div({
                     }
                 }
             }
-        } else {
+            } else {
             Div({
                 classes(SilkStylesheet.aiMessageContent)
             }) {
@@ -5297,6 +5327,7 @@ Div({
                     references = message.references,
                     anchorPrefix = "msg-${message.id}-"
                 )
+            }
             }
         }
         // 底部操作栏
