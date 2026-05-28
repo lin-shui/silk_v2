@@ -456,6 +456,7 @@ fun main() {
         console.log("2️⃣ renderComposable 已调用")
         
         Style(SilkStylesheet)
+        SilkChatStyles.inject()
         console.log("3️⃣ Silk样式已加载")
         
         SilkApp()
@@ -5118,7 +5119,7 @@ Div({
         }
         
     Div({
-        classes(SilkStylesheet.aiMessageCard)
+        classes(SilkStylesheet.aiMessageCard, "silk-ai-card")
         attr("id", "ai-msg-${message.id}")
         style {
             property("flex", "1")
@@ -5131,49 +5132,22 @@ Div({
     }) {
         // AI 头部标识
         Div({
-            style {
-                display(DisplayStyle.Flex)
-                alignItems(AlignItems.Center)
-                property("gap", "10px")
-                marginBottom(12.px)
-            }
+            classes("silk-ai-header")
         }) {
             // AI 图标
             Div({
-                classes(SilkStylesheet.aiBadge)
+                classes("silk-ai-avatar")
             }) {
                 Text("🤖")
             }
             
             // AI 名称和时间
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    flexDirection(FlexDirection.Column)
-                    property("gap", "2px")
-                }
-            }) {
-                Span({
-                    style {
-                        fontWeight("600")
-                        fontSize(14.px)
-                        color(Color(SilkColors.primary))
-                        property("letter-spacing", "0.5px")
-                    }
-                }) {
-                    val aiDisplayName = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
-                        .let { if (it.isBlank() || it == "Silk") "Silk AI" else it }
-                    Text(aiDisplayName)
-                }
-                Span({
-                    style {
-                        fontSize(11.px)
-                        color(Color(SilkColors.textLight))
-                    }
-                }) {
-                    Text(timeString)
-                }
+            Span({ classes("silk-ai-name") }) {
+                val aiDisplayName = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
+                    .let { if (it.isBlank() || it == "Silk") "Silk AI" else it }
+                Text(aiDisplayName)
             }
+            Span({ classes("silk-ai-time") }) { Text(timeString) }
             
             // 展开/收起按钮（长内容时显示，DOM 切换 display，不触发 Compose 重组）
             if (isLongContent && !isTransient) {
@@ -5327,16 +5301,7 @@ Div({
         }
         // 底部操作栏
         if (!isTransient && !isSelectionMode) {
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    property("justify-content", "flex-start")
-                    property("gap", "6px")
-                    marginTop(12.px)
-                    paddingTop(8.px)
-                    property("border-top", "1px solid rgba(232, 224, 212, 0.5)")
-                }
-            }) {
+            Div({ classes("silk-ai-actions") }) {
                 Span({
                     style {
                         fontSize(11.px)
@@ -5356,22 +5321,9 @@ Div({
                 }
                 
                 Span({
-                    style {
-                        fontSize(11.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("cursor", "pointer")
-                        padding(4.px, 10.px)
-                        borderRadius(4.px)
-                        property("transition", "all 0.2s")
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "4px")
-                    }
+                    classes("silk-ai-action")
                     onClick { onForward(message) }
-                }) {
-                    Text("↗")
-                    Text("转发")
-                }
+                }) { Text("↗ 转发") }
                 
                 Span({
                     style {
@@ -5397,22 +5349,9 @@ Div({
 
                 
                 Span({
-                    style {
-                        fontSize(11.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("cursor", "pointer")
-                        padding(4.px, 10.px)
-                        borderRadius(4.px)
-                        property("transition", "all 0.2s")
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "4px")
-                    }
+                    classes("silk-ai-action")
                     onClick { onEnterSelectionMode(message.id) }
-                }) {
-                    Text("☑")
-                    Text("多选")
-                }
+                }) { Text("☑ 多选") }
             }
         }
         

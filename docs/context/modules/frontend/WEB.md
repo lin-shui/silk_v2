@@ -10,6 +10,7 @@
 - `WorkflowScene.kt`
 - `AudioDuplexScene.kt`
 - `SettingsScene.kt`
+- `SilkChatStyles.kt` -- claudian 风格 CSS 样式注入（消息卡片、头像、hover 操作栏、动画）
 
 ## Current Shape
 
