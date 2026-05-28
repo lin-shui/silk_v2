@@ -256,10 +256,11 @@ def _process_line(line: str, state: dict) -> str:
             state["in_thinking"] = True
             state["thinking_buf"] = []
             state["thinking_emitted_len"] = 0
+            state["thinking_marker_emitted"] = False
         elif block_type == "text":
             state["in_text"] = True
             result = _flush_thinking(state)
-            return result + "\n\n<!--THINKING_END-->\n\n"
+            return result + "\n\n<!--END_THINKING-->\n\n"
         return ""
 
     elif event_type == "content_block_delta":
@@ -286,8 +287,12 @@ def _process_line(line: str, state: dict) -> str:
         return ""
 
     elif event_type == "content_block_stop":
+        was_tool = state.get("in_tool_use", False)
         state["in_thinking"] = False
         state["in_text"] = False
+        state["in_tool_use"] = False
+        if was_tool:
+            return "\n<!--END_TOOL-->\n"
         return ""
 
     return ""
@@ -303,11 +308,15 @@ def _flush_thinking(state: dict) -> str:
         return ""
     new_text = acc[em:]
     state["thinking_emitted_len"] = len(acc)
+    # Prepend opening marker on first flush
+    if not state.get("thinking_marker_emitted"):
+        state["thinking_marker_emitted"] = True
+        return "\n<!--THINKING-->\n" + new_text.lstrip()
     return new_text.lstrip()
 
 
 def _forward_pty_output(fd: int, pid: int) -> None:
-    state = {"in_thinking": False, "in_text": False, "thinking_buf": None, "had_text_delta": False}
+    state = {"in_thinking": False, "in_text": False, "thinking_buf": None, "had_text_delta": False, "in_tool_use": False}
     buf = ""
 
     while True:

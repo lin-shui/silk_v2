@@ -5223,10 +5223,10 @@ Div({
                 style { display(DisplayStyle.None) }
                 classes(SilkStylesheet.aiMessageContent)
             }) {
-                MarkdownContent(
+                StructuredContent(
                     content = message.content,
                     references = message.references,
-                    referenceAnchorPrefix = "msg-${message.id}-"
+                    msgId = message.id
                 )
                 ReferenceSourcesList(
                     references = message.references,
@@ -5288,10 +5288,10 @@ Div({
             Div({
                 classes(SilkStylesheet.aiMessageContent)
             }) {
-                MarkdownContent(
+                StructuredContent(
                     content = message.content,
                     references = message.references,
-                    referenceAnchorPrefix = "msg-${message.id}-"
+                    msgId = message.id
                 )
                 ReferenceSourcesList(
                     references = message.references,
