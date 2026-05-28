@@ -27,7 +27,7 @@ import org.jetbrains.compose.web.dom.Text
 
 private sealed class Segment {
     data class Text(val content: String) : Segment()
-    data class Thinking(val content: String) : Segment()
+    data class Thinking(val content: String, val isComplete: Boolean = false) : Segment()
     data class ToolCall(val name: String, val summary: String, val content: String) : Segment()
 }
 
@@ -79,7 +79,7 @@ private fun parseSegments(raw: String): List<Segment> {
                 val endPos = rest.indexOf("<!--END_THINKING-->", pos)
                 if (endPos >= 0) {
                     val content = rest.substring(pos + "<!--THINKING-->".length, endPos).trim()
-                    if (content.isNotEmpty()) segs.add(Segment.Thinking(content))
+                    if (content.isNotEmpty()) segs.add(Segment.Thinking(content, isComplete = true))
                     rest = rest.substring(endPos + "<!--END_THINKING-->".length)
                 } else {
                     // Unclosed marker -> treat rest as thinking
@@ -91,7 +91,7 @@ private fun parseSegments(raw: String): List<Segment> {
             "END_THINKING" -> {
                 // Everything up to here is thinking (no <!--THINKING--> marker emitted due to streaming batches)
                 val content = rest.substring(0, pos).trim()
-                if (content.isNotEmpty()) segs.add(Segment.Thinking(content))
+                if (content.isNotEmpty()) segs.add(Segment.Thinking(content, isComplete = true))
                 rest = rest.substring(pos + "<!--END_THINKING-->".length)
             }
             "TOOL" -> {
@@ -143,7 +143,7 @@ fun StructuredContent(content: String, references: List<MessageReference>, msgId
     for (seg in segments) {
         when (seg) {
             is Segment.Text -> MarkdownContent(content = seg.content, references = references)
-            is Segment.Thinking -> ThinkingBlock(content = seg.content)
+            is Segment.Thinking -> ThinkingBlock(content = seg.content, isComplete = seg.isComplete)
             is Segment.ToolCall -> ToolCallBlock(name = seg.name, summary = seg.summary, content = seg.content)
         }
     }
@@ -152,22 +152,11 @@ fun StructuredContent(content: String, references: List<MessageReference>, msgId
 // ── Thinking Block ──
 
 @Composable
-fun ThinkingBlock(content: String) {
+fun ThinkingBlock(content: String, isComplete: Boolean = false) {
     var expanded by remember { mutableStateOf(false) }
-    var elapsedSeconds by remember { mutableStateOf(0) }
-    val startTime = remember { kotlinx.browser.window.performance.now().toLong() }
-    val isComplete = content.contains("<!--END_THINKING-->")
-    val cleanContent = content.replace("<!--END_THINKING-->", "").replace("<!--THINKING-->", "").trim()
 
-    // Live timer counting up every second (claudian-style)
-    LaunchedEffect(Unit) {
-        while (true) {
-            elapsedSeconds = ((kotlinx.browser.window.performance.now().toLong() - startTime) / 1000).toInt()
-            kotlinx.coroutines.delay(1000)
-        }
-    }
-
-    val label = if (isComplete) "Thought for ${elapsedSeconds}s" else "Thinking ${elapsedSeconds}s..."
+    // Show "Thinking" during streaming, "Thought" when done (claudian-style)
+    val label = if (isComplete) "Thought" else "Thinking..."
 
     Div({
         style {
@@ -177,7 +166,6 @@ fun ThinkingBlock(content: String) {
             marginLeft(7.px)
         }
     }) {
-        // Header row (clickable)
         Div({
             style {
                 display(DisplayStyle.Flex)
@@ -201,7 +189,7 @@ fun ThinkingBlock(content: String) {
             } }) { Text("\u25B6") }
         }
 
-        // Content (expanded while streaming, collapsible when done)
+        // Auto-expand during streaming, collapsible when done
         if (expanded || !isComplete) {
             Div({
                 style {
@@ -209,8 +197,8 @@ fun ThinkingBlock(content: String) {
                     color(Color("#8A7B6A")); padding(4.px, 0.px)
                 }
             }) {
-                if (cleanContent.isNotEmpty()) {
-                    MarkdownContent(content = cleanContent, references = emptyList())
+                if (content.isNotEmpty()) {
+                    MarkdownContent(content = content, references = emptyList())
                 }
             }
         }

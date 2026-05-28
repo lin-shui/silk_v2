@@ -277,6 +277,10 @@ def _process_line(line: str, state: dict) -> str:
                     new_text = acc[em:]
                     state["thinking_emitted_len"] = len(acc)
                     if new_text:
+                        # Wrap first batch in <!--THINKING--> marker for frontend timer
+                        if not state.get("thinking_marker_emitted"):
+                            state["thinking_marker_emitted"] = True
+                            return "\n<!--THINKING-->\n" + new_text
                         return new_text
             return ""
 
