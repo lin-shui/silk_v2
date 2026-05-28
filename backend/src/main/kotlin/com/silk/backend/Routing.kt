@@ -1,6 +1,7 @@
 package com.silk.backend
 
 import com.silk.backend.ai.AIConfig
+import com.silk.backend.ai.ContentBlock
 import com.silk.backend.auth.AuthService
 import com.silk.backend.auth.GroupService
 import com.silk.backend.database.AddMemberRequest
@@ -2321,6 +2322,44 @@ fun Application.configureRouting() {
                 return sb.toString()
             }
 
+            fun buildContentBlockList(): List<ContentBlock> {
+                val blocks = mutableListOf<ContentBlock>()
+                var index = 0
+                val hasPostThinkingContent = toolParts.isNotEmpty() || answerText.isNotEmpty()
+                if (thinkingParts.isNotEmpty()) {
+                    blocks.add(ContentBlock(
+                        index = index++,
+                        type = "thinking",
+                        content = thinkingParts.joinToString("\n\n"),
+                        isComplete = hasPostThinkingContent
+                    ))
+                }
+                for (toolPart in toolParts) {
+                    val toolName = toolPart.lines().firstOrNull()
+                        ?.removePrefix("🔧")
+                        ?.trim()
+                        ?.replace("**", "")
+                        ?.trim()
+                        ?.take(40) ?: ""
+                    blocks.add(ContentBlock(
+                        index = index++,
+                        type = "tool_use",
+                        content = toolPart,
+                        isComplete = true,
+                        toolName = toolName
+                    ))
+                }
+                if (answerText.isNotEmpty()) {
+                    blocks.add(ContentBlock(
+                        index = index++,
+                        type = "text",
+                        content = answerText,
+                        isComplete = true
+                    ))
+                }
+                return blocks
+            }
+
             val ccUserName = com.silk.backend.ccconnect.agentTriggerName(hello.agentType).replaceFirstChar { it.uppercaseChar() }
 
             try {
@@ -2352,6 +2391,7 @@ fun Application.configureRouting() {
                                     type = MessageType.TEXT,
                                     isTransient = true,
                                     isIncremental = false,
+                                    contentBlocks = buildContentBlockList(),
                                 )
                                 chatServer.broadcast(msg)
                             } else {
@@ -2415,6 +2455,7 @@ fun Application.configureRouting() {
                                     type = MessageType.TEXT,
                                     isTransient = true,
                                     isIncremental = false,
+                                    contentBlocks = buildContentBlockList(),
                                 )
                                 chatServer.broadcast(msg)
                             } else {
@@ -2464,6 +2505,7 @@ fun Application.configureRouting() {
                                                 content = finalContent,
                                                 timestamp = System.currentTimeMillis(),
                                                 type = MessageType.TEXT,
+                                                contentBlocks = buildContentBlockList(),
                                             )
                                             chatServer.broadcast(msg)
                                         }
