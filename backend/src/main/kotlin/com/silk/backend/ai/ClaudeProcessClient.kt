@@ -10,6 +10,8 @@ import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.util.UUID
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Claude CLI 进程客户端。
@@ -26,6 +28,20 @@ class ClaudeProcessClient(
 ) {
     private val logger = LoggerFactory.getLogger(ClaudeProcessClient::class.java)
 
+    /** 从 ~/.claude/settings.json 读取环境变量注入子进程 */
+    private val claudeEnvVars: Map<String, String> by lazy {
+        val settingsFile = java.io.File(System.getProperty("user.home"), ".claude/settings.json")
+        if (!settingsFile.exists()) return@lazy emptyMap()
+        try {
+            val root = kotlinx.serialization.json.Json.parseToJsonElement(settingsFile.readText().replace(Regex(",\\s*}"), "}")).jsonObject
+            val envObj = root["env"]?.jsonObject ?: return@lazy emptyMap()
+            envObj.mapValues { (_, value) -> value.jsonPrimitive.content }
+        } catch (e: Exception) {
+            logger.warn("Failed to read claude settings.json: ${e.message}")
+            emptyMap()
+        }
+    }
+
     private val claudePath = AIConfig.CLAUDE_CLI_PATH
 
     /** PTY 桥接脚本路径 */
@@ -37,14 +53,23 @@ class ClaudeProcessClient(
      * 从 CWD 向上查找 cc_bridge/pty_chat.py。
      */
     private fun resolvePtyChatPath(): String {
-        val target = "cc_bridge/pty_chat.py"
+        // 优先找 backend/scripts/pty_chat.py（新标准位置），再找 cc_bridge/pty_chat.py（旧位置）
+        val targets = listOf("backend/scripts/pty_chat.py", "cc_bridge/pty_chat.py")
         var dir = File(System.getProperty("user.dir"))
         while (true) {
-            val candidate = File(dir, target)
-            if (candidate.exists()) return candidate.absolutePath
+            for (target in targets) {
+                val candidate = File(dir, target)
+                if (candidate.exists()) return candidate.absolutePath
+            }
             dir = dir.parentFile ?: break
         }
-        return File(workspaceDir, "../../../cc_bridge/pty_chat.py").absoluteFile.absolutePath
+        // Fallback: 从 workspace 相对路径找
+        for (target in targets) {
+            val fallback = File(workspaceDir, "../../../$target").absoluteFile
+            if (fallback.exists()) return fallback.absolutePath
+        }
+        // 兜底
+        return File("backend/scripts/pty_chat.py").absolutePath
     }
 
     /** 单次响应超时 */
@@ -66,26 +91,32 @@ class ClaudeProcessClient(
     ): String {
         val callId = UUID.randomUUID().toString().take(8)
 
-        // 将 prompt 写入临时文件（避免 shell 转义和命令行长度限制）
-        val promptFile = File.createTempFile("silk-prompt-", ".txt").apply {
+        // 将 prompt 写入 workspaceDir 内的临时文件
+        // 必须在 workspace 内——pty_chat.py 会用 Landlock 将子进程限制在该目录
+        val workspaceFile = java.io.File(workspaceDir).also { it.mkdirs() }
+        val promptFile = java.io.File(workspaceFile, ".prompt.md").apply {
             writeText(fullPrompt)
-            deleteOnExit()
         }
 
-        // 通过 PTY 桥接脚本运行 claude
+        // 传 absWorkspaceDir 给 pty_chat.py 做 Landlock 沙箱根目录
+        // 使用绝对路径避免子进程 CWD 变化后路径不可达
+        val absWorkspaceDir = workspaceFile.absolutePath
         val cmd = buildList {
             add("python3")
             add(ptyChatPath)
             add(promptFile.absolutePath)
+            add(absWorkspaceDir)
         }
 
         logger.info("[ClaudeProcessClient-{}] 启动 claude PTY: groupId={}, promptLen={}, script={}",
             callId, groupId, fullPrompt.length, ptyChatPath)
 
         return withContext(Dispatchers.IO) {
-            val env = mapOf("PYTHONUNBUFFERED" to "1")
+            val env = mutableMapOf("PYTHONUNBUFFERED" to "1")
+            // Inject claude env vars from ~/.claude/settings.json (claude -p doesn't auto-read them)
+            env.putAll(claudeEnvVars)
             val processBuilder = ProcessBuilder(cmd)
-                .directory(File(workspaceDir))
+                .directory(File(absWorkspaceDir))
                 .redirectErrorStream(true)
             processBuilder.environment().putAll(env)
 

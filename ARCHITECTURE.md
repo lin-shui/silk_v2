@@ -53,7 +53,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | Android | `frontend/androidApp/` | 四 Tab + 移动端流程 |
 | Desktop | `frontend/desktopApp/` | 可编译/可测试，但能力面窄于 Web/Android |
 | Harmony | `frontend/harmonyApp/` | 独立 ArkTS 应用，含 Todo/Workflow/KB/Audio Duplex |
-| External bridges | `cc_bridge/`, `codex_bridge/`, `feishu_bot/` | Python 服务，不在 Gradle 主工程内 |
+| External bridges | `backend/scripts/`（PTY bridge）, `cc_bridge/`, `codex_bridge/`, `feishu_bot/` | Python 服务，不在 Gradle 主工程内 |
 
 ## cc-connect Integration
 
