@@ -5032,7 +5032,7 @@ private fun AITransientStatus() {
 }
 
 @Composable
-@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS", "CyclomaticComplexMethod", "UnusedParameter")
+@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS", "UnusedParameter")
 @NoLiveLiterals
 fun AIMessageCard(
     message: Message,
@@ -5119,7 +5119,6 @@ private fun resolveRenderMode(message: Message): MessageRenderMode {
     }
 }
 
-@Suppress("CyclomaticComplexMethod", "NestedBlockDepth") // large render-mode dispatch
 @Composable
 fun MessageItem(
     message: Message,
@@ -5161,610 +5160,659 @@ fun MessageItem(
             )
         }
         MessageRenderMode.AGENT_STATUS -> {
-            Div({
-                style {
-                    padding(8.px, 16.px)
-                    marginBottom(6.px)
-                    backgroundColor(Color("#F5F5F5"))
-                    borderRadius(8.px)
-                    property("border-left", "3px solid #BDBDBD")
-                    fontSize(13.px)
-                    color(Color("#757575"))
-                    property("font-style", "italic")
-                    property("white-space", "pre-wrap")
-                    property("word-break", "break-word")
-                }
-            }) {
-                Text(message.content)
-            }
+            AgentStatusMessage(message.content)
         }
         MessageRenderMode.AGENT_QUESTION -> {
-            Div({
-                style {
-                    padding(12.px, 16.px)
-                    marginBottom(8.px)
-                    backgroundColor(Color("#FFF8F0"))
-                    borderRadius(8.px)
-                    property("border-left", "3px solid #E8B86C")
-                    fontSize(14.px)
-                    color(Color("#5D4E37"))
-                    property("white-space", "pre-wrap")
-                    property("word-break", "break-word")
-                }
-            }) {
-                Text(message.content)
-            }
+            AgentQuestionMessage(message.content)
         }
         MessageRenderMode.NORMAL_TEXT -> {
-            val canRecall = message.userId == currentUserId &&
-                    !isAgentUserId(message.userId) &&
-                    !isTransient
-            val showActions = !isTransient
-
-            // 检测PDF下载链接
-            val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
-            
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("gap", "8px")
-                }
-            }) {
-                if (isSelectionMode) {
-                    Div({
-                        style {
-                            width(24.px)
-                            height(24.px)
-                            borderRadius(4.px)
-                            property("border", if (isSelected) "none" else "2px solid ${SilkColors.border}")
-                            backgroundColor(Color(if (isSelected) SilkColors.primary else "transparent"))
-                            display(DisplayStyle.Flex)
-                            alignItems(AlignItems.Center)
-                            property("justify-content", "center")
-                            property("cursor", "pointer")
-                            property("flex-shrink", "0")
-                            property("transition", "all 0.15s ease")
-                        }
-                        onClick { onToggleSelection(message.id) }
-                    }) {
-                        if (isSelected) {
-                            Span({ style { color(Color.white); fontSize(14.px); property("font-weight", "bold") } }) {
-                                Text("\u2713")
-                            }
-                        }
-                    }
-                }
-            Div({
-                classes(SilkStylesheet.messageCard)
-                style {
-                    property("flex", "1")
-                    property("min-width", "0")
-                    if (isSelected) {
-                        backgroundColor(Color("rgba(76, 175, 80, 0.10)"))
-                        property("outline", "2px solid ${SilkColors.primary}")
-                    }
-                    if (isSelectionMode) {
-                        property("cursor", "pointer")
-                    }
-                }
-                if (isSelectionMode) {
-                    onClick { onToggleSelection(message.id) }
-                }
-            }) {
-                Div({ classes(SilkStylesheet.messageHeader) }) {
-                    Span({ classes(SilkStylesheet.userName) }) {
-                        Text(message.userName)
-                    }
-                    Span({ classes(SilkStylesheet.timestamp) }) {
-                        Text(timeString)
-                    }
-                }
-                Div({
-                    style {
-                        property("white-space", "pre-wrap")
-                        property("word-wrap", "break-word")
-                        property("line-height", "1.7")
-                        property("color", SilkColors.textPrimary)
-                    }
-                }) {
-                    if (isPdfMessage) {
-                        // PDF下载消息特殊处理
-                        val lines = message.content.split("\n")
-                        var pdfUrl: String? = null
-                        var fileName: String? = null
-                        
-                        // 查找PDF路径和文件名
-                        lines.forEach { line ->
-                            val trimmedLine = line.trim()
-                            if (trimmedLine.startsWith("/download/report/") && trimmedLine.contains(".pdf")) {
-                                pdfUrl = trimmedLine
-                                // 提取文件名（去除路径中的编码字符）
-                                fileName = trimmedLine.substringAfterLast("/").replace("%20", " ").replace("%27", "'")
-                            }
-                        }
-                        
-                        // 显示消息内容（过滤掉路径行）
-                        lines.forEach { line ->
-                            val trimmedLine = line.trim()
-                            if (!trimmedLine.startsWith("/download/report/") && trimmedLine.isNotEmpty()) {
-                                Text(line)
-                                Br()
-                            }
-                        }
-                        
-                        // 显示下载按钮 - 丝滑绿色
-                        if (pdfUrl != null) {
-                            val baseUrl = backendHttpOrigin()
-                            val fullUrl = "$baseUrl$pdfUrl"
-                            
-                            Div({
-                                style {
-                                    marginTop(14.px)
-                                }
-                            }) {
-                                Button({
-                                    style {
-                                        property("background", "linear-gradient(135deg, ${SilkColors.success} 0%, #6A9D5B 100%)")
-                                        color(Color.white)
-                                        padding(12.px, 20.px)
-                                        border {
-                                            width(0.px)
-                                        }
-                                        borderRadius(8.px)
-                                        fontSize(14.px)
-                                        property("cursor", "pointer")
-                                        property("font-weight", "600")
-                                        property("display", "inline-flex")
-                                        property("align-items", "center")
-                                        property("gap", "8px")
-                                        property("box-shadow", "0 2px 8px rgba(125, 174, 108, 0.3)")
-                                        property("transition", "all 0.2s ease")
-                                    }
-                                    onClick { event ->
-                                        event.preventDefault()
-                                        // ✅ 使用 fetch + Blob 方式下载PDF，触发浏览器保存对话框
-                                        val downloadFileName = fileName ?: "diagnosis_report.pdf"
-                                        console.log("开始下载PDF: $fullUrl, 文件名: $downloadFileName")
-                                        
-                                        // 获取window和document对象（js()返回的已经是dynamic类型）
-                                        val window = js("window")
-                                        val document = js("document")
-                                        
-                                        // 使用fetch下载PDF
-                                        window.fetch(fullUrl)
-                                            .then({ response: dynamic ->
-                                                // response已经是JavaScript对象，直接使用
-                                                console.log("获取响应:", response)
-                                                if (!response.ok) {
-                                                    throw js("Error('下载失败: ' + response.status)")
-                                                }
-                                                response.blob()  // 返回Promise<Blob>
-                                            })
-                                            .then({ blob: dynamic ->
-                                                // blob已经是JavaScript Blob对象，直接使用
-                                                console.log("创建Blob对象")
-                                                val url = window.URL.createObjectURL(blob)
-                                                val a = document.createElement("a")
-                                                a.style.display = "none"
-                                                a.href = url
-                                                a.download = downloadFileName
-                                                document.body.appendChild(a)
-                                                a.click()
-                                                window.URL.revokeObjectURL(url)
-                                                document.body.removeChild(a)
-                                                console.log("PDF下载成功")
-                                            })
-                                            .catch({ error: dynamic ->
-                                                console.error("下载PDF失败:", error)
-                                                window.alert("下载失败: " + error.message)
-                                            })
-                                    }
-                                }) {
-                                    Text("📥 下载PDF报告")
-                                }
-                                
-                                // 显示文件名
-                                if (fileName != null) {
-                                    Div({
-                                        style {
-                                            fontSize(11.px)
-                                            color(Color(SilkColors.textLight))
-                                            marginTop(8.px)
-                                            property("font-style", "italic")
-                                        }
-                                    }) {
-                                        Text("文件名：$fileName")
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        // 普通文本消息
-                        Text(message.content)
-                    }
-                }
-                
-                // 消息操作按钮行
-                if (showActions && !isSelectionMode) {
-                    Div({
-                        style {
-                            display(DisplayStyle.Flex)
-                            property("justify-content", "flex-end")
-                            property("gap", "6px")
-                            marginTop(8.px)
-                            property("opacity", "0.5")
-                            property("transition", "opacity 0.2s")
-                        }
-                    }) {
-                        Span({
-                            style {
-                                fontSize(11.px)
-                                color(Color(SilkColors.textSecondary))
-                                property("cursor", "pointer")
-                                property("padding", "2px 6px")
-                                property("border-radius", "4px")
-                                property("transition", "all 0.2s")
-                            }
-                            onClick { copyTextToClipboard(message.content) }
-                        }) { Text("📋复制") }
-                        
-                        Span({
-                            style {
-                                fontSize(11.px)
-                                color(Color(SilkColors.textSecondary))
-                                property("cursor", "pointer")
-                                property("padding", "2px 6px")
-                                property("border-radius", "4px")
-                                property("transition", "all 0.2s")
-                            }
-                            onClick { onForward(message) }
-                        }) { Text("↗转发") }
-                        
-                        if (canRecall && !isRecalling) {
-                            Span({
-                                style {
-                                    fontSize(11.px)
-                                    color(Color(SilkColors.textSecondary))
-                                    property("cursor", "pointer")
-                                    property("padding", "2px 6px")
-                                    property("border-radius", "4px")
-                                    property("transition", "all 0.2s")
-                                }
-                                onClick {
-                                    if (window.confirm("确定要撤回这条消息吗？")) {
-                                        onRecall(message.id)
-                                    }
-                                }
-                            }) { Text("↩撤回") }
-                        }
-                        
-                        Span({
-                            style {
-                                fontSize(11.px)
-                                color(Color("#E57373"))
-                                property("cursor", "pointer")
-                                property("padding", "2px 6px")
-                                property("border-radius", "4px")
-                                property("transition", "all 0.2s")
-                            }
-                            onClick {
-                                if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
-                                    onDelete(message.id)
-                                }
-                            }
-                        }) { Text("🗑删除") }
-                        
-                        Span({
-                            style {
-                                fontSize(11.px)
-                                color(Color(SilkColors.textSecondary))
-                                property("cursor", "pointer")
-                                property("padding", "2px 6px")
-                                property("border-radius", "4px")
-                                property("transition", "all 0.2s")
-                            }
-                            onClick { onEnterSelectionMode(message.id) }
-                        }) { Text("☑多选") }
-                    }
-                }
-            }
-            } // close selection wrapper Div
+            UserTextMessageCard(
+                message = message,
+                timeString = timeString,
+                currentUserId = currentUserId,
+                isTransient = isTransient,
+                isRecalling = isRecalling,
+                onRecall = onRecall,
+                onForward = onForward,
+                onDelete = onDelete,
+                isSelectionMode = isSelectionMode,
+                isSelected = isSelected,
+                onToggleSelection = onToggleSelection,
+                onEnterSelectionMode = onEnterSelectionMode
+            )
         }
         MessageRenderMode.FILE -> {
-            val fileInfo = remember(message.content) {
-                parseWebFileMessageContent(message.content)
-            }
-            val fileName = fileInfo.fileName
-            val fileSize = fileInfo.fileSize
-            val downloadUrl = fileInfo.downloadUrl
-            val fileIcon = webFileIconForName(fileName)
-            val fileSizeStr = formatWebFileSize(fileSize)
-            val fileExtLabel = fileName.substringAfterLast(".", "").uppercase().ifBlank { "FILE" }
-            
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("gap", "8px")
-                }
-            }) {
-                if (isSelectionMode) {
-                    Div({
-                        style {
-                            width(24.px)
-                            height(24.px)
-                            borderRadius(4.px)
-                            property("border", if (isSelected) "none" else "2px solid ${SilkColors.border}")
-                            backgroundColor(Color(if (isSelected) SilkColors.primary else "transparent"))
-                            display(DisplayStyle.Flex)
-                            alignItems(AlignItems.Center)
-                            property("justify-content", "center")
-                            property("cursor", "pointer")
-                            property("flex-shrink", "0")
-                            property("transition", "all 0.15s ease")
-                        }
-                        onClick { onToggleSelection(message.id) }
-                    }) {
-                        if (isSelected) {
-                            Span({ style { color(Color.white); fontSize(14.px); property("font-weight", "bold") } }) {
-                                Text("\u2713")
-                            }
-                        }
-                    }
-                }
-            Div({
-                classes(SilkStylesheet.messageCard)
-                style {
-                    property("flex", "1")
-                    property("min-width", "0")
-                    if (isSelected) {
-                        backgroundColor(Color("rgba(76, 175, 80, 0.10)"))
-                        property("outline", "2px solid ${SilkColors.primary}")
-                    }
-                    if (isSelectionMode) {
-                        property("cursor", "pointer")
-                    }
-                }
-                if (isSelectionMode) {
-                    onClick { onToggleSelection(message.id) }
-                }
-            }) {
-                Div({ classes(SilkStylesheet.messageHeader) }) {
-                    Span({ classes(SilkStylesheet.userName) }) {
-                        Text(message.userName)
-                    }
-                    Span({ classes(SilkStylesheet.timestamp) }) {
-                        Text(timeString)
-                    }
-                }
-                
-                // 文件卡片
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "12px")
-                        padding(12.px)
-                        backgroundColor(Color(SilkColors.surfaceElevated))
-                        borderRadius(8.px)
-                        property("border", "1px solid ${SilkColors.border}")
-                        property("cursor", "pointer")
-                        property("transition", "all 0.2s ease")
-                    }
-                    onClick {
-                        if (downloadUrl.isNotEmpty()) {
-                            val baseUrl = backendHttpOrigin()
-                            val fullUrl = "$baseUrl$downloadUrl"
-                            console.log("打开文件下载: $fullUrl")
-                            
-                            // 使用 fetch 下载文件
-                            val window = js("window")
-                            val document = js("document")
-                            
-                            window.fetch(fullUrl)
-                                .then({ response: dynamic ->
-                                    if (!response.ok) {
-                                        throw js("Error('下载失败: ' + response.status)")
-                                    }
-                                    response.blob()
-                                })
-                                .then({ blob: dynamic ->
-                                    val url = window.URL.createObjectURL(blob)
-                                    val a = document.createElement("a")
-                                    a.style.display = "none"
-                                    a.href = url
-                                    a.download = fileName
-                                    document.body.appendChild(a)
-                                    a.click()
-                                    window.URL.revokeObjectURL(url)
-                                    document.body.removeChild(a)
-                                    console.log("文件下载成功")
-                                })
-                                .catch({ error: dynamic ->
-                                    console.error("下载文件失败:", error)
-                                    window.alert("下载失败: " + error.message)
-                                })
-                        }
-                    }
-                }) {
-                    // 文件图标
-                    Div({
-                        style {
-                            fontSize(32.px)
-                            padding(8.px)
-                            backgroundColor(Color(SilkColors.secondary))
-                            borderRadius(8.px)
-                        }
-                    }) {
-                        Text(fileIcon)
-                    }
-                    
-                    // 文件信息
-                    Div({
-                        style {
-                            display(DisplayStyle.Flex)
-                            flexDirection(FlexDirection.Column)
-                            property("gap", "4px")
-                        }
-                    }) {
-                        Div({
-                            style {
-                                fontSize(14.px)
-                                fontWeight("600")
-                                color(Color(SilkColors.textPrimary))
-                                property("max-width", "200px")
-                                property("overflow", "hidden")
-                                property("text-overflow", "ellipsis")
-                                property("white-space", "nowrap")
-                            }
-                        }) {
-                            Text(fileName)
-                        }
-                        Div({
-                            style {
-                                fontSize(12.px)
-                                color(Color(SilkColors.textSecondary))
-                            }
-                        }) {
-                            Text("$fileSizeStr • $fileExtLabel")
-                        }
-                    }
-                    
-                    // 下载按钮
-                    Div({
-                        style {
-                            marginLeft(8.px)
-                            fontSize(18.px)
-                            color(Color(SilkColors.primary))
-                        }
-                    }) {
-                        Text("⬇")
-                    }
-                }
-                
-                // 文件消息操作按钮行
-                if (!isTransient && !isSelectionMode) {
-                    Div({
-                        style {
-                            display(DisplayStyle.Flex)
-                            property("justify-content", "flex-end")
-                            property("gap", "6px")
-                            marginTop(8.px)
-                            property("opacity", "0.5")
-                            property("transition", "opacity 0.2s")
-                        }
-                    }) {
-                        Span({
-                            style {
-                                fontSize(11.px)
-                                color(Color(SilkColors.textSecondary))
-                                property("cursor", "pointer")
-                                property("padding", "2px 6px")
-                                property("border-radius", "4px")
-                                property("transition", "all 0.2s")
-                            }
-                            onClick { onForward(message) }
-                        }) { Text("↗转发") }
-                        
-                        Span({
-                            style {
-                                fontSize(11.px)
-                                color(Color("#E57373"))
-                                property("cursor", "pointer")
-                                property("padding", "2px 6px")
-                                property("border-radius", "4px")
-                                property("transition", "all 0.2s")
-                            }
-                            onClick {
-                                if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
-                                    onDelete(message.id)
-                                }
-                            }
-                        }) { Text("🗑删除") }
-                        
-                        Span({
-                            style {
-                                fontSize(11.px)
-                                color(Color(SilkColors.textSecondary))
-                                property("cursor", "pointer")
-                                property("padding", "2px 6px")
-                                property("border-radius", "4px")
-                                property("transition", "all 0.2s")
-                            }
-                            onClick { onEnterSelectionMode(message.id) }
-                        }) { Text("☑多选") }
-                    }
-                }
-            }
-            } // close selection wrapper Div
+            FileMessageCard(
+                message = message,
+                timeString = timeString,
+                isTransient = isTransient,
+                onForward = onForward,
+                onDelete = onDelete,
+                isSelectionMode = isSelectionMode,
+                isSelected = isSelected,
+                onToggleSelection = onToggleSelection,
+                onEnterSelectionMode = onEnterSelectionMode
+            )
         }
         MessageRenderMode.SYSTEM_EVENT -> {
-            Div({ classes(SilkStylesheet.systemMessage) }) {
-                Text("• ${message.content} ($timeString)")
-            }
+            SystemEventMessage(message.content, timeString)
         }
         MessageRenderMode.CARD -> {
-            if (chatClient != null) {
-                CardMessageRenderer(
-                    message = message,
-                    chatClient = chatClient,
-                    currentUserId = currentUserId,
-                    userName = currentUserName,
-                )
-            } else {
-                Div({ style { padding(8.px); color(Color("#999")) } }) {
-                    Text("[卡片消息]")
-                }
-            }
+            CardMessageContent(message, chatClient, currentUserId, currentUserName)
         }
         MessageRenderMode.CARD_REPLY -> {
-            val replyText = try {
-                val payload = kotlinx.serialization.json.Json.parseToJsonElement(message.content)
-                    .jsonObject
-                val action = payload["action"]?.jsonPrimitive?.content ?: "unknown"
-                when {
-                    action.startsWith("__opt__") -> {
-                        // "__opt__0__Python - 简洁易用" → "Python - 简洁易用"
-                        val afterPrefix = action.removePrefix("__opt__")
-                        val idx = afterPrefix.indexOf("__")
-                        val cleanText = if (idx >= 0) afterPrefix.substring(idx + 2) else action
-                        "选择: $cleanText"
-                    }
-                    action.startsWith("__custom__") -> {
-                        val qi = action.removePrefix("__custom__")
-                        val custom = payload["inputs"]?.jsonObject?.get("custom_answer_$qi")
-                            ?.jsonPrimitive?.content ?: ""
-                        if (custom.isNotBlank()) "回复: $custom" else "回复: (自定义)"
-                    }
-                    action.startsWith("perm_allow_") -> "允许"
-                    action.startsWith("perm_deny_") -> "拒绝"
-                    action.startsWith("perm_accept_edits_") -> "允许所有编辑"
-                    action.startsWith("perm_bypass_") -> "允许所有操作"
-                    else -> "选择: $action"
-                }
-            } catch (_: kotlinx.serialization.SerializationException) {
-                "卡片回复"
-            } catch (_: IllegalArgumentException) {
-                "卡片回复"
-            }
-            Div({
-                style {
-                    padding(6.px, 12.px)
-                    marginBottom(6.px)
-                    backgroundColor(Color("#F0F8F0"))
-                    borderRadius(8.px)
-                    fontSize(13.px)
-                    color(Color("#4a7c59"))
-                    property("font-style", "italic")
-                }
-            }) {
-                Text("\u2713 $replyText")
-            }
+            CardReplySummary(message.content)
         }
         MessageRenderMode.NOOP -> { }
     }
 }
+
+private data class PdfReportMessage(
+    val bodyLines: List<String>,
+    val downloadPath: String?,
+    val fileName: String?,
+)
+
+@Composable
+private fun AgentStatusMessage(content: String) {
+    AgentBubbleMessage(
+        content = content,
+        background = "#F5F5F5",
+        borderColor = "#BDBDBD",
+        textColor = "#757575",
+        fontSizePx = 13
+    )
+}
+
+@Composable
+private fun AgentQuestionMessage(content: String) {
+    AgentBubbleMessage(
+        content = content,
+        background = "#FFF8F0",
+        borderColor = "#E8B86C",
+        textColor = "#5D4E37",
+        fontSizePx = 14
+    )
+}
+
+@Composable
+private fun AgentBubbleMessage(
+    content: String,
+    background: String,
+    borderColor: String,
+    textColor: String,
+    fontSizePx: Int,
+) {
+    Div({
+        style {
+            padding(12.px, 16.px)
+            marginBottom(8.px)
+            backgroundColor(Color(background))
+            borderRadius(8.px)
+            property("border-left", "3px solid $borderColor")
+            fontSize(fontSizePx.px)
+            color(Color(textColor))
+            property("font-style", "italic")
+            property("white-space", "pre-wrap")
+            property("word-break", "break-word")
+        }
+    }) {
+        Text(content)
+    }
+}
+
+@Composable
+private fun UserTextMessageCard(
+    message: Message,
+    timeString: String,
+    currentUserId: String,
+    isTransient: Boolean,
+    isRecalling: Boolean,
+    onRecall: (String) -> Unit,
+    onForward: (Message) -> Unit,
+    onDelete: (String) -> Unit,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelection: (String) -> Unit,
+    onEnterSelectionMode: (String) -> Unit,
+) {
+    val canRecall = message.userId == currentUserId &&
+        !isAgentUserId(message.userId) &&
+        !isTransient
+    val pdfReport = remember(message.content) { parsePdfReportMessage(message.content) }
+
+    StandardMessageCard(
+        message = message,
+        timeString = timeString,
+        isSelectionMode = isSelectionMode,
+        isSelected = isSelected,
+        onToggleSelection = onToggleSelection
+    ) {
+        StandardMessageBody {
+            if (pdfReport == null) {
+                Text(message.content)
+            } else {
+                PdfReportMessageBody(pdfReport)
+            }
+        }
+        if (!isTransient && !isSelectionMode) {
+            TextMessageActions(
+                message = message,
+                canRecall = canRecall,
+                isRecalling = isRecalling,
+                onRecall = onRecall,
+                onForward = onForward,
+                onDelete = onDelete,
+                onEnterSelectionMode = onEnterSelectionMode
+            )
+        }
+    }
+}
+
+@Composable
+private fun FileMessageCard(
+    message: Message,
+    timeString: String,
+    isTransient: Boolean,
+    onForward: (Message) -> Unit,
+    onDelete: (String) -> Unit,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelection: (String) -> Unit,
+    onEnterSelectionMode: (String) -> Unit,
+) {
+    val fileInfo = remember(message.content) {
+        parseWebFileMessageContent(message.content)
+    }
+    val fileName = fileInfo.fileName
+    val fileSizeStr = formatWebFileSize(fileInfo.fileSize)
+    val fileExtLabel = fileName.substringAfterLast(".", "").uppercase().ifBlank { "FILE" }
+
+    StandardMessageCard(
+        message = message,
+        timeString = timeString,
+        isSelectionMode = isSelectionMode,
+        isSelected = isSelected,
+        onToggleSelection = onToggleSelection
+    ) {
+        FileDownloadCard(
+            fileName = fileName,
+            fileSizeStr = fileSizeStr,
+            fileExtLabel = fileExtLabel,
+            downloadUrl = fileInfo.downloadUrl
+        )
+        if (!isTransient && !isSelectionMode) {
+            FileMessageActions(
+                message = message,
+                onForward = onForward,
+                onDelete = onDelete,
+                onEnterSelectionMode = onEnterSelectionMode
+            )
+        }
+    }
+}
+
+@Composable
+private fun StandardMessageCard(
+    message: Message,
+    timeString: String,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelection: (String) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "8px")
+        }
+    }) {
+        if (isSelectionMode) {
+            StandardSelectionCheckbox(
+                isSelected = isSelected,
+                onClick = { onToggleSelection(message.id) }
+            )
+        }
+        Div({
+            classes(SilkStylesheet.messageCard)
+            style {
+                property("flex", "1")
+                property("min-width", "0")
+                if (isSelected) {
+                    backgroundColor(Color("rgba(76, 175, 80, 0.10)"))
+                    property("outline", "2px solid ${SilkColors.primary}")
+                }
+                if (isSelectionMode) {
+                    property("cursor", "pointer")
+                }
+            }
+            if (isSelectionMode) {
+                onClick { onToggleSelection(message.id) }
+            }
+        }) {
+            StandardMessageHeader(message.userName, timeString)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun StandardSelectionCheckbox(isSelected: Boolean, onClick: () -> Unit) {
+    Div({
+        style {
+            width(24.px)
+            height(24.px)
+            borderRadius(4.px)
+            property("border", if (isSelected) "none" else "2px solid ${SilkColors.border}")
+            backgroundColor(Color(if (isSelected) SilkColors.primary else "transparent"))
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("justify-content", "center")
+            property("cursor", "pointer")
+            property("flex-shrink", "0")
+            property("transition", "all 0.15s ease")
+        }
+        onClick { onClick() }
+    }) {
+        if (isSelected) {
+            Span({ style { color(Color.white); fontSize(14.px); property("font-weight", "bold") } }) {
+                Text("\u2713")
+            }
+        }
+    }
+}
+
+@Composable
+private fun StandardMessageHeader(userName: String, timeString: String) {
+    Div({ classes(SilkStylesheet.messageHeader) }) {
+        Span({ classes(SilkStylesheet.userName) }) {
+            Text(userName)
+        }
+        Span({ classes(SilkStylesheet.timestamp) }) {
+            Text(timeString)
+        }
+    }
+}
+
+@Composable
+private fun StandardMessageBody(content: @Composable () -> Unit) {
+    Div({
+        style {
+            property("white-space", "pre-wrap")
+            property("word-wrap", "break-word")
+            property("line-height", "1.7")
+            property("color", SilkColors.textPrimary)
+        }
+    }) {
+        content()
+    }
+}
+
+private fun parsePdfReportMessage(content: String): PdfReportMessage? {
+    if (!content.contains("/download/report/") || !content.contains(".pdf")) return null
+
+    var downloadPath: String? = null
+    var fileName: String? = null
+    val bodyLines = mutableListOf<String>()
+
+    content.split("\n").forEach { line ->
+        val trimmedLine = line.trim()
+        if (trimmedLine.startsWith("/download/report/") && trimmedLine.contains(".pdf")) {
+            downloadPath = trimmedLine
+            fileName = decodeDownloadFileName(trimmedLine)
+        } else if (trimmedLine.isNotEmpty()) {
+            bodyLines += line
+        }
+    }
+
+    return PdfReportMessage(
+        bodyLines = bodyLines,
+        downloadPath = downloadPath,
+        fileName = fileName
+    )
+}
+
+private fun decodeDownloadFileName(downloadPath: String): String =
+    downloadPath.substringAfterLast("/").replace("%20", " ").replace("%27", "'")
+
+private fun startBrowserDownload(
+    fullUrl: String,
+    downloadFileName: String,
+    startLog: String,
+    successLog: String,
+    failureLog: String,
+) {
+    console.log("$startLog: $fullUrl, 文件名: $downloadFileName")
+
+    val browserWindow = js("window")
+    val browserDocument = js("document")
+
+    browserWindow.fetch(fullUrl)
+        .then({ response: dynamic ->
+            if (!response.ok) {
+                throw js("Error('下载失败: ' + response.status)")
+            }
+            response.blob()
+        })
+        .then({ blob: dynamic ->
+            val url = browserWindow.URL.createObjectURL(blob)
+            val link = browserDocument.createElement("a")
+            link.style.display = "none"
+            link.href = url
+            link.download = downloadFileName
+            browserDocument.body.appendChild(link)
+            link.click()
+            browserWindow.URL.revokeObjectURL(url)
+            browserDocument.body.removeChild(link)
+            console.log(successLog)
+        })
+        .catch({ error: dynamic ->
+            console.error(failureLog, error)
+            browserWindow.alert("$failureLog: " + error.message)
+        })
+}
+
+@Composable
+private fun PdfReportMessageBody(pdfReport: PdfReportMessage) {
+    pdfReport.bodyLines.forEach { line ->
+        Text(line)
+        Br()
+    }
+
+    val downloadPath = pdfReport.downloadPath
+    if (downloadPath != null) {
+        val fullUrl = "${backendHttpOrigin()}$downloadPath"
+        val downloadFileName = pdfReport.fileName ?: "diagnosis_report.pdf"
+
+        Div({
+            style {
+                marginTop(14.px)
+            }
+        }) {
+            Button({
+                style {
+                    property("background", "linear-gradient(135deg, ${SilkColors.success} 0%, #6A9D5B 100%)")
+                    color(Color.white)
+                    padding(12.px, 20.px)
+                    border {
+                        width(0.px)
+                    }
+                    borderRadius(8.px)
+                    fontSize(14.px)
+                    property("cursor", "pointer")
+                    property("font-weight", "600")
+                    property("display", "inline-flex")
+                    property("align-items", "center")
+                    property("gap", "8px")
+                    property("box-shadow", "0 2px 8px rgba(125, 174, 108, 0.3)")
+                    property("transition", "all 0.2s ease")
+                }
+                onClick { event ->
+                    event.preventDefault()
+                    startBrowserDownload(
+                        fullUrl = fullUrl,
+                        downloadFileName = downloadFileName,
+                        startLog = "开始下载PDF",
+                        successLog = "PDF下载成功",
+                        failureLog = "下载PDF失败"
+                    )
+                }
+            }) {
+                Text("📥 下载PDF报告")
+            }
+
+            if (pdfReport.fileName != null) {
+                Div({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textLight))
+                        marginTop(8.px)
+                        property("font-style", "italic")
+                    }
+                }) {
+                    Text("文件名：${pdfReport.fileName}")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TextMessageActions(
+    message: Message,
+    canRecall: Boolean,
+    isRecalling: Boolean,
+    onRecall: (String) -> Unit,
+    onForward: (Message) -> Unit,
+    onDelete: (String) -> Unit,
+    onEnterSelectionMode: (String) -> Unit,
+) {
+    MessageActionRow {
+        MessageAction("📋复制") { copyTextToClipboard(message.content) }
+        MessageAction("↗转发") { onForward(message) }
+        if (canRecall && !isRecalling) {
+            MessageAction("↩撤回") {
+                if (window.confirm("确定要撤回这条消息吗？")) {
+                    onRecall(message.id)
+                }
+            }
+        }
+        MessageAction("🗑删除", color = "#E57373") {
+            if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
+                onDelete(message.id)
+            }
+        }
+        MessageAction("☑多选") { onEnterSelectionMode(message.id) }
+    }
+}
+
+@Composable
+private fun FileDownloadCard(
+    fileName: String,
+    fileSizeStr: String,
+    fileExtLabel: String,
+    downloadUrl: String,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "12px")
+            padding(12.px)
+            backgroundColor(Color(SilkColors.surfaceElevated))
+            borderRadius(8.px)
+            property("border", "1px solid ${SilkColors.border}")
+            property("cursor", "pointer")
+            property("transition", "all 0.2s ease")
+        }
+        onClick {
+            if (downloadUrl.isNotEmpty()) {
+                startBrowserDownload(
+                    fullUrl = "${backendHttpOrigin()}$downloadUrl",
+                    downloadFileName = fileName,
+                    startLog = "打开文件下载",
+                    successLog = "文件下载成功",
+                    failureLog = "下载文件失败"
+                )
+            }
+        }
+    }) {
+        Div({
+            style {
+                fontSize(32.px)
+                padding(8.px)
+                backgroundColor(Color(SilkColors.secondary))
+                borderRadius(8.px)
+            }
+        }) {
+            Text(webFileIconForName(fileName))
+        }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("gap", "4px")
+            }
+        }) {
+            Div({
+                style {
+                    fontSize(14.px)
+                    fontWeight("600")
+                    color(Color(SilkColors.textPrimary))
+                    property("max-width", "200px")
+                    property("overflow", "hidden")
+                    property("text-overflow", "ellipsis")
+                    property("white-space", "nowrap")
+                }
+            }) {
+                Text(fileName)
+            }
+            Div({
+                style {
+                    fontSize(12.px)
+                    color(Color(SilkColors.textSecondary))
+                }
+            }) {
+                Text("$fileSizeStr • $fileExtLabel")
+            }
+        }
+        Div({
+            style {
+                marginLeft(8.px)
+                fontSize(18.px)
+                color(Color(SilkColors.primary))
+            }
+        }) {
+            Text("⬇")
+        }
+    }
+}
+
+@Composable
+private fun FileMessageActions(
+    message: Message,
+    onForward: (Message) -> Unit,
+    onDelete: (String) -> Unit,
+    onEnterSelectionMode: (String) -> Unit,
+) {
+    MessageActionRow {
+        MessageAction("↗转发") { onForward(message) }
+        MessageAction("🗑删除", color = "#E57373") {
+            if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
+                onDelete(message.id)
+            }
+        }
+        MessageAction("☑多选") { onEnterSelectionMode(message.id) }
+    }
+}
+
+@Composable
+private fun MessageActionRow(content: @Composable () -> Unit) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            property("justify-content", "flex-end")
+            property("gap", "6px")
+            marginTop(8.px)
+            property("opacity", "0.5")
+            property("transition", "opacity 0.2s")
+        }
+    }) {
+        content()
+    }
+}
+
+@Composable
+private fun MessageAction(text: String, color: String = SilkColors.textSecondary, onClick: () -> Unit) {
+    Span({
+        style {
+            fontSize(11.px)
+            color(Color(color))
+            property("cursor", "pointer")
+            property("padding", "2px 6px")
+            property("border-radius", "4px")
+            property("transition", "all 0.2s")
+        }
+        onClick { onClick() }
+    }) {
+        Text(text)
+    }
+}
+
+@Composable
+private fun SystemEventMessage(content: String, timeString: String) {
+    Div({ classes(SilkStylesheet.systemMessage) }) {
+        Text("• $content ($timeString)")
+    }
+}
+
+@Composable
+private fun CardMessageContent(
+    message: Message,
+    chatClient: com.silk.shared.ChatClient?,
+    currentUserId: String,
+    currentUserName: String,
+) {
+    if (chatClient != null) {
+        CardMessageRenderer(
+            message = message,
+            chatClient = chatClient,
+            currentUserId = currentUserId,
+            userName = currentUserName,
+        )
+    } else {
+        Div({ style { padding(8.px); color(Color("#999")) } }) {
+            Text("[卡片消息]")
+        }
+    }
+}
+
+@Composable
+private fun CardReplySummary(content: String) {
+    Div({
+        style {
+            padding(6.px, 12.px)
+            marginBottom(6.px)
+            backgroundColor(Color("#F0F8F0"))
+            borderRadius(8.px)
+            fontSize(13.px)
+            color(Color("#4a7c59"))
+            property("font-style", "italic")
+        }
+    }) {
+        Text("\u2713 ${cardReplySummaryText(content)}")
+    }
+}
+
+private fun cardReplySummaryText(content: String): String =
+    try {
+        val payload = kotlinx.serialization.json.Json.parseToJsonElement(content).jsonObject
+        val action = payload["action"]?.jsonPrimitive?.content ?: "unknown"
+        when {
+            action.startsWith("__opt__") -> {
+                val afterPrefix = action.removePrefix("__opt__")
+                val idx = afterPrefix.indexOf("__")
+                val cleanText = if (idx >= 0) afterPrefix.substring(idx + 2) else action
+                "选择: $cleanText"
+            }
+            action.startsWith("__custom__") -> {
+                val questionIndex = action.removePrefix("__custom__")
+                val custom = payload["inputs"]?.jsonObject?.get("custom_answer_$questionIndex")
+                    ?.jsonPrimitive?.content ?: ""
+                if (custom.isNotBlank()) "回复: $custom" else "回复: (自定义)"
+            }
+            action.startsWith("perm_allow_") -> "允许"
+            action.startsWith("perm_deny_") -> "拒绝"
+            action.startsWith("perm_accept_edits_") -> "允许所有编辑"
+            action.startsWith("perm_bypass_") -> "允许所有操作"
+            else -> "选择: $action"
+        }
+    } catch (_: kotlinx.serialization.SerializationException) {
+        "卡片回复"
+    } catch (_: IllegalArgumentException) {
+        "卡片回复"
+    }
 
 @Composable
 fun TransientMessageItem(message: Message) {

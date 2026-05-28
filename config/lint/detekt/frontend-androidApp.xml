@@ -33,21 +33,17 @@
     <ID>EmptyCatchBlock:ChatScreen.kt${ }</ID>
     <ID>ImplicitDefaultLocale:ApkDownloader.kt$ApkDownloader$String.format("%.1f MB", size / (1024.0 * 1024.0))</ID>
     <ID>ImplicitDefaultLocale:MarkdownWebView.kt$String.format("%04x", c.code)</ID>
-    <ID>InstanceOfCheckForException:ApiClient.kt$ApiClient$e is CancellationException</ID>
     <ID>LoopWithTooManyJumpStatements:AudioDuplexScreen.kt$for</ID>
     <ID>LoopWithTooManyJumpStatements:ChatScreen.kt$while</ID>
     <ID>NestedBlockDepth:ChatScreen.kt$fun getFileName(context: android.content.Context, uri: Uri): String</ID>
     <ID>NestedBlockDepth:ChatScreen.kt$private fun AnnotatedString.Builder.highlightLine(line: String, language: String)</ID>
     <ID>PrintStackTrace:ApkDownloader.kt$ApkDownloader$e</ID>
     <ID>PrintStackTrace:VersionChecker.kt$VersionChecker$e</ID>
-    <ID>SwallowedException:ApiClient.kt$ApiClient$e: Exception</ID>
-    <ID>SwallowedException:ApiClient.kt$ApiClient$e: java.net.ConnectException</ID>
     <ID>SwallowedException:ApkDownloader.kt$ApkDownloader$e: Exception</ID>
     <ID>SwallowedException:AppState.kt$AppState$e: PackageManager.NameNotFoundException</ID>
     <ID>SwallowedException:AudioDuplexScreen.kt$e: CancellationException</ID>
     <ID>SwallowedException:AudioDuplexScreen.kt$e: Exception</ID>
     <ID>SwallowedException:ChatScreen.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:ApiClient.kt$ApiClient$e: Exception</ID>
     <ID>TooGenericExceptionCaught:ApkDownloader.kt$ApkDownloader$e: Exception</ID>
     <ID>TooGenericExceptionCaught:AppState.kt$AppState$e: Exception</ID>
     <ID>TooGenericExceptionCaught:AudioDuplexScreen.kt$e: Exception</ID>
