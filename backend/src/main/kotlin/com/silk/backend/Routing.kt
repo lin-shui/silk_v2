@@ -2364,6 +2364,9 @@ fun Application.configureRouting() {
                                     type = MessageType.TEXT,
                                 )
                                 chatServer.broadcast(msg)
+                                // 非 turn 中收到的 reply 通常是错误/日志或已完成回复，标记空闲让排队消息继续
+                                logger.info("[CcConnect][{}] non-turn reply → markIdle", groupId)
+                                com.silk.backend.ccconnect.CcConnectRegistry.markIdle(groupId)
                             }
                         }
                         "reply_stream" -> {
@@ -2435,6 +2438,7 @@ fun Application.configureRouting() {
                             )
                             when (status.state) {
                                 "thinking" -> {
+                                    logger.info("[CcConnect][{}] status=thinking, turnActive={}→true", groupId, turnActive)
                                     turnActive = true
                                     thinkingParts.clear()
                                     toolParts.clear()
@@ -2448,6 +2452,7 @@ fun Application.configureRouting() {
                                     )
                                 }
                                 "idle" -> {
+                                    logger.info("[CcConnect][{}] status=idle, turnActive={}", groupId, turnActive)
                                     if (turnActive) {
                                         val finalContent = buildStructuredContent(collapseTools = true)
                                         if (finalContent.isNotBlank() &&
@@ -2468,6 +2473,8 @@ fun Application.configureRouting() {
                                         answerText = ""
                                     }
                                     chatServer.broadcastSystemStatus("CLEAR_STATUS")
+                                    // 标记 agent 空闲，如有排队消息则自动发送下一條
+                                    com.silk.backend.ccconnect.CcConnectRegistry.markIdle(groupId)
                                 }
                                 else -> chatServer.broadcastSystemStatus(status.state)
                             }
@@ -2509,7 +2516,7 @@ fun Application.configureRouting() {
                 logger.error("[CcConnect] WS error: groupId={}, err={}", groupId, e.message)
             } finally {
                 logger.info("[CcConnect] WS disconnected: groupId={}", groupId)
-                com.silk.backend.ccconnect.CcConnectRegistry.unregister(groupId)
+                com.silk.backend.ccconnect.CcConnectRegistry.unregister(groupId, this)
 
                 val offlineMsg = Message(
                     id = java.util.UUID.randomUUID().toString(),

@@ -44,6 +44,8 @@ type Platform struct {
 
 	metadataActive atomic.Bool
 	metadataReply  chan string
+
+	handlerMu sync.Mutex // serialises all p.handler() calls (Claude CLI is not concurrent-safe)
 }
 
 func New(opts map[string]any) (core.Platform, error) {
@@ -293,8 +295,16 @@ func (p *Platform) connect(ctx context.Context) error {
 
 	slog.Info("[silk] connected", "groupId", ack.GroupID, "groupName", ack.GroupName)
 
+	// Run metadata query inline (before accepting messages) to prevent
+	// concurrent engine processing — the engine and Claude CLI do NOT
+	// support concurrent requests. Without this, a racing metadata
+	// goroutine and the main read loop both call p.handler, causing
+	// Claude CLI to reject one with "上一个请求仍在处理中".
+	p.handlerMu.Lock()
+	p.queryAndSendMetadata()
+	p.handlerMu.Unlock()
+
 	go p.pingLoop(ctx, conn)
-	go p.queryAndSendMetadata()
 
 	for {
 		_, data, err := conn.ReadMessage()
@@ -337,7 +347,9 @@ func (p *Platform) connect(ctx context.Context) error {
 				},
 			}
 			if p.handler != nil {
+				p.handlerMu.Lock()
 				p.handler(p, coreMsg)
+				p.handlerMu.Unlock()
 			}
 		case "command":
 			var cmd struct {
@@ -355,10 +367,14 @@ func (p *Platform) connect(ctx context.Context) error {
 					Platform:   "silk",
 					ReplyCtx:   &replyContext{userID: "__silk_cmd__", userName: "Silk"},
 				}
+				p.handlerMu.Lock()
 				p.handler(p, coreMsg)
+				p.handlerMu.Unlock()
 				go func() {
 					time.Sleep(2 * time.Second)
+					p.handlerMu.Lock()
 					p.queryAndSendMetadataOnce()
+					p.handlerMu.Unlock()
 				}()
 			}
 		case "ping":
@@ -398,7 +414,9 @@ func (p *Platform) queryAndSendMetadata() {
 		// If metadata was empty, retry after a delay (agent may still be loading)
 		slog.Debug("[silk] metadata empty, scheduling retry in 15s...")
 		time.AfterFunc(15*time.Second, func() {
+			p.handlerMu.Lock()
 			p.queryAndSendMetadataOnce()
+			p.handlerMu.Unlock()
 		})
 	}
 }
