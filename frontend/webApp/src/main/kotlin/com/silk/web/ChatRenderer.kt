@@ -1,12 +1,12 @@
 package com.silk.web
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.silk.shared.models.MessageReference
-import kotlinx.browser.document
 import org.jetbrains.compose.web.css.*
 import org.jetbrains.compose.web.dom.Div
 import org.jetbrains.compose.web.dom.Span
@@ -15,115 +15,159 @@ import org.jetbrains.compose.web.dom.Text
 /**
  * 结构化内容渲染器 — 参考 claudian (YishenTu/claudian) 的显示流程。
  *
- * 解析消息中的标记并渲染为可折叠块：
- * - `<!--THINKING-->...<!--END_THINKING-->` → 可折叠 thinking 块
- * - `<!--TOOL name="..." status="..." summary="..."-->...<!--END_TOOL-->` → 可折叠 tool 块
- * - 其余内容 → 普通 Markdown 渲染
+ * 格式约定（与 pty_chat.py 对齐）：
+ * - `<!--THINKING-->...content...<!--END_THINKING-->`
+ * - `<!--TOOL name="n" summary="s"-->...content...<!--END_TOOL-->`
+ *
+ * 注意：streaming 时 thinking 文本可能出现在 <!--THINKING--> 之前（分批发出），
+ * 所有 <！--END_THINKING--> 之前的内容都应归入 thinking 块。
  */
 
-private data class ContentSegment(
-    val type: String,       // "text", "thinking", "tool"
-    val content: String,
-    val meta: Map<String, String> = emptyMap()
-)
+// ── Segment types ──
 
-private fun parseStructuredContent(raw: String): List<ContentSegment> {
-    val segments = mutableListOf<ContentSegment>()
-    var remaining = raw
+private sealed class Segment {
+    data class Text(val content: String) : Segment()
+    data class Thinking(val content: String) : Segment()
+    data class ToolCall(val name: String, val summary: String, val content: String) : Segment()
+}
 
-    while (remaining.isNotEmpty()) {
-        val ti = remaining.indexOf("<!--THINKING-->")
-        val te = remaining.indexOf("<!--TOOL")
-        val first = when {
-            ti >= 0 && (te < 0 || ti < te) -> "thinking" to ti
-            te >= 0 -> "tool" to te
-            else -> null to -1
-        }
+// ── Parser: robust against partial/fragmented markers ──
 
-        if (first == null) {
-            segments.add(ContentSegment("text", remaining.trim()))
+private fun parseSegments(raw: String): List<Segment> {
+    if (!raw.contains("<!--THINKING") && !raw.contains("<!--TOOL")) {
+        return listOf(Segment.Text(raw.trim()))
+    }
+
+    val segs = mutableListOf<Segment>()
+    var rest = raw
+
+    // Phase 1: extract <!--TOOL ...--> ... <!--END_TOOL--> pairs
+    val toolResults = mutableListOf<Pair<Int, Int>>()  // (start, end) in original text
+    val toolMeta = mutableListOf<Pair<String, String>>()
+
+    // We'll process sequentially instead
+    while (rest.isNotEmpty()) {
+        val ti = rest.indexOf("<!--THINKING")
+        val te = rest.indexOf("<!--TOOL")
+        val et = rest.indexOf("<!--END_TOOL-->")
+        val eth = rest.indexOf("<!--END_THINKING-->")
+
+        if (ti < 0 && te < 0 && et < 0 && eth < 0) {
+            segs.add(Segment.Text(rest.trim()))
             break
         }
 
-        val (type, pos) = first
+        // Pick the earliest meaningful marker
+        val candidates = mutableListOf<Pair<Int, String>>()
+        if (ti >= 0) candidates.add(ti to "THINKING")
+        if (te >= 0) candidates.add(te to "TOOL")
+        if (et >= 0) candidates.add(et to "END_TOOL")
+        if (eth >= 0) candidates.add(eth to "END_THINKING")
+        candidates.sortBy { it.first }
 
-        // Text before the marker
+        val (pos, marker) = candidates.first()
+
+        // Text before this marker
         if (pos > 0) {
-            val before = remaining.substring(0, pos).trim()
-            if (before.isNotEmpty()) segments.add(ContentSegment("text", before))
+            val before = rest.substring(0, pos).trim()
+            if (before.isNotEmpty()) segs.add(Segment.Text(before))
         }
 
-        if (type == "thinking") {
-            val endTag = "<!--END_THINKING-->"
-            val endIdx = remaining.indexOf(endTag, pos)
-            if (endIdx > 0) {
-                val content = remaining.substring(pos + "<!--THINKING-->".length, endIdx).trim()
-                segments.add(ContentSegment("thinking", content))
-                remaining = remaining.substring(endIdx + endTag.length)
-            } else {
-                remaining = remaining.substring(pos + "<!--THINKING-->".length)
-            }
-        } else {
-            val closeTag = "-->"
-            val closeIdx = remaining.indexOf(closeTag, pos + "<!--TOOL".length)
-            if (closeIdx > 0) {
-                val attrs = remaining.substring(pos + "<!--TOOL".length, closeIdx).trim()
-                val meta = parseAttrs(attrs)
-                val endTag = "<!--END_TOOL-->"
-                val endIdx = remaining.indexOf(endTag, closeIdx)
-                if (endIdx > 0) {
-                    val content = remaining.substring(closeIdx + closeTag.length, endIdx).trim()
-                    segments.add(ContentSegment("tool", content, meta))
-                    remaining = remaining.substring(endIdx + endTag.length)
+        when (marker) {
+            "THINKING" -> {
+                // Find <!--END_THINKING--> after this
+                val endPos = rest.indexOf("<!--END_THINKING-->", pos)
+                if (endPos >= 0) {
+                    val content = rest.substring(pos + "<!--THINKING-->".length, endPos).trim()
+                    if (content.isNotEmpty()) segs.add(Segment.Thinking(content))
+                    rest = rest.substring(endPos + "<!--END_THINKING-->".length)
                 } else {
-                    remaining = remaining.substring(closeIdx + closeTag.length)
+                    // Unclosed marker -> treat rest as thinking
+                    val content = rest.substring(pos + "<!--THINKING-->".length).trim()
+                    if (content.isNotEmpty()) segs.add(Segment.Thinking(content))
+                    rest = ""
                 }
-            } else {
-                remaining = remaining.substring(pos + "<!--TOOL".length)
+            }
+            "END_THINKING" -> {
+                // Everything up to here is thinking (no <!--THINKING--> marker emitted due to streaming batches)
+                val content = rest.substring(0, pos).trim()
+                if (content.isNotEmpty()) segs.add(Segment.Thinking(content))
+                rest = rest.substring(pos + "<!--END_THINKING-->".length)
+            }
+            "TOOL" -> {
+                val closeTag = "-->"
+                val closeIdx = rest.indexOf(closeTag, pos + "<!--TOOL".length)
+                if (closeIdx >= 0) {
+                    val attrs = rest.substring(pos + "<!--TOOL".length, closeIdx).trim()
+                    val name = extractAttr(attrs, "name")
+                    val summary = extractAttr(attrs, "summary")
+                    val endTool = rest.indexOf("<!--END_TOOL-->", closeIdx)
+                    if (endTool >= 0) {
+                        val content = rest.substring(closeIdx + closeTag.length, endTool).trim()
+                        segs.add(Segment.ToolCall(name, summary, content))
+                        rest = rest.substring(endTool + "<!--END_TOOL-->".length)
+                    } else {
+                        rest = rest.substring(closeIdx + closeTag.length)
+                    }
+                } else {
+                    rest = rest.substring(pos + "<!--TOOL".length)
+                }
+            }
+            "END_TOOL" -> {
+                // Stray end marker without open -> skip
+                rest = rest.substring(pos + "<!--END_TOOL-->".length)
             }
         }
     }
 
-    return segments.filter { it.content.isNotEmpty() }
+    return segs.filter { it !is Segment.Text || it.content.isNotBlank() }
 }
 
-private fun parseAttrs(s: String): Map<String, String> {
-    val m = mutableMapOf<String, String>()
-    val r = Regex("""(\w+)\s*=\s*"([^"]*)"""")
-    r.findAll(s).forEach { m[it.groupValues[1]] = it.groupValues[2] }
-    return m
+private fun extractAttr(s: String, key: String): String {
+    val r = Regex("""${key}\s*=\s*"([^"]*)"""")
+    return r.find(s)?.groupValues?.getOrElse(1) { "" } ?: ""
 }
 
-/** 将消息内容渲染为结构化块序列（thinking/tool/text） */
+// ── Top-level composable ──
+
 @Composable
 fun StructuredContent(content: String, references: List<MessageReference>, msgId: String) {
-    val hasAnyMarker = content.contains("<!--THINKING") || content.contains("<!--TOOL")
-    if (!hasAnyMarker) {
-        MarkdownContent(content = content, references = references)
+    val segments = remember(content) { parseSegments(content) }
+
+    // If only one text segment, use MarkdownContent directly (no marker overhead)
+    if (segments.size == 1 && segments[0] is Segment.Text) {
+        MarkdownContent(content = (segments[0] as Segment.Text).content, references = references)
         return
     }
 
-    val segments = remember(content) { parseStructuredContent(content) }
-    for ((i, seg) in segments.withIndex()) {
-        when (seg.type) {
-            "thinking" -> ThinkingBlock(content = seg.content)
-            "tool" -> ToolCallBlock(
-                toolName = seg.meta["name"] ?: "",
-                status = seg.meta["status"] ?: "completed",
-                summary = seg.meta["summary"] ?: "",
-                content = seg.content
-            )
-            else -> MarkdownContent(content = seg.content, references = references)
+    for (seg in segments) {
+        when (seg) {
+            is Segment.Text -> MarkdownContent(content = seg.content, references = references)
+            is Segment.Thinking -> ThinkingBlock(content = seg.content)
+            is Segment.ToolCall -> ToolCallBlock(name = seg.name, summary = seg.summary, content = seg.content)
         }
     }
 }
 
-/** 可折叠 Thinking 块 — "Thought for Xs" 标签 + 树状左边线 */
+// ── Thinking Block ──
+
 @Composable
 fun ThinkingBlock(content: String) {
     var expanded by remember { mutableStateOf(false) }
-    // Estimate duration from content or just show "Thought" for stored messages
-    val label = "思考过程"
+    var elapsedSeconds by remember { mutableStateOf(0) }
+    val startTime = remember { kotlinx.browser.window.performance.now().toLong() }
+    val isComplete = content.contains("<!--END_THINKING-->")
+    val cleanContent = content.replace("<!--END_THINKING-->", "").replace("<!--THINKING-->", "").trim()
+
+    // Live timer counting up every second (claudian-style)
+    LaunchedEffect(Unit) {
+        while (true) {
+            elapsedSeconds = ((kotlinx.browser.window.performance.now().toLong() - startTime) / 1000).toInt()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+
+    val label = if (isComplete) "Thought for ${elapsedSeconds}s" else "Thinking ${elapsedSeconds}s..."
 
     Div({
         style {
@@ -133,7 +177,7 @@ fun ThinkingBlock(content: String) {
             marginLeft(7.px)
         }
     }) {
-        // Clickable header
+        // Header row (clickable)
         Div({
             style {
                 display(DisplayStyle.Flex)
@@ -145,66 +189,50 @@ fun ThinkingBlock(content: String) {
                 fontSize(13.px)
                 fontWeight("500")
                 color(Color("#C9A86C"))
+                if (!isComplete) { property("animation", "silk-pulse 1.5s ease-in-out") }
             }
-            attr("tabindex", "0")
-            attr("role", "button")
+            attr("tabindex", "0"); attr("role", "button")
             onClick { expanded = !expanded }
         }) {
-            Span({ style { property("flex-shrink", "0"); fontSize(14.px) } }) { Text("💭") }
+            Span({ style { property("flex-shrink", "0"); fontSize(14.px) } }) { Text("\uD83D\uDCAD") }
             Span({ style { property("flex", "1") } }) { Text(label) }
-            Span({
-                style {
-                    fontSize(10.px)
-                    color(Color("#B8A890"))
-                    property("transition", "transform 0.2s")
-                    if (expanded) { property("transform", "rotate(90deg)") }
-                }
-            }) { Text("▶") }
+            Span({ style { fontSize(10.px); color(Color("#B8A890")); property("transition", "transform 0.2s")
+                if (expanded) { property("transform", "rotate(90deg)") }
+            } }) { Text("\u25B6") }
         }
 
-        // Collapsible content
-        if (expanded) {
+        // Content (expanded while streaming, collapsible when done)
+        if (expanded || !isComplete) {
             Div({
                 style {
-                    fontSize(13.px)
-                    property("line-height", "1.5")
-                    color(Color("#8A7B6A"))
-                    padding(4.px, 0.px)
+                    fontSize(13.px); property("line-height", "1.5")
+                    color(Color("#8A7B6A")); padding(4.px, 0.px)
                 }
             }) {
-                MarkdownContent(content = content, references = emptyList())
+                if (cleanContent.isNotEmpty()) {
+                    MarkdownContent(content = cleanContent, references = emptyList())
+                }
             }
         }
     }
 }
-
-/** 可折叠 Tool 调用块 — "Read xxx" 标签 + 状态 + 树状左边线 */
 @Composable
-fun ToolCallBlock(toolName: String, status: String = "completed", summary: String = "", content: String = "") {
+fun ToolCallBlock(name: String, summary: String = "", content: String = "") {
     var expanded by remember { mutableStateOf(false) }
 
     val icon = when {
-        toolName.contains("bash", ignoreCase = true) -> "💻"
-        toolName.contains("read", ignoreCase = true) -> "📖"
-        toolName.contains("write", ignoreCase = true) || toolName.contains("edit", ignoreCase = true) -> "✏️"
-        toolName.contains("grep", ignoreCase = true) || toolName.contains("glob", ignoreCase = true) || toolName.contains("search", ignoreCase = true) -> "🔍"
-        toolName.contains("web", ignoreCase = true) || toolName.contains("fetch", ignoreCase = true) -> "🌐"
-        toolName.contains("todo", ignoreCase = true) -> "✅"
-        toolName.contains("think", ignoreCase = true) -> "💭"
-        toolName.contains("ask", ignoreCase = true) -> "❓"
-        toolName.contains("plan", ignoreCase = true) -> "📋"
-        toolName.contains("apply", ignoreCase = true) || toolName.contains("patch", ignoreCase = true) -> "🔧"
-        else -> "🔧"
+        name.contains("bash", true) || name.contains("command", true) -> "\uD83D\uDCBB"
+        name.contains("read", true) -> "\uD83D\uDCD6"
+        name.contains("write", true) || name.contains("edit", true) -> "\u270F\uFE0F"
+        name.contains("grep", true) || name.contains("search", true) || name.contains("glob", true) -> "\uD83D\uDD0D"
+        name.contains("web", true) || name.contains("fetch", true) -> "\uD83C\uDF10"
+        name.contains("todo", true) -> "\u2705"
+        name.contains("think", true) -> "\uD83D\uDCAD"
+        name.contains("ask", true) -> "\u2753"
+        name.contains("plan", true) -> "\uD83D\uDCCB"
+        name.contains("apply", true) || name.contains("patch", true) -> "\uD83D\uDD27"
+        else -> "\uD83D\uDD27"
     }
-
-    val statusColor = when (status) {
-        "completed" -> "#7DAE6C"
-        "error" -> "#D97B7B"
-        "running" -> "#C9A86C"
-        else -> "#8A7B6A"
-    }
-
-    val displayName = if (summary.isNotEmpty()) "$toolName $summary" else toolName
 
     Div({
         style {
@@ -214,7 +242,6 @@ fun ToolCallBlock(toolName: String, status: String = "completed", summary: Strin
             marginLeft(7.px)
         }
     }) {
-        // Clickable header
         Div({
             style {
                 display(DisplayStyle.Flex)
@@ -231,13 +258,7 @@ fun ToolCallBlock(toolName: String, status: String = "completed", summary: Strin
             onClick { expanded = !expanded }
         }) {
             Span({ style { property("flex-shrink", "0"); fontSize(14.px) } }) { Text(icon) }
-            Span({
-                style {
-                    color(Color("#4A4038"))
-                    property("white-space", "nowrap")
-                    property("flex-shrink", "0")
-                }
-            }) { Text(toolName) }
+            Span({ style { color(Color("#4A4038")); property("flex-shrink", "0") } }) { Text(name) }
             if (summary.isNotEmpty()) {
                 Span({
                     style {
@@ -251,15 +272,13 @@ fun ToolCallBlock(toolName: String, status: String = "completed", summary: Strin
                     }
                 }) { Text(summary) }
             }
-            // Status dot
             Span({
                 style {
                     width(8.px)
                     height(8.px)
                     borderRadius(50.percent)
-                    backgroundColor(Color(statusColor))
+                    backgroundColor(Color("#7DAE6C"))
                     property("flex-shrink", "0")
-                    if (status == "running") { property("animation", "silk-pulse 1.5s ease-in-out infinite") }
                 }
             }) {}
             Span({
@@ -269,10 +288,9 @@ fun ToolCallBlock(toolName: String, status: String = "completed", summary: Strin
                     property("transition", "transform 0.2s")
                     if (expanded) { property("transform", "rotate(90deg)") }
                 }
-            }) { Text("▶") }
+            }) { Text("\u25B6") }
         }
 
-        // Collapsible content
         if (expanded && content.isNotEmpty()) {
             Div({
                 style {
