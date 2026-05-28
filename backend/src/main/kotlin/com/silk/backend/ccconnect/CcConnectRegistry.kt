@@ -57,6 +57,54 @@ object CcConnectRegistry {
     /** 处理中超时阈值（毫秒），超过此时间未收到响应则自动清除忙碌状态. */
     private const val PROCESSING_TIMEOUT_MS = 600_000L // 10 分钟
 
+    // ── 等待用户输入状态（AI 提问后保持会话） ──
+    private val waitingForInput = ConcurrentHashMap<String, Boolean>()
+    private val waitingForInputTimestamps = ConcurrentHashMap<String, Long>()
+    private const val WAITING_TIMEOUT_MS = 300_000L // 5 分钟
+
+    fun setWaitingForInput(groupId: String) {
+        waitingForInput[groupId] = true
+        waitingForInputTimestamps[groupId] = System.currentTimeMillis()
+        logger.info("[CcConnect][{}] setWaitingForInput", groupId)
+    }
+
+    fun clearWaitingForInput(groupId: String) {
+        waitingForInput.remove(groupId)
+        waitingForInputTimestamps.remove(groupId)
+    }
+
+    fun isWaitingForInput(groupId: String): Boolean {
+        val ts = waitingForInputTimestamps[groupId] ?: return false
+        if (System.currentTimeMillis() - ts > WAITING_TIMEOUT_MS) {
+            logger.warn("[CcConnect][{}] waitingForInput timeout ({}s ago), clearing", groupId, (System.currentTimeMillis() - ts) / 1000)
+            waitingForInput.remove(groupId)
+            waitingForInputTimestamps.remove(groupId)
+            return false
+        }
+        return waitingForInput.getOrDefault(groupId, false)
+    }
+
+    /**
+     * 直接发送回答到 adapter，不经过 processing 检查/排队。
+     * 用于 waitingForInput 阶段：用户回答必须直达已存在的会话。
+     */
+    suspend fun forwardAnswer(groupId: String, userMessage: UserMessage): Boolean {
+        val conn = connections[groupId] ?: return false
+        return try {
+            val json = protocolJson.encodeToString(UserMessage.serializer(), userMessage)
+            conn.session.send(Frame.Text(json))
+            logger.info("[CcConnect][{}] forwardAnswer sent, msgId={}", groupId, userMessage.msgId)
+            true
+        } catch (e: ClosedSendChannelException) {
+            logger.warn("[CcConnect][{}] forwardAnswer failed (closed): msgId={}", groupId, userMessage.msgId)
+            unregister(groupId)
+            false
+        } catch (e: Exception) {
+            logger.warn("[CcConnect][{}] forwardAnswer failed: msgId={}, err={}", groupId, userMessage.msgId, e.message)
+            false
+        }
+    }
+
     /** 指定群组是否正在等待 agent 响应。 */
     fun isProcessing(groupId: String): Boolean {
         val ts = processingTimestamps[groupId]
@@ -172,6 +220,7 @@ object CcConnectRegistry {
         processing.remove(groupId)
         processingTimestamps.remove(groupId)
         pendingQueues.remove(groupId)
+        clearWaitingForInput(groupId)
         logger.info("[CcConnect][{}] clearPending", groupId)
     }
 

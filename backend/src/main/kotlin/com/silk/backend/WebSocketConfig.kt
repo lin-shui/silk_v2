@@ -425,7 +425,12 @@ class ChatServer(
                             userName = message.userName,
                             msgId = message.id,
                         )
-                        com.silk.backend.ccconnect.CcConnectRegistry.forwardToAdapter(ccGroupId, userMsg)
+                        // 如果 AI 正在等待回答，直达已有会话；否则走正常 processing/排队
+                        if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(ccGroupId)) {
+                            com.silk.backend.ccconnect.CcConnectRegistry.forwardAnswer(ccGroupId, userMsg)
+                        } else {
+                            com.silk.backend.ccconnect.CcConnectRegistry.forwardToAdapter(ccGroupId, userMsg)
+                        }
                     }
                 }
             }

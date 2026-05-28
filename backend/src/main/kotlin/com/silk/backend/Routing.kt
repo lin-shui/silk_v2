@@ -2360,6 +2360,15 @@ fun Application.configureRouting() {
                 return blocks
             }
 
+            fun isLikelyQuestion(text: String): Boolean {
+                if (text.isBlank()) return false
+                if (text.contains("?") || text.contains("？")) return true
+                if (text.contains(Regex("""[（(]\d+[)）]"""))) return true
+                if (text.contains("选项") || text.contains("choose", true) || text.contains("select", true)) return true
+                if (text.contains(Regex("""\d+\.""")) && text.length < 500) return true
+                return false
+            }
+
             val ccUserName = com.silk.backend.ccconnect.agentTriggerName(hello.agentType).replaceFirstChar { it.uppercaseChar() }
 
             try {
@@ -2372,6 +2381,16 @@ fun Application.configureRouting() {
                             val reply = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                 com.silk.backend.ccconnect.ReplyMessage.serializer(), text
                             )
+                            // ── 从等待回答恢复：清累积器，继续新段落 ──
+                            if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
+                                thinkingParts.clear()
+                                toolParts.clear()
+                                answerText = ""
+                                gotReplyAfterStream = false
+                                com.silk.backend.ccconnect.CcConnectRegistry.clearWaitingForInput(groupId)
+                                turnActive = true
+                                logger.info("[CcConnect][{}] answer received → continuation (reply)", groupId)
+                            }
                             if (turnActive) {
                                 val content = reply.content.trimStart()
                                 when {
@@ -2413,6 +2432,16 @@ fun Application.configureRouting() {
                             val stream = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                 com.silk.backend.ccconnect.ReplyStreamMessage.serializer(), text
                             )
+                            // ── 从等待回答恢复：清累积器，继续新段落 ──
+                            if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
+                                thinkingParts.clear()
+                                toolParts.clear()
+                                answerText = ""
+                                gotReplyAfterStream = false
+                                com.silk.backend.ccconnect.CcConnectRegistry.clearWaitingForInput(groupId)
+                                turnActive = true
+                                logger.info("[CcConnect][{}] answer received → continuation (stream)", groupId)
+                            }
                             if (turnActive) {
                                 val raw = stream.content
                                 val thinkEmoji = "\uD83D\uDCAD"
@@ -2479,6 +2508,11 @@ fun Application.configureRouting() {
                             )
                             when (status.state) {
                                 "thinking" -> {
+                                    // ── 如果 waitingForInput, 清除（新段落开始） ──
+                                    if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
+                                        com.silk.backend.ccconnect.CcConnectRegistry.clearWaitingForInput(groupId)
+                                        logger.info("[CcConnect][{}] clearWaitingForInput (status=thinking)", groupId)
+                                    }
                                     logger.info("[CcConnect][{}] status=thinking, turnActive={}→true", groupId, turnActive)
                                     turnActive = true
                                     thinkingParts.clear()
@@ -2509,14 +2543,25 @@ fun Application.configureRouting() {
                                             )
                                             chatServer.broadcast(msg)
                                         }
-                                        turnActive = false
-                                        thinkingParts.clear()
-                                        toolParts.clear()
-                                        answerText = ""
+                                        // ── 检测 AI 是否在提问 → 保持会话存活 ──
+                                        val isQuestion = isLikelyQuestion(answerText)
+                                        if (isQuestion) {
+                                            logger.info("[CcConnect][{}] question detected → waitingForAnswer, answers={}, tools={}",
+                                                groupId, answerText.length, toolParts.size)
+                                            com.silk.backend.ccconnect.CcConnectRegistry.setWaitingForInput(groupId)
+                                            // 保持 turnActive=true, 不清除累积器
+                                        } else {
+                                            turnActive = false
+                                            thinkingParts.clear()
+                                            toolParts.clear()
+                                            answerText = ""
+                                        }
                                     }
                                     chatServer.broadcastSystemStatus("CLEAR_STATUS")
-                                    // 标记 agent 空闲，如有排队消息则自动发送下一條
-                                    com.silk.backend.ccconnect.CcConnectRegistry.markIdle(groupId)
+                                    // ── 仅非提问场景标记空闲 ──
+                                    if (!com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
+                                        com.silk.backend.ccconnect.CcConnectRegistry.markIdle(groupId)
+                                    }
                                 }
                                 else -> chatServer.broadcastSystemStatus(status.state)
                             }
