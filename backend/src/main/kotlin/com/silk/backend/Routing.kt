@@ -2587,9 +2587,9 @@ fun Application.configureRouting() {
                                             answerText = ""
                                         }
                                     }
-                                    chatServer.broadcastSystemStatus("CLEAR_STATUS")
-                                    // ── 仅非提问场景标记空闲 ──
+                                    // ── 提问场景：不清除状态，不标记空闲 ──
                                     if (!com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
+                                        chatServer.broadcastSystemStatus("CLEAR_STATUS")
                                         com.silk.backend.ccconnect.CcConnectRegistry.markIdle(groupId)
                                     }
                                 }
