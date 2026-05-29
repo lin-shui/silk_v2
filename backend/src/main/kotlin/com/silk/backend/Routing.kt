@@ -2449,12 +2449,37 @@ fun Application.configureRouting() {
                             val stream = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                 com.silk.backend.ccconnect.ReplyStreamMessage.serializer(), text
                             )
-                            // ── 累积式 content 替换：清空 block 累积器后重新解析 ──
-                            // streaming card (replace=true) 每次发送全量累积内容，
-                            // 不清空会导致重复 blocks。逐事件路径不设 replace，blocks 正常累积。
-                            if (stream.resetBlocks == true) {
-                                streamBlockTypes.clear()
-                                streamBlockContent.clear()
+                            // ── 结构化事件通道：优先使用引擎直接发来的 contentBlocks ──
+                            val rawJson = com.silk.backend.ccconnect.protocolJson.parseToJsonElement(text).jsonObject
+                            val engineContentBlocks = rawJson["contentBlocks"]?.jsonArray
+                            if (engineContentBlocks != null) {
+                                val blocks = engineContentBlocks.map { elem ->
+                                    val obj = elem.jsonObject
+                                    com.silk.backend.ai.ContentBlock(
+                                        index = obj["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                                        type = obj["type"]?.jsonPrimitive?.content ?: "",
+                                        content = obj["content"]?.jsonPrimitive?.content ?: "",
+                                        isComplete = obj["isComplete"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: true,
+                                        toolName = obj["toolName"]?.jsonPrimitive?.content ?: "",
+                                    )
+                                }
+                                val msg = Message(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    userId = "cc-connect",
+                                    userName = ccUserName,
+                                    content = stream.content,
+                                    timestamp = System.currentTimeMillis(),
+                                    type = MessageType.TEXT,
+                                    isTransient = !stream.done,
+                                    isIncremental = false,
+                                    contentBlocks = blocks,
+                                )
+                                chatServer.broadcast(msg)
+                                if (stream.done) {
+                                    streamBlockTypes.clear()
+                                    streamBlockContent.clear()
+                                }
+                                continue
                             }
                             // ── 从等待回答恢复：清累积器，继续新段落 ──
                             if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
