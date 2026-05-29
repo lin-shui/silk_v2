@@ -389,6 +389,20 @@ class ChatServer(
             return
         }
 
+        // ==================== cc-connect 命令转发（TEXT 中的 cmd: 前缀）====================
+        // 用户在输入框手动输入 cmd: 开头的消息，或某些场景下按钮值以 TEXT 类型到达时，
+        // 直接作为 CC_COMMAND 转发给 cc-connect agent（不进聊天记录）
+        if (message.type == MessageType.TEXT
+            && message.content.startsWith("cmd:")
+            && com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccCmdGroupId)
+        ) {
+            val memberRole = com.silk.backend.database.GroupRepository.getMemberRole(ccCmdGroupId, message.userId)
+            if (memberRole == MemberRole.HOST || memberRole == MemberRole.OPERATOR) {
+                com.silk.backend.ccconnect.CcConnectRegistry.sendCommand(ccCmdGroupId, message.content.removePrefix("cmd:"))
+            }
+            return
+        }
+
         // ==================== cc-connect 路由 ====================
         // cc-connect 群组：仅 HOST / OPERATOR 的消息转发给适配器，GUEST 消息不触发命令
         // 多人群需要 @-prefix 触发（@cc 通用或 @claude/@cursor 等代理特定前缀）；单人直接转发

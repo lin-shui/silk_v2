@@ -402,8 +402,16 @@ class ChatClient(
     /**
      * 发送交互式按钮的答案到 cc-connect 适配器。
      * 不添加到本地消息列表（引擎会通过 reply/reply_stream 继续输出）。
+     * cmd: 前缀的按钮值是引擎命令（如 cmd:/mode），直接以 CC_COMMAND 类型发送，
+     * 让后端正确路由给引擎处理，不会落入 AI agent 导致权限拦截。
      */
     fun sendCcAnswer(content: String) {
+        // cmd: 前缀 → 作为命令发送（引擎按钮值）
+        if (content.startsWith("cmd:")) {
+            sendCcCommand(currentUserId, content.substring(4))
+            _interactiveOptions.value = emptyList()
+            return
+        }
         val message = Message(
             id = generateId(),
             userId = currentUserId,
