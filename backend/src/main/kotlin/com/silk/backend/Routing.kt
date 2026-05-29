@@ -2289,6 +2289,21 @@ fun Application.configureRouting() {
             val toolParts = mutableListOf<String>()
             var answerText = ""
             var gotReplyAfterStream = false
+            // Streaming block state: ordered list of content blocks as they arrive in real time.
+            // Each reply_stream fragment is scanned for 💭/🔧 emoji markers that delimit
+            // thinking/tool_use blocks, emitting updated contentBlocks with every fragment.
+            val streamBlockTypes = mutableListOf<String>()        // "thinking", "tool_use", "text"
+            val streamBlockContent = mutableListOf<StringBuilder>()
+
+            // Helper: flush text into a text segment, creating one if no segments exist yet.
+            fun appendOrCreateTextSegment(text: String, types: MutableList<String>, contents: MutableList<StringBuilder>) {
+                if (text.isEmpty()) return
+                if (types.isNotEmpty() && types.last() == "text") {
+                    contents.last().append(text)
+                } else {
+                    types.add("text"); contents.add(StringBuilder(text))
+                }
+            }
 
             fun buildStructuredContent(collapseTools: Boolean = false): String {
                 val sb = StringBuilder()
@@ -2387,6 +2402,8 @@ fun Application.configureRouting() {
                                 toolParts.clear()
                                 answerText = ""
                                 gotReplyAfterStream = false
+                                streamBlockTypes.clear()
+                                streamBlockContent.clear()
                                 com.silk.backend.ccconnect.CcConnectRegistry.clearWaitingForInput(groupId)
                                 turnActive = true
                                 logger.info("[CcConnect][{}] answer received → continuation (reply)", groupId)
@@ -2438,53 +2455,72 @@ fun Application.configureRouting() {
                                 toolParts.clear()
                                 answerText = ""
                                 gotReplyAfterStream = false
+                                streamBlockTypes.clear()
+                                streamBlockContent.clear()
                                 com.silk.backend.ccconnect.CcConnectRegistry.clearWaitingForInput(groupId)
                                 turnActive = true
                                 logger.info("[CcConnect][{}] answer received → continuation (stream)", groupId)
                             }
                             if (turnActive) {
+                                // Real-time emoji parsing: scan each incremental fragment for \ud83d\udcad/\ud83d\udd27
+                                // markers that delimit thinking/tool_use blocks. Build and emit
+                                // contentBlocks with every fragment so the frontend renders blocks live.
                                 val raw = stream.content
-                                val thinkEmoji = "\uD83D\uDCAD"
-                                val toolEmoji = "\uD83D\uDD27"
-                                if (raw.contains(thinkEmoji) || raw.contains(toolEmoji)) {
-                                    thinkingParts.clear()
-                                    toolParts.clear()
-                                    answerText = ""
-                                    val parts = mutableListOf<String>()
-                                    var lastPos = 0
-                                    var ci = 0
-                                    while (ci < raw.length - 1) {
-                                        if (raw[ci] == '\uD83D' && (raw[ci + 1] == '\uDCAD' || raw[ci + 1] == '\uDD27')) {
-                                            if (ci > lastPos) parts.add(raw.substring(lastPos, ci))
-                                            lastPos = ci
+                                val scanBuf = StringBuilder()
+                                var ci = 0
+                                while (ci < raw.length) {
+                                    if (ci < raw.length - 1 && raw[ci] == '\uD83D') {
+                                        if (raw[ci + 1] == '\uDCAD') { // \ud83d\udcad = entering thinking
+                                            if (scanBuf.isNotEmpty() || streamBlockTypes.isEmpty()) {
+                                                appendOrCreateTextSegment(scanBuf.toString(), streamBlockTypes, streamBlockContent)
+                                                scanBuf.clear()
+                                            }
+                                            streamBlockTypes.add("thinking"); streamBlockContent.add(StringBuilder())
                                             ci += 2
-                                        } else {
-                                            ci++
+                                            continue
+                                        } else if (raw[ci + 1] == '\uDD27') { // \ud83d\udd27 = entering tool_use
+                                            if (scanBuf.isNotEmpty() || streamBlockTypes.isEmpty()) {
+                                                appendOrCreateTextSegment(scanBuf.toString(), streamBlockTypes, streamBlockContent)
+                                                scanBuf.clear()
+                                            }
+                                            streamBlockTypes.add("tool_use"); streamBlockContent.add(StringBuilder())
+                                            ci += 2
+                                            continue
                                         }
                                     }
-                                    if (lastPos < raw.length) parts.add(raw.substring(lastPos))
-                                    for (part in parts) {
-                                        val trimmed = part.trimStart()
-                                        when {
-                                            trimmed.startsWith(thinkEmoji) -> thinkingParts.add(part.trim())
-                                            trimmed.startsWith(toolEmoji) -> toolParts.add(part.trim())
-                                            trimmed.isNotBlank() -> answerText = part.trim()
-                                        }
-                                    }
-                                } else {
-                                    answerText = raw
+                                    scanBuf.append(raw[ci]); ci++
                                 }
-                                gotReplyAfterStream = false
+                                if (scanBuf.isNotEmpty()) {
+                                    if (streamBlockTypes.isNotEmpty()) {
+                                        streamBlockContent.last().append(scanBuf)
+                                    } else {
+                                        streamBlockTypes.add("text"); streamBlockContent.add(StringBuilder(scanBuf))
+                                    }
+                                }
+                                // Build content blocks from live streaming state
+                                val liveBlocks = streamBlockTypes.mapIndexed { idx, type ->
+                                    val content = streamBlockContent[idx].toString()
+                                    when (type) {
+                                        "thinking" -> ContentBlock(index = idx, type = "thinking", content = content,
+                                            isComplete = idx < streamBlockTypes.size - 1)
+                                        "tool_use" -> ContentBlock(index = idx, type = "tool_use", content = content,
+                                            isComplete = true,
+                                            toolName = content.lines().firstOrNull()?.removePrefix("\ud83d\udd27")?.trim()
+                                                ?.replace("**", "")?.trim()?.take(40) ?: "")
+                                        else -> ContentBlock(index = idx, type = "text", content = content,
+                                            isComplete = idx < streamBlockTypes.size - 1)
+                                    }
+                                }
                                 val msg = Message(
                                     id = java.util.UUID.randomUUID().toString(),
                                     userId = "cc-connect",
                                     userName = ccUserName,
-                                    content = buildStructuredContent(),
+                                    content = raw,
                                     timestamp = System.currentTimeMillis(),
                                     type = MessageType.TEXT,
                                     isTransient = true,
                                     isIncremental = false,
-                                    contentBlocks = buildContentBlockList(),
+                                    contentBlocks = liveBlocks,
                                 )
                                 chatServer.broadcast(msg)
                             } else {
@@ -2515,7 +2551,29 @@ fun Application.configureRouting() {
                                 }
                             }
 
+                            // Convert streaming blocks to thinkingParts/toolParts for the question context
+                            if (streamBlockTypes.isNotEmpty()) {
+                                for (i in streamBlockTypes.indices) {
+                                    when (streamBlockTypes[i]) {
+                                        "thinking" -> thinkingParts.add(streamBlockContent[i].toString())
+                                        "tool_use" -> toolParts.add(streamBlockContent[i].toString())
+                                        "text" -> {} // preceding text is superseded by question
+                                    }
+                                }
+                                streamBlockTypes.clear()
+                                streamBlockContent.clear()
+                            }
+
                             // 用现有 buildContentBlockList() 构建 thinking/tool/text blocks
+                            val blocks = buildContentBlockList().toMutableList()
+                            // Always include the question text as a text block (frontend renders
+                            // contentBlocks + interactiveOptions, but NOT message.content)
+                            blocks.add(ContentBlock(
+                                index = blocks.size + 1,
+                                type = "text",
+                                content = question.content,
+                                isComplete = true
+                            ))
                             val msg = Message(
                                 id = java.util.UUID.randomUUID().toString(),
                                 userId = "cc-connect",
@@ -2524,7 +2582,7 @@ fun Application.configureRouting() {
                                 timestamp = System.currentTimeMillis(),
                                 type = MessageType.TEXT,
                                 isTransient = true,
-                                contentBlocks = buildContentBlockList(),
+                                contentBlocks = blocks,
                                 interactiveOptions = interactiveOptions.ifEmpty { null },
                             )
                             chatServer.broadcast(msg)
@@ -2549,6 +2607,8 @@ fun Application.configureRouting() {
                                     toolParts.clear()
                                     answerText = ""
                                     gotReplyAfterStream = false
+                                    streamBlockTypes.clear()
+                                    streamBlockContent.clear()
                                     chatServer.broadcastSystemStatus("Thinking...")
                                 }
                                 "tool_use" -> {
@@ -2559,6 +2619,22 @@ fun Application.configureRouting() {
                                 "idle" -> {
                                     logger.info("[CcConnect][{}] status=idle, turnActive={}", groupId, turnActive)
                                     if (turnActive) {
+                                        // Convert streaming blocks to thinkingParts/toolParts/answerText for
+                                        // the final message. During streaming we only maintained the live block
+                                        // state; now at turn end we finalize into the accumulator-based format
+                                        // used by buildStructuredContent() and buildContentBlockList().
+                                        thinkingParts.clear()
+                                        toolParts.clear()
+                                        answerText = ""
+                                        for (i in streamBlockTypes.indices) {
+                                            when (streamBlockTypes[i]) {
+                                                "thinking" -> thinkingParts.add(streamBlockContent[i].toString())
+                                                "tool_use" -> toolParts.add(streamBlockContent[i].toString())
+                                                "text" -> answerText = streamBlockContent[i].toString()
+                                            }
+                                        }
+                                        streamBlockTypes.clear()
+                                        streamBlockContent.clear()
                                         val finalContent = buildStructuredContent(collapseTools = true)
                                         if (finalContent.isNotBlank() &&
                                             finalContent != "<!--CC_TURN-->\n") {
