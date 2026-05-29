@@ -1,6 +1,7 @@
 package com.silk.android
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,11 +65,7 @@ class AppState(
         BackendUrlHolder.init(context)
 
         // 获取当前 App 版本信息
-        val packageInfo = try {
-            context.packageManager.getPackageInfo(context.packageName, 0)
-        } catch (e: PackageManager.NameNotFoundException) {
-            null
-        }
+        val packageInfo = loadPackageInfoOrNull()
         val versionCode = packageInfo?.let {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
                 it.longVersionCode.toInt()
@@ -155,10 +152,7 @@ class AppState(
     fun checkAndRestoreSession(): Boolean {
         // 检查是否有保存的用户数据
         val prefs = context.getSharedPreferences("silk_prefs", Context.MODE_PRIVATE)
-        val savedUserId = prefs.getString("user_id", null)
-        val savedLoginName = prefs.getString("user_login_name", null)
-        val savedFullName = prefs.getString("user_full_name", null)
-        val savedPhoneNumber = prefs.getString("user_phone_number", null)
+        val storedUser = readStoredUser(prefs)
         
         // 如果用户明确请求了退出登录，不恢复
         if (explicitLogoutRequested) {
@@ -167,10 +161,10 @@ class AppState(
         }
         
         // 如果有保存的用户数据，说明用户没有明确退出，是意外到达登录页的
-        if (savedUserId != null && savedLoginName != null && savedFullName != null && savedPhoneNumber != null) {
+        if (storedUser != null) {
             println("🔄 检测到保存的用户数据，用户未明确退出登录，自动恢复到群组列表")
             // 恢复用户数据
-            currentUser = User(savedUserId, savedLoginName, savedFullName, savedPhoneNumber)
+            currentUser = storedUser
             // 直接跳转到群组列表
             currentScene = Scene.GROUP_LIST
             sceneHistory.clear()
@@ -195,25 +189,24 @@ class AppState(
     suspend fun revalidateUser(): Pair<Boolean, Boolean> {
         isValidating = true
         return try {
-            val user = currentUser
-            if (user != null) {
-                val response = ApiClient.validateUser(user.id)
-                if (response.success && response.user != null) {
+            val user = currentUser ?: return Pair(false, false)
+            val response = ApiClient.validateUser(user.id)
+            when {
+                response.success && response.user != null -> {
                     currentUser = response.user
                     saveUserToStorage(response.user)
                     Pair(true, false)
-                } else {
+                }
+                response.isNetworkFailure() -> {
+                    println("⚠️ 用户验证失败（网络异常），保持登录状态: ${response.message}")
+                    Pair(false, true)
+                }
+                else -> {
                     // 服务器明确拒绝此用户（如用户被删除），才登出
                     logout()
                     Pair(false, false)
                 }
-            } else {
-                Pair(false, false)
             }
-        } catch (e: Exception) {
-            // 网络异常时，不登出，保留用户信息，允许离线使用
-            println("⚠️ 用户验证失败（网络异常），保持登录状态: ${e.message}")
-            Pair(false, true)
         } finally {
             isValidating = false
         }
@@ -221,13 +214,10 @@ class AppState(
     
     private fun loadUserFromStorage() {
         val prefs = context.getSharedPreferences("silk_prefs", Context.MODE_PRIVATE)
-        val userId = prefs.getString("user_id", null)
-        val loginName = prefs.getString("user_login_name", null)
-        val fullName = prefs.getString("user_full_name", null)
-        val phoneNumber = prefs.getString("user_phone_number", null)
+        val storedUser = readStoredUser(prefs)
         
-        if (userId != null && loginName != null && fullName != null && phoneNumber != null) {
-            currentUser = User(userId, loginName, fullName, phoneNumber)
+        if (storedUser != null) {
+            currentUser = storedUser
             
             // 启动时重新验证用户，但即使验证失败（网络问题）也保持登录状态
             scope.launch {
@@ -256,5 +246,21 @@ class AppState(
         val prefs = context.getSharedPreferences("silk_prefs", Context.MODE_PRIVATE)
         prefs.edit().clear().apply()
     }
-}
 
+    private fun loadPackageInfoOrNull() = try {
+        context.packageManager.getPackageInfo(context.packageName, 0)
+    } catch (error: PackageManager.NameNotFoundException) {
+        println("⚠️ 无法读取应用版本信息: ${error.message}")
+        null
+    }
+
+    private fun readStoredUser(prefs: SharedPreferences): User? {
+        val userId = prefs.getString("user_id", null) ?: return null
+        val loginName = prefs.getString("user_login_name", null) ?: return null
+        val fullName = prefs.getString("user_full_name", null) ?: return null
+        val phoneNumber = prefs.getString("user_phone_number", null) ?: return null
+        return User(userId, loginName, fullName, phoneNumber)
+    }
+
+    private fun AuthResponse.isNetworkFailure(): Boolean = !success && message.startsWith("网络错误")
+}

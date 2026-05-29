@@ -6,6 +6,7 @@ import android.app.Activity
 import android.content.Context
 import android.os.Build
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -143,6 +144,7 @@ import com.silk.shared.models.isAgentUserId
 import com.silk.shared.models.SILK_AGENT_USER_ID
 import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import com.silk.shared.utils.formatMessageTimestamp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -277,28 +279,28 @@ fun ChatScreen(appState: AppState) {
                 isUploading = true
                 uploadProgress = "正在上传..."
                 try {
-                    val fileName = getFileName(context, selectedUri)
-                    addLog("📎 开始上传文件: $fileName")
-                    
-                    val inputStream = context.contentResolver.openInputStream(selectedUri)
-                    if (inputStream != null) {
-                        val success = uploadFile(
-                            inputStream = inputStream,
-                            fileName = fileName,
-                            sessionId = group.id,
-                            userId = user.id,
-                            onProgress = { progress -> uploadProgress = progress }
-                        )
-                        if (success) {
-                            addLog("✅ 文件上传成功: $fileName")
-                            // 发送上传成功消息
-                            chatClient.sendMessage(user.id, user.fullName, "📎 已上传文件: $fileName")
-                        } else {
-                            addLog("❌ 文件上传失败")
+                    runLoggedSuspendAction("❌ 上传异常", ::addLog) {
+                        val fileName = getFileName(context, selectedUri)
+                        addLog("📎 开始上传文件: $fileName")
+
+                        val inputStream = context.contentResolver.openInputStream(selectedUri)
+                        if (inputStream != null) {
+                            val success = uploadFile(
+                                inputStream = inputStream,
+                                fileName = fileName,
+                                sessionId = group.id,
+                                userId = user.id,
+                                onProgress = { progress -> uploadProgress = progress }
+                            )
+                            if (success) {
+                                addLog("✅ 文件上传成功: $fileName")
+                                // 发送上传成功消息
+                                chatClient.sendMessage(user.id, user.fullName, "📎 已上传文件: $fileName")
+                            } else {
+                                addLog("❌ 文件上传失败")
+                            }
                         }
                     }
-                } catch (e: Exception) {
-                    addLog("❌ 上传异常: ${e.message}")
                 } finally {
                     isUploading = false
                     uploadProgress = ""
@@ -408,23 +410,20 @@ fun ChatScreen(appState: AppState) {
         
         // 并行：加载群成员 + 建立 WebSocket，互不阻塞
         launch {
-            try {
-                val membersResponse = ApiClient.getGroupMembers(group.id)
+            val membersResponse = ApiClient.getGroupMembers(group.id)
+            if (membersResponse.success) {
                 groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
                 addLog("✅ 群成员列表已加载，共 ${groupMembers.size} 人")
-            } catch (e: Exception) {
-                addLog("❌ 加载群成员列表失败: ${e.message}")
+            } else {
+                addLog("❌ 加载群成员列表失败")
             }
         }
         
         launch {
-            try {
+            runLoggedSuspendAction("❌ connect() 抛出异常", ::addLog) {
                 addLog("⏳ 启动 chatClient.connect()...")
                 chatClient.connect(user.id, user.fullName, group.id)
                 addLog("⚠️ connect() 返回了（连接已关闭）")
-            } catch (e: Exception) {
-                addLog("❌ connect() 抛出异常: ${e.message}")
-                e.printStackTrace()
             }
         }
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -508,7 +507,7 @@ fun ChatScreen(appState: AppState) {
                                 
                                 // 启动新的连接
                                 connectionJob = scope.launch {
-                                    try {
+                                    runLoggedSuspendAction("❌ 重新连接失败", ::addLog) {
                                         addLog("🔌 建立新的WebSocket连接...")
                                         chatClient.connect(user.id, user.fullName, group.id)
                                         
@@ -532,8 +531,6 @@ fun ChatScreen(appState: AppState) {
                                         } else {
                                             addLog("❌ WebSocket重新连接超时")
                                         }
-                                    } catch (e: Exception) {
-                                        addLog("❌ 重新连接失败: ${e.message}")
                                     }
                                 }
                             } else if (connectionState == ConnectionState.CONNECTING) {
@@ -584,11 +581,10 @@ fun ChatScreen(appState: AppState) {
                 // 标记已读
                 kotlinx.coroutines.delay(300)
                 appState.currentUser?.let { user ->
-                    try {
-                        ApiClient.markGroupAsRead(user.id, group.id)
+                    if (ApiClient.markGroupAsRead(user.id, group.id)) {
                         addLog("✅ 已标记群组为已读")
-                    } catch (e: Exception) {
-                        addLog("⚠️ 标记已读失败: ${e.message}")
+                    } else {
+                        addLog("⚠️ 标记已读失败")
                     }
                 }
             }
@@ -636,11 +632,10 @@ fun ChatScreen(appState: AppState) {
                                     // 这样可以确保用户发送的消息已被服务器处理
                                     // 标记时间会晚于所有消息的时间戳
                                     appState.currentUser?.let { user ->
-                                        try {
-                                            ApiClient.markGroupAsRead(user.id, group.id)
+                                        if (ApiClient.markGroupAsRead(user.id, group.id)) {
                                             println("✅ 已标记群组 ${group.id} 为已读")
-                                        } catch (e: Exception) {
-                                            println("⚠️ 标记已读失败: ${e.message}")
+                                        } else {
+                                            println("⚠️ 标记已读失败")
                                         }
                                     }
                                     
@@ -794,8 +789,6 @@ fun ChatScreen(appState: AppState) {
                                         val result = loadGroupFilesAndUrls(group.id)
                                         folderFiles = result.files
                                         processedUrls = result.processedUrls
-                                    } catch (e: Exception) {
-                                        addLog("❌ 加载文件列表失败: ${e.message}")
                                     } finally {
                                         isLoadingFiles = false
                                     }
@@ -951,7 +944,13 @@ fun ChatScreen(appState: AppState) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 reverseLayout = true  // 从底部开始显示，最新消息贴近输入框
             ) {
-                if (messages.isEmpty() && transientMessage == null && statusMessages.isEmpty() && !isWaitingForAI) {
+                if (shouldShowEmptyChatState(
+                        messages = messages,
+                        transientMessage = transientMessage,
+                        statusMessages = statusMessages,
+                        isWaitingForAI = isWaitingForAI,
+                    )
+                ) {
                     item {
                         Box(
                             modifier = Modifier
@@ -1103,9 +1102,6 @@ fun ChatScreen(appState: AppState) {
                                             if (!response.success) {
                                                 android.widget.Toast.makeText(context, "撤回失败: ${response.message}", android.widget.Toast.LENGTH_SHORT).show()
                                             }
-                                        } catch (e: Exception) {
-                                            println("❌ 撤回消息失败: ${e.message}")
-                                            android.widget.Toast.makeText(context, "撤回失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
                                         } finally {
                                             recallingMessageIds = recallingMessageIds - messageId
                                         }
@@ -1373,24 +1369,25 @@ fun ChatScreen(appState: AppState) {
                                                 mediaRecorderRef.value = null
                                                 scope.launch {
                                                     try {
-                                                        val file = java.io.File(filePath)
-                                                        if (file.exists()) {
-                                                            val bytes = file.readBytes()
-                                                            val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                                                            val result = ApiClient.transcribeAudio(base64, "m4a")
-                                                            if (result.success && result.text.isNotBlank()) {
-                                                                val current = messageText.text
-                                                                val newText = if (current.isNotBlank()) "$current ${result.text}" else result.text
-                                                                messageText = TextFieldValue(newText, TextRange(newText.length))
-                                                            } else {
-                                                                addLog("ASR 失败: ${result.error ?: "未知错误"}")
+                                                        runLoggedSuspendAction("语音识别出错", ::addLog) {
+                                                            val file = java.io.File(filePath)
+                                                            if (file.exists()) {
+                                                                val bytes = file.readBytes()
+                                                                val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                                                                val result = ApiClient.transcribeAudio(base64, "m4a")
+                                                                if (result.success && result.text.isNotBlank()) {
+                                                                    val current = messageText.text
+                                                                    val newText = if (current.isNotBlank()) "$current ${result.text}" else result.text
+                                                                    messageText = TextFieldValue(newText, TextRange(newText.length))
+                                                                } else {
+                                                                    addLog("ASR 失败: ${result.error ?: "未知错误"}")
+                                                                }
+                                                                file.delete()
                                                             }
-                                                            file.delete()
                                                         }
-                                                    } catch (e: Exception) {
-                                                        addLog("语音识别出错: ${e.message}")
+                                                    } finally {
+                                                        isTranscribing = false
                                                     }
-                                                    isTranscribing = false
                                                 }
                                             },
                                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4D4F)),
@@ -1462,7 +1459,7 @@ fun ChatScreen(appState: AppState) {
                                                 micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                                 return@IconButton
                                             }
-                                            try {
+                                            runCatching {
                                                 val filePath = "${context.cacheDir.absolutePath}/silk_voice_${System.currentTimeMillis()}.m4a"
                                                 audioFilePathRef.value = filePath
                                                 @Suppress("DEPRECATION")
@@ -1478,8 +1475,9 @@ fun ChatScreen(appState: AppState) {
                                                 }
                                                 mediaRecorderRef.value = recorder
                                                 isVoiceRecording = true
-                                            } catch (e: Exception) {
-                                                addLog("无法启动录音: ${e.message}")
+                                            }.onFailure { error ->
+                                                if (error is CancellationException) throw error
+                                                addLog("无法启动录音: ${error.message}")
                                             }
                                         },
                                         modifier = Modifier.size(48.dp)
@@ -1667,9 +1665,7 @@ fun ChatScreen(appState: AppState) {
                     scope.launch {
                         showMembersDialog = false
                         // 先断开当前WebSocket
-                        try {
-                            chatClient.disconnect()
-                        } catch (e: Exception) { }
+                        disconnectChatClientQuietly(chatClient, ::addLog)
                         
                         // 调用API获取或创建与该联系人的对话
                         val response = ApiClient.startPrivateChat(user.id, member.id)
@@ -2366,114 +2362,48 @@ private fun AnnotatedString.Builder.highlightLine(line: String, language: String
     val lang = language.lowercase()
     
     while (i < line.length) {
-        // 跳过空格
-        if (line[i].isWhitespace()) {
-            append(line[i])
-            i++
-            continue
-        }
-        
+        val currentChar = line[i]
+
         // 注释
-        if (line.substring(i).startsWith("//") || 
-            (lang == "python" && line[i] == '#')) {
-            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["comment"]!!)) {
-                append(line.substring(i))
-            }
+        if (line.startsCodeCommentAt(i, lang)) {
+            appendCodeToken("comment", line.substring(i))
             return
         }
-        
-        // 字符串字面量
-        if (line[i] == '"' || line[i] == '\'' || line[i] == '`') {
-            val quote = line[i]
-            val start = i
-            i++
-            while (i < line.length && line[i] != quote) {
-                if (line[i] == '\\' && i + 1 < line.length) i++
-                i++
+        i = when {
+            currentChar.isWhitespace() -> {
+                append(currentChar)
+                i + 1
             }
-            if (i < line.length) i++
-            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["string"]!!)) {
-                append(line.substring(start, i))
+            currentChar.isCodeStringDelimiter() -> {
+                val end = findQuotedTokenEnd(line, i)
+                appendCodeToken("string", line.substring(i, end))
+                end
             }
-            continue
+            line.isNumberTokenStartAt(i) -> {
+                val end = findNumberTokenEnd(line, i)
+                appendCodeToken("number", line.substring(i, end))
+                end
+            }
+            currentChar.isLetter() || currentChar == '_' -> {
+                val end = findIdentifierTokenEnd(line, i)
+                val word = line.substring(i, end)
+                appendCodeToken(classifyIdentifierColor(word, line, end), word)
+                end
+            }
+            currentChar.isCodeOperatorChar() -> {
+                val end = findOperatorTokenEnd(line, i)
+                appendCodeToken("operator", line.substring(i, end))
+                end
+            }
+            currentChar.isCodePunctuationChar() -> {
+                appendCodeToken("punctuation", currentChar.toString())
+                i + 1
+            }
+            else -> {
+                appendCodeToken("variable", currentChar.toString())
+                i + 1
+            }
         }
-        
-        // 数字
-        if (line[i].isDigit() || (line[i] == '-' && i + 1 < line.length && line[i + 1].isDigit())) {
-            val start = i
-            if (line[i] == '-') i++
-            while (i < line.length && (line[i].isDigit() || line[i] == '.' || line[i] == 'x' || line[i] == 'X')) {
-                i++
-            }
-            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["number"]!!)) {
-                append(line.substring(start, i))
-            }
-            continue
-        }
-        
-        // 标识符（关键字、内置函数、变量）
-        if (line[i].isLetter() || line[i] == '_') {
-            val start = i
-            while (i < line.length && (line[i].isLetterOrDigit() || line[i] == '_')) {
-                i++
-            }
-            val word = line.substring(start, i)
-            when {
-                keywordSet.contains(word) -> {
-                    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["keyword"]!!)) {
-                        append(word)
-                    }
-                }
-                builtinSet.contains(word) -> {
-                    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["builtin"]!!)) {
-                        append(word)
-                    }
-                }
-                i < line.length && line[i] == '(' -> {
-                    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["function"]!!)) {
-                        append(word)
-                    }
-                }
-                word.first().isUpperCase() -> {
-                    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["type"]!!)) {
-                        append(word)
-                    }
-                }
-                else -> {
-                    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["variable"]!!)) {
-                        append(word)
-                    }
-                }
-            }
-            continue
-        }
-        
-        // 操作符
-        if (line[i] in setOf('+', '-', '*', '/', '=', '!', '<', '>', '&', '|', '^', '~', '?', ':')) {
-            val start = i
-            while (i < line.length && line[i] in setOf('+', '-', '*', '/', '=', '!', '<', '>', '&', '|', '^', '~', '?', ':')) {
-                i++
-            }
-            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["operator"]!!)) {
-                append(line.substring(start, i))
-            }
-            continue
-        }
-        
-        // 标点符号
-        if (line[i] in setOf('(', ')', '{', '}', '[', ']', ',', ';', '.')) {
-            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["punctuation"]!!)) {
-                append(line[i])
-            }
-            i++
-            continue
-        }
-        
-        // 其他字符
-        withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["variable"]!!)) {
-            append(line[i])
-        }
-        i++
     }
 }
 
@@ -3178,6 +3108,8 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
         var offset = 0
         
         while (remaining.isNotEmpty()) {
+            var consumed = false
+
             // 检查当前位置是否有数学公式
             val mathAtPos = mathSegments.find { it.first == offset }
             if (mathAtPos != null) {
@@ -3190,127 +3122,139 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
                 }
                 offset += mathAtPos.second.length
                 remaining = if (remaining.length > mathAtPos.second.length) remaining.substring(mathAtPos.second.length) else ""
-                continue
+                consumed = true
             }
-            
-            // 处理链接 [text](url)
-            val linkStart = remaining.indexOf("[")
-            if (linkStart >= 0) {
-                val linkEnd = remaining.indexOf("]", linkStart)
-                if (linkEnd > linkStart) {
-                    val urlStart = remaining.indexOf("(", linkEnd)
-                    val urlEnd = remaining.indexOf(")", urlStart)
-                    if (urlStart == linkEnd + 1 && urlEnd > urlStart) {
-                        // 添加前面的普通文本
-                        if (linkStart > 0) {
-                            append(remaining.substring(0, linkStart))
+
+            if (!consumed) {
+                // 处理链接 [text](url)
+                val linkStart = remaining.indexOf("[")
+                if (linkStart >= 0) {
+                    val linkEnd = remaining.indexOf("]", linkStart)
+                    if (linkEnd > linkStart) {
+                        val urlStart = remaining.indexOf("(", linkEnd)
+                        val urlEnd = remaining.indexOf(")", urlStart)
+                        if (urlStart == linkEnd + 1 && urlEnd > urlStart) {
+                            // 添加前面的普通文本
+                            if (linkStart > 0) {
+                                append(remaining.substring(0, linkStart))
+                            }
+
+                            val linkText = remaining.substring(linkStart + 1, linkEnd)
+                            val url = remaining.substring(urlStart + 1, urlEnd)
+
+                            // 添加可点击的链接
+                            pushStringAnnotation(tag = "URL", annotation = url)
+                            withStyle(androidx.compose.ui.text.SpanStyle(
+                                color = Color(0xFF1565C0),
+                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                            )) {
+                                append(linkText)
+                            }
+                            pop()
+
+                            remaining = remaining.substring(urlEnd + 1)
+                            consumed = true
                         }
-                        
-                        val linkText = remaining.substring(linkStart + 1, linkEnd)
-                        val url = remaining.substring(urlStart + 1, urlEnd)
-                        
-                        // 添加可点击的链接
-                        pushStringAnnotation(tag = "URL", annotation = url)
-                        withStyle(androidx.compose.ui.text.SpanStyle(
-                            color = Color(0xFF1565C0),
-                            textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
-                        )) {
-                            append(linkText)
+                    }
+                }
+            }
+
+            if (!consumed) {
+                // 处理自动链接 URL
+                val urlPattern = Regex("""(https?://[^\s<>\[\]()]+)""")
+                val urlMatch = urlPattern.find(remaining)
+                if (urlMatch != null) {
+                    val matchStart = urlMatch.range.first
+                    if (matchStart > 0) {
+                        append(remaining.substring(0, matchStart))
+                    }
+
+                    val url = urlMatch.value
+                    pushStringAnnotation(tag = "URL", annotation = url)
+                    withStyle(androidx.compose.ui.text.SpanStyle(
+                        color = Color(0xFF1565C0),
+                        textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
+                    )) {
+                        append(url)
+                    }
+                    pop()
+
+                    remaining = remaining.substring(urlMatch.range.last + 1)
+                    consumed = true
+                }
+            }
+
+            if (!consumed) {
+                // 处理粗体 **text**
+                val boldStart = remaining.indexOf("**")
+                if (boldStart >= 0) {
+                    // 添加前面的普通文本
+                    if (boldStart > 0) {
+                        append(remaining.substring(0, boldStart))
+                    }
+
+                    val boldEnd = remaining.indexOf("**", boldStart + 2)
+                    if (boldEnd > boldStart) {
+                        val boldText = remaining.substring(boldStart + 2, boldEnd)
+                        withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) {
+                            append(boldText)
                         }
-                        pop()
-                        
-                        remaining = remaining.substring(urlEnd + 1)
-                        continue
+                        remaining = remaining.substring(boldEnd + 2)
+                        consumed = true
                     }
                 }
             }
-            
-            // 处理自动链接 URL
-            val urlPattern = Regex("""(https?://[^\s<>\[\]()]+)""")
-            val urlMatch = urlPattern.find(remaining)
-            if (urlMatch != null) {
-                val matchStart = urlMatch.range.first
-                if (matchStart > 0) {
-                    append(remaining.substring(0, matchStart))
-                }
-                
-                val url = urlMatch.value
-                pushStringAnnotation(tag = "URL", annotation = url)
-                withStyle(androidx.compose.ui.text.SpanStyle(
-                    color = Color(0xFF1565C0),
-                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
-                )) {
-                    append(url)
-                }
-                pop()
-                
-                remaining = remaining.substring(urlMatch.range.last + 1)
-                continue
-            }
-            
-            // 处理粗体 **text**
-            val boldStart = remaining.indexOf("**")
-            if (boldStart >= 0) {
-                // 添加前面的普通文本
-                if (boldStart > 0) {
-                    append(remaining.substring(0, boldStart))
-                }
-                
-                val boldEnd = remaining.indexOf("**", boldStart + 2)
-                if (boldEnd > boldStart) {
-                    val boldText = remaining.substring(boldStart + 2, boldEnd)
-                    withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) {
-                        append(boldText)
+
+            if (!consumed) {
+                // 处理斜体 *text*
+                val italicStart = remaining.indexOf("*")
+                if (italicStart >= 0 && (italicStart == 0 || remaining[italicStart - 1] != '*')) {
+                    if (italicStart > 0) {
+                        append(remaining.substring(0, italicStart))
                     }
-                    remaining = remaining.substring(boldEnd + 2)
-                    continue
-                }
-            }
-            
-            // 处理斜体 *text*
-            val italicStart = remaining.indexOf("*")
-            if (italicStart >= 0 && (italicStart == 0 || remaining[italicStart - 1] != '*')) {
-                if (italicStart > 0) {
-                    append(remaining.substring(0, italicStart))
-                }
-                
-                val italicEnd = remaining.indexOf("*", italicStart + 1)
-                if (italicEnd > italicStart && (italicEnd == remaining.length - 1 || remaining[italicEnd + 1] != '*')) {
-                    val italicText = remaining.substring(italicStart + 1, italicEnd)
-                    withStyle(androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) {
-                        append(italicText)
+
+                    val italicEnd = remaining.indexOf("*", italicStart + 1)
+                    if (italicEnd > italicStart && (italicEnd == remaining.length - 1 || remaining[italicEnd + 1] != '*')) {
+                        val italicText = remaining.substring(italicStart + 1, italicEnd)
+                        withStyle(androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) {
+                            append(italicText)
+                        }
+                        remaining = remaining.substring(italicEnd + 1)
+                        consumed = true
                     }
-                    remaining = remaining.substring(italicEnd + 1)
-                    continue
                 }
             }
-            
-            // 处理行内代码 `code`
-            val codeStart = remaining.indexOf("`")
-            if (codeStart >= 0) {
-                if (codeStart > 0) {
-                    append(remaining.substring(0, codeStart))
-                }
-                
-                val codeEnd = remaining.indexOf("`", codeStart + 1)
-                if (codeEnd > codeStart) {
-                    val codeText = remaining.substring(codeStart + 1, codeEnd)
-                    withStyle(
-                        androidx.compose.ui.text.SpanStyle(
-                            background = Color(0xFFF0F0F0),
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                    ) {
-                        append(" $codeText ")
+
+            if (!consumed) {
+                // 处理行内代码 `code`
+                val codeStart = remaining.indexOf("`")
+                if (codeStart >= 0) {
+                    if (codeStart > 0) {
+                        append(remaining.substring(0, codeStart))
                     }
-                    remaining = remaining.substring(codeEnd + 1)
-                    continue
+
+                    val codeEnd = remaining.indexOf("`", codeStart + 1)
+                    if (codeEnd > codeStart) {
+                        val codeText = remaining.substring(codeStart + 1, codeEnd)
+                        withStyle(
+                            androidx.compose.ui.text.SpanStyle(
+                                background = Color(0xFFF0F0F0),
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                        ) {
+                            append(" $codeText ")
+                        }
+                        remaining = remaining.substring(codeEnd + 1)
+                        consumed = true
+                    }
                 }
             }
-            
-            // 没有特殊标记，添加剩余文本
-            append(remaining)
-            break
+
+            if (!consumed) {
+                // 没有特殊标记，添加剩余文本
+                append(remaining)
+                break
+            }
         }
     }
     
@@ -3326,11 +3270,11 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
             // 点击时检查是否点击了链接
             val annotations = annotatedText.getStringAnnotations("URL", 0, annotatedText.length)
             if (annotations.isNotEmpty()) {
-                try {
+                runCatching {
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(annotations.first().item))
                     localContext.startActivity(intent)
-                } catch (e: Exception) {
-                    // 忽略无法打开的链接
+                }.onFailure { error ->
+                    Log.w("ChatScreen", "无法打开链接: ${annotations.first().item}", error)
                 }
             }
         }
@@ -3885,11 +3829,9 @@ fun MessageItem(
                                 pdfUrl = trimmedLine
                                 // ✅ 使用 URLDecoder 完整解码文件名（处理中文和所有特殊字符）
                                 val encodedFileName = trimmedLine.substringAfterLast("/")
-                                fileName = try {
+                                fileName = runCatching {
                                     java.net.URLDecoder.decode(encodedFileName, "UTF-8")
-                                } catch (e: Exception) {
-                                    encodedFileName  // 解码失败则使用原始文件名
-                                }
+                                }.getOrElse { encodedFileName }
                             }
                         }
                         
@@ -4399,26 +4341,9 @@ fun FileItemCard(
  * 从 Uri 获取文件名
  */
 fun getFileName(context: android.content.Context, uri: Uri): String {
-    var result: String? = null
-    if (uri.scheme == "content") {
-        val cursor = context.contentResolver.query(uri, null, null, null, null)
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (index >= 0) {
-                    result = it.getString(index)
-                }
-            }
-        }
-    }
-    if (result == null) {
-        result = uri.path
-        val cut = result?.lastIndexOf('/') ?: -1
-        if (cut != -1) {
-            result = result?.substring(cut + 1)
-        }
-    }
-    return result ?: "unknown_file"
+    return queryDisplayName(context, uri)
+        ?: uri.path?.substringAfterLast('/')
+        ?: "unknown_file"
 }
 
 /**
@@ -4433,7 +4358,7 @@ suspend fun uploadFile(
     userId: String,
     onProgress: (String) -> Unit
 ): Boolean = withContext(Dispatchers.IO) {
-    try {
+    runCatching {
         val boundary = "===" + System.currentTimeMillis() + "==="
         val url = URL("${BackendUrlHolder.getBaseUrl()}/api/files/upload")
         val connection = AndroidHttpCompat.openConnection(url)
@@ -4491,8 +4416,9 @@ suspend fun uploadFile(
         connection.disconnect()
         
         responseCode == 200 || responseCode == 201
-    } catch (e: Exception) {
-        e.printStackTrace()
+    }.getOrElse { error ->
+        if (error is CancellationException) throw error
+        Log.w("ChatScreen", "文件上传失败: $fileName", error)
         false
     }
 }
@@ -4509,7 +4435,7 @@ data class FilesAndUrls(
  * 加载群组文件列表和已处理的 URL
  */
 suspend fun loadGroupFilesAndUrls(groupId: String): FilesAndUrls = withContext(Dispatchers.IO) {
-    try {
+    runCatching {
         val url = URL("${BackendUrlHolder.getBaseUrl()}/api/files/list/$groupId")
         val connection = AndroidHttpCompat.openConnection(url)
         connection.requestMethod = "GET"
@@ -4523,9 +4449,35 @@ suspend fun loadGroupFilesAndUrls(groupId: String): FilesAndUrls = withContext(D
         } else {
             FilesAndUrls(emptyList(), emptyList())
         }
-    } catch (e: Exception) {
-        e.printStackTrace()
+    }.getOrElse { error ->
+        if (error is CancellationException) throw error
+        Log.w("ChatScreen", "加载群组文件列表失败: $groupId", error)
         FilesAndUrls(emptyList(), emptyList())
+    }
+}
+
+private suspend fun runLoggedSuspendAction(
+    failurePrefix: String,
+    log: (String) -> Unit,
+    block: suspend () -> Unit,
+) {
+    runCatching {
+        block()
+    }.onFailure { error ->
+        if (error is CancellationException) throw error
+        log("$failurePrefix: ${error.message}")
+    }
+}
+
+private suspend fun disconnectChatClientQuietly(
+    chatClient: ChatClient,
+    log: (String) -> Unit,
+) {
+    runCatching {
+        chatClient.disconnect()
+    }.onFailure { error ->
+        if (error is CancellationException) throw error
+        log("⚠️ 切换会话前断开旧连接失败: ${error.message}")
     }
 }
 
@@ -5263,7 +5215,7 @@ private fun extractInlineMath(text: String): Pair<String, List<Pair<Int, String>
             }
         }
         // 检查是否是行内公式 $...$ (不是 $$)
-        else if (text[i] == '$' && (i == 0 || text[i - 1] != '$') && (i + 1 >= text.length || text[i + 1] != '$')) {
+        else if (text.startsInlineDollarMathAt(i)) {
             val start = i
             i++
             // 找到结束的 $
@@ -5290,4 +5242,113 @@ private fun extractInlineMath(text: String): Pair<String, List<Pair<Int, String>
     }
     
     return Pair(result.toString(), mathSegments)
+}
+
+private fun shouldShowEmptyChatState(
+    messages: List<Message>,
+    transientMessage: Message?,
+    statusMessages: List<Message>,
+    isWaitingForAI: Boolean,
+): Boolean {
+    if (messages.isNotEmpty()) return false
+    if (transientMessage != null) return false
+    if (statusMessages.isNotEmpty()) return false
+    return !isWaitingForAI
+}
+
+private fun AnnotatedString.Builder.appendCodeToken(
+    colorKey: String,
+    text: String,
+) {
+    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors.getValue(colorKey))) {
+        append(text)
+    }
+}
+
+private fun String.startsCodeCommentAt(index: Int, language: String): Boolean {
+    if (startsWith("//", startIndex = index)) return true
+    return language == "python" && this[index] == '#'
+}
+
+private fun Char.isCodeStringDelimiter(): Boolean = this == '"' || this == '\'' || this == '`'
+
+private fun String.isNumberTokenStartAt(index: Int): Boolean {
+    val current = this[index]
+    if (current.isDigit()) return true
+    if (current != '-') return false
+    val nextIndex = index + 1
+    return nextIndex < length && this[nextIndex].isDigit()
+}
+
+private fun Char.isNumberTokenChar(): Boolean = isDigit() || this == '.' || this == 'x' || this == 'X'
+
+private fun findQuotedTokenEnd(line: String, startIndex: Int): Int {
+    var index = startIndex + 1
+    val quote = line[startIndex]
+    while (index < line.length) {
+        val currentChar = line[index]
+        index += if (currentChar == '\\' && index + 1 < line.length) 2 else 1
+        if (currentChar == quote) {
+            break
+        }
+    }
+    return index
+}
+
+private fun findNumberTokenEnd(line: String, startIndex: Int): Int {
+    var index = if (line[startIndex] == '-') startIndex + 1 else startIndex
+    while (index < line.length && line[index].isNumberTokenChar()) {
+        index++
+    }
+    return index
+}
+
+private fun findIdentifierTokenEnd(line: String, startIndex: Int): Int {
+    var index = startIndex
+    while (index < line.length && (line[index].isLetterOrDigit() || line[index] == '_')) {
+        index++
+    }
+    return index
+}
+
+private fun classifyIdentifierColor(
+    word: String,
+    line: String,
+    endIndex: Int,
+): String = when {
+    keywordSet.contains(word) -> "keyword"
+    builtinSet.contains(word) -> "builtin"
+    line.hasFunctionCallAt(endIndex) -> "function"
+    word.first().isUpperCase() -> "type"
+    else -> "variable"
+}
+
+private fun String.hasFunctionCallAt(index: Int): Boolean = index < length && this[index] == '('
+
+private fun Char.isCodeOperatorChar(): Boolean = this in "+-*/=!<>&|^~?:"
+
+private fun findOperatorTokenEnd(line: String, startIndex: Int): Int {
+    var index = startIndex
+    while (index < line.length && line[index].isCodeOperatorChar()) {
+        index++
+    }
+    return index
+}
+
+private fun Char.isCodePunctuationChar(): Boolean = this in "(){}[],;."
+
+private fun queryDisplayName(context: android.content.Context, uri: Uri): String? {
+    if (uri.scheme != "content") return null
+    return context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        val columnIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (columnIndex < 0) return@use null
+        cursor.getString(columnIndex)
+    }
+}
+
+private fun String.startsInlineDollarMathAt(index: Int): Boolean {
+    if (this[index] != '$') return false
+    if (index > 0 && this[index - 1] == '$') return false
+    return index + 1 >= length || this[index + 1] != '$'
 }

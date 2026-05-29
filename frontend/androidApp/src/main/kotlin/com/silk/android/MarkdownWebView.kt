@@ -13,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import java.util.Locale
 
 /**
  * 使用 WebView + KaTeX 渲染 Markdown 内容
@@ -83,7 +84,7 @@ private fun encodeToJsString(s: String): String {
             else -> {
                 if (c.code < 32 || c.code > 127) {
                     sb.append("\\u")
-                    sb.append(String.format("%04x", c.code))
+                    sb.append(String.format(Locale.US, "%04x", c.code))
                 } else {
                     sb.append(c)
                 }

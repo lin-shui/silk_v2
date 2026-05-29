@@ -12,6 +12,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 
 /**
  * APK 下载和安装工具
@@ -134,7 +135,7 @@ object ApkDownloader {
         return when {
             size < 1024 -> "$size B"
             size < 1024 * 1024 -> "${size / 1024} KB"
-            else -> String.format("%.1f MB", size / (1024.0 * 1024.0))
+            else -> String.format(Locale.US, "%.1f MB", size / (1024.0 * 1024.0))
         }
     }
 }
