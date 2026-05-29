@@ -234,7 +234,8 @@ object ApiClient {
     }
     
     suspend fun validateUser(userId: String): AuthResponse = recoverApiCall(
-        fallback = { AuthResponse(false, "验证失败") },
+        logMessage = "验证用户失败:",
+        fallback = { error -> AuthResponse(false, "网络错误: ${error.message ?: "验证失败"}") },
     ) {
             val response = get("/auth/validate/$userId")
             jsonParser.decodeFromString(response)
