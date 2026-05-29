@@ -157,6 +157,7 @@ fun ThinkingBlock(content: String, isComplete: Boolean = false) {
     var elapsedSeconds by remember { mutableStateOf(0L) }
     val startEpochMs = remember { kotlin.js.Date.now().toLong() }
 
+    // Timer: updates every second until complete
     LaunchedEffect(isComplete) {
         while (true) {
             kotlinx.coroutines.delay(1000)
@@ -165,47 +166,61 @@ fun ThinkingBlock(content: String, isComplete: Boolean = false) {
         }
     }
 
-    // Show "Thinking for Xs" during streaming, "Thought for Xs" when done (claudian-style)
     val label = if (isComplete) "Thought for ${elapsedSeconds}s"
-                else "Thinking... (${elapsedSeconds}s)"
+                else "Thinking ${elapsedSeconds}s..."
 
     Div({
         style {
-            margin(8.px, 0.px)
+            margin(10.px, 0.px)
             property("border-left", "2px solid #E8E0D4")
-            paddingLeft(16.px)
+            paddingLeft(14.px)
             marginLeft(7.px)
         }
     }) {
+        // Clickable header
         Div({
             style {
                 display(DisplayStyle.Flex)
                 alignItems(AlignItems.Center)
                 property("gap", "8px")
-                padding(4.px, 0.px)
+                padding(3.px, 0.px)
                 property("cursor", "pointer")
                 property("user-select", "none")
                 fontSize(13.px)
-                fontWeight("500")
-                color(Color("#C9A86C"))
-                if (!isComplete) { property("animation", "silk-pulse 1.5s ease-in-out") }
+                color(Color("#8A7B6A"))
             }
             attr("tabindex", "0"); attr("role", "button")
             onClick { expanded = !expanded }
         }) {
-            Span({ style { property("flex-shrink", "0"); fontSize(14.px) } }) { Text("\uD83D\uDCAD") }
-            Span({ style { property("flex", "1") } }) { Text(label) }
-            Span({ style { fontSize(10.px); color(Color("#B8A890")); property("transition", "transform 0.2s")
+            Span({ style { property("flex-shrink", "0"); fontSize(14.px) } }) {
+                Text("\uD83D\uDCAD")
+            }
+            Span({
+                style {
+                    property("flex", "1")
+                    property("font-weight", if (!isComplete) "500" else "400")
+                    color(Color(if (!isComplete) "#C9A86C" else "#8A7B6A"))
+                }
+            }) {
+                Text(label)
+            }
+            // Collapse/expand indicator
+            Span({ style {
+                fontSize(10.px)
+                color(Color("#C0B0A0"))
+                property("transition", "transform 0.2s")
                 if (expanded) { property("transform", "rotate(90deg)") }
-            } }) { Text("\u25B6") }
+            }}) { Text("\u25B6") }
         }
 
-        // Auto-expand during streaming, collapsible when done
+        // Thinking content (auto-expanded during streaming, collapsible when done)
         if (expanded || !isComplete) {
             Div({
                 style {
-                    fontSize(13.px); property("line-height", "1.5")
-                    color(Color("#8A7B6A")); padding(4.px, 0.px)
+                    fontSize(13.px)
+                    property("line-height", "1.6")
+                    color(Color("#7A6B5A"))
+                    padding(6.px, 0.px, 2.px, 0.px)
                 }
             }) {
                 if (content.isNotEmpty()) {
@@ -215,97 +230,131 @@ fun ThinkingBlock(content: String, isComplete: Boolean = false) {
         }
     }
 }
+
 @Composable
 fun ToolCallBlock(name: String, summary: String = "", content: String = "") {
     var expanded by remember { mutableStateOf(false) }
+    // In the marker-based approach, we can't distinguish running vs completed
+    // tool calls because both arrive in the same format. For streaming, the
+    // marker arrives when the tool is complete. We assume it's completed.
+    val isRunning = false
 
-    val icon = when {
-        name.contains("bash", true) || name.contains("command", true) -> "\uD83D\uDCBB"
-        name.contains("read", true) -> "\uD83D\uDCD6"
-        name.contains("write", true) || name.contains("edit", true) -> "\u270F\uFE0F"
-        name.contains("grep", true) || name.contains("search", true) || name.contains("glob", true) -> "\uD83D\uDD0D"
-        name.contains("web", true) || name.contains("fetch", true) -> "\uD83C\uDF10"
-        name.contains("todo", true) -> "\u2705"
-        name.contains("think", true) -> "\uD83D\uDCAD"
-        name.contains("ask", true) -> "\u2753"
-        name.contains("plan", true) -> "\uD83D\uDCCB"
-        name.contains("apply", true) || name.contains("patch", true) -> "\uD83D\uDD27"
-        else -> "\uD83D\uDD27"
-    }
+    val displayLabel = buildLabel(name, summary)
+
+    val icon = getToolIcon(name)
 
     Div({
         style {
-            margin(6.px, 0.px)
+            margin(8.px, 0.px)
             property("border-left", "2px solid #E8E0D4")
-            paddingLeft(16.px)
+            paddingLeft(14.px)
             marginLeft(7.px)
         }
     }) {
+        // Clickable header row
         Div({
             style {
                 display(DisplayStyle.Flex)
                 alignItems(AlignItems.Center)
                 property("gap", "8px")
-                padding(4.px, 0.px)
+                padding(3.px, 0.px)
                 property("cursor", "pointer")
                 property("user-select", "none")
-                property("font-family", "SF Mono, Fira Code, monospace")
                 fontSize(13.px)
+                property("line-height", "1.4")
             }
-            attr("tabindex", "0")
-            attr("role", "button")
+            attr("tabindex", "0"); attr("role", "button")
             onClick { expanded = !expanded }
         }) {
-            Span({ style { property("flex-shrink", "0"); fontSize(14.px) } }) { Text(icon) }
-            Span({ style { color(Color("#4A4038")); property("flex-shrink", "0") } }) { Text(name) }
-            if (summary.isNotEmpty()) {
-                Span({
-                    style {
-                        color(Color("#8A7B6A"))
-                        fontSize(12.px)
-                        property("overflow", "hidden")
-                        property("text-overflow", "ellipsis")
-                        property("white-space", "nowrap")
-                        property("flex", "1")
-                        property("min-width", "0")
-                    }
-                }) { Text(summary) }
+            // Icon
+            Span({ style { property("flex-shrink", "0"); fontSize(14.px); width(18.px); property("text-align", "center") } }) {
+                Text(icon)
             }
+            // Tool label: "Read: src/index.ts"
             Span({
                 style {
-                    width(8.px)
-                    height(8.px)
+                    color(Color("#5A5048"))
+                    property("font-weight", "500")
+                    property("white-space", "nowrap")
+                    property("overflow", "hidden")
+                    property("text-overflow", "ellipsis")
+                    property("flex", "1")
+                    property("min-width", "0")
+                    fontFamily("SF Mono, SFMono-Regular, Menlo, Consolas, monospace")
+                    fontSize(12.5.px)
+                }
+            }) {
+                Text(displayLabel)
+            }
+            // Status indicator: green dot (running) or check (done)
+            Span({ style {
+                width(7.px); height(7.px)
+                if (isRunning) {
                     borderRadius(50.percent)
                     backgroundColor(Color("#7DAE6C"))
-                    property("flex-shrink", "0")
+                    property("animation", "silk-pulse 1.5s ease-in-out infinite")
+                } else {
+                    fontSize(12.px)
+                    color(Color("#7DAE6C"))
                 }
-            }) {}
-            Span({
-                style {
-                    fontSize(10.px)
-                    color(Color("#B8A890"))
-                    property("transition", "transform 0.2s")
-                    if (expanded) { property("transform", "rotate(90deg)") }
-                }
-            }) { Text("\u25B6") }
+                property("flex-shrink", "0")
+            }}) {
+                if (!isRunning) Text("\u2713")
+            }
+            // Expand arrow
+            Span({ style {
+                fontSize(10.px)
+                color(Color("#C0B0A0"))
+                property("transition", "transform 0.2s")
+                if (expanded) { property("transform", "rotate(90deg)") }
+                property("flex-shrink", "0")
+            }}) { Text("\u25B6") }
         }
 
+        // Expanded content
         if (expanded && content.isNotEmpty()) {
             Div({
                 style {
-                    padding(4.px, 0.px)
-                    property("font-family", "SF Mono, Fira Code, monospace")
-                    fontSize(12.px)
-                    property("line-height", "1.4")
-                    color(Color("#8A7B6A"))
-                    property("white-space", "pre-wrap")
+                    padding(8.px, 0.px, 2.px, 0.px)
+                    fontSize(12.5.px)
+                    property("line-height", "1.5")
+                    color(Color("#7A6B5A"))
                     property("word-break", "break-word")
-                    maxHeight(300.px)
-                    property("overflow-y", "auto")
                 }
             }) {
-                Text(content)
+                MarkdownContent(content = content, references = emptyList())
             }
         }
+    }
+}
+
+private fun buildLabel(name: String, summary: String): String {
+    return if (summary.isNotEmpty()) {
+        val shortName = when {
+            name.equals("Read", true) || name.equals("Write", true) || name.equals("Edit", true) -> name
+            name.equals("Bash", true) || name.equals("Command", true) -> name
+            else -> name
+        }
+        "$shortName: $summary"
+    } else {
+        name
+    }
+}
+
+private fun getToolIcon(name: String): String {
+    val n = name.lowercase()
+    return when {
+        n.contains("bash") || n.contains("command") || n.contains("shell") -> "\uD83D\uDCBB"
+        n.contains("read") || n.contains("ls") || n.contains("glob") -> "\uD83D\uDCD6"
+        n.contains("write") || n.contains("edit") || n.contains("apply") || n.contains("patch") -> "\u270F\uFE0F"
+        n.contains("grep") || n.contains("search") || n.contains("find") -> "\uD83D\uDD0D"
+        n.contains("web") || n.contains("fetch") || n.contains("url") -> "\uD83C\uDF10"
+        n.contains("todo") || n.contains("task") -> "\u2705"
+        n.contains("think") || n.contains("reason") -> "\uD83D\uDCAD"
+        n.contains("ask") || n.contains("question") -> "\u2753"
+        n.contains("plan") -> "\uD83D\uDCCB"
+        n.contains("diff") -> "\uD83D\uDD27"
+        n.contains("notebook") || n.contains("jupyter") -> "\uD83D\uDCD8"
+        else -> "\uD83D\uDD27"
     }
 }
