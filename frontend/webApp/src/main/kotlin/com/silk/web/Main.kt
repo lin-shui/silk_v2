@@ -5245,7 +5245,7 @@ Div({
                     when (block.type) {
                         "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete)
                         "text" -> MarkdownContent(content = block.content, references = message.references)
-                        "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = "")
+                        "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
                     }
                 }
             }
