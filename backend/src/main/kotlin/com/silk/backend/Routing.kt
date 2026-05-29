@@ -2502,6 +2502,36 @@ fun Application.configureRouting() {
                                 chatServer.broadcast(msg)
                             }
                         }
+                        "question" -> {
+                            val question = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                com.silk.backend.ccconnect.QuestionMessage.serializer(), text
+                            )
+                            logger.info("[CcConnect][{}] question received: options={}", groupId, question.options.size)
+
+                            // 将 button rows 展平为 InteractiveOption 列表（所有按钮平铺）
+                            val interactiveOptions = question.options.flatMap { row ->
+                                row.row.map { btn ->
+                                    InteractiveOption(label = btn.label, value = btn.value)
+                                }
+                            }
+
+                            // 用现有 buildContentBlockList() 构建 thinking/tool/text blocks
+                            val msg = Message(
+                                id = java.util.UUID.randomUUID().toString(),
+                                userId = "cc-connect",
+                                userName = ccUserName,
+                                content = question.content,
+                                timestamp = System.currentTimeMillis(),
+                                type = MessageType.TEXT,
+                                isTransient = true,
+                                contentBlocks = buildContentBlockList(),
+                                interactiveOptions = interactiveOptions.ifEmpty { null },
+                            )
+                            chatServer.broadcast(msg)
+                            // 引擎已阻塞等待回答，设置 waitingForInput
+                            com.silk.backend.ccconnect.CcConnectRegistry.setWaitingForInput(groupId)
+                            logger.info("[CcConnect][{}] question broadcast with {} options, waitingForInput set", groupId, interactiveOptions.size)
+                        }
                         "status" -> {
                             val status = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                 com.silk.backend.ccconnect.StatusMessage.serializer(), text

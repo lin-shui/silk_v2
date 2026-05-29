@@ -106,6 +106,28 @@ func (p *Platform) Stop() error {
 	return nil
 }
 
+// Compile-time interface check: silk implements core.InlineButtonSender
+var _ core.InlineButtonSender = (*Platform)(nil)
+
+func (p *Platform) SendWithButtons(ctx context.Context, replyCtx any, content string, buttons [][]core.ButtonOption) error {
+	var rows []map[string]any
+	for _, row := range buttons {
+		var btns []map[string]any
+		for _, btn := range row {
+			btns = append(btns, map[string]any{
+				"label": btn.Text,
+				"value": btn.Data,
+			})
+		}
+		rows = append(rows, map[string]any{"row": btns})
+	}
+	return p.sendJSON(map[string]any{
+		"type":    "question",
+		"content": content,
+		"options": rows,
+	})
+}
+
 func (p *Platform) Reply(ctx context.Context, replyCtx any, content string) error {
 	if p.metadataActive.Load() {
 		select {

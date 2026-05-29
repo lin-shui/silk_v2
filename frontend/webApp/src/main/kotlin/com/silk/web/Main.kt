@@ -1408,6 +1408,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val pendingQuestionId by chatClient.pendingQuestionId.collectAsState()
     val ccMetadataJson by chatClient.ccMetadataJson.collectAsState()
     val contentBlocks by chatClient.transientContentBlocks.collectAsState()
+    val interactiveOptions by chatClient.interactiveOptions.collectAsState()
 
     // Update ccConnectInfo when metadata arrives via WebSocket
     LaunchedEffect(ccMetadataJson) {
@@ -2251,8 +2252,18 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }
             }
+
+            // 显示交互式按钮选项（cc-connect 提问）
+            if (interactiveOptions.isNotEmpty()) {
+                InteractiveOptions(
+                    options = interactiveOptions,
+                    onAnswer = { value ->
+                        chatClient.sendCcAnswer(value)
+                    }
+                )
+            }
         }
-        
+
         // Drag-and-drop event handlers - directly manipulate DOM for immediate visual feedback
         DisposableEffect(group.id) {
             val sessionId = group.id
@@ -7122,6 +7133,59 @@ fun MembersDialog(
                 onClick { onDismiss() }
             }) {
                 Text("关闭")
+            }
+        }
+    }
+}
+
+/**
+ * 交互式按钮选项（cc-connect AskUserQuestion）。
+ * 每个选项显示为一个可点击的按钮，点击后发送答案并禁用按钮。
+ */
+@Composable
+@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS")
+@NoLiveLiterals
+fun InteractiveOptions(
+    options: List<com.silk.shared.models.InteractiveOption>,
+    onAnswer: (String) -> Unit
+) {
+    val clickedOption = remember { mutableStateOf<String?>(null) }
+
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            property("flex-wrap", "wrap")
+            property("gap", "8px")
+            marginTop(12.px)
+            padding(8.px, 0.px)
+        }
+    }) {
+        for (opt in options) {
+            val isClicked = clickedOption.value == opt.value
+            Button({
+                style {
+                    padding(8.px, 20.px)
+                    borderRadius(8.px)
+                    border {
+                        width(if (isClicked) 2.px else 1.px)
+                        style(LineStyle.Solid)
+                        color(Color(if (isClicked) "#C8A86C" else "#D0D0D0"))
+                    }
+                    backgroundColor(Color(if (isClicked) "#F5F0E6" else "#FFFFFF"))
+                    color(Color("#333333"))
+                    fontSize(14.px)
+                    property("cursor", if (isClicked) "default" else "pointer")
+                    property("transition", "all 0.2s")
+                    property("opacity", if (isClicked) "0.7" else "1.0")
+                }
+                if (!isClicked) {
+                    onClick {
+                        clickedOption.value = opt.value
+                        onAnswer(opt.value)
+                    }
+                }
+            }) {
+                Text(opt.label)
             }
         }
     }

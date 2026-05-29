@@ -39,7 +39,14 @@ data class Message(
     val isIncremental: Boolean = false, // true = 增量消息（前端需拼接），false = 完整消息（前端直接替换）
     val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度区分）
     val references: List<com.silk.backend.models.MessageReference> = emptyList(),
-    val contentBlocks: List<com.silk.backend.ai.ContentBlock>? = null  // 结构化 content block（流式 / 持久化回放）
+    val contentBlocks: List<com.silk.backend.ai.ContentBlock>? = null,  // 结构化 content block（流式 / 持久化回放）
+    val interactiveOptions: List<InteractiveOption>? = null,  // 交互式按钮选项（用于 cc-connect 提问）
+)
+
+@Serializable
+data class InteractiveOption(
+    val label: String = "",
+    val value: String = "",
 )
 
 @Serializable
@@ -419,8 +426,18 @@ class ChatServer(
                         content
                     }
                     if (forwardContent.isNotBlank()) {
+                        // Transform cc-connect button values to text the engine understands.
+                        // Permission button values (perm:allow/perm:deny/perm:allow_all) must be
+                        // mapped to the exact text that isAllowResponse/isDenyResponse/isApproveAllResponse
+                        // expect, because the engine uses exact string matching.
+                        val engineContent = when (forwardContent) {
+                            "perm:allow" -> "allow"
+                            "perm:deny" -> "deny"
+                            "perm:allow_all" -> "allow all"
+                            else -> forwardContent
+                        }
                         val userMsg = com.silk.backend.ccconnect.UserMessage(
-                            content = forwardContent,
+                            content = engineContent,
                             userId = message.userId,
                             userName = message.userName,
                             msgId = message.id,

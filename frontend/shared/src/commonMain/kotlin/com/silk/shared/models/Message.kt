@@ -16,7 +16,14 @@ data class Message(
     val isIncremental: Boolean = false, // true = 增量消息（需拼接），false = 完整消息（直接替换）
     val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度）
     val references: List<MessageReference> = emptyList(),
-    val contentBlocks: List<ContentBlock>? = null  // 结构化 content block（流式 / 持久化回放）
+    val contentBlocks: List<ContentBlock>? = null,  // 结构化 content block（流式 / 持久化回放）
+    val interactiveOptions: List<InteractiveOption>? = null,  // 交互式按钮选项（用于 cc-connect 提问）
+)
+
+@Serializable
+data class InteractiveOption(
+    val label: String = "",
+    val value: String = "",
 )
 
 @Serializable

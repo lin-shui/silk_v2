@@ -91,6 +91,26 @@ data class MetadataMessage(
     @SerialName("available_models") val availableModels: List<CcModelOption>? = null,
 )
 
+// ── cc-connect → silk (interactive question with buttons) ──
+
+@Serializable
+data class QuestionButton(
+    val label: String = "",
+    val value: String = "",
+)
+
+@Serializable
+data class QuestionButtonRow(
+    val row: List<QuestionButton> = emptyList(),
+)
+
+@Serializable
+data class QuestionMessage(
+    val type: String = "question",
+    val content: String = "",
+    val options: List<QuestionButtonRow> = emptyList(),
+)
+
 // ── silk → cc-connect (command) ──
 
 @Serializable

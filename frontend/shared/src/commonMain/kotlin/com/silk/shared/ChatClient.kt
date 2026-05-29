@@ -4,6 +4,7 @@ import com.silk.shared.models.Message
 import com.silk.shared.models.MessageCategory
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.ContentBlock
+import com.silk.shared.models.InteractiveOption
 import com.silk.shared.models.isAgentUserId
 import kotlinx.datetime.Clock
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,7 +70,11 @@ class ChatClient(
 
     private val _transientContentBlocks = MutableStateFlow<List<ContentBlock>>(emptyList())
     val transientContentBlocks: StateFlow<List<ContentBlock>> = _transientContentBlocks.asStateFlow()
-    
+
+    /** cc-connect 交互式按钮选项（AskUserQuestion） */
+    private val _interactiveOptions = MutableStateFlow<List<InteractiveOption>>(emptyList())
+    val interactiveOptions: StateFlow<List<InteractiveOption>> = _interactiveOptions.asStateFlow()
+
     private val _isLoadingHistory = MutableStateFlow(false)
     val isLoadingHistory: StateFlow<Boolean> = _isLoadingHistory.asStateFlow()
     private val historyBuffer = mutableListOf<Message>()
@@ -216,10 +221,17 @@ class ChatClient(
                     }
                     log("🗑️ [ChatClient] 已移除 ${messageIdsToRemove.size} 条消息")
                 }
-                // 结构化 content blocks（流式替换完整 block 列表）
+                // 结构化 content blocks（流式替换完整 block 列表），同时可能携带交互式选项
                 message.isTransient && message.contentBlocks != null -> {
                     _transientContentBlocks.value = message.contentBlocks
+                    if (message.interactiveOptions != null) {
+                        _interactiveOptions.value = message.interactiveOptions
+                    }
                     if (isSilkAi) _isGenerating.value = true
+                }
+                // 交互式按钮选项（cc-connect 提问，无 contentBlocks 的场景）
+                message.interactiveOptions != null -> {
+                    _interactiveOptions.value = message.interactiveOptions
                 }
                 // Agent 状态消息：添加到状态消息列表（灰色显示）
                 message.category == MessageCategory.AGENT_STATUS -> {
@@ -230,6 +242,7 @@ class ChatClient(
                         suppressTransient = false
                         _pendingQuestionId.value = null
                         _transientContentBlocks.value = emptyList()  // 清除内容块
+                        _interactiveOptions.value = emptyList()  // 清除交互式按钮
                     } else {
                         log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
                         if (isSilkAi) _isGenerating.value = true
@@ -286,12 +299,14 @@ class ChatClient(
                         _transientMessage.value = null
                         _statusMessages.value = emptyList()
                         _transientContentBlocks.value = emptyList()
+                        _interactiveOptions.value = emptyList()
                         suppressTransient = false
                     } else {
                         _transientMessage.value = null
                         _statusMessages.value = emptyList()
                         _isGenerating.value = false
                         _transientContentBlocks.value = emptyList()
+                        _interactiveOptions.value = emptyList()
                         suppressTransient = false
                         _pendingQuestionId.value = null
                     }
@@ -337,8 +352,9 @@ class ChatClient(
         _statusMessages.value = emptyList()
         _pendingQuestionId.value = null
         _transientContentBlocks.value = emptyList()
+        _interactiveOptions.value = emptyList()
     }
-    
+
     suspend fun sendMessage(userId: String, userName: String, content: String) {
         suppressTransient = false
         
@@ -382,6 +398,30 @@ class ChatClient(
             log("❌ [ChatClient] 发送 cc_command 失败: ${e.message}")
         }
     }
+
+    /**
+     * 发送交互式按钮的答案到 cc-connect 适配器。
+     * 不添加到本地消息列表（引擎会通过 reply/reply_stream 继续输出）。
+     */
+    fun sendCcAnswer(content: String) {
+        val message = Message(
+            id = generateId(),
+            userId = currentUserId,
+            userName = currentUserName,
+            content = content,
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+            type = MessageType.TEXT,
+        )
+        try {
+            val jsonMessage = Json.encodeToString(message)
+            log("📤 [ChatClient] 发送 cc-connect 交互式回答: ${content.take(30)}")
+            webSocket?.send(jsonMessage)
+            // 清除交互式选项（按钮已点击）
+            _interactiveOptions.value = emptyList()
+        } catch (e: SerializationException) {
+            log("❌ [ChatClient] 发送 cc-connect 交互式回答失败: ${e.message}")
+        }
+    }
     
     suspend fun disconnect() {
         webSocket?.disconnect()
@@ -401,14 +441,16 @@ class ChatClient(
         historyBuffer.clear()
         suppressTransient = false
         _transientContentBlocks.value = emptyList()
+        _interactiveOptions.value = emptyList()
     }
-    
+
     fun clearTransientOnly() {
         log("🗑️ [ChatClient] 只清空临时消息")
         _transientMessage.value = null
         _transientContentBlocks.value = emptyList()
+        _interactiveOptions.value = emptyList()
     }
-    
+
     private fun generateId(): String {
         return "${Clock.System.now().toEpochMilliseconds()}_${(0..9999).random()}"
     }
