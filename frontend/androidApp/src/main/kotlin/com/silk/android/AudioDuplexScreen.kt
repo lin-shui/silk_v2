@@ -212,28 +212,32 @@ private suspend fun runAudioDuplexSession(
     val accumulatedText = StringBuilder()
 
     try {
-        audioTrack = createPlaybackTrack()
-        withContext(Dispatchers.Main) { onStatusChange("准备中…") }
+        runCatching {
+            val playbackTrack = createPlaybackTrack()
+            audioTrack = playbackTrack
+            withContext(Dispatchers.Main) { onStatusChange("准备中…") }
 
-        val playChannel = Channel<FloatArray>(Channel.BUFFERED)
-        httpClient.webSocket(urlString = wsUrl) {
-            launchStopSignalForwarder(stopChannel)
-            launchPlaybackConsumer(playChannel, audioTrack)
-            sendPrepareMessage()
+            val playChannel = Channel<FloatArray>(Channel.BUFFERED)
+            httpClient.webSocket(urlString = wsUrl) {
+                launchStopSignalForwarder(stopChannel)
+                launchPlaybackConsumer(playChannel, playbackTrack)
+                sendPrepareMessage()
 
-            audioRecord = processDuplexFrames(
-                playChannel = playChannel,
-                accumulatedText = accumulatedText,
-                onStatusChange = onStatusChange,
-                onTranscriptAppend = onTranscriptAppend
-            )
-        }
-    } catch (e: CancellationException) {
-        // UI stop and composition disposal are expected cancellations.
-    } catch (e: Exception) {
-        withContext(Dispatchers.Main) {
-            if (isDuplexActive()) {
-                onStatusChange("连接异常")
+                audioRecord = processDuplexFrames(
+                    playChannel = playChannel,
+                    accumulatedText = accumulatedText,
+                    onStatusChange = onStatusChange,
+                    onTranscriptAppend = onTranscriptAppend
+                )
+            }
+        }.getOrElse { error ->
+            if (error is CancellationException) {
+                throw error
+            }
+            withContext(Dispatchers.Main) {
+                if (isDuplexActive()) {
+                    onStatusChange("连接异常")
+                }
             }
         }
     } finally {
@@ -256,37 +260,82 @@ private suspend fun DefaultClientWebSocketSession.processDuplexFrames(
     var captureJob: Job? = null
 
     for (frame in incoming) {
-        if (frame is Frame.Text) {
-            val event = parseAudioDuplexEvent(frame.readText()) ?: continue
-            when (event.type) {
-                "queued" -> withContext(Dispatchers.Main) { onStatusChange("排队等待中…") }
-                "prepared" -> {
-                    withContext(Dispatchers.Main) { onStatusChange("对话中，点击结束") }
-                    audioRecord = createCaptureRecorder()
-                    audioRecord?.startRecording()
-                    captureJob?.cancel()
-                    captureJob = launchCaptureJob(audioRecord) { payload ->
-                        sendAudioChunk(payload)
-                    }
-                }
-                "result" -> handleResultEvent(
-                    event = event,
-                    playChannel = playChannel,
-                    accumulatedText = accumulatedText,
-                    onTranscriptAppend = onTranscriptAppend
-                )
-                "audio_only" -> enqueueAudioPayload(event.audioBase64, playChannel)
-                "error" -> withContext(Dispatchers.Main) { onStatusChange("连接异常") }
-                "stopped" -> {
-                    withContext(Dispatchers.Main) { onStatusChange("已断开") }
-                    break
-                }
-            }
+        val shouldStop = processIncomingDuplexFrame(
+            frame = frame,
+            playChannel = playChannel,
+            accumulatedText = accumulatedText,
+            onStatusChange = onStatusChange,
+            onTranscriptAppend = onTranscriptAppend,
+            onAudioRecordChange = { audioRecord = it },
+            captureJob = { captureJob },
+            onCaptureJobChange = { captureJob = it }
+        )
+        if (shouldStop) {
+            captureJob?.cancel()
+            return audioRecord
         }
     }
 
     captureJob?.cancel()
     return audioRecord
+}
+
+private suspend fun DefaultClientWebSocketSession.processIncomingDuplexFrame(
+    frame: Frame,
+    playChannel: Channel<FloatArray>,
+    accumulatedText: StringBuilder,
+    onStatusChange: (String) -> Unit,
+    onTranscriptAppend: (TranscriptItem) -> Unit,
+    onAudioRecordChange: (AudioRecord) -> Unit,
+    captureJob: () -> Job?,
+    onCaptureJobChange: (Job?) -> Unit
+): Boolean {
+    if (frame !is Frame.Text) {
+        return false
+    }
+    val event = parseAudioDuplexEvent(frame.readText()) ?: return false
+
+    return when (event.type) {
+        "queued" -> {
+            withContext(Dispatchers.Main) { onStatusChange("排队等待中…") }
+            false
+        }
+        "prepared" -> {
+            withContext(Dispatchers.Main) { onStatusChange("对话中，点击结束") }
+            val captureRecorder = createCaptureRecorder()
+            onAudioRecordChange(captureRecorder)
+            captureRecorder.startRecording()
+            captureJob()?.cancel()
+            onCaptureJobChange(
+                launchCaptureJob(captureRecorder) { payload ->
+                    sendAudioChunk(payload)
+                }
+            )
+            false
+        }
+        "result" -> {
+            handleResultEvent(
+                event = event,
+                playChannel = playChannel,
+                accumulatedText = accumulatedText,
+                onTranscriptAppend = onTranscriptAppend
+            )
+            false
+        }
+        "audio_only" -> {
+            enqueueAudioPayload(event.audioBase64, playChannel)
+            false
+        }
+        "error" -> {
+            withContext(Dispatchers.Main) { onStatusChange("连接异常") }
+            false
+        }
+        "stopped" -> {
+            withContext(Dispatchers.Main) { onStatusChange("已断开") }
+            true
+        }
+        else -> false
+    }
 }
 
 private fun DefaultClientWebSocketSession.launchStopSignalForwarder(

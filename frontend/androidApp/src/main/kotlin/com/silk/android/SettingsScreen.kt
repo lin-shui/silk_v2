@@ -121,22 +121,23 @@ fun SettingsScreen(appState: AppState) {
                     selectedLanguage = response.settings!!.language
                     defaultInstruction = response.settings!!.defaultAgentInstruction
                 } else {
+                    if (response.message.isNotBlank()) {
+                        println("加载设置失败: ${response.message}")
+                    }
                     // Use defaults
                     selectedLanguage = Language.CHINESE
                     defaultInstruction = "You are a helpful technical research assistant. "
                 }
+
                 // Load CC Bridge settings
                 val ccResponse = ApiClient.getCcSettings(user.id)
                 if (ccResponse.success) {
                     ccBridgeToken = ccResponse.ccBridgeToken
                     ccBridgeConnected = ccResponse.bridgeConnected
                     ccBridgeIp = ccResponse.bridgeIp
+                } else if (ccResponse.message.isNotBlank()) {
+                    println("加载CC设置失败: ${ccResponse.message}")
                 }
-            } catch (e: Exception) {
-                println("加载设置失败: $e")
-                // Use defaults on error
-                selectedLanguage = Language.CHINESE
-                defaultInstruction = "You are a helpful technical research assistant. "
             } finally {
                 isLoading = false
             }
@@ -539,11 +540,11 @@ fun SettingsScreen(appState: AppState) {
                                                 settings = response.settings
                                                 saveMessage = strings.settingsSaved
                                             } else {
+                                                if (response.message.isNotBlank()) {
+                                                    println("保存设置失败: ${response.message}")
+                                                }
                                                 saveMessage = strings.settingsSaveError
                                             }
-                                        } catch (e: Exception) {
-                                            println("保存设置失败: $e")
-                                            saveMessage = strings.settingsSaveError
                                         } finally {
                                             isSaving = false
                                         }

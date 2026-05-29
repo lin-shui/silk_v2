@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -38,7 +39,7 @@ object ApkDownloader {
         context: Context,
         onProgress: (DownloadState) -> Unit
     ): File? = withContext(Dispatchers.IO) {
-        try {
+        runCatching {
             onProgress(DownloadState.Downloading(0, "正在连接服务器..."))
             
             val url = URL(apkUrl)
@@ -89,10 +90,12 @@ object ApkDownloader {
             
             onProgress(DownloadState.Success(apkFile))
             apkFile
-            
-        } catch (e: Exception) {
-            e.printStackTrace()
-            onProgress(DownloadState.Error("下载失败: ${e.message}"))
+        }.getOrElse { error ->
+            if (error is CancellationException) {
+                throw error
+            }
+            println("❌ APK 下载失败: $error")
+            onProgress(DownloadState.Error("下载失败: ${error.message}"))
             null
         }
     }
@@ -100,8 +103,7 @@ object ApkDownloader {
     /**
      * 安装 APK
      */
-    fun installApk(context: Context, apkFile: File) {
-        try {
+    fun installApk(context: Context, apkFile: File): String? = runCatching {
             val intent = Intent(Intent.ACTION_VIEW)
             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
             
@@ -119,12 +121,11 @@ object ApkDownloader {
             
             intent.setDataAndType(apkUri, "application/vnd.android.package-archive")
             context.startActivity(intent)
-            
-        } catch (e: Exception) {
-            e.printStackTrace()
-            throw RuntimeException("启动安装失败: ${e.message}")
+            null
+        }.getOrElse { error ->
+            println("❌ 启动安装失败: $error")
+            "启动安装失败: ${error.message}"
         }
-    }
     
     /**
      * 格式化文件大小
@@ -137,4 +138,3 @@ object ApkDownloader {
         }
     }
 }
-
