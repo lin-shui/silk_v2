@@ -223,6 +223,7 @@ class ChatClient(
                 }
                 // 结构化 content blocks（流式替换完整 block 列表），同时可能携带交互式选项
                 message.isTransient && message.contentBlocks != null -> {
+                    _transientMessage.value = null
                     _transientContentBlocks.value = message.contentBlocks
                     if (message.interactiveOptions != null) {
                         _interactiveOptions.value = message.interactiveOptions
