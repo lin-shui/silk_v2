@@ -2247,7 +2247,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         when (block.type) {
                             "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete)
                             "text" -> MarkdownContent(content = block.content, references = emptyList())
-                            "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = "")
+                            "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
                         }
                     }
                 }

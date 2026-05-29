@@ -328,17 +328,39 @@ fun ToolCallBlock(name: String, summary: String = "", content: String = "") {
     }
 }
 
-private fun buildLabel(name: String, summary: String): String {
-    return if (summary.isNotEmpty()) {
-        val shortName = when {
-            name.equals("Read", true) || name.equals("Write", true) || name.equals("Edit", true) -> name
-            name.equals("Bash", true) || name.equals("Command", true) -> name
-            else -> name
-        }
-        "$shortName: $summary"
-    } else {
-        name
+private fun buildLabel(name: String, content: String): String {
+    val shortName = when {
+        name.equals("Read", true) || name.equals("Write", true) || name.equals("Edit", true) -> name
+        name.equals("Bash", true) || name.equals("Command", true) -> name
+        else -> name
     }
+    if (content.isEmpty()) return name
+    // Extract a concise summary from full tool content
+    val summary = extractToolSummary(content)
+    return if (summary.isNotEmpty()) "$shortName: $summary" else shortName
+}
+
+private fun extractToolSummary(content: String): String {
+    // Try to extract file_path value
+    val fileRe = Regex("""file_path\": \"([^\"]+)""")
+    val fileMatch = fileRe.find(content)
+    if (fileMatch != null) {
+        val path = fileMatch.groupValues[1]
+        val idx = path.lastIndexOf("/")
+        return if (idx >= 0) path.substring(idx + 1) else path
+    }
+    // Try to extract command value
+    val cmdRe = Regex("""command\": \"([^\"]+)""")
+    val cmdMatch = cmdRe.find(content)
+    if (cmdMatch != null) {
+        val cmd = cmdMatch.groupValues[1]
+        return if (cmd.length > 60) cmd.substring(0, 60) + "..." else cmd
+    }
+    // Try to extract pattern (for grep/glob)
+    val patRe = Regex("""pattern\": \"([^\"]+)""")
+    val patMatch = patRe.find(content)
+    if (patMatch != null) return patMatch.groupValues[1]
+    return ""
 }
 
 private fun getToolIcon(name: String): String {
