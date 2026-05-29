@@ -38,6 +38,7 @@ data class ReplyStreamMessage(
     val content: String,
     val done: Boolean = false,
     val incremental: Boolean? = null,
+    val resetBlocks: Boolean? = null,
 )
 
 @Serializable

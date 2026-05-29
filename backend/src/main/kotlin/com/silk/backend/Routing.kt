@@ -2449,6 +2449,13 @@ fun Application.configureRouting() {
                             val stream = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                 com.silk.backend.ccconnect.ReplyStreamMessage.serializer(), text
                             )
+                            // ── 累积式 content 替换：清空 block 累积器后重新解析 ──
+                            // streaming card (replace=true) 每次发送全量累积内容，
+                            // 不清空会导致重复 blocks。逐事件路径不设 replace，blocks 正常累积。
+                            if (stream.resetBlocks == true) {
+                                streamBlockTypes.clear()
+                                streamBlockContent.clear()
+                            }
                             // ── 从等待回答恢复：清累积器，继续新段落 ──
                             if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
                                 thinkingParts.clear()
