@@ -255,25 +255,20 @@ fun LoginScreen(appState: AppState) {
                             scope.launch {
                                 isLoading = true
                                 errorMessage = ""
-                                
-                                try {
-                                    val response = if (isLogin) {
-                                        ApiClient.login(loginName, password)
-                                    } else {
-                                        ApiClient.register(loginName, fullName, phoneNumber, password)
-                                    }
-                                    
-                                    if (response.success && response.user != null) {
-                                        println("${if (isLogin) "登录" else "注册"}成功: ${response.user.fullName}")
-                                        appState.setUser(response.user)
-                                    } else {
-                                        errorMessage = response.message
-                                    }
-                                } catch (e: Exception) {
-                                    errorMessage = "操作失败: ${e.message}"
-                                } finally {
-                                    isLoading = false
+
+                                val response = if (isLogin) {
+                                    ApiClient.login(loginName, password)
+                                } else {
+                                    ApiClient.register(loginName, fullName, phoneNumber, password)
                                 }
+
+                                if (response.success && response.user != null) {
+                                    println("${if (isLogin) "登录" else "注册"}成功: ${response.user.fullName}")
+                                    appState.setUser(response.user)
+                                } else {
+                                    errorMessage = response.message
+                                }
+                                isLoading = false
                             }
                         },
                         modifier = Modifier
@@ -370,10 +365,8 @@ fun LoginScreen(appState: AppState) {
                             
                             // 下载成功后自动安装
                             if (state is ApkDownloader.DownloadState.Success) {
-                                try {
-                                    ApkDownloader.installApk(context, state.file)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "启动安装失败: ${e.message}", Toast.LENGTH_LONG).show()
+                                ApkDownloader.installApk(context, state.file)?.let { message ->
+                                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                                 }
                             }
                         }

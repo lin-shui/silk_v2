@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -105,11 +106,14 @@ fun WorkflowChatScreen(appState: AppState) {
         // Connect WebSocket
         LaunchedEffect(groupId) {
             if (groupId.isBlank()) return@LaunchedEffect
-            try {
+            runCatching {
                 chatClient.clearMessages()
                 chatClient.connect(user.id, user.fullName, groupId)
-            } catch (e: Exception) {
-                println("❌ 工作流 WebSocket 连接失败: ${e.message}")
+            }.getOrElse { error ->
+                if (error is CancellationException) {
+                    throw error
+                }
+                println("❌ 工作流 WebSocket 连接失败: ${error.message}")
             }
         }
 

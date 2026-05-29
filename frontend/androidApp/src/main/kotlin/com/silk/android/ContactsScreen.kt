@@ -78,13 +78,11 @@ fun ContactsScreen(appState: AppState) {
     // Load user language preference
     LaunchedEffect(Unit) {
         scope.launch {
-            try {
-                val response = ApiClient.getUserSettings(user.id)
-                if (response.success && response.settings != null) {
-                    userLanguage = response.settings!!.language
-                }
-            } catch (e: Exception) {
-                println("Failed to load user settings: $e")
+            val response = ApiClient.getUserSettings(user.id)
+            if (response.success && response.settings != null) {
+                userLanguage = response.settings!!.language
+            } else if (response.message.isNotBlank()) {
+                println("Failed to load user settings: ${response.message}")
             }
         }
     }
@@ -95,21 +93,16 @@ fun ContactsScreen(appState: AppState) {
     fun loadContacts() {
         scope.launch {
             isLoading = true
-            try {
-                val response = appState.currentUser?.let { user ->
-                    ApiClient.getContacts(user.id)
-                }
-                
-                if (response != null && response.success) {
-                    contacts = response.contacts ?: emptyList()
-                    pendingRequests = response.pendingRequests ?: emptyList()
-                    println("✅ 加载了${contacts.size}个联系人，${pendingRequests.size}个待处理请求")
-                }
-            } catch (e: Exception) {
-                println("❌ 加载联系人失败: ${e.message}")
-            } finally {
-                isLoading = false
+            val response = ApiClient.getContacts(user.id)
+
+            if (response.success) {
+                contacts = response.contacts ?: emptyList()
+                pendingRequests = response.pendingRequests ?: emptyList()
+                println("✅ 加载了${contacts.size}个联系人，${pendingRequests.size}个待处理请求")
+            } else if (response.message.isNotBlank()) {
+                println("❌ 加载联系人失败: ${response.message}")
             }
+            isLoading = false
         }
     }
     

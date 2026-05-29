@@ -36,17 +36,17 @@
 
 ## Current Snapshot
 
-当前 detekt baseline 余量（2026-05-28，Slice 44 后）：
+当前 detekt baseline 余量（2026-05-29，Slice 51 后）：
 
 - `backend.xml`: 186
-- `frontend-androidApp.xml`: 53
+- `frontend-androidApp.xml`: 38
 - `frontend-webApp.xml`: 0
 - `frontend-shared.xml`: 7
 - `frontend-desktopApp.xml`: 0
 
 当前关键分布：
 
-- `frontend/androidApp` 已无 `WildcardImport` 与 `InstanceOfCheckForException` baseline，剩余主要是 `CyclomaticComplexMethod` 22、`TooGenericExceptionCaught` 10、`SwallowedException` 5。
+- `frontend/androidApp` 已无 `WildcardImport`、`InstanceOfCheckForException`、`PrintStackTrace` 与 `TooGenericExceptionThrown` baseline；剩余主要是 `CyclomaticComplexMethod` 22、`ComplexCondition` 6、`TooGenericExceptionCaught` 2、`SwallowedException` 2，且异常类问题已基本收缩到 `AppState.kt` / `ChatScreen.kt`。
 - `frontend/webApp` 已清空 detekt baseline；`ApiClient.kt` 的异常恢复已统一收敛到 `recoverApiCall(...)` helper。
 - `backend` 已无 `WildcardImport` baseline；剩余主要是 `CyclomaticComplexMethod` 34、`TooGenericExceptionCaught` 33、`ConstructorParameterNaming` 16、`NestedBlockDepth` 14、`UnusedPrivateMember` 13。
 
@@ -80,12 +80,21 @@
 - Slice 42 的完成历史已归档到 [2026-05-28-lint-baseline-reduction-slice-42.md](../completed/2026-05-28-lint-baseline-reduction-slice-42.md)。
 - Slice 43 的完成历史已归档到 [2026-05-28-lint-baseline-reduction-slice-43.md](../completed/2026-05-28-lint-baseline-reduction-slice-43.md)。
 - Slice 44 的完成历史已归档到 [2026-05-28-lint-baseline-reduction-slice-44.md](../completed/2026-05-28-lint-baseline-reduction-slice-44.md)。
+- Slice 45 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-45.md](../completed/2026-05-29-lint-baseline-reduction-slice-45.md)。
+- Slice 46 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-46.md](../completed/2026-05-29-lint-baseline-reduction-slice-46.md)。
+- Slice 47 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-47.md](../completed/2026-05-29-lint-baseline-reduction-slice-47.md)。
+- Slice 48 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-48.md](../completed/2026-05-29-lint-baseline-reduction-slice-48.md)。
+- Slice 49 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-49.md](../completed/2026-05-29-lint-baseline-reduction-slice-49.md)。
+- Slice 50 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-50.md](../completed/2026-05-29-lint-baseline-reduction-slice-50.md)。
+- Slice 51 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-51.md](../completed/2026-05-29-lint-baseline-reduction-slice-51.md)。
 - Android 侧已知 `jlink` / `JdkImageTransform` 阻塞保持不变；当前 active plan 继续优先选择不依赖该链路的窄 slice。
 
 ## Next Slices
 
-- Slice 45 候选：继续留在 Android，优先处理 `AudioDuplexScreen.kt` 的 `TooGenericExceptionCaught` / `SwallowedException`，因为它同时还挂着 `LoopWithTooManyJumpStatements`，适合先只切异常恢复面、不要把循环复杂度一起摊开。
-- Slice 46 候选：如果回到 backend，下一轮不要再按“大范围机械清理”切；优先选单文件的 `UnusedPrivateMember` / `UnusedParameter` 或明确异常语义问题。
+- Slice 52 候选：继续留在 Android，优先处理 `AppState.kt` 里剩余的 `TooGenericExceptionCaught` / `SwallowedException` 与两处 `ComplexCondition`，它的异常和条件都集中在本地会话恢复面，适合保持“小文件、小语义面”的切法推进。
+- Slice 53 候选：如果继续 Android，小范围异常类问题只剩 `ChatScreen.kt` 1 条 generic catch + 1 条 swallowed exception；但它同时叠着复杂度/条件/loop，大概率要和别的 slice 彻底隔离，不要和 `AppState.kt` 混做。
+- `ChatScreen.kt` 仍然是 Android 里剩余最重的异常/loop 组合面；在清完这些小文件前，先不要把它和别的 slice 混做。
+- 如果回到 backend，下一轮不要再按“大范围机械清理”切；优先选单文件的 `UnusedPrivateMember` / `UnusedParameter` 或明确异常语义问题。
 - `frontend/webApp` baseline 已清空；后续 web 再出现 lint 时只接受“新增问题直接修源码”，不要回填 baseline。
 - 复杂度规则继续按单文件慢拆，不和异常语义 / import 收敛混在同一 slice。
 
@@ -95,6 +104,13 @@
 - `frontend/shared/src/iosMain` 当前不在根 detekt source set 中；本计划按当前 lint 覆盖面推进，不把未启用 iOS 源码混进每一步。
 - `frontend/webApp/src/main/kotlin/com/silk/web/ApiClient.kt` 已抽出 `recoverApiCall(...)`；后续新增 web API 方法优先复用它，保持 cancellation 透传和 fallback 语义一致，不要再回到整文件 `catch (Exception)`。
 - `frontend/androidApp/src/main/kotlin/com/silk/android/ApiClient.kt` 已抽出同名 `recoverApiCall(...)`；后续新增 Android API 方法优先复用它，保持 `Dispatchers.IO`、cancellation 透传和 fallback 语义一致，不要再回到整文件 `catch (Exception)`。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/AudioDuplexScreen.kt` 已把会话级错误恢复和 receive loop 收敛到 helper；后续如果继续切这个文件，优先维持“事件分发 helper + 顶层会话 orchestration”的结构，不要把异常处理和 stop 分支重新散回主循环。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/ContactsScreen.kt` 现在直接依赖 `ApiClient` 的恢复语义来加载语言和联系人；后续改联系人页时不要再把这些 API 调用包回 `catch (Exception)`，优先检查 `response.success/message` 即可。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/SettingsScreen.kt` 现在直接依赖 `ApiClient` 的恢复语义来加载/保存用户设置与 CC Bridge 状态；后续改设置页时不要再把这些 API 调用包回 `catch (Exception)`，优先检查 `response.success/message` 并只保留必要的 `finally` 状态收尾。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/LoginScreen.kt` 现在直接依赖 `ApiClient.login/register(...)` 的恢复语义，升级安装错误也统一经 `ApkDownloader.installApk(...)` 的返回值汇报；后续改登录页时不要再把认证或安装入口包回 generic catch。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/GroupListScreen.kt` 现在直接依赖 `ApiClient` 的恢复语义来加载语言、群组和 create/join dialog；后续改群组页时优先检查 `response.success/message` 并只保留必要的 loading 状态收尾。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/WorkflowChatScreen.kt` 的首次连接已改成 `runCatching + cancellation 透传`；后续改工作流聊天页时不要再把 `chatClient.connect(...)` 包回 generic catch。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/ApkDownloader.kt` 现在把下载失败和安装失败统一折叠成返回值/状态回写，不再向调用方抛 `RuntimeException`；后续接入升级安装入口时优先消费返回消息，不要再在页面侧包安装 `try/catch`。
 - `frontend/webApp` 里的 transient/system-message 复杂条件已抽成共享 helper；后续同类判断优先复用 `shouldRenderInlineTransientMessage(...)` 与 `isWorkflowAgentLifecycleMessage(...)`，避免把条件重新写散。
 - `ContactsScene.kt` 已经把顶部栏、加载态、待处理请求区、联系人区拆成独立 composable；后续改联系人页时优先在这些 section helper 上扩展，不要把条件再塞回 `ContactsScene(...)`。
 - `SettingsScene.kt` 已经把顶部栏、语言/默认指令区、CC Bridge 区块、保存提示和底部按钮拆成独立 helper；后续继续加设置项时优先往这些 section 扩展，不要把分支重新堆回主 composable。

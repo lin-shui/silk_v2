@@ -114,13 +114,11 @@ fun GroupListScreen(appState: AppState) {
     LaunchedEffect(appState.currentUser?.id) {
         appState.currentUser?.let { user ->
             scope.launch {
-                try {
-                    val response = ApiClient.getUserSettings(user.id)
-                    if (response.success && response.settings != null) {
-                        userLanguage = response.settings!!.language
-                    }
-                } catch (e: Exception) {
-                    println("Failed to load user settings: $e")
+                val response = ApiClient.getUserSettings(user.id)
+                if (response.success && response.settings != null) {
+                    userLanguage = response.settings!!.language
+                } else if (response.message.isNotBlank()) {
+                    println("Failed to load user settings: ${response.message}")
                 }
             }
         }
@@ -133,31 +131,28 @@ fun GroupListScreen(appState: AppState) {
         if (appState.currentScene == Scene.GROUP_LIST) {
             scope.launch {
                 isLoading = true
-                try {
-                    val response = appState.currentUser?.let { user ->
-                        ApiClient.getUserGroups(user.id)
-                    }
-                    
-                    if (response != null && response.success) {
-                        // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
-                        // 它们只通过工作流 Tab 访问，不在 Silk 群组列表中显示
-                        groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
-                        println("✅ 加载了 ${groups.size} 个群组")
-                        
-                        // 加载未读消息数
-                        appState.currentUser?.let { user ->
-                            val unreadResponse = ApiClient.getUnreadCounts(user.id)
-                            if (unreadResponse.success) {
-                                unreadCounts = unreadResponse.unreadCounts
-                                println("✅ 未读消息: $unreadCounts")
-                            }
+                val response = appState.currentUser?.let { user ->
+                    ApiClient.getUserGroups(user.id)
+                }
+
+                if (response != null && response.success) {
+                    // 过滤掉工作流自动创建的关联群组（命名约定为 wf_ 前缀），
+                    // 它们只通过工作流 Tab 访问，不在 Silk 群组列表中显示
+                    groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
+                    println("✅ 加载了 ${groups.size} 个群组")
+
+                    // 加载未读消息数
+                    appState.currentUser?.let { user ->
+                        val unreadResponse = ApiClient.getUnreadCounts(user.id)
+                        if (unreadResponse.success) {
+                            unreadCounts = unreadResponse.unreadCounts
+                            println("✅ 未读消息: $unreadCounts")
                         }
                     }
-                } catch (e: Exception) {
-                    println("❌ 加载群组异常: ${e.message}")
-                } finally {
-                    isLoading = false
+                } else if (response?.message?.isNotBlank() == true) {
+                    println("❌ 加载群组异常: ${response.message}")
                 }
+                isLoading = false
             }
         }
     }
@@ -644,10 +639,8 @@ fun GroupListScreen(appState: AppState) {
                             
                             // 下载成功后自动安装
                             if (state is ApkDownloader.DownloadState.Success) {
-                                try {
-                                    ApkDownloader.installApk(context, state.file)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "启动安装失败: ${e.message}", Toast.LENGTH_LONG).show()
+                                ApkDownloader.installApk(context, state.file)?.let { message ->
+                                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                                 }
                             }
                         }
@@ -925,22 +918,17 @@ fun CreateGroupDialog(
                 onClick = {
                     scope.launch {
                         isLoading = true
-                        try {
-                            val response = appState.currentUser?.let { user ->
-                                ApiClient.createGroup(user.id, groupName)
-                            }
-                            
-                            if (response != null && response.success && response.group != null) {
-                                println("群组创建成功: ${response.group.name}")
-                                onGroupCreated(response.group)
-                            } else {
-                                errorMessage = response?.message ?: "创建失败"
-                            }
-                        } catch (e: Exception) {
-                            errorMessage = "创建失败: ${e.message}"
-                        } finally {
-                            isLoading = false
+                        val response = appState.currentUser?.let { user ->
+                            ApiClient.createGroup(user.id, groupName)
                         }
+
+                        if (response != null && response.success && response.group != null) {
+                            println("群组创建成功: ${response.group.name}")
+                            onGroupCreated(response.group)
+                        } else {
+                            errorMessage = response?.message ?: "创建失败"
+                        }
+                        isLoading = false
                     }
                 },
                 enabled = !isLoading && groupName.isNotBlank()
@@ -1000,22 +988,17 @@ fun JoinGroupDialog(
                 onClick = {
                     scope.launch {
                         isLoading = true
-                        try {
-                            val response = appState.currentUser?.let { user ->
-                                ApiClient.joinGroup(user.id, invitationCode)
-                            }
-                            
-                            if (response != null && response.success && response.group != null) {
-                                println("加入群组成功: ${response.group.name}")
-                                onGroupJoined(response.group)
-                            } else {
-                                errorMessage = response?.message ?: "加入失败"
-                            }
-                        } catch (e: Exception) {
-                            errorMessage = "加入失败: ${e.message}"
-                        } finally {
-                            isLoading = false
+                        val response = appState.currentUser?.let { user ->
+                            ApiClient.joinGroup(user.id, invitationCode)
                         }
+
+                        if (response != null && response.success && response.group != null) {
+                            println("加入群组成功: ${response.group.name}")
+                            onGroupJoined(response.group)
+                        } else {
+                            errorMessage = response?.message ?: "加入失败"
+                        }
+                        isLoading = false
                     }
                 },
                 enabled = !isLoading && invitationCode.length == 6
