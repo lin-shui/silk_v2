@@ -226,6 +226,7 @@ class ChatClient(
                     _transientMessage.value = null
                     _transientContentBlocks.value = message.contentBlocks
                     if (message.interactiveOptions != null) {
+                        log("🔘 [ChatClient] 设置 interactiveOptions: ${message.interactiveOptions.size} options: ${message.interactiveOptions.map { it.label }}")
                         _interactiveOptions.value = message.interactiveOptions
                     }
                     if (isSilkAi) _isGenerating.value = true
@@ -243,6 +244,7 @@ class ChatClient(
                         suppressTransient = false
                         _pendingQuestionId.value = null
                         _transientContentBlocks.value = emptyList()  // 清除内容块
+                        log("🔘 [ChatClient] CLEAR_STATUS 清除 interactiveOptions")
                         _interactiveOptions.value = emptyList()  // 清除交互式按钮
                     } else {
                         log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
@@ -307,7 +309,8 @@ class ChatClient(
                         _statusMessages.value = emptyList()
                         _isGenerating.value = false
                         _transientContentBlocks.value = emptyList()
-                        _interactiveOptions.value = emptyList()
+                        // 不清除 _interactiveOptions：cc-connect 的交互按钮独立于普通消息生命周期，
+                        // 由 CLEAR_STATUS 或 sendCcAnswer 负责清除。普通消息到达不应取消等待中的按钮。
                         suppressTransient = false
                         _pendingQuestionId.value = null
                     }
@@ -358,7 +361,12 @@ class ChatClient(
 
     suspend fun sendMessage(userId: String, userName: String, content: String) {
         suppressTransient = false
-        
+        // 用户发送新文本消息时清除等待中的交互按钮（cc-connect 场景）
+        if (_interactiveOptions.value.isNotEmpty()) {
+            log("🔘 [ChatClient] sendMessage 清除 interactiveOptions")
+            _interactiveOptions.value = emptyList()
+        }
+
         val message = Message(
             id = generateId(),
             userId = userId,
@@ -407,6 +415,7 @@ class ChatClient(
      * 让后端正确路由给引擎处理，不会落入 AI agent 导致权限拦截。
      */
     fun sendCcAnswer(content: String) {
+        log("🔘 [ChatClient] sendCcAnswer: content=${content.take(30)}, clearing interactiveOptions")
         // cmd: 前缀 → 作为命令发送（引擎按钮值）
         if (content.startsWith("cmd:")) {
             sendCcCommand(currentUserId, content.substring(4))

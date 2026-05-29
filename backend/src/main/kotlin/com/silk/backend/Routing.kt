@@ -2294,16 +2294,8 @@ fun Application.configureRouting() {
             // thinking/tool_use blocks, emitting updated contentBlocks with every fragment.
             val streamBlockTypes = mutableListOf<String>()        // "thinking", "tool_use", "text"
             val streamBlockContent = mutableListOf<StringBuilder>()
-
-            // Helper: flush text into a text segment, creating one if no segments exist yet.
-            fun appendOrCreateTextSegment(text: String, types: MutableList<String>, contents: MutableList<StringBuilder>) {
-                if (text.isEmpty()) return
-                if (types.isNotEmpty() && types.last() == "text") {
-                    contents.last().append(text)
-                } else {
-                    types.add("text"); contents.add(StringBuilder(text))
-                }
-            }
+            var finalBlocksSent = false
+            var pendingFinalBlocks = emptyList<com.silk.backend.ai.ContentBlock>()  // contentBlocks from done:true, for status:idle broadcast
 
             fun buildStructuredContent(collapseTools: Boolean = false): String {
                 val sb = StringBuilder()
@@ -2409,6 +2401,34 @@ fun Application.configureRouting() {
                                 logger.info("[CcConnect][{}] answer received → continuation (reply)", groupId)
                             }
                             if (turnActive) {
+                                // ── 结构化最终块已发送：引擎回退的 reply 包含权限问题文本 ──
+                                if (finalBlocksSent) {
+                                    val rawContent = reply.content.trimStart()
+                                    if (rawContent.startsWith("💭") || rawContent.startsWith("🔧")) {
+                                        // 工具/思考块 → 正常处理（continue 后落到下方 when）
+                                        finalBlocksSent = false
+                                    } else if (!com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
+                                        // waitingForInput 已被 forwardAnswer 清除 →
+                                        // 用户已点击按钮，此 reply 是继续输出，不是新问题
+                                        finalBlocksSent = false
+                                        logger.info("[CcConnect][{}] finalBlocksSent → continuation after answer forwarded", groupId)
+                                    } else {
+                                        answerText = reply.content
+                                        // 广播问题文本，让用户看到权限请求
+                                        chatServer.broadcast(Message(
+                                            id = java.util.UUID.randomUUID().toString(),
+                                            userId = "cc-connect",
+                                            userName = ccUserName,
+                                            content = reply.content,
+                                            timestamp = System.currentTimeMillis(),
+                                            type = MessageType.TEXT,
+                                            isTransient = true,
+                                        ))
+                                        com.silk.backend.ccconnect.CcConnectRegistry.setWaitingForInput(groupId)
+                                        logger.info("[CcConnect][{}] finalBlocksSent → question broadcast, waitingForInput set", groupId)
+                                        continue
+                                    }
+                                }
                                 val content = reply.content.trimStart()
                                 when {
                                     content.startsWith("\uD83D\uDCAD") -> thinkingParts.add(reply.content)
@@ -2463,14 +2483,24 @@ fun Application.configureRouting() {
                                         toolName = obj["toolName"]?.jsonPrimitive?.content ?: "",
                                     )
                                 }
+                                // Extract answer text for content field and question detection
+                                var contentField = stream.content
+                                if (stream.done) {
+                                    for (block in blocks) {
+                                        if (block.type == "text" && block.content.isNotBlank()) {
+                                            contentField = block.content
+                                            answerText = block.content
+                                        }
+                                    }
+                                }
                                 val msg = Message(
                                     id = java.util.UUID.randomUUID().toString(),
                                     userId = "cc-connect",
                                     userName = ccUserName,
-                                    content = stream.content,
+                                    content = contentField,
                                     timestamp = System.currentTimeMillis(),
                                     type = MessageType.TEXT,
-                                    isTransient = !stream.done,
+                                    isTransient = true,
                                     isIncremental = false,
                                     contentBlocks = blocks,
                                 )
@@ -2478,6 +2508,8 @@ fun Application.configureRouting() {
                                 if (stream.done) {
                                     streamBlockTypes.clear()
                                     streamBlockContent.clear()
+                                    pendingFinalBlocks = blocks
+                                    finalBlocksSent = true
                                 }
                                 continue
                             }
@@ -2494,67 +2526,19 @@ fun Application.configureRouting() {
                                 logger.info("[CcConnect][{}] answer received → continuation (stream)", groupId)
                             }
                             if (turnActive) {
-                                // Real-time emoji parsing: scan each incremental fragment for \ud83d\udcad/\ud83d\udd27
-                                // markers that delimit thinking/tool_use blocks. Build and emit
-                                // contentBlocks with every fragment so the frontend renders blocks live.
-                                val raw = stream.content
-                                val scanBuf = StringBuilder()
-                                var ci = 0
-                                while (ci < raw.length) {
-                                    if (ci < raw.length - 1 && raw[ci] == '\uD83D') {
-                                        if (raw[ci + 1] == '\uDCAD') { // \ud83d\udcad = entering thinking
-                                            if (scanBuf.isNotEmpty() || streamBlockTypes.isEmpty()) {
-                                                appendOrCreateTextSegment(scanBuf.toString(), streamBlockTypes, streamBlockContent)
-                                                scanBuf.clear()
-                                            }
-                                            streamBlockTypes.add("thinking"); streamBlockContent.add(StringBuilder())
-                                            ci += 2
-                                            continue
-                                        } else if (raw[ci + 1] == '\uDD27') { // \ud83d\udd27 = entering tool_use
-                                            if (scanBuf.isNotEmpty() || streamBlockTypes.isEmpty()) {
-                                                appendOrCreateTextSegment(scanBuf.toString(), streamBlockTypes, streamBlockContent)
-                                                scanBuf.clear()
-                                            }
-                                            streamBlockTypes.add("tool_use"); streamBlockContent.add(StringBuilder())
-                                            ci += 2
-                                            continue
-                                        }
-                                    }
-                                    scanBuf.append(raw[ci]); ci++
-                                }
-                                if (scanBuf.isNotEmpty()) {
-                                    if (streamBlockTypes.isNotEmpty()) {
-                                        streamBlockContent.last().append(scanBuf)
-                                    } else {
-                                        streamBlockTypes.add("text"); streamBlockContent.add(StringBuilder(scanBuf))
-                                    }
-                                }
-                                // Build content blocks from live streaming state
-                                val liveBlocks = streamBlockTypes.mapIndexed { idx, type ->
-                                    val content = streamBlockContent[idx].toString()
-                                    when (type) {
-                                        "thinking" -> ContentBlock(index = idx, type = "thinking", content = content,
-                                            isComplete = idx < streamBlockTypes.size - 1)
-                                        "tool_use" -> ContentBlock(index = idx, type = "tool_use", content = content,
-                                            isComplete = true,
-                                            toolName = content.lines().firstOrNull()?.removePrefix("\ud83d\udd27")?.trim()
-                                                ?.replace("**", "")?.trim()?.take(40) ?: "")
-                                        else -> ContentBlock(index = idx, type = "text", content = content,
-                                            isComplete = idx < streamBlockTypes.size - 1)
-                                    }
-                                }
-                                val msg = Message(
+                                // silk.go now sends structured contentBlocks directly via the
+                                // engineContentBlocks check above. This is a safety fallback:
+                                // just send raw content as plain text.
+                                chatServer.broadcast(Message(
                                     id = java.util.UUID.randomUUID().toString(),
                                     userId = "cc-connect",
                                     userName = ccUserName,
-                                    content = raw,
+                                    content = stream.content,
                                     timestamp = System.currentTimeMillis(),
                                     type = MessageType.TEXT,
                                     isTransient = true,
                                     isIncremental = false,
-                                    contentBlocks = liveBlocks,
-                                )
-                                chatServer.broadcast(msg)
+                                ))
                             } else {
                                 val isIncremental = stream.incremental ?: !stream.done
                                 val msg = Message(
@@ -2620,7 +2604,7 @@ fun Application.configureRouting() {
                             chatServer.broadcast(msg)
                             // 引擎已阻塞等待回答，设置 waitingForInput
                             com.silk.backend.ccconnect.CcConnectRegistry.setWaitingForInput(groupId)
-                            logger.info("[CcConnect][{}] question broadcast with {} options, waitingForInput set", groupId, interactiveOptions.size)
+                            logger.info("[CcConnect][{}] question broadcast with {} options: {}, waitingForInput set", groupId, interactiveOptions.size, interactiveOptions.map { it.label })
                         }
                         "status" -> {
                             val status = com.silk.backend.ccconnect.protocolJson.decodeFromString(
@@ -2641,6 +2625,8 @@ fun Application.configureRouting() {
                                     gotReplyAfterStream = false
                                     streamBlockTypes.clear()
                                     streamBlockContent.clear()
+                                    finalBlocksSent = false
+                                    pendingFinalBlocks = emptyList()
                                     chatServer.broadcastSystemStatus("Thinking...")
                                 }
                                 "tool_use" -> {
@@ -2651,35 +2637,42 @@ fun Application.configureRouting() {
                                 "idle" -> {
                                     logger.info("[CcConnect][{}] status=idle, turnActive={}", groupId, turnActive)
                                     if (turnActive) {
-                                        // Convert streaming blocks to thinkingParts/toolParts/answerText for
-                                        // the final message. During streaming we only maintained the live block
-                                        // state; now at turn end we finalize into the accumulator-based format
-                                        // used by buildStructuredContent() and buildContentBlockList().
-                                        thinkingParts.clear()
-                                        toolParts.clear()
-                                        answerText = ""
-                                        for (i in streamBlockTypes.indices) {
-                                            when (streamBlockTypes[i]) {
-                                                "thinking" -> thinkingParts.add(streamBlockContent[i].toString())
-                                                "tool_use" -> toolParts.add(streamBlockContent[i].toString())
-                                                "text" -> answerText = streamBlockContent[i].toString()
+                                        if (finalBlocksSent || pendingFinalBlocks.isNotEmpty()) {
+                                            // 结构化流路径：广播最终消息（含 thinking / tool / text 完整 blocks）
+                                            val blocks = pendingFinalBlocks.also { pendingFinalBlocks = emptyList() }
+                                            val finalContent = answerText.ifEmpty {
+                                                blocks.firstOrNull { it.type == "text" }?.content ?: ""
                                             }
-                                        }
-                                        streamBlockTypes.clear()
-                                        streamBlockContent.clear()
-                                        val finalContent = buildStructuredContent(collapseTools = true)
-                                        if (finalContent.isNotBlank() &&
-                                            finalContent != "<!--CC_TURN-->\n") {
-                                            val msg = Message(
-                                                id = java.util.UUID.randomUUID().toString(),
-                                                userId = "cc-connect",
-                                                userName = ccUserName,
-                                                content = finalContent,
-                                                timestamp = System.currentTimeMillis(),
-                                                type = MessageType.TEXT,
-                                                contentBlocks = buildContentBlockList(),
-                                            )
-                                            chatServer.broadcast(msg)
+                                            if (blocks.isNotEmpty() || finalContent.isNotBlank()) {
+                                                val msg = Message(
+                                                    id = java.util.UUID.randomUUID().toString(),
+                                                    userId = "cc-connect",
+                                                    userName = ccUserName,
+                                                    content = finalContent,
+                                                    timestamp = System.currentTimeMillis(),
+                                                    type = MessageType.TEXT,
+                                                    contentBlocks = blocks,
+                                                )
+                                                chatServer.broadcast(msg)
+                                            }
+                                            finalBlocksSent = false
+                                        } else {
+                                            // 旧路径：直接使用已累积的 thinkingParts/toolParts/answerText
+                                            // （reply/reply_stream 处理器已通过 emoji 标记解析填充它们）
+                                            val finalContent = buildStructuredContent(collapseTools = true)
+                                            if (finalContent.isNotBlank() &&
+                                                finalContent != "<!--CC_TURN-->\n") {
+                                                val msg = Message(
+                                                    id = java.util.UUID.randomUUID().toString(),
+                                                    userId = "cc-connect",
+                                                    userName = ccUserName,
+                                                    content = finalContent,
+                                                    timestamp = System.currentTimeMillis(),
+                                                    type = MessageType.TEXT,
+                                                    contentBlocks = buildContentBlockList(),
+                                                )
+                                                chatServer.broadcast(msg)
+                                            }
                                         }
                                         // ── 检测 AI 是否在提问 → 保持会话存活 ──
                                         val isQuestion = isLikelyQuestion(answerText)
@@ -2693,6 +2686,7 @@ fun Application.configureRouting() {
                                             thinkingParts.clear()
                                             toolParts.clear()
                                             answerText = ""
+                                            pendingFinalBlocks = emptyList()
                                         }
                                     }
                                     // ── 提问场景：不清除状态，不标记空闲 ──

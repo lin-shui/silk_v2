@@ -2255,6 +2255,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
 
             // 显示交互式按钮选项（cc-connect 提问）
             if (interactiveOptions.isNotEmpty()) {
+                console.log("🔘 [UI] rendering InteractiveOptions: ${interactiveOptions.size} options: ${interactiveOptions.map { it.label }}")
                 InteractiveOptions(
                     options = interactiveOptions,
                     onAnswer = { value ->
@@ -5236,10 +5237,11 @@ Div({
         }
         
         // 内容区域 — 长内容渲染折叠+展开两个视图，DOM 切换 display（不触发 Compose 重组）
-        message.contentBlocks?.let { blocks ->
+        val contentBlocksForRender = message.contentBlocks
+        if (!contentBlocksForRender.isNullOrEmpty()) {
             // 持久化消息回放：从结构化 content blocks 渲染
             Div({ classes(SilkStylesheet.aiMessageContent) }) {
-                for (block in blocks) {
+                for (block in contentBlocksForRender) {
                     when (block.type) {
                         "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete)
                         "text" -> MarkdownContent(content = block.content, references = message.references)
@@ -5247,7 +5249,7 @@ Div({
                     }
                 }
             }
-        } ?: run {
+        } else {
             if (isLongContent && !isTransient) {
             Div({
                 attr("data-view", "collapsed")
