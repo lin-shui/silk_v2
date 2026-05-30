@@ -3381,6 +3381,37 @@ fun Application.configureRouting() {
                             val receivedText = frame.readText()
                             try {
                                 val message = Json.decodeFromString<Message>(receivedText)
+
+                                // ⛔ cc-connect 按钮答案拦截：按钮值（如 perm:allow）是引擎产生的
+                                // 机器 token，不应作为聊天消息显示。拦截在 broadcast() 之前，
+                                // 完全不存历史、不广播给客户端。
+                                // 仅拦截已知的按钮 token 格式（自然语言回复仍正常显示）。
+                                if (message.type == MessageType.TEXT && !message.isTransient
+                                    && message.userId != "cc-connect" && message.userId != "system"
+                                ) {
+                                    val ccGid = groupId
+                                    val ccReg = com.silk.backend.ccconnect.CcConnectRegistry
+                                    if (ccReg.isConnected(ccGid) && ccReg.isWaitingForInput(ccGid)) {
+                                        // 映射按钮值 → 引擎期望的权限回复文本
+                                        val engineContent = when (message.content) {
+                                            "perm:allow", "perm:allow_all" -> "allow"
+                                            "perm:deny" -> "deny"
+                                            else -> null  // 不是已知按钮值 → 走正常 broadcast 流程
+                                        }
+                                        if (engineContent != null) {
+                                            val userMsg = com.silk.backend.ccconnect.UserMessage(
+                                                content = engineContent,
+                                                userId = message.userId,
+                                                userName = message.userName,
+                                                msgId = message.id,
+                                            )
+                                            ccReg.forwardAnswer(ccGid, userMsg)
+                                            logger.info("[CcAnswer] 按钮答案已转发: groupId={}, content={}→{}", ccGid, message.content, engineContent)
+                                            return@consumeEach
+                                        }
+                                    }
+                                }
+
                                 groupChatServer.broadcast(message)
                             } catch (e: Exception) {
                                 logger.warn("⚠️ 解析消息失败: {}", e.message)
