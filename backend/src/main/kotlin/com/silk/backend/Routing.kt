@@ -2654,7 +2654,8 @@ fun Application.configureRouting() {
                                     finalBlocksSent = false
                                     pendingFinalBlocks = emptyList()
                                     lastStreamBlocks = emptyList()
-                                    preQuestionBlocks = emptyList()
+                                    // 保留 preQuestionBlocks：权限回复后 engine 发 status=thinking 开启新段落，
+                                    // 但 pre-question blocks 仍需在后续 reply_stream 中合并显示，直到 engine 自己产生新块。
                                     chatServer.broadcastSystemStatus("Thinking...")
                                 }
                                 "tool_use" -> {
