@@ -1566,8 +1566,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
-    // 自动滚动到底部
-    LaunchedEffect(messages.size, transientMessage, statusMessages.size) {
+    // 自动滚动到底部 — 包括 contentBlocks（cc-connect / Claudian 流式回复的主要通道）
+    // 以及 interactiveOptions（交互式按钮出现在底部时）
+    LaunchedEffect(messages.size, transientMessage, statusMessages.size, contentBlocks, interactiveOptions) {
         js("""
             setTimeout(function() {
                 var messagesContainer = document.getElementById('messages');
