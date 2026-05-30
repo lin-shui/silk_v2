@@ -88,6 +88,7 @@ class ChatServer(
     private val connections = ConcurrentHashMap<String, CopyOnWriteArrayList<WebSocketSession>>()
     private val messageHistory = Collections.synchronizedList(mutableListOf<Message>())
     private val historyManager = ChatHistoryManager()
+    private val historyJson = Json { ignoreUnknownKeys = true }
     private val silkAgent = SilkAgent().apply {
         initializeAgent(sessionName)  // 初始化 Agent 并传递 session name
     }
@@ -138,7 +139,23 @@ class ChatServer(
                         } catch (e: Exception) {
                             MessageType.TEXT
                         },
-                        references = entry.references
+                        references = entry.references,
+                        contentBlocks = entry.contentBlocksJson?.let {
+                            try {
+                                historyJson.decodeFromString<List<com.silk.backend.ai.ContentBlock>>(it)
+                            } catch (e: Exception) {
+                                logger.warn("⚠️ 反序列化 contentBlocks 失败: {}", e.message)
+                                null
+                            }
+                        },
+                        interactiveOptions = entry.interactiveOptionsJson?.let {
+                            try {
+                                historyJson.decodeFromString<List<InteractiveOption>>(it)
+                            } catch (e: Exception) {
+                                logger.warn("⚠️ 反序列化 interactiveOptions 失败: {}", e.message)
+                                null
+                            }
+                        },
                     )
                     messageHistory.add(msg)
                 }

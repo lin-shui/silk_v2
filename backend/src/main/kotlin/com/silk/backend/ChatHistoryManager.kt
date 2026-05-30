@@ -304,7 +304,9 @@ class ChatHistoryManager(
             content = message.content,
             timestamp = message.timestamp,
             messageType = message.type.name,
-            references = message.references
+            references = message.references,
+            contentBlocksJson = message.contentBlocks?.let { json.encodeToString(it) },
+            interactiveOptionsJson = message.interactiveOptions?.let { json.encodeToString(it) },
         )
         
         chatHistory.messages.add(entry)

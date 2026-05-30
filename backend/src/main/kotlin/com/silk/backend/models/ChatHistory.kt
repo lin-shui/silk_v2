@@ -49,7 +49,10 @@ data class ChatHistoryEntry(
     val content: String,
     val timestamp: Long,
     val messageType: String, // TEXT, JOIN, LEAVE, SYSTEM
-    val references: List<MessageReference> = emptyList()
+    val references: List<MessageReference> = emptyList(),
+    // JSON-encoded structured content (avoids cross-package type dependencies)
+    val contentBlocksJson: String? = null,
+    val interactiveOptionsJson: String? = null,
 )
 
 /**
