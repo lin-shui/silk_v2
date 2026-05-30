@@ -2544,7 +2544,14 @@ fun Application.configureRouting() {
                             if (turnActive) {
                                 // silk.go now sends structured contentBlocks directly via the
                                 // engineContentBlocks check above. This is a safety fallback:
-                                // just send raw content as plain text.
+                                // just send raw content as plain text. Include preQuestionBlocks
+                                // to prevent frontend from clearing transient display during
+                                // question-answer-handoff.
+                                val fallbackBlocks = if (preQuestionBlocks.isNotEmpty()) {
+                                    preQuestionBlocks
+                                } else {
+                                    emptyList()
+                                }
                                 chatServer.broadcast(Message(
                                     id = java.util.UUID.randomUUID().toString(),
                                     userId = "cc-connect",
@@ -2554,6 +2561,7 @@ fun Application.configureRouting() {
                                     type = MessageType.TEXT,
                                     isTransient = true,
                                     isIncremental = false,
+                                    contentBlocks = fallbackBlocks.ifEmpty { null },
                                 ))
                             } else {
                                 val isIncremental = stream.incremental ?: !stream.done
@@ -2593,6 +2601,10 @@ fun Application.configureRouting() {
                                 preQuestionBlocks = lastStreamBlocks.toList()
                                 blocks = lastStreamBlocks.toMutableList()
                                 lastStreamBlocks = emptyList()
+                            } else if (pendingFinalBlocks.isNotEmpty()) {
+                                // Stream already done=true before question: use pendingFinalBlocks
+                                preQuestionBlocks = pendingFinalBlocks.toList()
+                                blocks = pendingFinalBlocks.toMutableList()
                             } else {
                                 // Non-structured path: rebuild from emoji markers
                                 if (streamBlockTypes.isNotEmpty()) {
