@@ -1404,8 +1404,9 @@ class ChatServer(
 
         var fullResponse = ""
         var agentReferences: List<com.silk.backend.models.MessageReference> = emptyList()
-        // Track last structured blocks from blocks_state for final message inclusion
+        // Track last structured blocks from blocks_state / streaming_incremental
         var lastBlocks: List<com.silk.backend.ai.ContentBlock> = emptyList()
+        var streamingAccumulated = StringBuilder()
         try {
             val response = directModelAgent.processInput(
                 userInput = userMessage,
@@ -1421,20 +1422,29 @@ class ChatServer(
                         sendAgentStatus(content)
                     }
                     "streaming_incremental" -> {
-                        val incrementalMessage = Message(
+                        streamingAccumulated.append(content)
+                        val accumulated = streamingAccumulated.toString()
+                        // Send contentBlocks-style message (matching cc-connect format)
+                        val textBlock = com.silk.backend.ai.ContentBlock(
+                            index = 0, type = "text", content = accumulated,
+                            isComplete = false,
+                        )
+                        val blocks = listOf(textBlock)
+                        lastBlocks = blocks
+                        val blockMessage = Message(
                             id = "streaming_${System.currentTimeMillis()}",
                             userId = SilkAgent.AGENT_ID,
                             userName = SilkAgent.AGENT_NAME,
-                            content = content,
+                            content = accumulated,
                             timestamp = System.currentTimeMillis(),
                             type = MessageType.TEXT,
                             isTransient = true,
-                            isIncremental = true
+                            isIncremental = false,
+                            contentBlocks = blocks,
                         )
-                        val messageJson = Json.encodeToString(incrementalMessage)
-                        val sessions = allSessions()
-                        logger.info("📤 [流式-{}] 增量 {}字符 -> {}个连接", callId, content.length, sessions.size)
-                        sessions.forEach { session ->
+                        logger.info("📤 [流式-{}] 增量 {}字符 -> {}个连接", callId, accumulated.length, allSessions().size)
+                        val messageJson = Json.encodeToString(blockMessage)
+                        allSessions().forEach { session ->
                             try {
                                 session.send(Frame.Text(messageJson))
                             } catch (e: Exception) {
