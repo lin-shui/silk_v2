@@ -2805,6 +2805,34 @@ fun Application.configureRouting() {
                 logger.error("[CcConnect] WS error: groupId={}, err={}", groupId, e.message)
             } finally {
                 logger.info("[CcConnect] WS disconnected: groupId={}", groupId)
+
+                // ── 持久化未完成轮次的回复内容 ──
+                // 当引擎重启/崩溃时，status:idle 不会到达，流式回复仅以 transient
+                // 方式广播过。此处将已累积内容作为最终消息持久化，确保刷新后不丢失。
+                if (turnActive) {
+                    val blocks = pendingFinalBlocks.ifEmpty {
+                        // 无结构化 blocks → 从 legacy thinkingParts/toolParts/answerText 构建
+                        buildContentBlockList(preBlocks = preQuestionBlocks)
+                    }
+                    val finalContent = answerText.ifEmpty {
+                        blocks.firstOrNull { it.type == "text" }?.content ?: ""
+                    }
+                    if (blocks.isNotEmpty() || finalContent.isNotBlank()) {
+                        val msg = Message(
+                            id = java.util.UUID.randomUUID().toString(),
+                            userId = "cc-connect",
+                            userName = ccUserName,
+                            content = finalContent,
+                            timestamp = System.currentTimeMillis(),
+                            type = MessageType.TEXT,
+                            contentBlocks = blocks,
+                        )
+                        chatServer.broadcast(msg)
+                        logger.info("[CcConnect][{}] persisted in-flight turn on disconnect: blocks={}, contentLen={}",
+                            groupId, blocks.size, finalContent.length)
+                    }
+                    turnActive = false
+                }
                 com.silk.backend.ccconnect.CcConnectRegistry.unregister(groupId, this)
 
                 val offlineMsg = Message(

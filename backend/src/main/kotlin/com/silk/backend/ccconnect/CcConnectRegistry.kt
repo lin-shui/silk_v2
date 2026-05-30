@@ -91,10 +91,10 @@ object CcConnectRegistry {
     suspend fun forwardAnswer(groupId: String, userMessage: UserMessage): Boolean {
         val conn = connections[groupId] ?: return false
         return try {
+            clearWaitingForInput(groupId)
             val json = protocolJson.encodeToString(UserMessage.serializer(), userMessage)
             conn.session.send(Frame.Text(json))
-            clearWaitingForInput(groupId)
-            logger.info("[CcConnect][{}] forwardAnswer sent, msgId={}, waitingForInput cleared", groupId, userMessage.msgId)
+            logger.info("[CcConnect][{}] forwardAnswer sent, msgId={}", groupId, userMessage.msgId)
             true
         } catch (e: ClosedSendChannelException) {
             logger.warn("[CcConnect][{}] forwardAnswer failed (closed): msgId={}", groupId, userMessage.msgId)
