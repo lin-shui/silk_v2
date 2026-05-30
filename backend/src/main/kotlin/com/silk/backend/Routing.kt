@@ -2297,6 +2297,7 @@ fun Application.configureRouting() {
             var finalBlocksSent = false
             var pendingFinalBlocks = emptyList<com.silk.backend.ai.ContentBlock>()  // contentBlocks from done:true, for status:idle broadcast
             var lastStreamBlocks = emptyList<com.silk.backend.ai.ContentBlock>()    // last streaming blocks, for question context
+            var preQuestionBlocks = emptyList<com.silk.backend.ai.ContentBlock>()   // blocks saved before question, merged into final
 
             fun buildStructuredContent(collapseTools: Boolean = false): String {
                 val sb = StringBuilder()
@@ -2581,6 +2582,8 @@ fun Application.configureRouting() {
                             val blocks: MutableList<ContentBlock>
                             if (lastStreamBlocks.isNotEmpty()) {
                                 // Structured path: preserve what was streaming before question
+                                // Save pre-question blocks separately so they survive the answer→continuation boundary
+                                preQuestionBlocks = lastStreamBlocks.toList()
                                 blocks = lastStreamBlocks.toMutableList()
                                 lastStreamBlocks = emptyList()
                             } else {
@@ -2644,6 +2647,7 @@ fun Application.configureRouting() {
                                     finalBlocksSent = false
                                     pendingFinalBlocks = emptyList()
                                     lastStreamBlocks = emptyList()
+                                    preQuestionBlocks = emptyList()
                                     chatServer.broadcastSystemStatus("Thinking...")
                                 }
                                 "tool_use" -> {
@@ -2656,7 +2660,13 @@ fun Application.configureRouting() {
                                     if (turnActive) {
                                         if (finalBlocksSent || pendingFinalBlocks.isNotEmpty()) {
                                             // 结构化流路径：广播最终消息（含 thinking / tool / text 完整 blocks）
-                                            val blocks = pendingFinalBlocks.also { pendingFinalBlocks = emptyList() }
+                                            var blocks = pendingFinalBlocks.also { pendingFinalBlocks = emptyList() }
+                                            // 如果有预先保存的 pre-question blocks（刚结束的 turn 中曾展示过提问），
+                                            // 将它们合并到最终消息开头，确保 pre-question 内容不丢失。
+                                            if (preQuestionBlocks.isNotEmpty()) {
+                                                blocks = preQuestionBlocks + blocks
+                                                preQuestionBlocks = emptyList()
+                                            }
                                             val finalContent = answerText.ifEmpty {
                                                 blocks.firstOrNull { it.type == "text" }?.content ?: ""
                                             }
@@ -2705,6 +2715,7 @@ fun Application.configureRouting() {
                                             answerText = ""
                                             pendingFinalBlocks = emptyList()
                                             lastStreamBlocks = emptyList()
+                                            preQuestionBlocks = emptyList()
                                         }
                                     }
                                     // ── 提问场景：不清除状态，不标记空闲 ──
