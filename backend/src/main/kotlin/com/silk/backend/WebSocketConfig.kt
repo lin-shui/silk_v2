@@ -1404,6 +1404,8 @@ class ChatServer(
 
         var fullResponse = ""
         var agentReferences: List<com.silk.backend.models.MessageReference> = emptyList()
+        // Track last structured blocks from blocks_state for final message inclusion
+        var lastBlocks: List<com.silk.backend.ai.ContentBlock> = emptyList()
         try {
             val response = directModelAgent.processInput(
                 userInput = userMessage,
@@ -1442,11 +1444,14 @@ class ChatServer(
                     }
                     "blocks_state" -> {
                         val blocks = Json.decodeFromString<List<com.silk.backend.ai.ContentBlock>>(content)
+                        lastBlocks = blocks
+                        // Populate content from the text block (matching cc-connect format)
+                        val textContent = blocks.firstOrNull { it.type == "text" }?.content ?: ""
                         val blockMessage = Message(
                             id = "streaming_${System.currentTimeMillis()}",
                             userId = SilkAgent.AGENT_ID,
                             userName = SilkAgent.AGENT_NAME,
-                            content = "",
+                            content = textContent,
                             timestamp = System.currentTimeMillis(),
                             type = MessageType.TEXT,
                             isTransient = true,
@@ -1488,7 +1493,8 @@ class ChatServer(
                         type = MessageType.TEXT,
                         isTransient = false,
                         isIncremental = false,
-                        references = agentReferences
+                        references = agentReferences,
+                        contentBlocks = lastBlocks.ifEmpty { null },
                     )
                     
                     // 检查是否已经在历史中（防止重复）
