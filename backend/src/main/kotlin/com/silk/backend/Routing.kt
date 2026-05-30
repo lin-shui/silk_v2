@@ -2412,6 +2412,11 @@ fun Application.configureRouting() {
                                         // 用户已点击按钮，此 reply 是继续输出，不是新问题
                                         finalBlocksSent = false
                                         logger.info("[CcConnect][{}] finalBlocksSent → continuation after answer forwarded", groupId)
+                                        // 跳过广播：contentBlocks 已在 reply_stream done=true 时发送，
+                                        // 引擎 fallback 的纯文本 reply 会覆盖流式 blocks 导致闪烁。
+                                        answerText = reply.content
+                                        gotReplyAfterStream = true
+                                        continue
                                     } else {
                                         answerText = reply.content
                                         // 广播问题文本，让用户看到权限请求
