@@ -104,6 +104,10 @@ class ClaudeProcessClient(
         val cmd = buildList {
             add("python3")
             add(ptyChatPath)
+            if (claudePath != "claude") {
+                add("--claude-path")
+                add(claudePath)
+            }
             add(promptFile.absolutePath)
             add(absWorkspaceDir)
         }

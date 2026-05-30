@@ -362,12 +362,22 @@ def _forward_pty_output(fd: int, pid: int) -> None:
 # ──────────────────────────────────────────────
 
 def main():
-    if len(sys.argv) < 3:
-        print(f"Usage: {sys.argv[0]} <prompt_file> <workspace_dir>", file=sys.stderr)
+    claude_path = "claude"
+    args = sys.argv[1:]
+    # Parse optional --claude-path before positional args
+    for i, arg in enumerate(args[:]):
+        if arg == "--claude-path" and i + 1 < len(args):
+            claude_path = args[i + 1]
+            # Remove --claude-path and its value from positional args
+            args = args[:i] + args[i + 2:]
+            break
+
+    if len(args) < 2:
+        print(f"Usage: {sys.argv[0]} [--claude-path <path>] <prompt_file> <workspace_dir>", file=sys.stderr)
         sys.exit(1)
 
-    prompt_file = sys.argv[1]
-    workspace_dir = sys.argv[2]
+    prompt_file = args[0]
+    workspace_dir = args[1]
 
     # Validate paths
     if not os.path.isfile(prompt_file):
@@ -423,7 +433,7 @@ def main():
 
     # ── Step 4: Build claude command ──
     cmd = [
-        "claude",
+        claude_path,
         "-p", prompt,
         "--session-id", str(uuid.uuid4()),
         "--disallowedTools", "Bash,Write,Edit,ExecuteCommand",
