@@ -2409,30 +2409,15 @@ fun Application.configureRouting() {
                                     if (rawContent.startsWith("💭") || rawContent.startsWith("🔧")) {
                                         // 工具/思考块 → 正常处理（continue 后落到下方 when）
                                         finalBlocksSent = false
-                                    } else if (!com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
-                                        // waitingForInput 已被 forwardAnswer 清除 →
-                                        // 用户已点击按钮，此 reply 是继续输出，不是新问题
+                                    } else {
+                                        // finalBlocksSent 为 true 说明 reply_stream done=true 已发过结构化 blocks。
+                                        // 此 reply 是 Finalize 返回 error 后引擎的 fallback 文本。
+                                        // 问题已由 "question" handler 广播，此 reply 应始终跳过，
+                                        // 不依赖 isWaitingForInput 判断——避免 forwardAnswer 与引擎回复的时序竞争。
                                         finalBlocksSent = false
-                                        logger.info("[CcConnect][{}] finalBlocksSent → continuation after answer forwarded", groupId)
-                                        // 跳过广播：contentBlocks 已在 reply_stream done=true 时发送，
-                                        // 引擎 fallback 的纯文本 reply 会覆盖流式 blocks 导致闪烁。
                                         answerText = reply.content
                                         gotReplyAfterStream = true
-                                        continue
-                                    } else {
-                                        answerText = reply.content
-                                        // 广播问题文本，让用户看到权限请求
-                                        chatServer.broadcast(Message(
-                                            id = java.util.UUID.randomUUID().toString(),
-                                            userId = "cc-connect",
-                                            userName = ccUserName,
-                                            content = reply.content,
-                                            timestamp = System.currentTimeMillis(),
-                                            type = MessageType.TEXT,
-                                            isTransient = true,
-                                        ))
-                                        com.silk.backend.ccconnect.CcConnectRegistry.setWaitingForInput(groupId)
-                                        logger.info("[CcConnect][{}] finalBlocksSent → question broadcast, waitingForInput set", groupId)
+                                        logger.info("[CcConnect][{}] finalBlocksSent → skip reply (Finalize fallback)", groupId)
                                         continue
                                     }
                                 }
@@ -2661,10 +2646,10 @@ fun Application.configureRouting() {
                                         if (finalBlocksSent || pendingFinalBlocks.isNotEmpty()) {
                                             // 结构化流路径：广播最终消息（含 thinking / tool / text 完整 blocks）
                                             var blocks = pendingFinalBlocks.also { pendingFinalBlocks = emptyList() }
-                                            // 如果有预先保存的 pre-question blocks（刚结束的 turn 中曾展示过提问），
-                                            // 将它们合并到最终消息开头，确保 pre-question 内容不丢失。
-                                            if (preQuestionBlocks.isNotEmpty()) {
-                                                blocks = preQuestionBlocks + blocks
+                                            // 如果 post-answer 没有 done=true blocks（引擎回答后没有继续输出），
+                                            // 使用 pre-question blocks 作为最终消息，确保提问前的内容不丢失。
+                                            if (blocks.isEmpty() && preQuestionBlocks.isNotEmpty()) {
+                                                blocks = preQuestionBlocks
                                                 preQuestionBlocks = emptyList()
                                             }
                                             val finalContent = answerText.ifEmpty {
