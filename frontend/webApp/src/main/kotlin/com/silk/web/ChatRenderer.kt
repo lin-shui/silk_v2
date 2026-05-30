@@ -331,35 +331,61 @@ fun ToolCallBlock(name: String, summary: String = "", content: String = "") {
 private fun buildLabel(name: String, content: String): String {
     val shortName = when {
         name.equals("Read", true) || name.equals("Write", true) || name.equals("Edit", true) -> name
-        name.equals("Bash", true) || name.equals("Command", true) -> name
+        name.equals("Bash", true) || name.equals("ExecuteCommand", true) -> name
         else -> name
     }
     if (content.isEmpty()) return name
     // Extract a concise summary from full tool content
-    val summary = extractToolSummary(content)
+    val summary = extractToolSummary(name, content)
     return if (summary.isNotEmpty()) "$shortName: $summary" else shortName
 }
 
-private fun extractToolSummary(content: String): String {
+private fun extractToolSummary(name: String, content: String): String {
+    // Normalize: collapse newlines/spaces in JSON for single-line regex matching
+    val flat = content.replace("\n", " ").replace("\r", " ").replace(Regex("\\s+"), " ")
+
+    // Try JSON field extraction (works even with multiline JSON)
+    val trimmed = content.trimStart()
     // Try to extract file_path value
-    val fileRe = Regex(""""file_path": "([^"]+)""")
-    val fileMatch = fileRe.find(content)
+    val fileRe = Regex(""""file_path"\s*:\s*"([^"]+)"""")
+    val fileMatch = fileRe.find(flat)
     if (fileMatch != null) {
         val path = fileMatch.groupValues[1]
         val idx = path.lastIndexOf("/")
         return if (idx >= 0) path.substring(idx + 1) else path
     }
     // Try to extract command value
-    val cmdRe = Regex(""""command": "([^"]+)""")
-    val cmdMatch = cmdRe.find(content)
+    val cmdRe = Regex(""""command"\s*:\s*"([^"]+)"""")
+    val cmdMatch = cmdRe.find(flat)
     if (cmdMatch != null) {
         val cmd = cmdMatch.groupValues[1]
         return if (cmd.length > 60) cmd.substring(0, 60) + "..." else cmd
     }
     // Try to extract pattern (for grep/glob)
-    val patRe = Regex(""""pattern": "([^"]+)""")
-    val patMatch = patRe.find(content)
+    val patRe = Regex(""""pattern"\s*:\s*"([^"]+)"""")
+    val patMatch = patRe.find(flat)
     if (patMatch != null) return patMatch.groupValues[1]
+
+    // Fallback: if content looks like a direct shell command (Bash), show first line
+    if (name.equals("Bash", true) || name.equals("ExecuteCommand", true)) {
+        val firstLine = trimmed.substringBefore("\n").trim().take(60)
+        if (firstLine.isNotEmpty()) return firstLine + if (firstLine.length >= 60) "..." else ""
+    }
+
+    // Fallback: for Read/Write/Edit, extract last path component from any path-like string
+    if (name.equals("Read", true) || name.equals("Write", true) || name.equals("Edit", true)) {
+        val pathRe = Regex("""[\w./\\-]+\.\w{1,4}""")
+        val pathMatch = pathRe.find(trimmed)
+        if (pathMatch != null) {
+            val path = pathMatch.value
+            val idx = path.lastIndexOf("/")
+            return if (idx >= 0) path.substring(idx + 1) else path
+        }
+    }
+
+    // Generic fallback: first non-empty line, truncated
+    val firstLine = trimmed.substringBefore("\n").trim().take(70)
+    if (firstLine.isNotEmpty()) return firstLine + if (firstLine.length >= 70) "..." else ""
     return ""
 }
 
