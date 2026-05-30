@@ -2332,9 +2332,18 @@ fun Application.configureRouting() {
                 return sb.toString()
             }
 
-            fun buildContentBlockList(): List<ContentBlock> {
+            fun buildContentBlockList(preBlocks: List<ContentBlock> = emptyList()): List<ContentBlock> {
                 val blocks = mutableListOf<ContentBlock>()
                 var index = 0
+
+                // Prepend non-text pre-blocks (thinking/tool_use from pre-question context,
+                // preserved across permission resolution / question-answer boundaries)
+                for (b in preBlocks) {
+                    if (b.type != "text") {
+                        blocks.add(b.copy(index = index++))
+                    }
+                }
+
                 val hasPostThinkingContent = toolParts.isNotEmpty() || answerText.isNotEmpty()
                 if (thinkingParts.isNotEmpty()) {
                     blocks.add(ContentBlock(
@@ -2446,7 +2455,7 @@ fun Application.configureRouting() {
                                     type = MessageType.TEXT,
                                     isTransient = true,
                                     isIncremental = false,
-                                    contentBlocks = buildContentBlockList(),
+                                    contentBlocks = buildContentBlockList(preBlocks = preQuestionBlocks),
                                 )
                                 chatServer.broadcast(msg)
                             } else {
@@ -2626,7 +2635,7 @@ fun Application.configureRouting() {
                                     streamBlockTypes.clear()
                                     streamBlockContent.clear()
                                 }
-                                blocks = buildContentBlockList().toMutableList()
+                                blocks = buildContentBlockList(preBlocks = preQuestionBlocks).toMutableList()
                             }
                             // Always include the question text as a text block (frontend renders
                             // contentBlocks + interactiveOptions, but NOT message.content)
@@ -2726,13 +2735,14 @@ fun Application.configureRouting() {
                                                     content = finalContent,
                                                     timestamp = System.currentTimeMillis(),
                                                     type = MessageType.TEXT,
-                                                    contentBlocks = buildContentBlockList(),
+                                                    contentBlocks = buildContentBlockList(preBlocks = preQuestionBlocks),
                                                 )
                                                 chatServer.broadcast(msg)
                                             }
                                         }
                                         // ── 检测 AI 是否在提问 → 保持会话存活 ──
-                                        val isQuestion = isLikelyQuestion(answerText) || expectFinalizeReply
+                                        val isQuestion = isLikelyQuestion(answerText) || expectFinalizeReply ||
+                                            com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)
                                         if (isQuestion) {
                                             logger.info("[CcConnect][{}] question detected → waitingForAnswer, answers={}, tools={}",
                                                 groupId, answerText.length, toolParts.size)
