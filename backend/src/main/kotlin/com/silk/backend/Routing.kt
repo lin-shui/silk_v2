@@ -2298,6 +2298,7 @@ fun Application.configureRouting() {
             var pendingFinalBlocks = emptyList<com.silk.backend.ai.ContentBlock>()  // contentBlocks from done:true, for status:idle broadcast
             var lastStreamBlocks = emptyList<com.silk.backend.ai.ContentBlock>()    // last streaming blocks, for question context
             var preQuestionBlocks = emptyList<com.silk.backend.ai.ContentBlock>()   // blocks saved before question, merged into final
+            var expectFinalizeReply = false   // done=true sent → Finalize fallback reply incoming, skip it
 
             fun buildStructuredContent(collapseTools: Boolean = false): String {
                 val sb = StringBuilder()
@@ -2375,8 +2376,15 @@ fun Application.configureRouting() {
                 if (text.contains(Regex("""[（(]\d+[)）]"""))) return true
                 if (text.contains("选项") || text.contains("choose", true) || text.contains("select", true)) return true
                 if (text.contains(Regex("""\d+\.""")) && text.length < 500) return true
+                // Chinese permission/confirmation patterns
+                if (text.contains("请回复") || text.contains("请选择")) return true
+                if (text.contains("允许") || text.contains("拒绝")) return true
+                if (text.contains("是否") || text.contains("确认")) return true
+                if (text.contains("权限") || text.contains("等待")) return true
+                if (text.contains("继续执行")) return true
                 return false
             }
+
 
             val ccUserName = com.silk.backend.ccconnect.agentTriggerName(hello.agentType).replaceFirstChar { it.uppercaseChar() }
 
@@ -2403,21 +2411,20 @@ fun Application.configureRouting() {
                                 logger.info("[CcConnect][{}] answer received → continuation (reply)", groupId)
                             }
                             if (turnActive) {
-                                // ── 结构化最终块已发送：引擎回退的 reply 包含权限问题文本 ──
-                                if (finalBlocksSent) {
+                                // ── 结构化最终块已发送：引擎 Finalize 回退的 reply ──
+                                // expectFinalizeReply 在 done=true 时设置，独立于 finalBlocksSent。
+                                // 避免 status=idle 清除 finalBlocksSent 后 reply 被当作普通消息广播。
+                                if (expectFinalizeReply) {
+                                    expectFinalizeReply = false
                                     val rawContent = reply.content.trimStart()
                                     if (rawContent.startsWith("💭") || rawContent.startsWith("🔧")) {
                                         // 工具/思考块 → 正常处理（continue 后落到下方 when）
                                         finalBlocksSent = false
                                     } else {
-                                        // finalBlocksSent 为 true 说明 reply_stream done=true 已发过结构化 blocks。
-                                        // 此 reply 是 Finalize 返回 error 后引擎的 fallback 文本。
-                                        // 问题已由 "question" handler 广播，此 reply 应始终跳过，
-                                        // 不依赖 isWaitingForInput 判断——避免 forwardAnswer 与引擎回复的时序竞争。
                                         finalBlocksSent = false
                                         answerText = reply.content
                                         gotReplyAfterStream = true
-                                        logger.info("[CcConnect][{}] finalBlocksSent → skip reply (Finalize fallback)", groupId)
+                                        logger.info("[CcConnect][{}] expectFinalizeReply → skip reply (Finalize fallback)", groupId)
                                         continue
                                     }
                                 }
@@ -2526,6 +2533,7 @@ fun Application.configureRouting() {
                                     streamBlockContent.clear()
                                     pendingFinalBlocks = displayBlocks
                                     finalBlocksSent = true
+                                    expectFinalizeReply = true
                                 }
                                 continue
                             }
@@ -2642,6 +2650,7 @@ fun Application.configureRouting() {
                             chatServer.broadcast(msg)
                             // 引擎已阻塞等待回答，设置 waitingForInput
                             com.silk.backend.ccconnect.CcConnectRegistry.setWaitingForInput(groupId)
+                            expectFinalizeReply = false
                             logger.info("[CcConnect][{}] question broadcast with {} options: {}, waitingForInput set", groupId, interactiveOptions.size, interactiveOptions.map { it.label })
                         }
                         "status" -> {
@@ -2664,6 +2673,7 @@ fun Application.configureRouting() {
                                     streamBlockTypes.clear()
                                     streamBlockContent.clear()
                                     finalBlocksSent = false
+                                    expectFinalizeReply = false
                                     pendingFinalBlocks = emptyList()
                                     lastStreamBlocks = emptyList()
                                     // 保留 preQuestionBlocks：权限回复后 engine 发 status=thinking 开启新段落，
@@ -2722,7 +2732,7 @@ fun Application.configureRouting() {
                                             }
                                         }
                                         // ── 检测 AI 是否在提问 → 保持会话存活 ──
-                                        val isQuestion = isLikelyQuestion(answerText)
+                                        val isQuestion = isLikelyQuestion(answerText) || expectFinalizeReply
                                         if (isQuestion) {
                                             logger.info("[CcConnect][{}] question detected → waitingForAnswer, answers={}, tools={}",
                                                 groupId, answerText.length, toolParts.size)
@@ -2736,6 +2746,7 @@ fun Application.configureRouting() {
                                             pendingFinalBlocks = emptyList()
                                             lastStreamBlocks = emptyList()
                                             preQuestionBlocks = emptyList()
+                                            expectFinalizeReply = false
                                         }
                                     }
                                     // ── 提问场景：不清除状态，不标记空闲 ──
