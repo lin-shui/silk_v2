@@ -117,13 +117,24 @@ class ClaudeProcessClient(
             env.putAll(claudeEnvVars)
             val processBuilder = ProcessBuilder(cmd)
                 .directory(File(absWorkspaceDir))
-                .redirectErrorStream(true)
+                .redirectErrorStream(false)
             processBuilder.environment().putAll(env)
 
             val process = processBuilder.start()
 
             try {
                 coroutineScope {
+                    // 读取 stderr（Landlock 警告等），仅打日志不流入聊天
+                    val stderrLogger = launch {
+                        try {
+                            process.errorStream.bufferedReader().forEachLine { line ->
+                                if (line.isNotBlank()) {
+                                    logger.info("[ClaudeProcessClient-{}] stderr: {}", callId, line.trim())
+                                }
+                            }
+                        } catch (_: java.io.IOException) { /* process destroyed */ }
+                    }
+
                     // 看门狗：超时强行关闭
                     val watchdog = launch {
                         delay(responseTimeoutMs)
@@ -193,6 +204,7 @@ class ClaudeProcessClient(
                         result
                     } finally {
                         watchdog.cancel()
+                        stderrLogger.cancel()
                     }
                 }
             } catch (e: CancellationException) {
