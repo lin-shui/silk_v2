@@ -350,18 +350,27 @@ class ChatServer(
         // else {
         //     println("📝 临时消息不保存: ${message.content.take(50)}...")
         // }
-        
-        val messageJson = Json.encodeToString(message)
 
-        val sessions = allSessions()
-        sessions.forEach { session ->
-            try {
-                session.send(Frame.Text(messageJson))
-            } catch (e: Exception) {
-                e.printStackTrace()
+        // ⛔ cc-connect 等待回答时，用户 TEXT 消息由下方 cc-connect 路由直接转发给引擎，
+        // 不必在此广播——否则按钮值（如 "perm:allow"）会作为用户消息展示给所有人。
+        if (message.type == MessageType.TEXT
+            && message.userId != "cc-connect" && message.userId != "system"
+            && com.silk.backend.ccconnect.CcConnectRegistry.isConnected(sessionName.removePrefix("group_"))
+            && com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(sessionName.removePrefix("group_"))
+        ) {
+            logger.debug("⏭️ [broadcast] 跳过广播: cc-connect waitingForInput (msg={})", message.content.take(20))
+        } else {
+            val messageJson = Json.encodeToString(message)
+            val sessions = allSessions()
+            sessions.forEach { session ->
+                try {
+                    session.send(Frame.Text(messageJson))
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
             }
+            logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
         }
-        logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
 
         val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
         

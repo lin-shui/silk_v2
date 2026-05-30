@@ -2296,6 +2296,7 @@ fun Application.configureRouting() {
             val streamBlockContent = mutableListOf<StringBuilder>()
             var finalBlocksSent = false
             var pendingFinalBlocks = emptyList<com.silk.backend.ai.ContentBlock>()  // contentBlocks from done:true, for status:idle broadcast
+            var lastStreamBlocks = emptyList<com.silk.backend.ai.ContentBlock>()    // last streaming blocks, for question context
 
             fun buildStructuredContent(collapseTools: Boolean = false): String {
                 val sb = StringBuilder()
@@ -2488,6 +2489,8 @@ fun Application.configureRouting() {
                                         toolName = obj["toolName"]?.jsonPrimitive?.content ?: "",
                                     )
                                 }
+                                // Preserve streaming blocks for question context
+                                if (!stream.done) lastStreamBlocks = blocks
                                 // Extract answer text for content field and question detection
                                 var contentField = stream.content
                                 if (stream.done) {
@@ -2573,20 +2576,28 @@ fun Application.configureRouting() {
                             }
 
                             // Convert streaming blocks to thinkingParts/toolParts for the question context
-                            if (streamBlockTypes.isNotEmpty()) {
-                                for (i in streamBlockTypes.indices) {
-                                    when (streamBlockTypes[i]) {
-                                        "thinking" -> thinkingParts.add(streamBlockContent[i].toString())
-                                        "tool_use" -> toolParts.add(streamBlockContent[i].toString())
-                                        "text" -> {} // preceding text is superseded by question
+                            // Strategy: prefer the engine's structured contentBlocks (lastStreamBlocks),
+                            // fall back to emoji-based streamBlockTypes/streamBlockContent for non-structured path.
+                            val blocks: MutableList<ContentBlock>
+                            if (lastStreamBlocks.isNotEmpty()) {
+                                // Structured path: preserve what was streaming before question
+                                blocks = lastStreamBlocks.toMutableList()
+                                lastStreamBlocks = emptyList()
+                            } else {
+                                // Non-structured path: rebuild from emoji markers
+                                if (streamBlockTypes.isNotEmpty()) {
+                                    for (i in streamBlockTypes.indices) {
+                                        when (streamBlockTypes[i]) {
+                                            "thinking" -> thinkingParts.add(streamBlockContent[i].toString())
+                                            "tool_use" -> toolParts.add(streamBlockContent[i].toString())
+                                            "text" -> {} // preceding text is superseded by question
+                                        }
                                     }
+                                    streamBlockTypes.clear()
+                                    streamBlockContent.clear()
                                 }
-                                streamBlockTypes.clear()
-                                streamBlockContent.clear()
+                                blocks = buildContentBlockList().toMutableList()
                             }
-
-                            // 用现有 buildContentBlockList() 构建 thinking/tool/text blocks
-                            val blocks = buildContentBlockList().toMutableList()
                             // Always include the question text as a text block (frontend renders
                             // contentBlocks + interactiveOptions, but NOT message.content)
                             blocks.add(ContentBlock(
@@ -2632,6 +2643,7 @@ fun Application.configureRouting() {
                                     streamBlockContent.clear()
                                     finalBlocksSent = false
                                     pendingFinalBlocks = emptyList()
+                                    lastStreamBlocks = emptyList()
                                     chatServer.broadcastSystemStatus("Thinking...")
                                 }
                                 "tool_use" -> {
@@ -2692,6 +2704,7 @@ fun Application.configureRouting() {
                                             toolParts.clear()
                                             answerText = ""
                                             pendingFinalBlocks = emptyList()
+                                            lastStreamBlocks = emptyList()
                                         }
                                     }
                                     // ── 提问场景：不清除状态，不标记空闲 ──
