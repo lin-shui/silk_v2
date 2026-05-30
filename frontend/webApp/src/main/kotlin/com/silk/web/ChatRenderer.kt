@@ -366,10 +366,19 @@ private fun extractToolSummary(name: String, content: String): String {
     val patMatch = patRe.find(flat)
     if (patMatch != null) return patMatch.groupValues[1]
 
+    // Helper: find first meaningful line, skipping markdown code block markers
+    fun firstMeaningfulLine(text: String): String {
+        for (line in text.lineSequence()) {
+            val trimmed = line.trim()
+            if (trimmed.isNotEmpty() && !trimmed.startsWith("```")) return trimmed
+        }
+        return ""
+    }
+
     // Fallback: if content looks like a direct shell command (Bash), show first line
     if (name.equals("Bash", true) || name.equals("ExecuteCommand", true)) {
-        val firstLine = trimmed.substringBefore("\n").trim().take(60)
-        if (firstLine.isNotEmpty()) return firstLine + if (firstLine.length >= 60) "..." else ""
+        val cmd = firstMeaningfulLine(trimmed).take(60)
+        if (cmd.isNotEmpty()) return cmd + if (cmd.length >= 60) "..." else ""
     }
 
     // Fallback: for Read/Write/Edit, extract last path component from any path-like string
@@ -383,8 +392,8 @@ private fun extractToolSummary(name: String, content: String): String {
         }
     }
 
-    // Generic fallback: first non-empty line, truncated
-    val firstLine = trimmed.substringBefore("\n").trim().take(70)
+    // Generic fallback: first meaningful (non-codeblock) line, truncated
+    val firstLine = firstMeaningfulLine(trimmed).take(70)
     if (firstLine.isNotEmpty()) return firstLine + if (firstLine.length >= 70) "..." else ""
     return ""
 }
