@@ -2475,8 +2475,30 @@ fun Application.configureRouting() {
                                         toolName = obj["toolName"]?.jsonPrimitive?.content ?: "",
                                     )
                                 }
+                                // ── 在 question 之后，引擎的 UpdateStructured 可能只发 answer text ──
+                                // （thinking/tools 为空，且旧 thinking 未进入 completedThinking）。
+                                // 此时合并 preQuestionBlocks 中非 text 块，确保前序内容不消失。
+                                val displayBlocks: List<com.silk.backend.ai.ContentBlock>
+                                if (preQuestionBlocks.isNotEmpty()) {
+                                    val hasNonText = blocks.any { it.type == "thinking" || it.type == "tool_use" }
+                                    if (hasNonText) {
+                                        // 引擎已赶上，直接使用其 blocks，后续不再需要 preQuestionBlocks
+                                        preQuestionBlocks = emptyList()
+                                        displayBlocks = blocks
+                                    } else {
+                                        // 引擎只发了 text → 补充前序 thinking/tool 块
+                                        val preNonText = preQuestionBlocks.filter { it.type != "text" }
+                                        if (preNonText.isNotEmpty()) {
+                                            displayBlocks = (preNonText + blocks).mapIndexed { i, b -> b.copy(index = i) }
+                                        } else {
+                                            displayBlocks = blocks
+                                        }
+                                    }
+                                } else {
+                                    displayBlocks = blocks
+                                }
                                 // Preserve streaming blocks for question context
-                                if (!stream.done) lastStreamBlocks = blocks
+                                if (!stream.done) lastStreamBlocks = displayBlocks
                                 // Extract answer text for content field and question detection
                                 var contentField = stream.content
                                 if (stream.done) {
@@ -2496,13 +2518,13 @@ fun Application.configureRouting() {
                                     type = MessageType.TEXT,
                                     isTransient = true,
                                     isIncremental = false,
-                                    contentBlocks = blocks,
+                                    contentBlocks = displayBlocks,
                                 )
                                 chatServer.broadcast(msg)
                                 if (stream.done) {
                                     streamBlockTypes.clear()
                                     streamBlockContent.clear()
-                                    pendingFinalBlocks = blocks
+                                    pendingFinalBlocks = displayBlocks
                                     finalBlocksSent = true
                                 }
                                 continue
