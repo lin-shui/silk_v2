@@ -115,7 +115,15 @@ class DirectModelAgent(
         currentResponseReferences.clear()
         lastAgentResponse = null
 
-        val effectiveSystemPrompt = withCitationGuidelines(systemPrompt ?: "你是 Silk，一个智能助手。")
+        val effectiveSystemPrompt = buildString {
+            appendLine(withCitationGuidelines(systemPrompt ?: "你是 Silk，一个智能助手。"))
+            appendLine()
+            appendLine("## 当前时间")
+            val now = java.time.LocalDateTime.now()
+            val formatter = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
+            appendLine("当前日期和时间：${now.format(formatter)}")
+            appendLine("这是一条由系统注入的准确时间信息，请以此为准回答任何与时间、日期相关的问题。")
+        }
 
         // 1. 添加用户消息到历史
         conversationHistory.add(Message(role = "user", content = userInput))
