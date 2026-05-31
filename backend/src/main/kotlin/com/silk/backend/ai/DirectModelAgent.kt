@@ -446,18 +446,33 @@ class DirectModelAgent(
             }
         }
 
-        // Claude CLI 路径：无注册引用但有 [citation:N] 标记时，保留标记并创建占位引用
-        if (currentResponseReferences.isEmpty() || currentResponseReferences.all { it.url == null && it.path == null }) {
+        // Claude CLI 路径：无注册引用但有 [citation:N] 标记时，创建占位引用
+        val hasRefs = currentResponseReferences.isNotEmpty() && currentResponseReferences.any { it.url != null || it.path != null }
+        if (!hasRefs) {
             val hasCitationMarkers = Regex("\\[citation:\\d+\\]").containsMatchIn(cleanedContent)
             if (hasCitationMarkers) {
-                return normalizeCitedReferences(cleanedContent)
+                val result = normalizeCitedReferences(cleanedContent)
+                // 剥离正文中的 [citation:N] 标记（引用已在列表中）
+                return FinalCitationResult(
+                    stripCitationMarkers(result.content),
+                    result.references
+                )
             }
             // 无任何引用标记 → 清理 available 标记后返回
-            val stripped = cleanedContent.replace(Regex("\\[available:\\d+\\]"), "")
+            val stripped = cleanedContent.replace(Regex("\\[(citation|available):\\d+\\]"), "")
             return FinalCitationResult(stripped, currentResponseReferences.toList())
         }
         val withMarkers = ensureCitationMarkers(cleanedContent)
-        return normalizeCitedReferences(withMarkers)
+        val result = normalizeCitedReferences(withMarkers)
+        // 剥离正文中的 [citation:N] 标记（引用已在列表中）
+        return FinalCitationResult(
+            stripCitationMarkers(result.content),
+            result.references
+        )
+    }
+
+    private fun stripCitationMarkers(content: String): String {
+        return content.replace(Regex("\\[(citation|available):\\d+\\]"), "")
     }
 
     private fun normalizeCitedReferences(content: String): FinalCitationResult {
