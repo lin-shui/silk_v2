@@ -415,10 +415,16 @@ class DirectModelAgent(
     }
 
     private fun finalizeAgentResponse(content: String): FinalCitationResult {
-        // Claude CLI 路径：无真实引用（空或全是占位），直接剥离标记
-        // 让 Sources: 部分（带真实链接）自然显示
+        // Claude CLI 路径：无注册引用但有 [citation:N] 标记时，保留标记并创建占位引用。
+        // 让 "Sources:" 部分（带真实链接）自然显示并通过 frontend 渲染。
         if (currentResponseReferences.isEmpty() || currentResponseReferences.all { it.url == null && it.path == null }) {
-            val stripped = content.replace(Regex("\\[(citation|available):\\d+\\]"), "")
+            val hasCitationMarkers = Regex("\\[citation:\\d+\\]").containsMatchIn(content)
+            if (hasCitationMarkers) {
+                // 有 citation 标记但无注册引用 → 走 normalizeCitedReferences 创建占位引用
+                return normalizeCitedReferences(content)
+            }
+            // 无任何引用标记 → 清理 available 标记并返回空
+            val stripped = content.replace(Regex("\\[available:\\d+\\]"), "")
             return FinalCitationResult(stripped, emptyList())
         }
         val withMarkers = ensureCitationMarkers(content)
