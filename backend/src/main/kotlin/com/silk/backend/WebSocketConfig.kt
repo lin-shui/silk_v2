@@ -1407,6 +1407,10 @@ class ChatServer(
         // Track last structured blocks from blocks_state / streaming_incremental
         var lastBlocks: List<com.silk.backend.ai.ContentBlock> = emptyList()
         var streamingAccumulated = StringBuilder()
+        // When Anthropic API produces structured blocks (thinking/tool_use/text),
+        // we rely on blocks_state for display and suppress competing streaming_incremental
+        // transient messages. CLI fallback path only emits streaming_incremental.
+        var hasStructuredBlocks = false
         try {
             val response = directModelAgent.processInput(
                 userInput = userMessage,
@@ -1416,43 +1420,54 @@ class ChatServer(
             ) { stepType, content, isComplete ->
                 when (stepType) {
                     "thinking" -> {
-                        sendAgentStatus(content)
+                        // Structured path: thinking content comes via blocks_state
+                        // CLI fallback: brief thinking notification as status
+                        if (!hasStructuredBlocks) {
+                            sendAgentStatus(content)
+                        }
                     }
                     "tool" -> {
-                        sendAgentStatus(content)
+                        // Structured path: tool content comes via blocks_state
+                        // CLI fallback: brief tool notification as status
+                        if (!hasStructuredBlocks) {
+                            sendAgentStatus(content)
+                        }
                     }
                     "streaming_incremental" -> {
                         streamingAccumulated.append(content)
                         val accumulated = streamingAccumulated.toString()
-                        // Send contentBlocks-style message (matching cc-connect format)
-                        val textBlock = com.silk.backend.ai.ContentBlock(
-                            index = 0, type = "text", content = accumulated,
-                            isComplete = false,
-                        )
-                        val blocks = listOf(textBlock)
-                        lastBlocks = blocks
-                        val blockMessage = Message(
-                            id = "streaming_${System.currentTimeMillis()}",
-                            userId = SilkAgent.AGENT_ID,
-                            userName = SilkAgent.AGENT_NAME,
-                            content = accumulated,
-                            timestamp = System.currentTimeMillis(),
-                            type = MessageType.TEXT,
-                            isTransient = true,
-                            isIncremental = false,
-                            contentBlocks = blocks,
-                        )
-                        logger.info("📤 [流式-{}] 增量 {}字符 -> {}个连接", callId, accumulated.length, allSessions().size)
-                        val messageJson = Json.encodeToString(blockMessage)
-                        allSessions().forEach { session ->
-                            try {
-                                session.send(Frame.Text(messageJson))
-                            } catch (e: Exception) {
-                                logger.error("📤 [流式-{}] 发送失败: {}", callId, e.message)
+                        if (!hasStructuredBlocks) {
+                            // CLI fallback: send transient text messages for progressive display.
+                            // The CLI produces <!--THINKING--> markers in content; we don't set
+                            // lastBlocks here so the final message falls back to contentBlocks=null,
+                            // letting the frontend's StructuredContent parse the markers into
+                            // collapsible thinking/tool sections (matching cc-connect display).
+                            val blockMessage = Message(
+                                id = "streaming_${System.currentTimeMillis()}",
+                                userId = SilkAgent.AGENT_ID,
+                                userName = SilkAgent.AGENT_NAME,
+                                content = accumulated,
+                                timestamp = System.currentTimeMillis(),
+                                type = MessageType.TEXT,
+                                isTransient = true,
+                                isIncremental = false,
+                            )
+                            logger.info("📤 [流式-{}] 增量 {}字符 -> {}个连接", callId, accumulated.length, allSessions().size)
+                            val messageJson = Json.encodeToString(blockMessage)
+                            allSessions().forEach { session ->
+                                try {
+                                    session.send(Frame.Text(messageJson))
+                                } catch (e: Exception) {
+                                    logger.error("📤 [流式-{}] 发送失败: {}", callId, e.message)
+                                }
                             }
                         }
+                        // Structured path: blocks_state drives display; don't send
+                        // competing text-only transient messages that would overwrite
+                        // the rich thinking/tool_use blocks in the frontend.
                     }
                     "blocks_state" -> {
+                        hasStructuredBlocks = true
                         val blocks = Json.decodeFromString<List<com.silk.backend.ai.ContentBlock>>(content)
                         lastBlocks = blocks
                         // Populate content from the text block (matching cc-connect format)

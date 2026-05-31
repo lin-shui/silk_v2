@@ -116,6 +116,13 @@ class AnthropicClient(
             if (!apiTools.isNullOrEmpty()) {
                 put("tools", JsonArray(apiTools))
             }
+            // Enable extended thinking so the model returns thinking blocks,
+            // allowing the frontend to display a collapsible "思考过程" section
+            // matching cc-connect's display format.
+            put("thinking", buildJsonObject {
+                put("type", "enabled")
+                put("budget_tokens", 1024)
+            })
         }
         val requestBody = bodyObj.toString()
 
