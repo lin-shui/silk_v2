@@ -149,8 +149,19 @@ def apply_landlock(workspace_dir: str):
 
     After this call returns, the process is permanently jailed.
     Must be called BEFORE fork()/execvp().
+
+    Raises RuntimeError if Landlock is present but too old (ABI 1-3).
+    Skips silently if Landlock is completely absent (ABI 0) —
+    this is common in containers/VMs where CONFIG_SECURITY_LANDLOCK=n.
     """
     abi = _get_landlock_abi()
+    if abi == 0:
+        # Landlock not compiled into kernel (e.g. container / VM without
+        # CONFIG_SECURITY_LANDLOCK). Skip gracefully — no security, but
+        # the process can still run.
+        print("WARNING: Landlock not available (ABI=0, kernel support missing), "
+              "skipping sandbox", file=sys.stderr)
+        return
     if abi < 4:
         raise RuntimeError(
             f"Landlock ABI {abi} < 4 (kernel < 6.7). This system requires "
@@ -403,7 +414,10 @@ def main():
         prompt = f.read()
 
     # ── Step 1: Apply resource limits ──
-    apply_resource_limits()
+    # Skipped when Landlock is unavailable (ABI=0) to avoid compatibility issues
+    # in containers/VMs without full kernel feature support.
+    if _get_landlock_abi() > 0:
+        apply_resource_limits()
 
     # ── Step 2: Open PTY before Landlock ──
     # pty.fork() internally does open("/dev/ptmx") which would be
@@ -418,16 +432,22 @@ def main():
 
     # ── Step 3: Landlock sandbox (IRREVERSIBLE, Linux 6.7+) ──
     # After this point, the process can only access ws_real + system paths.
-    # Any failure here is fatal—silently falling back = no security.
     # On macOS/non-Linux, Landlock is not available; skip gracefully.
+    # Set SILK_DISABLE_LANDLOCK=true to skip Landlock even on Linux
+    #   (useful in dev containers / VMs without Landlock kernel support).
     if sys.platform == 'linux':
-        try:
-            apply_landlock(ws_real)
-        except RuntimeError as e:
-            print(f"FATAL: Landlock setup failed: {e}", file=sys.stderr)
-            os.close(master_fd)
-            os.close(slave_fd)
-            sys.exit(1)
+        disable_landlock = os.environ.get('SILK_DISABLE_LANDLOCK', '').strip().lower()
+        if disable_landlock in ('true', '1', 'yes'):
+            print("WARNING: SILK_DISABLE_LANDLOCK is set, skipping sandbox", file=sys.stderr)
+        else:
+            try:
+                apply_landlock(ws_real)
+            except RuntimeError as e:
+                print(f"FATAL: Landlock setup failed: {e}", file=sys.stderr)
+                print(f"HINT: Set SILK_DISABLE_LANDLOCK=true to skip sandbox on systems without Landlock support.", file=sys.stderr)
+                os.close(master_fd)
+                os.close(slave_fd)
+                sys.exit(1)
     else:
         print("WARNING: Landlock not available on this platform, skipping sandbox", file=sys.stderr)
 
