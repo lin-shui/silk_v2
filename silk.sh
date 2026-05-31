@@ -372,6 +372,30 @@ kill_all_ports() {
 }
 
 # ============================================================
+# Nginx 保活
+# ============================================================
+
+ensure_nginx() {
+    echo -e "${BLUE}检查 Nginx 反向代理...${NC}"
+    if command -v nginx >/dev/null 2>&1; then
+        if pgrep -x nginx > /dev/null; then
+            echo -e "  ${GREEN}✓ Nginx 已在运行${NC}"
+        else
+            echo -e "  ${YELLOW}⚠ Nginx 未运行，正在启动...${NC}"
+            nginx -t > /dev/null 2>&1 && nginx
+            if [ $? -eq 0 ]; then
+                echo -e "  ${GREEN}✓ Nginx 已启动${NC}"
+            else
+                echo -e "  ${RED}❌ Nginx 启动失败，请检查 nginx -t${NC}"
+                return 1
+            fi
+        fi
+    else
+        echo -e "  ${YELLOW}⚠ 未安装 nginx，跳过反向代理检查${NC}"
+    fi
+}
+
+# ============================================================
 # Weaviate 管理
 # ============================================================
 
@@ -732,6 +756,30 @@ check_status() {
     else
         echo -e "  ${YELLOW}○ 未找到 APK 文件${NC}"
         echo -e "  运行 './silk.sh build-apk' 构建"
+    fi
+
+    # Nginx 状态
+    echo ""
+    echo -e "${BLUE}【Nginx 反向代理】${NC}"
+    if command -v nginx >/dev/null 2>&1; then
+        if pgrep -x nginx > /dev/null; then
+            local NGINX_COUNT=$(pgrep -c nginx)
+            echo -e "  状态: ${GREEN}● 运行中${NC} ($NGINX_COUNT 进程)"
+            if check_port $FRONTEND_PUBLIC_PORT; then
+                echo -e "  前端公网端口 $FRONTEND_PUBLIC_PORT: ${GREEN}✓ 监听中${NC}"
+            else
+                echo -e "  前端公网端口 $FRONTEND_PUBLIC_PORT: ${RED}✗ 未监听${NC}"
+            fi
+            if check_port $BACKEND_HTTP_PORT; then
+                echo -e "  后端公网端口 $BACKEND_HTTP_PORT: ${GREEN}✓ 监听中${NC}"
+            else
+                echo -e "  后端公网端口 $BACKEND_HTTP_PORT: ${RED}✗ 未监听${NC}"
+            fi
+        else
+            echo -e "  状态: ${RED}○ 未运行${NC}"
+        fi
+    else
+        echo -e "  ${YELLOW}⚠ nginx 未安装${NC}"
     fi
     
     echo ""
@@ -1228,6 +1276,11 @@ deploy() {
     echo ""
     echo -e "${BLUE}[5/5] 启动后端和前端...${NC}"
     start_services_internal
+
+    # 6. 确保 Nginx 反向代理运行
+    echo ""
+    echo -e "${BLUE}[6/6] 检查 Nginx 反向代理...${NC}"
+    ensure_nginx
 }
 
 # ============================================================
@@ -1403,6 +1456,10 @@ start_services() {
     
     echo ""
     echo -e "${YELLOW}⚠ 部分服务可能仍在启动中，请运行 './silk.sh status' 检查${NC}"
+
+    # 确保 Nginx 反向代理运行
+    echo ""
+    ensure_nginx
 }
 
 # ============================================================
