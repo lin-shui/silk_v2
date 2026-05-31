@@ -414,20 +414,49 @@ class DirectModelAgent(
         return "$cleaned $markers"
     }
 
+    private fun extractSourcesSection(content: String): Pair<String, List<com.silk.backend.models.MessageReference>> {
+        val sectionRegex = Regex("""\n*(Sources|参考来源):\s*\n[\s\S]*$""")
+        val match = sectionRegex.find(content) ?: return content to emptyList()
+
+        val sectionText = match.value
+        val cleanContent = content.substring(0, match.range.first).trimEnd()
+
+        val linkRegex = Regex("""\[([^\]]+)\]\(([^)]+)\)""")
+        val refs = linkRegex.findAll(sectionText).mapIndexed { index, linkMatch ->
+            com.silk.backend.models.MessageReference(
+                kind = "citation",
+                index = index + 1,
+                title = linkMatch.groupValues[1],
+                url = linkMatch.groupValues[2],
+                snippet = null,
+                path = null
+            )
+        }.toList()
+
+        return cleanContent to refs
+    }
+
     private fun finalizeAgentResponse(content: String): FinalCitationResult {
-        // Claude CLI 路径：无注册引用但有 [citation:N] 标记时，保留标记并创建占位引用。
-        // 让 "Sources:" 部分（带真实链接）自然显示并通过 frontend 渲染。
-        if (currentResponseReferences.isEmpty() || currentResponseReferences.all { it.url == null && it.path == null }) {
-            val hasCitationMarkers = Regex("\\[citation:\\d+\\]").containsMatchIn(content)
-            if (hasCitationMarkers) {
-                // 有 citation 标记但无注册引用 → 走 normalizeCitedReferences 创建占位引用
-                return normalizeCitedReferences(content)
+        // 从正文末尾提取 "Sources:" / "参考来源:" 节，避免前端重复渲染
+        val (cleanedContent, sourcesRefs) = extractSourcesSection(content)
+        // 注册来源节中的 URL 引用（去重）
+        for (ref in sourcesRefs) {
+            if (currentResponseReferences.none { it.url == ref.url && it.title == ref.title }) {
+                currentResponseReferences.add(ref)
             }
-            // 无任何引用标记 → 清理 available 标记并返回空
-            val stripped = content.replace(Regex("\\[available:\\d+\\]"), "")
-            return FinalCitationResult(stripped, emptyList())
         }
-        val withMarkers = ensureCitationMarkers(content)
+
+        // Claude CLI 路径：无注册引用但有 [citation:N] 标记时，保留标记并创建占位引用
+        if (currentResponseReferences.isEmpty() || currentResponseReferences.all { it.url == null && it.path == null }) {
+            val hasCitationMarkers = Regex("\\[citation:\\d+\\]").containsMatchIn(cleanedContent)
+            if (hasCitationMarkers) {
+                return normalizeCitedReferences(cleanedContent)
+            }
+            // 无任何引用标记 → 清理 available 标记后返回
+            val stripped = cleanedContent.replace(Regex("\\[available:\\d+\\]"), "")
+            return FinalCitationResult(stripped, currentResponseReferences.toList())
+        }
+        val withMarkers = ensureCitationMarkers(cleanedContent)
         return normalizeCitedReferences(withMarkers)
     }
 
