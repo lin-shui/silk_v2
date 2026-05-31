@@ -272,6 +272,14 @@ def _process_line(line: str, state: dict) -> str:
             state["in_text"] = True
             result = _flush_thinking(state)
             return result + "\n\n<!--END_THINKING-->\n\n"
+        elif block_type == "tool_use":
+            state["in_tool_use"] = True
+            name = block.get("name", "tool")
+            # Flush any pending thinking before tool
+            result = _flush_thinking(state)
+            if result:
+                result += "\n\n<!--END_THINKING-->\n"
+            return result + "\n<!--TOOL name=\"" + name + "\"-->\n"
         return ""
 
     elif event_type == "content_block_delta":
@@ -298,6 +306,12 @@ def _process_line(line: str, state: dict) -> str:
         if delta_type == "text_delta":
             state["had_text_delta"] = True
             return delta.get("text", "")
+
+        if delta_type == "input_json_delta" and state.get("in_tool_use"):
+            partial = delta.get("partial_json", "")
+            if partial:
+                return partial
+            return ""
 
         return ""
 
