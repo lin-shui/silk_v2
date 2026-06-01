@@ -261,6 +261,8 @@ class ChatClient(
                 // 增量临时消息：拼接到已有内容尾部
                 message.isTransient && message.isIncremental -> {
                     if (isSilkAi) _isGenerating.value = true
+                    // Clear structured blocks — raw text is being streamed instead
+                    _transientContentBlocks.value = emptyList()
                     val existing = _transientMessage.value
                     if (existing != null &&
                         existing.userId == message.userId &&
@@ -278,10 +280,12 @@ class ChatClient(
                         log("📝 [ChatClient] 增量首帧: ${message.content.length}字")
                     }
                 }
-                // 完整临时消息：直接替换
+                // 完整临时消息：直接替换（contentBlocks != null 的消息已在上面处理）
                 message.isTransient -> {
                     log("📝 [ChatClient] 完整临时消息")
                     if (isSilkAi) _isGenerating.value = true
+                    // Clear structured blocks — raw text is being shown instead
+                    _transientContentBlocks.value = emptyList()
                     _transientMessage.value = message
                 }
                 // 普通消息：添加到消息列表（如果不存在）
