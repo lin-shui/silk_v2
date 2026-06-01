@@ -2397,6 +2397,77 @@ token  = "${tokenInfo.token ?: ""}"
 // ==================== AI 消息卡片组件 ====================
 
 /**
+ * 思考过程组件（含计时器）— 对应 Web 端 ChatRenderer.kt 的 ThinkingBlock。
+ * 在思考进行中显示 "Thinking Xs..."，完成后显示 "Thought for Xs"。
+ */
+@Composable
+fun ThinkingBlock(
+    thinkingText: String,
+    isComplete: Boolean = false,
+    isExpanded: Boolean = false,
+    onToggle: () -> Unit = {}
+) {
+    var elapsedSeconds by remember { mutableLongStateOf(0L) }
+    val startEpochMs = remember { System.currentTimeMillis() }
+
+    LaunchedEffect(isComplete) {
+        if (isComplete) {
+            elapsedSeconds = (System.currentTimeMillis() - startEpochMs) / 1000
+        } else {
+            elapsedSeconds = 0
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                elapsedSeconds = (System.currentTimeMillis() - startEpochMs) / 1000
+            }
+        }
+    }
+
+    val label = if (isComplete) {
+        val secs = elapsedSeconds
+        if (secs < 1) "Thought for <1s" else "Thought for ${secs}s"
+    } else {
+        "Thinking ${elapsedSeconds}s..."
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .background(color = Color(0xFFFAF8F4), shape = RoundedCornerShape(8.dp))
+            .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(8.dp))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onToggle() }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = "\uD83D\uDCAD", fontSize = 14.sp)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                fontWeight = if (!isComplete) FontWeight.Medium else FontWeight.Normal,
+                color = if (!isComplete) Color(0xFFC9A86C) else Color(0xFF8B7355)
+            )
+        }
+        if (isExpanded || !isComplete) {
+            Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+            Text(
+                text = thinkingText,
+                fontSize = 12.sp,
+                color = Color(0xFF8B7355),
+                lineHeight = 18.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp)
+            )
+        }
+    }
+}
+
+/**
  * AI 消息卡片 - 专门用于 Silk AI 回复的卡片样式
  * 
  * @param isExpanded 外部控制的展开状态（由父组件管理）
@@ -2416,6 +2487,110 @@ fun AIMessageCardAndroid(
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {}
 ) {
+    // ── 优先使用结构化 contentBlocks 渲染（与 Web 端一致）──
+    val blocks = message.contentBlocks
+    if (!blocks.isNullOrEmpty()) {
+        val thinkingBlock = blocks.firstOrNull { it.type == "thinking" }
+        val textBlock = blocks.firstOrNull { it.type == "text" }
+        val toolBlocks = blocks.filter { it.type == "tool_use" }
+        val bodyContent = textBlock?.content ?: ""
+
+        val isLongContent = bodyContent.length > 500
+        val effectiveExpanded = if (isTransient) true else isExpanded
+        val aiPreview = if (bodyContent.length > 220) bodyContent.take(220) + "..." else bodyContent
+
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F6F0)),
+            shape = RoundedCornerShape(16.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Box(modifier = Modifier.size(32.dp).background(
+                        Brush.linearGradient(colors = listOf(Color(0xFFC9A86C), Color(0xFFA8894D))), CircleShape
+                    ), contentAlignment = Alignment.Center) { Text("🤖", fontSize = 16.sp) }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
+                            .let { if (it.isBlank() || it == "Silk") "Silk AI" else it },
+                        style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = Color(0xFFC9A86C)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = timeString, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (isLongContent && !isTransient) {
+                        Spacer(modifier = Modifier.weight(1f))
+                        Box(modifier = Modifier.background(
+                            color = if (effectiveExpanded) Color.Transparent else Color(0x1AC9A86C), shape = RoundedCornerShape(4.dp)
+                        ).clickable { onExpandChange(!effectiveExpanded) }.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                            Text(if (effectiveExpanded) "▼ 收起" else "▶ 展开", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 思考过程（带计时器）
+                if (thinkingBlock != null) {
+                    ThinkingBlock(
+                        thinkingText = thinkingBlock.content,
+                        isComplete = thinkingBlock.isComplete,
+                        isExpanded = isThinkingExpanded || !thinkingBlock.isComplete,
+                        onToggle = { onThinkingExpandChange(!isThinkingExpanded) }
+                    )
+                }
+
+                // 工具调用
+                for (tool in toolBlocks) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                            .background(color = Color(0xFFF5F5F5), shape = RoundedCornerShape(8.dp))
+                            .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(8.dp))
+                    ) {
+                        Row(modifier = Modifier.fillMaxWidth().clickable { onToolsExpandChange(!isToolsExpanded) }
+                            .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (isToolsExpanded) "▼" else "▶", fontSize = 10.sp, color = Color(0xFF666666))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("\uD83D\uDD27 ${tool.toolName.ifEmpty { "工具调用" }}", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF666666))
+                        }
+                        if (isToolsExpanded) {
+                            Divider(color = Color(0xFFE0E0E0), thickness = 1.dp)
+                            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState()).padding(12.dp)) {
+                                Text(tool.content, fontSize = 12.sp, lineHeight = 18.sp, color = Color(0xFF555555))
+                            }
+                        }
+                    }
+                }
+
+                // 正文
+                if (bodyContent.isNotEmpty()) {
+                    when {
+                        !isLongContent || isTransient -> MarkdownWebView(bodyContent)
+                        !effectiveExpanded -> Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(aiPreview, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 8, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+                            Row(modifier = Modifier.fillMaxWidth().padding(top = 10.dp).clickable { onExpandChange(true) }.padding(vertical = 6.dp),
+                                horizontalArrangement = Arrangement.Center) {
+                                Text("查看全文", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = SilkColors.primary)
+                                Text("  ▼", fontSize = 12.sp, color = SilkColors.primary)
+                            }
+                        }
+                        else -> Column(modifier = Modifier.fillMaxWidth()) {
+                            MarkdownWebView(bodyContent)
+                            Row(modifier = Modifier.fillMaxWidth().padding(top = 10.dp).clickable { onExpandChange(false) }.padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.Center) {
+                                Text("▲ 收起", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = SilkColors.primary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    // ── 回退：标记解析路径（无 contentBlocks 时）──
     // Strip the cc-connect turn routing marker (invisible to users)
     val ccClean = message.content
         .replace("<!--CC_TURN-->\n", "")
