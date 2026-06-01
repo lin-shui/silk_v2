@@ -166,17 +166,27 @@ fun ThinkingBlock(content: String, isComplete: Boolean = false) {
     var elapsedSeconds by remember { mutableStateOf(0L) }
     val startEpochMs = remember { kotlin.js.Date.now().toLong() }
 
-    // Timer: updates every second until complete
+    // Immediately update elapsed time whenever isComplete changes (no delay)
     LaunchedEffect(isComplete) {
-        while (true) {
-            kotlinx.coroutines.delay(1000)
-            elapsedSeconds = (kotlin.js.Date.now().toLong() - startEpochMs) / 1000
-            if (isComplete) break
+        elapsedSeconds = (kotlin.js.Date.now().toLong() - startEpochMs) / 1000
+    }
+
+    // Continuous timer: ticks every second while thinking is in progress
+    if (!isComplete) {
+        LaunchedEffect(Unit) {
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                elapsedSeconds = (kotlin.js.Date.now().toLong() - startEpochMs) / 1000
+            }
         }
     }
 
-    val label = if (isComplete) "Thought for ${elapsedSeconds}s"
-                else "Thinking ${elapsedSeconds}s..."
+    val label = if (isComplete) {
+        val secs = elapsedSeconds
+        if (secs < 1) "Thought for <1s" else "Thought for ${secs}s"
+    } else {
+        "Thinking ${elapsedSeconds}s..."
+    }
 
     Div({
         style {
