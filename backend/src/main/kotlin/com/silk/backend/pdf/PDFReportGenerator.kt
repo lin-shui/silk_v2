@@ -30,12 +30,19 @@ import java.time.format.DateTimeFormatter
  */
 class PDFReportGenerator {
 
+    private enum class DiagnosisSection {
+        NONE,
+        WESTERN,
+        CHINESE
+    }
+
     private val logger = LoggerFactory.getLogger(PDFReportGenerator::class.java)
 
     // 颜色定义（函数形式，避免跨PDF文档重用）
     private fun primaryColor() = DeviceRgb(25, 118, 210)      // 蓝色
     private fun secondaryColor() = DeviceRgb(76, 175, 80)     // 绿色
     private fun headerBgColor() = DeviceRgb(245, 245, 245)    // 浅灰色
+    private val commonChineseDiagnosisKeywords = listOf("不寐", "虚劳", "头痛")
     // 中文字体路径（静态配置）- 优先使用对中英文都支持好的字体
     private val chineseFontPath: String? by lazy {
         // macOS 系统自带的字体，优先选择对中英文都支持好的
@@ -478,82 +485,97 @@ class PDFReportGenerator {
      */
     private fun extractDiagnosisSummary(diagnosisResult: AIStepwiseAgent.DiagnosisResult): String {
         val diagnosisStep = diagnosisResult.stepResults["中西医疾病的诊断"]
-        
         if (diagnosisStep == null || !diagnosisStep.success) {
             return ""
         }
-        
+
         val fullText = diagnosisStep.result
-        val lines = fullText.split("\n")
-        val summary = mutableListOf<String>()
-        
-        // 提取西医诊断和中医诊断的关键信息
-        var inWesternDiagnosis = false
-        var inChineseDiagnosis = false
         val westernDiseases = mutableListOf<String>()
         val chineseDiseases = mutableListOf<String>()
-        
-        for (line in lines) {
+
+        var currentSection = DiagnosisSection.NONE
+        for (line in fullText.lineSequence()) {
             val trimmed = line.trim()
-            
-            when {
-                trimmed.contains("西医诊断") || trimmed.contains("【西医") -> {
-                    inWesternDiagnosis = true
-                    inChineseDiagnosis = false
-                }
-                trimmed.contains("中医诊断") || trimmed.contains("【中医") -> {
-                    inChineseDiagnosis = true
-                    inWesternDiagnosis = false
-                }
-                inWesternDiagnosis && trimmed.isNotEmpty() -> {
-                    // 提取疾病名称（通常包含"、"或数字编号）
-                    if (trimmed.matches(Regex(".*[：:].+")) || 
-                        trimmed.matches(Regex("\\d+[.、].*")) ||
-                        trimmed.contains("可能") ||
-                        trimmed.contains("考虑")) {
-                        westernDiseases.add(trimmed.replace(Regex("^\\d+[.、]\\s*"), ""))
-                    }
-                }
-                inChineseDiagnosis && trimmed.isNotEmpty() -> {
-                    // 提取中医病名
-                    if (trimmed.matches(Regex(".*[：:].+")) || 
-                        trimmed.matches(Regex("\\d+[.、].*")) ||
-                        trimmed.contains("不寐") ||
-                        trimmed.contains("虚劳") ||
-                        trimmed.contains("头痛")) {
-                        chineseDiseases.add(trimmed.replace(Regex("^\\d+[.、]\\s*"), ""))
-                    }
-                }
+            currentSection = detectDiagnosisSection(trimmed, currentSection)
+            collectDiagnosisLine(trimmed, currentSection, westernDiseases, chineseDiseases)
+        }
+
+        return buildDiagnosisSummary(fullText, westernDiseases, chineseDiseases)
+    }
+
+    private fun detectDiagnosisSection(
+        trimmed: String,
+        currentSection: DiagnosisSection
+    ): DiagnosisSection = when {
+        trimmed.contains("西医诊断") || trimmed.contains("【西医") -> DiagnosisSection.WESTERN
+        trimmed.contains("中医诊断") || trimmed.contains("【中医") -> DiagnosisSection.CHINESE
+        else -> currentSection
+    }
+
+    private fun collectDiagnosisLine(
+        trimmed: String,
+        currentSection: DiagnosisSection,
+        westernDiseases: MutableList<String>,
+        chineseDiseases: MutableList<String>
+    ) {
+        if (trimmed.isEmpty()) {
+            return
+        }
+
+        val normalized = trimmed.removeDiagnosisListPrefix()
+        when {
+            currentSection == DiagnosisSection.WESTERN && shouldCollectWesternDiagnosis(trimmed) ->
+                westernDiseases.add(normalized)
+            currentSection == DiagnosisSection.CHINESE && shouldCollectChineseDiagnosis(trimmed) ->
+                chineseDiseases.add(normalized)
+        }
+    }
+
+    private fun shouldCollectWesternDiagnosis(trimmed: String): Boolean =
+        hasDiagnosisLead(trimmed) || trimmed.contains("可能") || trimmed.contains("考虑")
+
+    private fun shouldCollectChineseDiagnosis(trimmed: String): Boolean =
+        hasDiagnosisLead(trimmed) || commonChineseDiagnosisKeywords.any(trimmed::contains)
+
+    private fun hasDiagnosisLead(trimmed: String): Boolean =
+        trimmed.matches(Regex(".*[：:].+")) || trimmed.matches(Regex("\\d+[.、].*"))
+
+    private fun String.removeDiagnosisListPrefix(): String =
+        replace(Regex("^\\d+[.、]\\s*"), "")
+
+    private fun buildDiagnosisSummary(
+        fullText: String,
+        westernDiseases: List<String>,
+        chineseDiseases: List<String>
+    ): String = buildString {
+        appendDiagnosisSection("【西医】", westernDiseases)
+        if (isNotEmpty() && chineseDiseases.isNotEmpty()) {
+            append("\n")
+        }
+        appendDiagnosisSection("【中医】", chineseDiseases)
+
+        if (isEmpty()) {
+            append(fullText.replace(Regex("\\s+"), " ").take(150))
+            if (fullText.length > 150) {
+                append("...")
             }
         }
-        
-        // 构建简要诊断摘要
-        val result = buildString {
-            if (westernDiseases.isNotEmpty()) {
-                append("【西医】")
-                append(westernDiseases.take(2).joinToString("；").take(100))
-                if (westernDiseases.size > 2 || westernDiseases.joinToString().length > 100) {
-                    append("...")
-                }
-            }
-            
-            if (chineseDiseases.isNotEmpty()) {
-                if (westernDiseases.isNotEmpty()) append("\n")
-                append("【中医】")
-                append(chineseDiseases.take(2).joinToString("；").take(100))
-                if (chineseDiseases.size > 2 || chineseDiseases.joinToString().length > 100) {
-                    append("...")
-                }
-            }
-            
-            // 如果提取失败，使用简化的完整文本前150字
-            if (isEmpty()) {
-                append(fullText.replace(Regex("\\s+"), " ").take(150))
-                if (fullText.length > 150) append("...")
-            }
+    }
+
+    private fun StringBuilder.appendDiagnosisSection(
+        title: String,
+        diseases: List<String>
+    ) {
+        if (diseases.isEmpty()) {
+            return
         }
-        
-        return result.toString()
+
+        val joined = diseases.joinToString("；")
+        append(title)
+        append(diseases.take(2).joinToString("；").take(100))
+        if (diseases.size > 2 || joined.length > 100) {
+            append("...")
+        }
     }
     
     /**
@@ -731,10 +753,7 @@ class PDFReportGenerator {
             val trimmed = line.trim()
             
             // 跳过空行和分隔线
-            if (trimmed.isEmpty() || 
-                trimmed.startsWith("═") || 
-                trimmed.startsWith("─") ||
-                trimmed.contains("Silk AI Agent")) {
+            if (shouldSkipFormattedSummaryLine(trimmed)) {
                 continue
             }
             
@@ -806,6 +825,12 @@ class PDFReportGenerator {
             }
         }
     }
+
+    private fun shouldSkipFormattedSummaryLine(trimmed: String): Boolean =
+        trimmed.isEmpty() ||
+            trimmed.startsWith("═") ||
+            trimmed.startsWith("─") ||
+            trimmed.contains("Silk AI Agent")
     
     
     /**

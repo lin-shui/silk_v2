@@ -39,7 +39,7 @@ class SilkAgent {
         currentSessionId = sessionName
         directAgent = DirectModelAgent(sessionId = sessionName)
         if (AIConfig.WEAVIATE_URL.isNotBlank()) {
-            searchAgent = SearchDrivenAgent(sessionId = sessionName, userId = "system")
+            searchAgent = SearchDrivenAgent(sessionId = sessionName)
         }
     }
     
@@ -238,17 +238,15 @@ class SilkAgent {
      * 使用搜索驱动的智能响应（调用 Weaviate 搜索）
      * @param userInput 用户输入
      * @param recentHistory 最近聊天历史
-     * @param userId 发送消息的用户 ID
      * @param callback 状态回调 (stepType, content, isComplete)
      * @return AI 回复
      */
     suspend fun generateSearchDrivenResponse(
         userInput: String,
         recentHistory: List<ChatHistoryEntry> = emptyList(),
-        userId: String = "user",
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
-        val agent = searchAgent ?: SearchDrivenAgent(sessionId = currentSessionId, userId = userId).also { searchAgent = it }
+        val agent = searchAgent ?: SearchDrivenAgent(sessionId = currentSessionId).also { searchAgent = it }
         
         val result = agent.processInput(
             userInput = userInput,
@@ -293,4 +291,3 @@ AI Agent 将会：
 """.trimIndent()
     }
 }
-

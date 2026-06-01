@@ -44,7 +44,6 @@ import org.slf4j.LoggerFactory
  * // 隔离搜索
  * val results = client.isolatedSearch(
  *     query = "身份验证",
- *     userId = "user_123",
  *     currentSessionId = "session_abc",
  *     mode = SearchMode.FOREGROUND_FIRST  // 优先当前会话
  * )
@@ -133,28 +132,24 @@ class WeaviateClient(
      * 隔离搜索 - 核心搜索 API
      * 
      * @param query 搜索查询
-     * @param userId 当前用户 ID (用于权限过滤)
      * @param currentSessionId 当前会话 ID (用于 foreground/background 分离)
      * @param mode 搜索模式
      * @param foregroundLimit Foreground 结果数量限制
      * @param backgroundLimit Background 结果数量限制
-     * @param alpha 混合搜索参数 (0=关键词, 1=语义)
      */
     suspend fun isolatedSearch(
         query: String,
-        userId: String,
         currentSessionId: String,
         mode: SearchMode = SearchMode.FOREGROUND_FIRST,
         foregroundLimit: Int = 10,
-        backgroundLimit: Int = 5,
-        alpha: Float = 0.5f
+        backgroundLimit: Int = 5
     ): IsolatedSearchResults = coroutineScope {
         
         val startTime = System.currentTimeMillis()
         
         when (mode) {
             SearchMode.FOREGROUND_ONLY -> {
-                val foreground = foregroundSearch(query, userId, currentSessionId, foregroundLimit, alpha)
+                val foreground = foregroundSearch(query, currentSessionId, foregroundLimit)
                 IsolatedSearchResults(
                     foreground = foreground,
                     background = SearchResults(emptyList(), 0, 0, "background"),
@@ -164,7 +159,7 @@ class WeaviateClient(
             }
             
             SearchMode.BACKGROUND_ONLY -> {
-                val background = backgroundSearch(query, userId, currentSessionId, backgroundLimit, alpha)
+                val background = backgroundSearch(query, currentSessionId, backgroundLimit)
                 IsolatedSearchResults(
                     foreground = SearchResults(emptyList(), 0, 0, "foreground"),
                     background = background,
@@ -176,10 +171,10 @@ class WeaviateClient(
             SearchMode.FOREGROUND_FIRST -> {
                 // 并行执行 foreground 和 background 搜索
                 val foregroundDeferred = async { 
-                    foregroundSearch(query, userId, currentSessionId, foregroundLimit, alpha) 
+                    foregroundSearch(query, currentSessionId, foregroundLimit)
                 }
                 val backgroundDeferred = async { 
-                    backgroundSearch(query, userId, currentSessionId, backgroundLimit, alpha) 
+                    backgroundSearch(query, currentSessionId, backgroundLimit)
                 }
                 
                 IsolatedSearchResults(
@@ -193,10 +188,10 @@ class WeaviateClient(
             SearchMode.MERGED -> {
                 // 合并搜索，按分数排序
                 val foregroundDeferred = async { 
-                    foregroundSearch(query, userId, currentSessionId, foregroundLimit * 2, alpha) 
+                    foregroundSearch(query, currentSessionId, foregroundLimit * 2)
                 }
                 val backgroundDeferred = async { 
-                    backgroundSearch(query, userId, currentSessionId, backgroundLimit * 2, alpha) 
+                    backgroundSearch(query, currentSessionId, backgroundLimit * 2)
                 }
                 
                 val foreground = foregroundDeferred.await()
@@ -243,10 +238,8 @@ class WeaviateClient(
      */
     suspend fun foregroundSearch(
         query: String,
-        userId: String,
         sessionId: String,
-        limit: Int = 10,
-        alpha: Float = 0.5f
+        limit: Int = 10
     ): SearchResults = withContext(Dispatchers.IO) {
         
         val startTime = System.currentTimeMillis()
@@ -261,7 +254,7 @@ class WeaviateClient(
         """.trimIndent()
         
         // 执行主要的 BM25 搜索
-        val mainResults = executeHybridSearch(query, whereFilter, limit, alpha, "foreground", startTime)
+        val mainResults = executeHybridSearch(query, whereFilter, limit, "foreground", startTime)
         
         // 额外搜索：从查询中提取英文关键词，搜索文件标题
         // 这解决了中文查询无法匹配英文文件名的问题（如 "介绍HersLaw" 无法找到 "HersLaw_Seminal.pdf"）
@@ -270,7 +263,7 @@ class WeaviateClient(
             val keywordQuery = englishKeywords.joinToString(" ")
             logger.debug("🔍 [Weaviate] 额外搜索英文关键词: {}", keywordQuery)
             
-            val titleResults = executeHybridSearch(keywordQuery, whereFilter, limit / 2, alpha, "foreground_title", startTime)
+            val titleResults = executeHybridSearch(keywordQuery, whereFilter, limit / 2, "foreground_title", startTime)
             
             // 合并结果，去重
             val existingIds = mainResults.documents.map { it.id }.toSet()
@@ -313,10 +306,8 @@ class WeaviateClient(
      */
     suspend fun backgroundSearch(
         query: String,
-        userId: String,
         excludeSessionId: String,
-        limit: Int = 5,
-        alpha: Float = 0.5f
+        limit: Int = 5
     ): SearchResults = withContext(Dispatchers.IO) {
         
         val startTime = System.currentTimeMillis()
@@ -324,7 +315,7 @@ class WeaviateClient(
         logger.debug("🔍 [Background] 跨 session 搜索: excludeSession={}, limit={}", excludeSessionId, limit)
         
         // 由于 Weaviate BM25 + NotEqual 有 bug，先搜索更多结果，然后应用层过滤
-        val allResults = executeHybridSearchNoFilter(query, limit * 3, alpha, "background_raw", startTime)
+        val allResults = executeHybridSearchNoFilter(query, limit * 3, "background_raw", startTime)
         
         // 应用层过滤：排除当前 session
         val filteredDocs = allResults.documents.filter { it.sessionId != excludeSessionId }
@@ -702,7 +693,6 @@ class WeaviateClient(
         query: String,
         whereFilter: String,
         limit: Int,
-        alpha: Float,
         searchType: String,
         startTime: Long
     ): SearchResults {
@@ -841,7 +831,6 @@ class WeaviateClient(
     private suspend fun executeHybridSearchNoFilter(
         query: String,
         limit: Int,
-        alpha: Float,
         searchType: String,
         startTime: Long
     ): SearchResults {

@@ -64,14 +64,6 @@ class ChatHistoryManager(
         return "$baseDir/$normalizedSessionName"
     }
     
-    /**
-     * 获取会话目录路径（不进行标准化，用于查找旧格式目录）
-     */
-    private fun getSessionDirLegacy(sessionName: String): String {
-        val safeName = sessionName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        return "$baseDir/$safeName"
-    }
-
     private fun getSessionFile(sessionName: String): File {
         return File("${getSessionDir(sessionName)}/session.json")
     }
