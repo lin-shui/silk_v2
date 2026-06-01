@@ -21,9 +21,6 @@ import com.microsoft.playwright.Browser
 import com.microsoft.playwright.BrowserType
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.Playwright
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
 /**
@@ -48,11 +45,6 @@ object WebPageDownloader {
     private val URL_PATTERN = Pattern.compile(
         """https?://[^\s<>"']+""",
         Pattern.CASE_INSENSITIVE
-    )
-    
-    // 常见的网页文件扩展名
-    private val WEB_PAGE_EXTENSIONS = setOf(
-        "", "html", "htm", "php", "asp", "aspx", "jsp", "shtml"
     )
     
     // 支持的文档类型（可以提取文本）
@@ -326,7 +318,7 @@ object WebPageDownloader {
                 val cleanedText = cleanText(textContent)
                 
                 // 生成文件名
-                val fileName = generateFileName(url, title, "html")
+                val fileName = generateFileName(title, "html")
                 
                 logger.info("✅ Playwright 下载成功: {} ({} 字符)", title, cleanedText.length)
                 
@@ -429,7 +421,7 @@ object WebPageDownloader {
             document.select("script, style, nav, header, footer, aside, noscript, iframe").remove()
             val textContent = document.body()?.text() ?: ""
             val cleanedText = cleanText(textContent)
-            val fileName = generateFileName(url, title, "html")
+            val fileName = generateFileName(title, "html")
             
             logger.info("✅ HTTP 下载成功: {} ({} 字符)", title, cleanedText.length)
             
@@ -524,7 +516,7 @@ object WebPageDownloader {
             document.close()
             
             val cleanedText = cleanText(textContent)
-            val fileName = generateFileName(url, title, "pdf")
+            val fileName = generateFileName(title, "pdf")
             
             logger.info("✅ PDF 提取成功: {} ({} 页, {} 字符)", title, pageCount, cleanedText.length)
             
@@ -583,7 +575,7 @@ object WebPageDownloader {
     /**
      * 生成保存的文件名
      */
-    private fun generateFileName(url: String, title: String, extension: String = "html"): String {
+    private fun generateFileName(title: String, extension: String = "html"): String {
         val timestamp = System.currentTimeMillis()
         val safeName = title
             .replace(Regex("[^a-zA-Z0-9\\u4e00-\\u9fa5]"), "_")

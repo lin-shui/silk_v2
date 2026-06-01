@@ -133,8 +133,6 @@ class DirectModelAgent(
     suspend fun processInput(
         userInput: String,
         systemPrompt: String? = null,
-        requestUserId: String = "",
-        accessibleSessionIds: List<String> = listOf(sessionId),
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
         currentResponseReferences.clear()

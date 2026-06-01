@@ -38,8 +38,7 @@ import java.time.Duration
  */
 class SearchDrivenAgent(
     private val apiKey: String = AIConfig.API_KEY,
-    private val sessionId: String = "default",
-    private val userId: String = "default_user"
+    private val sessionId: String = "default"
 ) {
     private val logger = LoggerFactory.getLogger(SearchDrivenAgent::class.java)
     
@@ -186,12 +185,10 @@ class SearchDrivenAgent(
                 if (weaviateClient.isReady()) {
                     weaviateClient.isolatedSearch(
                         query = query,
-                        userId = userId,
                         currentSessionId = sessionId,
                         mode = SearchMode.FOREGROUND_FIRST,
                         foregroundLimit = 5,
-                        backgroundLimit = 3,
-                        alpha = 0.5f
+                        backgroundLimit = 3
                     )
                 } else {
                     logger.warn("⚠️ Weaviate 不可用")

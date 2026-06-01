@@ -479,7 +479,7 @@ object UserTodoStore {
 
     internal fun logicalDedupKey(title: String, actionType: String?, actionDetail: String?, taskKind: String? = null): String {
         val at = actionType?.trim()?.lowercase(Locale.getDefault())?.ifBlank { null }
-        var adNorm = normalizeActionDetailForKey(at, actionDetail)
+        var adNorm = normalizeActionDetailForKey(actionDetail)
         val kindPrefix = if (taskKind?.trim()?.lowercase(Locale.getDefault()) == "long_term_template") "lt:" else ""
         // actionType=alarm but missing actionDetail: try to extract time from title
         if ((at == "alarm" || at == "calendar") && adNorm == null) {
@@ -568,7 +568,7 @@ object UserTodoStore {
     }
 
 
-    private fun normalizeActionDetailForKey(actionType: String?, detail: String?): String? {
+    private fun normalizeActionDetailForKey(detail: String?): String? {
         if (detail == null) return null
         val t = detail.trim().lowercase(Locale.getDefault()).ifBlank { return null }
         // "HH:mm" exact
