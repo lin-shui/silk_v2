@@ -67,6 +67,16 @@ data class UserMessage(
     @SerialName("user_id") val userId: String = "",
     @SerialName("user_name") val userName: String = "",
     @SerialName("msg_id") val msgId: String = "",
+    val history: List<HistoryEntry>? = null,
+)
+
+@Serializable
+data class HistoryEntry(
+    @SerialName("sender_id") val senderId: String,
+    @SerialName("sender_name") val senderName: String,
+    val content: String,
+    @SerialName("message_type") val messageType: String = "TEXT",
+    val timestamp: Long = 0,
 )
 
 @Serializable

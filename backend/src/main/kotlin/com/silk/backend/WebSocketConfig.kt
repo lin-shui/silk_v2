@@ -476,11 +476,28 @@ class ChatServer(
                             "perm:allow_all" -> "allow all"
                             else -> forwardContent
                         }
+                        // Load recent chat history so cc-connect agents have
+                        // the same full group-chat context that DirectModelAgent
+                        // receives (last 50 TEXT entries, capped for performance).
+                        val chatHistory = historyManager.loadChatHistory(sessionName)
+                        val historyEntries = chatHistory?.messages
+                            ?.filter { it.messageType == "TEXT" }
+                            ?.takeLast(50)
+                            ?.map { entry ->
+                                com.silk.backend.ccconnect.HistoryEntry(
+                                    senderId = entry.senderId,
+                                    senderName = entry.senderName,
+                                    content = entry.content,
+                                    messageType = entry.messageType,
+                                    timestamp = entry.timestamp,
+                                )
+                            }
                         val userMsg = com.silk.backend.ccconnect.UserMessage(
                             content = engineContent,
                             userId = message.userId,
                             userName = message.userName,
                             msgId = message.id,
+                            history = historyEntries,
                         )
                         // 如果 AI 正在等待回答，直达已有会话；否则走正常 processing/排队
                         if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(ccGroupId)) {
