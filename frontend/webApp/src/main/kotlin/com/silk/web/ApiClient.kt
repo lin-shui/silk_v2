@@ -250,11 +250,8 @@ data class ExportKBResponse(
 object ApiClient {
     private val BASE_URL: String
         get() {
-            // 如果构建时注入了 BACKEND_BASE_URL，直接使用
-            val injected = BuildConfig.BACKEND_BASE_URL
-            if (injected.isNotEmpty()) return injected
-
-            // 否则动态检测：dev server 切到后端端口，生产走同源
+            // 优先走同源，兼容 nginx 代理；
+            // 仅在本地前端 dev server 直连场景下切到后端端口，避免跨端口登录失效。
             val protocol = window.location.protocol
             val hostname = window.location.hostname
             val origin = window.location.origin.let { if (it.endsWith("/")) it.dropLast(1) else it }

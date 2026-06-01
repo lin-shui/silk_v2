@@ -127,10 +127,6 @@ object SilkColors {
 }
 
 fun backendHttpOrigin(): String {
-    // 如果构建时注入了 BACKEND_BASE_URL，直接使用
-    val injected = BuildConfig.BACKEND_BASE_URL
-    if (injected.isNotEmpty()) return injected
-
     val protocol = window.location.protocol
     val hostname = window.location.hostname
     val currentPort = window.location.port
@@ -142,14 +138,6 @@ fun backendHttpOrigin(): String {
 }
 
 internal fun backendWsOrigin(): String {
-    // 如果构建时注入了 BACKEND_BASE_URL，推导 WebSocket 地址
-    val injected = BuildConfig.BACKEND_BASE_URL
-    if (injected.isNotEmpty()) {
-        val wsProtocol = if (injected.startsWith("https")) "wss:" else "ws:"
-        val hostPart = injected.removePrefix("http://").removePrefix("https://")
-        return "$wsProtocol//$hostPart"
-    }
-
     val wsProtocol = if (window.location.protocol == "https:") "wss:" else "ws:"
     val currentPort = window.location.port
     val host = if (currentPort == BuildConfig.FRONTEND_PORT) {
