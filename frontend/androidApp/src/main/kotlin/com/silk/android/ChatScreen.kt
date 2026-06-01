@@ -26,6 +26,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -120,6 +121,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
@@ -131,6 +133,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -2018,27 +2022,22 @@ fun AIMessageCardAndroid(
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {}
 ) {
-    val thinkingMarker = "<!--THINKING_END-->"
-    val hasThinking = message.content.contains(thinkingMarker)
-    val thinkingText = if (hasThinking) {
-        message.content.substringBefore(thinkingMarker).trim()
-    } else ""
-    val bodyContent = if (hasThinking) {
-        message.content.substringAfter(thinkingMarker).trim()
-    } else {
-        message.content
+    val cardState = remember(message.content, message.userName, isTransient, isExpanded) {
+        buildAiMessageCardState(
+            content = message.content,
+            userName = message.userName,
+            isTransient = isTransient,
+            isExpanded = isExpanded,
+        )
     }
-    val isLongContent = bodyContent.length > 500
-    val effectiveExpanded = if (isTransient) true else isExpanded
-    val aiPreview =
-        if (bodyContent.length > 220) bodyContent.take(220) + "..."
-        else bodyContent
-    
-    // 调试日志
-    LaunchedEffect(message.id, isExpanded) {
-        println("🤖 AIMessageCardAndroid: messageId=${message.id}, bodyLength=${bodyContent.length}, isLongContent=$isLongContent, isExpanded=$isExpanded")
-    }
-    
+
+    LogAiMessageCardState(
+        messageId = message.id,
+        bodyLength = cardState.bodyContent.length,
+        isLongContent = cardState.isLongContent,
+        isExpanded = isExpanded,
+    )
+
     Card(
         modifier = Modifier
             .fillMaxWidth(0.95f)
@@ -2050,249 +2049,391 @@ fun AIMessageCardAndroid(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // 顶部标识栏
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                // AI 头像
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(Color(0xFFC9A86C), Color(0xFFA8894D))
-                            ),
-                            CircleShape
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("🤖", fontSize = 16.sp)
-                }
-                
-                Spacer(modifier = Modifier.width(8.dp))
-                
-                // 名称和时间
-                Text(
-                    text = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
-                        .let { if (it.isBlank() || it == "Silk") "Silk AI" else it },
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = Color(0xFFC9A86C)  // 金色
-                )
-                
-                Spacer(modifier = Modifier.width(8.dp))
-                
-                Text(
-                    text = timeString,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                
-                // 展开/折叠按钮
-                if (isLongContent && !isTransient) {
-                    Spacer(modifier = Modifier.weight(1f))
-                    
-                    Box(
-                        modifier = Modifier
-                            .background(
-                                color = if (effectiveExpanded) Color.Transparent else Color(0x1AC9A86C),
-                                shape = RoundedCornerShape(4.dp)
-                            )
-                            .clickable { 
-                                onExpandChange(!effectiveExpanded)
-                            }
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                    ) {
-                        Text(
-                            text = if (effectiveExpanded) "▼ 收起" else "▶ 展开",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            }
-            
-            Spacer(modifier = Modifier.height(12.dp))
-            
-            // 分隔线
-            Divider(
-                color = Color(0xFFE8E0D4),
-                thickness = 1.dp
+            AIMessageCardHeader(
+                state = cardState,
+                timeString = timeString,
+                onExpandChange = onExpandChange,
             )
-            
+
             Spacer(modifier = Modifier.height(12.dp))
 
-            // 思考过程折叠区域
-            if (hasThinking && thinkingText.isNotEmpty()) {
-                Column(
+            Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            AIMessageThinkingPanel(
+                thinkingText = cardState.thinkingText,
+                isExpanded = isThinkingExpanded,
+                onExpandChange = onThinkingExpandChange,
+            )
+            AIMessageCardBody(state = cardState, onExpandChange = onExpandChange)
+            AIMessageCardFooter(
+                isTransient = isTransient,
+                message = message,
+                onCopy = onCopy,
+                onForward = onForward,
+            )
+        }
+    }
+}
+
+private data class AIMessageCardState(
+    val displayName: String,
+    val thinkingText: String,
+    val bodyContent: String,
+    val isTransient: Boolean,
+    val isLongContent: Boolean,
+    val effectiveExpanded: Boolean,
+    val previewText: String,
+)
+
+private data class AIMessageContentSections(
+    val thinkingText: String,
+    val bodyContent: String,
+)
+
+private fun buildAiMessageCardState(
+    content: String,
+    userName: String,
+    isTransient: Boolean,
+    isExpanded: Boolean,
+): AIMessageCardState {
+    val sections = splitAiMessageContent(content)
+    return AIMessageCardState(
+        displayName = resolveAiMessageDisplayName(userName),
+        thinkingText = sections.thinkingText,
+        bodyContent = sections.bodyContent,
+        isTransient = isTransient,
+        isLongContent = sections.bodyContent.length > 500,
+        effectiveExpanded = if (isTransient) true else isExpanded,
+        previewText = sections.bodyContent.toAiMessagePreview(),
+    )
+}
+
+private fun splitAiMessageContent(content: String): AIMessageContentSections {
+    val thinkingMarker = "<!--THINKING_END-->"
+    if (!content.contains(thinkingMarker)) {
+        return AIMessageContentSections(
+            thinkingText = "",
+            bodyContent = content,
+        )
+    }
+    return AIMessageContentSections(
+        thinkingText = content.substringBefore(thinkingMarker).trim(),
+        bodyContent = content.substringAfter(thinkingMarker).trim(),
+    )
+}
+
+private fun resolveAiMessageDisplayName(userName: String): String =
+    userName.trimStart().removePrefix("\uD83E\uDD16").trim()
+        .ifBlank { "Silk AI" }
+        .let { if (it == "Silk") "Silk AI" else it }
+
+private fun String.toAiMessagePreview(maxLength: Int = 220): String =
+    if (length > maxLength) take(maxLength) + "..." else this
+
+@Composable
+private fun LogAiMessageCardState(
+    messageId: String,
+    bodyLength: Int,
+    isLongContent: Boolean,
+    isExpanded: Boolean,
+) {
+    LaunchedEffect(messageId, isExpanded) {
+        println(
+            "🤖 AIMessageCardAndroid: " +
+                "messageId=$messageId, bodyLength=$bodyLength, " +
+                "isLongContent=$isLongContent, isExpanded=$isExpanded"
+        )
+    }
+}
+
+@Composable
+private fun AIMessageCardHeader(
+    state: AIMessageCardState,
+    timeString: String,
+    onExpandChange: (Boolean) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(Color(0xFFC9A86C), Color(0xFFA8894D)),
+                    ),
+                    CircleShape,
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("🤖", fontSize = 16.sp)
+        }
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        Text(
+            text = state.displayName,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Color(0xFFC9A86C),
+        )
+
+        Spacer(modifier = Modifier.width(8.dp))
+
+        Text(
+            text = timeString,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        AIMessageCardExpandToggle(
+            isVisible = state.isLongContent && !state.isTransient,
+            isExpanded = state.effectiveExpanded,
+            onExpandChange = onExpandChange,
+        )
+    }
+}
+
+@Composable
+private fun RowScope.AIMessageCardExpandToggle(
+    isVisible: Boolean,
+    isExpanded: Boolean,
+    onExpandChange: (Boolean) -> Unit,
+) {
+    if (!isVisible) return
+
+    Spacer(modifier = Modifier.weight(1f))
+
+    Box(
+        modifier = Modifier
+            .background(
+                color = if (isExpanded) Color.Transparent else Color(0x1AC9A86C),
+                shape = RoundedCornerShape(4.dp),
+            )
+            .clickable { onExpandChange(!isExpanded) }
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Text(
+            text = if (isExpanded) "▼ 收起" else "▶ 展开",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+    }
+}
+
+@Composable
+private fun AIMessageThinkingPanel(
+    thinkingText: String,
+    isExpanded: Boolean,
+    onExpandChange: (Boolean) -> Unit,
+) {
+    if (thinkingText.isEmpty()) return
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .background(
+                color = Color(0xFFFAF8F4),
+                shape = RoundedCornerShape(8.dp),
+            )
+            .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(8.dp)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onExpandChange(!isExpanded) }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (isExpanded) "▼" else "▶",
+                fontSize = 10.sp,
+                color = Color(0xFF8B7355),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = "\uD83D\uDCAD 思考过程",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+                color = Color(0xFF8B7355),
+            )
+        }
+        AnimatedVisibility(
+            visible = isExpanded,
+            enter = expandVertically(),
+            exit = shrinkVertically(),
+        ) {
+            Column {
+                Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+                Text(
+                    text = thinkingText,
+                    fontSize = 12.sp,
+                    color = Color(0xFF8B7355),
+                    lineHeight = 18.sp,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 8.dp)
-                        .background(
-                            color = Color(0xFFFAF8F4),
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                        .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(8.dp))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onThinkingExpandChange(!isThinkingExpanded) }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (isThinkingExpanded) "▼" else "▶",
-                            fontSize = 10.sp,
-                            color = Color(0xFF8B7355)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "\uD83D\uDCAD 思考过程",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Color(0xFF8B7355)
-                        )
-                    }
-                    AnimatedVisibility(
-                        visible = isThinkingExpanded,
-                        enter = expandVertically(),
-                        exit = shrinkVertically()
-                    ) {
-                        Column {
-                            Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
-                            Text(
-                                text = thinkingText,
-                                fontSize = 12.sp,
-                                color = Color(0xFF8B7355),
-                                lineHeight = 18.sp,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp)
-                            )
-                        }
-                    }
-                }
-            }
-            
-            // 内容区域（与 Harmony：长文折叠时底部「查看全文」，展开后底部「收起」）
-            when {
-                !isLongContent || isTransient -> {
-                    MarkdownWebView(bodyContent)
-                }
-                !effectiveExpanded -> {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = aiPreview,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            maxLines = 8,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 10.dp)
-                                .clickable { onExpandChange(true) }
-                                .padding(vertical = 6.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "查看全文",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = SilkColors.primary
-                            )
-                            Text("  ▼", fontSize = 12.sp, color = SilkColors.primary)
-                        }
-                    }
-                }
-                else -> {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        MarkdownWebView(bodyContent)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 10.dp)
-                                .clickable { onExpandChange(false) }
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "收起",
-                                fontSize = 12.sp,
-                                color = SilkColors.textSecondary
-                            )
-                            Text(
-                                "  ▲",
-                                fontSize = 11.sp,
-                                color = SilkColors.textSecondary
-                            )
-                        }
-                    }
-                }
-            }
-            
-            // 底部操作栏
-            if (!isTransient) {
-                Spacer(modifier = Modifier.height(12.dp))
-                
-                Divider(
-                    color = Color(0xFFE8E0D4).copy(alpha = 0.5f),
-                    thickness = 0.5.dp
+                        .padding(12.dp),
                 )
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    // 复制按钮
-                    TextButton(
-                        onClick = { onCopy(message.content) },
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        Text("📋", fontSize = 14.sp)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("复制", style = MaterialTheme.typography.bodySmall)
-                    }
-                    
-                    // 转发按钮
-                    TextButton(
-                        onClick = { onForward(message) },
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        Text("↗", fontSize = 14.sp)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("转发", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-            
-            // 临时消息状态
-            if (isTransient) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "⏳",
-                        fontSize = 12.sp
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "生成中...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFE8B86C)
-                    )
-                }
             }
         }
+    }
+}
+
+@Composable
+private fun AIMessageCardBody(
+    state: AIMessageCardState,
+    onExpandChange: (Boolean) -> Unit,
+) {
+    when {
+        !state.isLongContent || state.isTransient -> MarkdownWebView(state.bodyContent)
+        !state.effectiveExpanded -> AIMessageCollapsedBody(
+            previewText = state.previewText,
+            onExpand = { onExpandChange(true) },
+        )
+        else -> AIMessageExpandedBody(
+            bodyContent = state.bodyContent,
+            onCollapse = { onExpandChange(false) },
+        )
+    }
+}
+
+@Composable
+private fun AIMessageCollapsedBody(
+    previewText: String,
+    onExpand: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = previewText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        AIMessageBodyToggle(
+            label = "查看全文",
+            arrow = "▼",
+            fontSize = 13.sp,
+            textColor = SilkColors.primary,
+            verticalPadding = 6.dp,
+            onClick = onExpand,
+        )
+    }
+}
+
+@Composable
+private fun AIMessageExpandedBody(
+    bodyContent: String,
+    onCollapse: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        MarkdownWebView(bodyContent)
+        AIMessageBodyToggle(
+            label = "收起",
+            arrow = "▲",
+            fontSize = 12.sp,
+            textColor = SilkColors.textSecondary,
+            verticalPadding = 4.dp,
+            onClick = onCollapse,
+        )
+    }
+}
+
+@Composable
+private fun AIMessageBodyToggle(
+    label: String,
+    arrow: String,
+    fontSize: TextUnit,
+    textColor: Color,
+    verticalPadding: Dp,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .clickable(onClick = onClick)
+            .padding(vertical = verticalPadding),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            fontSize = fontSize,
+            fontWeight = if (label == "查看全文") FontWeight.Medium else FontWeight.Normal,
+            color = textColor,
+        )
+        Text("  $arrow", fontSize = if (label == "查看全文") 12.sp else 11.sp, color = textColor)
+    }
+}
+
+@Composable
+private fun AIMessageCardFooter(
+    isTransient: Boolean,
+    message: Message,
+    onCopy: (String) -> Unit,
+    onForward: (Message) -> Unit,
+) {
+    if (isTransient) {
+        AIMessageTransientStatus()
+        return
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+    Divider(
+        color = Color(0xFFE8E0D4).copy(alpha = 0.5f),
+        thickness = 0.5.dp,
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        AIMessageActionButton(
+            icon = "📋",
+            label = "复制",
+            onClick = { onCopy(message.content) },
+        )
+        AIMessageActionButton(
+            icon = "↗",
+            label = "转发",
+            onClick = { onForward(message) },
+        )
+    }
+}
+
+@Composable
+private fun AIMessageActionButton(
+    icon: String,
+    label: String,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.padding(horizontal = 4.dp),
+    ) {
+        Text(icon, fontSize = 14.sp)
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(label, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun AIMessageTransientStatus() {
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(text = "⏳", fontSize = 12.sp)
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = "生成中...",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFFE8B86C),
+        )
     }
 }
 
@@ -2602,28 +2743,8 @@ private fun processMathFormula(formula: String): String {
  */
 @Composable
 fun MarkdownTableAndroid(lines: List<String>) {
-    if (lines.isEmpty()) return
-    
-    val hasHeader = lines.size > 1 && lines[1].contains("|") && 
-                    lines[1].all { it == '|' || it == '-' || it == ' ' || it == ':' }
-    
-    val headerLine = if (hasHeader) lines[0] else ""
-    val dataLines = if (hasHeader) lines.drop(2) else lines
-    
-    val parseRow: (String) -> List<String> = { line ->
-        line.split("|")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-    }
-    
-    val headerCells = if (hasHeader) parseRow(headerLine) else emptyList()
-    val rows = dataLines.map { parseRow(it) }
-    
-    if (headerCells.isEmpty() && rows.isEmpty()) return
-    
-    val maxCols = maxOf(headerCells.size, rows.maxOfOrNull { it.size } ?: 0)
-    if (maxCols == 0) return
-    
+    val table = remember(lines) { parseMarkdownTable(lines) } ?: return
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -2633,61 +2754,21 @@ fun MarkdownTableAndroid(lines: List<String>) {
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // 表头
-            if (headerCells.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFFEFF6FF))
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                ) {
-                    headerCells.forEach { cell ->
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 4.dp)
-                        ) {
-                            Text(
-                                text = cell,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF1E3A5F)
-                            )
-                        }
-                    }
-                    // 补齐空列
-                    repeat(maxCols - headerCells.size) {
-                        Box(modifier = Modifier.weight(1f))
-                    }
-                }
+            if (table.headerCells.isNotEmpty()) {
+                MarkdownTableHeaderRow(
+                    headerCells = table.headerCells,
+                    maxCols = table.maxCols,
+                )
                 Divider(color = Color(0xFFE2E8F0), thickness = 1.dp)
             }
-            
-            // 数据行
-            rows.forEachIndexed { rowIndex, rowCells ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(if (rowIndex % 2 == 0) Color.White else Color(0xFFFAFAFA))
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                ) {
-                    rowCells.forEach { cell ->
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 4.dp)
-                        ) {
-                            InlineMarkdownAndroid(cell)
-                        }
-                    }
-                    // 补齐空列
-                    repeat(maxCols - rowCells.size) {
-                        Box(modifier = Modifier.weight(1f))
-                    }
-                }
-                if (rowIndex < rows.size - 1) {
-                    Divider(color = Color(0xFFF0F0F0), thickness = 0.5.dp)
-                }
+
+            table.rows.forEachIndexed { rowIndex, rowCells ->
+                MarkdownTableDataRow(
+                    rowCells = rowCells,
+                    rowIndex = rowIndex,
+                    maxCols = table.maxCols,
+                    showDivider = rowIndex < table.rows.lastIndex,
+                )
             }
         }
     }
@@ -2758,270 +2839,11 @@ fun TaskListItemAndroid(content: String, isChecked: Boolean, onToggle: (() -> Un
 @Composable
 fun MarkdownContentAndroid(content: String) {
     val context = LocalContext.current
-    val lines = content.split("\n")
-    var inCodeBlock = false
-    var codeBlockContent = StringBuilder()
-    var codeLanguage = ""
-    var inTable = false
-    var tableLines = mutableListOf<String>()
-    var inMathBlock = false
-    var mathBlockContent = StringBuilder()
-    
-    Column(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        lines.forEachIndexed { index, line ->
-            when {
-                // 数学公式块 $$...$$ 或 \[...\]
-                (line.trim().startsWith("$$") || line.trim().startsWith("\\[")) && !inCodeBlock -> {
-                    if (inMathBlock) {
-                        // 结束数学块
-                        if (mathBlockContent.isNotEmpty()) {
-                            MathFormulaAndroid(mathBlockContent.toString().trim(), isBlock = true)
-                            mathBlockContent = StringBuilder()
-                        }
-                        inMathBlock = false
-                    } else {
-                        val trimmedLine = line.trim()
-                        val isDollar = trimmedLine.startsWith("$$")
-                        val endMarker = if (isDollar) "$$" else "\\]"
-                        val startMarker = if (isDollar) "$$" else "\\["
-                        
-                        // 检查是否是单行公式 $$...$$ 或 \[...\]
-                        if (trimmedLine.endsWith(endMarker) && trimmedLine.length > startMarker.length + endMarker.length) {
-                            // 单行公式
-                            val content = trimmedLine.removePrefix(startMarker).removeSuffix(endMarker).trim()
-                            MathFormulaAndroid(content, isBlock = true)
-                        } else {
-                            // 多行公式开始
-                            inMathBlock = true
-                            // 如果当前行有内容（不是纯粹的起始标记），加入内容
-                            val firstContent = trimmedLine.removePrefix(startMarker).trim()
-                            if (firstContent.isNotEmpty()) {
-                                mathBlockContent.append(firstContent).append("\n")
-                            }
-                        }
-                    }
-                }
-                // 结束标记 \] 或 $$（当在数学块中）
-                inMathBlock && (line.trim() == "$$" || line.trim() == "\\]") -> {
-                    // 结束数学块
-                    if (mathBlockContent.isNotEmpty()) {
-                        MathFormulaAndroid(mathBlockContent.toString().trim(), isBlock = true)
-                        mathBlockContent = StringBuilder()
-                    }
-                    inMathBlock = false
-                }
-                inMathBlock -> {
-                    mathBlockContent.append(line).append("\n")
-                }
-                // 代码块开始/结束
-                line.trim().startsWith("```") -> {
-                    if (inCodeBlock) {
-                        // 代码块结束
-                        if (codeBlockContent.isNotEmpty()) {
-                            CodeBlockAndroid(
-                                code = codeBlockContent.toString().trimEnd(),
-                                language = codeLanguage
-                            )
-                            codeBlockContent = StringBuilder()
-                        }
-                        inCodeBlock = false
-                    } else {
-                        // 代码块开始
-                        inCodeBlock = true
-                        codeLanguage = line.trim().removePrefix("```").trim()
-                    }
-                }
-                // 代码块内容
-                inCodeBlock -> {
-                    codeBlockContent.append(line).append("\n")
-                }
-                // 表格检测
-                line.trim().startsWith("|") && line.trim().endsWith("|") -> {
-                    if (!inTable) {
-                        inTable = true
-                        tableLines = mutableListOf()
-                    }
-                    tableLines.add(line)
-                }
-                // 表格结束
-                inTable && !line.trim().startsWith("|") -> {
-                    if (tableLines.isNotEmpty()) {
-                        MarkdownTableAndroid(tableLines)
-                        tableLines = mutableListOf()
-                    }
-                    inTable = false
-                    // 继续处理当前行
-                    when {
-                        line.startsWith("### ") -> {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = line.removePrefix("### "),
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF4A4038)
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                        }
-                        line.startsWith("## ") -> {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = line.removePrefix("## "),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF4A4038)
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                        }
-                        line.startsWith("# ") -> {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text(
-                                text = line.removePrefix("# "),
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFC9A86C)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                        line.isNotBlank() -> {
-                            InlineMarkdownAndroid(line, context)
-                            Spacer(modifier = Modifier.height(4.dp))
-                        }
-                    }
-                }
-                // 标题
-                line.startsWith("### ") -> {
-                    if (index > 0) Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = line.removePrefix("### "),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF4A4038)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                line.startsWith("## ") -> {
-                    if (index > 0) Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = line.removePrefix("## "),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF4A4038)
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                }
-                line.startsWith("# ") -> {
-                    if (index > 0) Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = line.removePrefix("# "),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFC9A86C)  // 金色大标题
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                // 任务列表 - [ ] 或 [x]
-                line.trim().let { l ->
-                    l.startsWith("- [ ] ") || l.startsWith("- [x] ") || 
-                    l.startsWith("* [ ] ") || l.startsWith("* [x] ")
-                } -> {
-                    val isChecked = line.trim().contains("[x]")
-                    val content = line.trim()
-                        .removePrefix("- [ ] ").removePrefix("- [x] ")
-                        .removePrefix("* [ ] ").removePrefix("* [x] ")
-                    TaskListItemAndroid(content, isChecked)
-                }
-                // 无序列表
-                line.trim().startsWith("- ") || line.trim().startsWith("* ") -> {
-                    val content = line.trim().removePrefix("- ").removePrefix("* ")
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 16.dp, bottom = 4.dp)
-                    ) {
-                        Text(
-                            text = "•",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFC9A86C),
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                        InlineMarkdownAndroid(content, context)
-                    }
-                }
-                // 有序列表
-                line.trim().matches(Regex("^\\d+\\.\\s.*")) -> {
-                    val parts = line.trim().split(".", limit = 2)
-                    if (parts.size == 2) {
-                        val num = parts[0].trim()
-                        val listContent = parts[1].trim()
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 16.dp, bottom = 4.dp)
-                        ) {
-                            Text(
-                                text = "$num.",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFFC9A86C),
-                                modifier = Modifier.padding(end = 8.dp)
-                            )
-                            InlineMarkdownAndroid(listContent, context)
-                        }
-                    }
-                }
-                // 分隔线
-                line.trim() == "---" || line.trim() == "***" -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Divider(
-                        color = Color(0xFFE8E0D4),
-                        thickness = 1.dp,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                }
-                // 引用块
-                line.startsWith("> ") -> {
-                    val quoteContent = line.removePrefix("> ")
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 8.dp, bottom = 8.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFFF0F0F0)
-                        ),
-                        shape = RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp, bottomStart = 8.dp)
-                    ) {
-                        Row(modifier = Modifier.padding(12.dp)) {
-                            Box(
-                                modifier = Modifier
-                                    .width(3.dp)
-                                    .height(20.dp)
-                                    .background(Color(0xFF7BA8C9))
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            InlineMarkdownAndroid(quoteContent, context)
-                        }
-                    }
-                }
-                // 普通文本
-                line.isNotBlank() -> {
-                    InlineMarkdownAndroid(line, context)
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                // 空行
-                else -> {
-                    if (index > 0 && lines.getOrNull(index - 1)?.isNotBlank() == true) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                }
-            }
-        }
-        
-        // 处理末尾的表格
-        if (inTable && tableLines.isNotEmpty()) {
-            MarkdownTableAndroid(tableLines)
+    val renderItems = remember(content) { parseMarkdownContent(content) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        renderItems.forEach { item ->
+            RenderMarkdownContentItem(item = item, context = context)
         }
     }
 }
@@ -3098,166 +2920,33 @@ fun CodeBlockAndroid(code: String, language: String) {
 @Composable
 fun InlineMarkdownAndroid(text: String, context: Context? = null) {
     val localContext = context ?: LocalContext.current
-    
+
     // 处理行内数学公式
     val processedText = remember(text) { extractInlineMath(text) }
-    
+
     val annotatedText = buildAnnotatedString {
         var remaining = processedText.first
         val mathSegments = processedText.second
         var offset = 0
-        
+
         while (remaining.isNotEmpty()) {
-            var consumed = false
-
-            // 检查当前位置是否有数学公式
-            val mathAtPos = mathSegments.find { it.first == offset }
-            if (mathAtPos != null) {
-                // 渲染数学公式
-                withStyle(androidx.compose.ui.text.SpanStyle(
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                    background = Color(0xFFF5F5F5)
-                )) {
-                    append(mathAtPos.second)
-                }
-                offset += mathAtPos.second.length
-                remaining = if (remaining.length > mathAtPos.second.length) remaining.substring(mathAtPos.second.length) else ""
-                consumed = true
-            }
-
-            if (!consumed) {
-                // 处理链接 [text](url)
-                val linkStart = remaining.indexOf("[")
-                if (linkStart >= 0) {
-                    val linkEnd = remaining.indexOf("]", linkStart)
-                    if (linkEnd > linkStart) {
-                        val urlStart = remaining.indexOf("(", linkEnd)
-                        val urlEnd = remaining.indexOf(")", urlStart)
-                        if (urlStart == linkEnd + 1 && urlEnd > urlStart) {
-                            // 添加前面的普通文本
-                            if (linkStart > 0) {
-                                append(remaining.substring(0, linkStart))
-                            }
-
-                            val linkText = remaining.substring(linkStart + 1, linkEnd)
-                            val url = remaining.substring(urlStart + 1, urlEnd)
-
-                            // 添加可点击的链接
-                            pushStringAnnotation(tag = "URL", annotation = url)
-                            withStyle(androidx.compose.ui.text.SpanStyle(
-                                color = Color(0xFF1565C0),
-                                textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
-                            )) {
-                                append(linkText)
-                            }
-                            pop()
-
-                            remaining = remaining.substring(urlEnd + 1)
-                            consumed = true
-                        }
-                    }
-                }
-            }
-
-            if (!consumed) {
-                // 处理自动链接 URL
-                val urlPattern = Regex("""(https?://[^\s<>\[\]()]+)""")
-                val urlMatch = urlPattern.find(remaining)
-                if (urlMatch != null) {
-                    val matchStart = urlMatch.range.first
-                    if (matchStart > 0) {
-                        append(remaining.substring(0, matchStart))
-                    }
-
-                    val url = urlMatch.value
-                    pushStringAnnotation(tag = "URL", annotation = url)
-                    withStyle(androidx.compose.ui.text.SpanStyle(
-                        color = Color(0xFF1565C0),
-                        textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
-                    )) {
-                        append(url)
-                    }
-                    pop()
-
-                    remaining = remaining.substring(urlMatch.range.last + 1)
-                    consumed = true
-                }
-            }
-
-            if (!consumed) {
-                // 处理粗体 **text**
-                val boldStart = remaining.indexOf("**")
-                if (boldStart >= 0) {
-                    // 添加前面的普通文本
-                    if (boldStart > 0) {
-                        append(remaining.substring(0, boldStart))
-                    }
-
-                    val boldEnd = remaining.indexOf("**", boldStart + 2)
-                    if (boldEnd > boldStart) {
-                        val boldText = remaining.substring(boldStart + 2, boldEnd)
-                        withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) {
-                            append(boldText)
-                        }
-                        remaining = remaining.substring(boldEnd + 2)
-                        consumed = true
-                    }
-                }
-            }
-
-            if (!consumed) {
-                // 处理斜体 *text*
-                val italicStart = remaining.indexOf("*")
-                if (italicStart >= 0 && (italicStart == 0 || remaining[italicStart - 1] != '*')) {
-                    if (italicStart > 0) {
-                        append(remaining.substring(0, italicStart))
-                    }
-
-                    val italicEnd = remaining.indexOf("*", italicStart + 1)
-                    if (italicEnd > italicStart && (italicEnd == remaining.length - 1 || remaining[italicEnd + 1] != '*')) {
-                        val italicText = remaining.substring(italicStart + 1, italicEnd)
-                        withStyle(androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) {
-                            append(italicText)
-                        }
-                        remaining = remaining.substring(italicEnd + 1)
-                        consumed = true
-                    }
-                }
-            }
-
-            if (!consumed) {
-                // 处理行内代码 `code`
-                val codeStart = remaining.indexOf("`")
-                if (codeStart >= 0) {
-                    if (codeStart > 0) {
-                        append(remaining.substring(0, codeStart))
-                    }
-
-                    val codeEnd = remaining.indexOf("`", codeStart + 1)
-                    if (codeEnd > codeStart) {
-                        val codeText = remaining.substring(codeStart + 1, codeEnd)
-                        withStyle(
-                            androidx.compose.ui.text.SpanStyle(
-                                background = Color(0xFFF0F0F0),
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
-                        ) {
-                            append(" $codeText ")
-                        }
-                        remaining = remaining.substring(codeEnd + 1)
-                        consumed = true
-                    }
-                }
-            }
-
-            if (!consumed) {
-                // 没有特殊标记，添加剩余文本
+            val match = findNextInlineMarkdownMatch(remaining, offset, mathSegments)
+            if (match == null) {
                 append(remaining)
                 break
             }
+
+            if (match.startIndex > 0) {
+                append(remaining.substring(0, match.startIndex))
+            }
+            appendInlineMarkdownMatch(match)
+
+            val consumedLength = (match.startIndex + match.rawLength).coerceAtMost(remaining.length)
+            remaining = remaining.substring(consumedLength)
+            offset += consumedLength
         }
     }
-    
+
     // 渲染可点击的文本
     Text(
         text = annotatedText,
@@ -3289,31 +2978,7 @@ private fun ForwardedMessageBubble(
     onExpand: () -> Unit,
     onCollapse: () -> Unit,
 ) {
-    val batchItems = remember(parts.body, parts.isBatch) {
-        if (parts.isBatch) parseBatchForwardMarkdownBody(parts.body) else emptyList()
-    }
-    val useBatchLayout = batchItems.isNotEmpty()
-
-    fun previewSource(): String =
-        if (parts.isBatch && batchItems.isNotEmpty()) batchItems.first().content
-        else parts.body
-
-    fun bodyPreviewText(rawBody: String): String {
-        val b = rawBody.replace("\r", "").trim()
-        if (b.isEmpty()) return "（无正文）"
-        val firstLine = b.lineSequence().firstOrNull { it.isNotBlank() } ?: b
-        val line = firstLine.ifEmpty { b }
-        val maxLen = 96
-        return if (line.length <= maxLen) line else line.take(maxLen) + "…"
-    }
-
-    val bg = if (isOwn) Color(0xFFEDE4D4) else Color(0xFFFAF7F2)
-    val shape = RoundedCornerShape(
-        topStart = 12.dp,
-        topEnd = 12.dp,
-        bottomStart = if (isOwn) 12.dp else 4.dp,
-        bottomEnd = if (isOwn) 4.dp else 12.dp,
-    )
+    val bubbleState = remember(parts, isOwn) { buildForwardedBubbleState(parts, isOwn) }
 
     Row(
         modifier = Modifier
@@ -3329,130 +2994,253 @@ private fun ForwardedMessageBubble(
         Column(
             modifier = Modifier
                 .weight(1f)
-                .background(bg, shape)
+                .background(bubbleState.backgroundColor, bubbleState.shape)
                 .padding(12.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("📨", fontSize = 14.sp)
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    if (parts.isBatch) "批量转发" else "转发",
-                    fontSize = 12.sp,
-                    color = Color(0xFF7A6B5A),
-                )
-                Text(
-                    " · 来自",
-                    fontSize = 12.sp,
-                    color = SilkColors.textLight,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
-                Text(
-                    parts.sourceName.ifEmpty { "未命名会话" },
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = SilkColors.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            if (parts.senderName.isNotEmpty()) {
-                Text(
-                    parts.senderName,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = SilkColors.primary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp, bottom = 2.dp, start = 4.dp)
-                )
-            }
+            ForwardedMessageHeader(parts = parts)
+            ForwardedMessageSender(senderName = parts.senderName)
 
             if (!isExpanded) {
-                Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
-                    Text(
-                        text = bodyPreviewText(previewSource()),
-                        fontSize = 13.sp,
-                        color = SilkColors.textSecondary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        lineHeight = 20.sp,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 10.dp)
-                            .clickable(onClick = onExpand)
-                            .padding(vertical = 6.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "查看转发全文",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = SilkColors.primary
-                        )
-                        Text("  ▼", fontSize = 12.sp, color = SilkColors.primary)
-                    }
-                }
+                ForwardedMessageCollapsedContent(
+                    previewText = bubbleState.previewText,
+                    onExpand = onExpand,
+                )
             } else {
-                if (useBatchLayout) {
-                    batchItems.forEachIndexed { index, item ->
-                        if (index > 0) {
-                            Spacer(Modifier.height(14.dp))
-                            Divider(color = Color(0xFFE0D8CC), thickness = 1.dp)
-                            Spacer(Modifier.height(2.dp))
-                        }
-                        Text(
-                            item.senderName.ifEmpty { "用户" },
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = SilkColors.primary,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(
-                                    top = if (index == 0) 10.dp else 14.dp,
-                                    bottom = 6.dp,
-                                    start = 4.dp
-                                )
-                        )
-                        MarkdownWebView(item.content)
-                    }
-                } else {
-                    Divider(
-                        color = Color(0xFFE0D8CC),
-                        thickness = 1.dp,
-                        modifier = Modifier.padding(top = 10.dp, bottom = 10.dp)
-                    )
-                    MarkdownWebView(parts.body)
-                }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 10.dp)
-                        .clickable(onClick = onCollapse)
-                        .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("收起", fontSize = 12.sp, color = SilkColors.textSecondary)
-                    Text("  ▲", fontSize = 11.sp, color = SilkColors.textSecondary)
-                }
+                ForwardedMessageExpandedContent(
+                    body = parts.body,
+                    batchItems = bubbleState.batchItems,
+                    onCollapse = onCollapse,
+                )
             }
         }
     }
 }
+
+@Composable
+private fun ForwardedMessageHeader(parts: ForwardedMessageParts) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text("📨", fontSize = 14.sp)
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = forwardedMessageTitle(parts.isBatch),
+            fontSize = 12.sp,
+            color = Color(0xFF7A6B5A),
+        )
+        Text(
+            text = " · 来自",
+            fontSize = 12.sp,
+            color = SilkColors.textLight,
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        Text(
+            text = parts.sourceName.ifEmpty { "未命名会话" },
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = SilkColors.primary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
+private fun ForwardedMessageSender(senderName: String) {
+    if (senderName.isEmpty()) return
+
+    Text(
+        text = senderName,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+        color = SilkColors.primary,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 2.dp, start = 4.dp),
+    )
+}
+
+@Composable
+private fun ForwardedMessageCollapsedContent(
+    previewText: String,
+    onExpand: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp),
+    ) {
+        Text(
+            text = previewText,
+            fontSize = 13.sp,
+            color = SilkColors.textSecondary,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            lineHeight = 20.sp,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        ForwardedMessageToggleRow(
+            label = "查看转发全文",
+            indicator = "▼",
+            onClick = onExpand,
+            color = SilkColors.primary,
+            fontSize = 13.sp,
+            indicatorFontSize = 12.sp,
+            topPadding = 10.dp,
+            verticalPadding = 6.dp,
+            fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+@Composable
+private fun ForwardedMessageExpandedContent(
+    body: String,
+    batchItems: List<BatchForwardItem>,
+    onCollapse: () -> Unit,
+) {
+    if (batchItems.isNotEmpty()) {
+        ForwardedMessageBatchList(batchItems = batchItems)
+    } else {
+        Divider(
+            color = Color(0xFFE0D8CC),
+            thickness = 1.dp,
+            modifier = Modifier.padding(top = 10.dp, bottom = 10.dp),
+        )
+        MarkdownWebView(body)
+    }
+
+    ForwardedMessageToggleRow(
+        label = "收起",
+        indicator = "▲",
+        onClick = onCollapse,
+        color = SilkColors.textSecondary,
+        fontSize = 12.sp,
+        indicatorFontSize = 11.sp,
+        topPadding = 10.dp,
+        verticalPadding = 4.dp,
+    )
+}
+
+@Composable
+private fun ForwardedMessageBatchList(batchItems: List<BatchForwardItem>) {
+    batchItems.forEachIndexed { index, item ->
+        ForwardedMessageBatchItem(
+            item = item,
+            isFirst = index == 0,
+            showDivider = index > 0,
+        )
+    }
+}
+
+@Composable
+private fun ForwardedMessageBatchItem(
+    item: BatchForwardItem,
+    isFirst: Boolean,
+    showDivider: Boolean,
+) {
+    if (showDivider) {
+        Spacer(Modifier.height(14.dp))
+        Divider(color = Color(0xFFE0D8CC), thickness = 1.dp)
+        Spacer(Modifier.height(2.dp))
+    }
+
+    Text(
+        text = item.senderName.ifEmpty { "用户" },
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Medium,
+        color = SilkColors.primary,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                top = if (isFirst) 10.dp else 14.dp,
+                bottom = 6.dp,
+                start = 4.dp,
+            ),
+    )
+    MarkdownWebView(item.content)
+}
+
+@Composable
+private fun ForwardedMessageToggleRow(
+    label: String,
+    indicator: String,
+    onClick: () -> Unit,
+    color: Color,
+    fontSize: TextUnit,
+    indicatorFontSize: TextUnit,
+    topPadding: Dp,
+    verticalPadding: Dp,
+    fontWeight: FontWeight? = null,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = topPadding)
+            .clickable(onClick = onClick)
+            .padding(vertical = verticalPadding),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            fontSize = fontSize,
+            color = color,
+            fontWeight = fontWeight,
+        )
+        Text(
+            text = "  $indicator",
+            fontSize = indicatorFontSize,
+            color = color,
+        )
+    }
+}
+
+private fun buildForwardedBubbleState(
+    parts: ForwardedMessageParts,
+    isOwn: Boolean,
+): ForwardedMessageBubbleState {
+    val batchItems = parts.takeIf(ForwardedMessageParts::isBatch)
+        ?.body
+        ?.let(::parseBatchForwardMarkdownBody)
+        .orEmpty()
+    return ForwardedMessageBubbleState(
+        batchItems = batchItems,
+        previewText = forwardedMessagePreviewText(parts.previewSource(batchItems)),
+        backgroundColor = if (isOwn) Color(0xFFEDE4D4) else Color(0xFFFAF7F2),
+        shape = forwardedMessageBubbleShape(isOwn),
+    )
+}
+
+private fun forwardedMessageTitle(isBatch: Boolean): String =
+    if (isBatch) "批量转发" else "转发"
+
+private fun ForwardedMessageParts.previewSource(batchItems: List<BatchForwardItem>): String =
+    batchItems.firstOrNull()?.content ?: body
+
+private fun forwardedMessagePreviewText(rawBody: String): String {
+    val normalizedBody = rawBody.replace("\r", "").trim()
+    if (normalizedBody.isEmpty()) return "（无正文）"
+
+    val firstLine = normalizedBody.lineSequence().firstOrNull(String::isNotBlank) ?: normalizedBody
+    val previewLine = firstLine.ifEmpty { normalizedBody }
+    val maxLength = 96
+    return if (previewLine.length <= maxLength) previewLine else previewLine.take(maxLength) + "…"
+}
+
+private fun forwardedMessageBubbleShape(isOwn: Boolean): RoundedCornerShape =
+    RoundedCornerShape(
+        topStart = 12.dp,
+        topEnd = 12.dp,
+        bottomStart = if (isOwn) 12.dp else 4.dp,
+        bottomEnd = if (isOwn) 4.dp else 12.dp,
+    )
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -4281,18 +4069,8 @@ fun FileItemCard(
     file: FileItem,
     onClick: () -> Unit
 ) {
-    val fileIcon = when {
-        file.name.endsWith(".pdf", ignoreCase = true) -> "📄"
-        file.name.endsWith(".doc", ignoreCase = true) || file.name.endsWith(".docx", ignoreCase = true) -> "📝"
-        file.name.endsWith(".xls", ignoreCase = true) || file.name.endsWith(".xlsx", ignoreCase = true) -> "📊"
-        file.name.endsWith(".jpg", ignoreCase = true) || file.name.endsWith(".png", ignoreCase = true) || 
-        file.name.endsWith(".gif", ignoreCase = true) -> "🖼️"
-        file.name.endsWith(".mp3", ignoreCase = true) || file.name.endsWith(".wav", ignoreCase = true) -> "🎵"
-        file.name.endsWith(".mp4", ignoreCase = true) || file.name.endsWith(".avi", ignoreCase = true) -> "🎬"
-        file.name.endsWith(".zip", ignoreCase = true) || file.name.endsWith(".rar", ignoreCase = true) -> "📦"
-        else -> "📎"
-    }
-    
+    val fileIcon = remember(file.name) { file.name.toFileCardIcon() }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -4335,6 +4113,14 @@ fun FileItemCard(
             )
         }
     }
+}
+
+private fun String.toFileCardIcon(): String {
+    val normalizedName = lowercase()
+    return fileCardIconMappings
+        .firstOrNull { (_, extensions) -> extensions.any(normalizedName::endsWith) }
+        ?.first
+        ?: "📎"
 }
 
 /**
@@ -4674,8 +4460,8 @@ fun MembersDialog(
     onMemberClick: (GroupMember) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val contactIds = contacts.map { it.contactId }.toSet()
-    
+    val contactIds = remember(contacts) { contacts.map(Contact::contactId).toSet() }
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
@@ -4688,139 +4474,14 @@ fun MembersDialog(
                     .fillMaxWidth()
                     .padding(20.dp)
             ) {
-                // 标题
-                Text(
-                    text = "👥 群组成员 (${members.size})",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 16.dp)
+                MembersDialogHeader(memberCount = members.size)
+                MembersDialogBody(
+                    members = members,
+                    contactIds = contactIds,
+                    currentUserId = currentUserId,
+                    isLoading = isLoading,
+                    onMemberClick = onMemberClick,
                 )
-                
-                if (isLoading) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(20.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
-                } else if (members.isEmpty()) {
-                    Text(
-                        text = "暂无成员",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(20.dp)
-                    )
-                } else {
-                    // 成员列表
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f, fill = false),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(members) { member ->
-                            val isCurrentUser = member.id == currentUserId
-                            val isContact = member.id in contactIds
-                            val isSilkAI = isAgentUserId(member.id)
-                            
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .then(
-                                        if (!isCurrentUser && !isSilkAI) {
-                                            Modifier.clickable { onMemberClick(member) }
-                                        } else {
-                                            Modifier
-                                        }
-                                    ),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                    ) {
-                                        // 头像/图标
-                                        Surface(
-                                            modifier = Modifier.size(40.dp),
-                                            shape = MaterialTheme.shapes.medium,
-                                            color = when {
-                                                isSilkAI -> SilkColors.info
-                                                isCurrentUser -> SilkColors.primary
-                                                isContact -> SilkColors.success
-                                                else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                            }
-                                        ) {
-                                            Box(
-                                                contentAlignment = Alignment.Center,
-                                                modifier = Modifier.fillMaxSize()
-                                            ) {
-                                                Text(
-                                                    text = when {
-                                                        isSilkAI -> "🤖"
-                                                        isCurrentUser -> "👤"
-                                                        isContact -> "✓"
-                                                        else -> member.fullName.firstOrNull()?.toString() ?: "?"
-                                                    },
-                                                    color = Color.White,
-                                                    fontSize = 18.sp
-                                                )
-                                            }
-                                        }
-                                        
-                                        // 名字和状态
-                                        Column {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Text(
-                                                    text = member.fullName,
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    fontWeight = FontWeight.Medium
-                                                )
-                                                if (isCurrentUser) {
-                                                    Text(
-                                                        text = " (我)",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
-                                                }
-                                            }
-                                            Text(
-                                                text = when {
-                                                    isSilkAI -> "AI 助手"
-                                                    isCurrentUser -> "当前用户"
-                                                    isContact -> "联系人 · 点击聊天"
-                                                    else -> "点击添加联系人"
-                                                },
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                    
-                                    // 右侧操作提示
-                                    if (!isCurrentUser && !isSilkAI) {
-                                        Text(
-                                            text = if (isContact) "💬" else "➕",
-                                            fontSize = 20.sp
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // 关闭按钮
                 TextButton(
                     onClick = onDismiss,
                     modifier = Modifier
@@ -4832,6 +4493,251 @@ fun MembersDialog(
             }
         }
     }
+}
+
+@Composable
+private fun MembersDialogHeader(memberCount: Int) {
+    Text(
+        text = "👥 群组成员 ($memberCount)",
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(bottom = 16.dp),
+    )
+}
+
+@Composable
+private fun ColumnScope.MembersDialogBody(
+    members: List<GroupMember>,
+    contactIds: Set<String>,
+    currentUserId: String,
+    isLoading: Boolean,
+    onMemberClick: (GroupMember) -> Unit,
+) {
+    when {
+        isLoading -> MembersDialogLoadingState()
+        members.isEmpty() -> MembersDialogEmptyState()
+        else -> MembersDialogList(
+            members = members,
+            contactIds = contactIds,
+            currentUserId = currentUserId,
+            onMemberClick = onMemberClick,
+        )
+    }
+}
+
+@Composable
+private fun MembersDialogLoadingState() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(20.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator()
+    }
+}
+
+@Composable
+private fun MembersDialogEmptyState() {
+    Text(
+        text = "暂无成员",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(20.dp),
+    )
+}
+
+@Composable
+private fun ColumnScope.MembersDialogList(
+    members: List<GroupMember>,
+    contactIds: Set<String>,
+    currentUserId: String,
+    onMemberClick: (GroupMember) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .weight(1f, fill = false),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(members) { member ->
+            MembersDialogMemberRow(
+                state = member.toMembersDialogState(
+                    currentUserId = currentUserId,
+                    contactIds = contactIds,
+                ),
+                onClick = { onMemberClick(member) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MembersDialogMemberRow(
+    state: MembersDialogMemberState,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (state.isClickable) Modifier.clickable(onClick = onClick) else Modifier),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                MembersDialogMemberAvatar(state)
+                MembersDialogMemberDetails(state)
+            }
+            MembersDialogMemberAction(state)
+        }
+    }
+}
+
+@Composable
+private fun MembersDialogMemberAvatar(state: MembersDialogMemberState) {
+    Surface(
+        modifier = Modifier.size(40.dp),
+        shape = MaterialTheme.shapes.medium,
+        color = state.avatarColor,
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Text(
+                text = state.avatarText,
+                color = Color.White,
+                fontSize = 18.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MembersDialogMemberDetails(state: MembersDialogMemberState) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = state.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+            )
+            if (state.isCurrentUser) {
+                Text(
+                    text = " (我)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Text(
+            text = state.statusText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun MembersDialogMemberAction(state: MembersDialogMemberState) {
+    state.actionEmoji?.let { emoji ->
+        Text(
+            text = emoji,
+            fontSize = 20.sp,
+        )
+    }
+}
+
+@Composable
+private fun GroupMember.toMembersDialogState(
+    currentUserId: String,
+    contactIds: Set<String>,
+): MembersDialogMemberState {
+    val isCurrentUser = id == currentUserId
+    val isSilkAI = isAgentUserId(id)
+    val isContact = id in contactIds
+    return MembersDialogMemberState(
+        displayName = fullName,
+        isCurrentUser = isCurrentUser,
+        isClickable = !isCurrentUser && !isSilkAI,
+        statusText = membersDialogStatusText(
+            isSilkAI = isSilkAI,
+            isCurrentUser = isCurrentUser,
+            isContact = isContact,
+        ),
+        avatarText = membersDialogAvatarText(
+            displayName = fullName,
+            isSilkAI = isSilkAI,
+            isCurrentUser = isCurrentUser,
+            isContact = isContact,
+        ),
+        avatarColor = membersDialogAvatarColor(
+            isSilkAI = isSilkAI,
+            isCurrentUser = isCurrentUser,
+            isContact = isContact,
+        ),
+        actionEmoji = membersDialogActionEmoji(
+            isSilkAI = isSilkAI,
+            isCurrentUser = isCurrentUser,
+            isContact = isContact,
+        ),
+    )
+}
+
+private fun membersDialogStatusText(
+    isSilkAI: Boolean,
+    isCurrentUser: Boolean,
+    isContact: Boolean,
+): String = when {
+    isSilkAI -> "AI 助手"
+    isCurrentUser -> "当前用户"
+    isContact -> "联系人 · 点击聊天"
+    else -> "点击添加联系人"
+}
+
+private fun membersDialogAvatarText(
+    displayName: String,
+    isSilkAI: Boolean,
+    isCurrentUser: Boolean,
+    isContact: Boolean,
+): String = when {
+    isSilkAI -> "🤖"
+    isCurrentUser -> "👤"
+    isContact -> "✓"
+    else -> displayName.firstOrNull()?.toString() ?: "?"
+}
+
+@Composable
+private fun membersDialogAvatarColor(
+    isSilkAI: Boolean,
+    isCurrentUser: Boolean,
+    isContact: Boolean,
+): Color = when {
+    isSilkAI -> SilkColors.info
+    isCurrentUser -> SilkColors.primary
+    isContact -> SilkColors.success
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+private fun membersDialogActionEmoji(
+    isSilkAI: Boolean,
+    isCurrentUser: Boolean,
+    isContact: Boolean,
+): String? = when {
+    isCurrentUser || isSilkAI -> null
+    isContact -> "💬"
+    else -> "➕"
 }
 
 /**
@@ -5191,56 +5097,21 @@ private fun extractInlineMath(text: String): Pair<String, List<Pair<Int, String>
     val result = StringBuilder()
     var i = 0
     var offset = 0
-    
+
     while (i < text.length) {
-        // 检查是否是 \(...\) 格式的行内公式
-        if (i + 1 < text.length && text[i] == '\\' && text[i + 1] == '(') {
-            val start = i
-            i += 2  // 跳过 \(
-            // 找到结束的 \)
-            while (i + 1 < text.length && !(text[i] == '\\' && text[i + 1] == ')')) {
-                i++
-            }
-            if (i + 1 < text.length) {
-                val formula = text.substring(start + 2, i)
-                val processed = processMathFormula(formula)
-                mathSegments.add(Pair(offset, processed))
-                result.append(processed)
-                offset += processed.length
-                i += 2  // 跳过 \)
-            } else {
-                // 没有结束符，作为普通文本
-                result.append(text.substring(start))
-                offset += text.length - start
-            }
-        }
-        // 检查是否是行内公式 $...$ (不是 $$)
-        else if (text.startsInlineDollarMathAt(i)) {
-            val start = i
-            i++
-            // 找到结束的 $
-            while (i < text.length && text[i] != '$') {
-                i++
-            }
-            if (i < text.length) {
-                val formula = text.substring(start + 1, i)
-                val processed = processMathFormula(formula)
-                mathSegments.add(Pair(offset, processed))
-                result.append(processed)
-                offset += processed.length
-                i++
-            } else {
-                // 没有结束符，作为普通文本
-                result.append(text.substring(start))
-                offset += text.length - start
-            }
+        val mathMatch = findInlineMathMatch(text, i)
+        if (mathMatch != null) {
+            mathSegments.add(offset to mathMatch.processedText)
+            result.append(mathMatch.processedText)
+            offset += mathMatch.processedText.length
+            i += mathMatch.rawLength
         } else {
             result.append(text[i])
             offset++
             i++
         }
     }
-    
+
     return Pair(result.toString(), mathSegments)
 }
 
@@ -5352,3 +5223,764 @@ private fun String.startsInlineDollarMathAt(index: Int): Boolean {
     if (index > 0 && this[index - 1] == '$') return false
     return index + 1 >= length || this[index + 1] != '$'
 }
+
+private enum class InlineMarkdownMatchType {
+    Math,
+    Link,
+    Bold,
+    Italic,
+    Code,
+}
+
+private data class ForwardedMessageBubbleState(
+    val batchItems: List<BatchForwardItem>,
+    val previewText: String,
+    val backgroundColor: Color,
+    val shape: RoundedCornerShape,
+)
+
+private data class MembersDialogMemberState(
+    val displayName: String,
+    val isCurrentUser: Boolean,
+    val isClickable: Boolean,
+    val statusText: String,
+    val avatarText: String,
+    val avatarColor: Color,
+    val actionEmoji: String?,
+)
+
+private data class ParsedMarkdownTable(
+    val headerCells: List<String>,
+    val rows: List<List<String>>,
+    val maxCols: Int,
+)
+
+private sealed interface MarkdownContentItem
+
+private data class MarkdownHeadingItem(
+    val text: String,
+    val level: Int,
+    val topSpacingDp: Int,
+    val bottomSpacingDp: Int,
+) : MarkdownContentItem
+
+private data class MarkdownParagraphItem(
+    val text: String,
+) : MarkdownContentItem
+
+private data class MarkdownTaskListItem(
+    val text: String,
+    val isChecked: Boolean,
+) : MarkdownContentItem
+
+private data class MarkdownUnorderedListItem(
+    val text: String,
+) : MarkdownContentItem
+
+private data class MarkdownOrderedListItem(
+    val number: String,
+    val text: String,
+) : MarkdownContentItem
+
+private data object MarkdownDividerItem : MarkdownContentItem
+
+private data class MarkdownQuoteItem(
+    val text: String,
+) : MarkdownContentItem
+
+private data class MarkdownTableBlockItem(
+    val lines: List<String>,
+) : MarkdownContentItem
+
+private data class MarkdownCodeBlockItem(
+    val code: String,
+    val language: String,
+) : MarkdownContentItem
+
+private data class MarkdownMathBlockItem(
+    val text: String,
+) : MarkdownContentItem
+
+private data object MarkdownBlankLineItem : MarkdownContentItem
+
+private data class MarkdownParseState(
+    var inCodeBlock: Boolean = false,
+    val codeBlockContent: StringBuilder = StringBuilder(),
+    var codeLanguage: String = "",
+    var inTable: Boolean = false,
+    val tableLines: MutableList<String> = mutableListOf(),
+    var inMathBlock: Boolean = false,
+    val mathBlockContent: StringBuilder = StringBuilder(),
+)
+
+private data class InlineMarkdownMatch(
+    val startIndex: Int,
+    val rawLength: Int,
+    val displayText: String,
+    val type: InlineMarkdownMatchType,
+    val annotation: String? = null,
+)
+
+private data class InlineMathMatch(
+    val rawLength: Int,
+    val processedText: String,
+)
+
+private fun parseMarkdownContent(content: String): List<MarkdownContentItem> {
+    val lines = content.split("\n")
+    val items = mutableListOf<MarkdownContentItem>()
+    val state = MarkdownParseState()
+
+    lines.forEachIndexed { index, line ->
+        if (state.inTable && !line.trim().startsWith("|")) {
+            flushTrailingMarkdownTable(state, items)
+        }
+        if (consumeMarkdownMathLine(line, state, items)) return@forEachIndexed
+        if (consumeMarkdownCodeLine(line, state, items)) return@forEachIndexed
+        if (consumeMarkdownTableLine(line, state)) return@forEachIndexed
+
+        classifyMarkdownLine(
+            line = line,
+            index = index,
+            lines = lines,
+        )?.let(items::add)
+    }
+
+    flushTrailingMarkdownTable(state, items)
+    return items
+}
+
+private fun consumeMarkdownMathLine(
+    line: String,
+    state: MarkdownParseState,
+    items: MutableList<MarkdownContentItem>,
+): Boolean {
+    val trimmedLine = line.trim()
+    if (!state.inCodeBlock && trimmedLine.startsMarkdownMathBlock()) {
+        if (state.inMathBlock) {
+            flushMarkdownMathBlock(state, items)
+            state.inMathBlock = false
+        } else {
+            startMarkdownMathBlock(trimmedLine, state, items)
+        }
+        return true
+    }
+    if (state.inMathBlock && trimmedLine.isMarkdownMathBlockEndMarker()) {
+        flushMarkdownMathBlock(state, items)
+        state.inMathBlock = false
+        return true
+    }
+    if (state.inMathBlock) {
+        state.mathBlockContent.append(line).append("\n")
+        return true
+    }
+    return false
+}
+
+private fun startMarkdownMathBlock(
+    trimmedLine: String,
+    state: MarkdownParseState,
+    items: MutableList<MarkdownContentItem>,
+) {
+    val marker = markdownMathBlockMarker(trimmedLine)
+    val startMarker = marker.first
+    val endMarker = marker.second
+    if (trimmedLine.endsWith(endMarker) && trimmedLine.length > startMarker.length + endMarker.length) {
+        val mathContent = trimmedLine.removePrefix(startMarker).removeSuffix(endMarker).trim()
+        items += MarkdownMathBlockItem(mathContent)
+        return
+    }
+    state.inMathBlock = true
+    val firstContent = trimmedLine.removePrefix(startMarker).trim()
+    if (firstContent.isNotEmpty()) {
+        state.mathBlockContent.append(firstContent).append("\n")
+    }
+}
+
+private fun flushMarkdownMathBlock(
+    state: MarkdownParseState,
+    items: MutableList<MarkdownContentItem>,
+) {
+    if (state.mathBlockContent.isNotEmpty()) {
+        items += MarkdownMathBlockItem(state.mathBlockContent.toString().trim())
+        state.mathBlockContent.setLength(0)
+    }
+}
+
+private fun consumeMarkdownCodeLine(
+    line: String,
+    state: MarkdownParseState,
+    items: MutableList<MarkdownContentItem>,
+): Boolean {
+    val trimmedLine = line.trim()
+    if (!trimmedLine.startsWith("```")) {
+        if (state.inCodeBlock) {
+            state.codeBlockContent.append(line).append("\n")
+            return true
+        }
+        return false
+    }
+
+    if (state.inCodeBlock) {
+        if (state.codeBlockContent.isNotEmpty()) {
+            items += MarkdownCodeBlockItem(
+                code = state.codeBlockContent.toString().trimEnd(),
+                language = state.codeLanguage,
+            )
+            state.codeBlockContent.setLength(0)
+        }
+        state.inCodeBlock = false
+        state.codeLanguage = ""
+    } else {
+        state.inCodeBlock = true
+        state.codeLanguage = trimmedLine.removePrefix("```").trim()
+    }
+    return true
+}
+
+private fun consumeMarkdownTableLine(
+    line: String,
+    state: MarkdownParseState,
+): Boolean {
+    val trimmedLine = line.trim()
+    if (trimmedLine.startsWith("|") && trimmedLine.endsWith("|")) {
+        if (!state.inTable) {
+            state.inTable = true
+            state.tableLines.clear()
+        }
+        state.tableLines.add(line)
+        return true
+    }
+    return false
+}
+
+private fun flushTrailingMarkdownTable(
+    state: MarkdownParseState,
+    items: MutableList<MarkdownContentItem>,
+) {
+    if (state.inTable && state.tableLines.isNotEmpty()) {
+        items += MarkdownTableBlockItem(state.tableLines.toList())
+        state.tableLines.clear()
+    }
+    state.inTable = false
+}
+
+private fun classifyMarkdownLine(
+    line: String,
+    index: Int,
+    lines: List<String>,
+): MarkdownContentItem? =
+    parseMarkdownHeadingItem(line, index)
+        ?: parseMarkdownTaskListItem(line)
+        ?: parseMarkdownUnorderedListItem(line)
+        ?: parseMarkdownOrderedListItem(line)
+        ?: parseMarkdownDividerItem(line)
+        ?: parseMarkdownQuoteItem(line)
+        ?: parseMarkdownParagraphItem(line)
+        ?: parseMarkdownBlankLineItem(index, lines)
+
+private fun parseMarkdownHeadingItem(
+    line: String,
+    index: Int,
+): MarkdownHeadingItem? = when {
+    line.startsWith("### ") -> MarkdownHeadingItem(
+        text = line.removePrefix("### "),
+        level = 3,
+        topSpacingDp = if (index > 0) 8 else 0,
+        bottomSpacingDp = 4,
+    )
+
+    line.startsWith("## ") -> MarkdownHeadingItem(
+        text = line.removePrefix("## "),
+        level = 2,
+        topSpacingDp = if (index > 0) 12 else 0,
+        bottomSpacingDp = 6,
+    )
+
+    line.startsWith("# ") -> MarkdownHeadingItem(
+        text = line.removePrefix("# "),
+        level = 1,
+        topSpacingDp = if (index > 0) 16 else 0,
+        bottomSpacingDp = 8,
+    )
+
+    else -> null
+}
+
+private fun parseMarkdownTaskListItem(line: String): MarkdownTaskListItem? {
+    val trimmedLine = line.trim()
+    if (!trimmedLine.isMarkdownTaskListLine()) return null
+    return MarkdownTaskListItem(
+        text = trimmedLine
+            .removePrefix("- [ ] ").removePrefix("- [x] ")
+            .removePrefix("* [ ] ").removePrefix("* [x] "),
+        isChecked = trimmedLine.contains("[x]"),
+    )
+}
+
+private fun String.isMarkdownTaskListLine(): Boolean =
+    startsWith("- [ ] ") || startsWith("- [x] ") || startsWith("* [ ] ") || startsWith("* [x] ")
+
+private fun parseMarkdownUnorderedListItem(line: String): MarkdownUnorderedListItem? {
+    val trimmedLine = line.trim()
+    if (!trimmedLine.startsWith("- ") && !trimmedLine.startsWith("* ")) return null
+    return MarkdownUnorderedListItem(
+        text = trimmedLine.removePrefix("- ").removePrefix("* "),
+    )
+}
+
+private fun parseMarkdownOrderedListItem(line: String): MarkdownOrderedListItem? {
+    val match = markdownOrderedListPattern.matchEntire(line.trim()) ?: return null
+    return MarkdownOrderedListItem(
+        number = match.groupValues[1],
+        text = match.groupValues[2].trim(),
+    )
+}
+
+private fun parseMarkdownDividerItem(line: String): MarkdownContentItem? =
+    if (line.trim() == "---" || line.trim() == "***") MarkdownDividerItem else null
+
+private fun parseMarkdownQuoteItem(line: String): MarkdownQuoteItem? =
+    if (line.startsWith("> ")) MarkdownQuoteItem(line.removePrefix("> ")) else null
+
+private fun parseMarkdownParagraphItem(line: String): MarkdownParagraphItem? =
+    if (line.isNotBlank()) MarkdownParagraphItem(line) else null
+
+private fun parseMarkdownBlankLineItem(
+    index: Int,
+    lines: List<String>,
+): MarkdownContentItem? =
+    if (index > 0 && lines.getOrNull(index - 1)?.isNotBlank() == true) MarkdownBlankLineItem else null
+
+private fun String.startsMarkdownMathBlock(): Boolean = startsWith("$$") || startsWith("\\[")
+
+private fun String.isMarkdownMathBlockEndMarker(): Boolean = this == "$$" || this == "\\]"
+
+private fun markdownMathBlockMarker(trimmedLine: String): Pair<String, String> =
+    if (trimmedLine.startsWith("$$")) "$$" to "$$" else "\\[" to "\\]"
+
+@Composable
+private fun RenderMarkdownContentItem(
+    item: MarkdownContentItem,
+    context: Context,
+) {
+    when (item) {
+        is MarkdownHeadingItem -> MarkdownHeadingBlock(item)
+        is MarkdownParagraphItem -> MarkdownParagraphBlock(item.text, context)
+        is MarkdownTaskListItem -> TaskListItemAndroid(item.text, item.isChecked)
+        is MarkdownUnorderedListItem -> MarkdownUnorderedListBlock(item.text, context)
+        is MarkdownOrderedListItem -> MarkdownOrderedListBlock(item, context)
+        MarkdownDividerItem -> MarkdownDividerBlock()
+        is MarkdownQuoteItem -> MarkdownQuoteBlock(item.text, context)
+        is MarkdownTableBlockItem -> MarkdownTableAndroid(item.lines)
+        is MarkdownCodeBlockItem -> CodeBlockAndroid(item.code, item.language)
+        is MarkdownMathBlockItem -> MathFormulaAndroid(item.text, isBlock = true)
+        MarkdownBlankLineItem -> Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun MarkdownHeadingBlock(item: MarkdownHeadingItem) {
+    if (item.topSpacingDp > 0) {
+        Spacer(modifier = Modifier.height(item.topSpacingDp.dp))
+    }
+    Text(
+        text = item.text,
+        style = when (item.level) {
+            3 -> MaterialTheme.typography.titleSmall
+            2 -> MaterialTheme.typography.titleMedium
+            else -> MaterialTheme.typography.titleLarge
+        },
+        fontWeight = if (item.level == 3) FontWeight.SemiBold else FontWeight.Bold,
+        color = if (item.level == 1) Color(0xFFC9A86C) else Color(0xFF4A4038),
+    )
+    Spacer(modifier = Modifier.height(item.bottomSpacingDp.dp))
+}
+
+@Composable
+private fun MarkdownParagraphBlock(
+    text: String,
+    context: Context,
+) {
+    InlineMarkdownAndroid(text, context)
+    Spacer(modifier = Modifier.height(4.dp))
+}
+
+@Composable
+private fun MarkdownUnorderedListBlock(
+    text: String,
+    context: Context,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, bottom = 4.dp),
+    ) {
+        Text(
+            text = "•",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFFC9A86C),
+            modifier = Modifier.padding(end = 8.dp),
+        )
+        InlineMarkdownAndroid(text, context)
+    }
+}
+
+@Composable
+private fun MarkdownOrderedListBlock(
+    item: MarkdownOrderedListItem,
+    context: Context,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, bottom = 4.dp),
+    ) {
+        Text(
+            text = "${item.number}.",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Color(0xFFC9A86C),
+            modifier = Modifier.padding(end = 8.dp),
+        )
+        InlineMarkdownAndroid(item.text, context)
+    }
+}
+
+@Composable
+private fun MarkdownDividerBlock() {
+    Spacer(modifier = Modifier.height(8.dp))
+    Divider(
+        color = Color(0xFFE8E0D4),
+        thickness = 1.dp,
+        modifier = Modifier.padding(vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun MarkdownQuoteBlock(
+    text: String,
+    context: Context,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, bottom = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
+        shape = RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp, bottomStart = 8.dp),
+    ) {
+        Row(modifier = Modifier.padding(12.dp)) {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(20.dp)
+                    .background(Color(0xFF7BA8C9)),
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            InlineMarkdownAndroid(text, context)
+        }
+    }
+}
+
+private fun parseMarkdownTable(lines: List<String>): ParsedMarkdownTable? {
+    if (lines.isEmpty()) return null
+    val hasHeader = lines.hasMarkdownTableHeader()
+    val headerCells = if (hasHeader) parseMarkdownTableRow(lines.first()) else emptyList()
+    val rows = lines.drop(if (hasHeader) 2 else 0).map(::parseMarkdownTableRow)
+    if (headerCells.isEmpty() && rows.isEmpty()) return null
+    val maxCols = maxOf(headerCells.size, rows.maxOfOrNull(List<String>::size) ?: 0)
+    if (maxCols == 0) return null
+    return ParsedMarkdownTable(
+        headerCells = headerCells,
+        rows = rows,
+        maxCols = maxCols,
+    )
+}
+
+private fun List<String>.hasMarkdownTableHeader(): Boolean {
+    if (size <= 1) return false
+    val separatorLine = this[1]
+    return separatorLine.contains("|") &&
+        separatorLine.all { it == '|' || it == '-' || it == ' ' || it == ':' }
+}
+
+private fun parseMarkdownTableRow(line: String): List<String> =
+    line.split("|")
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+
+@Composable
+private fun MarkdownTableHeaderRow(
+    headerCells: List<String>,
+    maxCols: Int,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFEFF6FF))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        headerCells.forEach { cell ->
+            MarkdownTableCell {
+                Text(
+                    text = cell,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF1E3A5F),
+                )
+            }
+        }
+        MarkdownTableTrailingCells(maxCols - headerCells.size)
+    }
+}
+
+@Composable
+private fun MarkdownTableDataRow(
+    rowCells: List<String>,
+    rowIndex: Int,
+    maxCols: Int,
+    showDivider: Boolean,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(if (rowIndex % 2 == 0) Color.White else Color(0xFFFAFAFA))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+        ) {
+            rowCells.forEach { cell ->
+                MarkdownTableCell { InlineMarkdownAndroid(cell) }
+            }
+            MarkdownTableTrailingCells(maxCols - rowCells.size)
+        }
+        if (showDivider) {
+            Divider(color = Color(0xFFF0F0F0), thickness = 0.5.dp)
+        }
+    }
+}
+
+@Composable
+private fun RowScope.MarkdownTableCell(
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .padding(horizontal = 4.dp),
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun RowScope.MarkdownTableTrailingCells(count: Int) {
+    repeat(count.coerceAtLeast(0)) {
+        Box(modifier = Modifier.weight(1f))
+    }
+}
+
+private fun findNextInlineMarkdownMatch(
+    remaining: String,
+    offset: Int,
+    mathSegments: List<Pair<Int, String>>,
+): InlineMarkdownMatch? {
+    val candidates = listOfNotNull(
+        findInlineMathMarkdownMatch(offset, remaining.length, mathSegments),
+        findMarkdownLinkMatch(remaining),
+        findAutoUrlMatch(remaining),
+        findBoldMatch(remaining),
+        findItalicMatch(remaining),
+        findInlineCodeMatch(remaining),
+    )
+    return candidates.minByOrNull { it.startIndex }
+}
+
+private fun findInlineMathMarkdownMatch(
+    offset: Int,
+    remainingLength: Int,
+    mathSegments: List<Pair<Int, String>>,
+): InlineMarkdownMatch? {
+    val mathSegment = mathSegments.firstOrNull { it.first >= offset } ?: return null
+    val startIndex = mathSegment.first - offset
+    if (startIndex >= remainingLength) return null
+    return InlineMarkdownMatch(
+        startIndex = startIndex,
+        rawLength = mathSegment.second.length,
+        displayText = mathSegment.second,
+        type = InlineMarkdownMatchType.Math,
+    )
+}
+
+private fun findMarkdownLinkMatch(remaining: String): InlineMarkdownMatch? {
+    val linkStart = remaining.indexOf("[")
+    if (linkStart < 0) return null
+    val linkEnd = remaining.indexOf("]", linkStart)
+    if (linkEnd <= linkStart) return null
+    val urlStart = remaining.indexOf("(", linkEnd)
+    if (urlStart != linkEnd + 1) return null
+    val urlEnd = remaining.indexOf(")", urlStart)
+    if (urlEnd <= urlStart) return null
+    return InlineMarkdownMatch(
+        startIndex = linkStart,
+        rawLength = urlEnd + 1 - linkStart,
+        displayText = remaining.substring(linkStart + 1, linkEnd),
+        type = InlineMarkdownMatchType.Link,
+        annotation = remaining.substring(urlStart + 1, urlEnd),
+    )
+}
+
+private fun findAutoUrlMatch(remaining: String): InlineMarkdownMatch? {
+    val urlMatch = inlineMarkdownUrlPattern.find(remaining) ?: return null
+    return InlineMarkdownMatch(
+        startIndex = urlMatch.range.first,
+        rawLength = urlMatch.value.length,
+        displayText = urlMatch.value,
+        type = InlineMarkdownMatchType.Link,
+        annotation = urlMatch.value,
+    )
+}
+
+private fun findBoldMatch(remaining: String): InlineMarkdownMatch? {
+    val boldStart = remaining.indexOf("**")
+    if (boldStart < 0) return null
+    val boldEnd = remaining.indexOf("**", boldStart + 2)
+    if (boldEnd <= boldStart) return null
+    return InlineMarkdownMatch(
+        startIndex = boldStart,
+        rawLength = boldEnd + 2 - boldStart,
+        displayText = remaining.substring(boldStart + 2, boldEnd),
+        type = InlineMarkdownMatchType.Bold,
+    )
+}
+
+private fun findItalicMatch(remaining: String): InlineMarkdownMatch? {
+    val italicStart = remaining.indexOf("*")
+    if (italicStart < 0 || (italicStart > 0 && remaining[italicStart - 1] == '*')) return null
+    val italicEnd = remaining.indexOf("*", italicStart + 1)
+    if (italicEnd <= italicStart) return null
+    if (italicEnd < remaining.length - 1 && remaining[italicEnd + 1] == '*') return null
+    return InlineMarkdownMatch(
+        startIndex = italicStart,
+        rawLength = italicEnd + 1 - italicStart,
+        displayText = remaining.substring(italicStart + 1, italicEnd),
+        type = InlineMarkdownMatchType.Italic,
+    )
+}
+
+private fun findInlineCodeMatch(remaining: String): InlineMarkdownMatch? {
+    val codeStart = remaining.indexOf("`")
+    if (codeStart < 0) return null
+    val codeEnd = remaining.indexOf("`", codeStart + 1)
+    if (codeEnd <= codeStart) return null
+    return InlineMarkdownMatch(
+        startIndex = codeStart,
+        rawLength = codeEnd + 1 - codeStart,
+        displayText = remaining.substring(codeStart + 1, codeEnd),
+        type = InlineMarkdownMatchType.Code,
+    )
+}
+
+private fun AnnotatedString.Builder.appendInlineMarkdownMatch(match: InlineMarkdownMatch) {
+    when (match.type) {
+        InlineMarkdownMatchType.Math -> {
+            withStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    background = Color(0xFFF5F5F5),
+                )
+            ) {
+                append(match.displayText)
+            }
+        }
+
+        InlineMarkdownMatchType.Link -> {
+            val url = match.annotation ?: return
+            pushStringAnnotation(tag = "URL", annotation = url)
+            withStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    color = Color(0xFF1565C0),
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                )
+            ) {
+                append(match.displayText)
+            }
+            pop()
+        }
+
+        InlineMarkdownMatchType.Bold -> {
+            withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) {
+                append(match.displayText)
+            }
+        }
+
+        InlineMarkdownMatchType.Italic -> {
+            withStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                )
+            ) {
+                append(match.displayText)
+            }
+        }
+
+        InlineMarkdownMatchType.Code -> {
+            withStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    background = Color(0xFFF0F0F0),
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                )
+            ) {
+                append(" ${match.displayText} ")
+            }
+        }
+    }
+}
+
+private fun findInlineMathMatch(text: String, startIndex: Int): InlineMathMatch? =
+    findEscapedInlineMathMatch(text, startIndex) ?: findDollarInlineMathMatch(text, startIndex)
+
+private fun findEscapedInlineMathMatch(text: String, startIndex: Int): InlineMathMatch? {
+    if (startIndex + 1 >= text.length || text[startIndex] != '\\' || text[startIndex + 1] != '(') return null
+    val endIndex = findEscapedInlineMathEnd(text, startIndex + 2)
+    if (endIndex < 0) return null
+    val formula = text.substring(startIndex + 2, endIndex)
+    return InlineMathMatch(
+        rawLength = endIndex + 2 - startIndex,
+        processedText = processMathFormula(formula),
+    )
+}
+
+private fun findDollarInlineMathMatch(text: String, startIndex: Int): InlineMathMatch? {
+    if (!text.startsInlineDollarMathAt(startIndex)) return null
+    val endIndex = text.indexOf('$', startIndex + 1)
+    if (endIndex < 0) return null
+    val formula = text.substring(startIndex + 1, endIndex)
+    return InlineMathMatch(
+        rawLength = endIndex + 1 - startIndex,
+        processedText = processMathFormula(formula),
+    )
+}
+
+private fun findEscapedInlineMathEnd(text: String, startIndex: Int): Int {
+    var index = startIndex
+    while (index + 1 < text.length) {
+        if (text[index] == '\\' && text[index + 1] == ')') {
+            return index
+        }
+        index++
+    }
+    return -1
+}
+
+private val inlineMarkdownUrlPattern = Regex("""(https?://[^\s<>\[\]()]+)""")
+private val markdownOrderedListPattern = Regex("""^(\d+)\.\s+(.*)$""")
+private val fileCardIconMappings = listOf(
+    "📄" to setOf(".pdf"),
+    "📝" to setOf(".doc", ".docx"),
+    "📊" to setOf(".xls", ".xlsx"),
+    "🖼️" to setOf(".jpg", ".png", ".gif"),
+    "🎵" to setOf(".mp3", ".wav"),
+    "🎬" to setOf(".mp4", ".avi"),
+    "📦" to setOf(".zip", ".rar"),
+)
