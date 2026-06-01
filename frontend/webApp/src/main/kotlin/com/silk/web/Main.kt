@@ -2244,11 +2244,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     classes(SilkStylesheet.aiMessageContent)
                     style { property("margin-top", "4px") }
                 }) {
+                    // Thinking block rendered outside the loop for stable composition identity
+                    val thinkingBlock = contentBlocks.firstOrNull { it.type == "thinking" }
+                    if (thinkingBlock != null) {
+                        ThinkingBlock(content = thinkingBlock.content, isComplete = thinkingBlock.isComplete)
+                    }
                     for (block in contentBlocks) {
                         when (block.type) {
-                            "thinking" -> key("thinking") {
-                                ThinkingBlock(content = block.content, isComplete = block.isComplete)
-                            }
+                            "thinking" -> { /* rendered above */ }
                             "text" -> MarkdownContent(content = block.content, references = emptyList())
                             "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
                         }
@@ -5244,11 +5247,14 @@ Div({
         if (!contentBlocksForRender.isNullOrEmpty()) {
             // 持久化消息回放：从结构化 content blocks 渲染
             Div({ classes(SilkStylesheet.aiMessageContent) }) {
+                // Thinking block rendered outside the loop for stable composition identity
+                val thinkingBlock = contentBlocksForRender.firstOrNull { it.type == "thinking" }
+                if (thinkingBlock != null) {
+                    ThinkingBlock(content = thinkingBlock.content, isComplete = thinkingBlock.isComplete)
+                }
                 for (block in contentBlocksForRender) {
                     when (block.type) {
-                        "thinking" -> key("thinking") {
-                            ThinkingBlock(content = block.content, isComplete = block.isComplete)
-                        }
+                        "thinking" -> { /* rendered above */ }
                         "text" -> MarkdownContent(content = block.content, references = message.references)
                         "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
                     }
