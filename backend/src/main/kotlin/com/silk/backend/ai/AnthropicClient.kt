@@ -452,18 +452,16 @@ class AnthropicClient(
             "content_block_stop" -> {
                 val index = obj["index"]?.jsonPrimitive?.int ?: return
 
-                // 标记 block 为完成状态并通知前端
-                val existing = streamingBlocks[index]
-                if (existing != null) {
-                    streamingBlocks[index] = existing.copy(isComplete = true)
-                    onBlockChanged()
-                }
-
                 val pending = pendingToolUses.remove(index)
                 if (pending != null) {
                     // web_search 是服务端工具，Anthropic 自行处理，我们无需响应
                     if (pending.name == "web_search") {
                         logger.info("[Anthropic] Claude 使用了 web_search")
+                        val existing = streamingBlocks[index]
+                        if (existing != null) {
+                            streamingBlocks[index] = existing.copy(isComplete = true)
+                            onBlockChanged()
+                        }
                         return
                     }
 
@@ -477,6 +475,19 @@ class AnthropicClient(
                         if (fixed != null) json.parseToJsonElement(fixed).toString() else "{}"
                     }
 
+                    // 从工具参数生成人类可读的描述（匹配 cc-connect 的显示效果）
+                    val toolSummary = generateToolDescription(pending.name, validArgs)
+
+                    // 标记 block 完成并设置描述内容，通知前端
+                    val existing = streamingBlocks[index]
+                    if (existing != null) {
+                        streamingBlocks[index] = existing.copy(
+                            isComplete = true,
+                            content = toolSummary
+                        )
+                        onBlockChanged()
+                    }
+
                     completedToolCalls.add(
                         ToolCall(
                             id = pending.id,
@@ -487,6 +498,13 @@ class AnthropicClient(
                             )
                         )
                     )
+                } else {
+                    // 非 tool_use block（text/thinking），仅标记完成
+                    val existing = streamingBlocks[index]
+                    if (existing != null) {
+                        streamingBlocks[index] = existing.copy(isComplete = true)
+                        onBlockChanged()
+                    }
                 }
             }
 
@@ -640,6 +658,59 @@ class AnthropicClient(
             json.parseToJsonElement(s).toString()
         } catch (_: Exception) {
             null
+        }
+    }
+
+    /**
+     * 从工具名称和 JSON arguments 中生成人类可读的描述摘要。
+     * 匹配前端的 extractToolSummary 逻辑，使 tool_use content block
+     * 的 content 字段包含可读的描述（类似 cc-connect 的显示效果）。
+     */
+    private fun generateToolDescription(name: String, argumentsJson: String): String {
+        val argsObj = try {
+            json.parseToJsonElement(argumentsJson).jsonObject
+        } catch (_: Exception) { return "" }
+
+        return when {
+            // bash / execute_command: 显示命令内容
+            name.equals("bash", true) || name.equals("execute_command", true) || name.equals("ExecuteCommand", true) -> {
+                val cmd = argsObj["command"]?.jsonPrimitive?.content ?: ""
+                if (cmd.length > 80) cmd.take(80) + "..." else cmd
+            }
+
+            // Read / Write / Edit: 显示文件路径的最后部分
+            name.equals("Read", true) || name.equals("Write", true) || name.equals("Edit", true) -> {
+                val path = argsObj["file_path"]?.jsonPrimitive?.content
+                    ?: argsObj["path"]?.jsonPrimitive?.content ?: ""
+                if (path.isNotEmpty()) {
+                    val idx = path.lastIndexOf("/")
+                    if (idx >= 0) path.substring(idx + 1) else path
+                } else ""
+            }
+
+            // grep: 显示搜索模式
+            name.equals("grep", true) -> {
+                val pattern = argsObj["pattern"]?.jsonPrimitive?.content ?: ""
+                if (pattern.length > 60) pattern.take(60) + "..." else pattern
+            }
+
+            // glob: 显示文件匹配模式
+            name.equals("glob", true) -> {
+                val pattern = argsObj["pattern"]?.jsonPrimitive?.content ?: ""
+                if (pattern.length > 60) pattern.take(60) + "..." else pattern
+            }
+
+            // web_search: 显示搜索查询
+            name.equals("web_search", true) -> {
+                argsObj["query"]?.jsonPrimitive?.content ?: ""
+            }
+
+            // 其它工具：尝试提取第一个有意义的字段值
+            else -> {
+                val firstValue = argsObj.values.firstOrNull()?.jsonPrimitive?.content
+                if (firstValue != null && firstValue.length <= 80) firstValue
+                else firstValue?.take(80)?.let { "$it..." } ?: ""
+            }
         }
     }
 

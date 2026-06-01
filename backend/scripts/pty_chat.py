@@ -274,12 +274,13 @@ def _process_line(line: str, state: dict) -> str:
             return result + "\n\n<!--END_THINKING-->\n\n"
         elif block_type == "tool_use":
             state["in_tool_use"] = True
-            name = block.get("name", "tool")
+            state["tool_name"] = block.get("name", "tool")
+            state["tool_input_buf"] = []
             # Flush any pending thinking before tool
             result = _flush_thinking(state)
             if result:
                 result += "\n\n<!--END_THINKING-->\n"
-            return result + "\n<!--TOOL name=\"" + name + "\"-->\n"
+            return result + "\n<!--TOOL name=\"" + state["tool_name"] + "\"-->\n"
         return ""
 
     elif event_type == "content_block_delta":
@@ -310,6 +311,7 @@ def _process_line(line: str, state: dict) -> str:
         if delta_type == "input_json_delta" and state.get("in_tool_use"):
             partial = delta.get("partial_json", "")
             if partial:
+                state["tool_input_buf"].append(partial)
                 return partial
             return ""
 
@@ -321,9 +323,47 @@ def _process_line(line: str, state: dict) -> str:
         state["in_text"] = False
         state["in_tool_use"] = False
         if was_tool:
+            # Generate summary from accumulated tool input JSON
+            summary = _generate_tool_summary(
+                state.get("tool_name", ""),
+                "".join(state.get("tool_input_buf", []))
+            )
+            if summary:
+                return '\n<!--TOOL_SUMMARY: ' + summary.replace('"', '&quot;') + '-->\n<!--END_TOOL-->\n'
             return "\n<!--END_TOOL-->\n"
         return ""
 
+    return ""
+
+
+def _generate_tool_summary(name: str, input_json: str) -> str:
+    """从工具名称和JSON参数生成人类可读的摘要，匹配后端 generateToolDescription 逻辑."""
+    if not input_json.strip():
+        return ""
+    try:
+        args = json.loads(input_json)
+    except json.JSONDecodeError:
+        return ""
+    name_lower = name.lower()
+    if name_lower in ("bash", "executecommand"):
+        cmd = args.get("command", "")
+        if len(cmd) > 80:
+            cmd = cmd[:80] + "..."
+        return cmd
+    if name_lower in ("read", "write", "edit"):
+        path = args.get("file_path", "") or args.get("path", "")
+        if path:
+            idx = path.rfind("/")
+            return path[idx + 1:] if idx >= 0 else path
+        return ""
+    if name_lower == "grep":
+        return args.get("pattern", "")
+    if name_lower == "glob":
+        return args.get("pattern", "")
+    # Fallback: first string value
+    for v in args.values():
+        if isinstance(v, str):
+            return (v[:80] + "...") if len(v) > 80 else v
     return ""
 
 
@@ -345,7 +385,7 @@ def _flush_thinking(state: dict) -> str:
 
 
 def _forward_pty_output(fd: int, pid: int) -> None:
-    state = {"in_thinking": False, "in_text": False, "thinking_buf": None, "had_text_delta": False, "in_tool_use": False}
+    state = {"in_thinking": False, "in_text": False, "thinking_buf": None, "had_text_delta": False, "in_tool_use": False, "tool_name": "", "tool_input_buf": []}
     buf = ""
 
     while True:

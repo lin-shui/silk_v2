@@ -100,10 +100,19 @@ private fun parseSegments(raw: String): List<Segment> {
                 if (closeIdx >= 0) {
                     val attrs = rest.substring(pos + "<!--TOOL".length, closeIdx).trim()
                     val name = extractAttr(attrs, "name")
-                    val summary = extractAttr(attrs, "summary")
+                    var summary = extractAttr(attrs, "summary")
                     val endTool = rest.indexOf("<!--END_TOOL-->", closeIdx)
                     if (endTool >= 0) {
-                        val content = rest.substring(closeIdx + closeTag.length, endTool).trim()
+                        var content = rest.substring(closeIdx + closeTag.length, endTool).trim()
+                        // Check for TOOL_SUMMARY marker in content (from pty_chat.py)
+                        if (summary.isEmpty()) {
+                            val tsRegex = Regex("""<!--TOOL_SUMMARY\s*:\s*([^>]+)-->""")
+                            val tsMatch = tsRegex.find(content)
+                            if (tsMatch != null) {
+                                summary = tsMatch.groupValues[1].trim()
+                                content = content.replace(tsRegex, "").trim()
+                            }
+                        }
                         segs.add(Segment.ToolCall(name, summary, content))
                         rest = rest.substring(endTool + "<!--END_TOOL-->".length)
                     } else {
@@ -239,7 +248,7 @@ fun ToolCallBlock(name: String, summary: String = "", content: String = "") {
     // marker arrives when the tool is complete. We assume it's completed.
     val isRunning = false
 
-    val displayLabel = buildLabel(name, summary)
+    val displayLabel = buildLabel(name, summary.ifEmpty { content })
 
     val icon = getToolIcon(name)
 
