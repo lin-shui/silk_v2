@@ -141,14 +141,21 @@ object AgentRuntime {
     /** 列出所有已注册的 agent descriptor。 */
     fun listRegisteredAgents(): List<AgentDescriptor> = AgentRegistry.list()
 
+    /** cc-connect 桥接代理的用户 ID（见 Routing.kt /ccconnect-bridge）。 */
+    const val CC_CONNECT_USER_ID = "cc-connect"
+
     /** 判断某条消息是否来自某个 agent（用于 WebSocketConfig 的 AGENT_ID 过滤）。 */
     fun isAgentMessage(msg: Message): Boolean {
-        return msg.userId == SilkAgent.AGENT_ID || AgentRegistry.list().any { it.agentUserId == msg.userId }
+        return msg.userId == SilkAgent.AGENT_ID
+            || msg.userId == CC_CONNECT_USER_ID
+            || AgentRegistry.list().any { it.agentUserId == msg.userId }
     }
 
     /** 判断某个 userId 是否属于已注册的 agent。 */
     fun isAgentUserId(userId: String): Boolean {
-        return userId == SilkAgent.AGENT_ID || AgentRegistry.list().any { it.agentUserId == userId }
+        return userId == SilkAgent.AGENT_ID
+            || userId == CC_CONNECT_USER_ID
+            || AgentRegistry.list().any { it.agentUserId == userId }
     }
 
     /**
