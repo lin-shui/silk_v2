@@ -36,19 +36,19 @@
 
 ## Current Snapshot
 
-当前 detekt baseline 余量（2026-05-29，Slice 56 后）：
+当前 detekt baseline 余量（2026-06-01，Slice 65 后）：
 
-- `backend.xml`: 186
-- `frontend-androidApp.xml`: 21
+- `backend.xml`: 174
+- `frontend-androidApp.xml`: 13
 - `frontend-webApp.xml`: 0
 - `frontend-shared.xml`: 7
 - `frontend-desktopApp.xml`: 0
 
 当前关键分布：
 
-- `frontend/androidApp` 已无 `WildcardImport`、`InstanceOfCheckForException`、`PrintStackTrace`、`TooGenericExceptionThrown`、`TooGenericExceptionCaught`、`SwallowedException`、`ImplicitDefaultLocale`、`ComplexCondition`、`NestedBlockDepth` 与 `LoopWithTooManyJumpStatements` baseline；剩余 21 条全部都是 `CyclomaticComplexMethod`。
+- `frontend/androidApp` 已无 `WildcardImport`、`InstanceOfCheckForException`、`PrintStackTrace`、`TooGenericExceptionThrown`、`TooGenericExceptionCaught`、`SwallowedException`、`ImplicitDefaultLocale`、`ComplexCondition`、`NestedBlockDepth` 与 `LoopWithTooManyJumpStatements` baseline；剩余 13 条全部都是 `CyclomaticComplexMethod`。
 - `frontend/webApp` 已清空 detekt baseline；`ApiClient.kt` 的异常恢复已统一收敛到 `recoverApiCall(...)` helper。
-- `backend` 已无 `WildcardImport` baseline；剩余主要是 `CyclomaticComplexMethod` 34、`TooGenericExceptionCaught` 33、`ConstructorParameterNaming` 16、`NestedBlockDepth` 14、`UnusedPrivateMember` 13。
+- `backend` 已无 `WildcardImport` baseline；剩余主要是 `CyclomaticComplexMethod` 34、`TooGenericExceptionCaught` 33、`ConstructorParameterNaming` 16、`NestedBlockDepth` 14、`UnusedParameter` 6、`UnusedPrivateMember` 3。
 
 ## Current Status
 
@@ -92,13 +92,23 @@
 - Slice 54 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-54.md](../completed/2026-05-29-lint-baseline-reduction-slice-54.md)。
 - Slice 55 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-55.md](../completed/2026-05-29-lint-baseline-reduction-slice-55.md)。
 - Slice 56 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-56.md](../completed/2026-05-29-lint-baseline-reduction-slice-56.md)。
+- Slice 57 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-57.md](../completed/2026-06-01-lint-baseline-reduction-slice-57.md)。
+- Slice 58 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-58.md](../completed/2026-06-01-lint-baseline-reduction-slice-58.md)。
+- Slice 59 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-59.md](../completed/2026-06-01-lint-baseline-reduction-slice-59.md)。
+- Slice 60 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-60.md](../completed/2026-06-01-lint-baseline-reduction-slice-60.md)。
+- Slice 61 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-61.md](../completed/2026-06-01-lint-baseline-reduction-slice-61.md)。
+- Slice 62 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-62.md](../completed/2026-06-01-lint-baseline-reduction-slice-62.md)。
+- Slice 63 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-63.md](../completed/2026-06-01-lint-baseline-reduction-slice-63.md)。
+- Slice 64 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-64.md](../completed/2026-06-01-lint-baseline-reduction-slice-64.md)。
+- Slice 65 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-65.md](../completed/2026-06-01-lint-baseline-reduction-slice-65.md)。
 - Android 侧已知 `jlink` / `JdkImageTransform` 阻塞保持不变；当前 active plan 继续优先选择不依赖该链路的窄 slice。
 
 ## Next Slices
 
-- Slice 57 候选：如果继续留在 Android，优先处理 `ChatScreen.kt` 的 `InlineMarkdownAndroid(...)` 或 `extractInlineMath(...)`，这两个函数刚被 helper 化过一轮，继续切局部 markdown/token helper 的收益最确定。
-- Slice 58 候选：如果希望继续保持小而确定的收益，切回 backend，优先挑单文件的 `UnusedPrivateMember` / `UnusedParameter` 或明确异常语义问题，避免在 Android 侧过早进入顶层大 composable 拆分。
-- `ChatScreen.kt` 仍然是 Android 里剩余最重的复杂度面；后续如果继续切它，必须按 markdown/token/helper 或单卡片局部语义面慢拆，不要把 toolbar、上传、成员弹窗和 markdown 渲染混成一刀。
+- Slice 66 候选：继续留在 backend，优先处理 `ChatHistoryManager.kt` 的 `getSessionDirLegacy(...)` 或 `WebSocketConfig.kt` 的孤立 `UnusedPrivateMember`，保持“单文件、纯静态清理”的收益。
+- Slice 67 候选：如果希望继续 backend 的参数清理，优先挑 `DirectModelAgent.kt`、`WeaviateClient.kt` 或 `WebPageDownloader.kt` 的 `UnusedParameter`，避免在同一轮混入异常语义调整。
+- Slice 68 候选：如果切回 Android，优先处理 `ChatScreen.kt` 的 `MessageItem(...)` 外围 render-mode dispatch 或顶层 `ChatScreen(...)` host orchestration，避免把 AI 卡片、消息项分发和页面 host 一起拆。
+- `ChatScreen.kt` 仍然是 Android 里剩余最重的复杂度面；后续如果继续切它，必须按消息项分发或更大的 host composable 慢拆，不要把 toolbar、上传、成员弹窗和消息渲染混成一刀。
 - 如果回到 backend，下一轮不要再按“大范围机械清理”切；优先选单文件的 `UnusedPrivateMember` / `UnusedParameter` 或明确异常语义问题。
 - `frontend/webApp` baseline 已清空；后续 web 再出现 lint 时只接受“新增问题直接修源码”，不要回填 baseline。
 - 复杂度规则继续按单文件慢拆，不和异常语义 / import 收敛混在同一 slice。
@@ -117,8 +127,16 @@
 - `frontend/androidApp/src/main/kotlin/com/silk/android/WorkflowChatScreen.kt` 的首次连接已改成 `runCatching + cancellation 透传`；后续改工作流聊天页时不要再把 `chatClient.connect(...)` 包回 generic catch。
 - `frontend/androidApp/src/main/kotlin/com/silk/android/AppState.kt` 现在用 `readStoredUser(...)` 统一恢复本地会话，并通过 `AuthResponse.isNetworkFailure()` 保持“网络错误不登出、取消异常透传”的语义；后续改启动恢复/登出逻辑时不要再回到重复空值并列判断或 `catch (Exception)`。
 - `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把连接/上传/ASR 一类“失败就记录/回退”的路径收敛到 `runLoggedSuspendAction(...)` 与 `disconnectChatClientQuietly(...)`；后续改这些路径时优先复用 helper，不要把 generic catch 和空 catch 再散回事件处理器。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把空态判定、代码高亮 token 扫描、文件名解析和行内数学 `$...$` 起始判断都收敛到小 helper；后续继续切 markdown/高亮逻辑时优先沿这些 helper 扩展，不要把布尔链和深层游标判断重新塞回主函数。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在连 `highlightLine(...)`、`InlineMarkdownAndroid(...)` 的 loop jump 和标识符分类也都收敛到 helper/状态推进写法；后续改 markdown 或高亮逻辑时不要再引回多段 `continue` 或内联分类分支。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把空态判定、代码高亮 token 扫描、文件名解析、行内数学 `$...$` 起始判断，以及 inline math delimiter 扫描都收敛到小 helper；后续继续切 markdown/高亮逻辑时优先沿这些 helper 扩展，不要把布尔链和深层游标判断重新塞回主函数。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在连 `highlightLine(...)`、`InlineMarkdownAndroid(...)` 的 token 选择/样式追加，以及 `extractInlineMath(...)` 的分隔符分发都收敛到 helper/状态推进写法；后续改 markdown 或高亮逻辑时不要再引回多段 `continue`、内联分类分支或在 composable 里手写一长串 token 判断。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `MarkdownTableAndroid(...)` 的 header/data-row 渲染和表格解析也收敛到 `ParsedMarkdownTable` 与 row/cell helper；后续继续切 markdown renderer 时优先沿这些 parser/render helper 扩展，不要把 header 判定、空列补齐和行渲染重新塞回主 composable。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `MarkdownContentAndroid(...)` 也改成“先解析 `MarkdownContentItem`，再渲染”的结构；后续继续切 markdown 备用 renderer 时优先沿 parser/render item helper 扩展，不要把 code/table/math/list 分支重新堆回主 composable。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `FileItemCard(...)` 的文件类型分流改成共享映射 `fileCardIconMappings`；后续新增文件类型展示时优先加映射数据，不要再把一串扩展名判断写回 composable。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `ForwardedMessageBubble(...)` 改成 `ForwardedMessageBubbleState` + header/collapsed/expanded/batch-item helper 组合；后续继续改转发气泡时优先沿这些 helper 扩展，不要把批量/单条转发和展开收起分支重新塞回主 composable。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `MembersDialog(...)` 改成 header/body/member-row 分层，并把成员展示状态收敛到 `MembersDialogMemberState` 与字段级 helper；后续继续改成员弹窗时优先沿这些 helper 扩展，不要把 loading/empty/list 和成员判定分支重新塞回主 dialog。
+- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `AIMessageCardAndroid(...)` 改成 `AIMessageCardState` + header/thinking/body/footer helper 组合；后续继续改 AI 卡片时优先沿这些 helper 扩展，不要把思考折叠、长文展开和底部操作重新堆回主 card composable。
+- `backend/src/main/kotlin/com/silk/backend/ai/AIStepwiseAgent.kt` 已删除一组未接线的分析 helper，并把 `extractConclusion(...)` 收敛成只接收实际使用的 `fullResult`；后续如果继续切这个文件，优先确认 helper 是否真在 fallback / PDF 生成链路上使用，再决定是复接还是删除。
+- `backend/src/main/kotlin/com/silk/backend/pdf/PDFReportGenerator.kt` 现在已经去掉未使用的 `englishFont` 透传链与孤立的执行摘要/helper；后续继续改 PDF 生成器时优先保持“只保留真正参与渲染的签名与颜色 helper”，不要再把未使用字体/摘要入口挂回主流程。
 - `frontend/androidApp/src/main/kotlin/com/silk/android/ApkDownloader.kt` 与 `MarkdownWebView.kt` 现在对 `String.format(...)` 显式传 `Locale.US`；后续 Android 端如果再新增固定格式化字符串，不要依赖默认 locale。
 - `frontend/androidApp/src/main/kotlin/com/silk/android/ApkDownloader.kt` 现在把下载失败和安装失败统一折叠成返回值/状态回写，不再向调用方抛 `RuntimeException`；后续接入升级安装入口时优先消费返回消息，不要再在页面侧包安装 `try/catch`。
 - `frontend/webApp` 里的 transient/system-message 复杂条件已抽成共享 helper；后续同类判断优先复用 `shouldRenderInlineTransientMessage(...)` 与 `isWorkflowAgentLifecycleMessage(...)`，避免把条件重新写散。

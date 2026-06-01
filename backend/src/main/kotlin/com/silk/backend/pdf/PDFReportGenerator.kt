@@ -36,9 +36,6 @@ class PDFReportGenerator {
     private fun primaryColor() = DeviceRgb(25, 118, 210)      // 蓝色
     private fun secondaryColor() = DeviceRgb(76, 175, 80)     // 绿色
     private fun headerBgColor() = DeviceRgb(245, 245, 245)    // 浅灰色
-    private fun successColor() = DeviceRgb(76, 175, 80)       // 绿色
-    private fun errorColor() = DeviceRgb(244, 67, 54)         // 红色
-    
     // 中文字体路径（静态配置）- 优先使用对中英文都支持好的字体
     private val chineseFontPath: String? by lazy {
         // macOS 系统自带的字体，优先选择对中英文都支持好的
@@ -89,24 +86,11 @@ class PDFReportGenerator {
     }
     
     /**
-     * ✅ 创建英文字体（用于英文字母、数字，避免字符重叠）
-     */
-    private fun createEnglishFont(): PdfFont {
-        return try {
-            // 使用 Helvetica 标准字体（清晰、无衬线）
-            PdfFontFactory.createFont(com.itextpdf.io.font.constants.StandardFonts.HELVETICA)
-        } catch (e: Exception) {
-            logger.error("❌ 英文字体加载失败", e)
-            PdfFontFactory.createFont()
-        }
-    }
-    
-    /**
      * ✅ 创建统一的Paragraph（使用支持中英文的Unicode字体）
      * 简化方案：使用Arial Unicode或PingFang等对中英文都支持好的字体
      * 增加字符间距以避免字符重叠
      */
-    private fun createMixedFontParagraph(text: String, chineseFont: PdfFont, englishFont: PdfFont, fontSize: Float = 9f): Paragraph {
+    private fun createMixedFontParagraph(text: String, chineseFont: PdfFont, fontSize: Float = 9f): Paragraph {
         // ✅ 简化方案：只使用中文字体（选用的字体对英文也有良好支持）
         // 避免混合字体导致的字符宽度、间距问题
         val cleanedText = sanitizeText(text)
@@ -233,9 +217,7 @@ class PDFReportGenerator {
             
             // ✅ 为此 PDF 文档创建独立的字体对象（避免跨文档重用）
             val chineseFont = createChineseFont()  // 中文字体
-            val englishFont = createEnglishFont()  // 英文字体
-            
-            logger.info("✅ 字体加载完成：中文字体 + 英文字体")
+            logger.info("✅ 字体加载完成：中文字体")
             
             // 生成报告标题（包含群组名称和生成时间）
             val reportGeneratedTime = LocalDateTime.now()
@@ -247,26 +229,26 @@ class PDFReportGenerator {
             logger.debug("📋 诊断步骤数: {}", diagnosisResult.stepResults.size)
             logger.debug("📋 总结报告长度: {}", summaryReportText.length)
             
-            addReportHeader(document, reportTitle, reportGeneratedTime, chineseFont, englishFont)
+            addReportHeader(document, reportTitle, reportGeneratedTime, chineseFont)
             
             // 第一部分：患者信息表格
-            addPatientInfo(document, patientInfo, userName, sessionName, diagnosisResult, chineseFont, englishFont)
+            addPatientInfo(document, patientInfo, userName, sessionName, diagnosisResult, chineseFont)
             
             // 分页：患者信息 → 诊断步骤
             document.add(AreaBreak(AreaBreakType.NEXT_PAGE))
             
             // 第二部分：诊断步骤表格
-            addDiagnosisStepsTable(document, diagnosisResult, chineseFont, englishFont)
+            addDiagnosisStepsTable(document, diagnosisResult, chineseFont)
             
             // 分页：诊断步骤 → 总结报告
             if (summaryReportText.isNotEmpty() && summaryReportText.length > 100) {
                 document.add(AreaBreak(AreaBreakType.NEXT_PAGE))
                 
                 // 第三部分：格式化的总结报告
-                addSummaryReportSection(document, summaryReportText, chineseFont, englishFont)
+                addSummaryReportSection(document, summaryReportText, chineseFont)
             }
             
-            addReportFooter(document, chineseFont, englishFont)
+            addReportFooter(document, chineseFont)
             
             // ✅ 正常关闭文档
             document.close()
@@ -305,11 +287,10 @@ class PDFReportGenerator {
      * @param groupTitle 群组标题（已经是实际的显示名称）
      * @param generatedTime 报告生成时间
      * @param chineseFont 中文字体
-     * @param englishFont 英文字体
      */
-    private fun addReportHeader(document: Document, groupTitle: String, generatedTime: LocalDateTime, chineseFont: PdfFont, englishFont: PdfFont) {
+    private fun addReportHeader(document: Document, groupTitle: String, generatedTime: LocalDateTime, chineseFont: PdfFont) {
         // ✅ 主标题：使用混合字体（中英文自动识别）- 字体从24f减到20f
-        val title = createMixedFontParagraph(groupTitle, chineseFont, englishFont, 20f)
+        val title = createMixedFontParagraph(groupTitle, chineseFont, 20f)
             .setBold()
             .setTextAlignment(TextAlignment.CENTER)
             .setFontColor(primaryColor())
@@ -321,7 +302,7 @@ class PDFReportGenerator {
         val dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy年MM月dd日 HH:mm:ss")
         val formattedDateTime = generatedTime.format(dateTimeFormatter)
         
-        val subtitle = createMixedFontParagraph("诊断报告 - $formattedDateTime", chineseFont, englishFont, 11f)
+        val subtitle = createMixedFontParagraph("诊断报告 - $formattedDateTime", chineseFont, 11f)
             .setTextAlignment(TextAlignment.CENTER)
             .setFontColor(ColorConstants.GRAY)
             .setMarginBottom(10f)
@@ -329,7 +310,7 @@ class PDFReportGenerator {
         document.add(subtitle)
         
         // 系统标识（包含"Silk AI Agent"英文）- 字体从12f减到10f
-        val systemInfo = createMixedFontParagraph("Silk AI Agent 智能诊断系统", chineseFont, englishFont, 10f)
+        val systemInfo = createMixedFontParagraph("Silk AI Agent 智能诊断系统", chineseFont, 10f)
             .setTextAlignment(TextAlignment.CENTER)
             .setFontColor(ColorConstants.LIGHT_GRAY)
             .setMarginBottom(20f)
@@ -350,7 +331,6 @@ class PDFReportGenerator {
         sessionName: String,
         diagnosisResult: AIStepwiseAgent.DiagnosisResult,
         chineseFont: PdfFont,
-        englishFont: PdfFont
     ) {
         val sectionTitle = Paragraph(sanitizeText("患者情况"))
             .setFont(chineseFont)
@@ -621,58 +601,9 @@ class PDFReportGenerator {
     }
     
     /**
-     * 添加执行摘要
-     */
-    private fun addExecutionSummary(document: Document, result: AIStepwiseAgent.DiagnosisResult, chineseFont: PdfFont) {
-        val sectionTitle = Paragraph("诊断执行摘要")
-            .setFont(chineseFont)
-            .setFontSize(16f)
-            .setBold()
-            .setFontColor(primaryColor())
-            .setMarginTop(15f)
-            .setMarginBottom(10f)
-        
-        // ✅ 添加字符间距
-        try {
-            sectionTitle.setCharacterSpacing(1.2f)
-        } catch (e: Exception) {
-            // 忽略错误
-        }
-        
-        document.add(sectionTitle)
-        
-        // 摘要表格
-        val table = Table(UnitValue.createPercentArray(floatArrayOf(30f, 70f)))
-            .useAllAvailableWidth()
-            .setMarginBottom(15f)
-        
-        table.addHeaderCell(createHeaderCell("统计项", chineseFont))
-        table.addHeaderCell(createHeaderCell("数值", chineseFont))
-        
-        table.addCell(createCell("诊断步骤总数", chineseFont = chineseFont))
-        table.addCell(createCell("${result.stepResults.size} 步", chineseFont = chineseFont))
-        
-        table.addCell(createCell("成功完成", chineseFont = chineseFont))
-        table.addCell(createCell("${result.stepResults.count { it.value.success }} 步", 
-            if (result.allSuccess) successColor() else errorColor(), chineseFont))
-        
-        table.addCell(createCell("执行状态", chineseFont = chineseFont))
-        table.addCell(createCell(
-            if (result.allSuccess) "✓ 全部成功" else "⚠ 部分失败",
-            if (result.allSuccess) successColor() else errorColor(),
-            chineseFont
-        ))
-        
-        table.addCell(createCell("报告生成时间", chineseFont = chineseFont))
-        table.addCell(createCell(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")), chineseFont = chineseFont))
-        
-        document.add(table)
-    }
-    
-    /**
      * 添加诊断步骤表格（每个步骤一行，排除总结报告）
      */
-    private fun addDiagnosisStepsTable(document: Document, result: AIStepwiseAgent.DiagnosisResult, chineseFont: PdfFont, englishFont: PdfFont) {
+    private fun addDiagnosisStepsTable(document: Document, result: AIStepwiseAgent.DiagnosisResult, chineseFont: PdfFont) {
         val sectionTitle = Paragraph(sanitizeText("诊断详细过程"))
             .setFont(chineseFont)
             .setFontSize(14f)  // 从16f减到14f
@@ -710,7 +641,7 @@ class PDFReportGenerator {
             
             // ✅ 步骤名称：使用混合字体，字体从10f减到9f
             val nameCell = Cell()
-                .add(createMixedFontParagraph(stepName, chineseFont, englishFont, 9f)
+                .add(createMixedFontParagraph(stepName, chineseFont, 9f)
                     .setBold())
                 .setTextAlignment(TextAlignment.LEFT)
                 .setPadding(8f)
@@ -728,7 +659,7 @@ class PDFReportGenerator {
             
             // ✅ 结果内容：使用混合字体（中英文自动识别）
             val resultCell = Cell()
-                .add(createMixedFontParagraph(resultText, chineseFont, englishFont, 9f))
+                .add(createMixedFontParagraph(resultText, chineseFont, 9f))
                 .setTextAlignment(TextAlignment.LEFT)
                 .setPadding(8f)
             
@@ -763,7 +694,7 @@ class PDFReportGenerator {
      * 添加总结报告章节（使用与聊天室相同的内容，支持格式化标记）
      * 注意：调用此方法前，外部已添加分页符
      */
-    private fun addSummaryReportSection(document: Document, summaryText: String, chineseFont: PdfFont, englishFont: PdfFont) {
+    private fun addSummaryReportSection(document: Document, summaryText: String, chineseFont: PdfFont) {
         // 不在此处分页，由外部控制
         val sectionTitle = Paragraph(sanitizeText("诊断总结报告"))
             .setFont(chineseFont)
@@ -783,17 +714,17 @@ class PDFReportGenerator {
         document.add(sectionTitle)
         
         // 解析并渲染格式化的文本
-        parseAndRenderFormattedText(document, summaryText, chineseFont, englishFont)
+        parseAndRenderFormattedText(document, summaryText, chineseFont)
         
         // 添加免责声明
-        addDisclaimer(document, chineseFont, englishFont)
+        addDisclaimer(document, chineseFont)
     }
     
     /**
      * 解析并渲染格式化的文本
      * 支持标记：##主标题##, ###副标题###, ####要点####
      */
-    private fun parseAndRenderFormattedText(document: Document, text: String, chineseFont: PdfFont, englishFont: PdfFont) {
+    private fun parseAndRenderFormattedText(document: Document, text: String, chineseFont: PdfFont) {
         val lines = text.split("\n")
         
         for (line in lines) {
@@ -820,7 +751,7 @@ class PDFReportGenerator {
                     val point = text.trim()
                     
                     // ✅ 使用混合字体，字体从11f减到9.5f
-                    val paragraph = createMixedFontParagraph(point, chineseFont, englishFont, 9.5f)
+                    val paragraph = createMixedFontParagraph(point, chineseFont, 9.5f)
                         .setBold()
                         .setFontColor(DeviceRgb(100, 100, 100))
                         .setMarginTop(8f)
@@ -838,7 +769,7 @@ class PDFReportGenerator {
                     val subtitle = text.trim()
                     
                     // ✅ 使用混合字体，字体从12f减到10f
-                    val paragraph = createMixedFontParagraph(subtitle, chineseFont, englishFont, 10f)
+                    val paragraph = createMixedFontParagraph(subtitle, chineseFont, 10f)
                         .setBold()
                         .setFontColor(secondaryColor())
                         .setMarginTop(10f)
@@ -856,7 +787,7 @@ class PDFReportGenerator {
                     val title = text.trim()
                     
                     // ✅ 使用混合字体，字体从14f减到12f
-                    val paragraph = createMixedFontParagraph(title, chineseFont, englishFont, 12f)
+                    val paragraph = createMixedFontParagraph(title, chineseFont, 12f)
                         .setBold()
                         .setFontColor(primaryColor())
                         .setMarginTop(12f)
@@ -867,7 +798,7 @@ class PDFReportGenerator {
                 // 普通段落
                 else -> {
                     // ✅ 使用混合字体（中英文自动识别，避免字符重叠），使用默认9f
-                    val paragraph = createMixedFontParagraph(trimmed, chineseFont, englishFont)
+                    val paragraph = createMixedFontParagraph(trimmed, chineseFont)
                         .setMarginBottom(5f)
                         .setFirstLineIndent(20f)  // 首行缩进
                     document.add(paragraph)
@@ -880,7 +811,7 @@ class PDFReportGenerator {
     /**
      * 添加免责声明（使用中文字体）
      */
-    private fun addDisclaimer(document: Document, chineseFont: PdfFont, englishFont: PdfFont) {
+    private fun addDisclaimer(document: Document, chineseFont: PdfFont) {
         val disclaimerText = """
             【免责声明】
             
@@ -896,7 +827,7 @@ class PDFReportGenerator {
         """.trimIndent()
         
         // ✅ 使用混合字体（包含"Silk AI Agent"等英文）
-        val disclaimer = createMixedFontParagraph(disclaimerText, chineseFont, englishFont, 9f)
+        val disclaimer = createMixedFontParagraph(disclaimerText, chineseFont, 9f)
             .setFontColor(ColorConstants.GRAY)
             .setBackgroundColor(DeviceRgb(255, 248, 225))
             .setPadding(10f)
@@ -908,11 +839,11 @@ class PDFReportGenerator {
     /**
      * 添加报告页脚（使用中文字体）
      */
-    private fun addReportFooter(document: Document, chineseFont: PdfFont, englishFont: PdfFont) {
+    private fun addReportFooter(document: Document, chineseFont: PdfFont) {
         addHorizontalLine(document)
         
         // ✅ Footer使用混合字体（包含"Silk AI Agent", "DeepSeek AI"等英文）
-        val footer = createMixedFontParagraph("本报告由 Silk AI Agent 自动生成 | 技术支持: DeepSeek AI | 承山堂中医诊所", chineseFont, englishFont, 9f)
+        val footer = createMixedFontParagraph("本报告由 Silk AI Agent 自动生成 | 技术支持: DeepSeek AI | 承山堂中医诊所", chineseFont, 9f)
             .setTextAlignment(TextAlignment.CENTER)
             .setFontColor(ColorConstants.GRAY)
             .setMarginTop(10f)
@@ -1005,36 +936,6 @@ class PDFReportGenerator {
     }
     
     /**
-     * 格式化结果文本用于 PDF 显示
-     * 确保人类可读，去除 JSON 等技术格式
-     */
-    private fun formatResultForPDF(text: String): String {
-        // 检查是否是 JSON 格式
-        if (text.trim().startsWith("{") || text.trim().startsWith("[")) {
-            return "【系统信息】\n内容格式需要优化，请查看聊天室中的文字版总结报告。"
-        }
-        
-        // 移除过多的空行和特殊字符
-        val cleaned = text.split("\n")
-            .filter { line ->
-                val trimmed = line.trim()
-                trimmed.isNotEmpty() && 
-                !trimmed.startsWith("{") && 
-                !trimmed.startsWith("[") &&
-                !trimmed.contains("\"content\"") &&
-                !trimmed.contains("\"isTransient\"")
-            }
-            .joinToString("\n")
-        
-        // 限制长度（每个单元格最多1000字）
-        return if (cleaned.length > 1000) {
-            cleaned.take(997) + "..."
-        } else {
-            cleaned
-        }
-    }
-    
-    /**
      * 添加水平分隔线
      */
     private fun addHorizontalLine(document: Document) {
@@ -1046,4 +947,3 @@ class PDFReportGenerator {
         document.add(line)
     }
 }
-

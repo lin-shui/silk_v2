@@ -152,25 +152,13 @@
     <ID>TooGenericExceptionThrown:AnthropicClient.kt$AnthropicClient$throw Exception("Anthropic API 调用失败: ${response.statusCode()}")</ID>
     <ID>TooGenericExceptionThrown:PDFReportGenerator.kt$PDFReportGenerator$throw RuntimeException("PDF 生成失败：${e.message}", e)</ID>
     <ID>TooGenericExceptionThrown:SearchDrivenAgent.kt$SearchDrivenAgent$throw Exception("API 调用失败：${response.statusCode()}")</ID>
-    <ID>UnusedParameter:AIStepwiseAgent.kt$AIStepwiseAgent$taskName: String</ID>
     <ID>UnusedParameter:DirectModelAgent.kt$DirectModelAgent$accessibleSessionIds: List&lt;String&gt; = listOf(sessionId)</ID>
     <ID>UnusedParameter:DirectModelAgent.kt$DirectModelAgent$requestUserId: String = ""</ID>
-    <ID>UnusedParameter:PDFReportGenerator.kt$PDFReportGenerator$englishFont: PdfFont</ID>
     <ID>UnusedParameter:UserTodoStore.kt$UserTodoStore$actionType: String?</ID>
     <ID>UnusedParameter:WeaviateClient.kt$WeaviateClient$alpha: Float</ID>
     <ID>UnusedParameter:WeaviateClient.kt$WeaviateClient$userId: String</ID>
     <ID>UnusedParameter:WebPageDownloader.kt$WebPageDownloader$url: String</ID>
-    <ID>UnusedPrivateMember:AIStepwiseAgent.kt$AIStepwiseAgent$private fun analyzeUserIntent(input: String): String</ID>
-    <ID>UnusedPrivateMember:AIStepwiseAgent.kt$AIStepwiseAgent$private fun analyzeUserSentiment(context: String): String</ID>
-    <ID>UnusedPrivateMember:AIStepwiseAgent.kt$AIStepwiseAgent$private fun extractKeySummary(fullText: String): String</ID>
-    <ID>UnusedPrivateMember:AIStepwiseAgent.kt$AIStepwiseAgent$private fun extractLastUserInput(context: String): String</ID>
-    <ID>UnusedPrivateMember:AIStepwiseAgent.kt$AIStepwiseAgent$private fun extractTopics(context: String): String</ID>
-    <ID>UnusedPrivateMember:AIStepwiseAgent.kt$AIStepwiseAgent$private fun generateRecommendations(input: String): String</ID>
-    <ID>UnusedPrivateMember:AIStepwiseAgent.kt$AIStepwiseAgent$private fun identifyMainIssue(input: String): String</ID>
-    <ID>UnusedPrivateMember:AIStepwiseAgent.kt$AIStepwiseAgent$private fun identifyOpenQuestions(input: String): String</ID>
     <ID>UnusedPrivateMember:ChatHistoryManager.kt$ChatHistoryManager$private fun getSessionDirLegacy(sessionName: String): String</ID>
-    <ID>UnusedPrivateMember:PDFReportGenerator.kt$PDFReportGenerator$private fun addExecutionSummary(document: Document, result: AIStepwiseAgent.DiagnosisResult, chineseFont: PdfFont)</ID>
-    <ID>UnusedPrivateMember:PDFReportGenerator.kt$PDFReportGenerator$private fun formatResultForPDF(text: String): String</ID>
     <ID>UnusedPrivateMember:WebSocketConfig.kt$ChatServer$private fun checkIfUserIsHost(sessionName: String, userId: String): Boolean</ID>
     <ID>UnusedPrivateMember:WebSocketConfig.kt$ChatServer$private suspend fun executeSmartDiagnosis()</ID>
     <ID>UnusedPrivateProperty:AIStepwiseAgent.kt$AIStepwiseAgent$val finalLength = fullTextBuffer.length</ID>
