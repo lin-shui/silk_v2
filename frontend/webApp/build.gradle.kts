@@ -35,7 +35,8 @@ val envFile = readEnvFile()
 val backendPort = envFile["BACKEND_HTTP_PORT"] ?: System.getenv("BACKEND_HTTP_PORT") ?: "8003"
 val backendInternalPort = envFile["BACKEND_INTERNAL_PORT"] ?: System.getenv("BACKEND_INTERNAL_PORT") ?: backendPort
 val frontendPort = envFile["FRONTEND_PORT"] ?: System.getenv("FRONTEND_PORT") ?: "8004"
-println("📦 [webApp] BACKEND_HTTP_PORT = $backendPort, BACKEND_INTERNAL_PORT = $backendInternalPort, FRONTEND_PORT = $frontendPort")
+val backendBaseUrl = envFile["BACKEND_BASE_URL"] ?: System.getenv("BACKEND_BASE_URL") ?: ""
+println("📦 [webApp] BACKEND_HTTP_PORT = $backendPort, BACKEND_INTERNAL_PORT = $backendInternalPort, FRONTEND_PORT = $frontendPort, BACKEND_BASE_URL = $backendBaseUrl")
 
 plugins {
     kotlin("js")
@@ -57,6 +58,7 @@ val generateBuildConfig by tasks.registering {
                 const val BACKEND_HTTP_PORT = "$backendPort"
                 const val BACKEND_INTERNAL_PORT = "$backendInternalPort"
                 const val FRONTEND_PORT = "$frontendPort"
+                const val BACKEND_BASE_URL = "$backendBaseUrl"
             }
         """.trimIndent())
         println("📦 [webApp] 已生成 BuildConfig.kt (BACKEND_HTTP_PORT=$backendPort, BACKEND_INTERNAL_PORT=$backendInternalPort)")
