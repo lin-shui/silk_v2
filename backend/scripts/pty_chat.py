@@ -478,11 +478,8 @@ def main():
         "--include-partial-messages",
     ]
 
-    # Non-root users need permission bypass for non-interactive mode
-    if os.getuid() != 0:
-        cmd.insert(cmd.index("--no-chrome") + 1, "--permission-mode")
-        cmd.insert(cmd.index("--permission-mode") + 1, "bypassPermissions")
-        cmd.insert(cmd.index("--permission-mode") + 2, "--allow-dangerously-skip-permissions")
+    # Permissions are now controlled by --settings file (claude-strict/settings.json),
+    # not command-line flags, so the user can configure allow/deny rules there.
 
     # ── Step 5: Fork ──
     pid = os.fork()
