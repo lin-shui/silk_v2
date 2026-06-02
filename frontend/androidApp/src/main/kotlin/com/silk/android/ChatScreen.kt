@@ -1285,20 +1285,6 @@ fun ChatScreen(appState: AppState) {
                             isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
                             onThinkingExpandChange = { messageId, expanded ->
                                 thinkingExpandedStates[messageId] = expanded
-                                val reversedMessages = messages.reversed()
-                                val idx = reversedMessages.indexOfFirst { it.id == messageId }
-                                val itemOffset = (if (transientMessage != null) 1 else 0) +
-                                    (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
-                                val targetIdx = if (idx >= 0) itemOffset + idx else -1
-                                if (targetIdx >= 0) {
-                                    expandScrollJob?.cancel()
-                                    expandScrollJob = scopeForScroll.launch {
-                                        kotlinx.coroutines.delay(100)
-                                        // Use a large offset so the item's top (where thinking header is)
-                                        // appears at the viewport top instead of the bottom
-                                        listState.scrollToItem(targetIdx, Int.MAX_VALUE)
-                                    }
-                                }
                             },
                             isToolsExpanded = toolsExpandedStates[message.id] ?: false,
                             onToolsExpandChange = { messageId, expanded ->
@@ -2565,17 +2551,23 @@ fun ThinkingBlock(
                 color = Color(0xFFC0B0A0)
             )
         }
-        if (show) {
-            Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
-            Text(
-                text = thinkingText,
-                fontSize = 12.sp,
-                color = Color(0xFF8B7355),
-                lineHeight = 18.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp)
-            )
+        AnimatedVisibility(
+            visible = show,
+            enter = expandVertically(animationSpec = tween(200)),
+            exit = shrinkVertically(animationSpec = tween(200))
+        ) {
+            Column {
+                Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+                Text(
+                    text = thinkingText,
+                    fontSize = 12.sp,
+                    color = Color(0xFF8B7355),
+                    lineHeight = 18.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp)
+                )
+            }
         }
     }
 }
