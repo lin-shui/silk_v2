@@ -27,6 +27,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.window.Popup
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.platform.LocalDensity
@@ -2529,11 +2530,6 @@ fun ThinkingBlock(
         "Thinking ${elapsedSeconds}s..."
     }
 
-    val targetOffset by animateDpAsState(
-        targetValue = if (show) 0.dp else (-2000).dp,
-        animationSpec = tween(250)
-    )
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -2563,29 +2559,17 @@ fun ThinkingBlock(
                 color = Color(0xFFC0B0A0)
             )
         }
-        // Content always occupies its full layout height — offset slides it in/out visually.
-        // LazyColumn never sees a height change, so no repositioning occurs.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clipToBounds()
-        ) {
-            Column(
+        if (show) {
+            Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+            Text(
+                text = thinkingText,
+                fontSize = 12.sp,
+                color = Color(0xFF8B7355),
+                lineHeight = 18.sp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .offset(y = targetOffset)
-            ) {
-                Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
-                Text(
-                    text = thinkingText,
-                    fontSize = 12.sp,
-                    color = Color(0xFF8B7355),
-                    lineHeight = 18.sp,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp)
-                )
-            }
+                    .padding(12.dp)
+            )
         }
     }
 }
