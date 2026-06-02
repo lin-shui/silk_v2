@@ -2,18 +2,10 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
-    <ID>CyclomaticComplexMethod:ChatScreen.kt$@OptIn(ExperimentalFoundationApi::class) @Composable fun MessageItem( message: Message, currentUserId: String, context: android.content.Context, isTransient: Boolean = false, isSelectionMode: Boolean = false, isSelected: Boolean = false, onToggleSelection: (String) -&gt; Unit = {}, onLongPress: (String) -&gt; Unit = {}, onUserNameClick: ((Message) -&gt; Unit)? = null, // 撤回功能相关参数 isRecalling: Boolean = false, onRecall: (String) -&gt; Unit = {}, // AI 消息展开状态相关参数 isAIExpanded: Boolean = true, onAIExpandChange: (String, Boolean) -&gt; Unit = { _, _ -&gt; }, // AI 思考过程展开状态相关参数 isThinkingExpanded: Boolean = false, onThinkingExpandChange: (String, Boolean) -&gt; Unit = { _, _ -&gt; }, /** 长文本/转发全文收起后由列表滚回该条，与 Harmony onLongContentCollapsed 一致 */ onLongContentCollapsed: (String) -&gt; Unit = {}, // 复制和转发功能相关参数 onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {} )</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ChatScreen(appState: AppState)</ID>
-    <ID>CyclomaticComplexMethod:ContactsScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ContactsScreen(appState: AppState)</ID>
-    <ID>CyclomaticComplexMethod:ContactsScreen.kt$@Suppress("UNUSED_PARAMETER") @Composable fun AddContactDialog( appState: AppState, strings: com.silk.shared.i18n.Strings, onDismiss: () -&gt; Unit, onContactAdded: () -&gt; Unit // 保留以便将来刷新列表 )</ID>
-    <ID>CyclomaticComplexMethod:GroupListScreen.kt$@Composable fun GroupMembersListDialog( group: Group, members: List&lt;GroupMember&gt;, contacts: List&lt;Contact&gt;, currentUserId: String, isLoading: Boolean, onMemberClick: (GroupMember) -&gt; Unit, onDismiss: () -&gt; Unit )</ID>
-    <ID>CyclomaticComplexMethod:GroupListScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun GroupListScreen(appState: AppState)</ID>
     <ID>CyclomaticComplexMethod:KnowledgeBaseScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun KnowledgeBaseScreen(appState: AppState)</ID>
     <ID>CyclomaticComplexMethod:LoginScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun LoginScreen(appState: AppState)</ID>
-    <ID>CyclomaticComplexMethod:MainActivity.kt$@Composable fun SilkApp( activity: MainActivity, scope: kotlinx.coroutines.CoroutineScope, onAppStateReady: (AppState) -&gt; Unit = {} )</ID>
     <ID>CyclomaticComplexMethod:SettingsScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun SettingsScreen(appState: AppState)</ID>
     <ID>CyclomaticComplexMethod:WorkflowChatScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun WorkflowChatScreen(appState: AppState)</ID>
-    <ID>CyclomaticComplexMethod:WorkflowDialogs.kt$@Composable fun FolderPickerDialog( userId: String, initialPath: String?, onDismiss: () -&gt; Unit, onConfirm: (String) -&gt; Unit, )</ID>
-    <ID>CyclomaticComplexMethod:WorkflowScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable private fun CreateWorkflowDialog( userId: String, onDismiss: () -&gt; Unit, onCreated: (WorkflowItem) -&gt; Unit, )</ID>
   </CurrentIssues>
 </SmellBaseline>

@@ -226,122 +226,154 @@ fun SilkApp(
     onAppStateReady: (AppState) -> Unit = {}
 ) {
     val appState = remember { AppState(activity, scope) }
-    
-    // 将 AppState 传递给 Activity
+    val showUpdateDialog by appState.versionChecker.showUpdateDialog.collectAsState()
+    val newVersion by appState.versionChecker.newVersionAvailable.collectAsState()
+    val showDownloadDialog by appState.versionChecker.showDownloadDialog.collectAsState()
+    val downloadState by appState.versionChecker.downloadState.collectAsState()
+
+    ObserveSilkApp(appState = appState, onAppStateReady = onAppStateReady)
+    SilkAppBackHandler(appState = appState)
+    SilkVersionDialogs(
+        appState = appState,
+        showUpdateDialog = showUpdateDialog,
+        newVersion = newVersion,
+        showDownloadDialog = showDownloadDialog,
+        downloadState = downloadState,
+    )
+    SilkAppContent(appState = appState)
+}
+
+@Composable
+private fun ObserveSilkApp(
+    appState: AppState,
+    onAppStateReady: (AppState) -> Unit,
+) {
     LaunchedEffect(appState) {
         onAppStateReady(appState)
     }
-    
-    // 版本更新对话框状态
-    val showUpdateDialog by appState.versionChecker.showUpdateDialog.collectAsState()
-    val newVersion by appState.versionChecker.newVersionAvailable.collectAsState()
-    
-    // 下载进度对话框状态
-    val showDownloadDialog by appState.versionChecker.showDownloadDialog.collectAsState()
-    val downloadState by appState.versionChecker.downloadState.collectAsState()
-    
-    // ✅ 调试日志：监控更新对话框状态
-    LaunchedEffect(showUpdateDialog, newVersion) {
-        println("🔔 [MainActivity] 更新对话框状态: showUpdateDialog=$showUpdateDialog, newVersion=${newVersion?.versionName ?: "null"}")
-    }
-    
-    // 在 Activity 销毁时清理资源
-    DisposableEffect(Unit) {
-        onDispose {
-            appState.destroy()
-        }
-    }
-    
-    // 注意：返回键处理已移至 Activity 的 OnBackPressedCallback
-    // 这里的 BackHandler 作为额外保险，始终启用并阻止默认行为
-    BackHandler(enabled = true) {
-        // 所有返回操作都由 Activity 的 OnBackPressedCallback 处理
-        // 这里只是作为 Compose 层的额外保护
-        println("🔙 [Compose BackHandler] 返回事件，场景: ${appState.currentScene}")
-        
-        when (appState.currentScene) {
-            Scene.LOGIN -> {
-                // 登录页不做任何操作
-            }
-            Scene.GROUP_LIST -> {
-                // 群组列表页不做任何操作（防止退出登录）
-            }
-            else -> {
-                // 其他页面执行返回
-                appState.navigateBack()
-            }
-        }
-    }
-    
-    // 版本更新对话框
-    if (showUpdateDialog && newVersion != null) {
-        UpdateDialog(
-            versionInfo = newVersion!!,
-            onDownload = { appState.versionChecker.startDownload() },
-            onSkip = { appState.versionChecker.skipThisVersion() },
-            onLater = { appState.versionChecker.remindLater() }
+
+    LaunchedEffect(appState.versionChecker.showUpdateDialog, appState.versionChecker.newVersionAvailable) {
+        println(
+            "🔔 [MainActivity] 更新对话框状态: " +
+                "showUpdateDialog=${appState.versionChecker.showUpdateDialog.value}, " +
+                "newVersion=${appState.versionChecker.newVersionAvailable.value?.versionName ?: "null"}"
         )
     }
-    
-    // 下载进度对话框
+
+    DisposableEffect(Unit) {
+        onDispose { appState.destroy() }
+    }
+}
+
+@Composable
+private fun SilkAppBackHandler(appState: AppState) {
+    BackHandler(enabled = true) {
+        println("🔙 [Compose BackHandler] 返回事件，场景: ${appState.currentScene}")
+        when (appState.currentScene) {
+            Scene.LOGIN,
+            Scene.GROUP_LIST -> Unit
+            else -> appState.navigateBack()
+        }
+    }
+}
+
+@Composable
+private fun SilkVersionDialogs(
+    appState: AppState,
+    showUpdateDialog: Boolean,
+    newVersion: AppVersionInfo?,
+    showDownloadDialog: Boolean,
+    downloadState: ApkDownloader.DownloadState,
+) {
+    if (showUpdateDialog && newVersion != null) {
+        UpdateDialog(
+            versionInfo = newVersion,
+            onDownload = { appState.versionChecker.startDownload() },
+            onSkip = { appState.versionChecker.skipThisVersion() },
+            onLater = { appState.versionChecker.remindLater() },
+        )
+    }
+
     if (showDownloadDialog) {
         DownloadProgressDialog(
             downloadState = downloadState,
-            onDismiss = { appState.versionChecker.dismissDownloadDialog() }
+            onDismiss = { appState.versionChecker.dismissDownloadDialog() },
         )
     }
-    
-    // 显示验证中的加载界面
-    if (appState.isValidating) {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
+}
+
+@Composable
+private fun SilkAppContent(appState: AppState) {
+    when {
+        appState.isValidating -> SilkValidationScreen()
+        appState.currentScene == Scene.LOGIN -> LoginScreen(appState)
+        else -> SilkAuthenticatedContent(appState)
+    }
+}
+
+@Composable
+private fun SilkValidationScreen() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                CircularProgressIndicator()
-                Text(
-                    text = "正在验证用户信息...",
-                    style = MaterialTheme.typography.bodyMedium
-                )
+            CircularProgressIndicator()
+            Text(
+                text = "正在验证用户信息...",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SilkAuthenticatedContent(appState: AppState) {
+    val showBottomNav = appState.currentScene != Scene.CHAT_ROOM &&
+        appState.currentScene != Scene.WORKFLOW_CHAT
+
+    Scaffold(
+        bottomBar = {
+            if (showBottomNav) {
+                SilkBottomNav(appState)
             }
         }
-    } else if (appState.currentScene == Scene.LOGIN) {
-        LoginScreen(appState)
-    } else {
-        val showBottomNav = appState.currentScene != Scene.CHAT_ROOM &&
-                            appState.currentScene != Scene.WORKFLOW_CHAT
-        Scaffold(
-            bottomBar = {
-                if (showBottomNav) {
-                    SilkBottomNav(appState)
-                }
-            }
-        ) { padding ->
-            Box(modifier = Modifier.fillMaxSize().padding(padding)) {
-                when (appState.currentTab) {
-                    NavTab.SILK -> {
-                        when (appState.currentScene) {
-                            Scene.GROUP_LIST -> GroupListScreen(appState)
-                            Scene.CONTACTS -> ContactsScreen(appState)
-                            Scene.CHAT_ROOM -> ChatScreen(appState)
-                            Scene.SETTINGS -> SettingsScreen(appState)
-                            else -> GroupListScreen(appState)
-                        }
-                    }
-                    NavTab.WORKFLOW -> {
-                        when (appState.currentScene) {
-                            Scene.WORKFLOW_CHAT -> WorkflowChatScreen(appState)
-                            else -> WorkflowScreen(appState)
-                        }
-                    }
-                    NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScreen(appState)
-                    NavTab.AUDIO_DUPLEX -> AudioDuplexScreen()
-                }
-            }
+    ) { padding ->
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            SilkSceneHost(appState = appState)
         }
+    }
+}
+
+@Composable
+private fun SilkSceneHost(appState: AppState) {
+    when (appState.currentTab) {
+        NavTab.SILK -> SilkTabScene(appState)
+        NavTab.WORKFLOW -> WorkflowTabScene(appState)
+        NavTab.KNOWLEDGE_BASE -> KnowledgeBaseScreen(appState)
+        NavTab.AUDIO_DUPLEX -> AudioDuplexScreen()
+    }
+}
+
+@Composable
+private fun SilkTabScene(appState: AppState) {
+    when (appState.currentScene) {
+        Scene.GROUP_LIST -> GroupListScreen(appState)
+        Scene.CONTACTS -> ContactsScreen(appState)
+        Scene.CHAT_ROOM -> ChatScreen(appState)
+        Scene.SETTINGS -> SettingsScreen(appState)
+        else -> GroupListScreen(appState)
+    }
+}
+
+@Composable
+private fun WorkflowTabScene(appState: AppState) {
+    when (appState.currentScene) {
+        Scene.WORKFLOW_CHAT -> WorkflowChatScreen(appState)
+        else -> WorkflowScreen(appState)
     }
 }
 

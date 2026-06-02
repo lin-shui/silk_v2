@@ -143,6 +143,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
 import com.silk.shared.models.Message
+import com.silk.shared.models.MessageCategory
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.isAgentUserId
 import com.silk.shared.models.SILK_AGENT_USER_ID
@@ -3242,6 +3243,647 @@ private fun forwardedMessageBubbleShape(isOwn: Boolean): RoundedCornerShape =
         bottomEnd = if (isOwn) 4.dp else 12.dp,
     )
 
+private enum class MessageRenderMode {
+    AI,
+    FILE,
+    SYSTEM,
+    REGULAR,
+}
+
+private data class FileMessageUiState(
+    val fileName: String,
+    val fileSize: Long,
+    val downloadUrl: String,
+)
+
+private data class PdfMessageUiState(
+    val bodyLines: List<String>,
+    val pdfUrl: String?,
+    val fileName: String?,
+)
+
+private data class RegularMessageVisualState(
+    val bubbleColor: Color,
+    val textColor: Color,
+    val stepColor: Color,
+    val useForwardedBubble: Boolean,
+)
+
+private fun messageRenderMode(message: Message): MessageRenderMode = when {
+    isAgentUserId(message.userId) &&
+        message.type == MessageType.TEXT &&
+        message.category != MessageCategory.AGENT_STATUS -> MessageRenderMode.AI
+    message.type == MessageType.FILE -> MessageRenderMode.FILE
+    message.type == MessageType.SYSTEM -> MessageRenderMode.SYSTEM
+    else -> MessageRenderMode.REGULAR
+}
+
+private fun fileMessageUiState(message: Message): FileMessageUiState {
+    val fileContent = parseAndroidFileMessageContent(message.content)
+    return FileMessageUiState(
+        fileName = fileContent.fileName,
+        fileSize = fileContent.fileSize,
+        downloadUrl = fileContent.downloadUrl,
+    )
+}
+
+private fun isPdfReportMessage(message: Message): Boolean =
+    message.content.contains("/download/report/") && message.content.contains(".pdf")
+
+private fun parsePdfMessageUiState(message: Message): PdfMessageUiState {
+    val bodyLines = mutableListOf<String>()
+    var pdfUrl: String? = null
+    var fileName: String? = null
+
+    message.content.lineSequence().forEach { line ->
+        val trimmedLine = line.trim()
+        if (trimmedLine.startsWith("/download/report/") && trimmedLine.contains(".pdf")) {
+            pdfUrl = trimmedLine
+            val encodedFileName = trimmedLine.substringAfterLast("/")
+            fileName = runCatching {
+                java.net.URLDecoder.decode(encodedFileName, "UTF-8")
+            }.getOrElse { encodedFileName }
+        } else if (trimmedLine.isNotEmpty()) {
+            bodyLines += line
+        }
+    }
+
+    return PdfMessageUiState(
+        bodyLines = bodyLines,
+        pdfUrl = pdfUrl,
+        fileName = fileName,
+    )
+}
+
+@Composable
+private fun rememberRegularMessageVisualState(
+    message: Message,
+    isCurrentUser: Boolean,
+    isSelected: Boolean,
+    isTransient: Boolean,
+    useForwardedBubble: Boolean,
+): RegularMessageVisualState {
+    return RegularMessageVisualState(
+        bubbleColor = regularMessageBubbleColor(
+            category = message.category,
+            isCurrentUser = isCurrentUser,
+            isSelected = isSelected,
+            isTransient = isTransient,
+            useForwardedBubble = useForwardedBubble,
+        ),
+        textColor = regularMessageTextColor(
+            category = message.category,
+            isCurrentUser = isCurrentUser,
+            isTransient = isTransient,
+        ),
+        stepColor = regularMessageStepColor(isCurrentUser = isCurrentUser),
+        useForwardedBubble = useForwardedBubble,
+    )
+}
+
+@Composable
+private fun regularMessageBubbleColor(
+    category: MessageCategory,
+    isCurrentUser: Boolean,
+    isSelected: Boolean,
+    isTransient: Boolean,
+    useForwardedBubble: Boolean,
+): Color = when {
+    isSelected && useForwardedBubble -> Color.Transparent
+    isSelected -> Color(0xFF81D4FA)
+    useForwardedBubble -> Color.Transparent
+    category == MessageCategory.FINAL_REPORT ->
+        if (isCurrentUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+    category == MessageCategory.STEP_PROCESS || category == MessageCategory.TODO_LIST ->
+        regularMessageBaseBubbleColor(isCurrentUser = isCurrentUser).copy(alpha = 0.6f)
+    isTransient -> regularMessageBaseBubbleColor(isCurrentUser = isCurrentUser).copy(alpha = 0.5f)
+    else -> regularMessageBaseBubbleColor(isCurrentUser = isCurrentUser)
+}
+
+@Composable
+private fun regularMessageTextColor(
+    category: MessageCategory,
+    isCurrentUser: Boolean,
+    isTransient: Boolean,
+): Color = when (category) {
+    MessageCategory.FINAL_REPORT -> regularMessageBaseTextColor(isCurrentUser = isCurrentUser)
+    MessageCategory.STEP_PROCESS,
+    MessageCategory.TODO_LIST -> regularMessageBaseTextColor(isCurrentUser = isCurrentUser).copy(alpha = 0.5f)
+    else -> {
+        val alpha = if (isTransient) 0.4f else 1f
+        regularMessageBaseTextColor(isCurrentUser = isCurrentUser).copy(alpha = alpha)
+    }
+}
+
+@Composable
+private fun regularMessageStepColor(isCurrentUser: Boolean): Color =
+    regularMessageBaseTextColor(isCurrentUser = isCurrentUser).copy(alpha = 0.5f)
+
+@Composable
+private fun regularMessageBaseBubbleColor(isCurrentUser: Boolean): Color =
+    if (isCurrentUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+
+@Composable
+private fun regularMessageBaseTextColor(isCurrentUser: Boolean): Color =
+    if (isCurrentUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+
+private fun openBackendRelativeUrl(
+    context: Context,
+    relativeUrl: String,
+    description: String,
+) {
+    if (relativeUrl.isEmpty()) return
+    val fullUrl = "${BackendUrlHolder.getBaseUrl()}$relativeUrl"
+    runCatching {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(fullUrl)))
+    }.onFailure { error ->
+        Log.w("ChatScreen", "无法打开$description: $fullUrl", error)
+    }
+}
+
+private fun copyMessageContent(context: Context, content: String) {
+    runCatching {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        val clip = android.content.ClipData.newPlainText("消息", content)
+        clipboard.setPrimaryClip(clip)
+        android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+    }.onFailure { error ->
+        Log.w("ChatScreen", "复制消息失败", error)
+    }
+}
+
+private fun shareMessageContent(context: Context, message: Message) {
+    runCatching {
+        val shareIntent = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, "${message.userName}: ${message.content}")
+        }
+        context.startActivity(Intent.createChooser(shareIntent, "分享到"))
+    }.onFailure { error ->
+        Log.w("ChatScreen", "分享消息失败: ${message.id}", error)
+    }
+}
+
+private fun vibrateMessageLongPress(context: Context) {
+    runCatching {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            (context.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator)
+                ?.vibrate(android.os.VibrationEffect.createOneShot(50, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+        }
+    }.onFailure { error ->
+        Log.w("ChatScreen", "消息长按震动失败", error)
+    }
+}
+
+@Composable
+private fun FileMessageItem(
+    message: Message,
+    currentUserId: String,
+    timeString: String,
+    context: Context,
+) {
+    val isCurrentUser = message.userId == currentUserId
+    val fileState = remember(message.content) { fileMessageUiState(message) }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = if (isCurrentUser) Alignment.End else Alignment.Start,
+    ) {
+        MessageMetaHeader(
+            message = message,
+            timeString = timeString,
+            isCurrentUser = isCurrentUser,
+            onUserNameClick = null,
+        )
+
+        Surface(
+            color = if (isCurrentUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+            shape = MaterialTheme.shapes.medium,
+            tonalElevation = 1.dp,
+            modifier = Modifier.clickable {
+                openBackendRelativeUrl(
+                    context = context,
+                    relativeUrl = fileState.downloadUrl,
+                    description = "文件 ${fileState.fileName}",
+                )
+            },
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = androidFileIconForName(fileState.fileName),
+                    fontSize = 32.sp,
+                    modifier = Modifier.padding(end = 12.dp),
+                )
+
+                Column {
+                    Text(
+                        text = fileState.fileName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (fileState.fileSize > 0) formatFileSize(fileState.fileSize) else "点击查看",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (isCurrentUser) {
+                            MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                }
+            }
+        }
+
+        MessageOwnTimestamp(timeString = timeString, isCurrentUser = isCurrentUser)
+    }
+}
+
+@Composable
+private fun SystemMessageItem(message: Message) {
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = MaterialTheme.shapes.small,
+        ) {
+            Text(
+                text = message.content,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MessageMetaHeader(
+    message: Message,
+    timeString: String,
+    isCurrentUser: Boolean,
+    onUserNameClick: ((Message) -> Unit)?,
+) {
+    if (isCurrentUser) return
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(horizontal = 4.dp),
+    ) {
+        if (!isAgentUserId(message.userId) && onUserNameClick != null) {
+            Text(
+                text = message.userName,
+                style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                color = SilkColors.primary,
+                modifier = Modifier.clickable { onUserNameClick(message) },
+            )
+        } else {
+            Text(
+                text = message.userName,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            text = " · $timeString",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    Spacer(modifier = Modifier.height(4.dp))
+}
+
+@Composable
+private fun MessageSelectionIndicator() {
+    Box(
+        modifier = Modifier
+            .size(24.dp)
+            .background(Color(0xFF2196F3), CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("✓", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+@Composable
+private fun MessageOwnTimestamp(timeString: String, isCurrentUser: Boolean) {
+    if (!isCurrentUser) return
+
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+        text = timeString,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 4.dp),
+    )
+}
+
+@Composable
+private fun RegularMessageContextMenu(
+    visible: Boolean,
+    onDismiss: () -> Unit,
+    message: Message,
+    context: Context,
+    canRecall: Boolean,
+    isRecalling: Boolean,
+    onForward: (Message) -> Unit,
+    onRecall: (String) -> Unit,
+    onLongPress: (String) -> Unit,
+) {
+    if (!visible) return
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("消息操作", fontWeight = FontWeight.Bold) },
+        text = {
+            Column {
+                TextButton(
+                    onClick = {
+                        onDismiss()
+                        copyMessageContent(context, message.content)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("📋 复制", color = MaterialTheme.colorScheme.onSurface) }
+
+                TextButton(
+                    onClick = {
+                        onDismiss()
+                        onForward(message)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("↗ 转发", color = MaterialTheme.colorScheme.onSurface) }
+
+                TextButton(
+                    onClick = {
+                        onDismiss()
+                        shareMessageContent(context, message)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("📤 分享", color = MaterialTheme.colorScheme.onSurface) }
+
+                if (canRecall && !isRecalling) {
+                    TextButton(
+                        onClick = {
+                            onDismiss()
+                            onRecall(message.id)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("↩ 撤回", color = MaterialTheme.colorScheme.onSurface) }
+                }
+
+                TextButton(
+                    onClick = {
+                        onDismiss()
+                        onLongPress(message.id)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("☑️ 多选", color = MaterialTheme.colorScheme.onSurface) }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
+private fun RegularMessageContent(
+    message: Message,
+    isCurrentUser: Boolean,
+    isTransient: Boolean,
+    isPdfMessage: Boolean,
+    onLongContentCollapsed: (String) -> Unit,
+    visualState: RegularMessageVisualState,
+) {
+    val forwardedParts = remember(message.content) { parseForwardedMessageContent(message.content) }
+    var isForwardExpanded by remember(message.id) { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier.padding(if (visualState.useForwardedBubble) 0.dp else 12.dp),
+    ) {
+        when {
+            isPdfMessage -> PdfMessageContent(
+                message = message,
+                isCurrentUser = isCurrentUser,
+                textColor = visualState.textColor,
+            )
+            forwardedParts != null -> ForwardedMessageBubble(
+                parts = forwardedParts,
+                isOwn = isCurrentUser,
+                isExpanded = isForwardExpanded,
+                onExpand = { isForwardExpanded = true },
+                onCollapse = {
+                    isForwardExpanded = false
+                    onLongContentCollapsed(message.id)
+                },
+            )
+            else -> Text(
+                text = message.content,
+                style = MaterialTheme.typography.bodySmall,
+                color = visualState.textColor,
+            )
+        }
+
+        if (isTransient && message.currentStep != null && message.totalSteps != null) {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "步骤 ${message.currentStep}/${message.totalSteps}",
+                style = MaterialTheme.typography.bodySmall,
+                color = visualState.stepColor,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PdfMessageContent(
+    message: Message,
+    isCurrentUser: Boolean,
+    textColor: Color,
+) {
+    val pdfState = remember(message.content) { parsePdfMessageUiState(message) }
+    val context = LocalContext.current
+
+    pdfState.bodyLines.forEach { line ->
+        Text(
+            text = line,
+            style = MaterialTheme.typography.bodySmall,
+            color = textColor,
+        )
+    }
+
+    val pdfUrl = pdfState.pdfUrl ?: return
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Button(
+        onClick = {
+            openBackendRelativeUrl(
+                context = context,
+                relativeUrl = pdfUrl,
+                description = "PDF 报告 ${pdfState.fileName.orEmpty()}",
+            )
+        },
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.tertiary),
+    ) {
+        Text("📥 下载PDF报告")
+    }
+
+    val fileName = pdfState.fileName ?: return
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+        text = "文件名：$fileName",
+        style = MaterialTheme.typography.bodySmall,
+        color = if (isCurrentUser) {
+            MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        },
+    )
+}
+
+@Composable
+private fun RegularMessageItem(
+    message: Message,
+    currentUserId: String,
+    timeString: String,
+    context: Context,
+    isTransient: Boolean,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelection: (String) -> Unit,
+    onLongPress: (String) -> Unit,
+    onUserNameClick: ((Message) -> Unit)?,
+    canRecall: Boolean,
+    isRecalling: Boolean,
+    onRecall: (String) -> Unit,
+    onLongContentCollapsed: (String) -> Unit,
+    onForward: (Message) -> Unit,
+) {
+    val isCurrentUser = message.userId == currentUserId
+    val isPdfMessage = remember(message.content) { isPdfReportMessage(message) }
+    val forwardedParts = remember(message.content) { parseForwardedMessageContent(message.content) }
+    val visualState = rememberRegularMessageVisualState(
+        message = message,
+        isCurrentUser = isCurrentUser,
+        isSelected = isSelected,
+        isTransient = isTransient,
+        useForwardedBubble = forwardedParts != null && !isPdfMessage,
+    )
+    var showContextMenu by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = if (isCurrentUser) Alignment.End else Alignment.Start,
+    ) {
+        MessageMetaHeader(
+            message = message,
+            timeString = timeString,
+            isCurrentUser = isCurrentUser,
+            onUserNameClick = onUserNameClick,
+        )
+
+        RegularMessageContextMenu(
+            visible = showContextMenu,
+            onDismiss = { showContextMenu = false },
+            message = message,
+            context = context,
+            canRecall = canRecall,
+            isRecalling = isRecalling,
+            onForward = onForward,
+            onRecall = onRecall,
+            onLongPress = onLongPress,
+        )
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = if (isCurrentUser) Arrangement.End else Arrangement.Start,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (isSelected && !isCurrentUser) {
+                MessageSelectionIndicator()
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+
+            Box(
+                modifier = regularMessageBoxModifier(
+                    isTransient = isTransient,
+                    isSelected = isSelected,
+                    isSelectionMode = isSelectionMode,
+                    messageId = message.id,
+                    onToggleSelection = onToggleSelection,
+                    onShowContextMenu = { showContextMenu = true },
+                    onVibrate = { vibrateMessageLongPress(context) },
+                ),
+            ) {
+                Surface(
+                    color = visualState.bubbleColor,
+                    shape = MaterialTheme.shapes.medium,
+                    tonalElevation = if (isTransient) 0.5.dp else 1.dp,
+                ) {
+                    RegularMessageContent(
+                        message = message,
+                        isCurrentUser = isCurrentUser,
+                        isTransient = isTransient,
+                        isPdfMessage = isPdfMessage,
+                        onLongContentCollapsed = onLongContentCollapsed,
+                        visualState = visualState,
+                    )
+                }
+            }
+
+            if (isSelected && isCurrentUser) {
+                Spacer(modifier = Modifier.width(8.dp))
+                MessageSelectionIndicator()
+            }
+        }
+
+        MessageOwnTimestamp(timeString = timeString, isCurrentUser = isCurrentUser)
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun RowScope.regularMessageBoxModifier(
+    isTransient: Boolean,
+    isSelected: Boolean,
+    isSelectionMode: Boolean,
+    messageId: String,
+    onToggleSelection: (String) -> Unit,
+    onShowContextMenu: () -> Unit,
+    onVibrate: () -> Unit,
+): Modifier {
+    if (isTransient) return Modifier.weight(1f, fill = false)
+
+    return Modifier
+        .weight(1f, fill = false)
+        .background(
+            if (isSelected) Color(0xFF4FC3F7).copy(alpha = 0.4f) else Color.Transparent,
+            shape = MaterialTheme.shapes.medium,
+        )
+        .combinedClickable(
+            onClick = {
+                if (isSelectionMode) {
+                    onToggleSelection(messageId)
+                }
+            },
+            onLongClick = {
+                if (!isSelectionMode) {
+                    onShowContextMenu()
+                    onVibrate()
+                }
+            },
+        )
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageItem(
@@ -3270,25 +3912,14 @@ fun MessageItem(
     onForward: (Message) -> Unit = {}
 ) {
     val isCurrentUser = message.userId == currentUserId
-    val isSystemMessage = message.type == MessageType.SYSTEM
-    val isFileMessage = message.type == MessageType.FILE
-    
-    // 是否可以撤回：只能撤回自己发送的消息，且不是 Silk 的消息，且不是系统消息
-    val canRecall = isCurrentUser && 
-                    !isAgentUserId(message.userId) &&
-                    !isSystemMessage && 
-                    !isTransient
-    
+    val renderMode = remember(message.userId, message.type, message.category) { messageRenderMode(message) }
+    val canRecall = isCurrentUser &&
+        !isAgentUserId(message.userId) &&
+        renderMode != MessageRenderMode.SYSTEM &&
+        !isTransient
     val timeString = formatMessageTimestamp(message.timestamp)
-    
-    // 检测PDF下载链接
-    val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
-    
-    // ✅ AI 消息特殊处理 - 使用专用卡片
-    val isAIMessage = isAgentUserId(message.userId)
-    if (isAIMessage && message.type == MessageType.TEXT && 
-        message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS) {
-        AIMessageCardAndroid(
+    when (renderMode) {
+        MessageRenderMode.AI -> AIMessageCardAndroid(
             message = message,
             timeString = timeString,
             isTransient = isTransient,
@@ -3297,457 +3928,32 @@ fun MessageItem(
             isThinkingExpanded = isThinkingExpanded,
             onThinkingExpandChange = { newExpanded -> onThinkingExpandChange(message.id, newExpanded) },
             onCopy = onCopy,
-            onForward = onForward
+            onForward = onForward,
         )
-        return
-    }
-    
-    // ✅ 文件消息特殊处理
-    if (isFileMessage) {
-        val fileContent = parseAndroidFileMessageContent(message.content)
-        val fileName = fileContent.fileName
-        val fileSize = fileContent.fileSize
-        val downloadUrl = fileContent.downloadUrl
-        
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = if (isCurrentUser) Alignment.End else Alignment.Start
-        ) {
-            // 发送者名称和时间
-            if (!isCurrentUser) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                ) {
-                    Text(
-                        text = message.userName,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = " · $timeString",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-            }
-            
-            // 文件卡片
-            Surface(
-                color = if (isCurrentUser) MaterialTheme.colorScheme.primary 
-                        else MaterialTheme.colorScheme.surfaceVariant,
-                shape = MaterialTheme.shapes.medium,
-                tonalElevation = 1.dp,
-                modifier = Modifier.clickable {
-                    if (downloadUrl.isNotEmpty()) {
-                        val fullUrl = "${BackendUrlHolder.getBaseUrl()}$downloadUrl"
-                        println("📥 点击打开文件: $fileName, URL: $fullUrl")
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(fullUrl))
-                        context.startActivity(intent)
-                    }
-                }
-            ) {
-                Row(
-                    modifier = Modifier.padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = androidFileIconForName(fileName),
-                        fontSize = 32.sp,
-                        modifier = Modifier.padding(end = 12.dp)
-                    )
-                    
-                    Column {
-                        Text(
-                            text = fileName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary 
-                                    else MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = if (fileSize > 0) formatFileSize(fileSize) else "点击查看",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f)
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-            
-            // 当前用户消息的时间
-            if (isCurrentUser) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = timeString,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
-            }
-        }
-        return
-    }
-    
-    if (isSystemMessage) {
-        // 系统消息
-        Box(
-            modifier = Modifier.fillMaxWidth(),
-            contentAlignment = Alignment.Center
-        ) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                shape = MaterialTheme.shapes.small
-            ) {
-                Text(
-                    text = message.content,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    } else {
-        // 普通消息
-        val forwardedParts = remember(message.content) { parseForwardedMessageContent(message.content) }
-        var isForwardExpanded by remember(message.id) { mutableStateOf(false) }
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = if (isCurrentUser) Alignment.End else Alignment.Start
-        ) {
-                // 发送者名称和时间
-                if (!isCurrentUser) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        // 用户名 - 可点击添加联系人（不包括 Silk）
-                        if (!isAgentUserId(message.userId) && onUserNameClick != null) {
-                            Text(
-                                text = message.userName,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontWeight = FontWeight.SemiBold
-                                ),
-                                color = SilkColors.primary,
-                                modifier = Modifier.clickable { onUserNameClick(message) }
-                            )
-                        } else {
-                            Text(
-                                text = message.userName,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Text(
-                            text = " · $timeString",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                
-                var showContextMenu by remember { mutableStateOf(false) }
-                
-                if (showContextMenu) {
-                    AlertDialog(
-                        onDismissRequest = { showContextMenu = false },
-                        title = { Text("消息操作", fontWeight = FontWeight.Bold) },
-                        text = {
-                            Column {
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        try {
-                                            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
-                                                as android.content.ClipboardManager
-                                            val clip = android.content.ClipData.newPlainText("消息", message.content)
-                                            clipboard.setPrimaryClip(clip)
-                                            android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
-                                        } catch (_: Exception) { }
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) { Text("📋 复制", color = MaterialTheme.colorScheme.onSurface) }
-                                
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        try {
-                                            onForward(message)
-                                        } catch (_: Exception) { }
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) { Text("↗ 转发", color = MaterialTheme.colorScheme.onSurface) }
-                                
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        try {
-                                            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                                type = "text/plain"
-                                                putExtra(Intent.EXTRA_TEXT, "${message.userName}: ${message.content}")
-                                            }
-                                            context.startActivity(Intent.createChooser(shareIntent, "分享到"))
-                                        } catch (_: Exception) { }
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) { Text("📤 分享", color = MaterialTheme.colorScheme.onSurface) }
-                                
-                                if (canRecall && !isRecalling) {
-                                    TextButton(
-                                        onClick = {
-                                            showContextMenu = false
-                                            try { onRecall(message.id) } catch (_: Exception) { }
-                                        },
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) { Text("↩ 撤回", color = MaterialTheme.colorScheme.onSurface) }
-                                }
-                                
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        try { onLongPress(message.id) } catch (_: Exception) { }
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) { Text("☑️ 多选", color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                        },
-                        confirmButton = {},
-                        dismissButton = {
-                            TextButton(onClick = { showContextMenu = false }) {
-                                Text("取消")
-                            }
-                        }
-                    )
-                }
-                
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = if (isCurrentUser) Arrangement.End else Arrangement.Start,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    // 选中勾选图标（左侧 - 对方消息）
-                    if (isSelected && !isCurrentUser) {
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .background(Color(0xFF2196F3), CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("✓", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-                    
-                    Box(
-                        modifier = if (!isTransient) {
-                            Modifier
-                                .weight(1f, fill = false)
-                                .background(
-                                    if (isSelected) Color(0xFF4FC3F7).copy(alpha = 0.4f) else Color.Transparent,
-                                    shape = MaterialTheme.shapes.medium
-                                )
-                                .combinedClickable(
-                                    onClick = {
-                                        if (isSelectionMode) {
-                                            onToggleSelection(message.id)
-                                        }
-                                    },
-                                    onLongClick = {
-                                        if (!isSelectionMode) {
-                                            showContextMenu = true
-                                            try {
-                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                                    (context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator)
-                                                        ?.vibrate(android.os.VibrationEffect.createOneShot(50, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-                                                }
-                                            } catch (_: Exception) { }
-                                        }
-                                    }
-                                )
-                        } else {
-                            Modifier.weight(1f, fill = false)
-                        }
-                    ) {
-                val useForwardedBubble = forwardedParts != null && !isPdfMessage
-                // ✅ 根据消息类别设置背景色和透明度
-                Surface(
-                    color = when {
-                        isSelected && useForwardedBubble -> Color.Transparent
-                        isSelected -> Color(0xFF81D4FA)  // 选中时：明亮的浅蓝色
-                        useForwardedBubble -> Color.Transparent
-                        // ✅ 根据category设置背景
-                        message.category == com.silk.shared.models.MessageCategory.FINAL_REPORT -> {
-                            // 最终报告：正常颜色，高亮
-                            if (isCurrentUser) MaterialTheme.colorScheme.primary 
-                            else MaterialTheme.colorScheme.surfaceVariant
-                        }
-                        message.category == com.silk.shared.models.MessageCategory.STEP_PROCESS ||
-                        message.category == com.silk.shared.models.MessageCategory.TODO_LIST -> {
-                            // 步骤过程和TODO：浅色背景
-                            if (isCurrentUser) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
-                        }
-                        isTransient -> {
-                            // 临时消息：更浅
-                            if (isCurrentUser) MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
-                            else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                        }
-                        isCurrentUser -> MaterialTheme.colorScheme.primary
-                        else -> MaterialTheme.colorScheme.surfaceVariant
-                    },
-                    shape = MaterialTheme.shapes.medium,
-                    tonalElevation = if (isTransient) 0.5.dp else 1.dp  // ✅ 统一阴影
-                ) {
-                    Column(
-                        modifier = Modifier.padding(if (useForwardedBubble) 0.dp else 12.dp)
-                    ) {
-                        if (isPdfMessage) {
-                        // PDF下载消息特殊处理
-                        val lines = message.content.split("\n")
-                        var pdfUrl: String? = null
-                        var fileName: String? = null
-                        
-                        // 查找PDF路径和文件名
-                        lines.forEach { line ->
-                            val trimmedLine = line.trim()
-                            if (trimmedLine.startsWith("/download/report/") && trimmedLine.contains(".pdf")) {
-                                pdfUrl = trimmedLine
-                                // ✅ 使用 URLDecoder 完整解码文件名（处理中文和所有特殊字符）
-                                val encodedFileName = trimmedLine.substringAfterLast("/")
-                                fileName = runCatching {
-                                    java.net.URLDecoder.decode(encodedFileName, "UTF-8")
-                                }.getOrElse { encodedFileName }
-                            }
-                        }
-                        
-                        // 显示消息内容（过滤掉路径行）
-                        lines.forEach { line ->
-                            val trimmedLine = line.trim()
-                            if (!trimmedLine.startsWith("/download/report/") && trimmedLine.isNotEmpty()) {
-                                Text(
-                                    text = line,
-                                    style = MaterialTheme.typography.bodySmall,  // ✅ 统一字体大小
-                                    // ✅ PDF消息是FINAL_REPORT，高亮显示
-                                    color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary 
-                                            else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                        
-                        // 显示下载按钮
-                        if (pdfUrl != null) {
-                            val fullUrl = "${BackendUrlHolder.getBaseUrl()}$pdfUrl"
-                            
-                            Spacer(modifier = Modifier.height(8.dp))
-                            
-                            Button(
-                                onClick = {
-                                    println("📥 点击下载PDF: $fileName")
-                                    // 打开浏览器下载PDF
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(fullUrl))
-                                    context.startActivity(intent)
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.tertiary
-                                )
-                            ) {
-                                Text("📥 下载PDF报告")
-                            }
-                            
-                            if (fileName != null) {
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = "文件名：$fileName",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.7f) 
-                                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                )
-                            }
-                        }
-                    } else if (forwardedParts != null) {
-                        ForwardedMessageBubble(
-                            parts = forwardedParts,
-                            isOwn = isCurrentUser,
-                            isExpanded = isForwardExpanded,
-                            onExpand = { isForwardExpanded = true },
-                            onCollapse = {
-                                isForwardExpanded = false
-                                onLongContentCollapsed(message.id)
-                            },
-                        )
-                    } else {
-                        // 普通文本消息
-                        // ✅ 统一使用bodySmall（增大一号，不再缩小），根据category设置不同亮度
-                        Text(
-                            text = message.content,
-                            style = MaterialTheme.typography.bodySmall,  // ✅ 增大一号：直接使用bodySmall，不缩小
-                            color = when (message.category) {
-                                com.silk.shared.models.MessageCategory.FINAL_REPORT -> {
-                                    // 最终报告：高亮度
-                                    if (isCurrentUser) MaterialTheme.colorScheme.onPrimary
-                                    else MaterialTheme.colorScheme.onSurfaceVariant
-                                }
-                                com.silk.shared.models.MessageCategory.STEP_PROCESS,
-                                com.silk.shared.models.MessageCategory.TODO_LIST -> {
-                                    // 步骤过程和TODO：低亮度（50%透明）
-                                    if (isCurrentUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f)
-                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                                }
-                                else -> {
-                                    // 普通消息和临时消息
-                                    if (isTransient) {
-                                        if (isCurrentUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.4f)
-                                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                                    } else {
-                                        if (isCurrentUser) MaterialTheme.colorScheme.onPrimary
-                                        else MaterialTheme.colorScheme.onSurfaceVariant
-                                    }
-                                }
-                            }
-                        )
-                    }
-                    
-                    // 显示步骤信息（临时消息）
-                    if (isTransient && message.currentStep != null && message.totalSteps != null) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "步骤 ${message.currentStep}/${message.totalSteps}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (isCurrentUser) MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f) 
-                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
-                    }
-                }
-                }
-            }  // ✅ Box 结束（长按手势容器）
-                    
-                    // 选中勾选图标（右侧 - 自己的消息）
-                    if (isSelected && isCurrentUser) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Box(
-                            modifier = Modifier
-                                .size(24.dp)
-                                .background(Color(0xFF2196F3), CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("✓", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }  // ✅ Row 结束（选中图标容器）
-            
-            if (isCurrentUser) {
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = timeString,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
-            }
-        }
+        MessageRenderMode.FILE -> FileMessageItem(
+            message = message,
+            currentUserId = currentUserId,
+            timeString = timeString,
+            context = context,
+        )
+        MessageRenderMode.SYSTEM -> SystemMessageItem(message = message)
+        MessageRenderMode.REGULAR -> RegularMessageItem(
+            message = message,
+            currentUserId = currentUserId,
+            timeString = timeString,
+            context = context,
+            isTransient = isTransient,
+            isSelectionMode = isSelectionMode,
+            isSelected = isSelected,
+            onToggleSelection = onToggleSelection,
+            onLongPress = onLongPress,
+            onUserNameClick = onUserNameClick,
+            canRecall = canRecall,
+            isRecalling = isRecalling,
+            onRecall = onRecall,
+            onLongContentCollapsed = onLongContentCollapsed,
+            onForward = onForward,
+        )
     }
 }
 
