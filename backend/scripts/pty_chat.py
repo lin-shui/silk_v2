@@ -518,8 +518,16 @@ def main():
         "--include-partial-messages",
     ]
 
-    # Permissions are now controlled by --settings file (claude-strict/settings.json),
-    # not command-line flags, so the user can configure allow/deny rules there.
+    # If CLAUDE_STRICT_SETTINGS env var is set, enforce --settings regardless
+    # of whether the wrapper passed it. This is a defense-in-depth layer:
+    # even if someone bypasses the claude-strict wrapper by changing
+    # CLAUDE_CLI_PATH in .env, the strict permissions are still applied.
+    strict_settings = os.environ.get("CLAUDE_STRICT_SETTINGS", "").strip()
+    if strict_settings:
+        if os.path.isfile(strict_settings):
+            cmd += ["--settings", strict_settings]
+        else:
+            print(f"WARNING: CLAUDE_STRICT_SETTINGS={strict_settings} not found, skipping", file=sys.stderr)
 
     # ── Step 5: Fork ──
     pid = os.fork()

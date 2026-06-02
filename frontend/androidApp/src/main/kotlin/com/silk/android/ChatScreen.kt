@@ -239,14 +239,14 @@ fun ChatScreen(appState: AppState) {
                     
                     val inputStream = context.contentResolver.openInputStream(selectedUri)
                     if (inputStream != null) {
-                        val success = uploadFile(
+                        val result = uploadFile(
                             inputStream = inputStream,
                             fileName = fileName,
                             sessionId = group.id,
                             userId = user.id,
                             onProgress = { progress -> uploadProgress = progress }
                         )
-                        if (success) {
+                        if (result != null) {
                             addLog("✅ 文件上传成功: $fileName")
                             // 发送上传成功消息
                             chatClient.sendMessage(user.id, user.fullName, "📎 已上传文件: $fileName")
@@ -2812,20 +2812,12 @@ fun AIMessageCardAndroid(
                     }
                     if (isToolsExpanded) {
                         Divider(color = Color(0xFFE0E0E0), thickness = 1.dp)
-                        Column(
+                        MarkdownWebView(
+                            content = toolsText,
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 320.dp)
-                                .verticalScroll(rememberScrollState())
-                                .padding(12.dp)
-                        ) {
-                            Text(
-                                text = toolsText,
-                                fontSize = 12.sp,
-                                lineHeight = 18.sp,
-                                color = Color(0xFF555555)
-                            )
-                        }
+                                .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp)
+                                .height(300.dp)
+                        )
                     }
                 }
             }
@@ -5091,12 +5083,12 @@ suspend fun uploadFile(
     sessionId: String,
     userId: String,
     onProgress: (String) -> Unit
-): Boolean = withContext(Dispatchers.IO) {
+): String? = withContext(Dispatchers.IO) {
     try {
         val boundary = "===" + System.currentTimeMillis() + "==="
         val url = URL("${BackendUrlHolder.getBaseUrl()}/api/files/upload")
         val connection = AndroidHttpCompat.openConnection(url)
-        
+
         connection.requestMethod = "POST"
         connection.doOutput = true
         connection.doInput = true
@@ -5105,29 +5097,29 @@ suspend fun uploadFile(
         connection.setRequestProperty("Connection", "Keep-Alive")
         connection.connectTimeout = 30000
         connection.readTimeout = 60000
-        
+
         val outputStream = connection.outputStream
         val writer = java.io.PrintWriter(java.io.OutputStreamWriter(outputStream, "UTF-8"), true)
-        
+
         // 写入 sessionId 字段
         writer.append("--$boundary").append("\r\n")
         writer.append("Content-Disposition: form-data; name=\"sessionId\"").append("\r\n")
         writer.append("\r\n")
         writer.append(sessionId).append("\r\n")
-        
+
         // 写入 userId 字段
         writer.append("--$boundary").append("\r\n")
         writer.append("Content-Disposition: form-data; name=\"userId\"").append("\r\n")
         writer.append("\r\n")
         writer.append(userId).append("\r\n")
-        
+
         // 写入文件部分
         writer.append("--$boundary").append("\r\n")
         writer.append("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"").append("\r\n")
         writer.append("Content-Type: application/octet-stream").append("\r\n")
         writer.append("\r\n")
         writer.flush()
-        
+
         // 写入文件内容
         val buffer = ByteArray(4096)
         var bytesRead: Int
@@ -5139,20 +5131,32 @@ suspend fun uploadFile(
         }
         outputStream.flush()
         inputStream.close()
-        
+
         // 写入结束边界
         writer.append("\r\n")
         writer.append("--$boundary--").append("\r\n")
         writer.flush()
         writer.close()
-        
+
         val responseCode = connection.responseCode
-        connection.disconnect()
-        
-        responseCode == 200 || responseCode == 201
+        if (responseCode == 200 || responseCode == 201) {
+            try {
+                val responseBody = connection.inputStream.bufferedReader().readText()
+                connection.disconnect()
+                // Parse JSON to extract downloadUrl
+                val json = org.json.JSONObject(responseBody)
+                json.optString("downloadUrl", null)
+            } catch (_: Exception) {
+                connection.disconnect()
+                null
+            }
+        } else {
+            connection.disconnect()
+            null
+        }
     } catch (e: Exception) {
         e.printStackTrace()
-        false
+        null
     }
 }
 

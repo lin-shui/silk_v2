@@ -119,6 +119,14 @@ class ClaudeProcessClient(
             val env = mutableMapOf("PYTHONUNBUFFERED" to "1")
             // Inject claude env vars from ~/.claude/settings.json (claude -p doesn't auto-read them)
             env.putAll(claudeEnvVars)
+            // Defense-in-depth: inject strict settings path so pty_chat.py
+            // always enforces --settings regardless of wrapper bypass.
+            val strictSettingsFile = java.io.File(
+                System.getProperty("user.home"), ".claude/settings-strict.json"
+            )
+            if (strictSettingsFile.exists()) {
+                env["CLAUDE_STRICT_SETTINGS"] = strictSettingsFile.absolutePath
+            }
             val processBuilder = ProcessBuilder(cmd)
                 .directory(File(absWorkspaceDir))
                 .redirectErrorStream(false)
