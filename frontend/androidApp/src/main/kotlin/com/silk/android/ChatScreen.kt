@@ -2508,8 +2508,6 @@ fun ThinkingBlock(
 ) {
     var elapsedSeconds by remember { mutableLongStateOf(0L) }
     val startEpochMs = remember { System.currentTimeMillis() }
-    val density = LocalDensity.current
-    var contentHeightDp by remember { mutableStateOf(0.dp) }
     val show = isExpanded || !isComplete
 
     LaunchedEffect(isComplete) {
@@ -2532,7 +2530,7 @@ fun ThinkingBlock(
     }
 
     val targetOffset by animateDpAsState(
-        targetValue = if (show) 0.dp else -contentHeightDp,
+        targetValue = if (show) 0.dp else (-2000).dp,
         animationSpec = tween(250)
     )
 
@@ -2565,19 +2563,17 @@ fun ThinkingBlock(
                 color = Color(0xFFC0B0A0)
             )
         }
-        // Fixed-height box: always reserves space so LazyColumn never repositions.
-        // Content slides in/out via offset animation.
+        // Content always occupies its full layout height — offset slides it in/out visually.
+        // LazyColumn never sees a height change, so no repositioning occurs.
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = contentHeightDp)
                 .clipToBounds()
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .offset(y = targetOffset)
-                    .onSizeChanged { size -> contentHeightDp = with(density) { size.height.toDp() } }
             ) {
                 Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
                 Text(
