@@ -1,11 +1,5 @@
 <?xml version="1.0" ?>
 <SmellBaseline>
   <ManuallySuppressedIssues/>
-  <CurrentIssues>
-    <ID>CyclomaticComplexMethod:ChatScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ChatScreen(appState: AppState)</ID>
-    <ID>CyclomaticComplexMethod:KnowledgeBaseScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun KnowledgeBaseScreen(appState: AppState)</ID>
-    <ID>CyclomaticComplexMethod:LoginScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun LoginScreen(appState: AppState)</ID>
-    <ID>CyclomaticComplexMethod:SettingsScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun SettingsScreen(appState: AppState)</ID>
-    <ID>CyclomaticComplexMethod:WorkflowChatScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun WorkflowChatScreen(appState: AppState)</ID>
-  </CurrentIssues>
+  <CurrentIssues/>
 </SmellBaseline>

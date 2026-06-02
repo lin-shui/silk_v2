@@ -57,6 +57,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 
+private data class LoginFormState(
+    val isLogin: Boolean,
+    val loginName: String,
+    val password: String,
+    val fullName: String,
+    val phoneNumber: String,
+    val errorMessage: String,
+    val isLoading: Boolean,
+) {
+    val submitEnabled: Boolean =
+        !isLoading && loginName.isNotBlank() && password.isNotBlank() &&
+            (isLogin || (fullName.isNotBlank() && phoneNumber.isNotBlank()))
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LoginScreen(appState: AppState) {
@@ -85,8 +99,102 @@ fun LoginScreen(appState: AppState) {
     // 升级相关状态
     var showUpgradeDialog by remember { mutableStateOf(false) }
     var downloadState by remember { mutableStateOf<ApkDownloader.DownloadState>(ApkDownloader.DownloadState.Idle) }
-    
-    // Silk 渐变背景
+
+    val formState = LoginFormState(
+        isLogin = isLogin,
+        loginName = loginName,
+        password = password,
+        fullName = fullName,
+        phoneNumber = phoneNumber,
+        errorMessage = errorMessage,
+        isLoading = isLoading,
+    )
+
+    LoginScreenContent(
+        formState = formState,
+        focusManager = focusManager,
+        onLoginNameChange = {
+            loginName = it
+            errorMessage = ""
+        },
+        onPasswordChange = {
+            password = it
+            errorMessage = ""
+        },
+        onFullNameChange = {
+            fullName = it
+            errorMessage = ""
+        },
+        onPhoneNumberChange = {
+            phoneNumber = it
+            errorMessage = ""
+        },
+        onSubmit = {
+            scope.launch {
+                isLoading = true
+                errorMessage = ""
+                try {
+                    val response = if (isLogin) {
+                        ApiClient.login(loginName, password)
+                    } else {
+                        ApiClient.register(loginName, fullName, phoneNumber, password)
+                    }
+                    if (response.success && response.user != null) {
+                        println("${if (isLogin) "登录" else "注册"}成功: ${response.user.fullName}")
+                        appState.setUser(response.user)
+                    } else {
+                        errorMessage = response.message
+                    }
+                } finally {
+                    isLoading = false
+                }
+            }
+        },
+        onToggleMode = {
+            if (!isLoading) {
+                isLogin = !isLogin
+                errorMessage = ""
+            }
+        },
+        onShowUpgradeDialog = { showUpgradeDialog = true },
+    )
+
+    LoginUpgradeDialog(
+        showUpgradeDialog = showUpgradeDialog,
+        downloadState = downloadState,
+        onDismiss = {
+            if (downloadState !is ApkDownloader.DownloadState.Downloading) {
+                showUpgradeDialog = false
+                downloadState = ApkDownloader.DownloadState.Idle
+            }
+        },
+        onStartDownload = {
+            scope.launch {
+                ApkDownloader.downloadApk(context) { state ->
+                    downloadState = state
+                    if (state is ApkDownloader.DownloadState.Success) {
+                        ApkDownloader.installApk(context, state.file)?.let { message ->
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun LoginScreenContent(
+    formState: LoginFormState,
+    focusManager: androidx.compose.ui.focus.FocusManager,
+    onLoginNameChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onFullNameChange: (String) -> Unit,
+    onPhoneNumberChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onToggleMode: () -> Unit,
+    onShowUpgradeDialog: () -> Unit,
+) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -95,7 +203,7 @@ fun LoginScreen(appState: AppState) {
                     colors = listOf(
                         SilkColors.background,
                         SilkColors.secondary.copy(alpha = 0.3f),
-                        SilkColors.background
+                        SilkColors.background,
                     )
                 )
             )
@@ -106,273 +214,252 @@ fun LoginScreen(appState: AppState) {
                 .verticalScroll(rememberScrollState())
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Center,
         ) {
-            // Logo 区域
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(bottom = 32.dp)
-            ) {
-                Text(
-                    text = "SILK",
-                    style = MaterialTheme.typography.displayMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 8.sp
-                    ),
-                    color = SilkColors.primary
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "智能协作平台",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = SilkColors.textSecondary
-                )
-            }
-            
-            // 登录卡片
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(
-                        elevation = 8.dp,
-                        shape = MaterialTheme.shapes.large,
-                        ambientColor = SilkColors.primary.copy(alpha = 0.1f),
-                        spotColor = SilkColors.primary.copy(alpha = 0.2f)
-                    ),
-                colors = CardDefaults.cardColors(
-                    containerColor = SilkColors.surfaceElevated
-                ),
-                shape = MaterialTheme.shapes.large
-            ) {
-                Column(
-                    modifier = Modifier.padding(28.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // 标题
-                    Text(
-                        text = if (isLogin) "欢迎回来" else "创建账户",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = SilkColors.textPrimary,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center
-                    )
-                    
-                    Divider(
-                        color = SilkColors.divider,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                    
-                    // 登录名
-                    OutlinedTextField(
-                        value = loginName,
-                        onValueChange = { loginName = it; errorMessage = "" },
-                        label = { Text("登录名") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !isLoading,
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Text,
-                            imeAction = ImeAction.Next
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onNext = { focusManager.moveFocus(FocusDirection.Down) }
-                        )
-                    )
-                    
-                    // 密码
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it; errorMessage = "" },
-                        label = { Text("密码") },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !isLoading,
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Password,
-                            imeAction = if (isLogin) ImeAction.Done else ImeAction.Next
-                        ),
-                        keyboardActions = KeyboardActions(
-                            onNext = { focusManager.moveFocus(FocusDirection.Down) },
-                            onDone = {
-                                if (isLogin) {
-                                    focusManager.clearFocus()
-                                }
-                            }
-                        )
-                    )
-                    
-                    // 注册时的额外字段
-                    if (!isLogin) {
-                        OutlinedTextField(
-                            value = fullName,
-                            onValueChange = { fullName = it; errorMessage = "" },
-                            label = { Text("姓名") },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isLoading,
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Text,
-                                imeAction = ImeAction.Next
-                            ),
-                            keyboardActions = KeyboardActions(
-                                onNext = { focusManager.moveFocus(FocusDirection.Down) }
-                            )
-                        )
-                        
-                        OutlinedTextField(
-                            value = phoneNumber,
-                            onValueChange = { phoneNumber = it; errorMessage = "" },
-                            label = { Text("手机号") },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isLoading,
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Phone,
-                                imeAction = ImeAction.Done
-                            ),
-                            keyboardActions = KeyboardActions(
-                                onDone = { focusManager.clearFocus() }
-                            )
-                        )
-                    }
-                    
-                    // 错误提示
-                    if (errorMessage.isNotEmpty()) {
-                        Text(
-                            text = errorMessage,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    // 登录/注册按钮 - Silk 金色风格
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                isLoading = true
-                                errorMessage = ""
-
-                                val response = if (isLogin) {
-                                    ApiClient.login(loginName, password)
-                                } else {
-                                    ApiClient.register(loginName, fullName, phoneNumber, password)
-                                }
-
-                                if (response.success && response.user != null) {
-                                    println("${if (isLogin) "登录" else "注册"}成功: ${response.user.fullName}")
-                                    appState.setUser(response.user)
-                                } else {
-                                    errorMessage = response.message
-                                }
-                                isLoading = false
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp),
-                        enabled = !isLoading && loginName.isNotBlank() && password.isNotBlank() &&
-                                (isLogin || (fullName.isNotBlank() && phoneNumber.isNotBlank())),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = SilkColors.primary,
-                            contentColor = androidx.compose.ui.graphics.Color.White,
-                            disabledContainerColor = SilkColors.primary.copy(alpha = 0.5f),
-                            disabledContentColor = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f)
-                        ),
-                        shape = MaterialTheme.shapes.medium
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                color = androidx.compose.ui.graphics.Color.White,
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
-                        Text(
-                            text = if (isLoading) "处理中..." else if (isLogin) "登录" else "注册",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    
-                    // 切换登录/注册
-                    TextButton(
-                        onClick = {
-                            if (!isLoading) {
-                                isLogin = !isLogin
-                                errorMessage = ""
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !isLoading,
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = SilkColors.primary
-                        )
-                    ) {
-                        Text(
-                            text = if (isLogin) "没有账号？点击注册" else "已有账号？点击登录",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                }
-            }
-            
-            // 升级按钮
+            LoginBrandHeader()
+            LoginFormCard(
+                formState = formState,
+                focusManager = focusManager,
+                onLoginNameChange = onLoginNameChange,
+                onPasswordChange = onPasswordChange,
+                onFullNameChange = onFullNameChange,
+                onPhoneNumberChange = onPhoneNumberChange,
+                onSubmit = onSubmit,
+                onToggleMode = onToggleMode,
+            )
             Spacer(modifier = Modifier.height(24.dp))
             OutlinedButton(
-                onClick = { showUpgradeDialog = true },
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = SilkColors.success
-                ),
-                modifier = Modifier.fillMaxWidth(0.6f)
+                onClick = onShowUpgradeDialog,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = SilkColors.success),
+                modifier = Modifier.fillMaxWidth(0.6f),
             ) {
                 Icon(
-                    Icons.Default.SystemUpdate, 
-                    contentDescription = null, 
-                    modifier = Modifier.size(18.dp)
+                    Icons.Default.SystemUpdate,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("检查更新")
             }
-            
-            // 底部版权信息
             Spacer(modifier = Modifier.height(16.dp))
             Text(
                 text = "Silk © 2026",
                 style = MaterialTheme.typography.bodySmall,
-                color = SilkColors.textLight
-            )
-        }
-        
-        // 升级对话框
-        if (showUpgradeDialog) {
-            UpgradeDialog(
-                downloadState = downloadState,
-                onDismiss = { 
-                    if (downloadState !is ApkDownloader.DownloadState.Downloading) {
-                        showUpgradeDialog = false
-                        downloadState = ApkDownloader.DownloadState.Idle
-                    }
-                },
-                onStartDownload = {
-                    scope.launch {
-                        ApkDownloader.downloadApk(context) { state ->
-                            downloadState = state
-                            
-                            // 下载成功后自动安装
-                            if (state is ApkDownloader.DownloadState.Success) {
-                                ApkDownloader.installApk(context, state.file)?.let { message ->
-                                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    }
-                }
+                color = SilkColors.textLight,
             )
         }
     }
+}
+
+@Composable
+private fun LoginBrandHeader() {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(bottom = 32.dp),
+    ) {
+        Text(
+            text = "SILK",
+            style = MaterialTheme.typography.displayMedium.copy(
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 8.sp,
+            ),
+            color = SilkColors.primary,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "智能协作平台",
+            style = MaterialTheme.typography.bodyLarge,
+            color = SilkColors.textSecondary,
+        )
+    }
+}
+
+@Composable
+private fun LoginFormCard(
+    formState: LoginFormState,
+    focusManager: androidx.compose.ui.focus.FocusManager,
+    onLoginNameChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onFullNameChange: (String) -> Unit,
+    onPhoneNumberChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onToggleMode: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .shadow(
+                elevation = 8.dp,
+                shape = MaterialTheme.shapes.large,
+                ambientColor = SilkColors.primary.copy(alpha = 0.1f),
+                spotColor = SilkColors.primary.copy(alpha = 0.2f),
+            ),
+        colors = CardDefaults.cardColors(containerColor = SilkColors.surfaceElevated),
+        shape = MaterialTheme.shapes.large,
+    ) {
+        Column(
+            modifier = Modifier.padding(28.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text(
+                text = if (formState.isLogin) "欢迎回来" else "创建账户",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = SilkColors.textPrimary,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+            )
+            Divider(
+                color = SilkColors.divider,
+                modifier = Modifier.padding(vertical = 8.dp),
+            )
+            OutlinedTextField(
+                value = formState.loginName,
+                onValueChange = onLoginNameChange,
+                label = { Text("登录名") },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !formState.isLoading,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Next,
+                ),
+                keyboardActions = KeyboardActions(
+                    onNext = { focusManager.moveFocus(FocusDirection.Down) },
+                ),
+            )
+            OutlinedTextField(
+                value = formState.password,
+                onValueChange = onPasswordChange,
+                label = { Text("密码") },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !formState.isLoading,
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    imeAction = if (formState.isLogin) ImeAction.Done else ImeAction.Next,
+                ),
+                keyboardActions = KeyboardActions(
+                    onNext = { focusManager.moveFocus(FocusDirection.Down) },
+                    onDone = {
+                        if (formState.isLogin) {
+                            focusManager.clearFocus()
+                        }
+                    },
+                ),
+            )
+            LoginRegistrationFields(
+                formState = formState,
+                focusManager = focusManager,
+                onFullNameChange = onFullNameChange,
+                onPhoneNumberChange = onPhoneNumberChange,
+            )
+            if (formState.errorMessage.isNotEmpty()) {
+                Text(
+                    text = formState.errorMessage,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = onSubmit,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+                enabled = formState.submitEnabled,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = SilkColors.primary,
+                    contentColor = androidx.compose.ui.graphics.Color.White,
+                    disabledContainerColor = SilkColors.primary.copy(alpha = 0.5f),
+                    disabledContentColor = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.7f),
+                ),
+                shape = MaterialTheme.shapes.medium,
+            ) {
+                if (formState.isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        color = androidx.compose.ui.graphics.Color.White,
+                        strokeWidth = 2.dp,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Text(
+                    text = if (formState.isLoading) "处理中..." else if (formState.isLogin) "登录" else "注册",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            TextButton(
+                onClick = onToggleMode,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !formState.isLoading,
+                colors = ButtonDefaults.textButtonColors(contentColor = SilkColors.primary),
+            ) {
+                Text(
+                    text = if (formState.isLogin) "没有账号？点击注册" else "已有账号？点击登录",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoginRegistrationFields(
+    formState: LoginFormState,
+    focusManager: androidx.compose.ui.focus.FocusManager,
+    onFullNameChange: (String) -> Unit,
+    onPhoneNumberChange: (String) -> Unit,
+) {
+    if (formState.isLogin) return
+
+    OutlinedTextField(
+        value = formState.fullName,
+        onValueChange = onFullNameChange,
+        label = { Text("姓名") },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = !formState.isLoading,
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Text,
+            imeAction = ImeAction.Next,
+        ),
+        keyboardActions = KeyboardActions(
+            onNext = { focusManager.moveFocus(FocusDirection.Down) },
+        ),
+    )
+
+    OutlinedTextField(
+        value = formState.phoneNumber,
+        onValueChange = onPhoneNumberChange,
+        label = { Text("手机号") },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = !formState.isLoading,
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = KeyboardType.Phone,
+            imeAction = ImeAction.Done,
+        ),
+        keyboardActions = KeyboardActions(
+            onDone = { focusManager.clearFocus() },
+        ),
+    )
+}
+
+@Composable
+private fun LoginUpgradeDialog(
+    showUpgradeDialog: Boolean,
+    downloadState: ApkDownloader.DownloadState,
+    onDismiss: () -> Unit,
+    onStartDownload: () -> Unit,
+) {
+    if (!showUpgradeDialog) return
+
+    UpgradeDialog(
+        downloadState = downloadState,
+        onDismiss = onDismiss,
+        onStartDownload = onStartDownload,
+    )
 }

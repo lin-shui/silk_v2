@@ -166,6 +166,7 @@ import android.content.pm.PackageManager
 import android.media.MediaRecorder
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.viewinterop.AndroidView
@@ -186,52 +187,42 @@ fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsState(): State<T> {
 fun ChatScreen(appState: AppState) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    
+
     val user = appState.currentUser ?: return
     val group = appState.selectedGroup ?: return
-    
-    // WebSocket URL - 与 BackendUrlHolder 一致（应用内设置或构建时默认）
+
     val baseUrl = BackendUrlHolder.getBaseUrl()
     val wsUrl = baseUrl.replaceFirst("http", "ws")
-    
-    // 收集调试日志（只保留最后32行）
     val debugLogs = remember { mutableStateListOf<String>() }
-    
-    // 添加日志函数（自动限制到最后32行）
+
     fun addLog(message: String) {
         debugLogs.add(message)
-        // 只保留最后32行
         while (debugLogs.size > 32) {
             debugLogs.removeAt(0)
         }
         println(message)
     }
-    
-    val chatClient = remember { 
+
+    val chatClient = remember {
         addLog("🔧 创建 ChatClient，URL: $wsUrl")
         ChatClient(wsUrl) { logMessage ->
             addLog(logMessage)
         }
     }
-    
+
     val messages by chatClient.messages.collectAsState()
     val transientMessage by chatClient.transientMessage.collectAsState()
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
-    
-    // Track if we've sent the default instruction for this session
+
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
-    
     var messageText by remember { mutableStateOf(TextFieldValue("")) }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isExiting by remember { mutableStateOf(false) }
     var showDebugInfo by remember { mutableStateOf(false) }
-    
-    // AI 响应等待状态 - 必须在 LaunchedEffect 之前定义
     var isWaitingForAI by remember { mutableStateOf(false) }
 
-    // ASR 语音输入状态
     var isVoiceRecording by remember { mutableStateOf(false) }
     var isTranscribing by remember { mutableStateOf(false) }
     val mediaRecorderRef = remember { mutableStateOf<MediaRecorder?>(null) }
@@ -242,52 +233,230 @@ fun ChatScreen(appState: AppState) {
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> micPermissionGranted.value = granted }
-    
-    // 监控消息列表变化
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) {
-            val last = messages.last()
-            addLog("📊 消息列表+1: 总共${messages.size}条")
-            addLog("   最新: ${last.userName}: ${last.content.take(20)}...")
-            
-            // 收到 Silk 的响应时，清除等待状态
-            if (isAgentUserId(last.userId) && isWaitingForAI) {
-                isWaitingForAI = false
-                addLog("✅ AI 响应已收到，清除等待状态")
-            }
-        }
-    }
-    
-    // 监控临时消息变化
-    LaunchedEffect(transientMessage) {
-        if (transientMessage != null) {
-            addLog("⏳ 临时消息: ${transientMessage!!.content.take(20)}... (${transientMessage!!.content.length}字)")
-        } else {
-            addLog("🗑️ 临时消息已清除")
-        }
-    }
-    
-    // 文件上传相关
+
     var isUploading by remember { mutableStateOf(false) }
     var uploadProgress by remember { mutableStateOf("") }
     var showFolderExplorer by remember { mutableStateOf(false) }
     var folderFiles by remember { mutableStateOf<List<FileItem>>(emptyList()) }
     var processedUrls by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoadingFiles by remember { mutableStateOf(false) }
-    
-    // 文件选择器
-    val filePickerLauncher = rememberLauncherForActivityResult(
+
+    var isSelectionMode by remember { mutableStateOf(false) }
+    val selectedMessages = remember { mutableStateListOf<String>() }
+    var showForwardToGroupDialog by remember { mutableStateOf(false) }
+    var showForwardToContactDialog by remember { mutableStateOf(false) }
+    var userGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
+    var isLoadingGroups by remember { mutableStateOf(false) }
+    var forwardResult by remember { mutableStateOf<String?>(null) }
+    var messageToForward by remember { mutableStateOf<Message?>(null) }
+
+    var showAddContactConfirm by remember { mutableStateOf<Message?>(null) }
+    var isAddingContact by remember { mutableStateOf(false) }
+    var addContactResult by remember { mutableStateOf<String?>(null) }
+
+    var showAddMemberDialog by remember { mutableStateOf(false) }
+    var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
+    var groupMembers by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
+    var isLoadingContacts by remember { mutableStateOf(false) }
+    var addMemberResult by remember { mutableStateOf<String?>(null) }
+
+    var recallingMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showMembersDialog by remember { mutableStateOf(false) }
+    var selectedMemberForInvite by remember { mutableStateOf<GroupMember?>(null) }
+    var isInvitingMember by remember { mutableStateOf(false) }
+    var inviteMemberResult by remember { mutableStateOf<String?>(null) }
+
+    var showMentionMenu by remember { mutableStateOf(false) }
+    var mentionSearchText by remember { mutableStateOf("") }
+    var mentionStartIndex by remember { mutableStateOf(-1) }
+
+    val filePickerLauncher = rememberChatFilePickerLauncher(
+        context = context,
+        group = group,
+        user = user,
+        scope = scope,
+        chatClient = chatClient,
+        addLog = ::addLog,
+        onUploadingChange = { isUploading = it },
+        onUploadProgressChange = { uploadProgress = it },
+    )
+
+    val sessionUsers = rememberChatSessionUsers(messages, groupMembers, user)
+    val listState = rememberLazyListState()
+    val aiMessageExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
+    val thinkingExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
+    var expandScrollJob by remember { mutableStateOf<Job?>(null) }
+    val isHistoryLoading by chatClient.isLoadingHistory.collectAsState()
+
+    ChatScreenEffects(
+        user = user,
+        group = group,
+        wsUrl = wsUrl,
+        baseUrl = baseUrl,
+        chatClient = chatClient,
+        messages = messages,
+        transientMessage = transientMessage,
+        connectionState = connectionState,
+        isWaitingForAI = isWaitingForAI,
+        isHistoryLoading = isHistoryLoading,
+        listState = listState,
+        addLog = ::addLog,
+        onGroupMembersLoaded = { groupMembers = it },
+        onHasSentDefaultInstructionChange = { hasSentDefaultInstruction = it },
+        onWaitingForAiChange = { isWaitingForAI = it },
+    )
+
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    ChatScreenScaffoldContent(
+        appState = appState,
+        user = user,
+        group = group,
+        context = context,
+        chatClient = chatClient,
+        scrollBehavior = scrollBehavior,
+        messages = messages,
+        transientMessage = transientMessage,
+        statusMessages = statusMessages,
+        connectionState = connectionState,
+        isHistoryLoading = isHistoryLoading,
+        isGenerating = isGenerating,
+        isWaitingForAI = isWaitingForAI,
+        isSelectionMode = isSelectionMode,
+        selectedMessages = selectedMessages,
+        isExiting = isExiting,
+        isUploading = isUploading,
+        uploadProgress = uploadProgress,
+        messageText = messageText,
+        listState = listState,
+        aiMessageExpandedStates = aiMessageExpandedStates,
+        thinkingExpandedStates = thinkingExpandedStates,
+        expandScrollJob = expandScrollJob,
+        sessionUsers = sessionUsers,
+        showMentionMenu = showMentionMenu,
+        mentionSearchText = mentionSearchText,
+        mentionStartIndex = mentionStartIndex,
+        isVoiceRecording = isVoiceRecording,
+        isTranscribing = isTranscribing,
+        micPermissionGranted = micPermissionGranted.value,
+        recallingMessageIds = recallingMessageIds,
+        filePickerLauncher = filePickerLauncher,
+        onExitingChange = { isExiting = it },
+        onSelectionModeChange = { isSelectionMode = it },
+        onClearSelectedMessages = { selectedMessages.clear() },
+        onMessageSelected = { messageId ->
+            if (selectedMessages.contains(messageId)) selectedMessages.remove(messageId) else selectedMessages.add(messageId)
+        },
+        onWaitingForAiChange = { isWaitingForAI = it },
+        onShowForwardToGroupDialog = { showForwardToGroupDialog = it },
+        onShowForwardToContactDialog = { showForwardToContactDialog = it },
+        onShowInvitationDialog = { showInvitationDialog = it },
+        onShowFolderExplorer = { showFolderExplorer = it },
+        onFolderFilesLoaded = { files, urls ->
+            folderFiles = files
+            processedUrls = urls
+        },
+        onLoadingFilesChange = { isLoadingFiles = it },
+        onShowAddMemberDialog = { showAddMemberDialog = it },
+        onShowMembersDialog = { showMembersDialog = it },
+        onContactsLoaded = { contacts = it },
+        onGroupMembersLoaded = { groupMembers = it },
+        onMessageTextChange = { messageText = it },
+        onMentionMenuChange = { showMentionMenu = it },
+        onMentionSearchTextChange = { mentionSearchText = it },
+        onMentionStartIndexChange = { mentionStartIndex = it },
+        onVoiceRecordingChange = { isVoiceRecording = it },
+        onTranscribingChange = { isTranscribing = it },
+        onShowAddContactConfirm = { showAddContactConfirm = it },
+        onMessageToForward = { messageToForward = it },
+        onLoadingGroupsChange = { isLoadingGroups = it },
+        onUserGroupsLoaded = { userGroups = it },
+        onExpandScrollJobChange = { expandScrollJob = it },
+        onRecallingMessageIdsChange = { recallingMessageIds = it },
+        mediaRecorderRef = mediaRecorderRef,
+        audioFilePathRef = audioFilePathRef,
+        micPermissionLauncher = micPermissionLauncher,
+        addLog = ::addLog,
+    )
+
+    ChatScreenDialogsHost(
+        appState = appState,
+        user = user,
+        group = group,
+        context = context,
+        chatClient = chatClient,
+        messages = messages,
+        debugLogs = debugLogs,
+        connectionState = connectionState,
+        showDebugInfo = showDebugInfo,
+        showInvitationDialog = showInvitationDialog,
+        showAddMemberDialog = showAddMemberDialog,
+        contacts = contacts,
+        groupMembers = groupMembers,
+        isLoadingContacts = isLoadingContacts,
+        addMemberResult = addMemberResult,
+        showMembersDialog = showMembersDialog,
+        selectedMemberForInvite = selectedMemberForInvite,
+        isInvitingMember = isInvitingMember,
+        inviteMemberResult = inviteMemberResult,
+        showFolderExplorer = showFolderExplorer,
+        folderFiles = folderFiles,
+        processedUrls = processedUrls,
+        isLoadingFiles = isLoadingFiles,
+        showAddContactConfirm = showAddContactConfirm,
+        isAddingContact = isAddingContact,
+        addContactResult = addContactResult,
+        showForwardToGroupDialog = showForwardToGroupDialog,
+        showForwardToContactDialog = showForwardToContactDialog,
+        userGroups = userGroups,
+        isLoadingGroups = isLoadingGroups,
+        selectedMessages = selectedMessages,
+        messageToForward = messageToForward,
+        forwardResult = forwardResult,
+        onShowDebugInfo = { showDebugInfo = it },
+        onShowInvitationDialog = { showInvitationDialog = it },
+        onShowAddMemberDialog = { showAddMemberDialog = it },
+        onAddMemberResult = { addMemberResult = it },
+        onShowMembersDialog = { showMembersDialog = it },
+        onSelectedMemberForInvite = { selectedMemberForInvite = it },
+        onInvitingMemberChange = { isInvitingMember = it },
+        onInviteMemberResult = { inviteMemberResult = it },
+        onShowFolderExplorer = { showFolderExplorer = it },
+        onShowAddContactConfirm = { showAddContactConfirm = it },
+        onAddingContactChange = { isAddingContact = it },
+        onAddContactResult = { addContactResult = it },
+        onShowForwardToGroupDialog = { showForwardToGroupDialog = it },
+        onShowForwardToContactDialog = { showForwardToContactDialog = it },
+        onMessageToForward = { messageToForward = it },
+        onForwardResult = { forwardResult = it },
+        onSelectionModeChange = { isSelectionMode = it },
+        onClearSelectedMessages = { selectedMessages.clear() },
+        onGroupMembersLoaded = { groupMembers = it },
+        addLog = ::addLog,
+    )
+}
+
+@Composable
+private fun rememberChatFilePickerLauncher(
+    context: Context,
+    group: Group,
+    user: User,
+    scope: kotlinx.coroutines.CoroutineScope,
+    chatClient: ChatClient,
+    addLog: (String) -> Unit,
+    onUploadingChange: (Boolean) -> Unit,
+    onUploadProgressChange: (String) -> Unit,
+): ActivityResultLauncher<String> =
+    rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let { selectedUri ->
             scope.launch {
-                isUploading = true
-                uploadProgress = "正在上传..."
+                onUploadingChange(true)
+                onUploadProgressChange("正在上传...")
                 try {
-                    runLoggedSuspendAction("❌ 上传异常", ::addLog) {
+                    runLoggedSuspendAction("❌ 上传异常", addLog) {
                         val fileName = getFileName(context, selectedUri)
                         addLog("📎 开始上传文件: $fileName")
-
                         val inputStream = context.contentResolver.openInputStream(selectedUri)
                         if (inputStream != null) {
                             val success = uploadFile(
@@ -295,11 +464,10 @@ fun ChatScreen(appState: AppState) {
                                 fileName = fileName,
                                 sessionId = group.id,
                                 userId = user.id,
-                                onProgress = { progress -> uploadProgress = progress }
+                                onProgress = onUploadProgressChange,
                             )
                             if (success) {
                                 addLog("✅ 文件上传成功: $fileName")
-                                // 发送上传成功消息
                                 chatClient.sendMessage(user.id, user.fullName, "📎 已上传文件: $fileName")
                             } else {
                                 addLog("❌ 文件上传失败")
@@ -307,75 +475,76 @@ fun ChatScreen(appState: AppState) {
                         }
                     }
                 } finally {
-                    isUploading = false
-                    uploadProgress = ""
+                    onUploadingChange(false)
+                    onUploadProgressChange("")
                 }
             }
         }
     }
-    
-    // 消息选择模式
-    var isSelectionMode by remember { mutableStateOf(false) }
-    val selectedMessages = remember { mutableStateListOf<String>() }  // 存储选中消息的ID
-    
-    // ✅ 转发对话框状态
-    var showForwardToGroupDialog by remember { mutableStateOf(false) }
-    var showForwardToContactDialog by remember { mutableStateOf(false) }
-    var userGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
-    var isLoadingGroups by remember { mutableStateOf(false) }
-    var forwardResult by remember { mutableStateOf<String?>(null) }
-    // ✅ 单条消息转发状态（用于 AI 消息等直接点击转发按钮的情况）
-    var messageToForward by remember { mutableStateOf<Message?>(null) }
-    
-    // 添加联系人对话框状态
-    var showAddContactConfirm by remember { mutableStateOf<Message?>(null) }
-    var isAddingContact by remember { mutableStateOf(false) }
-    var addContactResult by remember { mutableStateOf<String?>(null) }
-    
-    // 添加成员到群组状态
-    var showAddMemberDialog by remember { mutableStateOf(false) }
-    var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
-    var groupMembers by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
-    var isLoadingContacts by remember { mutableStateOf(false) }
-    var addMemberResult by remember { mutableStateOf<String?>(null) }
-    
-    // 消息撤回相关状态
-    var recallingMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }  // 正在撤回中的消息ID集合
-    
-    // 查看成员列表状态
-    var showMembersDialog by remember { mutableStateOf(false) }
-    var selectedMemberForInvite by remember { mutableStateOf<GroupMember?>(null) }
-    var isInvitingMember by remember { mutableStateOf(false) }
-    var inviteMemberResult by remember { mutableStateOf<String?>(null) }
-    
-    // @ mention 功能状态（输入 @ 后弹出群成员/会话用户列表）
-    var showMentionMenu by remember { mutableStateOf(false) }
-    var mentionSearchText by remember { mutableStateOf("") }
-    var mentionStartIndex by remember { mutableStateOf(-1) }
-    
-    // 从消息历史和群组成员列表中提取用户列表（去重），用于 @ 提及下拉
-    // 优先使用 groupMembers（包含所有群组成员），同时合并消息历史中的用户
-    val sessionUsers = remember(messages, groupMembers) {
-        val users = mutableSetOf<Pair<String, String>>() // (id, name)
-        // 始终添加 Silk AI
-        users.add(SILK_AGENT_USER_ID to "🤖 $SILK_AGENT_DISPLAY_NAME")
-        // 添加当前用户
-        users.add(user.id to user.fullName)
-        // 从群组成员列表添加所有成员
-        groupMembers.forEach { member ->
-            if (!isAgentUserId(member.id) && member.id != user.id) {
-                users.add(member.id to member.fullName)
-            }
+
+@Composable
+private fun rememberChatSessionUsers(
+    messages: List<Message>,
+    groupMembers: List<GroupMember>,
+    user: User,
+): List<Pair<String, String>> = remember(messages, groupMembers, user.id, user.fullName) {
+    val users = mutableSetOf<Pair<String, String>>()
+    users.add(SILK_AGENT_USER_ID to "🤖 $SILK_AGENT_DISPLAY_NAME")
+    users.add(user.id to user.fullName)
+    groupMembers.forEach { member ->
+        if (!isAgentUserId(member.id) && member.id != user.id) {
+            users.add(member.id to member.fullName)
         }
-        // 从消息中提取其他用户（作为补充，以防成员列表不完整）
-        messages.forEach { msg ->
-            if (!isAgentUserId(msg.userId) && msg.userId != user.id) {
-                users.add(msg.userId to msg.userName)
-            }
-        }
-        users.toList()
     }
-    
+    messages.forEach { msg ->
+        if (!isAgentUserId(msg.userId) && msg.userId != user.id) {
+            users.add(msg.userId to msg.userName)
+        }
+    }
+    users.toList()
+}
+
+@Composable
+@Suppress("CyclomaticComplexMethod")
+private fun ChatScreenEffects(
+    user: User,
+    group: Group,
+    wsUrl: String,
+    baseUrl: String,
+    chatClient: ChatClient,
+    messages: List<Message>,
+    transientMessage: Message?,
+    connectionState: ConnectionState,
+    isWaitingForAI: Boolean,
+    isHistoryLoading: Boolean,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    addLog: (String) -> Unit,
+    onGroupMembersLoaded: (List<GroupMember>) -> Unit,
+    onHasSentDefaultInstructionChange: (Boolean) -> Unit,
+    onWaitingForAiChange: (Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            val last = messages.last()
+            addLog("📊 消息列表+1: 总共${messages.size}条")
+            addLog("   最新: ${last.userName}: ${last.content.take(20)}...")
+            if (isAgentUserId(last.userId) && isWaitingForAI) {
+                onWaitingForAiChange(false)
+                addLog("✅ AI 响应已收到，清除等待状态")
+            }
+        }
+    }
+
+    LaunchedEffect(transientMessage) {
+        if (transientMessage != null) {
+            addLog("⏳ 临时消息: ${transientMessage.content.take(20)}... (${transientMessage.content.length}字)")
+        } else {
+            addLog("🗑️ 临时消息已清除")
+        }
+    }
+
     LaunchedEffect(Unit) {
         addLog("📱 应用版本: 1.0.12-robust-reconnect (Build 12)")
         addLog("📱 Android版本: ${android.os.Build.VERSION.RELEASE}")
@@ -383,27 +552,13 @@ fun ChatScreen(appState: AppState) {
         addLog("🔧 WebSocket URL: $wsUrl")
         addLog("🔧 HTTP BASE_URL: $baseUrl")
     }
-    
-    val listState = rememberLazyListState()
-    
-    // ✅ AI 消息展开状态管理 - 使用 Map 存储每个消息的展开状态
-    val aiMessageExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
-    // 思考过程展开状态（默认折叠）
-    val thinkingExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
-    
-    val scopeForScroll = rememberCoroutineScope()
-    var expandScrollJob by remember { mutableStateOf<Job?>(null) }
-    
-    // 显示连接状态
+
     LaunchedEffect(connectionState) {
         addLog("📊 连接状态变化: $connectionState")
     }
-    
-    // 连接WebSocket（在后台协程中保持连接）
+
     LaunchedEffect(group.id) {
-        // Reset flag when group changes
-        hasSentDefaultInstruction = false
-        
+        onHasSentDefaultInstructionChange(false)
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
         addLog("🔌 开始连接WebSocket...")
         addLog("   URL: $wsUrl")
@@ -412,20 +567,17 @@ fun ChatScreen(appState: AppState) {
         addLog("   群组: ${group.name}")
         addLog("   群组ID: ${group.id}")
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
-        
-        // 并行：加载群成员 + 建立 WebSocket，互不阻塞
         launch {
             val membersResponse = ApiClient.getGroupMembers(group.id)
             if (membersResponse.success) {
-                groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                addLog("✅ 群成员列表已加载，共 ${groupMembers.size} 人")
+                onGroupMembersLoaded(membersResponse.members.sortedByDescending { it.id == group.hostId })
+                addLog("✅ 群成员列表已加载，共 ${membersResponse.members.size} 人")
             } else {
                 addLog("❌ 加载群成员列表失败")
             }
         }
-        
         launch {
-            runLoggedSuspendAction("❌ connect() 抛出异常", ::addLog) {
+            runLoggedSuspendAction("❌ connect() 抛出异常", addLog) {
                 addLog("⏳ 启动 chatClient.connect()...")
                 chatClient.connect(user.id, user.fullName, group.id)
                 addLog("⚠️ connect() 返回了（连接已关闭）")
@@ -435,58 +587,39 @@ fun ChatScreen(appState: AppState) {
         addLog("✅ WebSocket 连接协程已启动")
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
     }
-    
-    // 历史消息加载状态：由 ChatClient 缓冲完成后一次性刷入
-    val isHistoryLoading by chatClient.isLoadingHistory.collectAsState()
-    var lastMessageCount by remember { mutableStateOf(0) }
 
-    // 历史加载完成后跳转到底部（reverseLayout 下 index 0 = 最新）
+    var lastMessageCount by remember { mutableStateOf(0) }
     LaunchedEffect(isHistoryLoading) {
         if (!isHistoryLoading && messages.isNotEmpty()) {
             listState.scrollToItem(0)
         }
     }
-
-    // 新消息到达时动画滚动到底部
     LaunchedEffect(messages.size) {
         if (!isHistoryLoading && messages.size > lastMessageCount && lastMessageCount > 0) {
             listState.animateScrollToItem(0)
         }
         lastMessageCount = messages.size
     }
-    
-    // 首次出现临时消息时，确保显示在底部
-    val hasTransient = transientMessage != null
-    LaunchedEffect(hasTransient) {
-        if (hasTransient && messages.isNotEmpty()) {
+    LaunchedEffect(transientMessage != null) {
+        if (transientMessage != null && messages.isNotEmpty()) {
             kotlinx.coroutines.delay(100)
             listState.scrollToItem(0)
         }
     }
-    
-    // 等待 AI 响应时确保显示等待状态
     LaunchedEffect(isWaitingForAI) {
         if (isWaitingForAI) {
             kotlinx.coroutines.delay(100)
             listState.scrollToItem(0)
         }
     }
-    
-    // ✅ 使用前台服务保持 WebSocket 连接活跃
-    // 前台服务会在应用切换到后台时保持连接，避免显示"连接已断开"
+
     val lifecycleOwner = LocalLifecycleOwner.current
-    var connectionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
-    // 跟踪是否需要重连
-    var needReconnect by remember { mutableStateOf(false) }
-    var lastConnectionTime by remember { mutableStateOf(0L) }
-    
-    // 启动前台服务
+    var connectionJob by remember { mutableStateOf<Job?>(null) }
     LaunchedEffect(Unit) {
         WebSocketForegroundService.start(context, group.name)
         addLog("🚀 [前台服务] 已启动 WebSocket 保活服务")
     }
-    
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -494,41 +627,25 @@ fun ChatScreen(appState: AppState) {
                     scope.launch {
                         addLog("🔄 [生命周期] 应用返回前台")
                         addLog("   当前连接状态: $connectionState")
-                        
-                        // ✅ 如果连接已断开或正在连接中，才尝试重连
                         if (connectionState != ConnectionState.CONNECTED) {
                             addLog("🔄 [生命周期] 连接未就绪，检查是否需要重连...")
-                            
-                            // 等待一小段时间，让连接状态稳定
                             kotlinx.coroutines.delay(500)
-                            
                             if (connectionState == ConnectionState.DISCONNECTED) {
                                 addLog("🔌 [生命周期] 连接已断开，尝试重新连接...")
-                                needReconnect = true
-                                
-                                // 取消旧的连接协程
                                 connectionJob?.cancel()
                                 kotlinx.coroutines.delay(300)
-                                
-                                // 启动新的连接
                                 connectionJob = scope.launch {
-                                    runLoggedSuspendAction("❌ 重新连接失败", ::addLog) {
+                                    runLoggedSuspendAction("❌ 重新连接失败", addLog) {
                                         addLog("🔌 建立新的WebSocket连接...")
                                         chatClient.connect(user.id, user.fullName, group.id)
-                                        
-                                        // 等待连接建立
                                         var attempts = 0
                                         while (connectionState != ConnectionState.CONNECTED && attempts < 10) {
                                             kotlinx.coroutines.delay(500)
                                             attempts++
                                             addLog("⏳ 等待连接建立... (${attempts}/10)")
                                         }
-                                        
                                         if (connectionState == ConnectionState.CONNECTED) {
                                             addLog("✅ WebSocket重新连接成功！")
-                                            lastConnectionTime = System.currentTimeMillis()
-                                            
-                                            // 连接成功后滚动到最新消息
                                             kotlinx.coroutines.delay(300)
                                             if (messages.isNotEmpty()) {
                                                 listState.scrollToItem(0)
@@ -543,79 +660,125 @@ fun ChatScreen(appState: AppState) {
                             }
                         } else {
                             addLog("✅ [生命周期] 连接正常，无需重连")
-                            // 确保前台服务正在运行
                             WebSocketForegroundService.start(context, group.name)
                         }
-                        
-                        needReconnect = false
                     }
                 }
                 Lifecycle.Event.ON_PAUSE -> {
-                    // ✅ 进入后台时保持连接不断开
-                    // 前台服务会维持连接活跃
                     scope.launch {
                         addLog("⏸️ [生命周期] 应用进入后台 - 保持连接（前台服务保活）")
                         addLog("   当前连接状态: $connectionState")
                     }
                 }
                 Lifecycle.Event.ON_STOP -> {
-                    // ✅ 即使在 onStop 也不断开连接
-                    // 前台服务会确保连接保持活跃
                     scope.launch {
                         addLog("⏹️ [生命周期] 应用停止 - 前台服务保活中")
                         addLog("   当前连接状态: $connectionState")
                     }
                 }
-                else -> {}
+                else -> Unit
             }
         }
-        
         lifecycleOwner.lifecycle.addObserver(observer)
-        
         onDispose {
             scope.launch {
                 addLog("🔌 [生命周期] 离开聊天界面，清理资源...")
-                
-                // 停止前台服务
                 WebSocketForegroundService.stop(context)
                 addLog("🛑 [前台服务] 已停止 WebSocket 保活服务")
-                
-                // 断开连接
                 chatClient.disconnect()
-                
-                // 标记已读
                 kotlinx.coroutines.delay(300)
-                appState.currentUser?.let { user ->
-                    if (ApiClient.markGroupAsRead(user.id, group.id)) {
-                        addLog("✅ 已标记群组为已读")
-                    } else {
-                        addLog("⚠️ 标记已读失败")
-                    }
+                if (ApiClient.markGroupAsRead(user.id, group.id)) {
+                    addLog("✅ 已标记群组为已读")
+                } else {
+                    addLog("⚠️ 标记已读失败")
                 }
             }
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
-    
-    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
-    
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Suppress("CyclomaticComplexMethod")
+@Composable
+private fun ChatScreenScaffoldContent(
+    appState: AppState,
+    user: User,
+    group: Group,
+    context: Context,
+    chatClient: ChatClient,
+    scrollBehavior: androidx.compose.material3.TopAppBarScrollBehavior,
+    messages: List<Message>,
+    transientMessage: Message?,
+    statusMessages: List<Message>,
+    connectionState: ConnectionState,
+    isHistoryLoading: Boolean,
+    isGenerating: Boolean,
+    isWaitingForAI: Boolean,
+    isSelectionMode: Boolean,
+    selectedMessages: SnapshotStateList<String>,
+    isExiting: Boolean,
+    isUploading: Boolean,
+    uploadProgress: String,
+    messageText: TextFieldValue,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    aiMessageExpandedStates: MutableMap<String, Boolean>,
+    thinkingExpandedStates: MutableMap<String, Boolean>,
+    expandScrollJob: Job?,
+    sessionUsers: List<Pair<String, String>>,
+    showMentionMenu: Boolean,
+    mentionSearchText: String,
+    mentionStartIndex: Int,
+    isVoiceRecording: Boolean,
+    isTranscribing: Boolean,
+    micPermissionGranted: Boolean,
+    recallingMessageIds: Set<String>,
+    filePickerLauncher: ActivityResultLauncher<String>,
+    onExitingChange: (Boolean) -> Unit,
+    onSelectionModeChange: (Boolean) -> Unit,
+    onClearSelectedMessages: () -> Unit,
+    onMessageSelected: (String) -> Unit,
+    onWaitingForAiChange: (Boolean) -> Unit,
+    onShowForwardToGroupDialog: (Boolean) -> Unit,
+    onShowForwardToContactDialog: (Boolean) -> Unit,
+    onShowInvitationDialog: (Boolean) -> Unit,
+    onShowFolderExplorer: (Boolean) -> Unit,
+    onFolderFilesLoaded: (List<FileItem>, List<String>) -> Unit,
+    onLoadingFilesChange: (Boolean) -> Unit,
+    onShowAddMemberDialog: (Boolean) -> Unit,
+    onShowMembersDialog: (Boolean) -> Unit,
+    onContactsLoaded: (List<Contact>) -> Unit,
+    onGroupMembersLoaded: (List<GroupMember>) -> Unit,
+    onMessageTextChange: (TextFieldValue) -> Unit,
+    onMentionMenuChange: (Boolean) -> Unit,
+    onMentionSearchTextChange: (String) -> Unit,
+    onMentionStartIndexChange: (Int) -> Unit,
+    onVoiceRecordingChange: (Boolean) -> Unit,
+    onTranscribingChange: (Boolean) -> Unit,
+    onShowAddContactConfirm: (Message?) -> Unit,
+    onMessageToForward: (Message?) -> Unit,
+    onLoadingGroupsChange: (Boolean) -> Unit,
+    onUserGroupsLoaded: (List<Group>) -> Unit,
+    onExpandScrollJobChange: (Job?) -> Unit,
+    onRecallingMessageIdsChange: (Set<String>) -> Unit,
+    mediaRecorderRef: MutableState<MediaRecorder?>,
+    audioFilePathRef: MutableState<String>,
+    micPermissionLauncher: ActivityResultLauncher<String>,
+    addLog: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             TopAppBar(
                 title = {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = group.name,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                        )
+                        Text(group.name, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
                             text = "${messages.size} 条消息",
                             style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 },
@@ -623,121 +786,86 @@ fun ChatScreen(appState: AppState) {
                 navigationIcon = {
                     IconButton(
                         onClick = {
-                            if (!isExiting) {
-                                isExiting = true
-                                scope.launch {
-                                    // 先断开连接，确保所有消息处理完成
-                                    chatClient.disconnect()
-                                    chatClient.clearMessages()
-                                    
-                                    // 等待服务器完成所有消息处理
-                                    kotlinx.coroutines.delay(500)
-                                    
-                                    // 最后标记已读 - 在断开连接之后调用
-                                    // 这样可以确保用户发送的消息已被服务器处理
-                                    // 标记时间会晚于所有消息的时间戳
-                                    appState.currentUser?.let { user ->
-                                        if (ApiClient.markGroupAsRead(user.id, group.id)) {
-                                            println("✅ 已标记群组 ${group.id} 为已读")
-                                        } else {
-                                            println("⚠️ 标记已读失败")
-                                        }
-                                    }
-                                    
-                                    appState.navigateBack()
-                                }
+                            scope.launch {
+                                handleChatBackNavigation(
+                                    appState = appState,
+                                    group = group,
+                                    user = user,
+                                    chatClient = chatClient,
+                                    isExiting = isExiting,
+                                    onExitingChange = onExitingChange,
+                                )
                             }
                         },
-                        enabled = !isExiting
+                        enabled = !isExiting,
                     ) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
-                    // 如果在选择模式，显示操作按钮
                     if (isSelectionMode) {
-                        // 使用水平滚动以适应更多按钮 - 使用 TextButton 替代 IconButton 避免圆形裁切
                         Row(
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
-                            // 📋 复制到剪贴板
                             TextButton(
                                 onClick = {
                                     val selectedContent = messages
                                         .filter { selectedMessages.contains(it.id) }
                                         .sortedBy { it.timestamp }
                                         .joinToString("\n\n") { "${it.userName}:\n${it.content}" }
-                                    
                                     if (selectedContent.isNotEmpty()) {
-                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
-                                            as android.content.ClipboardManager
-                                        val clip = android.content.ClipData.newPlainText("消息", selectedContent)
-                                        clipboard.setPrimaryClip(clip)
-                                        android.widget.Toast.makeText(
-                                            context,
-                                            "已复制 ${selectedMessages.size} 条消息",
-                                            android.widget.Toast.LENGTH_SHORT
-                                        ).show()
+                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("消息", selectedContent))
+                                        android.widget.Toast.makeText(context, "已复制 ${selectedMessages.size} 条消息", android.widget.Toast.LENGTH_SHORT).show()
                                     }
-                                    isSelectionMode = false
-                                    selectedMessages.clear()
+                                    onSelectionModeChange(false)
+                                    onClearSelectedMessages()
                                 },
                                 enabled = selectedMessages.isNotEmpty(),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text("📋复制", fontSize = 12.sp, color = Color.White)
                             }
-                            
-                            // 💬 转发到其他 Silk 对话
                             TextButton(
                                 onClick = {
-                                    // 加载用户的群组列表
                                     scope.launch {
-                                        isLoadingGroups = true
+                                        onLoadingGroupsChange(true)
                                         val response = ApiClient.getUserGroups(user.id)
-                                        userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
-                                        isLoadingGroups = false
-                                        showForwardToGroupDialog = true
+                                        onUserGroupsLoaded(response.groups?.filter { it.id != group.id } ?: emptyList())
+                                        onLoadingGroupsChange(false)
+                                        onShowForwardToGroupDialog(true)
                                     }
                                 },
                                 enabled = selectedMessages.isNotEmpty(),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text("💬转发", fontSize = 12.sp, color = Color.White)
                             }
-                            
-                            // 👤 转发到联系人
                             TextButton(
                                 onClick = {
                                     scope.launch {
-                                        isLoadingContacts = true
+                                        onLoadingFilesChange(true)
                                         val contactsResponse = ApiClient.getContacts(user.id)
-                                        contacts = contactsResponse.contacts ?: emptyList()
-                                        isLoadingContacts = false
-                                        showForwardToContactDialog = true
+                                        onContactsLoaded(contactsResponse.contacts ?: emptyList())
+                                        onLoadingFilesChange(false)
+                                        onShowForwardToContactDialog(true)
                                     }
                                 },
                                 enabled = selectedMessages.isNotEmpty(),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text("👤私聊", fontSize = 12.sp, color = Color.White)
                             }
-                            
-                            // 📤 分享到其他应用
                             TextButton(
                                 onClick = {
                                     val selectedContent = messages
                                         .filter { selectedMessages.contains(it.id) }
                                         .sortedBy { it.timestamp }
                                         .joinToString("\n\n") { msg ->
-                                            val time = formatMessageTimestamp(
-                                                timestamp = msg.timestamp,
-                                                includeSeconds = false
-                                            )
+                                            val time = formatMessageTimestamp(timestamp = msg.timestamp, includeSeconds = false)
                                             "[$time] ${msg.userName}:\n${msg.content}"
                                         }
-                                    
                                     if (selectedContent.isNotEmpty()) {
                                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                             type = "text/plain"
@@ -745,114 +873,77 @@ fun ChatScreen(appState: AppState) {
                                         }
                                         context.startActivity(Intent.createChooser(shareIntent, "分享到"))
                                     }
-                                    isSelectionMode = false
-                                    selectedMessages.clear()
+                                    onSelectionModeChange(false)
+                                    onClearSelectedMessages()
                                 },
                                 enabled = selectedMessages.isNotEmpty(),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text("📤分享", fontSize = 12.sp, color = Color.White)
                             }
-                            
-                            // ✕ 取消选择
                             TextButton(
                                 onClick = {
-                                    isSelectionMode = false
-                                    selectedMessages.clear()
+                                    onSelectionModeChange(false)
+                                    onClearSelectedMessages()
                                 },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text("✕取消", fontSize = 12.sp, color = Color.White)
                             }
                         }
                     } else {
-                        // 正常模式的按钮
-                        
-                        // ☑️ 选择模式按钮 - 点击进入选择模式
                         IconButton(
                             onClick = {
-                                isSelectionMode = true
-                                selectedMessages.clear()
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "已进入选择模式，点击消息进行选择",
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
+                                onSelectionModeChange(true)
+                                onClearSelectedMessages()
+                                android.widget.Toast.makeText(context, "已进入选择模式，点击消息进行选择", android.widget.Toast.LENGTH_SHORT).show()
                             }
                         ) {
                             Text("☑️", fontSize = 16.sp)
                         }
-                        
-                        // 📁 文件夹浏览器按钮
                         IconButton(
-                            onClick = { 
-                                showFolderExplorer = true
-                                isLoadingFiles = true
-                                // 加载文件列表和 URL 清单
+                            onClick = {
+                                onShowFolderExplorer(true)
+                                onLoadingFilesChange(true)
                                 scope.launch {
                                     try {
                                         val result = loadGroupFilesAndUrls(group.id)
-                                        folderFiles = result.files
-                                        processedUrls = result.processedUrls
+                                        onFolderFilesLoaded(result.files, result.processedUrls)
                                     } finally {
-                                        isLoadingFiles = false
+                                        onLoadingFilesChange(false)
                                     }
                                 }
                             }
                         ) {
                             Text("📁", fontSize = 16.sp)
                         }
-                        
-                        // 📎 上传文件按钮
-                        IconButton(
-                            onClick = { 
-                                if (!isUploading) {
-                                    filePickerLauncher.launch("*/*")
-                                }
-                            },
-                            enabled = !isUploading
-                        ) {
-                            Text(
-                                text = if (isUploading) "⏳" else "📎", 
-                                fontSize = 16.sp
-                            )
+                        IconButton(onClick = { if (!isUploading) filePickerLauncher.launch("*/*") }, enabled = !isUploading) {
+                            Text(text = if (isUploading) "⏳" else "📎", fontSize = 16.sp)
                         }
-                        
-                        // 邀请按钮
-                        IconButton(onClick = { showInvitationDialog = true }) {
+                        IconButton(onClick = { onShowInvitationDialog(true) }) {
                             Icon(Icons.Default.Share, contentDescription = "邀请", modifier = Modifier.size(20.dp))
                         }
-                        
-                        // ➕ 添加成员按钮
                         IconButton(
                             onClick = {
                                 scope.launch {
-                                    isLoadingContacts = true
                                     val contactsResponse = ApiClient.getContacts(user.id)
-                                    contacts = contactsResponse.contacts ?: emptyList()
                                     val membersResponse = ApiClient.getGroupMembers(group.id)
-                                    // 将群主排在第一位
-                                    groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                                    isLoadingContacts = false
-                                    showAddMemberDialog = true
+                                    onContactsLoaded(contactsResponse.contacts ?: emptyList())
+                                    onGroupMembersLoaded(membersResponse.members.sortedByDescending { it.id == group.hostId })
+                                    onShowAddMemberDialog(true)
                                 }
                             }
                         ) {
                             Text("➕", fontSize = 16.sp)
                         }
-                        
-                        // 👥 查看成员按钮
                         IconButton(
                             onClick = {
                                 scope.launch {
-                                    isLoadingContacts = true
                                     val contactsResponse = ApiClient.getContacts(user.id)
-                                    contacts = contactsResponse.contacts ?: emptyList()
                                     val membersResponse = ApiClient.getGroupMembers(group.id)
-                                    // 将群主排在第一位
-                                    groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                                    isLoadingContacts = false
-                                    showMembersDialog = true
+                                    onContactsLoaded(contactsResponse.contacts ?: emptyList())
+                                    onGroupMembersLoaded(membersResponse.members.sortedByDescending { it.id == group.hostId })
+                                    onShowMembersDialog(true)
                                 }
                             }
                         ) {
@@ -862,8 +953,8 @@ fun ChatScreen(appState: AppState) {
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary
-                )
+                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
             )
         }
     ) { padding ->
@@ -871,709 +962,674 @@ fun ChatScreen(appState: AppState) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .imePadding()  // ✅ 键盘弹出时自动调整内容，避免历史消息被遮挡
+                .imePadding()
         ) {
-            // 连接状态指示器
             if (connectionState == ConnectionState.CONNECTING) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Text(
-                        text = "正在连接...",
-                        modifier = Modifier.padding(8.dp),
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.secondaryContainer) {
+                    Text("正在连接...", modifier = Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
                 }
             }
-            
-            // 上传状态显示（浅灰色）
             if (isUploading && uploadProgress.isNotEmpty()) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = Color.LightGray.copy(alpha = 0.3f)
-                ) {
+                Surface(modifier = Modifier.fillMaxWidth(), color = Color.LightGray.copy(alpha = 0.3f)) {
                     Row(
                         modifier = Modifier.padding(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = Color.Gray
-                        )
-                        Text(
-                            text = "📎 $uploadProgress",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
-                        )
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.Gray)
+                        Text("📎 $uploadProgress", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     }
                 }
             }
-            
-            // 消息列表 - 使用 reverseLayout 让最新消息贴近输入框
-            // ✅ 底部对齐：使用 Box 包裹 LazyColumn，确保内容贴底显示
-            // 这样当键盘弹出时，历史信息不会滚动到屏幕外
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.BottomCenter  // ✅ 内容底部对齐
-            ) {
-                // ✅ 使用 Crossfade 实现平滑过渡动画
-                Crossfade(
-                    targetState = isHistoryLoading,
-                    animationSpec = tween(durationMillis = 300),
-                    label = "history_loading"
-                ) { loading ->
-                    if (loading) {
-                        // 加载中：显示加载指示器
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                CircularProgressIndicator(color = SilkColors.primary)
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text("加载历史消息...", color = SilkColors.textSecondary)
-                            }
-                        }
-                    } else {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxWidth(),
-                contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                reverseLayout = true  // 从底部开始显示，最新消息贴近输入框
-            ) {
-                if (shouldShowEmptyChatState(
-                        messages = messages,
-                        transientMessage = transientMessage,
-                        statusMessages = statusMessages,
-                        isWaitingForAI = isWaitingForAI,
-                    )
-                ) {
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 32.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "暂无消息，开始聊天吧！",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                } else {
-                    // ✅ reverseLayout=true 时，第一个 item 显示在底部（靠近输入框）
-                    // 所以临时消息（流式回答）放在最前面显示在最底部，状态消息紧随其后显示在回答上方
-                    
-                    // 1️⃣ 临时消息（AI处理中）- 不支持选择
-                    transientMessage?.let { message ->
-                        item(key = "transient_message") {
-                            MessageItem(
-                                message = message,
-                                currentUserId = user.id,
-                                context = context,
-                                isTransient = true,
-                                isSelectionMode = false,
-                                isSelected = false,
-                                onToggleSelection = {},
-                                onUserNameClick = null
-                            )
-                        }
-                    }
+            ChatScreenHistoryPane(
+                messages = messages,
+                transientMessage = transientMessage,
+                statusMessages = statusMessages,
+                isHistoryLoading = isHistoryLoading,
+                isWaitingForAI = isWaitingForAI,
+                isSelectionMode = isSelectionMode,
+                selectedMessages = selectedMessages,
+                currentUserId = user.id,
+                context = context,
+                listState = listState,
+                aiMessageExpandedStates = aiMessageExpandedStates,
+                thinkingExpandedStates = thinkingExpandedStates,
+                expandScrollJob = expandScrollJob,
+                onExpandScrollJobChange = onExpandScrollJobChange,
+                onMessageSelected = onMessageSelected,
+                onShowAddContactConfirm = onShowAddContactConfirm,
+                onWaitingForAiChange = onWaitingForAiChange,
+                onRecallingMessageIdsChange = onRecallingMessageIdsChange,
+                onSelectionModeChange = onSelectionModeChange,
+                onClearSelectedMessages = onClearSelectedMessages,
+                recallingMessageIds = recallingMessageIds,
+                user = user,
+                group = group,
+                onMessageToForward = onMessageToForward,
+                onLoadingGroupsChange = onLoadingGroupsChange,
+                onUserGroupsLoaded = onUserGroupsLoaded,
+                onShowForwardToGroupDialog = onShowForwardToGroupDialog,
+            )
+            ChatScreenInputPane(
+                context = context,
+                user = user,
+                group = group,
+                chatClient = chatClient,
+                messageText = messageText,
+                isGenerating = isGenerating,
+                isWaitingForAI = isWaitingForAI,
+                isVoiceRecording = isVoiceRecording,
+                isTranscribing = isTranscribing,
+                micPermissionGranted = micPermissionGranted,
+                sessionUsers = sessionUsers,
+                showMentionMenu = showMentionMenu,
+                mentionSearchText = mentionSearchText,
+                mentionStartIndex = mentionStartIndex,
+                mediaRecorderRef = mediaRecorderRef,
+                audioFilePathRef = audioFilePathRef,
+                micPermissionLauncher = micPermissionLauncher,
+                onMessageTextChange = onMessageTextChange,
+                onMentionMenuChange = onMentionMenuChange,
+                onMentionSearchTextChange = onMentionSearchTextChange,
+                onMentionStartIndexChange = onMentionStartIndexChange,
+                onVoiceRecordingChange = onVoiceRecordingChange,
+                onTranscribingChange = onTranscribingChange,
+                onWaitingForAiChange = onWaitingForAiChange,
+                addLog = addLog,
+            )
+        }
+    }
+}
 
-                    // 2️⃣ 状态消息（工具调用日志等）
-                    // 与 Web 端一致：显示在临时消息上方，由 ChatClient 在收到最终消息时统一清空
-                    if (statusMessages.isNotEmpty() || isWaitingForAI) {
-                        item(key = "status_messages") {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                            ) {
-                                // 如果有服务器状态消息，清除本地等待状态
-                                if (statusMessages.isNotEmpty() && isWaitingForAI) {
-                                    LaunchedEffect(statusMessages) {
-                                        isWaitingForAI = false
-                                    }
-                                }
-
-                                // 服务器状态消息（按时间倒序显示，最新的在上面）
-                                statusMessages.reversed().forEach { statusMsg ->
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(vertical = 2.dp)
-                                    ) {
-                                        val content = statusMsg.content
-                                        // CC Bridge 消息自带 emoji 图标（📖 🔍 💻 🤔 等），无需额外旋转指示器
-                                        val hasToolIcon = content.isNotEmpty() &&
-                                            !Character.isLetterOrDigit(content.codePointAt(0))
-
-                                        if (!hasToolIcon) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(12.dp),
-                                                strokeWidth = 1.5.dp,
-                                                color = Color.Gray.copy(alpha = 0.6f)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                        }
-                                        Text(
-                                            text = content,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color.Gray.copy(alpha = 0.7f),
-                                            maxLines = 2,
-                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-
-                                // 本地等待状态（服务器状态消息到达前显示）
-                                if (isWaitingForAI && statusMessages.isEmpty()) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        modifier = Modifier.padding(vertical = 2.dp)
-                                    ) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(14.dp),
-                                            strokeWidth = 2.dp,
-                                            color = Color.Gray.copy(alpha = 0.7f)
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text(
-                                            text = "🤔 Silk 正在思考...",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = Color.Gray.copy(alpha = 0.7f)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    
-                    // 3️⃣ 普通消息列表（反转顺序，最新的在第0位 = 显示在底部）
-                    items(messages.reversed(), key = { it.id }) { message ->
-                        MessageItem(
-                            message = message,
-                            currentUserId = user.id,
-                            context = context,
-                            isTransient = false,
-                            isSelectionMode = isSelectionMode,
-                            isSelected = selectedMessages.contains(message.id),
-                            onToggleSelection = { messageId ->
-                                if (selectedMessages.contains(messageId)) {
-                                    selectedMessages.remove(messageId)
-                                } else {
-                                    selectedMessages.add(messageId)
-                                }
-                            },
-                            onLongPress = { messageId ->
-                                // ✅ 长按进入选择模式并选中该消息
-                                println("🔴🔴🔴 [ChatScreen] onLongPress 被调用! messageId=$messageId, isSelectionMode=$isSelectionMode")
-                                if (!isSelectionMode) {
-                                    isSelectionMode = true
-                                    selectedMessages.clear()
-                                    selectedMessages.add(messageId)
-                                    println("🔴🔴🔴 [ChatScreen] 已进入选择模式，选中消息: $messageId")
-                                    // 触觉反馈
-                                    android.os.Build.VERSION.SDK_INT.let {
-                                        if (it >= android.os.Build.VERSION_CODES.O) {
-                                            (context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator)
-                                                ?.vibrate(android.os.VibrationEffect.createOneShot(50, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
-                                        }
-                                    }
-                                }
-                            },
-                            onUserNameClick = { clickedMessage ->
-                                // 点击用户名，弹出添加联系人确认对话框
-                                if (clickedMessage.userId != user.id) {
-                                    showAddContactConfirm = clickedMessage
-                                }
-                            },
-                            // 撤回相关参数
-                            isRecalling = message.id in recallingMessageIds,
-                            onRecall = { messageId ->
-                                if (messageId !in recallingMessageIds) {
-                                    recallingMessageIds = recallingMessageIds + messageId
-                                    scope.launch {
-                                        try {
-                                            val response = ApiClient.recallMessage(group.id, messageId, user.id)
-                                            if (!response.success) {
-                                                android.widget.Toast.makeText(context, "撤回失败: ${response.message}", android.widget.Toast.LENGTH_SHORT).show()
-                                            }
-                                        } finally {
-                                            recallingMessageIds = recallingMessageIds - messageId
-                                        }
-                                    }
-                                }
-                            },
-                            // AI 消息展开状态（默认收起，只有长内容才需要展开/收起功能）
-                            isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
-                            onAIExpandChange = { messageId, isExpanded ->
-                                val reversedMessages = messages.reversed()
-                                val idx = reversedMessages.indexOfFirst { it.id == messageId }
-                                val itemOffset = (if (transientMessage != null) 1 else 0) +
-                                    (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
-                                val targetIdx = if (idx >= 0) itemOffset + idx else -1
-
-                                if (isExpanded) {
-                                    aiMessageExpandedStates[messageId] = true
-                                    if (targetIdx >= 0) {
-                                        expandScrollJob?.cancel()
-                                        expandScrollJob = scopeForScroll.launch {
-                                            kotlinx.coroutines.delay(80)
-                                            listState.scrollToItem(targetIdx, 0)
-
-                                            var prevSize = listState.layoutInfo.visibleItemsInfo
-                                                .firstOrNull { it.index == targetIdx }?.size ?: 0
-                                            snapshotFlow {
-                                                listState.layoutInfo.visibleItemsInfo
-                                                    .firstOrNull { it.index == targetIdx }?.size ?: 0
-                                            }
-                                            .distinctUntilChanged()
-                                            .collect { size ->
-                                                if (size > 0 && prevSize > 0 && size > prevSize) {
-                                                    listState.scroll { scrollBy((size - prevSize).toFloat()) }
-                                                }
-                                                if (size > 0) prevSize = size
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    expandScrollJob?.cancel()
-                                    expandScrollJob = null
-                                    if (targetIdx >= 0) {
-                                        scopeForScroll.launch {
-                                            // Reset scroll offset to 0 BEFORE collapsing,
-                                            // otherwise the large offset from expand compensation
-                                            // exceeds the collapsed item height, causing LazyColumn
-                                            // to jump to a different item.
-                                            listState.scrollToItem(targetIdx, 0)
-                                            aiMessageExpandedStates[messageId] = false
-                                        }
-                                    } else {
-                                        aiMessageExpandedStates[messageId] = false
-                                    }
-                                }
-                            },
-                            isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
-                            onThinkingExpandChange = { messageId, expanded ->
-                                val reversedMessages = messages.reversed()
-                                val idx = reversedMessages.indexOfFirst { it.id == messageId }
-                                val itemOffset = (if (transientMessage != null) 1 else 0) +
-                                    (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
-                                val targetIdx = if (idx >= 0) itemOffset + idx else -1
-
-                                if (expanded) {
-                                    thinkingExpandedStates[messageId] = true
-                                    if (targetIdx >= 0) {
-                                        expandScrollJob?.cancel()
-                                        expandScrollJob = scopeForScroll.launch {
-                                            kotlinx.coroutines.delay(80)
-                                            listState.scrollToItem(targetIdx, 0)
-
-                                            var prevSize = listState.layoutInfo.visibleItemsInfo
-                                                .firstOrNull { it.index == targetIdx }?.size ?: 0
-                                            kotlinx.coroutines.withTimeoutOrNull(3000L) {
-                                                snapshotFlow {
-                                                    listState.layoutInfo.visibleItemsInfo
-                                                        .firstOrNull { it.index == targetIdx }?.size ?: 0
-                                                }
-                                                .distinctUntilChanged()
-                                                .collect { size ->
-                                                    if (size > 0 && prevSize > 0 && size > prevSize) {
-                                                        listState.scroll { scrollBy((size - prevSize).toFloat()) }
-                                                    }
-                                                    if (size > 0) prevSize = size
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    expandScrollJob?.cancel()
-                                    expandScrollJob = null
-                                    if (targetIdx >= 0) {
-                                        scopeForScroll.launch {
-                                            listState.scrollToItem(targetIdx, 0)
-                                            thinkingExpandedStates[messageId] = false
-                                        }
-                                    } else {
-                                        thinkingExpandedStates[messageId] = false
-                                    }
-                                }
-                            },
-                            onLongContentCollapsed = { messageId ->
-                                expandScrollJob?.cancel()
-                                val reversedMessages = messages.reversed()
-                                val idx = reversedMessages.indexOfFirst { it.id == messageId }
-                                if (idx >= 0) {
-                                    scopeForScroll.launch {
-                                        kotlinx.coroutines.delay(80)
-                                        val itemOffset = (if (transientMessage != null) 1 else 0) +
-                                            (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
-                                        listState.scrollToItem(itemOffset + idx)
-                                    }
-                                }
-                            },
-                            // 复制功能
-                            onCopy = { content ->
-                                val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
-                                    as android.content.ClipboardManager
-                                val clip = android.content.ClipData.newPlainText("消息", content)
-                                clipboard.setPrimaryClip(clip)
-                                android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
-                            },
-                            // 转发功能 - 单条消息转发
-                            onForward = { msg ->
-                                // 设置要转发的单条消息
-                                messageToForward = msg
-                                scope.launch {
-                                    isLoadingGroups = true
-                                    val response = ApiClient.getUserGroups(user.id)
-                                    userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
-                                    isLoadingGroups = false
-                                    showForwardToGroupDialog = true
-                                }
-                            }
-                        )
-                    }
-                }
-            }
-                    }  // ✅ else 结束 - 历史加载完成后的内容
-                }  // ✅ Crossfade 结束
-            }  // ✅ Box 结束 - 底部对齐容器
-            
-            // 输入框区域
-            if (connectionState == ConnectionState.CONNECTED) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shadowElevation = 8.dp
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp)
-                    ) {
-                        // @Silk 快捷按钮（在 Silk 私聊中隐藏）
-                        val isSilkPrivateChat = group.name.startsWith("[Silk]")
-                        if (!isSilkPrivateChat) {
-                            Surface(
-                                onClick = {
-                                    val prefix = "@Silk "
-                                    if (!messageText.text.startsWith(prefix)) {
-                                        val newText = prefix + messageText.text
-                                        val newSelection = TextRange(
-                                            start = (messageText.selection.start + prefix.length).coerceIn(0, newText.length),
-                                            end = (messageText.selection.end + prefix.length).coerceIn(0, newText.length)
-                                        )
-                                        messageText = messageText.copy(
-                                            text = newText,
-                                            selection = newSelection
-                                        )
-                                    }
-                                },
-                                color = SilkColors.primary.copy(alpha = 0.15f),
-                                shape = MaterialTheme.shapes.small
-                            ) {
-                                Text(
-                                    text = "@Silk",
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = SilkColors.primary
-                                )
-                            }
-                        }
-
+@Composable
+@Suppress("CyclomaticComplexMethod")
+private fun ColumnScope.ChatScreenHistoryPane(
+    messages: List<Message>,
+    transientMessage: Message?,
+    statusMessages: List<Message>,
+    isHistoryLoading: Boolean,
+    isWaitingForAI: Boolean,
+    isSelectionMode: Boolean,
+    selectedMessages: SnapshotStateList<String>,
+    currentUserId: String,
+    context: Context,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    aiMessageExpandedStates: MutableMap<String, Boolean>,
+    thinkingExpandedStates: MutableMap<String, Boolean>,
+    expandScrollJob: Job?,
+    onExpandScrollJobChange: (Job?) -> Unit,
+    onMessageSelected: (String) -> Unit,
+    onShowAddContactConfirm: (Message?) -> Unit,
+    onWaitingForAiChange: (Boolean) -> Unit,
+    onRecallingMessageIdsChange: (Set<String>) -> Unit,
+    onSelectionModeChange: (Boolean) -> Unit,
+    onClearSelectedMessages: () -> Unit,
+    recallingMessageIds: Set<String>,
+    user: User,
+    group: Group,
+    onMessageToForward: (Message?) -> Unit,
+    onLoadingGroupsChange: (Boolean) -> Unit,
+    onUserGroupsLoaded: (List<Group>) -> Unit,
+    onShowForwardToGroupDialog: (Boolean) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.BottomCenter) {
+        Crossfade(targetState = isHistoryLoading, animationSpec = tween(durationMillis = 300), label = "history_loading") { loading ->
+            if (loading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        CircularProgressIndicator(color = SilkColors.primary)
                         Spacer(modifier = Modifier.height(8.dp))
-                        
-                        // 输入框容器（用于 @ 提及下拉）
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.fillMaxWidth()) {
-                                // @ 提及下拉列表（输入 @ 后显示群成员/会话用户）
-                                if (showMentionMenu) {
-                                    val filteredUsers = sessionUsers.filter { (_, name) ->
-                                        mentionSearchText.isEmpty() ||
-                                            name.lowercase().contains(mentionSearchText.lowercase())
-                                    }
-                                    Card(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(max = 200.dp),
-                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                                        shape = RoundedCornerShape(8.dp),
-                                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-                                    ) {
-                                        if (filteredUsers.isEmpty()) {
-                                            Text(
-                                                text = "无匹配用户",
-                                                modifier = Modifier.padding(12.dp, 16.dp),
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        } else {
-                                            LazyColumn(
-                                                modifier = Modifier.fillMaxWidth()
-                                            ) {
-                                                items(filteredUsers.size) { index ->
-                                                    val (userId, userName) = filteredUsers[index]
-                                                    val displayName = if (isAgentUserId(userId)) "Silk" else userName
-                                                    Surface(
-                                                        onClick = {
-                                                            val beforeAt = messageText.text.substring(0, mentionStartIndex.coerceAtLeast(0))
-                                                            val newText = "$beforeAt@$displayName "
-                                                            messageText = TextFieldValue(
-                                                                text = newText,
-                                                                selection = TextRange(newText.length)
-                                                            )
-                                                            showMentionMenu = false
-                                                            mentionStartIndex = -1
-                                                        },
-                                                        modifier = Modifier.fillMaxWidth()
-                                                    ) {
-                                                        Text(
-                                                            text = userName,
-                                                            modifier = Modifier.padding(10.dp, 12.dp),
-                                                            style = MaterialTheme.typography.bodyMedium,
-                                                            fontWeight = if (isAgentUserId(userId)) FontWeight.SemiBold else FontWeight.Normal
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                }
-                                
-                                // 输入框和发送按钮在同一行
-                                if (isVoiceRecording) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Text(
-                                            "录音中...",
-                                            color = Color(0xFFFF4D4F),
-                                            fontWeight = FontWeight.Medium,
-                                            modifier = Modifier.weight(1f)
-                                        )
-                                        Button(
-                                            onClick = {
-                                                isVoiceRecording = false
-                                                isTranscribing = true
-                                                val recorder = mediaRecorderRef.value
-                                                val filePath = audioFilePathRef.value
-                                                try { recorder?.stop() } catch (_: Exception) {}
-                                                try { recorder?.release() } catch (_: Exception) {}
-                                                mediaRecorderRef.value = null
-                                                scope.launch {
-                                                    try {
-                                                        runLoggedSuspendAction("语音识别出错", ::addLog) {
-                                                            val file = java.io.File(filePath)
-                                                            if (file.exists()) {
-                                                                val bytes = file.readBytes()
-                                                                val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                                                                val result = ApiClient.transcribeAudio(base64, "m4a")
-                                                                if (result.success && result.text.isNotBlank()) {
-                                                                    val current = messageText.text
-                                                                    val newText = if (current.isNotBlank()) "$current ${result.text}" else result.text
-                                                                    messageText = TextFieldValue(newText, TextRange(newText.length))
-                                                                } else {
-                                                                    addLog("ASR 失败: ${result.error ?: "未知错误"}")
-                                                                }
-                                                                file.delete()
-                                                            }
-                                                        }
-                                                    } finally {
-                                                        isTranscribing = false
-                                                    }
-                                                }
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4D4F)),
-                                            modifier = Modifier.height(56.dp)
-                                        ) {
-                                            Icon(Icons.Default.Stop, contentDescription = "停止录音", tint = Color.White)
-                                        }
-                                    }
-                                } else if (isTranscribing) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.Center
-                                    ) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(24.dp),
-                                            strokeWidth = 2.dp,
-                                            color = SilkColors.primary
-                                        )
-                                        Spacer(modifier = Modifier.width(8.dp))
-                                        Text("识别中...", color = Color.Gray)
-                                    }
-                                } else {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    OutlinedTextField(
-                                        value = messageText,
-                                        onValueChange = { newValue ->
-                                            val oldText = messageText.text
-                                            messageText = newValue
-                                            val newText = newValue.text
-                                            if (newText.length > oldText.length) {
-                                                val lastChar = newText.getOrNull(newText.length - 1)
-                                                if (lastChar == '@') {
-                                                    showMentionMenu = true
-                                                    mentionStartIndex = newText.length - 1
-                                                    mentionSearchText = ""
-                                                    return@OutlinedTextField
-                                                }
-                                            }
-                                            if (showMentionMenu && mentionStartIndex >= 0) {
-                                                if (mentionStartIndex >= newText.length || newText.getOrNull(mentionStartIndex) != '@') {
-                                                    showMentionMenu = false
-                                                    mentionStartIndex = -1
-                                                } else {
-                                                    val textAfterAt = newText.substring(mentionStartIndex + 1)
-                                                    val spaceIndex = textAfterAt.indexOf(' ')
-                                                    if (spaceIndex >= 0) {
-                                                        showMentionMenu = false
-                                                        mentionStartIndex = -1
-                                                    } else {
-                                                        mentionSearchText = textAfterAt
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        modifier = Modifier.weight(1f),
-                                        placeholder = { Text(if (group.name.startsWith("[Silk]")) "直接输入消息与 Silk 对话..." else "输入消息... @ 提及成员 / @silk 提问AI") },
-                                        maxLines = 3
-                                    )
-
-                                    // 麦克风按钮
-                                    IconButton(
-                                        onClick = {
-                                            if (!micPermissionGranted.value) {
-                                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                                return@IconButton
-                                            }
-                                            runCatching {
-                                                val filePath = "${context.cacheDir.absolutePath}/silk_voice_${System.currentTimeMillis()}.m4a"
-                                                audioFilePathRef.value = filePath
-                                                @Suppress("DEPRECATION")
-                                                val recorder = MediaRecorder().apply {
-                                                    setAudioSource(MediaRecorder.AudioSource.MIC)
-                                                    setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                                                    setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                                                    setAudioSamplingRate(16000)
-                                                    setAudioChannels(1)
-                                                    setOutputFile(filePath)
-                                                    prepare()
-                                                    start()
-                                                }
-                                                mediaRecorderRef.value = recorder
-                                                isVoiceRecording = true
-                                            }.onFailure { error ->
-                                                if (error is CancellationException) throw error
-                                                addLog("无法启动录音: ${error.message}")
-                                            }
-                                        },
-                                        modifier = Modifier.size(48.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Mic,
-                                            contentDescription = "语音输入",
-                                            tint = Color.Gray
-                                        )
-                                    }
-                                    
-                                    val showStopButton = isGenerating || isWaitingForAI
-                                    if (showStopButton) {
-                                        Button(
-                                            onClick = {
-                                                chatClient.stopGeneration(user.id, user.fullName)
-                                                isWaitingForAI = false
-                                            },
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = Color(0xFFFF4D4F)
-                                            ),
-                                            modifier = Modifier.height(56.dp)
-                                        ) {
-                                            Text("停止", color = Color.White)
-                                        }
-                                    } else {
-                                        Button(
-                                            onClick = {
-                                                if (messageText.text.isNotBlank()) {
-                                                    val msgContent = messageText.text
-                                                    addLog("📤 发送消息: ${msgContent.take(20)}...")
-                                                    
-                                                    if (msgContent.lowercase().startsWith("@silk") || isSilkPrivateChat) {
-                                                        isWaitingForAI = true
-                                                        addLog("⏳ 开始等待 AI 响应...")
-                                                    }
-                                                    
-                                                    scope.launch {
-                                                        chatClient.sendMessage(user.id, user.fullName, msgContent)
-                                                        addLog("✅ 消息已发送")
-                                                        messageText = TextFieldValue("")
-                                                    }
-                                                }
-                                            },
-                                            enabled = messageText.text.isNotBlank(),
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = SilkColors.primary
-                                            ),
-                                            modifier = Modifier.height(56.dp)
-                                        ) {
-                                            Icon(Icons.Default.Send, contentDescription = "发送")
-                                        }
-                                    }
-                                }
-                                }
-                            }
-                        }
+                        Text("加载历史消息...", color = SilkColors.textSecondary)
                     }
                 }
             } else {
-                Surface(
+                LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.errorContainer
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    reverseLayout = true,
                 ) {
-                    Text(
-                        text = "连接已断开，正在重新连接...",
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
+                    if (shouldShowEmptyChatState(messages, transientMessage, statusMessages, isWaitingForAI)) {
+                        item {
+                            Box(modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
+                                Text("暂无消息，开始聊天吧！", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    } else {
+                        transientMessage?.let { message ->
+                            item(key = "transient_message") {
+                                MessageItem(
+                                    message = message,
+                                    currentUserId = currentUserId,
+                                    context = context,
+                                    isTransient = true,
+                                    isSelectionMode = false,
+                                    isSelected = false,
+                                    onToggleSelection = {},
+                                    onUserNameClick = null,
+                                )
+                            }
+                        }
+                        if (statusMessages.isNotEmpty() || isWaitingForAI) {
+                            item(key = "status_messages") {
+                                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+                                    if (statusMessages.isNotEmpty() && isWaitingForAI) {
+                                        LaunchedEffect(statusMessages) { onWaitingForAiChange(false) }
+                                    }
+                                    statusMessages.reversed().forEach { statusMsg ->
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                                            val content = statusMsg.content
+                                            val hasToolIcon = content.isNotEmpty() && !Character.isLetterOrDigit(content.codePointAt(0))
+                                            if (!hasToolIcon) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(12.dp),
+                                                    strokeWidth = 1.5.dp,
+                                                    color = Color.Gray.copy(alpha = 0.6f),
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                            }
+                                            Text(
+                                                text = content,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color.Gray.copy(alpha = 0.7f),
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    }
+                                    if (isWaitingForAI && statusMessages.isEmpty()) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(14.dp),
+                                                strokeWidth = 2.dp,
+                                                color = Color.Gray.copy(alpha = 0.7f),
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("🤔 Silk 正在思考...", style = MaterialTheme.typography.bodySmall, color = Color.Gray.copy(alpha = 0.7f))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        items(messages.reversed(), key = { it.id }) { message ->
+                            MessageItem(
+                                message = message,
+                                currentUserId = currentUserId,
+                                context = context,
+                                isTransient = false,
+                                isSelectionMode = isSelectionMode,
+                                isSelected = selectedMessages.contains(message.id),
+                                onToggleSelection = onMessageSelected,
+                                onLongPress = { messageId ->
+                                    if (!isSelectionMode) {
+                                        onSelectionModeChange(true)
+                                        onClearSelectedMessages()
+                                        onMessageSelected(messageId)
+                                        android.os.Build.VERSION.SDK_INT.let {
+                                            if (it >= android.os.Build.VERSION_CODES.O) {
+                                                (context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator)
+                                                    ?.vibrate(android.os.VibrationEffect.createOneShot(50, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                                            }
+                                        }
+                                    }
+                                },
+                                onUserNameClick = { clickedMessage ->
+                                    if (clickedMessage.userId != user.id) onShowAddContactConfirm(clickedMessage)
+                                },
+                                isRecalling = message.id in recallingMessageIds,
+                                onRecall = { messageId ->
+                                    if (messageId !in recallingMessageIds) {
+                                        onRecallingMessageIdsChange(recallingMessageIds + messageId)
+                                        scope.launch {
+                                            try {
+                                                val response = ApiClient.recallMessage(group.id, messageId, user.id)
+                                                if (!response.success) {
+                                                    android.widget.Toast.makeText(context, "撤回失败: ${response.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                            } finally {
+                                                onRecallingMessageIdsChange(recallingMessageIds - messageId)
+                                            }
+                                        }
+                                    }
+                                },
+                                isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
+                                onAIExpandChange = { messageId, isExpanded ->
+                                    val reversedMessages = messages.reversed()
+                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                    val itemOffset = (if (transientMessage != null) 1 else 0) + (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                    val targetIdx = if (idx >= 0) itemOffset + idx else -1
+                                    if (isExpanded) {
+                                        aiMessageExpandedStates[messageId] = true
+                                        if (targetIdx >= 0) {
+                                            expandScrollJob?.cancel()
+                                            onExpandScrollJobChange(scope.launch {
+                                                kotlinx.coroutines.delay(80)
+                                                listState.scrollToItem(targetIdx, 0)
+                                                var prevSize = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIdx }?.size ?: 0
+                                                snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIdx }?.size ?: 0 }
+                                                    .distinctUntilChanged()
+                                                    .collect { size ->
+                                                        if (size > 0 && prevSize > 0 && size > prevSize) {
+                                                            listState.scroll { scrollBy((size - prevSize).toFloat()) }
+                                                        }
+                                                        if (size > 0) prevSize = size
+                                                    }
+                                            })
+                                        }
+                                    } else {
+                                        expandScrollJob?.cancel()
+                                        onExpandScrollJobChange(null)
+                                        if (targetIdx >= 0) {
+                                            scope.launch {
+                                                listState.scrollToItem(targetIdx, 0)
+                                                aiMessageExpandedStates[messageId] = false
+                                            }
+                                        } else {
+                                            aiMessageExpandedStates[messageId] = false
+                                        }
+                                    }
+                                },
+                                isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
+                                onThinkingExpandChange = { messageId, expanded ->
+                                    val reversedMessages = messages.reversed()
+                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                    val itemOffset = (if (transientMessage != null) 1 else 0) + (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                    val targetIdx = if (idx >= 0) itemOffset + idx else -1
+                                    if (expanded) {
+                                        thinkingExpandedStates[messageId] = true
+                                        if (targetIdx >= 0) {
+                                            expandScrollJob?.cancel()
+                                            onExpandScrollJobChange(scope.launch {
+                                                kotlinx.coroutines.delay(80)
+                                                listState.scrollToItem(targetIdx, 0)
+                                                var prevSize = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIdx }?.size ?: 0
+                                                withTimeoutOrNull(3000L) {
+                                                    snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIdx }?.size ?: 0 }
+                                                        .distinctUntilChanged()
+                                                        .collect { size ->
+                                                            if (size > 0 && prevSize > 0 && size > prevSize) {
+                                                                listState.scroll { scrollBy((size - prevSize).toFloat()) }
+                                                            }
+                                                            if (size > 0) prevSize = size
+                                                        }
+                                                }
+                                            })
+                                        }
+                                    } else {
+                                        expandScrollJob?.cancel()
+                                        onExpandScrollJobChange(null)
+                                        if (targetIdx >= 0) {
+                                            scope.launch {
+                                                listState.scrollToItem(targetIdx, 0)
+                                                thinkingExpandedStates[messageId] = false
+                                            }
+                                        } else {
+                                            thinkingExpandedStates[messageId] = false
+                                        }
+                                    }
+                                },
+                                onLongContentCollapsed = { messageId ->
+                                    expandScrollJob?.cancel()
+                                    val reversedMessages = messages.reversed()
+                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                    if (idx >= 0) {
+                                        scope.launch {
+                                            kotlinx.coroutines.delay(80)
+                                            val itemOffset = (if (transientMessage != null) 1 else 0) + (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                            listState.scrollToItem(itemOffset + idx)
+                                        }
+                                    }
+                                },
+                                onCopy = { content ->
+                                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("消息", content))
+                                    android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                                },
+                                onForward = { msg ->
+                                    onMessageToForward(msg)
+                                    scope.launch {
+                                        onLoadingGroupsChange(true)
+                                        val response = ApiClient.getUserGroups(user.id)
+                                        onUserGroupsLoaded(response.groups?.filter { it.id != group.id } ?: emptyList())
+                                        onLoadingGroupsChange(false)
+                                        onShowForwardToGroupDialog(true)
+                                    }
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
     }
-    
-    // 调试信息对话框
+}
+
+@Composable
+@Suppress("CyclomaticComplexMethod")
+private fun ChatScreenInputPane(
+    context: Context,
+    user: User,
+    group: Group,
+    chatClient: ChatClient,
+    messageText: TextFieldValue,
+    isGenerating: Boolean,
+    isWaitingForAI: Boolean,
+    isVoiceRecording: Boolean,
+    isTranscribing: Boolean,
+    micPermissionGranted: Boolean,
+    sessionUsers: List<Pair<String, String>>,
+    showMentionMenu: Boolean,
+    mentionSearchText: String,
+    mentionStartIndex: Int,
+    mediaRecorderRef: MutableState<MediaRecorder?>,
+    audioFilePathRef: MutableState<String>,
+    micPermissionLauncher: ActivityResultLauncher<String>,
+    onMessageTextChange: (TextFieldValue) -> Unit,
+    onMentionMenuChange: (Boolean) -> Unit,
+    onMentionSearchTextChange: (String) -> Unit,
+    onMentionStartIndexChange: (Int) -> Unit,
+    onVoiceRecordingChange: (Boolean) -> Unit,
+    onTranscribingChange: (Boolean) -> Unit,
+    onWaitingForAiChange: (Boolean) -> Unit,
+    addLog: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    if (connectionStateOf(chatClient) == ConnectionState.CONNECTED) {
+        Surface(modifier = Modifier.fillMaxWidth(), shadowElevation = 8.dp) {
+            Column(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+                val isSilkPrivateChat = group.name.startsWith("[Silk]")
+                if (!isSilkPrivateChat) {
+                    Surface(
+                        onClick = {
+                            val prefix = "@Silk "
+                            if (!messageText.text.startsWith(prefix)) {
+                                val newText = prefix + messageText.text
+                                val newSelection = TextRange(
+                                    start = (messageText.selection.start + prefix.length).coerceIn(0, newText.length),
+                                    end = (messageText.selection.end + prefix.length).coerceIn(0, newText.length),
+                                )
+                                onMessageTextChange(messageText.copy(text = newText, selection = newSelection))
+                            }
+                        },
+                        color = SilkColors.primary.copy(alpha = 0.15f),
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        Text("@Silk", modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), style = MaterialTheme.typography.bodyMedium, color = SilkColors.primary)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        if (showMentionMenu) {
+                            val filteredUsers = sessionUsers.filter { (_, name) ->
+                                mentionSearchText.isEmpty() || name.lowercase().contains(mentionSearchText.lowercase())
+                            }
+                            Card(
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                shape = RoundedCornerShape(8.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                            ) {
+                                if (filteredUsers.isEmpty()) {
+                                    Text("无匹配用户", modifier = Modifier.padding(12.dp, 16.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                } else {
+                                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                                        items(filteredUsers.size) { index ->
+                                            val (userId, userName) = filteredUsers[index]
+                                            val displayName = if (isAgentUserId(userId)) "Silk" else userName
+                                            Surface(
+                                                onClick = {
+                                                    val beforeAt = messageText.text.substring(0, mentionStartIndex.coerceAtLeast(0))
+                                                    val newText = "$beforeAt@$displayName "
+                                                    onMessageTextChange(TextFieldValue(text = newText, selection = TextRange(newText.length)))
+                                                    onMentionMenuChange(false)
+                                                    onMentionStartIndexChange(-1)
+                                                },
+                                                modifier = Modifier.fillMaxWidth(),
+                                            ) {
+                                                Text(
+                                                    text = userName,
+                                                    modifier = Modifier.padding(10.dp, 12.dp),
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = if (isAgentUserId(userId)) FontWeight.SemiBold else FontWeight.Normal,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+                        if (isVoiceRecording) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("录音中...", color = Color(0xFFFF4D4F), fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                                Button(
+                                    onClick = {
+                                        onVoiceRecordingChange(false)
+                                        onTranscribingChange(true)
+                                        val recorder = mediaRecorderRef.value
+                                        val filePath = audioFilePathRef.value
+                                        try { recorder?.stop() } catch (_: Exception) {}
+                                        try { recorder?.release() } catch (_: Exception) {}
+                                        mediaRecorderRef.value = null
+                                        scope.launch {
+                                            try {
+                                                runLoggedSuspendAction("语音识别出错", addLog) {
+                                                    val file = java.io.File(filePath)
+                                                    if (file.exists()) {
+                                                        val bytes = file.readBytes()
+                                                        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                                                        val result = ApiClient.transcribeAudio(base64, "m4a")
+                                                        if (result.success && result.text.isNotBlank()) {
+                                                            val current = messageText.text
+                                                            val newText = if (current.isNotBlank()) "$current ${result.text}" else result.text
+                                                            onMessageTextChange(TextFieldValue(newText, TextRange(newText.length)))
+                                                        } else {
+                                                            addLog("ASR 失败: ${result.error ?: "未知错误"}")
+                                                        }
+                                                        file.delete()
+                                                    }
+                                                }
+                                            } finally {
+                                                onTranscribingChange(false)
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4D4F)),
+                                    modifier = Modifier.height(56.dp),
+                                ) {
+                                    Icon(Icons.Default.Stop, contentDescription = "停止录音", tint = Color.White)
+                                }
+                            }
+                        } else if (isTranscribing) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = SilkColors.primary)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("识别中...", color = Color.Gray)
+                            }
+                        } else {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = messageText,
+                                    onValueChange = { newValue ->
+                                        val oldText = messageText.text
+                                        onMessageTextChange(newValue)
+                                        val newText = newValue.text
+                                        if (newText.length > oldText.length && newText.lastOrNull() == '@') {
+                                            onMentionMenuChange(true)
+                                            onMentionStartIndexChange(newText.length - 1)
+                                            onMentionSearchTextChange("")
+                                            return@OutlinedTextField
+                                        }
+                                        if (showMentionMenu && mentionStartIndex >= 0) {
+                                            if (mentionStartIndex >= newText.length || newText.getOrNull(mentionStartIndex) != '@') {
+                                                onMentionMenuChange(false)
+                                                onMentionStartIndexChange(-1)
+                                            } else {
+                                                val textAfterAt = newText.substring(mentionStartIndex + 1)
+                                                val spaceIndex = textAfterAt.indexOf(' ')
+                                                if (spaceIndex >= 0) {
+                                                    onMentionMenuChange(false)
+                                                    onMentionStartIndexChange(-1)
+                                                } else {
+                                                    onMentionSearchTextChange(textAfterAt)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    placeholder = { Text(if (group.name.startsWith("[Silk]")) "直接输入消息与 Silk 对话..." else "输入消息... @ 提及成员 / @silk 提问AI") },
+                                    maxLines = 3,
+                                )
+                                IconButton(
+                                    onClick = {
+                                        if (!micPermissionGranted) {
+                                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                            return@IconButton
+                                        }
+                                        runCatching {
+                                            val filePath = "${context.cacheDir.absolutePath}/silk_voice_${System.currentTimeMillis()}.m4a"
+                                            audioFilePathRef.value = filePath
+                                            @Suppress("DEPRECATION")
+                                            val recorder = MediaRecorder().apply {
+                                                setAudioSource(MediaRecorder.AudioSource.MIC)
+                                                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                                                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                                                setAudioSamplingRate(16000)
+                                                setAudioChannels(1)
+                                                setOutputFile(filePath)
+                                                prepare()
+                                                start()
+                                            }
+                                            mediaRecorderRef.value = recorder
+                                            onVoiceRecordingChange(true)
+                                        }.onFailure { error ->
+                                            if (error is CancellationException) throw error
+                                            addLog("无法启动录音: ${error.message}")
+                                        }
+                                    },
+                                    modifier = Modifier.size(48.dp),
+                                ) {
+                                    Icon(Icons.Default.Mic, contentDescription = "语音输入", tint = Color.Gray)
+                                }
+                                val showStopButton = isGenerating || isWaitingForAI
+                                if (showStopButton) {
+                                    Button(
+                                        onClick = {
+                                            chatClient.stopGeneration(user.id, user.fullName)
+                                            onWaitingForAiChange(false)
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4D4F)),
+                                        modifier = Modifier.height(56.dp),
+                                    ) {
+                                        Text("停止", color = Color.White)
+                                    }
+                                } else {
+                                    Button(
+                                        onClick = {
+                                            if (messageText.text.isNotBlank()) {
+                                                val msgContent = messageText.text
+                                                addLog("📤 发送消息: ${msgContent.take(20)}...")
+                                                if (msgContent.lowercase().startsWith("@silk") || isSilkPrivateChat) {
+                                                    onWaitingForAiChange(true)
+                                                    addLog("⏳ 开始等待 AI 响应...")
+                                                }
+                                                scope.launch {
+                                                    chatClient.sendMessage(user.id, user.fullName, msgContent)
+                                                    addLog("✅ 消息已发送")
+                                                    onMessageTextChange(TextFieldValue(""))
+                                                }
+                                            }
+                                        },
+                                        enabled = messageText.text.isNotBlank(),
+                                        colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+                                        modifier = Modifier.height(56.dp),
+                                    ) {
+                                        Icon(Icons.Default.Send, contentDescription = "发送")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.errorContainer) {
+            Text("连接已断开，正在重新连接...", modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer)
+        }
+    }
+}
+
+@Composable
+@Suppress("CyclomaticComplexMethod")
+private fun ChatScreenDialogsHost(
+    appState: AppState,
+    user: User,
+    group: Group,
+    context: Context,
+    chatClient: ChatClient,
+    messages: List<Message>,
+    debugLogs: SnapshotStateList<String>,
+    connectionState: ConnectionState,
+    showDebugInfo: Boolean,
+    showInvitationDialog: Boolean,
+    showAddMemberDialog: Boolean,
+    contacts: List<Contact>,
+    groupMembers: List<GroupMember>,
+    isLoadingContacts: Boolean,
+    addMemberResult: String?,
+    showMembersDialog: Boolean,
+    selectedMemberForInvite: GroupMember?,
+    isInvitingMember: Boolean,
+    inviteMemberResult: String?,
+    showFolderExplorer: Boolean,
+    folderFiles: List<FileItem>,
+    processedUrls: List<String>,
+    isLoadingFiles: Boolean,
+    showAddContactConfirm: Message?,
+    isAddingContact: Boolean,
+    addContactResult: String?,
+    showForwardToGroupDialog: Boolean,
+    showForwardToContactDialog: Boolean,
+    userGroups: List<Group>,
+    isLoadingGroups: Boolean,
+    selectedMessages: SnapshotStateList<String>,
+    messageToForward: Message?,
+    forwardResult: String?,
+    onShowDebugInfo: (Boolean) -> Unit,
+    onShowInvitationDialog: (Boolean) -> Unit,
+    onShowAddMemberDialog: (Boolean) -> Unit,
+    onAddMemberResult: (String?) -> Unit,
+    onShowMembersDialog: (Boolean) -> Unit,
+    onSelectedMemberForInvite: (GroupMember?) -> Unit,
+    onInvitingMemberChange: (Boolean) -> Unit,
+    onInviteMemberResult: (String?) -> Unit,
+    onShowFolderExplorer: (Boolean) -> Unit,
+    onShowAddContactConfirm: (Message?) -> Unit,
+    onAddingContactChange: (Boolean) -> Unit,
+    onAddContactResult: (String?) -> Unit,
+    onShowForwardToGroupDialog: (Boolean) -> Unit,
+    onShowForwardToContactDialog: (Boolean) -> Unit,
+    onMessageToForward: (Message?) -> Unit,
+    onForwardResult: (String?) -> Unit,
+    onSelectionModeChange: (Boolean) -> Unit,
+    onClearSelectedMessages: () -> Unit,
+    onGroupMembersLoaded: (List<GroupMember>) -> Unit,
+    addLog: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
     if (showDebugInfo) {
         AlertDialog(
-            onDismissRequest = { showDebugInfo = false },
+            onDismissRequest = { onShowDebugInfo(false) },
             title = { Text("🐛 调试信息") },
             text = {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 400.dp)
-                ) {
+                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
                     items(debugLogs.size) { index ->
-                        Text(
-                            text = debugLogs[index],
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(vertical = 2.dp)
-                        )
+                        Text(text = debugLogs[index], style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 2.dp))
                     }
                     item {
                         Divider(modifier = Modifier.padding(vertical = 8.dp))
@@ -1585,49 +1641,26 @@ fun ChatScreen(appState: AppState) {
                                 ConnectionState.CONNECTED -> MaterialTheme.colorScheme.primary
                                 ConnectionState.CONNECTING -> MaterialTheme.colorScheme.secondary
                                 ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.error
-                            }
+                            },
                         )
                     }
                 }
             },
-            confirmButton = {
-                Button(onClick = { showDebugInfo = false }) {
-                    Text("关闭")
-                }
-            },
+            confirmButton = { Button(onClick = { onShowDebugInfo(false) }) { Text("关闭") } },
             dismissButton = {
                 TextButton(
                     onClick = {
-                        // 复制日志到剪贴板
-                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
-                            as android.content.ClipboardManager
-                        val clip = android.content.ClipData.newPlainText(
-                            "调试日志",
-                            debugLogs.joinToString("\n")
-                        )
-                        clipboard.setPrimaryClip(clip)
-                        android.widget.Toast.makeText(
-                            context,
-                            "日志已复制到剪贴板",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("调试日志", debugLogs.joinToString("\n")))
+                        android.widget.Toast.makeText(context, "日志已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
                     }
-                ) {
-                    Text("复制日志")
-                }
-            }
+                ) { Text("复制日志") }
+            },
         )
     }
-    
-    // 邀请对话框
     if (showInvitationDialog) {
-        InvitationDialog(
-            group = group,
-            onDismiss = { showInvitationDialog = false }
-        )
+        InvitationDialog(group = group, onDismiss = { onShowInvitationDialog(false) })
     }
-    
-    // 添加成员对话框
     if (showAddMemberDialog) {
         AddMemberDialog(
             contacts = contacts,
@@ -1637,25 +1670,23 @@ fun ChatScreen(appState: AppState) {
             onAddMember = { contact ->
                 scope.launch {
                     val response = ApiClient.addMemberToGroup(group.id, contact.contactId)
-                    addMemberResult = if (response.success) {
-                        // 刷新成员列表
-                        val membersResponse = ApiClient.getGroupMembers(group.id)
-                        // 将群主排在第一位
-                        groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                        "✅ 已添加 ${contact.contactName}"
-                    } else {
-                        "❌ ${response.message}"
-                    }
+                    onAddMemberResult(
+                        if (response.success) {
+                            val membersResponse = ApiClient.getGroupMembers(group.id)
+                            onGroupMembersLoaded(membersResponse.members.sortedByDescending { it.id == group.hostId })
+                            "✅ 已添加 ${contact.contactName}"
+                        } else {
+                            "❌ ${response.message}"
+                        }
+                    )
                 }
             },
-            onDismiss = { 
-                showAddMemberDialog = false
-                addMemberResult = null
-            }
+            onDismiss = {
+                onShowAddMemberDialog(false)
+                onAddMemberResult(null)
+            },
         )
     }
-    
-    // 查看成员对话框
     if (showMembersDialog) {
         MembersDialog(
             members = groupMembers,
@@ -1663,70 +1694,45 @@ fun ChatScreen(appState: AppState) {
             currentUserId = user.id,
             isLoading = isLoadingContacts,
             onMemberClick = { member ->
-                // 检查是否是联系人
                 val isContact = contacts.any { it.contactId == member.id }
                 if (isContact) {
-                    // 是联系人，跳转到与该联系人的对话
                     scope.launch {
-                        showMembersDialog = false
-                        // 先断开当前WebSocket
-                        disconnectChatClientQuietly(chatClient, ::addLog)
-                        
-                        // 调用API获取或创建与该联系人的对话
+                        onShowMembersDialog(false)
+                        disconnectChatClientQuietly(chatClient, addLog)
                         val response = ApiClient.startPrivateChat(user.id, member.id)
                         if (response.success && response.group != null) {
-                            // 导航到新的对话
                             appState.selectGroup(response.group!!)
                         } else {
-                            android.widget.Toast.makeText(
-                                context,
-                                "无法创建对话: ${response.message}",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
+                            android.widget.Toast.makeText(context, "无法创建对话: ${response.message}", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }
                 } else {
-                    // 不是联系人，弹出邀请确认
-                    selectedMemberForInvite = member
+                    onSelectedMemberForInvite(member)
                 }
             },
-            onDismiss = { 
-                showMembersDialog = false
-                selectedMemberForInvite = null
-                inviteMemberResult = null
-            }
+            onDismiss = {
+                onShowMembersDialog(false)
+                onSelectedMemberForInvite(null)
+                onInviteMemberResult(null)
+            },
         )
     }
-    
-    // 邀请成员加入联系人确认对话框
     selectedMemberForInvite?.let { member ->
         AlertDialog(
-            onDismissRequest = { 
-                selectedMemberForInvite = null 
-                inviteMemberResult = null
+            onDismissRequest = {
+                onSelectedMemberForInvite(null)
+                onInviteMemberResult(null)
             },
-            title = { 
-                Text(
-                    "添加联系人",
-                    fontWeight = FontWeight.Bold,
-                    color = SilkColors.primary
-                )
-            },
+            title = { Text("添加联系人", fontWeight = FontWeight.Bold, color = SilkColors.primary) },
             text = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                     Text("${member.fullName} 不在您的联系人列表中。")
                     Text("是否发送联系人请求？")
-                    
-                    if (inviteMemberResult != null) {
+                    inviteMemberResult?.let { result ->
                         Text(
-                            text = inviteMemberResult!!,
-                            color = if (inviteMemberResult!!.contains("成功") || inviteMemberResult!!.contains("已发送")) 
-                                SilkColors.success else SilkColors.error,
-                            style = MaterialTheme.typography.bodySmall
+                            text = result,
+                            color = if (result.contains("成功") || result.contains("已发送")) SilkColors.success else SilkColors.error,
+                            style = MaterialTheme.typography.bodySmall,
                         )
                     }
                 }
@@ -1735,108 +1741,66 @@ fun ChatScreen(appState: AppState) {
                 Button(
                     onClick = {
                         scope.launch {
-                            isInvitingMember = true
-                            inviteMemberResult = null
-                            
+                            onInvitingMemberChange(true)
+                            onInviteMemberResult(null)
                             val response = ApiClient.sendContactRequestById(user.id, member.id)
-                            inviteMemberResult = if (response.success) {
-                                "✅ 联系人请求已发送"
-                            } else {
-                                "❌ ${response.message}"
-                            }
-                            
-                            isInvitingMember = false
-                            
-                            // 成功后延迟关闭对话框
+                            onInviteMemberResult(if (response.success) "✅ 联系人请求已发送" else "❌ ${response.message}")
+                            onInvitingMemberChange(false)
                             if (response.success) {
                                 kotlinx.coroutines.delay(1500)
-                                selectedMemberForInvite = null
-                                inviteMemberResult = null
+                                onSelectedMemberForInvite(null)
+                                onInviteMemberResult(null)
                             }
                         }
                     },
                     enabled = !isInvitingMember && inviteMemberResult == null,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SilkColors.primary
-                    )
+                    colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
                 ) {
                     if (isInvitingMember) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                     } else {
                         Text("发送请求")
                     }
                 }
             },
             dismissButton = {
-                TextButton(
-                    onClick = { 
-                        selectedMemberForInvite = null 
-                        inviteMemberResult = null
-                    }
-                ) {
-                    Text("取消")
-                }
-            }
+                TextButton(onClick = {
+                    onSelectedMemberForInvite(null)
+                    onInviteMemberResult(null)
+                }) { Text("取消") }
+            },
         )
     }
-    
-    // 文件夹浏览对话框
     if (showFolderExplorer) {
         FolderExplorerDialog(
             files = folderFiles,
             processedUrls = processedUrls,
             isLoading = isLoadingFiles,
-            onDismiss = { showFolderExplorer = false },
+            onDismiss = { onShowFolderExplorer(false) },
             onFileClick = { file ->
-                val relativeDownloadUrl = file.downloadUrl.ifEmpty {
-                    "/api/files/download/${Uri.encode(group.id)}/${Uri.encode(file.name)}"
-                }
-                val intent = Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse("${BackendUrlHolder.getBaseUrl()}$relativeDownloadUrl")
-                )
-                context.startActivity(intent)
+                val relativeDownloadUrl = file.downloadUrl.ifEmpty { "/api/files/download/${Uri.encode(group.id)}/${Uri.encode(file.name)}" }
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("${BackendUrlHolder.getBaseUrl()}$relativeDownloadUrl")))
             },
             onUrlClick = { url ->
-                // 打开原始 URL
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                context.startActivity(intent)
-            }
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            },
         )
     }
-    
-    // 添加联系人确认对话框
     showAddContactConfirm?.let { clickedMessage ->
         AlertDialog(
-            onDismissRequest = { 
-                showAddContactConfirm = null 
-                addContactResult = null
+            onDismissRequest = {
+                onShowAddContactConfirm(null)
+                onAddContactResult(null)
             },
-            title = { 
-                Text(
-                    "添加联系人",
-                    fontWeight = FontWeight.Bold,
-                    color = SilkColors.primary
-                )
-            },
+            title = { Text("添加联系人", fontWeight = FontWeight.Bold, color = SilkColors.primary) },
             text = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                     Text("是否将 ${clickedMessage.userName} 添加为联系人？")
-                    
-                    if (addContactResult != null) {
+                    addContactResult?.let { result ->
                         Text(
-                            text = addContactResult!!,
-                            color = if (addContactResult!!.contains("成功") || addContactResult!!.contains("已发送")) 
-                                SilkColors.success else SilkColors.error,
-                            style = MaterialTheme.typography.bodySmall
+                            text = result,
+                            color = if (result.contains("成功") || result.contains("已发送")) SilkColors.success else SilkColors.error,
+                            style = MaterialTheme.typography.bodySmall,
                         )
                     }
                 }
@@ -1845,163 +1809,133 @@ fun ChatScreen(appState: AppState) {
                 Button(
                     onClick = {
                         scope.launch {
-                            isAddingContact = true
-                            addContactResult = null
-                            
+                            onAddingContactChange(true)
+                            onAddContactResult(null)
                             val response = ApiClient.sendContactRequestById(user.id, clickedMessage.userId)
-                            addContactResult = if (response.success) {
-                                "联系人请求已发送"
-                            } else {
-                                response.message
-                            }
-                            
-                            isAddingContact = false
-                            
-                            // 成功后延迟关闭对话框
+                            onAddContactResult(if (response.success) "联系人请求已发送" else response.message)
+                            onAddingContactChange(false)
                             if (response.success) {
                                 kotlinx.coroutines.delay(1500)
-                                showAddContactConfirm = null
-                                addContactResult = null
+                                onShowAddContactConfirm(null)
+                                onAddContactResult(null)
                             }
                         }
                     },
                     enabled = !isAddingContact && addContactResult == null,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SilkColors.primary
-                    )
+                    colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
                 ) {
                     if (isAddingContact) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                     } else {
                         Text("发送请求")
                     }
                 }
             },
             dismissButton = {
-                TextButton(
-                    onClick = { 
-                        showAddContactConfirm = null 
-                        addContactResult = null
-                    }
-                ) {
-                    Text("取消")
-                }
-            }
+                TextButton(onClick = {
+                    onShowAddContactConfirm(null)
+                    onAddContactResult(null)
+                }) { Text("取消") }
+            },
         )
     }
-    
-    // ==================== 转发到群组对话框 ====================
     if (showForwardToGroupDialog) {
-        // 支持单条消息转发（AI消息）和多条消息转发（选择模式）
-        val messagesToForward = if (messageToForward != null) {
-            listOf(messageToForward!!)
-        } else {
-            messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
-        }
-        
+        val messagesToForward = if (messageToForward != null) listOf(messageToForward) else messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
         ForwardToGroupDialog(
             groups = userGroups,
             isLoading = isLoadingGroups,
-            selectedMessages = messagesToForward,
+            selectedMessages = messagesToForward.filterNotNull(),
             onForward = { targetGroup ->
                 scope.launch {
-                    forwardResult = null
-                    val forwardMessage =
-                        if (messageToForward != null) {
-                            buildForwardPayloadForSingle(group.name, messageToForward!!)
-                        } else {
-                            buildForwardPayloadForBatch(group.name, messagesToForward)
-                        }
-                    val success = ApiClient.sendMessageToGroup(
-                        groupId = targetGroup.id,
-                        userId = user.id,
-                        userName = user.fullName,
-                        content = forwardMessage
-                    )
-                    
+                    onForwardResult(null)
+                    val forwardMessage = if (messageToForward != null) buildForwardPayloadForSingle(group.name, messageToForward) else buildForwardPayloadForBatch(group.name, messagesToForward.filterNotNull())
+                    val success = ApiClient.sendMessageToGroup(targetGroup.id, user.id, user.fullName, forwardMessage)
                     if (success) {
-                        forwardResult = "✅ 已转发到 ${targetGroup.name}"
-                        android.widget.Toast.makeText(
-                            context,
-                            "已转发 ${messagesToForward.size} 条消息到 ${targetGroup.name}",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        onForwardResult("✅ 已转发到 ${targetGroup.name}")
+                        android.widget.Toast.makeText(context, "已转发 ${messagesToForward.size} 条消息到 ${targetGroup.name}", android.widget.Toast.LENGTH_SHORT).show()
                         kotlinx.coroutines.delay(1000)
-                        showForwardToGroupDialog = false
-                        isSelectionMode = false
-                        selectedMessages.clear()
-                        messageToForward = null  // 清除单条消息转发状态
-                        forwardResult = null
+                        onShowForwardToGroupDialog(false)
+                        onSelectionModeChange(false)
+                        onClearSelectedMessages()
+                        onMessageToForward(null)
+                        onForwardResult(null)
                     } else {
-                        forwardResult = "❌ 转发失败"
+                        onForwardResult("❌ 转发失败")
                     }
                 }
             },
             onDismiss = {
-                showForwardToGroupDialog = false
-                messageToForward = null  // 清除单条消息转发状态
-                forwardResult = null
+                onShowForwardToGroupDialog(false)
+                onMessageToForward(null)
+                onForwardResult(null)
             },
-            result = forwardResult
+            result = forwardResult,
         )
     }
-    
-    // ==================== 转发到联系人对话框 ====================
     if (showForwardToContactDialog) {
-        val messagesToForwardContact =
-            messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
+        val messagesToForward = messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
         ForwardToContactDialog(
             contacts = contacts,
             isLoading = isLoadingContacts,
-            selectedMessages = messagesToForwardContact,
+            selectedMessages = messagesToForward,
             onForward = { contact ->
                 scope.launch {
-                    forwardResult = null
-                    
-                    // 先获取或创建与联系人的私聊
+                    onForwardResult(null)
                     val chatResponse = ApiClient.startPrivateChat(user.id, contact.contactId)
                     if (chatResponse.success && chatResponse.group != null) {
-                        val forwardMessage =
-                            buildForwardPayloadForBatch(group.name, messagesToForwardContact)
                         val success = ApiClient.sendMessageToGroup(
                             groupId = chatResponse.group!!.id,
                             userId = user.id,
                             userName = user.fullName,
-                            content = forwardMessage
+                            content = buildForwardPayloadForBatch(group.name, messagesToForward),
                         )
-                        
                         if (success) {
-                            forwardResult = "✅ 已转发给 ${contact.contactName}"
-                            android.widget.Toast.makeText(
-                                context,
-                                "已转发 ${selectedMessages.size} 条消息给 ${contact.contactName}",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
+                            onForwardResult("✅ 已转发给 ${contact.contactName}")
+                            android.widget.Toast.makeText(context, "已转发 ${selectedMessages.size} 条消息给 ${contact.contactName}", android.widget.Toast.LENGTH_SHORT).show()
                             kotlinx.coroutines.delay(1000)
-                            showForwardToContactDialog = false
-                            isSelectionMode = false
-                            selectedMessages.clear()
-                            forwardResult = null
+                            onShowForwardToContactDialog(false)
+                            onSelectionModeChange(false)
+                            onClearSelectedMessages()
+                            onForwardResult(null)
                         } else {
-                            forwardResult = "❌ 转发失败"
+                            onForwardResult("❌ 转发失败")
                         }
                     } else {
-                        forwardResult = "❌ 无法创建对话: ${chatResponse.message}"
+                        onForwardResult("❌ 无法创建对话: ${chatResponse.message}")
                     }
                 }
             },
             onDismiss = {
-                showForwardToContactDialog = false
-                forwardResult = null
+                onShowForwardToContactDialog(false)
+                onForwardResult(null)
             },
-            result = forwardResult
+            result = forwardResult,
         )
     }
 }
+
+private suspend fun handleChatBackNavigation(
+    appState: AppState,
+    group: Group,
+    user: User,
+    chatClient: ChatClient,
+    isExiting: Boolean,
+    onExitingChange: (Boolean) -> Unit,
+) {
+    if (isExiting) return
+    onExitingChange(true)
+    chatClient.disconnect()
+    chatClient.clearMessages()
+    kotlinx.coroutines.delay(500)
+    if (ApiClient.markGroupAsRead(user.id, group.id)) {
+        println("✅ 已标记群组 ${group.id} 为已读")
+    } else {
+        println("⚠️ 标记已读失败")
+    }
+    appState.navigateBack()
+}
+
+private fun connectionStateOf(chatClient: ChatClient): ConnectionState = chatClient.connectionState.value
 
 // ==================== AI 消息卡片组件 ====================
 
