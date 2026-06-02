@@ -1281,49 +1281,7 @@ fun ChatScreen(appState: AppState) {
                             },
                             isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
                             onThinkingExpandChange = { messageId, expanded ->
-                                val reversedMessages = messages.reversed()
-                                val idx = reversedMessages.indexOfFirst { it.id == messageId }
-                                val itemOffset = (if (transientMessage != null) 1 else 0) +
-                                    (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
-                                val targetIdx = if (idx >= 0) itemOffset + idx else -1
-
-                                if (expanded) {
-                                    thinkingExpandedStates[messageId] = true
-                                    if (targetIdx >= 0) {
-                                        expandScrollJob?.cancel()
-                                        expandScrollJob = scopeForScroll.launch {
-                                            kotlinx.coroutines.delay(80)
-                                            listState.scrollToItem(targetIdx, 0)
-
-                                            var prevSize = listState.layoutInfo.visibleItemsInfo
-                                                .firstOrNull { it.index == targetIdx }?.size ?: 0
-                                            kotlinx.coroutines.withTimeoutOrNull(3000L) {
-                                                snapshotFlow {
-                                                    listState.layoutInfo.visibleItemsInfo
-                                                        .firstOrNull { it.index == targetIdx }?.size ?: 0
-                                                }
-                                                .distinctUntilChanged()
-                                                .collect { size ->
-                                                    if (size > 0 && prevSize > 0 && size > prevSize) {
-                                                        listState.scroll { scrollBy((size - prevSize).toFloat()) }
-                                                    }
-                                                    if (size > 0) prevSize = size
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    expandScrollJob?.cancel()
-                                    expandScrollJob = null
-                                    if (targetIdx >= 0) {
-                                        scopeForScroll.launch {
-                                            listState.scrollToItem(targetIdx, 0)
-                                            thinkingExpandedStates[messageId] = false
-                                        }
-                                    } else {
-                                        thinkingExpandedStates[messageId] = false
-                                    }
-                                }
+                                thinkingExpandedStates[messageId] = expanded
                             },
                             isToolsExpanded = toolsExpandedStates[message.id] ?: false,
                             onToolsExpandChange = { messageId, expanded ->
