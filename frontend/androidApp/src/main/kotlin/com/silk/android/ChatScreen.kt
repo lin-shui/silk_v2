@@ -15,6 +15,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
@@ -25,6 +27,12 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -991,7 +999,7 @@ fun ChatScreen(appState: AppState) {
                     .fillMaxWidth(),
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                reverseLayout = true  // 从底部开始显示，最新消息贴近输入框
+                reverseLayout = true  // 最新消息在底部
             ) {
                 if (messages.isEmpty() && transientMessage == null && statusMessages.isEmpty() && !isWaitingForAI) {
                     item {
@@ -2500,6 +2508,9 @@ fun ThinkingBlock(
 ) {
     var elapsedSeconds by remember { mutableLongStateOf(0L) }
     val startEpochMs = remember { System.currentTimeMillis() }
+    val density = LocalDensity.current
+    var contentHeightDp by remember { mutableStateOf(0.dp) }
+    val show = isExpanded || !isComplete
 
     LaunchedEffect(isComplete) {
         if (isComplete) {
@@ -2520,7 +2531,10 @@ fun ThinkingBlock(
         "Thinking ${elapsedSeconds}s..."
     }
 
-    val show = isExpanded || !isComplete
+    val targetOffset by animateDpAsState(
+        targetValue = if (show) 0.dp else -contentHeightDp,
+        animationSpec = tween(250)
+    )
 
     Column(
         modifier = Modifier
@@ -2551,12 +2565,20 @@ fun ThinkingBlock(
                 color = Color(0xFFC0B0A0)
             )
         }
-        AnimatedVisibility(
-            visible = show,
-            enter = expandVertically(animationSpec = tween(200)),
-            exit = shrinkVertically(animationSpec = tween(200))
+        // Fixed-height box: always reserves space so LazyColumn never repositions.
+        // Content slides in/out via offset animation.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = contentHeightDp)
+                .clipToBounds()
         ) {
-            Column {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .offset(y = targetOffset)
+                    .onSizeChanged { size -> contentHeightDp = with(density) { size.height.toDp() } }
+            ) {
                 Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
                 Text(
                     text = thinkingText,
