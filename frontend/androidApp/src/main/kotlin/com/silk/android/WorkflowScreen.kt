@@ -291,206 +291,69 @@ private fun CreateWorkflowDialog(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
 
-    // 打开时检查 Bridge 连接状态、拉 agent 列表、拉默认目录
     LaunchedEffect(Unit) {
-        val agents = ApiClient.listAgents(userId)
-        availableAgents = agents
-        bridgeConnected = agents.any { it.connected }
-        if (selectedAgentType.isBlank()) {
-            val codexOk = agents.firstOrNull { it.agentType == "codex" && it.connected } != null
-            val ccOk = agents.firstOrNull { it.agentType == "claude_code" && it.connected } != null
-            selectedAgentType = when {
-                codexOk -> "codex"
-                ccOk -> "claude_code"
-                else -> "claude_code"
-            }
-        }
-        if (newInitialDir.isBlank() && bridgeConnected) {
-            dirWarning = null
-            val resp = ApiClient.listCcDir(userId, null)
-            if (resp.success && resp.path.isNotBlank()) {
-                newInitialDir = resp.path
-            } else {
-                dirWarning = resp.error ?: "无法获取默认目录"
-            }
-        }
+        initializeCreateWorkflowDialog(
+            userId = userId,
+            selectedAgentType = selectedAgentType,
+            newInitialDir = newInitialDir,
+            onAgentsLoaded = { agents ->
+                availableAgents = agents
+                bridgeConnected = agents.any { it.connected }
+            },
+            onSelectedAgentType = { selectedAgentType = it },
+            onInitialDirLoaded = { path, warning ->
+                newInitialDir = path
+                dirWarning = warning
+            },
+        )
     }
 
     val canCreate = !submitting && bridgeConnected &&
-                    newName.isNotBlank() && newInitialDir.isNotBlank()
-
-    val permModeLabel = { mode: String ->
-        when (mode) {
-            "ACCEPT_EDITS" -> "Accept Edits"
-            "BYPASS" -> "Bypass"
-            else -> "Interactive"
-        }
-    }
+        newName.isNotBlank() && newInitialDir.isNotBlank()
 
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
         title = { Text("创建工作流") },
         text = {
-            Column {
-                OutlinedTextField(
-                    value = newName,
-                    onValueChange = { newName = it },
-                    label = { Text("工作流名称") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                )
-                Spacer(Modifier.height(12.dp))
-
-                // Agent 选择
-                Text("Agent", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
-                Spacer(Modifier.height(4.dp))
-                Box {
-                    OutlinedTextField(
-                        value = availableAgents.firstOrNull { it.agentType == selectedAgentType }?.displayName ?: selectedAgentType,
-                        onValueChange = {},
-                        readOnly = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        trailingIcon = {
-                            IconButton(onClick = { agentDropdownExpanded = true }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "选择")
-                            }
-                        },
-                    )
-                    DropdownMenu(
-                        expanded = agentDropdownExpanded,
-                        onDismissRequest = { agentDropdownExpanded = false },
-                    ) {
-                        availableAgents.forEach { agent ->
-                            DropdownMenuItem(
-                                text = {
-                                    val suffix = if (agent.connected) "" else "（未连接）"
-                                    Text("${agent.displayName}$suffix")
-                                },
-                                onClick = {
-                                    selectedAgentType = agent.agentType
-                                    agentDropdownExpanded = false
-                                },
-                                enabled = agent.connected,
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-
-                // 权限模式
-                Text("权限模式", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
-                Spacer(Modifier.height(4.dp))
-                Box {
-                    OutlinedTextField(
-                        value = permModeLabel(selectedPermMode),
-                        onValueChange = {},
-                        readOnly = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        trailingIcon = {
-                            IconButton(onClick = { permDropdownExpanded = true }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "选择")
-                            }
-                        },
-                    )
-                    DropdownMenu(
-                        expanded = permDropdownExpanded,
-                        onDismissRequest = { permDropdownExpanded = false },
-                    ) {
-                        listOf("" to "Interactive", "ACCEPT_EDITS" to "Accept Edits", "BYPASS" to "Bypass").forEach { (value, label) ->
-                            DropdownMenuItem(
-                                text = { Text(label) },
-                                onClick = {
-                                    selectedPermMode = value
-                                    permDropdownExpanded = false
-                                },
-                            )
-                        }
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-
-                // 工作目录
-                Text("工作目录", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
-                Spacer(Modifier.height(4.dp))
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = newInitialDir,
-                        onValueChange = { newInitialDir = it },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        enabled = bridgeConnected,
-                        placeholder = {
-                            Text(
-                                when {
-                                    !bridgeConnected -> "Bridge 未连接，请先启动 Bridge"
-                                    dirWarning != null -> "请输入或选择工作目录"
-                                    else -> "加载默认目录中…"
-                                },
-                            )
-                        },
-                    )
-                    TextButton(
-                        onClick = { showFolderPicker = true },
-                        enabled = bridgeConnected,
-                    ) { Text("📂 选择") }
-                }
-                if (!bridgeConnected) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "⚠ Bridge 未连接。请先启动 Bridge Agent 再创建工作流。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = SilkColors.error,
-                    )
-                } else if (dirWarning != null) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "⚠ $dirWarning，请手动输入或选择工作目录。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = SilkColors.warning,
-                    )
-                }
-            }
+            CreateWorkflowDialogContent(
+                newName = newName,
+                newInitialDir = newInitialDir,
+                availableAgents = availableAgents,
+                selectedAgentType = selectedAgentType,
+                selectedPermMode = selectedPermMode,
+                agentDropdownExpanded = agentDropdownExpanded,
+                permDropdownExpanded = permDropdownExpanded,
+                bridgeConnected = bridgeConnected,
+                dirWarning = dirWarning,
+                onNameChange = { newName = it },
+                onInitialDirChange = { newInitialDir = it },
+                onAgentDropdownExpandedChange = { agentDropdownExpanded = it },
+                onPermDropdownExpandedChange = { permDropdownExpanded = it },
+                onAgentSelected = { selectedAgentType = it },
+                onPermSelected = { selectedPermMode = it },
+                onOpenFolderPicker = { showFolderPicker = true },
+            )
         },
         confirmButton = {
             Button(
                 onClick = {
                     if (!canCreate) return@Button
-                    val initDir = newInitialDir.trim()
-                    val name = newName.trim()
-                    val agentType = selectedAgentType.ifBlank { "claude_code" }
-                    val permMode = selectedPermMode
                     submitting = true
                     scope.launch {
-                        try {
-                            // 1. 信任目录检查
-                            when (val tc = ApiClient.checkTrustedDir(userId, initDir)) {
-                                is TrustCheckResult.BridgeDisconnected -> {
-                                    errorMessage = "Bridge 未连接，无法创建工作流。"
-                                    return@launch
-                                }
-                                is TrustCheckResult.Error -> {
-                                    errorMessage = "检查信任状态失败：${tc.message}"
-                                    return@launch
-                                }
-                                is TrustCheckResult.NotTrusted -> {
-                                    trustBridgeId = tc.bridgeId
-                                    showTrustConfirm = true
-                                    return@launch
-                                }
-                                is TrustCheckResult.Trusted -> {} // 继续
-                            }
-                            // 2. 已信任：直接创建
-                            performCreate(userId, name, initDir, agentType, permMode, onCreated) { msg ->
-                                errorMessage = msg
-                            }
-                        } finally {
-                            submitting = false
-                        }
+                        attemptCreateWorkflow(
+                            userId = userId,
+                            newName = newName,
+                            newInitialDir = newInitialDir,
+                            selectedAgentType = selectedAgentType,
+                            selectedPermMode = selectedPermMode,
+                            onCreated = onCreated,
+                            onNeedsTrust = { bridgeId ->
+                                trustBridgeId = bridgeId
+                                showTrustConfirm = true
+                            },
+                            onError = { errorMessage = it },
+                            setSubmitting = { submitting = it },
+                        )
                     }
                 },
                 enabled = canCreate,
@@ -502,15 +365,267 @@ private fun CreateWorkflowDialog(
         },
     )
 
+    CreateWorkflowAuxDialogs(
+        showFolderPicker = showFolderPicker,
+        userId = userId,
+        newInitialDir = newInitialDir,
+        showTrustConfirm = showTrustConfirm,
+        trustBridgeId = trustBridgeId,
+        errorMessage = errorMessage,
+        onDismissFolderPicker = { showFolderPicker = false },
+        onFolderPicked = { path ->
+            newInitialDir = path
+            showFolderPicker = false
+        },
+        onDismissTrustConfirm = {
+            showTrustConfirm = false
+            submitting = false
+        },
+        onTrust = {
+            submitting = true
+            scope.launch {
+                attemptTrustAndCreateWorkflow(
+                    userId = userId,
+                    newName = newName,
+                    newInitialDir = newInitialDir,
+                    selectedAgentType = selectedAgentType,
+                    selectedPermMode = selectedPermMode,
+                    onCreated = onCreated,
+                    onTrustHandled = { showTrustConfirm = false },
+                    onError = { errorMessage = it },
+                    setSubmitting = { submitting = it },
+                )
+            }
+        },
+        onDismissError = { errorMessage = null },
+    )
+}
+
+@Composable
+private fun CreateWorkflowDialogContent(
+    newName: String,
+    newInitialDir: String,
+    availableAgents: List<AgentInfo>,
+    selectedAgentType: String,
+    selectedPermMode: String,
+    agentDropdownExpanded: Boolean,
+    permDropdownExpanded: Boolean,
+    bridgeConnected: Boolean,
+    dirWarning: String?,
+    onNameChange: (String) -> Unit,
+    onInitialDirChange: (String) -> Unit,
+    onAgentDropdownExpandedChange: (Boolean) -> Unit,
+    onPermDropdownExpandedChange: (Boolean) -> Unit,
+    onAgentSelected: (String) -> Unit,
+    onPermSelected: (String) -> Unit,
+    onOpenFolderPicker: () -> Unit,
+) {
+    Column {
+        OutlinedTextField(
+            value = newName,
+            onValueChange = onNameChange,
+            label = { Text("工作流名称") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        Spacer(Modifier.height(12.dp))
+
+        CreateWorkflowAgentSelector(
+            availableAgents = availableAgents,
+            selectedAgentType = selectedAgentType,
+            expanded = agentDropdownExpanded,
+            onExpandedChange = onAgentDropdownExpandedChange,
+            onSelected = onAgentSelected,
+        )
+        Spacer(Modifier.height(12.dp))
+
+        CreateWorkflowPermissionSelector(
+            selectedPermMode = selectedPermMode,
+            expanded = permDropdownExpanded,
+            onExpandedChange = onPermDropdownExpandedChange,
+            onSelected = onPermSelected,
+        )
+        Spacer(Modifier.height(12.dp))
+
+        CreateWorkflowInitialDirField(
+            newInitialDir = newInitialDir,
+            bridgeConnected = bridgeConnected,
+            dirWarning = dirWarning,
+            onInitialDirChange = onInitialDirChange,
+            onOpenFolderPicker = onOpenFolderPicker,
+        )
+    }
+}
+
+@Composable
+private fun CreateWorkflowAgentSelector(
+    availableAgents: List<AgentInfo>,
+    selectedAgentType: String,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelected: (String) -> Unit,
+) {
+    CreateWorkflowFieldLabel(text = "Agent")
+    Box {
+        OutlinedTextField(
+            value = availableAgents.firstOrNull { it.agentType == selectedAgentType }?.displayName ?: selectedAgentType,
+            onValueChange = {},
+            readOnly = true,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            trailingIcon = {
+                IconButton(onClick = { onExpandedChange(true) }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "选择")
+                }
+            },
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) },
+        ) {
+            availableAgents.forEach { agent ->
+                DropdownMenuItem(
+                    text = {
+                        val suffix = if (agent.connected) "" else "（未连接）"
+                        Text("${agent.displayName}$suffix")
+                    },
+                    onClick = {
+                        onSelected(agent.agentType)
+                        onExpandedChange(false)
+                    },
+                    enabled = agent.connected,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CreateWorkflowPermissionSelector(
+    selectedPermMode: String,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelected: (String) -> Unit,
+) {
+    CreateWorkflowFieldLabel(text = "权限模式")
+    Box {
+        OutlinedTextField(
+            value = workflowPermissionModeLabel(selectedPermMode),
+            onValueChange = {},
+            readOnly = true,
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            trailingIcon = {
+                IconButton(onClick = { onExpandedChange(true) }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "选择")
+                }
+            },
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { onExpandedChange(false) },
+        ) {
+            listOf(
+                "" to "Interactive",
+                "ACCEPT_EDITS" to "Accept Edits",
+                "BYPASS" to "Bypass",
+            ).forEach { (value, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onSelected(value)
+                        onExpandedChange(false)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CreateWorkflowFieldLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.bodySmall,
+        color = SilkColors.textSecondary,
+    )
+    Spacer(Modifier.height(4.dp))
+}
+
+@Composable
+private fun CreateWorkflowInitialDirField(
+    newInitialDir: String,
+    bridgeConnected: Boolean,
+    dirWarning: String?,
+    onInitialDirChange: (String) -> Unit,
+    onOpenFolderPicker: () -> Unit,
+) {
+    CreateWorkflowFieldLabel(text = "工作目录")
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = newInitialDir,
+            onValueChange = onInitialDirChange,
+            modifier = Modifier.weight(1f),
+            singleLine = true,
+            enabled = bridgeConnected,
+            placeholder = {
+                Text(createWorkflowDirPlaceholder(bridgeConnected = bridgeConnected, dirWarning = dirWarning))
+            },
+        )
+        TextButton(
+            onClick = onOpenFolderPicker,
+            enabled = bridgeConnected,
+        ) { Text("📂 选择") }
+    }
+
+    when {
+        !bridgeConnected -> CreateWorkflowDirHint(
+            message = "⚠ Bridge 未连接。请先启动 Bridge Agent 再创建工作流。",
+            color = SilkColors.error,
+        )
+        dirWarning != null -> CreateWorkflowDirHint(
+            message = "⚠ $dirWarning，请手动输入或选择工作目录。",
+            color = SilkColors.warning,
+        )
+    }
+}
+
+@Composable
+private fun CreateWorkflowDirHint(
+    message: String,
+    color: Color,
+) {
+    Spacer(Modifier.height(6.dp))
+    Text(
+        text = message,
+        style = MaterialTheme.typography.bodySmall,
+        color = color,
+    )
+}
+
+@Composable
+private fun CreateWorkflowAuxDialogs(
+    showFolderPicker: Boolean,
+    userId: String,
+    newInitialDir: String,
+    showTrustConfirm: Boolean,
+    trustBridgeId: String?,
+    errorMessage: String?,
+    onDismissFolderPicker: () -> Unit,
+    onFolderPicked: (String) -> Unit,
+    onDismissTrustConfirm: () -> Unit,
+    onTrust: () -> Unit,
+    onDismissError: () -> Unit,
+) {
     if (showFolderPicker) {
         FolderPickerDialog(
             userId = userId,
             initialPath = newInitialDir.ifBlank { null },
-            onDismiss = { showFolderPicker = false },
-            onConfirm = { path ->
-                newInitialDir = path
-                showFolderPicker = false
-            },
+            onDismiss = onDismissFolderPicker,
+            onConfirm = onFolderPicked,
         )
     }
 
@@ -518,35 +633,129 @@ private fun CreateWorkflowDialog(
         TrustConfirmDialog(
             path = newInitialDir.trim(),
             bridgeId = trustBridgeId,
-            onDismiss = {
-                showTrustConfirm = false
-                submitting = false
-            },
-            onTrust = {
-                submitting = true
-                scope.launch {
-                    try {
-                        val added = ApiClient.addTrustedDir(userId, newInitialDir.trim())
-                        showTrustConfirm = false
-                        if (added) {
-                            performCreate(
-                                userId, newName.trim(), newInitialDir.trim(),
-                                selectedAgentType.ifBlank { "claude_code" }, selectedPermMode,
-                                onCreated,
-                            ) { msg -> errorMessage = msg }
-                        } else {
-                            errorMessage = "添加信任记录失败，请重试。"
-                        }
-                    } finally {
-                        submitting = false
-                    }
-                }
-            },
+            onDismiss = onDismissTrustConfirm,
+            onTrust = onTrust,
         )
     }
 
     errorMessage?.let { msg ->
-        WorkflowErrorDialog(message = msg, onDismiss = { errorMessage = null })
+        WorkflowErrorDialog(message = msg, onDismiss = onDismissError)
+    }
+}
+
+private fun workflowPermissionModeLabel(mode: String): String = when (mode) {
+    "ACCEPT_EDITS" -> "Accept Edits"
+    "BYPASS" -> "Bypass"
+    else -> "Interactive"
+}
+
+private fun createWorkflowDirPlaceholder(
+    bridgeConnected: Boolean,
+    dirWarning: String?,
+): String = when {
+    !bridgeConnected -> "Bridge 未连接，请先启动 Bridge"
+    dirWarning != null -> "请输入或选择工作目录"
+    else -> "加载默认目录中…"
+}
+
+private suspend fun initializeCreateWorkflowDialog(
+    userId: String,
+    selectedAgentType: String,
+    newInitialDir: String,
+    onAgentsLoaded: (List<AgentInfo>) -> Unit,
+    onSelectedAgentType: (String) -> Unit,
+    onInitialDirLoaded: (String, String?) -> Unit,
+) {
+    val agents = ApiClient.listAgents(userId)
+    val bridgeConnected = agents.any { it.connected }
+    onAgentsLoaded(agents)
+
+    if (selectedAgentType.isBlank()) {
+        onSelectedAgentType(defaultWorkflowAgentType(agents))
+    }
+
+    if (newInitialDir.isBlank() && bridgeConnected) {
+        val resp = ApiClient.listCcDir(userId, null)
+        onInitialDirLoaded(
+            if (resp.success && resp.path.isNotBlank()) resp.path else "",
+            if (resp.success && resp.path.isNotBlank()) null else resp.error ?: "无法获取默认目录",
+        )
+    }
+}
+
+private fun defaultWorkflowAgentType(agents: List<AgentInfo>): String {
+    val codexOk = agents.any { it.agentType == "codex" && it.connected }
+    val ccOk = agents.any { it.agentType == "claude_code" && it.connected }
+    return when {
+        codexOk -> "codex"
+        ccOk -> "claude_code"
+        else -> "claude_code"
+    }
+}
+
+private suspend fun attemptCreateWorkflow(
+    userId: String,
+    newName: String,
+    newInitialDir: String,
+    selectedAgentType: String,
+    selectedPermMode: String,
+    onCreated: (WorkflowItem) -> Unit,
+    onNeedsTrust: (String?) -> Unit,
+    onError: (String) -> Unit,
+    setSubmitting: (Boolean) -> Unit,
+) {
+    try {
+        val initDir = newInitialDir.trim()
+        when (val trustCheck = ApiClient.checkTrustedDir(userId, initDir)) {
+            is TrustCheckResult.BridgeDisconnected -> onError("Bridge 未连接，无法创建工作流。")
+            is TrustCheckResult.Error -> onError("检查信任状态失败：${trustCheck.message}")
+            is TrustCheckResult.NotTrusted -> onNeedsTrust(trustCheck.bridgeId)
+            is TrustCheckResult.Trusted -> {
+                performCreate(
+                    userId = userId,
+                    name = newName.trim(),
+                    initialDir = initDir,
+                    agentType = selectedAgentType.ifBlank { "claude_code" },
+                    permissionMode = selectedPermMode,
+                    onCreated = onCreated,
+                    onError = onError,
+                )
+            }
+        }
+    } finally {
+        setSubmitting(false)
+    }
+}
+
+private suspend fun attemptTrustAndCreateWorkflow(
+    userId: String,
+    newName: String,
+    newInitialDir: String,
+    selectedAgentType: String,
+    selectedPermMode: String,
+    onCreated: (WorkflowItem) -> Unit,
+    onTrustHandled: () -> Unit,
+    onError: (String) -> Unit,
+    setSubmitting: (Boolean) -> Unit,
+) {
+    try {
+        val added = ApiClient.addTrustedDir(userId, newInitialDir.trim())
+        onTrustHandled()
+        if (added) {
+            performCreate(
+                userId = userId,
+                name = newName.trim(),
+                initialDir = newInitialDir.trim(),
+                agentType = selectedAgentType.ifBlank { "claude_code" },
+                permissionMode = selectedPermMode,
+                onCreated = onCreated,
+                onError = onError,
+            )
+        } else {
+            onError("添加信任记录失败，请重试。")
+        }
+    } finally {
+        setSubmitting(false)
     }
 }
 
