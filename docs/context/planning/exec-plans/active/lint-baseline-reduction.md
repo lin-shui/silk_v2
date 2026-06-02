@@ -36,9 +36,9 @@
 
 ## Current Snapshot
 
-当前 detekt baseline 余量（2026-06-01，Slice 71 后）：
+当前 detekt baseline 余量（2026-06-02，Slice 76 后）：
 
-- `backend.xml`: 158
+- `backend.xml`: 150
 - `frontend-androidApp.xml`: 13
 - `frontend-webApp.xml`: 0
 - `frontend-shared.xml`: 7
@@ -48,7 +48,7 @@
 
 - `frontend/androidApp` 已无 `WildcardImport`、`InstanceOfCheckForException`、`PrintStackTrace`、`TooGenericExceptionThrown`、`TooGenericExceptionCaught`、`SwallowedException`、`ImplicitDefaultLocale`、`ComplexCondition`、`NestedBlockDepth` 与 `LoopWithTooManyJumpStatements` baseline；剩余 13 条全部都是 `CyclomaticComplexMethod`。
 - `frontend/webApp` 已清空 detekt baseline；`ApiClient.kt` 的异常恢复已统一收敛到 `recoverApiCall(...)` helper。
-- `backend` 已无 `WildcardImport`、`UnusedPrivateMember` 与 `UnusedParameter` baseline；剩余主要是 `CyclomaticComplexMethod` 32、`TooGenericExceptionCaught` 33、`ConstructorParameterNaming` 16、`NestedBlockDepth` 14。
+- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter` 与 `EmptyFunctionBlock` baseline；剩余主要是 `TooGenericExceptionCaught` 33、`CyclomaticComplexMethod` 29、`ConstructorParameterNaming` 16、`NestedBlockDepth` 11、`SwallowedException` 11。
 
 ## Current Status
 
@@ -107,13 +107,18 @@
 - Slice 69 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-69.md](../completed/2026-06-01-lint-baseline-reduction-slice-69.md)。
 - Slice 70 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-70.md](../completed/2026-06-01-lint-baseline-reduction-slice-70.md)。
 - Slice 71 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-71.md](../completed/2026-06-01-lint-baseline-reduction-slice-71.md)。
+- Slice 72 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-72.md](../completed/2026-06-02-lint-baseline-reduction-slice-72.md)。
+- Slice 73 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-73.md](../completed/2026-06-02-lint-baseline-reduction-slice-73.md)。
+- Slice 74 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-74.md](../completed/2026-06-02-lint-baseline-reduction-slice-74.md)。
+- Slice 75 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-75.md](../completed/2026-06-02-lint-baseline-reduction-slice-75.md)。
+- Slice 76 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-76.md](../completed/2026-06-02-lint-baseline-reduction-slice-76.md)。
 - Android 侧已知 `jlink` / `JdkImageTransform` 阻塞保持不变；当前 active plan 继续优先选择不依赖该链路的窄 slice。
 
 ## Next Slices
 
-- Slice 72 候选：如果继续 backend，优先切 `WebPageDownloader.downloadWithSimpleHttp(...)` 的单函数复杂度，保持“单文件、无合同变化”的收敛路径。
-- Slice 73 候选：如果继续 backend 且接受入口面，优先在 `WebSocketConfig.kt` 的 `generateIntelligentResponse(...)` 和 `broadcast(...)` 二选一，避免同轮同时拆两条主链。
-- Slice 74 候选：如果切回 Android，优先处理 `ChatScreen.kt` 的 `MessageItem(...)` 外围 render-mode dispatch 或顶层 `ChatScreen(...)` host orchestration，避免把 AI 卡片、消息项分发和页面 host 一起拆。
+- Slice 77 候选：如果切回 Android，优先处理 `ChatScreen.kt` 的 `MessageItem(...)` 外围 render-mode dispatch 或顶层 `ChatScreen(...)` host orchestration，避免把 AI 卡片、消息项分发和页面 host 一起拆。
+- Slice 78 候选：如果继续 backend 且接受入口面，优先单独处理 `WebSocketConfig.kt` 的同文件异常语义点，不要把 URL 流程、消息入口和 AI 主链重新混刀。
+- Slice 79 候选：如果继续 backend 但仍希望避开入口面，优先回到 `WebPageDownloader` 或 `WebSocketConfig.kt` 中单文件、单职责的剩余异常语义点，不要重新扩到多条主链。
 - `ChatScreen.kt` 仍然是 Android 里剩余最重的复杂度面；后续如果继续切它，必须按消息项分发或更大的 host composable 慢拆，不要把 toolbar、上传、成员弹窗和消息渲染混成一刀。
 - 如果回到 backend，下一轮不要再按“大范围机械清理”切；当前未使用签名类孤立项已经清空，优先选单函数复杂度或明确异常语义问题。
 - `frontend/webApp` baseline 已清空；后续 web 再出现 lint 时只接受“新增问题直接修源码”，不要回填 baseline。
@@ -147,6 +152,11 @@
 - `backend/src/main/kotlin/com/silk/backend/pdf/PDFReportGenerator.kt` 现在已经去掉未使用的 `englishFont` 透传链与孤立的执行摘要/helper；后续继续改 PDF 生成器时优先保持“只保留真正参与渲染的签名与颜色 helper”，不要再把未使用字体/摘要入口挂回主流程。
 - `backend/src/main/kotlin/com/silk/backend/pdf/PDFReportGenerator.kt` 现在把 `extractDiagnosisSummary(...)` 收敛成“章节识别 + 条目筛选 + 摘要拼装”的 helper 组合，且把 `parseAndRenderFormattedText(...)` 的 skip-guard 也抽成了 `shouldSkipFormattedSummaryLine(...)`；后续继续改 PDF 文本解析时优先沿这些 helper 扩展，不要把关键词判断和跳过条件重新塞回主循环。
 - `backend/src/main/kotlin/com/silk/backend/utils/WebPageDownloader.kt` 现在已经去掉 `generateFileName(...)` 上未参与命名的 `url` 透传参数和未接线的 `WEB_PAGE_EXTENSIONS` 常量；后续如果继续改下载器，优先只保留真实参与下载策略、提取或命名的签名/常量，不要再挂死参数或备用常量占位。
+- `backend/src/main/kotlin/com/silk/backend/utils/WebPageDownloader.kt` 现在把 `downloadWithSimpleHttp(...)` 拆成 SSL 配置、浏览器头连接、响应校验、压缩流读取和 HTML 解析 helper；后续继续改 HTTP fallback 时优先沿这些 helper 扩展，不要把连接细节、内容类型分支和 Jsoup 解析重新塞回主函数。
+- `backend/src/main/kotlin/com/silk/backend/utils/WebPageDownloader.kt` 现在把 `downloadWithPlaywright(...)` 也拆成 context/page 配置、导航/挑战处理、等待 helper 和内容构造 helper，且 URL 解析 fallback 已统一做 debug 记录；后续继续改 Playwright 或 URL fallback 时优先沿这些 helper 扩展，不要把 challenge/wait/url 解析分支重新塞回主函数。
+- `backend/src/main/kotlin/com/silk/backend/WebSocketConfig.kt` 现在把 `generateIntelligentResponse(...)` 收敛成 system prompt、Agent 上下文准备、workspace 初始化、流式 step 处理、最终消息发送和待办刷新 helper；后续继续改 DirectModelAgent 入口时优先沿这些 helper 扩展，不要把回调分支、落库发送和群聊上下文重新塞回主函数。
+- `backend/src/main/kotlin/com/silk/backend/WebSocketConfig.kt` 现在把 `broadcast(...)` 收敛成停生成、卡片回复、持久化/索引、URL 异步、CC 拦截和 Silk AI 分发几个 helper 组合；后续继续改消息入口时优先沿这些 helper 扩展，不要把多条副作用链重新堆回主函数。
+- `backend/src/main/kotlin/com/silk/backend/WebSocketConfig.kt` 现在把 `processUrlsInMessage(...)` 收敛成 URL 去重、单链接下载、文件广播、搜索索引和状态清理几个 helper；后续继续改 URL 入库链路时优先沿这些 helper 扩展，不要把下载、保存、广播和索引重新塞回同一个循环。
 - `frontend/androidApp/src/main/kotlin/com/silk/android/ApkDownloader.kt` 与 `MarkdownWebView.kt` 现在对 `String.format(...)` 显式传 `Locale.US`；后续 Android 端如果再新增固定格式化字符串，不要依赖默认 locale。
 - `frontend/androidApp/src/main/kotlin/com/silk/android/ApkDownloader.kt` 现在把下载失败和安装失败统一折叠成返回值/状态回写，不再向调用方抛 `RuntimeException`；后续接入升级安装入口时优先消费返回消息，不要再在页面侧包安装 `try/catch`。
 - `frontend/webApp` 里的 transient/system-message 复杂条件已抽成共享 helper；后续同类判断优先复用 `shouldRenderInlineTransientMessage(...)` 与 `isWorkflowAgentLifecycleMessage(...)`，避免把条件重新写散。
