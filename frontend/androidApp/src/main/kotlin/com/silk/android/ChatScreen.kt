@@ -16,6 +16,7 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -140,6 +141,8 @@ fun ChatScreen(appState: AppState) {
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
     val ccMetadataJson by chatClient.ccMetadataJson.collectAsState()
+    val transientContentBlocks by chatClient.transientContentBlocks.collectAsState()
+    val interactiveOptions by chatClient.interactiveOptions.collectAsState()
 
     // cc-connect status for this group
     var ccConnectInfo by remember(group.id) { mutableStateOf<CcConnectTokenInfo?>(null) }
@@ -1021,6 +1024,85 @@ fun ChatScreen(appState: AppState) {
                         }
                     }
 
+                    // 1.5️⃣ cc-connect 结构化内容块（thinking / tool_use / text）
+                    // 当 cc-connect 发送 contentBlocks 时，transientMessage 为 null，
+                    // 所以需要单独渲染 transientContentBlocks（与 Web 端一致）
+                    if (transientContentBlocks.isNotEmpty()) {
+                        item(key = "transient_content_blocks") {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 4.dp)
+                            ) {
+                                val thinkingBlock = transientContentBlocks.firstOrNull { it.type == "thinking" }
+                                val toolBlocks = transientContentBlocks.filter { it.type == "tool_use" }
+                                val textBlock = transientContentBlocks.firstOrNull { it.type == "text" }
+
+                                // 思考过程（带计时器）
+                                if (thinkingBlock != null) {
+                                    ThinkingBlock(
+                                        thinkingText = thinkingBlock.content,
+                                        isComplete = thinkingBlock.isComplete,
+                                        isExpanded = !thinkingBlock.isComplete,
+                                        onToggle = { }
+                                    )
+                                }
+
+                                // 工具调用（与 Web 端一致）
+                                for (tool in toolBlocks) {
+                                    var tcToolExpanded by remember { mutableStateOf(true) }
+                                    val icon = getToolIcon(tool.toolName)
+                                    val label = buildToolLabel(tool.toolName, tool.content)
+
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(bottom = 6.dp)
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { tcToolExpanded = !tcToolExpanded }
+                                                .padding(horizontal = 4.dp, vertical = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(icon, fontSize = 14.sp, modifier = Modifier.width(18.dp))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = label,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Medium,
+                                                color = Color(0xFF5A5048),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text("✓", fontSize = 12.sp, color = Color(0xFF7DAE6C))
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(
+                                                text = if (tcToolExpanded) "▾" else "▸",
+                                                fontSize = 10.sp,
+                                                color = Color(0xFFC0B0A0)
+                                            )
+                                        }
+                                        if (tcToolExpanded && tool.content.isNotEmpty()) {
+                                            MarkdownWebView(
+                                                content = tool.content,
+                                                modifier = Modifier.padding(start = 26.dp, top = 4.dp, bottom = 4.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // 正文
+                                if (textBlock != null && textBlock.content.isNotEmpty()) {
+                                    MarkdownWebView(content = textBlock.content)
+                                }
+                            }
+                        }
+                    }
+
                     // 2️⃣ 状态消息（工具调用日志等）
                     // 与 Web 端一致：显示在临时消息上方，由 ChatClient 在收到最终消息时统一清空
                     if (statusMessages.isNotEmpty() || isWaitingForAI) {
@@ -1282,6 +1364,54 @@ fun ChatScreen(appState: AppState) {
                                 }
                             }
                         )
+                    }
+                }
+
+                // 4️⃣ cc-connect 交互式按钮（与 Web 端一致，渲染在消息列表底部）
+                if (interactiveOptions.isNotEmpty()) {
+                    item(key = "interactive_options") {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                for (opt in interactiveOptions) {
+                                    var isClicked by remember { mutableStateOf(false) }
+                                    OutlinedButton(
+                                        onClick = {
+                                            if (!isClicked) {
+                                                isClicked = true
+                                                scope.launch {
+                                                    chatClient.sendCcAnswer(opt.value)
+                                                }
+                                            }
+                                        },
+                                        enabled = !isClicked,
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (isClicked) SilkColors.primary else Color(0xFFD0D0D0)
+                                        ),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            containerColor = if (isClicked) Color(0xFFF5F0E6) else Color.White
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.padding(vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            opt.label,
+                                            fontSize = 14.sp,
+                                            color = Color(0xFF333333)
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -2541,24 +2671,49 @@ fun AIMessageCardAndroid(
                     )
                 }
 
-                // 工具调用
+                // 工具调用（与 Web 端一致：每个工具独立显示，带图标和状态指示）
                 for (tool in toolBlocks) {
+                    var cbToolExpanded by remember { mutableStateOf(false) }
+                    val icon = getToolIcon(tool.toolName)
+                    val label = buildToolLabel(tool.toolName, tool.content)
+
                     Column(
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-                            .background(color = Color(0xFFF5F5F5), shape = RoundedCornerShape(8.dp))
-                            .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(8.dp))
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
                     ) {
-                        Row(modifier = Modifier.fillMaxWidth().clickable { onToolsExpandChange(!isToolsExpanded) }
-                            .padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(if (isToolsExpanded) "▼" else "▶", fontSize = 10.sp, color = Color(0xFF666666))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("\uD83D\uDD27 ${tool.toolName.ifEmpty { "工具调用" }}", fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF666666))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { cbToolExpanded = !cbToolExpanded }
+                                .padding(horizontal = 4.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(icon, fontSize = 14.sp, modifier = Modifier.width(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = label,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF5A5048),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("✓", fontSize = 12.sp, color = Color(0xFF7DAE6C))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (cbToolExpanded) "▾" else "▸",
+                                fontSize = 10.sp,
+                                color = Color(0xFFC0B0A0)
+                            )
                         }
-                        if (isToolsExpanded) {
-                            Divider(color = Color(0xFFE0E0E0), thickness = 1.dp)
-                            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp).verticalScroll(rememberScrollState()).padding(12.dp)) {
-                                Text(tool.content, fontSize = 12.sp, lineHeight = 18.sp, color = Color(0xFF555555))
-                            }
+                        if (cbToolExpanded && tool.content.isNotEmpty()) {
+                            MarkdownWebView(
+                                content = tool.content,
+                                modifier = Modifier.padding(start = 26.dp, top = 4.dp, bottom = 4.dp)
+                            )
                         }
                     }
                 }
@@ -2591,45 +2746,119 @@ fun AIMessageCardAndroid(
     }
 
     // ── 回退：标记解析路径（无 contentBlocks 时）──
-    // Strip the cc-connect turn routing marker (invisible to users)
+    // 支持两种标记格式：
+    // 1. Claude PTY: <!--THINKING_END--> (单标记) + <!--TOOLS_END-->
+    // 2. Claude Native: <!--THINKING-->...<!--END_THINKING--> + <!--TOOL name="..."-->...<!--END_TOOL-->
     val ccClean = message.content
         .replace("<!--CC_TURN-->\n", "")
         .replace("<!--CC_TURN-->", "")
 
-    val thinkingMarker = "<!--THINKING_END-->"
-    val hasThinking = ccClean.contains(thinkingMarker)
-    val thinkingText = if (hasThinking) {
-        ccClean.substringBefore(thinkingMarker).trim()
-    } else ""
+    // Try Claude Native format first (paired markers with richer structure)
+    val hasPairedThinking = ccClean.contains("<!--THINKING-->") || ccClean.contains("<!--END_THINKING-->")
+    val hasPairedTools = ccClean.contains("<!--TOOL ") || ccClean.contains("<!--END_TOOL-->")
 
-    val afterThinking = if (hasThinking) {
-        ccClean.substringAfter(thinkingMarker).trim()
+    var thinkingText = ""
+    var parsedToolBlocks = emptyList<ParsedToolBlock>()
+    var bodyContent = ""
+
+    if (hasPairedThinking || hasPairedTools) {
+        // Claude Native format: extract thinking blocks, tool blocks, and body text
+        val thinkingBlocks = mutableListOf<String>()
+        val toolBlocks = mutableListOf<ParsedToolBlock>()
+        var remaining = ccClean
+
+        while (remaining.isNotEmpty()) {
+            val ti = remaining.indexOf("<!--THINKING-->")
+            val te = remaining.indexOf("<!--TOOL ")
+            val et = remaining.indexOf("<!--END_THINKING-->")
+            val eto = remaining.indexOf("<!--END_TOOL-->")
+
+            if (ti < 0 && te < 0 && et < 0 && eto < 0) {
+                val trimmed = remaining.trim()
+                if (trimmed.isNotEmpty()) bodyContent = trimmed
+                break
+            }
+
+            val candidates = mutableListOf<Pair<Int, String>>()
+            if (ti >= 0) candidates.add(ti to "THINKING_OPEN")
+            if (te >= 0) candidates.add(te to "TOOL_OPEN")
+            if (et >= 0) candidates.add(et to "THINKING_CLOSE")
+            if (eto >= 0) candidates.add(eto to "TOOL_CLOSE")
+            candidates.sortBy { it.first }
+
+            val (pos, marker) = candidates.first()
+
+            when (marker) {
+                "THINKING_OPEN" -> {
+                    val endPos = remaining.indexOf("<!--END_THINKING-->", pos)
+                    if (endPos >= 0) {
+                        val content = remaining.substring(pos + "<!--THINKING-->".length, endPos).trim()
+                        if (content.isNotEmpty()) thinkingBlocks.add(content)
+                        remaining = remaining.substring(endPos + "<!--END_THINKING-->".length)
+                    } else {
+                        remaining = remaining.substring(pos + "<!--THINKING-->".length)
+                    }
+                }
+                "THINKING_CLOSE" -> {
+                    val content = remaining.substring(0, pos).trim()
+                    if (content.isNotEmpty()) thinkingBlocks.add(content)
+                    remaining = remaining.substring(pos + "<!--END_THINKING-->".length)
+                }
+                "TOOL_OPEN" -> {
+                    val closeTag = "-->"
+                    val closeIdx = remaining.indexOf(closeTag, pos + "<!--TOOL".length)
+                    if (closeIdx >= 0) {
+                        val attrs = remaining.substring(pos + "<!--TOOL".length, closeIdx).trim()
+                        var toolName = extractAttr(attrs, "name")
+                        val endTool = remaining.indexOf("<!--END_TOOL-->", closeIdx)
+                        if (endTool >= 0) {
+                            var content = remaining.substring(closeIdx + closeTag.length, endTool).trim()
+                            val tsRegex = Regex("""<!--TOOL_SUMMARY\s*:\s*([^>]+)-->""")
+                            tsRegex.find(content)?.let { content = content.replace(tsRegex, "").trim() }
+                            if (content.isNotEmpty()) toolBlocks.add(ParsedToolBlock(toolName, content))
+                            remaining = remaining.substring(endTool + "<!--END_TOOL-->".length)
+                        } else {
+                            remaining = remaining.substring(closeIdx + closeTag.length)
+                        }
+                    } else {
+                        remaining = remaining.substring(pos + "<!--TOOL".length)
+                    }
+                }
+                "TOOL_CLOSE" -> {
+                    remaining = remaining.substring(pos + "<!--END_TOOL-->".length)
+                }
+            }
+        }
+
+        thinkingText = thinkingBlocks.joinToString("\n\n")
+        parsedToolBlocks = toolBlocks
+        if (bodyContent.isEmpty() && thinkingBlocks.isEmpty() && toolBlocks.isEmpty()) {
+            bodyContent = ccClean.trim()
+        }
     } else {
-        ccClean
-    }
+        // Claude PTY / cc-connect format: single marker per section
+        val thinkingMarker = "<!--THINKING_END-->"
+        val hasThinkingPty = ccClean.contains(thinkingMarker)
+        thinkingText = if (hasThinkingPty) ccClean.substringBefore(thinkingMarker).trim() else ""
 
-    val toolsMarker = "<!--TOOLS_END-->"
-    val hasTools = afterThinking.contains(toolsMarker)
-    val rawToolsText = if (hasTools) {
-        afterThinking.substringBefore(toolsMarker).trim()
-    } else ""
-    var bodyContent = if (hasTools) {
-        afterThinking.substringAfter(toolsMarker).trim()
-    } else {
-        afterThinking
-    }
+        val afterThinking = if (hasThinkingPty) ccClean.substringAfter(thinkingMarker).trim() else ccClean
 
-    // Fallback: if <!--TOOLS_END--> is at the end (bodyContent empty),
-    // rawToolsText includes the answer. Try to split at --- separator.
-    val toolsSep = "\n\n---\n\n"
-    val toolsText: String
-    if (hasTools && rawToolsText.isNotEmpty() && bodyContent.isEmpty() && rawToolsText.contains(toolsSep)) {
-        toolsText = rawToolsText.substringBefore(toolsSep).trim()
-        bodyContent = rawToolsText.substringAfter(toolsSep).trim()
-    } else {
-        toolsText = rawToolsText
-    }
+        val toolsMarker = "<!--TOOLS_END-->"
+        val hasToolsPty = afterThinking.contains(toolsMarker)
+        val rawToolsText = if (hasToolsPty) afterThinking.substringBefore(toolsMarker).trim() else ""
+        bodyContent = if (hasToolsPty) afterThinking.substringAfter(toolsMarker).trim() else afterThinking
 
+        // Fallback: if <!--TOOLS_END--> is at the end, rawToolsText includes body. Split at --- separator.
+        val toolsSep = "\n\n---\n\n"
+        if (hasToolsPty && rawToolsText.isNotEmpty() && bodyContent.isEmpty() && rawToolsText.contains(toolsSep)) {
+            val ptyToolsText = rawToolsText.substringBefore(toolsSep).trim()
+            bodyContent = rawToolsText.substringAfter(toolsSep).trim()
+            // PTY format doesn't have per-tool names, use generic
+            parsedToolBlocks = listOf(ParsedToolBlock("", ptyToolsText))
+        } else if (rawToolsText.isNotEmpty()) {
+            parsedToolBlocks = listOf(ParsedToolBlock("", rawToolsText))
+        }
+    }
     val isLongContent = bodyContent.length > 500
     val effectiveExpanded = if (isTransient) true else isExpanded
     val aiPreview =
@@ -2725,98 +2954,65 @@ fun AIMessageCardAndroid(
             
             Spacer(modifier = Modifier.height(12.dp))
 
-            // 思考过程折叠区域
-            if (hasThinking && thinkingText.isNotEmpty()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp)
-                        .background(
-                            color = Color(0xFFFAF8F4),
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                        .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(8.dp))
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { onThinkingExpandChange(!isThinkingExpanded) }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = if (isThinkingExpanded) "▼" else "▶",
-                            fontSize = 10.sp,
-                            color = Color(0xFF8B7355)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "\uD83D\uDCAD 思考过程",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = Color(0xFF8B7355)
-                        )
-                    }
-                    AnimatedVisibility(
-                        visible = isThinkingExpanded,
-                        enter = expandVertically(),
-                        exit = shrinkVertically()
-                    ) {
-                        Column {
-                            Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
-                            Text(
-                                text = thinkingText,
-                                fontSize = 12.sp,
-                                color = Color(0xFF8B7355),
-                                lineHeight = 18.sp,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp)
-                            )
-                        }
-                    }
-                }
+            // 思考过程（与 Web 端一致：带计时器 ThinkingBlock）
+            if (thinkingText.isNotEmpty()) {
+                ThinkingBlock(
+                    thinkingText = thinkingText,
+                    isComplete = true,
+                    isExpanded = isThinkingExpanded,
+                    onToggle = { onThinkingExpandChange(!isThinkingExpanded) }
+                )
             }
 
-            // 工具调用过程折叠区域（点击头部展开/收起，无动画）
-            if (hasTools && toolsText.isNotEmpty()) {
+            // 工具调用（与 Web 端一致：每个工具独立显示，带图标和状态指示）
+            for (tool in parsedToolBlocks) {
+                var toolExpanded by remember { mutableStateOf(false) }
+                val icon = getToolIcon(tool.name)
+                val label = buildToolLabel(tool.name, tool.content)
+
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 8.dp)
-                        .background(
-                            color = Color(0xFFF5F5F5),
-                            shape = RoundedCornerShape(8.dp)
-                        )
-                        .border(1.dp, Color(0xFFE0E0E0), RoundedCornerShape(8.dp))
+                        .padding(bottom = 6.dp)
                 ) {
+                    // Clickable header row
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onToolsExpandChange(!isToolsExpanded) }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                            .clickable { toolExpanded = !toolExpanded }
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Icon
+                        Text(icon, fontSize = 14.sp, modifier = Modifier.width(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        // Tool label
                         Text(
-                            text = if (isToolsExpanded) "▼" else "▶",
-                            fontSize = 10.sp,
-                            color = Color(0xFF666666)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "\uD83D\uDD27 工具调用过程",
+                            text = label,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
-                            color = Color(0xFF666666)
+                            color = Color(0xFF5A5048),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        // Green check mark
+                        Text("✓", fontSize = 12.sp, color = Color(0xFF7DAE6C))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        // Expand arrow
+                        Text(
+                            text = if (toolExpanded) "▾" else "▸",
+                            fontSize = 10.sp,
+                            color = Color(0xFFC0B0A0)
                         )
                     }
-                    if (isToolsExpanded) {
-                        Divider(color = Color(0xFFE0E0E0), thickness = 1.dp)
+
+                    // Expanded content
+                    if (toolExpanded && tool.content.isNotEmpty()) {
                         MarkdownWebView(
-                            content = toolsText,
-                            modifier = Modifier
-                                .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp)
-                                .height(300.dp)
+                            content = tool.content,
+                            modifier = Modifier.padding(start = 26.dp, top = 4.dp, bottom = 4.dp)
                         )
                     }
                 }
@@ -2943,6 +3139,85 @@ fun AIMessageCardAndroid(
 }
 
 // ==================== 代码语法高亮颜色配置 ====================
+
+// ==================== Tool Block Utilities (matching Web ChatRenderer.kt) ====================
+
+private fun getToolIcon(name: String): String {
+    val n = name.lowercase()
+    return when {
+        n.contains("bash") || n.contains("command") || n.contains("shell") -> "\uD83D\uDCBB"
+        n.contains("read") || n.contains("ls") || n.contains("glob") -> "\uD83D\uDCD6"
+        n.contains("write") || n.contains("edit") || n.contains("apply") || n.contains("patch") -> "\u270F\uFE0F"
+        n.contains("grep") || n.contains("search") || n.contains("find") -> "\uD83D\uDD0D"
+        n.contains("web") || n.contains("fetch") || n.contains("url") -> "\uD83C\uDF10"
+        n.contains("todo") || n.contains("task") -> "\u2705"
+        n.contains("think") || n.contains("reason") -> "\uD83D\uDCAD"
+        n.contains("ask") || n.contains("question") -> "\u2753"
+        n.contains("plan") -> "\uD83D\uDCCB"
+        n.contains("diff") -> "\uD83D\uDD27"
+        n.contains("notebook") || n.contains("jupyter") -> "\uD83D\uDCD8"
+        else -> "\uD83D\uDD27"
+    }
+}
+
+private fun extractToolSummary(name: String, content: String): String {
+    val flat = content.replace("\n", " ").replace("\r", " ").replace(Regex("\\s+"), " ")
+
+    val fileRe = Regex(""""file_path"\s*:\s*"([^"]+)"""")
+    val fileMatch = fileRe.find(flat)
+    if (fileMatch != null) {
+        val path = fileMatch.groupValues[1]
+        val idx = path.lastIndexOf("/")
+        return if (idx >= 0) path.substring(idx + 1) else path
+    }
+    val cmdRe = Regex(""""command"\s*:\s*"([^"]+)"""")
+    val cmdMatch = cmdRe.find(flat)
+    if (cmdMatch != null) {
+        val cmd = cmdMatch.groupValues[1]
+        return if (cmd.length > 60) cmd.substring(0, 60) + "..." else cmd
+    }
+    val queryRe = Regex(""""query"\s*:\s*"([^"]+)"""")
+    val queryMatch = queryRe.find(flat)
+    if (queryMatch != null) {
+        val q = queryMatch.groupValues[1]
+        return if (q.length > 60) q.substring(0, 60) + "..." else q
+    }
+    val patRe = Regex(""""pattern"\s*:\s*"([^"]+)"""")
+    val patMatch = patRe.find(flat)
+    if (patMatch != null) return patMatch.groupValues[1]
+
+    fun firstMeaningfulLine(text: String): String {
+        for (line in text.lineSequence()) {
+            val t = line.trim()
+            if (t.isNotEmpty() && !t.startsWith("```")) return t
+        }
+        return ""
+    }
+
+    if (name.equals("Bash", true) || name.equals("ExecuteCommand", true)) {
+        val cmd = firstMeaningfulLine(content.trimStart()).take(60)
+        if (cmd.isNotEmpty()) return cmd + if (cmd.length >= 60) "..." else ""
+    }
+    return ""
+}
+
+private fun buildToolLabel(name: String, content: String): String {
+    val shortName = when {
+        name.equals("Read", true) || name.equals("Write", true) || name.equals("Edit", true) -> name
+        name.equals("Bash", true) || name.equals("ExecuteCommand", true) -> name
+        else -> name
+    }
+    if (content.isEmpty()) return shortName
+    val summary = extractToolSummary(name, content)
+    return if (summary.isNotEmpty()) "$shortName: $summary" else shortName
+}
+
+private data class ParsedToolBlock(val name: String, val content: String)
+
+private fun extractAttr(s: String, key: String): String {
+    val r = Regex("""${key}\s*=\s*"([^"]*)"""")
+    return r.find(s)?.groupValues?.getOrElse(1) { "" } ?: ""
+}
 private val codeColors = mapOf(
     // 关键字
     "keyword" to Color(0xFFCF8E6D),      // 橙色

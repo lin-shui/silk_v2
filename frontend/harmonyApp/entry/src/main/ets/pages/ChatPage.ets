@@ -2,10 +2,12 @@
  * ChatPage - 聊天页面
  * 使用 ChatStore + WebSocket 进行实时聊天
  */
-import { Message, MessageType, isAgentUserId } from '../models/Message';
+import { Message, MessageType, ContentBlock, InteractiveOption, isAgentUserId } from '../models/Message';
 import { UserTodoItem } from '../models/UserTodoItem';
 import { Group } from '../models/Group';
 import { MessageBubble } from '../components';
+import { ThinkingPanel } from '../components/ThinkingPanel';
+import { MarkdownLite } from '../components/MarkdownLite';
 import { chatStore as globalChatStore, ConnectionState } from '../stores/ChatStore';
 import { appStore as globalAppStore } from '../stores/AppStore';
 import { SilkColors } from '../common/Theme';
@@ -99,6 +101,10 @@ export struct ChatPage {
   @State private ccConnectInfo: CcConnectTokenInfo | null = null;
   @State private showModeSheet: boolean = false;
   @State private showModelSheet: boolean = false;
+
+  // cc-connect 结构化内容块和交互式按钮（与 Web/Android 一致）
+  @State private transientContentBlocks: ContentBlock[] = [];
+  @State private interactiveOptions: InteractiveOption[] = [];
 
   private get availableModes(): CcModeOption[] {
     return this.ccConnectInfo?.availableModes || [];
@@ -303,6 +309,8 @@ export struct ChatPage {
     this.messages = merged;
     this.messageDataSource.setData(merged);
     this.isAiGenerating = globalChatStore.isGenerating;
+    this.transientContentBlocks = globalChatStore.transientContentBlocks;
+    this.interactiveOptions = globalChatStore.interactiveOptions;
     this.markMessagesAsSent(confirmedOwnIds);
     const newCount = result.length;
     const shouldScrollToEnd = newCount > 0 && (!this.didInitialScroll || newCount > prevCount);
@@ -1967,6 +1975,79 @@ export struct ChatPage {
         .width('100%')
         .layoutWeight(1)
         .padding({ top: 8, bottom: 8 })
+      }
+
+      // cc-connect 结构化内容块（thinking / tool_use / text，与 Web/Android 一致）
+      if (this.transientContentBlocks.length > 0) {
+        Column() {
+          ForEach(this.transientContentBlocks.filter((b: ContentBlock) => b.type === 'thinking'),
+            (block: ContentBlock) => {
+              ThinkingPanel({ thinking: block.content, isComplete: block.isComplete })
+            })
+
+          ForEach(this.transientContentBlocks.filter((b: ContentBlock) => b.type === 'tool_use'),
+            (block: ContentBlock) => {
+              Column() {
+                Row() {
+                  Text('🔧 ' + (block.toolName ? block.toolName : '工具调用'))
+                    .fontSize(12)
+                    .fontColor('#666666')
+                    .fontWeight(FontWeight.Medium)
+                }
+                .width('100%')
+                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                .backgroundColor('#F5F5F5')
+                .borderRadius(4)
+                .margin({ bottom: 4 })
+
+                Text(block.content)
+                  .fontSize(11)
+                  .fontColor('#555555')
+                  .maxLines(20)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+              }
+              .width('100%')
+              .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+              .backgroundColor('#FAFAFA')
+              .borderRadius(8)
+              .margin({ bottom: 6 })
+            })
+
+          ForEach(this.transientContentBlocks.filter((b: ContentBlock) => b.type === 'text'),
+            (block: ContentBlock) => {
+              MarkdownLite({ content: block.content })
+            })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 4, bottom: 4 })
+      }
+
+      // cc-connect 交互式按钮（与 Web/Android 一致）
+      if (this.interactiveOptions.length > 0) {
+        Row() {
+          Scroll() {
+            Row() {
+              ForEach(this.interactiveOptions, (opt: InteractiveOption) => {
+                Button(opt.label)
+                  .fontSize(14)
+                  .fontColor('#333333')
+                  .backgroundColor('#FFFFFF')
+                  .border({ width: 1, color: '#D0D0D0', style: BorderStyle.Solid })
+                  .borderRadius(8)
+                  .padding({ left: 20, right: 20, top: 8, bottom: 8 })
+                  .margin({ right: 8 })
+                  .onClick(() => {
+                    globalChatStore.sendCcAnswer(opt.value);
+                  })
+              })
+            }
+            .padding({ left: 4, right: 4 })
+          }
+          .scrollable(ScrollDirection.Horizontal)
+          .scrollBar(BarState.Off)
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 8, bottom: 4 })
       }
 
       // 输入区域 - compact single-row with inline @Silk chip
