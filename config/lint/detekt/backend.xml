@@ -50,10 +50,6 @@
     <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$private fun normalizeActionDetailForKey(detail: String?): String?</ID>
     <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$private fun tryMergeByContainedNormTitle( a: UserTodoItemDto, b: UserTodoItemDto, now: Long ): UserTodoItemDto?</ID>
     <ID>CyclomaticComplexMethod:WeaviateClient.kt$WeaviateClient$suspend fun indexDocument( document: IndexDocument, participants: List&lt;String&gt; ): Boolean</ID>
-    <ID>CyclomaticComplexMethod:WebPageDownloader.kt$WebPageDownloader$private fun downloadWithSimpleHttp(url: String): WebPageContent?</ID>
-    <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "")</ID>
-    <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$suspend fun broadcast(message: Message)</ID>
-    <ID>EmptyFunctionBlock:WebPageDownloader.kt$WebPageDownloader.&lt;no name provided&gt;${}</ID>
     <ID>ForbiddenComment:FileRoutes.kt$// TODO: 调用 weaviateClient.deleteDocument()</ID>
     <ID>ForbiddenComment:Routing.kt$// TODO: 发送欢迎消息到群组聊天室</ID>
     <ID>FunctionOnlyReturningConstant:ExternalSearchService.kt$ExternalSearchService$fun isAvailable(): Boolean</ID>
@@ -89,9 +85,6 @@
     <ID>NestedBlockDepth:SearchDrivenAgent.kt$SearchDrivenAgent$private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
     <ID>NestedBlockDepth:ToolPolicyManager.kt$ToolPolicyManager$fun validateFilePath(path: String, policy: ToolPolicy): Pair&lt;Boolean, String&gt;</ID>
     <ID>NestedBlockDepth:ToolPolicyManager.kt$ToolPolicyManager$private fun loadConfigFromFile()</ID>
-    <ID>NestedBlockDepth:WebPageDownloader.kt$WebPageDownloader$private fun downloadWithPlaywright(url: String): WebPageContent?</ID>
-    <ID>NestedBlockDepth:WebSocketConfig.kt$ChatServer$private suspend fun processUrlsInMessage(message: Message)</ID>
-    <ID>NestedBlockDepth:WebSocketConfig.kt$ChatServer$suspend fun broadcast(message: Message)</ID>
     <ID>PrintStackTrace:ChatHistoryBackupManager.kt$ChatHistoryBackupManager$e</ID>
     <ID>PrintStackTrace:WeaviateClient.kt$WeaviateClient$e</ID>
     <ID>PrintStackTrace:WebSocketConfig.kt$ChatServer$e</ID>
@@ -104,7 +97,6 @@
     <ID>SwallowedException:SearchDrivenAgent.kt$SearchDrivenAgent$e: Exception</ID>
     <ID>SwallowedException:ToolPolicyManager.kt$ToolPolicyManager$e: Exception</ID>
     <ID>SwallowedException:UserSettingsRepository.kt$UserSettingsRepository$e: Exception</ID>
-    <ID>SwallowedException:WebPageDownloader.kt$WebPageDownloader$e: Exception</ID>
     <ID>SwallowedException:WebSocketConfig.kt$ChatServer$e: CancellationException</ID>
     <ID>SwallowedException:WebSocketConfig.kt$ChatServer$e: Exception</ID>
     <ID>ThrowsCount:AIStepwiseAgent.kt$AIStepwiseAgent$private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
