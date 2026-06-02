@@ -1284,14 +1284,18 @@ fun ChatScreen(appState: AppState) {
                             },
                             isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
                             onThinkingExpandChange = { messageId, expanded ->
-                                // Save scroll position before height change
-                                val savedIndex = listState.firstVisibleItemIndex
-                                val savedOffset = listState.firstVisibleItemScrollOffset
                                 thinkingExpandedStates[messageId] = expanded
-                                // Restore scroll position after layout settles
-                                scopeForScroll.launch {
-                                    kotlinx.coroutines.delay(100)
-                                    listState.scrollToItem(savedIndex, savedOffset)
+                                val reversedMessages = messages.reversed()
+                                val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                val itemOffset = (if (transientMessage != null) 1 else 0) +
+                                    (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                val targetIdx = if (idx >= 0) itemOffset + idx else -1
+                                if (targetIdx >= 0) {
+                                    expandScrollJob?.cancel()
+                                    expandScrollJob = scopeForScroll.launch {
+                                        kotlinx.coroutines.delay(100)
+                                        listState.scrollToItem(targetIdx, 0)
+                                    }
                                 }
                             },
                             isToolsExpanded = toolsExpandedStates[message.id] ?: false,
