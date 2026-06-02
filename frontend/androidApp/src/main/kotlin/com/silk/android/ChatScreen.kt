@@ -222,7 +222,7 @@ fun ChatScreen(appState: AppState) {
             }
         }
     }
-    
+
     // 监控临时消息变化
     LaunchedEffect(transientMessage) {
         if (transientMessage != null) {
@@ -354,6 +354,15 @@ fun ChatScreen(appState: AppState) {
     }
     
     val listState = rememberLazyListState()
+
+    // 自动滚动到底部（正常布局需要手动滚底，替代 reverseLayout）
+    LaunchedEffect(messages.size, transientMessage, transientContentBlocks, interactiveOptions) {
+        kotlinx.coroutines.delay(80)
+        val count = listState.layoutInfo.totalItemsCount
+        if (count > 0) {
+            listState.animateScrollToItem(count - 1)
+        }
+    }
     
     // ✅ AI 消息展开状态管理 - 使用 Map 存储每个消息的展开状态
     val aiMessageExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
@@ -999,8 +1008,7 @@ fun ChatScreen(appState: AppState) {
                 modifier = Modifier
                     .fillMaxWidth(),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                reverseLayout = true  // 最新消息在底部
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 if (messages.isEmpty() && transientMessage == null && statusMessages.isEmpty() && !isWaitingForAI) {
                     item {
@@ -1017,106 +1025,11 @@ fun ChatScreen(appState: AppState) {
                         }
                     }
                 } else {
-                    // ✅ reverseLayout=true 时，第一个 item 显示在底部（靠近输入框）
-                    // 所以临时消息（流式回答）放在最前面显示在最底部，状态消息紧随其后显示在回答上方
+                    // 正常布局（与 Web 端一致）：从上到下排列
+                    // 1️⃣ 状态消息 → 2️⃣ 普通消息 → 3️⃣ 流式内容 → 4️⃣ 临时消息 → 5️⃣ 交互按钮
+                    val statusOffset = if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0
                     
-                    // 1️⃣ 临时消息（AI处理中）- 不支持选择
-                    transientMessage?.let { message ->
-                        item(key = "transient_message") {
-                            MessageItem(
-                                message = message,
-                                currentUserId = user.id,
-                                context = context,
-                                isTransient = true,
-                                isSelectionMode = false,
-                                isSelected = false,
-                                onToggleSelection = {},
-                                onUserNameClick = null
-                            )
-                        }
-                    }
-
-                    // 1.5️⃣ cc-connect 结构化内容块（thinking / tool_use / text）
-                    // 当 cc-connect 发送 contentBlocks 时，transientMessage 为 null，
-                    // 所以需要单独渲染 transientContentBlocks（与 Web 端一致）
-                    if (transientContentBlocks.isNotEmpty()) {
-                        item(key = "transient_content_blocks") {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 4.dp, vertical = 4.dp)
-                            ) {
-                                val thinkingBlock = transientContentBlocks.firstOrNull { it.type == "thinking" }
-                                val toolBlocks = transientContentBlocks.filter { it.type == "tool_use" }
-                                val textBlock = transientContentBlocks.firstOrNull { it.type == "text" }
-
-                                // 思考过程（带计时器）
-                                if (thinkingBlock != null) {
-                                    ThinkingBlock(
-                                        thinkingText = thinkingBlock.content,
-                                        isComplete = thinkingBlock.isComplete,
-                                        isExpanded = !thinkingBlock.isComplete,
-                                        onToggle = { }
-                                    )
-                                }
-
-                                // 工具调用（与 Web 端一致）
-                                for (tool in toolBlocks) {
-                                    var tcToolExpanded by remember { mutableStateOf(true) }
-                                    val icon = getToolIcon(tool.toolName)
-                                    val label = buildToolLabel(tool.toolName, tool.content)
-
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(bottom = 6.dp)
-                                    ) {
-                                        Row(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable { tcToolExpanded = !tcToolExpanded }
-                                                .padding(horizontal = 4.dp, vertical = 4.dp),
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(icon, fontSize = 14.sp, modifier = Modifier.width(18.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = label,
-                                                fontSize = 12.sp,
-                                                fontWeight = FontWeight.Medium,
-                                                color = Color(0xFF5A5048),
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("✓", fontSize = 12.sp, color = Color(0xFF7DAE6C))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(
-                                                text = if (tcToolExpanded) "▾" else "▸",
-                                                fontSize = 10.sp,
-                                                color = Color(0xFFC0B0A0)
-                                            )
-                                        }
-                                        if (tcToolExpanded && tool.content.isNotEmpty()) {
-                                            MarkdownWebView(
-                                                content = tool.content,
-                                                modifier = Modifier.padding(start = 26.dp, top = 4.dp, bottom = 4.dp)
-                                            )
-                                        }
-                                    }
-                                }
-
-                                // 正文
-                                if (textBlock != null && textBlock.content.isNotEmpty()) {
-                                    MarkdownWebView(content = textBlock.content)
-                                }
-                            }
-                        }
-                    }
-
-                    // 2️⃣ 状态消息（工具调用日志等）
-                    // 与 Web 端一致：显示在临时消息上方，由 ChatClient 在收到最终消息时统一清空
+                    // 1️⃣ 状态消息（工具调用日志等）
                     if (statusMessages.isNotEmpty() || isWaitingForAI) {
                         item(key = "status_messages") {
                             Column(
@@ -1183,8 +1096,8 @@ fun ChatScreen(appState: AppState) {
                         }
                     }
                     
-                    // 3️⃣ 普通消息列表（反转顺序，最新的在第0位 = 显示在底部）
-                    items(messages.reversed(), key = { it.id }) { message ->
+                    // 2️⃣ 普通消息列表（按时间正序，最新在最底部）
+                    items(messages, key = { it.id }) { message ->
                         MessageItem(
                             message = message,
                             currentUserId = user.id,
@@ -1245,11 +1158,8 @@ fun ChatScreen(appState: AppState) {
                             // AI 消息展开状态（默认收起，只有长内容才需要展开/收起功能）
                             isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
                             onAIExpandChange = { messageId, isExpanded ->
-                                val reversedMessages = messages.reversed()
-                                val idx = reversedMessages.indexOfFirst { it.id == messageId }
-                                val itemOffset = (if (transientMessage != null) 1 else 0) +
-                                    (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
-                                val targetIdx = if (idx >= 0) itemOffset + idx else -1
+                                val idx = messages.indexOfFirst { it.id == messageId }
+                                val targetIdx = if (idx >= 0) statusOffset + idx else -1
 
                                 if (isExpanded) {
                                     aiMessageExpandedStates[messageId] = true
@@ -1302,14 +1212,11 @@ fun ChatScreen(appState: AppState) {
                             },
                             onLongContentCollapsed = { messageId ->
                                 expandScrollJob?.cancel()
-                                val reversedMessages = messages.reversed()
-                                val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                val idx = messages.indexOfFirst { it.id == messageId }
                                 if (idx >= 0) {
                                     scopeForScroll.launch {
                                         kotlinx.coroutines.delay(80)
-                                        val itemOffset = (if (transientMessage != null) 1 else 0) +
-                                            (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
-                                        listState.scrollToItem(itemOffset + idx)
+                                        listState.scrollToItem(statusOffset + idx)
                                     }
                                 }
                             },
@@ -1337,7 +1244,57 @@ fun ChatScreen(appState: AppState) {
                     }
                 }
 
-                // 4️⃣ cc-connect 交互式按钮（与 Web 端一致，渲染在消息列表底部）
+                // 3️⃣ cc-connect 结构化内容块（流式 thinking/tool_use/text）
+                if (transientContentBlocks.isNotEmpty()) {
+                    item(key = "transient_content_blocks") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp)
+                        ) {
+                            val tb = transientContentBlocks.firstOrNull { it.type == "thinking" }
+                            val toolBs = transientContentBlocks.filter { it.type == "tool_use" }
+                            val textB = transientContentBlocks.firstOrNull { it.type == "text" }
+
+                            if (tb != null) {
+                                ThinkingBlock(thinkingText = tb.content, isComplete = tb.isComplete, isExpanded = !tb.isComplete, onToggle = { })
+                            }
+                            for (tool in toolBs) {
+                                var tExp by remember { mutableStateOf(true) }
+                                val icon = getToolIcon(tool.toolName)
+                                val label = buildToolLabel(tool.toolName, tool.content)
+                                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                                    Row(modifier = Modifier.fillMaxWidth().clickable { tExp = !tExp }.padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(icon, fontSize = 14.sp, modifier = Modifier.width(18.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF5A5048), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("✓", fontSize = 12.sp, color = Color(0xFF7DAE6C))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(if (tExp) "▾" else "▸", fontSize = 10.sp, color = Color(0xFFC0B0A0))
+                                    }
+                                    if (tExp && tool.content.isNotEmpty()) {
+                                        MarkdownWebView(content = tool.content, modifier = Modifier.padding(start = 26.dp, top = 4.dp, bottom = 4.dp))
+                                    }
+                                }
+                            }
+                            if (textB != null && textB.content.isNotEmpty()) {
+                                MarkdownWebView(content = textB.content)
+                            }
+                        }
+                    }
+                }
+
+                // 4️⃣ 临时消息（AI 流式回答，不支持选择）
+                transientMessage?.let { message ->
+                    item(key = "transient_message") {
+                        MessageItem(
+                            message = message, currentUserId = user.id, context = context,
+                            isTransient = true, isSelectionMode = false, isSelected = false,
+                            onToggleSelection = {}, onUserNameClick = null
+                        )
+                    }
+                }
+
+                // 5️⃣ cc-connect 交互式按钮（与 Web 端一致，渲染在消息列表底部）
                 if (interactiveOptions.isNotEmpty()) {
                     item(key = "interactive_options") {
                         Column(
