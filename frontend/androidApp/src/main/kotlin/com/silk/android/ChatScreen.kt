@@ -1282,6 +1282,23 @@ fun ChatScreen(appState: AppState) {
                             isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
                             onThinkingExpandChange = { messageId, expanded ->
                                 thinkingExpandedStates[messageId] = expanded
+                                if (expanded) {
+                                    // Smooth scroll to bring the thinking header to the top,
+                                    // so the user sees the thinking content from the beginning
+                                    val reversedMessages = messages.reversed()
+                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                    val itemOffset = (if (transientMessage != null) 1 else 0) +
+                                        (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                    val targetIdx = if (idx >= 0) itemOffset + idx else -1
+                                    if (targetIdx >= 0) {
+                                        expandScrollJob?.cancel()
+                                        expandScrollJob = scopeForScroll.launch {
+                                            kotlinx.coroutines.delay(100)
+                                            listState.animateScrollToItem(targetIdx, 0)
+                                        }
+                                    }
+                                }
+                                // Collapse: do nothing — stay in place
                             },
                             isToolsExpanded = toolsExpandedStates[message.id] ?: false,
                             onToolsExpandChange = { messageId, expanded ->
