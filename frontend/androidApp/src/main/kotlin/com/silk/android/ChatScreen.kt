@@ -1283,6 +1283,19 @@ fun ChatScreen(appState: AppState) {
                             isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
                             onThinkingExpandChange = { messageId, expanded ->
                                 thinkingExpandedStates[messageId] = expanded
+                                if (expanded) {
+                                    val reversedMessages = messages.reversed()
+                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                    val itemOffset = (if (transientMessage != null) 1 else 0) +
+                                        (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                    val targetIdx = if (idx >= 0) itemOffset + idx else -1
+                                    if (targetIdx >= 0) {
+                                        scopeForScroll.launch {
+                                            kotlinx.coroutines.delay(350)
+                                            listState.animateScrollToItem(targetIdx, 0)
+                                        }
+                                    }
+                                }
                             },
                             isToolsExpanded = toolsExpandedStates[message.id] ?: false,
                             onToolsExpandChange = { messageId, expanded ->
@@ -2524,7 +2537,7 @@ fun ThinkingBlock(
             .padding(bottom = 8.dp)
             .background(color = Color(0xFFFAF8F4), shape = RoundedCornerShape(8.dp))
             .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(8.dp))
-            .animateContentSize()
+            .animateContentSize(tween(250))
     ) {
         Row(
             modifier = Modifier
