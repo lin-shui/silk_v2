@@ -1294,7 +1294,9 @@ fun ChatScreen(appState: AppState) {
                                     expandScrollJob?.cancel()
                                     expandScrollJob = scopeForScroll.launch {
                                         kotlinx.coroutines.delay(100)
-                                        listState.scrollToItem(targetIdx, 0)
+                                        // Use a large offset so the item's top (where thinking header is)
+                                        // appears at the viewport top instead of the bottom
+                                        listState.scrollToItem(targetIdx, Int.MAX_VALUE)
                                     }
                                 }
                             },
