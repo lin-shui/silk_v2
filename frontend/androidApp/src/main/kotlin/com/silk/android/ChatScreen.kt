@@ -10,6 +10,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -1282,23 +1283,6 @@ fun ChatScreen(appState: AppState) {
                             isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
                             onThinkingExpandChange = { messageId, expanded ->
                                 thinkingExpandedStates[messageId] = expanded
-                                if (expanded) {
-                                    // Smooth scroll to bring the thinking header to the top,
-                                    // so the user sees the thinking content from the beginning
-                                    val reversedMessages = messages.reversed()
-                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
-                                    val itemOffset = (if (transientMessage != null) 1 else 0) +
-                                        (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
-                                    val targetIdx = if (idx >= 0) itemOffset + idx else -1
-                                    if (targetIdx >= 0) {
-                                        expandScrollJob?.cancel()
-                                        expandScrollJob = scopeForScroll.launch {
-                                            kotlinx.coroutines.delay(100)
-                                            listState.animateScrollToItem(targetIdx, 0)
-                                        }
-                                    }
-                                }
-                                // Collapse: do nothing — stay in place
                             },
                             isToolsExpanded = toolsExpandedStates[message.id] ?: false,
                             onToolsExpandChange = { messageId, expanded ->
@@ -2540,6 +2524,7 @@ fun ThinkingBlock(
             .padding(bottom = 8.dp)
             .background(color = Color(0xFFFAF8F4), shape = RoundedCornerShape(8.dp))
             .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(8.dp))
+            .animateContentSize()
     ) {
         Row(
             modifier = Modifier
