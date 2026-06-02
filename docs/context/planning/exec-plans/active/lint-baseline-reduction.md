@@ -36,17 +36,17 @@
 
 ## Current Snapshot
 
-当前 detekt baseline 余量（2026-06-02，Slice 84 后）：
+当前 detekt baseline 余量（2026-06-02，Slice 85 后）：
 
 - `backend.xml`: 150
-- `frontend-androidApp.xml`: 5
+- `frontend-androidApp.xml`: 0
 - `frontend-webApp.xml`: 0
 - `frontend-shared.xml`: 7
 - `frontend-desktopApp.xml`: 0
 
 当前关键分布：
 
-- `frontend/androidApp` 已无 `WildcardImport`、`InstanceOfCheckForException`、`PrintStackTrace`、`TooGenericExceptionThrown`、`TooGenericExceptionCaught`、`SwallowedException`、`ImplicitDefaultLocale`、`ComplexCondition`、`NestedBlockDepth` 与 `LoopWithTooManyJumpStatements` baseline；剩余 5 条全部都是 `CyclomaticComplexMethod`。
+- `frontend/androidApp` detekt baseline 已清空；后续 Android 再出现 lint 只接受“新增问题直接修源码”，不要回填 baseline。
 - `frontend/webApp` 已清空 detekt baseline；`ApiClient.kt` 的异常恢复已统一收敛到 `recoverApiCall(...)` helper。
 - `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter` 与 `EmptyFunctionBlock` baseline；剩余主要是 `TooGenericExceptionCaught` 33、`CyclomaticComplexMethod` 29、`ConstructorParameterNaming` 16、`NestedBlockDepth` 11、`SwallowedException` 11。
 
@@ -120,16 +120,17 @@
 - Slice 82 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-82.md](../completed/2026-06-02-lint-baseline-reduction-slice-82.md)。
 - Slice 83 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-83.md](../completed/2026-06-02-lint-baseline-reduction-slice-83.md)。
 - Slice 84 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-84.md](../completed/2026-06-02-lint-baseline-reduction-slice-84.md)。
+- Slice 85 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-85.md](../completed/2026-06-02-lint-baseline-reduction-slice-85.md)。
 - Android 侧已知 `jlink` / `JdkImageTransform` 阻塞保持不变；当前 active plan 继续优先选择不依赖该链路的窄 slice。
 
 ## Next Slices
 
-- Slice 85 候选：如果继续 Android，优先处理 `SettingsScreen.kt` 或 `LoginScreen.kt` 这类单页 host，继续暂避 `ChatScreen(...)` 宿主大页。
 - Slice 86 候选：如果继续 backend 且接受入口面，优先单独处理 `WebSocketConfig.kt` 的同文件异常语义点，不要把 URL 流程、消息入口和 AI 主链重新混刀。
 - Slice 87 候选：如果继续 backend 但仍希望避开入口面，优先回到 `WebPageDownloader` 或 `WebSocketConfig.kt` 中单文件、单职责的剩余异常语义点，不要重新扩到多条主链。
-- `ChatScreen.kt` 仍然是 Android 里剩余最重的复杂度面；后续如果继续切它，必须按消息项分发或更大的 host composable 慢拆，不要把 toolbar、上传、成员弹窗和消息渲染混成一刀。
+- Slice 88 候选：如果继续 shared，优先处理 `frontend-shared.xml` 剩余 7 条，保持单文件、单职责推进。
 - 如果回到 backend，下一轮不要再按“大范围机械清理”切；当前未使用签名类孤立项已经清空，优先选单函数复杂度或明确异常语义问题。
 - `frontend/webApp` baseline 已清空；后续 web 再出现 lint 时只接受“新增问题直接修源码”，不要回填 baseline。
+- `frontend/androidApp` baseline 已清空；后续 Android 再出现 lint 时只接受“新增问题直接修源码”，不要回填 baseline。
 - 复杂度规则继续按单文件慢拆，不和异常语义 / import 收敛混在同一 slice。
 
 ## Handoff Notes
