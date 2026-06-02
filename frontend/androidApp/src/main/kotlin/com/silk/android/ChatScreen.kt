@@ -10,8 +10,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -48,6 +48,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
@@ -1283,19 +1284,6 @@ fun ChatScreen(appState: AppState) {
                             isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
                             onThinkingExpandChange = { messageId, expanded ->
                                 thinkingExpandedStates[messageId] = expanded
-                                if (expanded) {
-                                    val reversedMessages = messages.reversed()
-                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
-                                    val itemOffset = (if (transientMessage != null) 1 else 0) +
-                                        (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
-                                    val targetIdx = if (idx >= 0) itemOffset + idx else -1
-                                    if (targetIdx >= 0) {
-                                        scopeForScroll.launch {
-                                            kotlinx.coroutines.delay(350)
-                                            listState.animateScrollToItem(targetIdx, 0)
-                                        }
-                                    }
-                                }
                             },
                             isToolsExpanded = toolsExpandedStates[message.id] ?: false,
                             onToolsExpandChange = { messageId, expanded ->
@@ -2511,6 +2499,9 @@ fun ThinkingBlock(
 ) {
     var elapsedSeconds by remember { mutableLongStateOf(0L) }
     val startEpochMs = remember { System.currentTimeMillis() }
+    // Use alpha fade instead of height change — prevents reverse-layout LazyColumn jumps
+    val show = isExpanded || !isComplete
+    val animatedAlpha by animateFloatAsState(targetValue = if (show) 1f else 0f, animationSpec = tween(200))
 
     LaunchedEffect(isComplete) {
         if (isComplete) {
@@ -2537,7 +2528,6 @@ fun ThinkingBlock(
             .padding(bottom = 8.dp)
             .background(color = Color(0xFFFAF8F4), shape = RoundedCornerShape(8.dp))
             .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(8.dp))
-            .animateContentSize(tween(250))
     ) {
         Row(
             modifier = Modifier
@@ -2554,18 +2544,32 @@ fun ThinkingBlock(
                 fontWeight = if (!isComplete) FontWeight.Medium else FontWeight.Normal,
                 color = if (!isComplete) Color(0xFFC9A86C) else Color(0xFF8B7355)
             )
-        }
-        if (isExpanded || !isComplete) {
-            Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+            Spacer(modifier = Modifier.weight(1f))
             Text(
-                text = thinkingText,
-                fontSize = 12.sp,
-                color = Color(0xFF8B7355),
-                lineHeight = 18.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp)
+                text = if (isExpanded && isComplete) "▲" else "▼",
+                fontSize = 10.sp,
+                color = Color(0xFFC0B0A0)
             )
+        }
+        // Content always rendered at full size; alpha controls visibility.
+        // This guarantees zero layout change — no LazyColumn repositioning.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .alpha(animatedAlpha)
+        ) {
+            Column {
+                Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+                Text(
+                    text = thinkingText,
+                    fontSize = 12.sp,
+                    color = Color(0xFF8B7355),
+                    lineHeight = 18.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp)
+                )
+            }
         }
     }
 }
