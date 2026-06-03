@@ -2597,19 +2597,30 @@ fun Application.configureRouting() {
                         }
                         "reply_images" -> {
                             // cc-connect agent generated images during this turn (e.g. SVG/PNG from tools).
-                            // Use ##PREVIEW_IMAGE:data:...## mechanism — the frontend extracts the URL
-                            // and creates an <img> tag which natively supports data URIs.
+                            // Save to chat_history uploads dir so the frontend can serve them via
+                            // the existing /api/files/download/ route + ##PREVIEW_IMAGE: marker.
                             try {
                                 val replyImages = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                     com.silk.backend.ccconnect.ReplyImagesMessage.serializer(), text
                                 )
                                 logger.info("[CcConnect][{}] reply_images: received {} image(s)", groupId, replyImages.images.size)
 
+                                val sessionKey = "group_$groupId"
+                                val uploadsDir = File("chat_history/$sessionKey/uploads")
+                                if (!uploadsDir.exists()) uploadsDir.mkdirs()
+
                                 for (img in replyImages.images) {
                                     try {
-                                        val caption = img.fileName.ifBlank { "image" }
-                                        // SYSTEM type + ##PREVIEW_IMAGE: marker, same as uploaded images
-                                        val content = "##PREVIEW_IMAGE:data:${img.mimeType};base64,${img.data}##\n💬 $caption"
+                                        val imageBytes = java.util.Base64.getDecoder().decode(img.data)
+                                        val ext = img.mimeType.substringAfterLast("/").let {
+                                            if (it in listOf("jpeg", "png", "gif", "webp", "svg+xml")) it else "jpg"
+                                        }.replace("svg+xml", "svg")
+                                        val baseName = img.fileName.ifBlank { "generated_${System.currentTimeMillis()}" }
+                                        val safeName = baseName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                                        val targetFile = File(uploadsDir, safeName)
+                                        targetFile.writeBytes(imageBytes)
+                                        val downloadUrl = com.silk.backend.buildFileDownloadUrl(sessionKey, targetFile.name)
+                                        val content = "##PREVIEW_IMAGE:${downloadUrl}##\n💬 ${img.fileName.ifBlank { "image" }}"
                                         val imgMsg = Message(
                                             id = java.util.UUID.randomUUID().toString(),
                                             userId = "cc-connect",
@@ -2619,10 +2630,10 @@ fun Application.configureRouting() {
                                             type = MessageType.SYSTEM,
                                         )
                                         chatServer.broadcast(imgMsg)
-                                        logger.info("[CcConnect][{}] reply_images: broadcast {} (mime={}, base64_len={})",
-                                            groupId, img.fileName, img.mimeType, img.data.length)
+                                        logger.info("[CcConnect][{}] reply_images: saved and broadcast {} ({} bytes -> {})",
+                                            groupId, img.fileName, imageBytes.size, downloadUrl)
                                     } catch (e: Exception) {
-                                        logger.warn("[CcConnect][{}] failed to broadcast reply image {}: {}",
+                                        logger.warn("[CcConnect][{}] failed to save reply image {}: {}",
                                             groupId, img.fileName, e.message)
                                     }
                                 }
