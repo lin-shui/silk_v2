@@ -2597,50 +2597,30 @@ fun Application.configureRouting() {
                         }
                         "reply_images" -> {
                             // cc-connect agent generated images during this turn (e.g. SVG/PNG from tools).
-                            // Save each image to chat_history and broadcast as SYSTEM messages with
-                            // ##PREVIEW_IMAGE:url## markers so the frontend renders them inline.
+                            // Embed images as data URIs in markdown so the frontend renders them inline
+                            // without needing a file-serving endpoint.
                             try {
                                 val replyImages = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                     com.silk.backend.ccconnect.ReplyImagesMessage.serializer(), text
                                 )
-                                val sessionDir = File("chat_history/group_$groupId")
-                                if (!sessionDir.exists()) sessionDir.mkdirs()
 
-                                for ((idx, img) in replyImages.images.withIndex()) {
+                                for (img in replyImages.images) {
                                     try {
-                                        val imageBytes = java.util.Base64.getDecoder().decode(img.data)
-                                        val ext = when {
-                                            img.mimeType.contains("png", ignoreCase = true) -> ".png"
-                                            img.mimeType.contains("gif", ignoreCase = true) -> ".gif"
-                                            img.mimeType.contains("webp", ignoreCase = true) -> ".webp"
-                                            img.mimeType.contains("svg", ignoreCase = true) -> ".svg"
-                                            else -> ".jpg"
-                                        }
-                                        val baseName = img.fileName.ifBlank { "generated_${System.currentTimeMillis()}" }
-                                        val safeName = baseName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-                                        val targetPath = "${sessionDir.absolutePath}/$safeName"
-                                        var targetFile = File(targetPath)
-                                        var counter = 1
-                                        while (targetFile.exists()) {
-                                            targetFile = File("${sessionDir.absolutePath}/${baseName.removeSuffix(ext)}_$counter$ext")
-                                            counter++
-                                        }
-                                        targetFile.writeBytes(imageBytes)
-                                        val downloadUrl = "/api/files/download/group_${groupId}/${targetFile.name}"
-                                        val preview = "##PREVIEW_IMAGE:${downloadUrl}##\n💬 Claude 生成了图片: ${targetFile.name}"
+                                        // Build a markdown image with data URI
+                                        val content = "![${img.fileName.ifBlank { "image" }}](data:${img.mimeType};base64,${img.data})"
                                         val imgMsg = Message(
                                             id = java.util.UUID.randomUUID().toString(),
                                             userId = "cc-connect",
                                             userName = ccUserName,
-                                            content = preview,
+                                            content = content,
                                             timestamp = System.currentTimeMillis(),
-                                            type = MessageType.SYSTEM,
+                                            type = MessageType.TEXT,
                                         )
                                         chatServer.broadcast(imgMsg)
-                                        logger.info("[CcConnect][{}] reply_images: saved and broadcast image {} ({} bytes)",
-                                            groupId, targetFile.name, imageBytes.size)
+                                        logger.info("[CcConnect][{}] reply_images: broadcast image {} ({} bytes base64)",
+                                            groupId, img.fileName, img.data.length)
                                     } catch (e: Exception) {
-                                        logger.warn("[CcConnect][{}] failed to save reply image {}: {}",
+                                        logger.warn("[CcConnect][{}] failed to broadcast reply image {}: {}",
                                             groupId, img.fileName, e.message)
                                     }
                                 }
