@@ -61,6 +61,13 @@ data class HelloAckMessage(
 )
 
 @Serializable
+data class ImageAttachment(
+    @SerialName("mime_type") val mimeType: String,
+    val data: String, // base64-encoded image bytes
+    @SerialName("file_name") val fileName: String = "",
+)
+
+@Serializable
 data class UserMessage(
     val type: String = "message",
     val content: String,
@@ -68,6 +75,7 @@ data class UserMessage(
     @SerialName("user_name") val userName: String = "",
     @SerialName("msg_id") val msgId: String = "",
     val history: List<HistoryEntry>? = null,
+    val images: List<ImageAttachment>? = null,
 )
 
 @Serializable

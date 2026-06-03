@@ -192,9 +192,52 @@ fun Route.fileRoutes() {
                     val finalUserText = userTextForMsg
                     CoroutineScope(Dispatchers.IO).launch {
                         try {
-                            chatSvr.handleVisionImageAndText(
-                                targetFile, "", finalUserText, downloadUrl, finalUserId
-                            )
+                            // === cc-connect image routing ===
+                            // If this is a cc-connect group and the caption starts with @cc / @claude prefix,
+                            // forward the image to cc-connect's agent (Claude) for vision processing
+                            // instead of Silk's built-in vision pipeline.
+                            // Solo mode (single member): no @-prefix needed, same as TEXT routing.
+                            val ccGroupId = finalSessionId.removePrefix("group_")
+                            val isCcConnected = com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId)
+                            val isImage = isImageFile // from the check above
+
+                            val connMeta = if (isCcConnected) {
+                                com.silk.backend.ccconnect.CcConnectRegistry.getConnectionInfo(ccGroupId)
+                            } else null
+                            val triggerName = com.silk.backend.ccconnect.agentTriggerName(connMeta?.agentType ?: "")
+                            val prefixes = buildSet {
+                                add("@cc")
+                                if (triggerName != "cc") add("@$triggerName")
+                            }
+                            val matchedPrefix = prefixes.firstOrNull { p ->
+                                finalUserText.startsWith("$p ", ignoreCase = true) || finalUserText.equals(p, ignoreCase = true)
+                            }
+                            val memberCount = com.silk.backend.database.GroupRepository.getGroupMemberCount(ccGroupId)
+                            val isSoloMode = memberCount <= 1L
+
+                            if (isCcConnected && isImage && (isSoloMode || matchedPrefix != null)) {
+                                val strippedText = if (matchedPrefix != null) {
+                                    if (finalUserText.startsWith("$matchedPrefix ", ignoreCase = true)) {
+                                        finalUserText.substring(matchedPrefix.length + 1)
+                                    } else {
+                                        finalUserText.substring(matchedPrefix.length)
+                                    }
+                                } else {
+                                    finalUserText // solo mode, keep caption as-is
+                                }
+                                chatSvr.forwardImageToCcConnect(
+                                    imageFile = targetFile,
+                                    userText = strippedText.trim(),
+                                    downloadUrl = downloadUrl,
+                                    userId = finalUserId,
+                                    userName = finalUserName,
+                                    ccGroupId = ccGroupId,
+                                )
+                            } else {
+                                chatSvr.handleVisionImageAndText(
+                                    targetFile, "", finalUserText, downloadUrl, finalUserId
+                                )
+                            }
                         } catch (e: Exception) {
                             logger.error("❌ Vision 异步处理失败: {}", e.message, e)
                             chatSvr.broadcastCombinedVisionResult(

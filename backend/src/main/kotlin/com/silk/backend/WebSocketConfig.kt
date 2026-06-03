@@ -1025,6 +1025,84 @@ class ChatServer(
      * 处理 WebSocket 内嵌的 Vision 图片+文字
      * 前端将图片 base64 嵌入消息（##VISION_IMG:data:...##用户文字），后端在此统一处理
      */
+    /**
+     * Forward an image to cc-connect's Claude agent for vision processing.
+     * Called from FileRoutes.kt when a user uploads an image with @claude/@cc prefix
+     * in a cc-connect group. Falls back to Silk's built-in vision if cc-connect is not connected.
+     */
+    suspend fun forwardImageToCcConnect(
+        imageFile: java.io.File,
+        userText: String,
+        downloadUrl: String,
+        userId: String,
+        userName: String,
+        ccGroupId: String
+    ) {
+        logger.info("📸 [CcImage] forwarding image to cc-connect: {}", imageFile.name)
+        if (!imageFile.exists()) {
+            logger.warn("📸 [CcImage] image file not found: {}", imageFile.absolutePath)
+            return
+        }
+        if (!com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId)) {
+            logger.warn("📸 [CcImage] cc-connect not connected, falling back to Silk vision")
+            handleVisionImageAndText(imageFile, "", userText, downloadUrl, userId)
+            return
+        }
+
+        try {
+            val imageBytes = imageFile.readBytes()
+            val base64Image = java.util.Base64.getEncoder().encodeToString(imageBytes)
+            val ext = imageFile.extension.lowercase()
+            val mimeType = when (ext) {
+                "png" -> "image/png"
+                "gif" -> "image/gif"
+                "webp" -> "image/webp"
+                else -> "image/jpeg"
+            }
+
+            // Load recent chat history (same pattern as TEXT routing)
+            val chatHistory = historyManager.loadChatHistory(sessionName)
+            val historyEntries = chatHistory?.messages
+                ?.filter { it.messageType == "TEXT" }
+                ?.takeLast(50)
+                ?.map { entry ->
+                    com.silk.backend.ccconnect.HistoryEntry(
+                        senderId = entry.senderId,
+                        senderName = entry.senderName,
+                        content = entry.content,
+                        messageType = entry.messageType,
+                        timestamp = entry.timestamp,
+                    )
+                }
+
+            val userMsg = com.silk.backend.ccconnect.UserMessage(
+                content = userText.ifBlank { "请分析这张图片" },
+                userId = userId,
+                userName = userName,
+                msgId = "img_${System.currentTimeMillis()}",
+                history = historyEntries,
+                images = listOf(
+                    com.silk.backend.ccconnect.ImageAttachment(
+                        mimeType = mimeType,
+                        data = base64Image,
+                        fileName = imageFile.name,
+                    )
+                ),
+            )
+
+            if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(ccGroupId)) {
+                com.silk.backend.ccconnect.CcConnectRegistry.forwardAnswer(ccGroupId, userMsg)
+            } else {
+                com.silk.backend.ccconnect.CcConnectRegistry.forwardToAdapter(ccGroupId, userMsg)
+            }
+            logger.info("📸 [CcImage] image forwarded to cc-connect: {}", imageFile.name)
+        } catch (e: Exception) {
+            logger.error("📸 [CcImage] failed to forward image to cc-connect: {}", e.message, e)
+            // Fallback to Silk vision on error
+            handleVisionImageAndText(imageFile, "", userText, downloadUrl, userId)
+        }
+    }
+
     suspend fun handleVisionImageAndText(
         imageFile: java.io.File,
         base64Data: String,
