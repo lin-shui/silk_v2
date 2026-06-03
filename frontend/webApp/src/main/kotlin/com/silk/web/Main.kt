@@ -4739,6 +4739,8 @@ private fun createSanitizeConfig(): dynamic {
     val config = js("{}")
     config.ADD_TAGS = arrayOf("input", "details", "summary")
     config.ADD_ATTR = arrayOf("checked", "disabled", "type", "class", "open")
+    // Allow data: URIs for <img> so Claude's data URI images render inline
+    config.ADD_DATA_URI_TAGS = arrayOf("img")
     return config
 }
 
