@@ -1,5 +1,8 @@
 package com.silk.android
 
+import android.util.Base64
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.os.Handler
@@ -10,6 +13,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import java.io.ByteArrayInputStream
 
 /**
  * 使用 WebView + KaTeX 渲染 Markdown 内容
@@ -261,6 +265,40 @@ fun MarkdownWebView(
                         view.ensureScrollToTop()
                         view.postDelayed({ view.scrollTo(0, 0) }, 200)
                         view.postDelayed({ view.scrollTo(0, 0) }, 600)
+                    }
+
+                    // Handle data: URIs for images — some Android versions
+                    // block data URIs when loaded via loadDataWithBaseURL.
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: WebResourceRequest
+                    ): WebResourceResponse? {
+                        val url = request.url.toString()
+                        if (!url.startsWith("data:")) return super.shouldInterceptRequest(view, request)
+
+                        return try {
+                            val dataStart = url.indexOf(",")
+                            if (dataStart < 0) return super.shouldInterceptRequest(view, request)
+                            val header = url.substring(5, dataStart)
+                            val isBase64 = header.endsWith("base64")
+                            val mime = if (isBase64) {
+                                header.substring(0, maxOf(0, header.length - 7)).trim()
+                            } else {
+                                header.split(";")[0].trim()
+                            }
+                            val rawData = url.substring(dataStart + 1)
+                            val bytes = if (isBase64) {
+                                Base64.decode(rawData, Base64.DEFAULT)
+                            } else {
+                                try { rawData.toByteArray() } catch (_: Exception) { rawData.toByteArray() }
+                            }
+                            WebResourceResponse(
+                                mime.ifBlank { "image/png" }, "UTF-8",
+                                ByteArrayInputStream(bytes)
+                            )
+                        } catch (_: Exception) {
+                            super.shouldInterceptRequest(view, request)
+                        }
                     }
                 }
 
