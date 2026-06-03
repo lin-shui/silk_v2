@@ -2595,6 +2595,58 @@ fun Application.configureRouting() {
                                 chatServer.broadcast(msg)
                             }
                         }
+                        "reply_images" -> {
+                            // cc-connect agent generated images during this turn (e.g. SVG/PNG from tools).
+                            // Save each image to chat_history and broadcast as SYSTEM messages with
+                            // ##PREVIEW_IMAGE:url## markers so the frontend renders them inline.
+                            try {
+                                val replyImages = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                    com.silk.backend.ccconnect.ReplyImagesMessage.serializer(), text
+                                )
+                                val sessionDir = java.io.File(chatHistoryRootDir(), "group_$groupId")
+                                if (!sessionDir.exists()) sessionDir.mkdirs()
+
+                                for ((idx, img) in replyImages.images.withIndex()) {
+                                    try {
+                                        val imageBytes = java.util.Base64.getDecoder().decode(img.data)
+                                        val ext = when {
+                                            img.mimeType.contains("png", ignoreCase = true) -> ".png"
+                                            img.mimeType.contains("gif", ignoreCase = true) -> ".gif"
+                                            img.mimeType.contains("webp", ignoreCase = true) -> ".webp"
+                                            img.mimeType.contains("svg", ignoreCase = true) -> ".svg"
+                                            else -> ".jpg"
+                                        }
+                                        val baseName = img.fileName.ifBlank { "generated_${System.currentTimeMillis()}" }
+                                        var safeName = baseName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                                        var targetFile = java.io.File(sessionDir, safeName)
+                                        var counter = 1
+                                        while (targetFile.exists()) {
+                                            targetFile = java.io.File(sessionDir, "${baseName.removeSuffix(ext)}_$counter$ext")
+                                            counter++
+                                        }
+                                        targetFile.writeBytes(imageBytes)
+                                        val downloadUrl = "/api/files/download/group_${groupId}/${targetFile.name}"
+                                        val preview = "##PREVIEW_IMAGE:${downloadUrl}##\n💬 Claude 生成了图片: ${targetFile.name}"
+                                        val imgMsg = Message(
+                                            id = java.util.UUID.randomUUID().toString(),
+                                            userId = "cc-connect",
+                                            userName = ccUserName,
+                                            content = preview,
+                                            timestamp = System.currentTimeMillis(),
+                                            type = MessageType.SYSTEM,
+                                        )
+                                        chatServer.broadcast(imgMsg)
+                                        logger.info("[CcConnect][{}] reply_images: saved and broadcast image {} ({} bytes)",
+                                            groupId, targetFile.name, imageBytes.size)
+                                    } catch (e: Exception) {
+                                        logger.warn("[CcConnect][{}] failed to save reply image {}: {}",
+                                            groupId, img.fileName, e.message)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                logger.warn("[CcConnect][{}] failed to parse reply_images: {}", groupId, e.message)
+                            }
+                        }
                         "question" -> {
                             val question = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                 com.silk.backend.ccconnect.QuestionMessage.serializer(), text
