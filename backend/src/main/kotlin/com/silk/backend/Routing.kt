@@ -2300,6 +2300,21 @@ fun Application.configureRouting() {
             var preQuestionBlocks = emptyList<com.silk.backend.ai.ContentBlock>()   // blocks saved before question, merged into final
             var expectFinalizeReply = false   // done=true sent → Finalize fallback reply incoming, skip it
 
+            // convertImageUrls detects plain HTTP(S) image URLs in text and wraps them
+            // in markdown image syntax so the frontend renders them inline.
+            // Ignores URLs already inside ![]() markup.
+            fun convertImageUrls(text: String): String {
+                // Match http(s)://... ending with image extension, not already in ![](url)
+                val imageUrlRegex = Regex(
+                    """(?<!!\[.*?\]\()https?://[^\s"'<>]+\.(png|jpg|jpeg|gif|webp)(\?[^\s"'<>]*)?(?!"\))""",
+                    RegexOption.IGNORE_CASE
+                )
+                return imageUrlRegex.replace(text) { match ->
+                    val url = match.value
+                    "![]($url)"
+                }
+            }
+
             fun buildStructuredContent(collapseTools: Boolean = false): String {
                 val sb = StringBuilder()
                 sb.append("<!--CC_TURN-->\n")
@@ -2326,7 +2341,7 @@ fun Application.configureRouting() {
                 }
 
                 if (answerText.isNotEmpty()) {
-                    sb.append(answerText)
+                    sb.append(convertImageUrls(answerText))
                 }
 
                 return sb.toString()
@@ -2463,7 +2478,7 @@ fun Application.configureRouting() {
                                     id = java.util.UUID.randomUUID().toString(),
                                     userId = "cc-connect",
                                     userName = ccUserName,
-                                    content = reply.content,
+                                    content = convertImageUrls(reply.content),
                                     timestamp = System.currentTimeMillis(),
                                     type = MessageType.TEXT,
                                 )
@@ -2520,8 +2535,8 @@ fun Application.configureRouting() {
                                 if (stream.done) {
                                     for (block in blocks) {
                                         if (block.type == "text" && block.content.isNotBlank()) {
-                                            contentField = block.content
-                                            answerText = block.content
+                                            contentField = convertImageUrls(block.content)
+                                            answerText = convertImageUrls(block.content)
                                         }
                                     }
                                 }
