@@ -2302,11 +2302,12 @@ fun Application.configureRouting() {
 
             // convertImageUrls detects plain HTTP(S) image URLs in text and wraps them
             // in markdown image syntax so the frontend renders them inline.
-            // Ignores URLs already inside ![]() markup.
             fun convertImageUrls(text: String): String {
-                // Match http(s)://... ending with image extension, not already in ![](url)
+                // Match http(s)://... ending with image extension.
+                // Exclude `)` from the URL char set so URLs already inside ![]() are not
+                // double-wrapped — the closing `)` naturally terminates the match.
                 val imageUrlRegex = Regex(
-                    """(?<!!\[.*?\]\()https?://[^\s"'<>]+\.(png|jpg|jpeg|gif|webp)(\?[^\s"'<>]*)?(?!"\))""",
+                    """https?://[^\s"'<>)]+\.(png|jpg|jpeg|gif|webp)(\?[^\s"'<>)]*)?(?!"\))""",
                     RegexOption.IGNORE_CASE
                 )
                 return imageUrlRegex.replace(text) { match ->
