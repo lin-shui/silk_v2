@@ -2603,7 +2603,7 @@ fun Application.configureRouting() {
                                 val replyImages = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                     com.silk.backend.ccconnect.ReplyImagesMessage.serializer(), text
                                 )
-                                val sessionDir = java.io.File(chatHistoryRootDir(), "group_$groupId")
+                                val sessionDir = File("chat_history/group_$groupId")
                                 if (!sessionDir.exists()) sessionDir.mkdirs()
 
                                 for ((idx, img) in replyImages.images.withIndex()) {
@@ -2617,11 +2617,12 @@ fun Application.configureRouting() {
                                             else -> ".jpg"
                                         }
                                         val baseName = img.fileName.ifBlank { "generated_${System.currentTimeMillis()}" }
-                                        var safeName = baseName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
-                                        var targetFile = java.io.File(sessionDir, safeName)
+                                        val safeName = baseName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                                        val targetPath = "${sessionDir.absolutePath}/$safeName"
+                                        var targetFile = File(targetPath)
                                         var counter = 1
                                         while (targetFile.exists()) {
-                                            targetFile = java.io.File(sessionDir, "${baseName.removeSuffix(ext)}_$counter$ext")
+                                            targetFile = File("${sessionDir.absolutePath}/${baseName.removeSuffix(ext)}_$counter$ext")
                                             counter++
                                         }
                                         targetFile.writeBytes(imageBytes)
