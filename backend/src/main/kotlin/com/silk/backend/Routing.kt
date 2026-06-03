@@ -2608,15 +2608,18 @@ fun Application.configureRouting() {
                                 val sessionKey = "group_$groupId"
                                 val uploadsDir = File("chat_history/$sessionKey/uploads")
                                 if (!uploadsDir.exists()) uploadsDir.mkdirs()
+                                val ts = System.currentTimeMillis()
 
-                                for (img in replyImages.images) {
+                                for ((idx, img) in replyImages.images.withIndex()) {
                                     try {
                                         val imageBytes = java.util.Base64.getDecoder().decode(img.data)
                                         val ext = img.mimeType.substringAfterLast("/").let {
                                             if (it in listOf("jpeg", "png", "gif", "webp", "svg+xml")) it else "jpg"
                                         }.replace("svg+xml", "svg")
-                                        val baseName = img.fileName.ifBlank { "generated_${System.currentTimeMillis()}" }
-                                        val safeName = baseName.replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                                        // Prefix with timestamp to avoid collisions across turns
+                                        val prefix = "${ts}_${idx}"
+                                        val baseName = img.fileName.ifBlank { "generated" }
+                                        val safeName = "${prefix}_${baseName}".replace(Regex("[^a-zA-Z0-9._-]"), "_")
                                         val targetFile = File(uploadsDir, safeName)
                                         targetFile.writeBytes(imageBytes)
                                         val downloadUrl = com.silk.backend.buildFileDownloadUrl(sessionKey, targetFile.name)
@@ -2630,8 +2633,8 @@ fun Application.configureRouting() {
                                             type = MessageType.SYSTEM,
                                         )
                                         chatServer.broadcast(imgMsg)
-                                        logger.info("[CcConnect][{}] reply_images: saved and broadcast {} ({} bytes -> {})",
-                                            groupId, img.fileName, imageBytes.size, downloadUrl)
+                                        logger.info("[CcConnect][{}] reply_images: saved {} ({} bytes -> {})",
+                                            groupId, targetFile.name, imageBytes.size, downloadUrl)
                                     } catch (e: Exception) {
                                         logger.warn("[CcConnect][{}] failed to save reply image {}: {}",
                                             groupId, img.fileName, e.message)
