@@ -2597,28 +2597,30 @@ fun Application.configureRouting() {
                         }
                         "reply_images" -> {
                             // cc-connect agent generated images during this turn (e.g. SVG/PNG from tools).
-                            // Embed images as data URIs in markdown so the frontend renders them inline
-                            // without needing a file-serving endpoint.
+                            // Use ##PREVIEW_IMAGE:data:...## mechanism — the frontend extracts the URL
+                            // and creates an <img> tag which natively supports data URIs.
                             try {
                                 val replyImages = com.silk.backend.ccconnect.protocolJson.decodeFromString(
                                     com.silk.backend.ccconnect.ReplyImagesMessage.serializer(), text
                                 )
+                                logger.info("[CcConnect][{}] reply_images: received {} image(s)", groupId, replyImages.images.size)
 
                                 for (img in replyImages.images) {
                                     try {
-                                        // Build a markdown image with data URI
-                                        val content = "![${img.fileName.ifBlank { "image" }}](data:${img.mimeType};base64,${img.data})"
+                                        val caption = img.fileName.ifBlank { "image" }
+                                        // SYSTEM type + ##PREVIEW_IMAGE: marker, same as uploaded images
+                                        val content = "##PREVIEW_IMAGE:data:${img.mimeType};base64,${img.data}##\n💬 $caption"
                                         val imgMsg = Message(
                                             id = java.util.UUID.randomUUID().toString(),
                                             userId = "cc-connect",
                                             userName = ccUserName,
                                             content = content,
                                             timestamp = System.currentTimeMillis(),
-                                            type = MessageType.TEXT,
+                                            type = MessageType.SYSTEM,
                                         )
                                         chatServer.broadcast(imgMsg)
-                                        logger.info("[CcConnect][{}] reply_images: broadcast image {} ({} bytes base64)",
-                                            groupId, img.fileName, img.data.length)
+                                        logger.info("[CcConnect][{}] reply_images: broadcast {} (mime={}, base64_len={})",
+                                            groupId, img.fileName, img.mimeType, img.data.length)
                                     } catch (e: Exception) {
                                         logger.warn("[CcConnect][{}] failed to broadcast reply image {}: {}",
                                             groupId, img.fileName, e.message)
