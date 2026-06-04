@@ -23,10 +23,12 @@ import io.ktor.server.application.call
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondBytes
 import io.ktor.server.response.respondFile
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
+import java.io.FileInputStream
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
@@ -56,6 +58,52 @@ private fun normalizedSessionDir(sessionId: String): String =
 
 private fun uploadsDirForSession(sessionId: String): File =
     File(File(chatHistoryRootDir(), normalizedSessionDir(sessionId)), "uploads")
+
+/**
+ * 通过文件魔数 (magic bytes) 检测图片真实 Content-Type，
+ * 不依赖文件扩展名。解决 Chrome 粘贴 webp 时命名 image.png
+ * 但实际内容为 webp 导致的 Content-Type 错配问题。
+ */
+private fun detectImageContentTypeFromMagicBytes(file: File): String? {
+    return try {
+        val magic: ByteArray = FileInputStream(file).use { `in` ->
+            val bytes = ByteArray(12)
+            val read = `in`.read(bytes)
+            if (read < 2) return@use ByteArray(0)
+            bytes
+        } ?: return null
+        when {
+            // PNG: 89 50 4E 47 0D 0A 1A 0A
+            magic.size >= 8 &&
+                magic[0] == 0x89.toByte() && magic[1] == 0x50.toByte() &&
+                magic[2] == 0x4E.toByte() && magic[3] == 0x47.toByte() &&
+                magic[4] == 0x0D.toByte() && magic[5] == 0x0A.toByte() &&
+                magic[6] == 0x1A.toByte() && magic[7] == 0x0A.toByte() -> "image/png"
+            // JPEG: FF D8 FF
+            magic.size >= 3 && magic[0] == 0xFF.toByte() && magic[1] == 0xD8.toByte() && magic[2] == 0xFF.toByte() -> "image/jpeg"
+            // GIF: 47 49 46 38
+            magic.size >= 4 && magic[0] == 0x47.toByte() && magic[1] == 0x49.toByte() &&
+                magic[2] == 0x46.toByte() && magic[3] == 0x38.toByte() -> "image/gif"
+            // WebP: RIFF(4) + size(4) + WEBP(4)
+            magic.size >= 12 &&
+                magic[0] == 0x52.toByte() && magic[1] == 0x49.toByte() &&
+                magic[2] == 0x46.toByte() && magic[3] == 0x46.toByte() &&
+                magic[8] == 0x57.toByte() && magic[9] == 0x45.toByte() &&
+                magic[10] == 0x42.toByte() && magic[11] == 0x50.toByte() -> "image/webp"
+            // BMP: 42 4D
+            magic.size >= 2 && magic[0] == 0x42.toByte() && magic[1] == 0x4D.toByte() -> "image/bmp"
+            // TIFF little-endian: 49 49 2A 00
+            magic.size >= 4 && magic[0] == 0x49.toByte() && magic[1] == 0x49.toByte() &&
+                magic[2] == 0x2A.toByte() && magic[3] == 0x00.toByte() -> "image/tiff"
+            // TIFF big-endian: 4D 4D 00 2A
+            magic.size >= 4 && magic[0] == 0x4D.toByte() && magic[1] == 0x4D.toByte() &&
+                magic[2] == 0x00.toByte() && magic[3] == 0x2A.toByte() -> "image/tiff"
+            else -> null
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
 
 /**
  * APK 版本信息响应
@@ -374,12 +422,14 @@ fun Route.fileRoutes() {
                 return@get
             }
             
-            // 确定 Content-Type
-            val contentType = Files.probeContentType(file.toPath()) 
+            // 确定 Content-Type：优先通过魔数检测真实类型（解决 Chrome 粘贴 webp 时
+            // 命名 image.png 但内容实际为 webp 导致的 Content-Type 错配）
+            val detectedContentType = detectImageContentTypeFromMagicBytes(file)
+                ?: Files.probeContentType(file.toPath())
                 ?: ContentType.Application.OctetStream.toString()
             
             // 图片用 Inline（浏览器展示），非图片用 Attachment（下载）
-            val isImage = contentType.startsWith("image/")
+            val isImage = detectedContentType.startsWith("image/")
             val disposition = if (isImage) {
                 ContentDisposition.Inline.withParameter(
                     ContentDisposition.Parameters.FileName, 
@@ -396,7 +446,12 @@ fun Route.fileRoutes() {
                 disposition.toString()
             )
             
-            call.respondFile(file)
+            // 显式设置 Content-Type（基于 magic bytes 检测，不依赖文件扩展名），
+            // 解决粘贴上传 webp 时 Chrome 命名 image.png 但实际内容为 webp 导致的显示空白问题
+            call.respondBytes(
+                bytes = file.readBytes(),
+                contentType = ContentType.parse(detectedContentType)
+            )
         }
         
         /**

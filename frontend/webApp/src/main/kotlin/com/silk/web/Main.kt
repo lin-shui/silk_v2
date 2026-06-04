@@ -5166,7 +5166,8 @@ fun AIMessageCard(
     onToggleSelection: (String) -> Unit = {},
     onEnterSelectionMode: (String) -> Unit = {}
 ) {
-    val isLongContent = message.content.length > 500
+    val containsImageMd = message.content.contains("![](")
+    val isLongContent = message.content.length > 500 && !containsImageMd
     val collapsedPreview = remember(message.content) {
         message.content.trimStart().take(200).ifBlank { "（内容已折叠，点击展开）" }
     }
@@ -5761,8 +5762,8 @@ fun MessageItem(
                             }
                         }
                     } else {
-                        // 普通文本消息
-                        Text(message.content)
+                        // 普通文本消息 — 用 MarkdownContent 支持图片/格式渲染
+                        MarkdownContent(content = message.content)
                     }
                 }
                 
