@@ -68,8 +68,12 @@ import com.silk.shared.models.TrustedDirListResponse
 import com.silk.shared.models.TrustedDirCheckResponse
 import com.silk.shared.models.TrustedDirRecordDto
 import io.ktor.client.HttpClient
+import io.ktor.client.call.body
 import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
+import io.ktor.client.request.get as httpGet
+import io.ktor.client.statement.*
+import io.ktor.http.contentType
 import io.ktor.http.ContentDisposition
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -583,6 +587,27 @@ fun Application.configureRouting() {
             """.trimIndent(), ContentType.Application.Json)
         }
         
+        // 图片代理：通过后端转发 HTTP 图片，解决 Mixed Content 问题
+        get("/api/image-proxy") {
+            val url = call.request.queryParameters["url"]
+            if (url.isNullOrBlank() || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+                call.respond(HttpStatusCode.BadRequest, "Missing or invalid url parameter")
+                return@get
+            }
+            try {
+                val client = HttpClient { expectSuccess = false }
+                val resp = client.httpGet(url)
+                val bytes = resp.body<ByteArray>()
+                val contentType = resp.contentType()?.toString() ?: "image/png"
+                client.close()
+                call.response.header(HttpHeaders.ContentType, contentType)
+                call.response.header(HttpHeaders.CacheControl, "public, max-age=3600")
+                call.respond(bytes)
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.BadGateway, "Failed to fetch image")
+            }
+        }
+
         get("/health") {
             call.respondText(
                 """{"status":"ok","service":"silk","timestamp":${System.currentTimeMillis()}}""",
@@ -2302,12 +2327,10 @@ fun Application.configureRouting() {
 
             // convertImageUrls detects plain HTTP(S) image URLs in text and wraps them
             // in markdown image syntax so the frontend renders them inline.
+            // HTTP images are proxied through /api/image-proxy by the frontend.
             fun convertImageUrls(text: String): String {
-                // Match http(s)://... ending with image extension.
-                // Exclude `)` from the URL char set so URLs already inside ![]() are not
-                // double-wrapped — the closing `)` naturally terminates the match.
                 val imageUrlRegex = Regex(
-                    """https?://[^\s"'<>)]+\.(png|jpg|jpeg|gif|webp)(\?[^\s"'<>)]*)?(?!"\))""",
+                    """https?://[^\s"'<>)]++\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s"'<>)]*+)?(?:&[^\s"'<>)]*+)*+(?!\))""",
                     RegexOption.IGNORE_CASE
                 )
                 return imageUrlRegex.replace(text) { match ->
@@ -2447,7 +2470,7 @@ fun Application.configureRouting() {
                                         finalBlocksSent = false
                                     } else {
                                         finalBlocksSent = false
-                                        answerText = reply.content
+                                        answerText = convertImageUrls(reply.content)
                                         gotReplyAfterStream = true
                                         logger.info("[CcConnect][{}] expectFinalizeReply → skip reply (Finalize fallback)", groupId)
                                         continue
@@ -2755,7 +2778,7 @@ fun Application.configureRouting() {
                                                 blocks = preQuestionBlocks
                                                 preQuestionBlocks = emptyList()
                                             }
-                                            val finalContent = answerText.ifEmpty {
+                                            val finalContent = convertImageUrls(answerText).ifEmpty {
                                                 blocks.firstOrNull { it.type == "text" }?.content ?: ""
                                             }
                                             if (blocks.isNotEmpty() || finalContent.isNotBlank()) {

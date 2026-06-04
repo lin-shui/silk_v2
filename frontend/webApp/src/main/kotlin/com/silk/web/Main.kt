@@ -1762,6 +1762,39 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         Text("📋复制")
                     }
                     
+                    // 删除选中消息
+                    Button({
+                        style {
+                            padding(8.px, 14.px)
+                            backgroundColor(Color(if (selectedMessageIds.isNotEmpty()) "rgba(255,80,80,0.35)" else "rgba(255,255,255,0.10)"))
+                            color(Color.white)
+                            border { width(0.px) }
+                            borderRadius(8.px)
+                            property("cursor", if (selectedMessageIds.isNotEmpty()) "pointer" else "default")
+                            fontSize(13.px)
+                            property("transition", "all 0.2s ease")
+                        }
+                        if (selectedMessageIds.isNotEmpty()) {
+                            onClick {
+                                val idsToDelete = selectedMessageIds
+                                scope.launch {
+                                    chatClient.removeMessages(idsToDelete)
+                                    for (msgId in idsToDelete) {
+                                        try {
+                                            ApiClient.deleteMessage(group.id, msgId, user.id)
+                                        } catch (e: dynamic) {
+                                            console.log("删除消息失败:", msgId, e)
+                                        }
+                                    }
+                                }
+                                isSelectionMode = false
+                                selectedMessageIds = emptySet()
+                            }
+                        }
+                    }) {
+                        Text("🗑删除")
+                    }
+                    
                     // 转发选中消息
                     Button({
                         style {
@@ -4913,6 +4946,20 @@ fun MarkdownContent(
         val element = document.getElementById(containerId) as? HTMLElement
         if (element != null) {
             element.innerHTML = safeHtml
+
+            // Rewrite HTTP image src through backend proxy to avoid Mixed Content
+            val images = element.querySelectorAll("img")
+            for (imgIdx in 0 until images.length) {
+                val img = images.item(imgIdx) as? HTMLElement ?: continue
+                val src = img.getAttribute("src") ?: ""
+                if (src.startsWith("http://")) {
+                    // 代理在 API 后端，不在前端静态服务器
+                    val backendPort = BuildConfig.BACKEND_HTTP_PORT
+                    val loc = window.location
+                    val proxyBase = "${loc.protocol}//${loc.hostname}:$backendPort"
+                    img.setAttribute("src", "$proxyBase/api/image-proxy?url=${js("encodeURIComponent")(src)}")
+                }
+            }
 
             val links = element.querySelectorAll("a")
             for (index in 0 until links.length) {

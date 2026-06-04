@@ -466,6 +466,11 @@ class ChatClient(
         _interactiveOptions.value = emptyList()
     }
 
+    fun removeMessages(messageIds: Set<String>) {
+        _messages.value = _messages.value.filter { it.id !in messageIds }
+        log("🗑️ [ChatClient] 已移除 ${messageIds.size} 条消息: $messageIds")
+    }
+
     fun clearTransientOnly() {
         log("🗑️ [ChatClient] 只清空临时消息")
         _transientMessage.value = null

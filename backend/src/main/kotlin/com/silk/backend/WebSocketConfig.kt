@@ -2096,29 +2096,31 @@ class ChatServer(
         
         val deletedMessageIds = mutableListOf<String>()
 
-        // 3. 查找用户消息之后最近的 Agent 回复（Silk / cc-connect 等），级联删除
+        // 3. 查找用户消息之后的所有连续 Agent 回复（Silk / cc-connect 等），级联删除
+        //    包括 thinking、tool_use、answer 等多个分段消息
         logger.debug("🔄 [recallMessage] 查找 Agent 的回复")
         val messageIndex = chatHistory.messages.indexOf(messageEntry)
-        val agentReply = chatHistory.messages
+        val agentReplies = chatHistory.messages
             .drop(messageIndex + 1)
-            .firstOrNull { AgentRuntime.isAgentUserId(it.senderId) }
+            .takeWhile { AgentRuntime.isAgentUserId(it.senderId) }
 
-        if (agentReply != null) {
-            logger.debug("🔄 [recallMessage] 找到 Agent 回复: {}", agentReply.messageId)
-            historyManager.deleteMessages(sessionName, listOf(messageId, agentReply.messageId))
-            deletedMessageIds.add(messageId)
-            deletedMessageIds.add(agentReply.messageId)
-            messageHistory.removeIf { it.id == messageId || it.id == agentReply.messageId }
-            broadcastRecallNotification(listOf(messageId, agentReply.messageId))
+        if (agentReplies.isNotEmpty()) {
+            val agentIds = agentReplies.map { it.messageId }
+            val allIds = listOf(messageId) + agentIds
+            logger.debug("🔄 [recallMessage] 找到 {} 条 Agent 回复: {}", agentReplies.size, agentIds)
+            historyManager.deleteMessages(sessionName, allIds)
+            deletedMessageIds.addAll(allIds)
+            messageHistory.removeIf { it.id in allIds }
+            broadcastRecallNotification(allIds)
             // 同步删除 Weaviate 向量索引
             CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId, agentReply.messageId))
+                    WeaviateClient.getInstance().deleteChatMessages(sessionName, allIds)
                 } catch (e: Exception) {
                     logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败: {}", e.message)
                 }
             }
-            logger.info("✅ [recallMessage] 已撤回用户消息和 Agent 回复")
+            logger.info("✅ [recallMessage] 已撤回用户消息和 {} 条 Agent 回复", agentReplies.size)
         } else {
             logger.warn("⚠️ [recallMessage] 未找到 Agent 回复，只撤回用户消息")
             historyManager.deleteMessages(sessionName, listOf(messageId))
