@@ -137,162 +137,195 @@ class ChatClient(
     }
 
     private fun handleMessage(text: String) {
-        // 批量历史帧：服务端将最多 50 条消息编码为 JSON 数组一次性发送
-        // 不依赖 _isLoadingHistory 状态，防止超时后历史消息被丢弃
-        if (text.startsWith("[")) {
-            try {
-                val batch = Json.decodeFromString<List<Message>>(text)
-                if (_isLoadingHistory.value) {
-                    historyBuffer.addAll(batch)
-                    log("📜 [ChatClient] 收到批量历史: ${batch.size} 条")
-                } else {
-                    // 历史加载已完成但批量历史晚到：直接写入消息列表
-                    log("📜 [ChatClient] 历史加载已完成，直接写入 ${batch.size} 条历史消息")
-                    _messages.value = (_messages.value + batch).distinctBy { it.id }
-                }
-                return
-            } catch (_: SerializationException) {
-                log("⚠️ [ChatClient] 批量解析失败，回退单条解析")
-            }
-        }
+        if (handleBatchHistoryFrame(text)) return
+        decodeMessage(text)?.let(::handleDecodedMessage)
+    }
 
-        try {
-            val message = Json.decodeFromString<Message>(text)
-
-            // 历史加载完成标记
-            if (message.isTransient && message.type == MessageType.SYSTEM && message.content == "__history_end__") {
-                log("📜 [ChatClient] 收到 history_end 标记")
-                flushHistoryBuffer()
-                return
-            }
-
-            // 安全超时：超过 30 秒仍在缓冲则强制刷入
+    private fun handleBatchHistoryFrame(text: String): Boolean {
+        if (!text.startsWith("[")) return false
+        return try {
+            val batch = Json.decodeFromString<List<Message>>(text)
             if (_isLoadingHistory.value) {
-                val elapsed = Clock.System.now().toEpochMilliseconds() - historyLoadStartMs
-                if (elapsed > 30000) {
-                    log("⏰ [ChatClient] 历史加载超时 (30s)，强制刷入")
-                    flushHistoryBuffer()
-                }
+                historyBuffer.addAll(batch)
+                log("📜 [ChatClient] 收到批量历史: ${batch.size} 条")
+            } else {
+                log("📜 [ChatClient] 历史加载已完成，直接写入 ${batch.size} 条历史消息")
+                _messages.value = (_messages.value + batch).distinctBy { it.id }
             }
+            true
+        } catch (_: SerializationException) {
+            log("⚠️ [ChatClient] 批量解析失败，回退单条解析")
+            false
+        }
+    }
 
-            // 历史加载期间：缓冲普通消息，不逐条更新 UI
-            if (_isLoadingHistory.value && !message.isTransient && message.category != MessageCategory.AGENT_STATUS && message.type != MessageType.RECALL) {
-                historyBuffer.add(message)
-                return
-            }
-            
-            val isSilkAi = isAgentUserId(message.userId)
-            
-            // 停止后抑制残余流式消息（允许 CLEAR_STATUS 通过）
-            if (suppressTransient && isSilkAi && message.isTransient) {
-                if (message.category == MessageCategory.AGENT_STATUS &&
-                    message.content.startsWith("CLEAR_STATUS")) {
-                    _statusMessages.value = emptyList()
-                    _isGenerating.value = false
-                    suppressTransient = false
-                    _pendingQuestionId.value = null
-                }
-                return
-            }
-            
-            when {
-                // 撤回消息：从列表中移除指定消息
-                message.type == MessageType.RECALL -> {
-                    log("🗑️ [ChatClient] 收到撤回消息: ${message.content}")
-                    val messageIdsToRemove = message.content.split(",").map { it.trim() }
-                    _messages.value = _messages.value.filter { msg -> 
-                        msg.id !in messageIdsToRemove 
-                    }
-                    log("🗑️ [ChatClient] 已移除 ${messageIdsToRemove.size} 条消息")
-                }
-                // Agent 状态消息：添加到状态消息列表（灰色显示）
-                message.category == MessageCategory.AGENT_STATUS -> {
-                    if (message.content.startsWith("CLEAR_STATUS")) {
-                        log("🧹 [ChatClient] 清除状态消息")
-                        _statusMessages.value = emptyList()
-                        _isGenerating.value = false
-                        suppressTransient = false
-                        _pendingQuestionId.value = null
-                    } else {
-                        log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
-                        if (isSilkAi) _isGenerating.value = true
-                        val existingIndex = _statusMessages.value.indexOfFirst { it.id == message.id }
-                        val updated = if (existingIndex >= 0) {
-                            _statusMessages.value.toMutableList().apply { set(existingIndex, message) }
-                        } else {
-                            (_statusMessages.value + message).takeLast(10)
-                        }
-                        _statusMessages.value = updated
-                    }
-                }
-                // 增量临时消息：拼接到已有内容尾部
-                message.isTransient && message.isIncremental -> {
-                    if (isSilkAi) _isGenerating.value = true
-                    val existing = _transientMessage.value
-                    if (existing != null &&
-                        existing.userId == message.userId &&
-                        existing.type == message.type) {
-                        val newContent = existing.content + message.content
-                        _transientMessage.value = existing.copy(
-                            content = newContent,
-                            timestamp = message.timestamp,
-                            currentStep = message.currentStep,
-                            totalSteps = message.totalSteps
-                        )
-                        log("📝 [ChatClient] 增量拼接: +${message.content.length}字 -> 总${newContent.length}字")
-                    } else {
-                        _transientMessage.value = message
-                        log("📝 [ChatClient] 增量首帧: ${message.content.length}字")
-                    }
-                }
-                // 完整临时消息：直接替换
-                message.isTransient -> {
-                    log("📝 [ChatClient] 完整临时消息")
-                    if (isSilkAi) _isGenerating.value = true
-                    _transientMessage.value = message
-                }
-                // 普通消息：添加到消息列表（如果不存在），或替换（如果 action="edit"）
-                else -> {
-                    if (message.action == "edit") {
-                        log("✏️ [ChatClient] 编辑消息: ${message.id}")
-                        _messages.value = _messages.value.map {
-                            if (it.id == message.id) message else it
-                        }
-                        // edit 只更新已有卡片内容，不影响状态（agent 可能仍在工作中）
-                    } else {
-                        val exists = _messages.value.any { it.id == message.id }
-                        if (!exists) {
-                            log("💬 [ChatClient] 普通消息，添加到列表")
-                            _messages.value = _messages.value + message
-                        } else {
-                            log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
-                        }
-                        // 新消息到达时更新状态
-                        if (message.type == MessageType.CARD_REPLY) {
-                            // 卡片回复：agent 仍在工作中，保留状态消息
-                        } else if (message.category == MessageCategory.AGENT_QUESTION) {
-                            val reqId = message.id.removePrefix("agent_question_")
-                            _pendingQuestionId.value = reqId
-                            _isGenerating.value = false
-                            _transientMessage.value = null
-                            // 保留 statusMessages，agent 仍在工作中
-                            suppressTransient = false
-                        } else if (message.category == MessageCategory.AGENT_PERMISSION) {
-                            // 权限卡片：agent 仍在工作中，保留状态消息
-                            _transientMessage.value = null
-                        } else {
-                            _transientMessage.value = null
-                            _statusMessages.value = emptyList()
-                            _isGenerating.value = false
-                            suppressTransient = false
-                            _pendingQuestionId.value = null
-                        }
-                    }
-                }
-            }
+    private fun decodeMessage(text: String): Message? {
+        return try {
+            Json.decodeFromString<Message>(text)
         } catch (e: SerializationException) {
             log("❌ [ChatClient] 解析消息失败: ${e.message}")
+            null
         }
+    }
+
+    private fun handleDecodedMessage(message: Message) {
+        if (handleHistoryEndMarker(message)) return
+        flushHistoryBufferOnTimeout()
+        if (shouldBufferHistoryMessage(message)) {
+            historyBuffer.add(message)
+            return
+        }
+
+        val isSilkAi = isAgentUserId(message.userId)
+        if (shouldSuppressTransientMessage(message, isSilkAi)) return
+
+        when {
+            message.type == MessageType.RECALL -> handleRecallMessage(message)
+            message.category == MessageCategory.AGENT_STATUS -> handleAgentStatusMessage(message, isSilkAi)
+            message.isTransient && message.isIncremental -> handleIncrementalTransientMessage(message, isSilkAi)
+            message.isTransient -> handleTransientMessage(message, isSilkAi)
+            else -> handlePersistentMessage(message)
+        }
+    }
+
+    private fun handleHistoryEndMarker(message: Message): Boolean {
+        val isHistoryEnd =
+            message.isTransient &&
+                message.type == MessageType.SYSTEM &&
+                message.content == "__history_end__"
+        if (isHistoryEnd) {
+            log("📜 [ChatClient] 收到 history_end 标记")
+            flushHistoryBuffer()
+        }
+        return isHistoryEnd
+    }
+
+    private fun flushHistoryBufferOnTimeout() {
+        if (!_isLoadingHistory.value) return
+        val elapsed = Clock.System.now().toEpochMilliseconds() - historyLoadStartMs
+        if (elapsed > 30000) {
+            log("⏰ [ChatClient] 历史加载超时 (30s)，强制刷入")
+            flushHistoryBuffer()
+        }
+    }
+
+    private fun shouldBufferHistoryMessage(message: Message): Boolean {
+        return _isLoadingHistory.value &&
+            !message.isTransient &&
+            message.category != MessageCategory.AGENT_STATUS &&
+            message.type != MessageType.RECALL
+    }
+
+    private fun shouldSuppressTransientMessage(message: Message, isSilkAi: Boolean): Boolean {
+        if (!suppressTransient || !isSilkAi || !message.isTransient) return false
+        if (message.category == MessageCategory.AGENT_STATUS &&
+            message.content.startsWith("CLEAR_STATUS")) {
+            clearAgentStatusState()
+        }
+        return true
+    }
+
+    private fun handleRecallMessage(message: Message) {
+        log("🗑️ [ChatClient] 收到撤回消息: ${message.content}")
+        val messageIdsToRemove = message.content.split(",").map { it.trim() }
+        _messages.value = _messages.value.filter { msg -> msg.id !in messageIdsToRemove }
+        log("🗑️ [ChatClient] 已移除 ${messageIdsToRemove.size} 条消息")
+    }
+
+    private fun handleAgentStatusMessage(message: Message, isSilkAi: Boolean) {
+        if (message.content.startsWith("CLEAR_STATUS")) {
+            log("🧹 [ChatClient] 清除状态消息")
+            clearAgentStatusState()
+            return
+        }
+
+        log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
+        if (isSilkAi) _isGenerating.value = true
+        val existingIndex = _statusMessages.value.indexOfFirst { it.id == message.id }
+        _statusMessages.value = if (existingIndex >= 0) {
+            _statusMessages.value.toMutableList().apply { set(existingIndex, message) }
+        } else {
+            (_statusMessages.value + message).takeLast(10)
+        }
+    }
+
+    private fun handleIncrementalTransientMessage(message: Message, isSilkAi: Boolean) {
+        if (isSilkAi) _isGenerating.value = true
+        val existing = _transientMessage.value
+        if (existing != null &&
+            existing.userId == message.userId &&
+            existing.type == message.type) {
+            val newContent = existing.content + message.content
+            _transientMessage.value = existing.copy(
+                content = newContent,
+                timestamp = message.timestamp,
+                currentStep = message.currentStep,
+                totalSteps = message.totalSteps
+            )
+            log("📝 [ChatClient] 增量拼接: +${message.content.length}字 -> 总${newContent.length}字")
+            return
+        }
+
+        _transientMessage.value = message
+        log("📝 [ChatClient] 增量首帧: ${message.content.length}字")
+    }
+
+    private fun handleTransientMessage(message: Message, isSilkAi: Boolean) {
+        log("📝 [ChatClient] 完整临时消息")
+        if (isSilkAi) _isGenerating.value = true
+        _transientMessage.value = message
+    }
+
+    private fun handlePersistentMessage(message: Message) {
+        if (message.action == "edit") {
+            log("✏️ [ChatClient] 编辑消息: ${message.id}")
+            _messages.value = _messages.value.map {
+                if (it.id == message.id) message else it
+            }
+            return
+        }
+
+        appendMessageIfMissing(message)
+        updateStateForPersistentMessage(message)
+    }
+
+    private fun appendMessageIfMissing(message: Message) {
+        val exists = _messages.value.any { it.id == message.id }
+        if (!exists) {
+            log("💬 [ChatClient] 普通消息，添加到列表")
+            _messages.value = _messages.value + message
+        } else {
+            log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
+        }
+    }
+
+    private fun updateStateForPersistentMessage(message: Message) {
+        when {
+            message.type == MessageType.CARD_REPLY -> Unit
+            message.category == MessageCategory.AGENT_QUESTION -> {
+                _pendingQuestionId.value = message.id.removePrefix("agent_question_")
+                _isGenerating.value = false
+                _transientMessage.value = null
+                suppressTransient = false
+            }
+            message.category == MessageCategory.AGENT_PERMISSION -> {
+                _transientMessage.value = null
+            }
+            else -> {
+                _transientMessage.value = null
+                _statusMessages.value = emptyList()
+                _isGenerating.value = false
+                suppressTransient = false
+                _pendingQuestionId.value = null
+            }
+        }
+    }
+
+    private fun clearAgentStatusState() {
+        _statusMessages.value = emptyList()
+        _isGenerating.value = false
+        suppressTransient = false
+        _pendingQuestionId.value = null
     }
     
     fun stopGeneration(userId: String, userName: String) {

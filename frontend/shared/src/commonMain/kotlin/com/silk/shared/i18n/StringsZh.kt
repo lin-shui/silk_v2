@@ -3,7 +3,7 @@ package com.silk.shared.i18n
 /**
  * Chinese string resources
  */
-object Strings_ZH : Strings {
+object StringsZh : Strings {
     override val settingsTitle = "设置"
     override val languageLabel = "语言"
     override val defaultAgentInstructionLabel = "默认代理指令"

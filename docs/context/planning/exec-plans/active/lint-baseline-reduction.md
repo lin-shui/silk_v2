@@ -4,12 +4,17 @@
 
 在已经接入 `./gradlew silkLint` 的基础上，继续把 detekt baseline 转化为源码修复。原则保持不变：baseline 只减不增，每一步都能独立验证、独立 review。
 
-## Affected Surfaces
+## Remaining Surfaces
 
-- `config/lint/detekt/*.xml`
-- `frontend/androidApp/src/main/kotlin/com/silk/android/`
-- `frontend/webApp/src/main/kotlin/com/silk/web/`
-- 后续候选：`backend/src/main/kotlin/com/silk/backend/`
+- `config/lint/detekt/backend.xml`
+- `backend/src/main/kotlin/com/silk/backend/`
+
+已完成并归档：
+
+- Android baseline 清零：见 [2026-06-02-lint-baseline-reduction-slice-85.md](../completed/2026-06-02-lint-baseline-reduction-slice-85.md) 与 [2026-06-05-android-lint-baseline-closeout.md](../completed/2026-06-05-android-lint-baseline-closeout.md)
+- Web baseline 清零：见各 slice 归档，active plan 不再保留 Web 待办
+- Desktop baseline 清零：active plan 不再保留 Desktop 待办
+- Shared baseline 清零：见 [2026-06-05-lint-baseline-reduction-slice-86.md](../completed/2026-06-05-lint-baseline-reduction-slice-86.md)
 
 ## Guardrails
 
@@ -28,164 +33,46 @@
 
 按改动面追加最窄验证：
 
-- `frontend/androidApp`：`./gradlew :frontend:androidApp:detekt`
-- Android Kotlin 变更：`./gradlew :frontend:androidApp:compileDebugKotlin`
-- Android 单测：`./gradlew :frontend:androidApp:testDebugUnitTest`
-- backend 改动：`./gradlew :backend:test`
-- web 改动：`./gradlew :frontend:webApp:nodeTest`
+- backend 改动：`./gradlew :backend:detekt`、`./gradlew :backend:test`
+- shared 改动：按受影响 consumer 追加编译或测试
 
 ## Current Snapshot
 
-当前 detekt baseline 余量（2026-06-02，Slice 85 后）：
+当前 detekt baseline 余量（2026-06-05，Slice 93 后）：
 
-- `backend.xml`: 150
+- `backend.xml`: 138
 - `frontend-androidApp.xml`: 0
 - `frontend-webApp.xml`: 0
-- `frontend-shared.xml`: 7
+- `frontend-shared.xml`: 0
 - `frontend-desktopApp.xml`: 0
 
 当前关键分布：
 
-- `frontend/androidApp` detekt baseline 已清空；后续 Android 再出现 lint 只接受“新增问题直接修源码”，不要回填 baseline。
-- `frontend/webApp` 已清空 detekt baseline；`ApiClient.kt` 的异常恢复已统一收敛到 `recoverApiCall(...)` helper。
-- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter` 与 `EmptyFunctionBlock` baseline；剩余主要是 `TooGenericExceptionCaught` 33、`CyclomaticComplexMethod` 29、`ConstructorParameterNaming` 16、`NestedBlockDepth` 11、`SwallowedException` 11。
+- `frontend/androidApp` detekt baseline 已清空，并于 2026-06-05 再次通过 `:frontend:androidApp:detekt`、`:frontend:androidApp:compileDebugKotlin` 与 `silkLint` 复验。
+- `frontend/webApp` detekt baseline 已清空；后续 Web 再出现 lint 只接受“新增问题直接修源码”，不要回填 baseline。
+- `frontend/desktopApp` detekt baseline 已清空；后续 Desktop 再出现 lint 只接受“新增问题直接修源码”，不要回填 baseline。
+- `frontend/shared` detekt baseline 已清空，并于 2026-06-05 通过 `:frontend:shared:detekt`、三端 consumer 编译与 `silkLint` 复验。
+- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter`、`EmptyFunctionBlock`、`AsrRoutes.kt` 的 `SwallowedException`、`ChatHistoryBackupManager.kt` 的 `PrintStackTrace` / `SwallowedException`、`WeaviateClient.kt` 的 `PrintStackTrace`，以及 `WebSocketConfig.kt` 的 `ComplexCondition` / `PrintStackTrace` / `SwallowedException` baseline 和一条陈旧的 `TooGenericExceptionCaught(ex)` 残留；剩余主要是 `TooGenericExceptionCaught` 32、`CyclomaticComplexMethod` 29、`ConstructorParameterNaming` 16、`NestedBlockDepth` 11、`SwallowedException` 7。
 
 ## Current Status
 
-- Slice 1-16 的完成历史已归档到 [2026-05-21-lint-baseline-reduction-slices-1-16.md](../completed/2026-05-21-lint-baseline-reduction-slices-1-16.md)。
-- Slice 17-18 的完成历史已归档到 [2026-05-21-lint-baseline-reduction-slices-17-18.md](../completed/2026-05-21-lint-baseline-reduction-slices-17-18.md)。
-- Slice 19 的完成历史已归档到 [2026-05-21-lint-baseline-reduction-slice-19.md](../completed/2026-05-21-lint-baseline-reduction-slice-19.md)。
-- Slice 20 的完成历史已归档到 [2026-05-21-lint-baseline-reduction-slice-20.md](../completed/2026-05-21-lint-baseline-reduction-slice-20.md)。
-- Slice 21 的完成历史已归档到 [2026-05-21-lint-baseline-reduction-slice-21.md](../completed/2026-05-21-lint-baseline-reduction-slice-21.md)。
-- Slice 22 的完成历史已归档到 [2026-05-21-lint-baseline-reduction-slice-22.md](../completed/2026-05-21-lint-baseline-reduction-slice-22.md)。
-- Slice 23 的完成历史已归档到 [2026-05-25-lint-baseline-reduction-slice-23.md](../completed/2026-05-25-lint-baseline-reduction-slice-23.md)。
-- Slice 24 的完成历史已归档到 [2026-05-25-lint-baseline-reduction-slice-24.md](../completed/2026-05-25-lint-baseline-reduction-slice-24.md)。
-- Slice 25 的完成历史已归档到 [2026-05-25-lint-baseline-reduction-slice-25.md](../completed/2026-05-25-lint-baseline-reduction-slice-25.md)。
-- Slice 26 的完成历史已归档到 [2026-05-25-lint-baseline-reduction-slice-26.md](../completed/2026-05-25-lint-baseline-reduction-slice-26.md)。
-- Slice 27 的完成历史已归档到 [2026-05-25-lint-baseline-reduction-slice-27.md](../completed/2026-05-25-lint-baseline-reduction-slice-27.md)。
-- Slice 28 的完成历史已归档到 [2026-05-25-lint-baseline-reduction-slice-28.md](../completed/2026-05-25-lint-baseline-reduction-slice-28.md)。
-- Slice 29 的完成历史已归档到 [2026-05-25-lint-baseline-reduction-slice-29.md](../completed/2026-05-25-lint-baseline-reduction-slice-29.md)。
-- Slice 30 的完成历史已归档到 [2026-05-25-lint-baseline-reduction-slice-30.md](../completed/2026-05-25-lint-baseline-reduction-slice-30.md)。
-- Slice 31 的完成历史已归档到 [2026-05-25-lint-baseline-reduction-slice-31.md](../completed/2026-05-25-lint-baseline-reduction-slice-31.md)。
-- Slice 32 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-32.md](../completed/2026-05-26-lint-baseline-reduction-slice-32.md)。
-- Slice 33 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-33.md](../completed/2026-05-26-lint-baseline-reduction-slice-33.md)。
-- Slice 34 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-34.md](../completed/2026-05-26-lint-baseline-reduction-slice-34.md)。
-- Slice 35 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-35.md](../completed/2026-05-26-lint-baseline-reduction-slice-35.md)。
-- Slice 36 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-36.md](../completed/2026-05-26-lint-baseline-reduction-slice-36.md)。
-- Slice 37 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-37.md](../completed/2026-05-26-lint-baseline-reduction-slice-37.md)。
-- Slice 38 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-38.md](../completed/2026-05-26-lint-baseline-reduction-slice-38.md)。
-- Slice 39 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-39.md](../completed/2026-05-26-lint-baseline-reduction-slice-39.md)。
-- Slice 40 的完成历史已归档到 [2026-05-26-lint-baseline-reduction-slice-40.md](../completed/2026-05-26-lint-baseline-reduction-slice-40.md)。
-- Slice 41 的完成历史已归档到 [2026-05-28-lint-baseline-reduction-slice-41.md](../completed/2026-05-28-lint-baseline-reduction-slice-41.md)。
-- Slice 42 的完成历史已归档到 [2026-05-28-lint-baseline-reduction-slice-42.md](../completed/2026-05-28-lint-baseline-reduction-slice-42.md)。
-- Slice 43 的完成历史已归档到 [2026-05-28-lint-baseline-reduction-slice-43.md](../completed/2026-05-28-lint-baseline-reduction-slice-43.md)。
-- Slice 44 的完成历史已归档到 [2026-05-28-lint-baseline-reduction-slice-44.md](../completed/2026-05-28-lint-baseline-reduction-slice-44.md)。
-- Slice 45 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-45.md](../completed/2026-05-29-lint-baseline-reduction-slice-45.md)。
-- Slice 46 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-46.md](../completed/2026-05-29-lint-baseline-reduction-slice-46.md)。
-- Slice 47 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-47.md](../completed/2026-05-29-lint-baseline-reduction-slice-47.md)。
-- Slice 48 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-48.md](../completed/2026-05-29-lint-baseline-reduction-slice-48.md)。
-- Slice 49 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-49.md](../completed/2026-05-29-lint-baseline-reduction-slice-49.md)。
-- Slice 50 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-50.md](../completed/2026-05-29-lint-baseline-reduction-slice-50.md)。
-- Slice 51 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-51.md](../completed/2026-05-29-lint-baseline-reduction-slice-51.md)。
-- Slice 52 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-52.md](../completed/2026-05-29-lint-baseline-reduction-slice-52.md)。
-- Slice 53 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-53.md](../completed/2026-05-29-lint-baseline-reduction-slice-53.md)。
-- Slice 54 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-54.md](../completed/2026-05-29-lint-baseline-reduction-slice-54.md)。
-- Slice 55 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-55.md](../completed/2026-05-29-lint-baseline-reduction-slice-55.md)。
-- Slice 56 的完成历史已归档到 [2026-05-29-lint-baseline-reduction-slice-56.md](../completed/2026-05-29-lint-baseline-reduction-slice-56.md)。
-- Slice 57 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-57.md](../completed/2026-06-01-lint-baseline-reduction-slice-57.md)。
-- Slice 58 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-58.md](../completed/2026-06-01-lint-baseline-reduction-slice-58.md)。
-- Slice 59 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-59.md](../completed/2026-06-01-lint-baseline-reduction-slice-59.md)。
-- Slice 60 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-60.md](../completed/2026-06-01-lint-baseline-reduction-slice-60.md)。
-- Slice 61 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-61.md](../completed/2026-06-01-lint-baseline-reduction-slice-61.md)。
-- Slice 62 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-62.md](../completed/2026-06-01-lint-baseline-reduction-slice-62.md)。
-- Slice 63 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-63.md](../completed/2026-06-01-lint-baseline-reduction-slice-63.md)。
-- Slice 64 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-64.md](../completed/2026-06-01-lint-baseline-reduction-slice-64.md)。
-- Slice 65 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-65.md](../completed/2026-06-01-lint-baseline-reduction-slice-65.md)。
-- Slice 66 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-66.md](../completed/2026-06-01-lint-baseline-reduction-slice-66.md)。
-- Slice 67 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-67.md](../completed/2026-06-01-lint-baseline-reduction-slice-67.md)。
-- Slice 68 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-68.md](../completed/2026-06-01-lint-baseline-reduction-slice-68.md)。
-- Slice 69 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-69.md](../completed/2026-06-01-lint-baseline-reduction-slice-69.md)。
-- Slice 70 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-70.md](../completed/2026-06-01-lint-baseline-reduction-slice-70.md)。
-- Slice 71 的完成历史已归档到 [2026-06-01-lint-baseline-reduction-slice-71.md](../completed/2026-06-01-lint-baseline-reduction-slice-71.md)。
-- Slice 72 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-72.md](../completed/2026-06-02-lint-baseline-reduction-slice-72.md)。
-- Slice 73 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-73.md](../completed/2026-06-02-lint-baseline-reduction-slice-73.md)。
-- Slice 74 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-74.md](../completed/2026-06-02-lint-baseline-reduction-slice-74.md)。
-- Slice 75 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-75.md](../completed/2026-06-02-lint-baseline-reduction-slice-75.md)。
-- Slice 76 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-76.md](../completed/2026-06-02-lint-baseline-reduction-slice-76.md)。
-- Slice 77 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-77.md](../completed/2026-06-02-lint-baseline-reduction-slice-77.md)。
-- Slice 78 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-78.md](../completed/2026-06-02-lint-baseline-reduction-slice-78.md)。
-- Slice 79 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-79.md](../completed/2026-06-02-lint-baseline-reduction-slice-79.md)。
-- Slice 80 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-80.md](../completed/2026-06-02-lint-baseline-reduction-slice-80.md)。
-- Slice 81 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-81.md](../completed/2026-06-02-lint-baseline-reduction-slice-81.md)。
-- Slice 82 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-82.md](../completed/2026-06-02-lint-baseline-reduction-slice-82.md)。
-- Slice 83 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-83.md](../completed/2026-06-02-lint-baseline-reduction-slice-83.md)。
-- Slice 84 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-84.md](../completed/2026-06-02-lint-baseline-reduction-slice-84.md)。
-- Slice 85 的完成历史已归档到 [2026-06-02-lint-baseline-reduction-slice-85.md](../completed/2026-06-02-lint-baseline-reduction-slice-85.md)。
-- Android 侧已知 `jlink` / `JdkImageTransform` 阻塞保持不变；当前 active plan 继续优先选择不依赖该链路的窄 slice。
+- Slice 1-93 完成历史均已归档到 `docs/context/planning/exec-plans/completed/`。
+- Android / Web / Desktop / Shared baseline 已清零；active plan 现在只保留 backend 的剩余 detekt 收敛。
+- Android 侧既有 `JdkImageTransform` / `jlink` 环境阻塞仍未改变；这不影响 baseline 已清零这一事实。
 
 ## Next Slices
 
-- Slice 86 候选：如果继续 backend 且接受入口面，优先单独处理 `WebSocketConfig.kt` 的同文件异常语义点，不要把 URL 流程、消息入口和 AI 主链重新混刀。
-- Slice 87 候选：如果继续 backend 但仍希望避开入口面，优先回到 `WebPageDownloader` 或 `WebSocketConfig.kt` 中单文件、单职责的剩余异常语义点，不要重新扩到多条主链。
-- Slice 88 候选：如果继续 shared，优先处理 `frontend-shared.xml` 剩余 7 条，保持单文件、单职责推进。
-- 如果回到 backend，下一轮不要再按“大范围机械清理”切；当前未使用签名类孤立项已经清空，优先选单函数复杂度或明确异常语义问题。
-- `frontend/webApp` baseline 已清空；后续 web 再出现 lint 时只接受“新增问题直接修源码”，不要回填 baseline。
-- `frontend/androidApp` baseline 已清空；后续 Android 再出现 lint 时只接受“新增问题直接修源码”，不要回填 baseline。
-- 复杂度规则继续按单文件慢拆，不和异常语义 / import 收敛混在同一 slice。
+- Slice 94 候选：优先继续处理 `Routing.kt` 中单函数、单职责的剩余异常语义点。
+- Slice 95 候选：如果继续 backend 复杂度，优先按单函数慢拆，不和异常语义 / import 收敛混在同一 slice。
+- Slice 96 候选：如果 backend 异常语义继续推进，优先选单文件里的同类 catch / swallow 点做小批量收敛，不要横跨多个模块。
+- 如果某一步发现需要新增 baseline，先停下来判断是否应关规则、补测试或拆小 PR，不要直接把新增项写进 baseline。
 
 ## Handoff Notes
 
-- `frontend/desktopApp` 已清空 detekt baseline；如果后续 desktop 再出现 lint，只接受“新增问题直接修源码”，不要再回填 baseline。
+- `frontend/androidApp` baseline 已清空；后续 Android 再出现 lint，只接受“新增问题直接修源码”，不要回填 baseline。
+- `frontend/webApp` baseline 已清空；后续 Web 再出现 lint，只接受“新增问题直接修源码”，不要回填 baseline。
+- `frontend/desktopApp` baseline 已清空；后续 Desktop 再出现 lint，只接受“新增问题直接修源码”，不要回填 baseline。
+- `frontend/shared` baseline 已清空；后续 shared 再出现 lint，只接受“新增问题直接修源码”，不要回填 baseline。
 - `frontend/shared/src/iosMain` 当前不在根 detekt source set 中；本计划按当前 lint 覆盖面推进，不把未启用 iOS 源码混进每一步。
-- `frontend/webApp/src/main/kotlin/com/silk/web/ApiClient.kt` 已抽出 `recoverApiCall(...)`；后续新增 web API 方法优先复用它，保持 cancellation 透传和 fallback 语义一致，不要再回到整文件 `catch (Exception)`。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ApiClient.kt` 已抽出同名 `recoverApiCall(...)`；后续新增 Android API 方法优先复用它，保持 `Dispatchers.IO`、cancellation 透传和 fallback 语义一致，不要再回到整文件 `catch (Exception)`。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/AudioDuplexScreen.kt` 已把会话级错误恢复和 receive loop 收敛到 helper；后续如果继续切这个文件，优先维持“事件分发 helper + 顶层会话 orchestration”的结构，不要把异常处理和 stop 分支重新散回主循环。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ContactsScreen.kt` 现在直接依赖 `ApiClient` 的恢复语义来加载语言和联系人；后续改联系人页时不要再把这些 API 调用包回 `catch (Exception)`，优先检查 `response.success/message` 即可。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ContactsScreen.kt` 现在把 `ContactsScreen(...)` 顶层 scene 收敛成 top bar、body、列表内容和 dialog orchestration，并把加载语言/联系人与私聊启动抽成 helper；后续继续改联系人页宿主时优先沿这些 helper 扩展，不要把列表分支、对话框编排和启动私聊逻辑重新塞回顶层 composable。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ContactsScreen.kt` 现在把 `AddContactDialog(...)` 收敛成标题、输入区、搜索按钮、用户结果卡片、状态文案和请求发送 helper；后续继续改加联系人弹窗时优先沿这些 helper 扩展，不要把搜索/发送请求分支重新塞回主 dialog。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/MainActivity.kt` 现在把 `SilkApp(...)` 收敛成 app lifecycle observe、返回键保护、版本更新弹窗和 scene host 几层 helper；后续继续改 Android 宿主页时优先沿这些 helper 扩展，不要把登录/验证态、底部导航和 tab-scene 分发重新堆回顶层 composable。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/WorkflowScreen.kt` 现在把 `CreateWorkflowDialog(...)` 收敛成初始化加载、表单分区、目录提示与辅助对话框/信任创建 helper；后续继续改创建工作流弹窗时优先沿这些 helper 扩展，不要把 agent/权限/目录分支和信任检查重新塞回主 dialog。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/SettingsScreen.kt` 现在直接依赖 `ApiClient` 的恢复语义来加载/保存用户设置与 CC Bridge 状态；后续改设置页时不要再把这些 API 调用包回 `catch (Exception)`，优先检查 `response.success/message` 并只保留必要的 `finally` 状态收尾。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/LoginScreen.kt` 现在直接依赖 `ApiClient.login/register(...)` 的恢复语义，升级安装错误也统一经 `ApkDownloader.installApk(...)` 的返回值汇报；后续改登录页时不要再把认证或安装入口包回 generic catch。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/GroupListScreen.kt` 现在直接依赖 `ApiClient` 的恢复语义来加载语言、群组和 create/join dialog；后续改群组页时优先检查 `response.success/message` 并只保留必要的 loading 状态收尾。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/GroupListScreen.kt` 现在把 `GroupMembersListDialog(...)` 收敛成标题、loading/empty/list 状态、成员行状态和头像/文案/helper；后续继续改成员弹窗时优先沿这些 helper 扩展，不要把成员判定、头像和 CTA 分支重新塞回主 dialog。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/GroupListScreen.kt` 现在把 `GroupListScreen(...)` 顶层 scene 收敛成语言/列表刷新 effect、top bar、列表内容和 dialog host 四层 helper，并把退群、未读刷新、Silk 私聊和成员弹窗数据加载抽成 suspend helper；后续继续改群组页宿主时优先沿这些 helper 扩展，不要把删除模式、顶部动作和成员加载分支重新塞回顶层 composable。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/WorkflowChatScreen.kt` 的首次连接已改成 `runCatching + cancellation 透传`；后续改工作流聊天页时不要再把 `chatClient.connect(...)` 包回 generic catch。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/AppState.kt` 现在用 `readStoredUser(...)` 统一恢复本地会话，并通过 `AuthResponse.isNetworkFailure()` 保持“网络错误不登出、取消异常透传”的语义；后续改启动恢复/登出逻辑时不要再回到重复空值并列判断或 `catch (Exception)`。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把连接/上传/ASR 一类“失败就记录/回退”的路径收敛到 `runLoggedSuspendAction(...)` 与 `disconnectChatClientQuietly(...)`；后续改这些路径时优先复用 helper，不要把 generic catch 和空 catch 再散回事件处理器。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把空态判定、代码高亮 token 扫描、文件名解析、行内数学 `$...$` 起始判断，以及 inline math delimiter 扫描都收敛到小 helper；后续继续切 markdown/高亮逻辑时优先沿这些 helper 扩展，不要把布尔链和深层游标判断重新塞回主函数。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在连 `highlightLine(...)`、`InlineMarkdownAndroid(...)` 的 token 选择/样式追加，以及 `extractInlineMath(...)` 的分隔符分发都收敛到 helper/状态推进写法；后续改 markdown 或高亮逻辑时不要再引回多段 `continue`、内联分类分支或在 composable 里手写一长串 token 判断。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `MarkdownTableAndroid(...)` 的 header/data-row 渲染和表格解析也收敛到 `ParsedMarkdownTable` 与 row/cell helper；后续继续切 markdown renderer 时优先沿这些 parser/render helper 扩展，不要把 header 判定、空列补齐和行渲染重新塞回主 composable。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `MarkdownContentAndroid(...)` 也改成“先解析 `MarkdownContentItem`，再渲染”的结构；后续继续切 markdown 备用 renderer 时优先沿 parser/render item helper 扩展，不要把 code/table/math/list 分支重新堆回主 composable。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `MessageItem(...)` 收敛成 AI/file/system/regular 的 render-mode dispatch，并把文件卡片、系统提示、消息菜单、PDF 下载体和选择态消息壳层拆成 helper；后续继续改消息项时优先沿这些 helper 扩展，不要把菜单、文件/PDF 分支和选择态手势重新塞回主 dispatch。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `FileItemCard(...)` 的文件类型分流改成共享映射 `fileCardIconMappings`；后续新增文件类型展示时优先加映射数据，不要再把一串扩展名判断写回 composable。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `ForwardedMessageBubble(...)` 改成 `ForwardedMessageBubbleState` + header/collapsed/expanded/batch-item helper 组合；后续继续改转发气泡时优先沿这些 helper 扩展，不要把批量/单条转发和展开收起分支重新塞回主 composable。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `MembersDialog(...)` 改成 header/body/member-row 分层，并把成员展示状态收敛到 `MembersDialogMemberState` 与字段级 helper；后续继续改成员弹窗时优先沿这些 helper 扩展，不要把 loading/empty/list 和成员判定分支重新塞回主 dialog。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ChatScreen.kt` 现在把 `AIMessageCardAndroid(...)` 改成 `AIMessageCardState` + header/thinking/body/footer helper 组合；后续继续改 AI 卡片时优先沿这些 helper 扩展，不要把思考折叠、长文展开和底部操作重新堆回主 card composable。
-- `backend/src/main/kotlin/com/silk/backend/ai/AIStepwiseAgent.kt` 已删除一组未接线的分析 helper，并把 `extractConclusion(...)` 收敛成只接收实际使用的 `fullResult`；后续如果继续切这个文件，优先确认 helper 是否真在 fallback / PDF 生成链路上使用，再决定是复接还是删除。
-- `backend/src/main/kotlin/com/silk/backend/ai/DirectModelAgent.kt` 现在已经收紧 `processInput(...)` 到只保留实际使用的 `userInput/systemPrompt/callback`；后续如果再碰它的调用链，优先确认 `searchContext()` 或工具上下文是否真的接到运行链路，再决定是否扩签，不要把用户或 session 作用域参数空挂回主入口。
-- `backend/src/main/kotlin/com/silk/backend/search/WeaviateClient.kt` 现在已经把 `isolatedSearch(...)` 及其 `foreground/background` helper 收紧到只保留真实使用的 query/session/limit 参数；后续如果要恢复用户级过滤或 hybrid alpha，先把查询实现真正接上，再扩签名，不要先挂死参数占位。
-- `backend/src/main/kotlin/com/silk/backend/pdf/PDFReportGenerator.kt` 现在已经去掉未使用的 `englishFont` 透传链与孤立的执行摘要/helper；后续继续改 PDF 生成器时优先保持“只保留真正参与渲染的签名与颜色 helper”，不要再把未使用字体/摘要入口挂回主流程。
-- `backend/src/main/kotlin/com/silk/backend/pdf/PDFReportGenerator.kt` 现在把 `extractDiagnosisSummary(...)` 收敛成“章节识别 + 条目筛选 + 摘要拼装”的 helper 组合，且把 `parseAndRenderFormattedText(...)` 的 skip-guard 也抽成了 `shouldSkipFormattedSummaryLine(...)`；后续继续改 PDF 文本解析时优先沿这些 helper 扩展，不要把关键词判断和跳过条件重新塞回主循环。
-- `backend/src/main/kotlin/com/silk/backend/utils/WebPageDownloader.kt` 现在已经去掉 `generateFileName(...)` 上未参与命名的 `url` 透传参数和未接线的 `WEB_PAGE_EXTENSIONS` 常量；后续如果继续改下载器，优先只保留真实参与下载策略、提取或命名的签名/常量，不要再挂死参数或备用常量占位。
-- `backend/src/main/kotlin/com/silk/backend/utils/WebPageDownloader.kt` 现在把 `downloadWithSimpleHttp(...)` 拆成 SSL 配置、浏览器头连接、响应校验、压缩流读取和 HTML 解析 helper；后续继续改 HTTP fallback 时优先沿这些 helper 扩展，不要把连接细节、内容类型分支和 Jsoup 解析重新塞回主函数。
-- `backend/src/main/kotlin/com/silk/backend/utils/WebPageDownloader.kt` 现在把 `downloadWithPlaywright(...)` 也拆成 context/page 配置、导航/挑战处理、等待 helper 和内容构造 helper，且 URL 解析 fallback 已统一做 debug 记录；后续继续改 Playwright 或 URL fallback 时优先沿这些 helper 扩展，不要把 challenge/wait/url 解析分支重新塞回主函数。
-- `backend/src/main/kotlin/com/silk/backend/WebSocketConfig.kt` 现在把 `generateIntelligentResponse(...)` 收敛成 system prompt、Agent 上下文准备、workspace 初始化、流式 step 处理、最终消息发送和待办刷新 helper；后续继续改 DirectModelAgent 入口时优先沿这些 helper 扩展，不要把回调分支、落库发送和群聊上下文重新塞回主函数。
-- `backend/src/main/kotlin/com/silk/backend/WebSocketConfig.kt` 现在把 `broadcast(...)` 收敛成停生成、卡片回复、持久化/索引、URL 异步、CC 拦截和 Silk AI 分发几个 helper 组合；后续继续改消息入口时优先沿这些 helper 扩展，不要把多条副作用链重新堆回主函数。
-- `backend/src/main/kotlin/com/silk/backend/WebSocketConfig.kt` 现在把 `processUrlsInMessage(...)` 收敛成 URL 去重、单链接下载、文件广播、搜索索引和状态清理几个 helper；后续继续改 URL 入库链路时优先沿这些 helper 扩展，不要把下载、保存、广播和索引重新塞回同一个循环。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ApkDownloader.kt` 与 `MarkdownWebView.kt` 现在对 `String.format(...)` 显式传 `Locale.US`；后续 Android 端如果再新增固定格式化字符串，不要依赖默认 locale。
-- `frontend/androidApp/src/main/kotlin/com/silk/android/ApkDownloader.kt` 现在把下载失败和安装失败统一折叠成返回值/状态回写，不再向调用方抛 `RuntimeException`；后续接入升级安装入口时优先消费返回消息，不要再在页面侧包安装 `try/catch`。
-- `frontend/webApp` 里的 transient/system-message 复杂条件已抽成共享 helper；后续同类判断优先复用 `shouldRenderInlineTransientMessage(...)` 与 `isWorkflowAgentLifecycleMessage(...)`，避免把条件重新写散。
-- `ContactsScene.kt` 已经把顶部栏、加载态、待处理请求区、联系人区拆成独立 composable；后续改联系人页时优先在这些 section helper 上扩展，不要把条件再塞回 `ContactsScene(...)`。
-- `SettingsScene.kt` 已经把顶部栏、语言/默认指令区、CC Bridge 区块、保存提示和底部按钮拆成独立 helper；后续继续加设置项时优先往这些 section 扩展，不要把分支重新堆回主 composable。
-- `KnowledgeBaseScene.kt` 已经把主题栏、条目栏、编辑器与创建弹窗拆成独立 helper；后续改知识库页时优先复用这些 section 和文件级动作 helper，不要再把保存/导出/创建分支塞回主 composable。
-- `AudioDuplexScene.kt` 已经把 transcript pane、空态、状态文案和拨号按钮拆成独立 helper；后续改音频双工页时优先沿着这些 helper 扩展，不要回退成单函数堆逻辑。
-- `Main.kt` 的 `ChatScene(...)` 已经把 missing-context、sidebar header/content/card、unread badge，以及 sidebar 刷新/未读轮询 effect 拆成独立 helper；后续改聊天页外围群组 sidebar 时优先沿这些 helper 扩展，不要把分支重新塞回 `ChatScene(...)`。
-- `Main.kt` 的 `ChatAppWithGroup(...)` 已经把 language/session effects、顶部 header、选择模式工具栏、常规操作工具栏、连接状态条，以及转发/成员邀请/上传输入等 overlays 拆成独立 helper；后续改聊天页 host 层时优先沿这些 helper 扩展，不要把 toolbar、dialog 和 upload 分支重新塞回主 composable。
-- `Main.kt` 的 `MembersDialog(...)` 已经把 overlay、surface、状态体和单成员行拆成独立 helper，并把成员交互状态抽成 `MembersDialogMemberState`；后续改成员弹窗时优先沿这些 helper 扩展，不要把成员判定和 icon/status 分支重新塞回主 dialog。
-- `Main.kt` 的 `MessageItem(...)` 已经收敛成 render-mode dispatch，普通文本、文件消息、系统提示、卡片回复摘要，以及选择态卡片壳层/下载动作都已拆成独立 helper；后续改消息项时优先沿这些 helper 扩展，不要把分支重新塞回主 dispatch。
-- `GroupListScene.kt` 已经把顶层 scene 编排拆成 effect、header、content、overlay 与小型 suspend helper，且 create/join dialog 壳层、输入区、错误区、按钮区，以及成员弹窗内容区/成员 display helper 都已独立；后续继续改群组页时优先沿这些 helper 扩展，不要把条件重新塞回顶层 scene 或对话框主 composable。
-- `WorkflowScene.kt` 的 `FolderPickerDialog(...)` 已经把 header、breadcrumbs、列表区和 footer 拆成独立 helper；后续继续改目录选择器时优先沿这些 helper 扩展，不要把 UI 分支重新塞回主 dialog。
-- `WorkflowScene.kt` 的 `WorkflowChatPanel(...)` 已经把 header、消息区、badge/dropdown、输入区和目录/信任弹窗入口拆成独立 helper；后续继续改工作流聊天面板时优先在这些 helper 上扩展，不要把 agent 切换、目录切换和发送逻辑重新堆回主 composable。
-- `WorkflowScene.kt` 的 `WorkflowScene(appState: WebAppState)` 已经把左侧列表、右侧主面板、创建流程和管理弹窗编排拆成独立 helper；后续继续改工作流 scene 时优先在这些 host/helper 上扩展，不要把 create/trust/menu/rename/delete 分支重新塞回顶层 scene。
-- 如果某一步发现需要新增 baseline，先停下来判断是否应关规则、补测试或拆小 PR，不要直接把新增项写进 baseline。
+- 如果回到 backend，优先选择单文件、单函数、单职责的收敛面，不要再按大范围机械清理切片。
+- `WebSocketConfig.kt` 当前 broad-catch baseline 仍以文件级签名聚合；后续要拆异常语义时，先选边界最清晰的一组 catch，不要一次性移除整文件同签名 baseline。

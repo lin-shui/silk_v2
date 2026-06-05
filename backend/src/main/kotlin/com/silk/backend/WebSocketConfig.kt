@@ -126,11 +126,7 @@ class ChatServer(
                         userName = entry.senderName,
                         content = entry.content,
                         timestamp = entry.timestamp,
-                        type = try {
-                            MessageType.valueOf(entry.messageType)
-                        } catch (e: Exception) {
-                            MessageType.TEXT
-                        },
+                        type = parseStoredMessageType(entry.messageType),
                         references = entry.references
                     )
                     messageHistory.add(msg)
@@ -267,11 +263,19 @@ class ChatServer(
             !message.isTransient &&
             !AgentRuntime.isAgentMessage(message)
 
+    private fun shouldInterceptClaudeCodeBroadcast(
+        message: Message,
+        isSilkPrivateChat: Boolean,
+    ): Boolean = !isSilkPrivateChat && isNonAgentTextMessage(message)
+
     private fun isSilkPrivateChatSession(): Boolean =
         getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
 
     private fun extractMentionFreeContent(content: String): String =
         content.removePrefix("@Silk").removePrefix("@silk").trim()
+
+    private fun parseStoredMessageType(rawType: String): MessageType =
+        MessageType.entries.firstOrNull { it.name == rawType } ?: MessageType.TEXT
 
     private fun shouldSkipDuplicateMessage(message: Message): Boolean {
         if (message.isTransient || message.action == "edit") {
@@ -379,17 +383,34 @@ class ChatServer(
         }
     }
 
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun sendFrameSafely(
+        session: WebSocketSession,
+        messageJson: String,
+        onFailure: (Exception) -> Unit,
+    ): Boolean {
+        try {
+            session.send(Frame.Text(messageJson))
+            return true
+        } catch (e: Exception) {
+            onFailure(e)
+            return false
+        }
+    }
+
     private suspend fun broadcastMessageToAllSessions(message: Message) {
         val messageJson = Json.encodeToString(message)
         val sessions = allSessions()
         sessions.forEach { session ->
-            try {
-                session.send(Frame.Text(messageJson))
-            } catch (e: Exception) {
-                e.printStackTrace()
+            sendFrameSafely(session, messageJson) { error ->
+                logger.warn("📤 [broadcast] 消息发送失败: {}", error.message)
             }
         }
         logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
+    }
+
+    private fun logSessionSendFailure(scope: String, error: Exception) {
+        logger.warn("⚠️ [{}] 向会话发送消息失败", scope, error)
     }
 
     private fun maybeLaunchUrlProcessing(message: Message) {
@@ -410,7 +431,7 @@ class ChatServer(
         message: Message,
         isSilkPrivateChat: Boolean,
     ): Boolean {
-        if (isSilkPrivateChat || !isNonAgentTextMessage(message)) {
+        if (!shouldInterceptClaudeCodeBroadcast(message, isSilkPrivateChat)) {
             return false
         }
 
@@ -438,14 +459,12 @@ class ChatServer(
             val msgJson = Json.encodeToString(msg)
             val currentSessions = connections[ccUserId] ?: emptyList()
             currentSessions.forEach { session ->
-                try {
-                    session.send(Frame.Text(msgJson))
-                } catch (e: Exception) {
-                    logger.warn("[CC] 发送消息到某连接失败: {}", e.message)
+                sendFrameSafely(session, msgJson) { error ->
+                    logSessionSendFailure("CC", error)
                 }
             }
         } catch (e: Exception) {
-            logger.warn("[CC] 发送消息失败: {}", e.message)
+            logger.warn("[CC] 发送消息失败", e)
         }
     }
 
@@ -530,7 +549,7 @@ class ChatServer(
         launchActiveAiJob(
             cancelLog = "[/recall] 已被用户取消",
             onError = { e ->
-                logger.error("[/recall] 异常: {}", e.message)
+                logger.error("[/recall] 异常", e)
                 sendAgentStatus("历史查询失败: ${e.message}")
             }
         ) {
@@ -545,8 +564,7 @@ class ChatServer(
         launchActiveAiJob(
             cancelLog = "🛑 AI 生成已被用户取消",
             onError = { e ->
-                logger.error("❌ 生成AI回答异常: {}", e.message)
-                e.printStackTrace()
+                logger.error("❌ 生成AI回答异常", e)
             }
         ) {
             generateIntelligentResponse(silkContent, userId)
@@ -562,9 +580,10 @@ class ChatServer(
         activeAiJob = CoroutineScope(Dispatchers.IO).launch {
             try {
                 block()
-            } catch (e: CancellationException) {
+            } catch (@Suppress("SwallowedException") e: CancellationException) {
                 logger.info(cancelLog)
-            } catch (e: Exception) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught", "SwallowedException") e: Exception) {
                 onError(e)
             } finally {
                 activeAiJob = null
@@ -652,7 +671,7 @@ class ChatServer(
             }
             handleDownloadedUrlContent(message, url, uploadDir, content)
         } catch (e: Exception) {
-            logger.error("❌ 处理URL失败: {} - {}", url, e.message)
+            logger.error("❌ 处理URL失败: {}", url, e)
             broadcastSystemStatus("❌ 处理链接失败: $url")
         }
     }
@@ -770,11 +789,11 @@ class ChatServer(
 
         val messageJson = Json.encodeToString(statusMessage)
         allSessions().forEach { session ->
-            try {
-                session.send(Frame.Text(messageJson))
+            val sent = sendFrameSafely(session, messageJson) { error ->
+                logSessionSendFailure("status", error)
+            }
+            if (sent) {
                 logger.info("   ✅ 状态已发送到一个连接")
-            } catch (e: Exception) {
-                logger.error("   ❌ 状态发送失败: {}", e.message)
             }
         }
     }
@@ -798,7 +817,9 @@ class ChatServer(
                 val msgJson = Json.encodeToString(msg)
                 val currentSessions = connections[userId] ?: emptyList()
                 currentSessions.forEach { session ->
-                    try { session.send(Frame.Text(msgJson)) } catch (_: Exception) {}
+                    sendFrameSafely(session, msgJson) { error ->
+                        logSessionSendFailure("stop-generate", error)
+                    }
                 }
             }
             val ccCancelled = AgentRuntime.cancelIfActive(userId, groupId, ccBroadcastFn)
@@ -839,7 +860,9 @@ class ChatServer(
     private suspend fun sendMessageToAllSessions(message: Message) {
         val messageJson = Json.encodeToString(message)
         allSessions().forEach { session ->
-            try { session.send(Frame.Text(messageJson)) } catch (_: Exception) {}
+            sendFrameSafely(session, messageJson) { error ->
+                logSessionSendFailure("broadcast-all", error)
+            }
         }
     }
 
@@ -934,10 +957,8 @@ class ChatServer(
         val sessions = allSessions()
         logger.info("📤 [流式-{}] 增量 {}字符 -> {}个连接", callId, content.length, sessions.size)
         sessions.forEach { session ->
-            try {
-                session.send(Frame.Text(messageJson))
-            } catch (e: Exception) {
-                logger.error("📤 [流式-{}] 发送失败: {}", callId, e.message)
+            sendFrameSafely(session, messageJson) { error ->
+                logger.error("📤 [流式-{}] 发送失败", callId, error)
             }
         }
     }
@@ -990,11 +1011,11 @@ class ChatServer(
         val messageJson = Json.encodeToString(finalMessage)
         logger.debug("📤 [智能回答-{}] 发送最终消息到 {} 个连接", callId, allSessions().size)
         allSessions().forEach { session ->
-            try {
-                session.send(Frame.Text(messageJson))
+            val sent = sendFrameSafely(session, messageJson) { error ->
+                logger.warn("📤 [智能回答-{}] 最终消息发送失败: {}", callId, error.message)
+            }
+            if (sent) {
                 logger.info("   ✅ [智能回答-{}] 已发送到一个连接", callId)
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
         }
         logger.debug("📤 [智能回答-{}] 最终消息发送完成 (messageId={})", callId, messageId)
@@ -1015,7 +1036,7 @@ class ChatServer(
             try {
                 GroupTodoExtractionService.refreshTodosForUser(userId)
             } catch (e: Exception) {
-                logger.warn("⚠️ 专属对话待办提取失败: {}", e.message)
+                logger.warn("⚠️ 专属对话待办提取失败", e)
             }
         }
     }
@@ -1055,9 +1076,8 @@ class ChatServer(
         } catch (e: CancellationException) {
             logger.info("🛑 [generateIntelligentResponse-{}] 生成被取消", callId)
             throw e
-        } catch (e: Exception) {
-            logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败: {}", callId, e.message)
-            e.printStackTrace()
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败", callId, e)
             sendMessageToAllSessions(buildSilkTextMessage("抱歉，处理您的问题时发生了错误: ${e.message}"))
         }
     }
@@ -1083,7 +1103,7 @@ class ChatServer(
             logger.info("[/recall-{}] 已取消", callId)
             throw e
         } catch (e: Exception) {
-            logger.error("[/recall-{}] 失败: {}", callId, e.message)
+            logger.error("[/recall-{}] 失败", callId, e)
             sendMessageToAllSessions(buildSilkTextMessage("历史查询失败: ${e.message}"))
         }
     }
@@ -1142,10 +1162,8 @@ class ChatServer(
             // 发送给所有客户端
             val messageJson = Json.encodeToString(agentMessage)
             allSessions().forEach { session ->
-                try {
-                    session.send(Frame.Text(messageJson))
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                sendFrameSafely(session, messageJson) { error ->
+                    logger.warn("⚠️ [doctor-diagnosis] 发送更新失败", error)
                 }
             }
 
@@ -1174,8 +1192,7 @@ class ChatServer(
                 groupDisplayName = groupDisplayName
             )
         } catch (e: Exception) {
-            logger.error("❌ 医生诊断更新失败: {}", e.message)
-            e.printStackTrace()
+            logger.error("❌ 医生诊断更新失败", e)
         }
     }
 
@@ -1219,7 +1236,7 @@ class ChatServer(
                 }
             } catch (e: Exception) {
                 logger.warn("⚠️ 查询群组名称失败: {}", e.message)
-                e.printStackTrace()
+                logger.debug("⚠️ 查询群组名称异常详情", e)
                 null
             }
         } else {
@@ -1279,7 +1296,7 @@ class ChatServer(
                 try {
                     WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId, silkReply.messageId))
                 } catch (e: Exception) {
-                    logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败: {}", e.message)
+                    logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败", e)
                 }
             }
             logger.info("✅ [recallMessage] 已撤回用户消息和 Silk 回复")
@@ -1294,7 +1311,7 @@ class ChatServer(
                 try {
                     WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
                 } catch (e: Exception) {
-                    logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败: {}", e.message)
+                    logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败", e)
                 }
             }
         }
@@ -1341,7 +1358,7 @@ class ChatServer(
             try {
                 WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
             } catch (e: Exception) {
-                logger.warn("⚠️ [deleteMessage] Weaviate 删除向量失败: {}", e.message)
+                logger.warn("⚠️ [deleteMessage] Weaviate 删除向量失败", e)
             }
         }
 
@@ -1366,10 +1383,8 @@ class ChatServer(
         val notificationJson = Json.encodeToString(recallMessage)
 
         allSessions().forEach { session ->
-            try {
-                session.send(Frame.Text(notificationJson))
-            } catch (e: Exception) {
-                logger.error("❌ [broadcastRecallNotification] 发送失败: {}", e.message)
+            sendFrameSafely(session, notificationJson) { error ->
+                logger.error("❌ [broadcastRecallNotification] 发送失败", error)
             }
         }
         logger.debug("📢 [broadcastRecallNotification] 已广播撤回通知: {}", messageIds)

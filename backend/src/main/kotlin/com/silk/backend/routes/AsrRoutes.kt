@@ -71,6 +71,7 @@ fun Route.asrRoutes() {
                 try {
                     audioBytes = Base64.getDecoder().decode(audioBase64)
                 } catch (e: IllegalArgumentException) {
+                    logger.info("ASR request rejected due to invalid base64 payload: {}", e.message)
                     call.respondText(
                         buildJsonObject { put("success", false); put("error", "Invalid base64 audio") }.toString(),
                         ContentType.Application.Json, HttpStatusCode.BadRequest

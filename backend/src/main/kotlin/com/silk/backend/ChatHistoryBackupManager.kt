@@ -88,8 +88,7 @@ object ChatHistoryBackupManager {
             logger.info("   原因: {} - {}", backupType.name, reason)
             true
         } catch (e: Exception) {
-            logger.error("❌ 备份群组历史失败: {} - {}", groupId, e.message)
-            e.printStackTrace()
+            logger.error("❌ 备份群组历史失败: {}", groupId, e)
             false
         }
     }
@@ -177,7 +176,7 @@ object ChatHistoryBackupManager {
                         val metadata = json.decodeFromString<BackupMetadata>(metadataFile.readText())
                         backups.add(metadata)
                     } catch (e: Exception) {
-                        logger.warn("⚠️ 解析备份元数据失败: {}", metadataFile.path)
+                        logger.warn("⚠️ 解析备份元数据失败: {}, reason={}", metadataFile.path, e.message)
                     }
                 }
         }
@@ -224,8 +223,7 @@ object ChatHistoryBackupManager {
             logger.info("✅ 已从备份恢复: {} <- {}", groupId, backupDir.absolutePath)
             true
         } catch (e: Exception) {
-            logger.error("❌ 恢复备份失败: {}", e.message)
-            e.printStackTrace()
+            logger.error("❌ 恢复备份失败: {}", backupPath, e)
             false
         }
     }
@@ -248,7 +246,7 @@ object ChatHistoryBackupManager {
                         deletedCount++
                         logger.info("🗑️ 已删除过期备份: {}", dateDir.path)
                     } catch (e: Exception) {
-                        logger.warn("⚠️ 删除过期备份失败: {}", dateDir.path)
+                        logger.warn("⚠️ 删除过期备份失败: {}, reason={}", dateDir.path, e.message)
                     }
                 }
             }
