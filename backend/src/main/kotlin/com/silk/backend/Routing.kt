@@ -1183,18 +1183,7 @@ fun Application.configureRouting() {
             try {
                 val request = call.receive<CreateGroupRequest>()
                 val response = GroupService.createGroup(request)
-                
-                // 如果创建成功，发送欢迎消息到群组
-                if (response.success && response.group != null) {
-                    val welcomeMessage = buildString {
-                        append("🎉 欢迎加入群组！\n\n")
-                        append("群组名称：${response.group.name}\n")
-                        append("邀请码：${response.group.invitationCode}\n\n")
-                        append("分享邀请码，邀请朋友加入群组吧！")
-                    }
-                    // TODO: 发送欢迎消息到群组聊天室
-                }
-                
+
                 call.respond(response)
             } catch (e: Exception) {
                 logger.error("❌ 创建群组失败: {}", e.message)

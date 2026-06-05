@@ -83,7 +83,17 @@ actual class PlatformWebSocket actual constructor(
         get() = session != null && !isExplicitlyDisconnected.get()
     
     actual fun connect(userId: String, userName: String, groupId: String) {
-        // 切群场景：先清理旧连接，不做重复连接判断
+        cleanupExistingConnection()
+        isExplicitlyDisconnected.set(false)
+        reconnectAttempts = 0
+        val fullUrl = buildChatUrl(userId, userName, groupId)
+        log("🔗 [WebSocket] 连接到: $fullUrl")
+        job = scope.launch {
+            openSocketConnection(fullUrl, userId, userName, groupId)
+        }
+    }
+
+    private fun cleanupExistingConnection() {
         val wasConnecting = isConnecting.getAndSet(true)
         if (wasConnecting || session != null) {
             log("🔄 [WebSocket] 清理旧连接...")
@@ -91,87 +101,99 @@ actual class PlatformWebSocket actual constructor(
             job?.cancel()
             session = null
         }
-        
-        isExplicitlyDisconnected.set(false)
-        reconnectAttempts = 0
-        
-        val safeUserName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")
-        val safeGroupId = groupId.replace(" ", "_").replace("&", "_").replace("=", "_")
-        val fullUrl = "$serverUrl/chat?userId=$userId&userName=$safeUserName&groupId=$safeGroupId"
-        
-        log("🔗 [WebSocket] 连接到: $fullUrl")
-        
-        job = scope.launch {
-            try {
-                client.webSocket(urlString = fullUrl) {
-                    session = this
-                    isConnecting.set(false)
-                    reconnectAttempts = 0  // 重置重连计数
-                    log("✅ [WebSocket] 连接已打开")
-                    withContext(Dispatchers.Main) { onConnected() }
-                    
-                    // 启动保活心跳
-                    startKeepAlive()
-                    
-                    try {
-                        for (frame in incoming) {
-                            when (frame) {
-                                is Frame.Text -> {
-                                    val text = frame.readText()
-                                    // 收到消息说明连接正常，重置保活计时
-                                    withContext(Dispatchers.Main) { onMessage(text) }
-                                }
-                                is Frame.Ping -> {
-                                    log("💓 [WebSocket] 收到 Ping")
-                                }
-                                is Frame.Pong -> {
-                                    log("💓 [WebSocket] 收到 Pong")
-                                }
-                                else -> {}
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        log("⏹️ [WebSocket] 连接被取消（正常断开）")
-                        rethrowCancellation(e)
-                    } catch (e: IOException) {
-                        log("❌ [WebSocket] 接收错误: ${e.message}")
-                        // 非正常断开，尝试重连
-                        if (!isExplicitlyDisconnected.get()) {
-                            attemptReconnect(userId, userName, groupId)
-                        }
-                    } catch (e: IllegalStateException) {
-                        log("❌ [WebSocket] 接收错误: ${e.message}")
-                        // 非正常断开，尝试重连
-                        if (!isExplicitlyDisconnected.get()) {
-                            attemptReconnect(userId, userName, groupId)
-                        }
+    }
+
+    private fun buildChatUrl(userId: String, userName: String, groupId: String): String {
+        val safeUserName = sanitizeQueryValue(userName)
+        val safeGroupId = sanitizeQueryValue(groupId)
+        return "$serverUrl/chat?userId=$userId&userName=$safeUserName&groupId=$safeGroupId"
+    }
+
+    private fun sanitizeQueryValue(value: String): String {
+        return value.replace(" ", "_").replace("&", "_").replace("=", "_")
+    }
+
+    private suspend fun openSocketConnection(
+        fullUrl: String,
+        userId: String,
+        userName: String,
+        groupId: String
+    ) {
+        try {
+            client.webSocket(urlString = fullUrl) {
+                session = this
+                isConnecting.set(false)
+                reconnectAttempts = 0
+                log("✅ [WebSocket] 连接已打开")
+                withContext(Dispatchers.Main) { onConnected() }
+                startKeepAlive()
+                consumeIncomingFrames(userId, userName, groupId)
+            }
+        } catch (e: CancellationException) {
+            rethrowCancellation(e)
+        } catch (e: IOException) {
+            handleConnectFailure(e, userId, userName, groupId)
+        } catch (e: IllegalStateException) {
+            handleConnectFailure(e, userId, userName, groupId)
+        } finally {
+            session = null
+            keepAliveJob?.cancel()
+            if (!isExplicitlyDisconnected.get()) {
+                withContext(Dispatchers.Main) { onDisconnected() }
+            }
+        }
+    }
+
+    private suspend fun DefaultClientWebSocketSession.consumeIncomingFrames(
+        userId: String,
+        userName: String,
+        groupId: String
+    ) {
+        try {
+            for (frame in incoming) {
+                when (frame) {
+                    is Frame.Text -> {
+                        val text = frame.readText()
+                        withContext(Dispatchers.Main) { onMessage(text) }
                     }
-                }
-            } catch (e: CancellationException) {
-                rethrowCancellation(e)
-            } catch (e: IOException) {
-                isConnecting.set(false)
-                if (!isExplicitlyDisconnected.get()) {
-                    log("❌ [WebSocket] 连接失败: ${e.message}")
-                    withContext(Dispatchers.Main) { onError(e.message ?: "Unknown error") }
-                    // 尝试重连
-                    attemptReconnect(userId, userName, groupId)
-                }
-            } catch (e: IllegalStateException) {
-                isConnecting.set(false)
-                if (!isExplicitlyDisconnected.get()) {
-                    log("❌ [WebSocket] 连接失败: ${e.message}")
-                    withContext(Dispatchers.Main) { onError(e.message ?: "Unknown error") }
-                    // 尝试重连
-                    attemptReconnect(userId, userName, groupId)
-                }
-            } finally {
-                session = null
-                keepAliveJob?.cancel()
-                if (!isExplicitlyDisconnected.get()) {
-                    withContext(Dispatchers.Main) { onDisconnected() }
+                    is Frame.Ping -> log("💓 [WebSocket] 收到 Ping")
+                    is Frame.Pong -> log("💓 [WebSocket] 收到 Pong")
+                    else -> Unit
                 }
             }
+        } catch (e: CancellationException) {
+            log("⏹️ [WebSocket] 连接被取消（正常断开）")
+            rethrowCancellation(e)
+        } catch (e: IOException) {
+            handleReceiveFailure(e, userId, userName, groupId)
+        } catch (e: IllegalStateException) {
+            handleReceiveFailure(e, userId, userName, groupId)
+        }
+    }
+
+    private suspend fun handleReceiveFailure(
+        error: Exception,
+        userId: String,
+        userName: String,
+        groupId: String
+    ) {
+        log("❌ [WebSocket] 接收错误: ${error.message}")
+        if (!isExplicitlyDisconnected.get()) {
+            attemptReconnect(userId, userName, groupId)
+        }
+    }
+
+    private suspend fun handleConnectFailure(
+        error: Exception,
+        userId: String,
+        userName: String,
+        groupId: String
+    ) {
+        isConnecting.set(false)
+        if (!isExplicitlyDisconnected.get()) {
+            log("❌ [WebSocket] 连接失败: ${error.message}")
+            withContext(Dispatchers.Main) { onError(error.message ?: "Unknown error") }
+            attemptReconnect(userId, userName, groupId)
         }
     }
     

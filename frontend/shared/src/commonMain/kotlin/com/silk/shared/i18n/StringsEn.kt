@@ -3,7 +3,7 @@ package com.silk.shared.i18n
 /**
  * English string resources
  */
-object Strings_EN : Strings {
+object StringsEn : Strings {
     override val settingsTitle = "Settings"
     override val languageLabel = "Language"
     override val defaultAgentInstructionLabel = "Default Agent Instruction"
