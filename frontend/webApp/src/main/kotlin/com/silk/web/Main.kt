@@ -6124,18 +6124,22 @@ fun MessageItem(
             val content = message.content
             if (content.startsWith(previewMarker)) {
                 val markerEnd = content.indexOf("##\n", previewMarker.length)
+                console.log("🖼 [PREVIEW] content starts with marker: markerEnd=$markerEnd content.length=${content.length}")
                 if (markerEnd != -1) {
                     val imgUrl = content.substring(previewMarker.length, markerEnd)
                     val textContent = content.substring(markerEnd + 3)
                     val baseUrl = backendHttpOrigin()
                     val fullUrl = "$baseUrl$imgUrl"
+                    console.log("🖼 [PREVIEW] imgUrl=$imgUrl fullUrl=$fullUrl")
 
+                    val isOwnMessage = message.userId == currentUserId
+                    console.log("🖼 [PREVIEW] message.userId=$message.userId currentUserId=$currentUserId isOwn=$isOwnMessage")
                     Div({
                         classes(SilkStylesheet.messageCard)
                         style {
                             property("flex", "1")
                             property("min-width", "0")
-                            if (message.userId == currentUserId) {
+                            if (isOwnMessage) {
                                 property("max-width", "75%")
                                 property("margin-left", "auto")
                             }
@@ -6166,6 +6170,35 @@ fun MessageItem(
                                     display(DisplayStyle.Block)
                                     backgroundColor(Color("#f0f0f0"))
                                 }
+                                attr("onerror", """
+                                    console.error('🖼 [PREVIEW] Img load error:', this.src, 'complete:', this.complete, 'naturalWidth:', this.naturalWidth, 'naturalHeight:', this.naturalHeight);
+                                    // 显示 fallback 下载链接
+                                    this.style.display = 'none';
+                                    this.nextElementSibling && (this.nextElementSibling.style.display = 'block');
+                                """.trimIndent())
+                                attr("onload", """
+                                    console.log('🖼 [PREVIEW] Img loaded:', this.src, 'width:', this.width, 'height:', this.height, 'naturalWidth:', this.naturalWidth, 'naturalHeight:', this.naturalHeight);
+                                """.trimIndent())
+                            }
+                            // 图片加载失败时的 fallback
+                            Div({
+                                style {
+                                    display(DisplayStyle.None)
+                                    fontSize(13.px)
+                                    color(Color("#E57373"))
+                                    padding(8.px)
+                                    property("text-align", "center")
+                                }
+                            }) {
+                                Text("🖼 图片加载失败，")
+                                Span({
+                                    style {
+                                        color(Color("#1976D2"))
+                                        property("cursor", "pointer")
+                                        property("text-decoration", "underline")
+                                    }
+                                    onClick { val w = js("window"); w.open(fullUrl, "_blank") }
+                                }) { Text("点此在新标签页中打开") }
                             }
                         }
                         // 提取内容文字
@@ -6207,7 +6240,7 @@ fun MessageItem(
                                     alignItems(AlignItems.Center)
                                     property("gap", "4px")
                                 }
-                                onClick { onCopy(textContent.ifBlank { message.content }) }
+                                onClick { onCopy(textContent.ifBlank { "" }) }
                             }) {
                                 Text("📋")
                                 Text("复制")
