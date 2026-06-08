@@ -3,7 +3,9 @@ package com.silk.backend.database
 import com.silk.backend.ChatHistoryBackupManager
 import com.silk.backend.search.SessionInfo
 import com.silk.backend.search.WeaviateClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import org.jetbrains.exposed.exceptions.ExposedSQLException
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
 import org.jetbrains.exposed.sql.and
@@ -15,6 +17,7 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.sql.SQLException
 import java.util.UUID
 import kotlin.random.Random
 
@@ -28,7 +31,7 @@ object GroupRepository {
      * 同步群组到 Weaviate SilkSession（注册会话和参与者）
      */
     private fun syncGroupToWeaviate(groupId: String, groupName: String, hostId: String, participants: List<String>) {
-        try {
+        runCatching {
             val weaviate = WeaviateClient.getInstance()
             runBlocking {
                 weaviate.upsertSession(SessionInfo(
@@ -39,8 +42,11 @@ object GroupRepository {
                 ))
             }
             logger.info("✅ 群组会话已同步到 Weaviate: {} ({}), 参与者: {}", groupName, groupId, participants.size)
-        } catch (e: Exception) {
-            logger.warn("⚠️ 同步群组到 Weaviate 失败: {}", e.message)
+        }.onFailure { error ->
+            if (error is CancellationException) {
+                throw error
+            }
+            logger.warn("⚠️ 同步群组到 Weaviate 失败: {}", error.message)
         }
     }
 
@@ -48,13 +54,16 @@ object GroupRepository {
      * 同步群组所有成员到 Weaviate（从 SQL 读取当前成员列表）
      */
     private fun syncGroupMembersToWeaviate(groupId: String) {
-        try {
+        runCatching {
             val group = findGroupById(groupId) ?: return
             val members = getGroupMembers(groupId)
             val participantIds = members.map { it.userId }
             syncGroupToWeaviate(groupId, group.name, group.hostId, participantIds)
-        } catch (e: Exception) {
-            logger.warn("⚠️ 同步群组成员到 Weaviate 失败: {}", e.message)
+        }.onFailure { error ->
+            if (error is CancellationException) {
+                throw error
+            }
+            logger.warn("⚠️ 同步群组成员到 Weaviate 失败: {}", error.message)
         }
     }
 
@@ -113,7 +122,13 @@ object GroupRepository {
                 // 同步到 Weaviate SilkSession
                 syncGroupToWeaviate(groupId = group.id, groupName = group.name, hostId = hostId, participants = listOf(hostId))
             }
-        } catch (e: Exception) {
+        } catch (e: ExposedSQLException) {
+            logger.error("❌ 创建群组失败: {}", e.message)
+            null
+        } catch (e: SQLException) {
+            logger.error("❌ 创建群组失败: {}", e.message)
+            null
+        } catch (e: SecurityException) {
             logger.error("❌ 创建群组失败: {}", e.message)
             null
         }
@@ -206,7 +221,13 @@ object GroupRepository {
                 }
             }
             true
-        } catch (e: Exception) {
+        } catch (e: ExposedSQLException) {
+            logger.error("❌ 添加用户到群组失败: {}", e.message)
+            false
+        } catch (e: SQLException) {
+            logger.error("❌ 添加用户到群组失败: {}", e.message)
+            false
+        } catch (e: SecurityException) {
             logger.error("❌ 添加用户到群组失败: {}", e.message)
             false
         }
@@ -371,7 +392,13 @@ object GroupRepository {
                 // 同步到 Weaviate SilkSession
                 syncGroupToWeaviate(groupId = group.id, groupName = group.name, hostId = user1Id, participants = listOf(user1Id, user2Id))
             }
-        } catch (e: Exception) {
+        } catch (e: ExposedSQLException) {
+            logger.error("❌ 创建群组失败: {}", e.message)
+            null
+        } catch (e: SQLException) {
+            logger.error("❌ 创建群组失败: {}", e.message)
+            null
+        } catch (e: SecurityException) {
             logger.error("❌ 创建群组失败: {}", e.message)
             null
         }
@@ -413,7 +440,13 @@ object GroupRepository {
                     Pair(true, false)
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: ExposedSQLException) {
+            logger.error("❌ 退出群组失败: {}", e.message)
+            Pair(false, false)
+        } catch (e: SQLException) {
+            logger.error("❌ 退出群组失败: {}", e.message)
+            Pair(false, false)
+        } catch (e: SecurityException) {
             logger.error("❌ 退出群组失败: {}", e.message)
             Pair(false, false)
         }
@@ -458,7 +491,13 @@ object GroupRepository {
             UnreadRepository.cleanupGroup(groupId)
             
             true
-        } catch (e: Exception) {
+        } catch (e: ExposedSQLException) {
+            logger.error("❌ 删除群组失败: {}", e.message)
+            false
+        } catch (e: SQLException) {
+            logger.error("❌ 删除群组失败: {}", e.message)
+            false
+        } catch (e: SecurityException) {
             logger.error("❌ 删除群组失败: {}", e.message)
             false
         }
@@ -507,7 +546,13 @@ object GroupRepository {
                     Triple(false, "删除群组失败", emptyList())
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: ExposedSQLException) {
+            logger.error("❌ 删除群组失败: {}", e.message)
+            Triple(false, "删除群组失败: ${e.message}", emptyList())
+        } catch (e: SQLException) {
+            logger.error("❌ 删除群组失败: {}", e.message)
+            Triple(false, "删除群组失败: ${e.message}", emptyList())
+        } catch (e: SecurityException) {
             logger.error("❌ 删除群组失败: {}", e.message)
             Triple(false, "删除群组失败: ${e.message}", emptyList())
         }

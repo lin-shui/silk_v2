@@ -11,7 +11,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import io.ktor.http.ContentDisposition
-import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
@@ -28,14 +27,13 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.nio.file.Files
 import java.time.Instant
+import java.util.Locale
 
 private val logger = LoggerFactory.getLogger("FileRoutes")
-private val json = Json { ignoreUnknownKeys = true }
 
 // Weaviate 客户端（延迟初始化）
 private val weaviateClient by lazy { 
@@ -243,10 +241,6 @@ fun Route.fileRoutes() {
                 return@get
             }
             
-            // 确定 Content-Type
-            val contentType = Files.probeContentType(file.toPath()) 
-                ?: ContentType.Application.OctetStream.toString()
-            
             call.response.header(
                 HttpHeaders.ContentDisposition,
                 ContentDisposition.Attachment.withParameter(
@@ -294,7 +288,7 @@ fun Route.fileRoutes() {
             val minute = calendar.get(java.util.Calendar.MINUTE)
             
             val versionCode = year * 100000000 + month * 1000000 + day * 10000 + hour * 100 + minute
-            val versionName = String.format("%04d.%02d%02d.%02d%02d", 
+            val versionName = String.format(Locale.ROOT, "%04d.%02d%02d.%02d%02d",
                 calendar.get(java.util.Calendar.YEAR), month, day, hour, minute)
             
             logger.info("📱 APK 版本: $versionName (code=$versionCode) - 文件时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(lastModified))}")
@@ -390,7 +384,7 @@ fun Route.fileRoutes() {
             val minute = calendar.get(java.util.Calendar.MINUTE)
 
             val versionCode = year * 100000000 + month * 1000000 + day * 10000 + hour * 100 + minute
-            val versionName = String.format("%04d.%02d%02d.%02d%02d",
+            val versionName = String.format(Locale.ROOT, "%04d.%02d%02d.%02d%02d",
                 calendar.get(java.util.Calendar.YEAR), month, day, hour, minute)
 
             logger.info("📱 HAP 版本: $versionName (code=$versionCode) - 文件时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(lastModified))}")
@@ -527,12 +521,7 @@ fun Route.fileRoutes() {
             val deleted = file.delete()
             
             if (deleted) {
-                // 从搜索索引中删除
-                try {
-                    // TODO: 调用 weaviateClient.deleteDocument()
-                } catch (e: Exception) {
-                    logger.warn("从索引删除文件失败: ${e.message}")
-                }
+                logger.debug("文件已删除，搜索索引删除仍未接线: {}", file.absolutePath)
                 
                 call.respond(
                     HttpStatusCode.OK,

@@ -5,6 +5,7 @@ import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class TrustedDirManagerTest {
@@ -124,5 +125,18 @@ class TrustedDirManagerTest {
         manager.addTrust("user1", "ip:127.0.0.1", "/home/user/project/")
         // The stored path should not have trailing slash, so subdirectory matching works
         assertTrue(manager.isTrusted("user1", "ip:127.0.0.1", "/home/user/project/src"))
+    }
+
+    @Test
+    fun `corrupt store falls back to empty data`() {
+        val tempDir = createTempDirectory("trusted-dir-test").toFile()
+        val storeFile = File(tempDir, "trusted_dirs.json")
+        storeFile.writeText("{not-json")
+
+        val manager = createManager(tempDir)
+
+        assertFalse(manager.isTrusted("user1", "ip:127.0.0.1", "/home/user/project"))
+        assertNotNull(manager.listTrusts("user1"))
+        assertTrue(manager.listTrusts("user1").isEmpty())
     }
 }

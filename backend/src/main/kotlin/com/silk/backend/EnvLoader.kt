@@ -3,6 +3,7 @@ package com.silk.backend
 import java.nio.file.Files
 import java.nio.file.Paths
 import org.slf4j.LoggerFactory
+import java.io.IOException
 
 /**
  * 从项目根目录的 .env 文件加载配置，供后端在未通过 shell 加载 .env 时使用。
@@ -46,7 +47,9 @@ object EnvLoader {
                 if (value.startsWith("'") && value.endsWith("'")) value = value.drop(1).dropLast(1)
                 map[key] = value
             }
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            logger.warn("⚠️ [EnvLoader] 读取 .env 失败: {}", e.message)
+        } catch (e: SecurityException) {
             logger.warn("⚠️ [EnvLoader] 读取 .env 失败: {}", e.message)
         }
         return map

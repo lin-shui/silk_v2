@@ -2,6 +2,7 @@ package com.silk.backend.todos
 
 import com.silk.backend.TestWorkspace
 import com.silk.backend.database.UserTodoItemDto
+import java.io.File
 import java.time.LocalDate
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -176,6 +177,18 @@ class UserTodoStoreTest {
             assertEquals(template.id, instance.templateId)
             assertEquals("active", instance.lifecycleState)
             assertNotNull(instance.lastEvidenceAt)
+        }
+    }
+
+    @Test
+    fun `load returns empty list for corrupt payload`() {
+        TestWorkspace().use {
+            val userId = "todo-user-corrupt"
+            val todoDir = File(System.getProperty("silk.userTodoBaseDir"))
+            todoDir.mkdirs()
+            File(todoDir, "$userId.json").writeText("""{"userId":"$userId","items":["""")
+
+            assertTrue(UserTodoStore.load(userId).isEmpty())
         }
     }
 }

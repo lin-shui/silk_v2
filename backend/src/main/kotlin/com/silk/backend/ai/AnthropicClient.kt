@@ -143,7 +143,7 @@ class AnthropicClient(
                 response.body().bufferedReader().readText().take(2000)
             } catch (_: Exception) { "" }
             logger.error("❌ [Anthropic] API 失败: ${response.statusCode()}, body=$errorBody")
-            throw Exception("Anthropic API 调用失败: ${response.statusCode()}")
+            error("Anthropic API 调用失败: ${response.statusCode()}")
         }
 
         // 5. 解析 SSE 流

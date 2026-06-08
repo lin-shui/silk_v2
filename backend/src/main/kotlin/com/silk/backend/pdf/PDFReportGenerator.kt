@@ -275,7 +275,7 @@ class PDFReportGenerator {
             }
             
             // ✅ 重新抛出异常，让调用方知道PDF生成失败
-            throw RuntimeException("PDF 生成失败：${e.message}", e)
+            throw IllegalStateException("PDF 生成失败：${e.message}", e)
         }
         
         // 生成下载 URL（对文件名进行 URL 编码，处理中文和特殊字符）
