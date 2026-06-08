@@ -176,6 +176,15 @@ class DirectModelAgent(
             appendLine("- 第一个搜索结果的引用编号为 [citation:1]，第二个为 [citation:2]，以此类推")
             appendLine("- 每个重要观点都必须标注来源引用，不能遗漏")
             appendLine("- 如果你没有使用网络搜索，则不需要添加引用标记")
+            appendLine()
+            appendLine("## 参考来源列表（必须遵守）")
+            appendLine("当你使用了网络搜索，必须在回答末尾附上完整的参考来源列表，格式如下：")
+            appendLine("参考来源:")
+            appendLine("1. [来源标题](完整URL)")
+            appendLine("2. [来源标题](完整URL)")
+            appendLine("- 必须列出所有引用来源，编号与正文中的 [citation:数字] 一一对应")
+            appendLine("- URL 必须是完整的 https:// 链接，不能省略或截断")
+            appendLine("- 如果没有使用网络搜索，则不需要添加参考来源列表")
         }
     }
 
@@ -454,17 +463,41 @@ class DirectModelAgent(
             }
         }
 
-        // Claude CLI 路径：无注册引用但有 [citation:N] 标记时，创建占位引用
+        // 回退：从全文提取 Markdown 链接作为备用 URL 来源（适用于模型未输出独立来源节的情况）
+        if (currentResponseReferences.none { it.url != null || it.path != null }) {
+            val bodyLinkRegex = Regex("""\[([^\]]+)\]\(([^)]+)\)""")
+            for (linkMatch in bodyLinkRegex.findAll(cleanedContent)) {
+                val title = linkMatch.groupValues[1]
+                val url = linkMatch.groupValues[2]
+                if (url.isNotBlank() && currentResponseReferences.none { it.url == url }) {
+                    currentResponseReferences.add(
+                        com.silk.backend.models.MessageReference(
+                            kind = "citation",
+                            index = currentResponseReferences.size + 1,
+                            title = title,
+                            url = url,
+                            snippet = null,
+                            path = null
+                        )
+                    )
+                }
+            }
+        }
+
         val hasRefs = currentResponseReferences.isNotEmpty() && currentResponseReferences.any { it.url != null || it.path != null }
         if (!hasRefs) {
             val hasCitationMarkers = Regex("\\[citation:\\d+\\]").containsMatchIn(cleanedContent)
             if (hasCitationMarkers) {
                 val result = normalizeCitedReferences(cleanedContent)
-                // 剥离正文中的 [citation:N] 标记（引用已在列表中）
-                return FinalCitationResult(
-                    stripCitationMarkers(result.content),
-                    result.references
-                )
+                // 无 URL → 保留标记在正文中（前端渲染为可读的引用编号），引用列表不丢
+                //（stripCitationMarkers 仅在 references 有 URL 时才剥离，保证点击链接着陆页干净）
+                if (result.references.any { it.url != null || it.path != null }) {
+                    return FinalCitationResult(
+                        stripCitationMarkers(result.content),
+                        result.references
+                    )
+                }
+                return FinalCitationResult(result.content, result.references)
             }
             // 无任何引用标记 → 清理 available 标记后返回
             val stripped = cleanedContent.replace(Regex("\\[(citation|available):\\d+\\]"), "")
@@ -472,7 +505,7 @@ class DirectModelAgent(
         }
         val withMarkers = ensureCitationMarkers(cleanedContent)
         val result = normalizeCitedReferences(withMarkers)
-        // 剥离正文中的 [citation:N] 标记（引用已在列表中）
+        // references 有 URL → 剥离标记，前端用引用列表渲染可点击链接
         return FinalCitationResult(
             stripCitationMarkers(result.content),
             result.references
