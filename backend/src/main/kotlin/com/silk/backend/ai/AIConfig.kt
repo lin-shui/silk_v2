@@ -70,16 +70,25 @@ object AIConfig {
     val WEAVIATE_API_KEY: String get() = env("WEAVIATE_API_KEY") ?: ""
 
     /** 获取 Anhtropic API 地址，为空时抛错提示配置 .env */
-    fun requireAnthropicApiBaseUrl(): String = ANTHROPIC_API_BASE_URL.trim().takeIf { it.isNotBlank() }
-        ?: throw IllegalStateException("请在项目根目录 .env 中配置 ANTHROPIC_API_BASE_URL")
+    fun requireAnthropicApiBaseUrl(): String {
+        val url = ANTHROPIC_API_BASE_URL.trim()
+        check(url.isNotBlank()) { "请在项目根目录 .env 中配置 ANTHROPIC_API_BASE_URL" }
+        return url
+    }
 
     @Deprecated("改用 requireAnthropicApiBaseUrl", replaceWith = ReplaceWith("requireAnthropicApiBaseUrl"))
-    fun requireApiBaseUrl(): String = API_BASE_URL.trim().takeIf { it.isNotBlank() }
-        ?: throw IllegalStateException("请在项目根目录 .env 中配置 API_BASE_URL")
+    fun requireApiBaseUrl(): String {
+        val url = API_BASE_URL.trim()
+        check(url.isNotBlank()) { "请在项目根目录 .env 中配置 API_BASE_URL" }
+        return url
+    }
 
     /** 获取 Weaviate 地址，为空时抛错提示配置 .env */
-    fun requireWeaviateUrl(): String = WEAVIATE_URL.trim().takeIf { it.isNotBlank() }
-        ?: throw IllegalStateException("请在项目根目录 .env 中配置 WEAVIATE_URL")
+    fun requireWeaviateUrl(): String {
+        val url = WEAVIATE_URL.trim()
+        check(url.isNotBlank()) { "请在项目根目录 .env 中配置 WEAVIATE_URL" }
+        return url
+    }
 
     // ── 外部搜索（已弃用：改用 Claude 原生 web_search 工具） ─────────
     val SERPAPI_KEY: String get() = env("SERPAPI_KEY") ?: ""

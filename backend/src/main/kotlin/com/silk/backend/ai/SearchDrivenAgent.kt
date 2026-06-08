@@ -492,7 +492,7 @@ $userInput
             model = AIConfig.MODEL,
             messages = listOf(ApiMessage(role = "user", content = prompt)),
             temperature = 0.7,
-            max_tokens = 2000,
+            maxTokens = 2000,
             stream = false
         )
         
@@ -510,7 +510,7 @@ $userInput
             val apiResponse = json.decodeFromString<ApiResponse>(response.body())
             apiResponse.choices.firstOrNull()?.message?.content ?: ""
         } else {
-            throw Exception("API 调用失败：${response.statusCode()}")
+            error("API 调用失败：${response.statusCode()}")
         }
     }
     
@@ -525,7 +525,7 @@ $userInput
             model = AIConfig.MODEL,
             messages = listOf(ApiMessage(role = "user", content = prompt)),
             temperature = 0.7,
-            max_tokens = 2000,
+            maxTokens = 2000,
             stream = true
         )
         
@@ -540,7 +540,7 @@ $userInput
         val response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream())
         
         if (response.statusCode() != 200) {
-            throw Exception("API 调用失败：${response.statusCode()}")
+            error("API 调用失败：${response.statusCode()}")
         }
         
         val fullText = StringBuilder()

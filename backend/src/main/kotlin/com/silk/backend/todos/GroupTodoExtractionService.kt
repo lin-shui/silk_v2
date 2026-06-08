@@ -8,6 +8,7 @@ import com.silk.backend.database.UserTodoItemDto
 import com.silk.backend.models.ChatHistory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.encodeToString
@@ -71,7 +72,8 @@ object GroupTodoExtractionService {
         val model: String,
         val messages: List<SimpleMsg>,
         val temperature: Double = 0.35,
-        val max_tokens: Int = 2048,
+        @SerialName("max_tokens")
+        val maxTokens: Int = 2048,
         val stream: Boolean = false
     )
 
@@ -707,7 +709,7 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
             model = AIConfig.MODEL.ifBlank { "gpt-4o-mini" },
             messages = listOf(SimpleMsg("system", system), SimpleMsg("user", user)),
             temperature = temperature,
-            max_tokens = 2048,
+            maxTokens = 2048,
             stream = false
         )
         val req = HttpRequest.newBuilder()
