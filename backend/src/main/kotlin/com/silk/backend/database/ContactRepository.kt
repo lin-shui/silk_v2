@@ -1,5 +1,6 @@
 package com.silk.backend.database
 
+import org.jetbrains.exposed.exceptions.ExposedSQLException
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.deleteWhere
@@ -9,6 +10,7 @@ import org.jetbrains.exposed.sql.or
 import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
+import java.sql.SQLException
 import java.util.UUID
 
 /**
@@ -68,7 +70,10 @@ object ContactRepository {
                 }
             }
             true
-        } catch (e: Exception) {
+        } catch (e: ExposedSQLException) {
+            logger.error("❌ 添加联系人失败: {}", e.message)
+            false
+        } catch (e: SQLException) {
             logger.error("❌ 添加联系人失败: {}", e.message)
             false
         }
@@ -86,7 +91,10 @@ object ContactRepository {
                 }
             }
             true
-        } catch (e: Exception) {
+        } catch (e: ExposedSQLException) {
+            logger.error("❌ 删除联系人失败: {}", e.message)
+            false
+        } catch (e: SQLException) {
             logger.error("❌ 删除联系人失败: {}", e.message)
             false
         }
@@ -129,7 +137,10 @@ object ContactRepository {
                     status = ContactRequestStatus.PENDING
                 )
             }
-        } catch (e: Exception) {
+        } catch (e: ExposedSQLException) {
+            logger.error("❌ 创建联系人请求失败: {}", e.message)
+            null
+        } catch (e: SQLException) {
             logger.error("❌ 创建联系人请求失败: {}", e.message)
             null
         }
@@ -184,7 +195,10 @@ object ContactRepository {
                 
                 true
             }
-        } catch (e: Exception) {
+        } catch (e: ExposedSQLException) {
+            logger.error("❌ 处理联系人请求失败: {}", e.message)
+            false
+        } catch (e: SQLException) {
             logger.error("❌ 处理联系人请求失败: {}", e.message)
             false
         }

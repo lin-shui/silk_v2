@@ -30,8 +30,6 @@ class ClaudeProcessClient(
 ) {
     private val logger = LoggerFactory.getLogger(ClaudeProcessClient::class.java)
 
-    private val claudePath = AIConfig.CLAUDE_CLI_PATH
-
     /** PTY 桥接脚本路径 */
     private val ptyChatPath: String by lazy {
         resolvePtyChatPath()
@@ -91,14 +89,16 @@ class ClaudeProcessClient(
             val process = processBuilder.start()
 
             try {
-                runProcessWithWatchdog(process, callId, callback)
-            } catch (e: CancellationException) {
-                process.destroyForcibly()
-                throw e
-            } catch (e: Exception) {
-                process.destroyForcibly()
-                logger.error("[ClaudeProcessClient-{}] 异常: {}", callId, e.message)
-                throw e
+                runCatching {
+                    runProcessWithWatchdog(process, callId, callback)
+                }.getOrElse { error ->
+                    process.destroyForcibly()
+                    if (error is CancellationException) {
+                        throw error
+                    }
+                    logger.error("[ClaudeProcessClient-{}] 异常: {}", callId, error.message)
+                    throw error
+                }
             } finally {
                 promptFile.delete()
             }

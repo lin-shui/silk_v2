@@ -3,10 +3,12 @@ package com.silk.backend.workflow
 import com.silk.backend.models.AgentSessionState
 import com.silk.backend.models.Workflow
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
@@ -34,7 +36,13 @@ class WorkflowManager(
         return if (storeFile.exists()) {
             try {
                 json.decodeFromString(storeFile.readText())
-            } catch (e: Exception) {
+            } catch (e: SerializationException) {
+                logger.error("Failed to decode workflow store: {}", e.message)
+                WorkflowStore()
+            } catch (e: IllegalArgumentException) {
+                logger.error("Invalid workflow store content: {}", e.message)
+                WorkflowStore()
+            } catch (e: IOException) {
                 logger.error("Failed to load workflow store: {}", e.message)
                 WorkflowStore()
             }

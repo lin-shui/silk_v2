@@ -1,10 +1,12 @@
 package com.silk.backend.todos
 
 import com.silk.backend.database.UserTodoItemDto
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.IOException
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -63,7 +65,16 @@ object UserTodoStore {
         return try {
             val text = f.readText()
             json.decodeFromString<UserTodoFilePayload>(text).items
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
+            println("⚠️ [UserTodoStore] 读取失败 user=${userId.take(8)}… : ${e.message}")
+            emptyList()
+        } catch (e: IllegalArgumentException) {
+            println("⚠️ [UserTodoStore] 读取失败 user=${userId.take(8)}… : ${e.message}")
+            emptyList()
+        } catch (e: IOException) {
+            println("⚠️ [UserTodoStore] 读取失败 user=${userId.take(8)}… : ${e.message}")
+            emptyList()
+        } catch (e: SecurityException) {
             println("⚠️ [UserTodoStore] 读取失败 user=${userId.take(8)}… : ${e.message}")
             emptyList()
         }

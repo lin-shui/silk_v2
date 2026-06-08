@@ -5,6 +5,7 @@ import com.silk.backend.ai.AIStepwiseAgent
 import com.silk.backend.ai.SearchDrivenAgent
 import com.silk.backend.ai.DirectModelAgent
 import com.silk.backend.models.ChatHistoryEntry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import org.slf4j.LoggerFactory
 import java.time.LocalTime
@@ -264,10 +265,11 @@ class SilkAgent {
      * 索引消息到 Weaviate
      */
     suspend fun indexMessageToSearch(message: ChatHistoryEntry, participants: List<String>): Boolean {
-        return try {
+        return runCatching {
             searchAgent?.indexMessage(message, participants) ?: false
-        } catch (e: Exception) {
-            logger.error("❌ 索引消息失败: {}", e.message)
+        }.getOrElse { error ->
+            if (error is CancellationException) throw error
+            logger.error("❌ 索引消息失败: {}", error.message)
             false
         }
     }

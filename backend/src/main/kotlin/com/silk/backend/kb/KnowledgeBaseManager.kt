@@ -3,10 +3,12 @@ package com.silk.backend.kb
 import com.silk.backend.models.KBEntry
 import com.silk.backend.models.KBTopic
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
@@ -33,7 +35,13 @@ class KnowledgeBaseManager(
         return if (storeFile.exists()) {
             try {
                 json.decodeFromString(storeFile.readText())
-            } catch (e: Exception) {
+            } catch (e: SerializationException) {
+                logger.error("Failed to decode KB store: {}", e.message)
+                KBStore()
+            } catch (e: IllegalArgumentException) {
+                logger.error("Invalid KB store content: {}", e.message)
+                KBStore()
+            } catch (e: IOException) {
                 logger.error("Failed to load KB store: {}", e.message)
                 KBStore()
             }

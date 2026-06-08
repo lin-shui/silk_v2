@@ -430,8 +430,7 @@ $taskPrompt
             }
             
             // ✅ 移除日志输出以提升性能
-            val finalLength = fullTextBuffer.length
-            // if (finalLength > 0) {
+            // if (fullTextBuffer.isNotEmpty()) {
             //     val avgCharsPerSend = if (sendCount > 0) finalLength / sendCount else 0
             //     logger.info("✅ [$taskName] 流式输出完成: $finalLength 字符, 发送 $sendCount 次, 平均 $avgCharsPerSend 字符/次")
             // }
@@ -541,7 +540,7 @@ $conclusion
             apiResponse.choices.firstOrNull()?.message?.content 
                 ?: "API 返回空结果"
         } else {
-            throw Exception("API 调用失败：${response.statusCode()} - ${response.body()}")
+            error("API 调用失败：${response.statusCode()} - ${response.body()}")
         }
     }
     
@@ -600,7 +599,7 @@ $conclusion
         
         if (response.statusCode() != 200) {
             logger.error("❌ API 返回错误状态码: ${response.statusCode()}")
-            throw Exception("API 调用失败：${response.statusCode()}")
+            error("API 调用失败：${response.statusCode()}")
         }
         
         val fullText = StringBuilder()

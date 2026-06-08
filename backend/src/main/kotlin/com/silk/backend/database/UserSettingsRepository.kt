@@ -4,9 +4,9 @@ import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.select
-import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
+import org.slf4j.LoggerFactory
 import java.security.SecureRandom
 import java.time.LocalDateTime
 
@@ -16,6 +16,7 @@ import java.time.LocalDateTime
 object UserSettingsRepository {
 
     private val secureRandom = SecureRandom()
+    private val logger = LoggerFactory.getLogger(UserSettingsRepository::class.java)
 
     /**
      * 获取用户设置
@@ -123,7 +124,8 @@ object UserSettingsRepository {
         val languageStr = row[UserSettingsTable.language]
         val language = try {
             Language.valueOf(languageStr)
-        } catch (e: Exception) {
+        } catch (e: IllegalArgumentException) {
+            logger.warn("Unknown user language '{}', fallback to CHINESE", languageStr, e)
             Language.CHINESE // 默认值
         }
 

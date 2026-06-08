@@ -505,7 +505,6 @@ class ChatHistoryManager(
         if (userMessageIndex == -1) return emptyList()
         
         val userMessage = chatHistory.messages[userMessageIndex]
-        val userTimestamp = userMessage.timestamp
         
         val isAgent = { id: String -> AgentRuntime.isAgentUserId(id) }
 

@@ -721,7 +721,7 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
             .build()
         val resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString())
         if (resp.statusCode() != 200) {
-            throw IllegalStateException("HTTP ${resp.statusCode()}: ${resp.body().take(200)}")
+            error("HTTP ${resp.statusCode()}: ${resp.body().take(200)}")
         }
         val root = json.parseToJsonElement(resp.body()).jsonObject
         val choices = root["choices"]?.jsonArray ?: return ""

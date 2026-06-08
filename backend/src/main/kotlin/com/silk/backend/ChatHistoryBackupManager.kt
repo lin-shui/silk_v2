@@ -3,9 +3,11 @@ package com.silk.backend
 import com.silk.backend.models.BackupMetadata
 import com.silk.backend.models.ChatHistoryEntry
 import com.silk.backend.models.RecalledMessageBackup
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.time.LocalDateTime
@@ -87,7 +89,10 @@ object ChatHistoryBackupManager {
             logger.info("✅ 群组历史已备份: {} -> {}", groupId, backupDir.absolutePath)
             logger.info("   原因: {} - {}", backupType.name, reason)
             true
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            logger.error("❌ 备份群组历史失败: {}", groupId, e)
+            false
+        } catch (e: SecurityException) {
             logger.error("❌ 备份群组历史失败: {}", groupId, e)
             false
         }
@@ -121,7 +126,10 @@ object ChatHistoryBackupManager {
             
             logger.info("✅ 撤回消息已备份: {} -> {}", message.messageId, backupFile.name)
             true
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            logger.error("❌ 备份撤回消息失败: {} - {}", message.messageId, e.message)
+            false
+        } catch (e: SecurityException) {
             logger.error("❌ 备份撤回消息失败: {} - {}", message.messageId, e.message)
             false
         }
@@ -175,7 +183,11 @@ object ChatHistoryBackupManager {
                     try {
                         val metadata = json.decodeFromString<BackupMetadata>(metadataFile.readText())
                         backups.add(metadata)
-                    } catch (e: Exception) {
+                    } catch (e: SerializationException) {
+                        logger.warn("⚠️ 解析备份元数据失败: {}, reason={}", metadataFile.path, e.message)
+                    } catch (e: IllegalArgumentException) {
+                        logger.warn("⚠️ 解析备份元数据失败: {}, reason={}", metadataFile.path, e.message)
+                    } catch (e: IOException) {
                         logger.warn("⚠️ 解析备份元数据失败: {}, reason={}", metadataFile.path, e.message)
                     }
                 }
@@ -222,7 +234,16 @@ object ChatHistoryBackupManager {
             
             logger.info("✅ 已从备份恢复: {} <- {}", groupId, backupDir.absolutePath)
             true
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
+            logger.error("❌ 恢复备份失败: {}", backupPath, e)
+            false
+        } catch (e: IllegalArgumentException) {
+            logger.error("❌ 恢复备份失败: {}", backupPath, e)
+            false
+        } catch (e: IOException) {
+            logger.error("❌ 恢复备份失败: {}", backupPath, e)
+            false
+        } catch (e: SecurityException) {
             logger.error("❌ 恢复备份失败: {}", backupPath, e)
             false
         }
@@ -245,7 +266,7 @@ object ChatHistoryBackupManager {
                         dateDir.deleteRecursively()
                         deletedCount++
                         logger.info("🗑️ 已删除过期备份: {}", dateDir.path)
-                    } catch (e: Exception) {
+                    } catch (e: SecurityException) {
                         logger.warn("⚠️ 删除过期备份失败: {}, reason={}", dateDir.path, e.message)
                     }
                 }
