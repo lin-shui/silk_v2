@@ -38,9 +38,9 @@
 
 ## Current Snapshot
 
-当前 detekt baseline 余量（2026-06-05，Slice 93 后）：
+当前 detekt baseline 余量（2026-06-08，Slice 99 后）：
 
-- `backend.xml`: 138
+- `backend.xml`: 108
 - `frontend-androidApp.xml`: 0
 - `frontend-webApp.xml`: 0
 - `frontend-shared.xml`: 0
@@ -52,19 +52,25 @@
 - `frontend/webApp` detekt baseline 已清空；后续 Web 再出现 lint 只接受“新增问题直接修源码”，不要回填 baseline。
 - `frontend/desktopApp` detekt baseline 已清空；后续 Desktop 再出现 lint 只接受“新增问题直接修源码”，不要回填 baseline。
 - `frontend/shared` detekt baseline 已清空，并于 2026-06-05 通过 `:frontend:shared:detekt`、三端 consumer 编译与 `silkLint` 复验。
-- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter`、`EmptyFunctionBlock`、`AsrRoutes.kt` 的 `SwallowedException`、`ChatHistoryBackupManager.kt` 的 `PrintStackTrace` / `SwallowedException`、`WeaviateClient.kt` 的 `PrintStackTrace`，以及 `WebSocketConfig.kt` 的 `ComplexCondition` / `PrintStackTrace` / `SwallowedException` baseline 和一条陈旧的 `TooGenericExceptionCaught(ex)` 残留；剩余主要是 `TooGenericExceptionCaught` 32、`CyclomaticComplexMethod` 29、`ConstructorParameterNaming` 16、`NestedBlockDepth` 11、`SwallowedException` 7。
+- `ExternalSearchService.kt` 已移除 1 条 `FunctionOnlyReturningConstant` 和 5 条 `MayBeConst` baseline；静态搜索 URL 现已收敛为 `const val`，未使用的 `isAvailable()` 已删除。
+- `ExternalSearchService.kt` 的 9 条 `ConstructorParameterNaming` baseline 已清理；对外 JSON 字段改为 `@SerialName(...) + camelCase`，不改变 SerpAPI / DuckDuckGo / SearXNG 的响应反序列化合同。
+- `AIConfig.kt`、`AcpWebSocketTransport.kt`、`SilkAgent.kt` 与 `AnthropicClient.kt` 已移除 5 条 `UseCheckOrError` 和 1 条 `UseRequire` baseline；这些前置校验现统一改为 `check` / `checkNotNull` / `require`。
+- `AiModels.kt`、`AIStepwiseAgent.kt`、`GroupTodoExtractionService.kt` 与 `AcpCapabilities.kt` 已额外移除 7 条 `ConstructorParameterNaming` baseline；消息模型、AI 请求体与 ACP `_silk` 扩展能力声明现统一改为 `camelCase + @SerialName(...)`，不改变现有协议字段。
+- `SearchDrivenAgent.kt` 的两处 HTTP 非 200 响应抛错已从 `Exception(...)` 收紧为 `error(...)`；`TooGenericExceptionThrown` baseline 再减 1 条，不改变上层 fallback 行为。
+- `Routing.kt` 已移除 1 条 `SwallowedException: ... CancellationException` baseline；Agent Bridge / group chat / audio duplex 的正常取消不再静默吞掉，日志也补到了取消与关闭失败路径。
+- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter`、`EmptyFunctionBlock`、`AsrRoutes.kt` 的 `SwallowedException`、`ChatHistoryBackupManager.kt` 的 `PrintStackTrace` / `SwallowedException`、`WeaviateClient.kt` 的 `PrintStackTrace`，以及 `WebSocketConfig.kt` 的 `ComplexCondition` / `PrintStackTrace` / `SwallowedException` baseline 和一条陈旧的 `TooGenericExceptionCaught(ex)` 残留；剩余主要是 `TooGenericExceptionCaught` 31、`CyclomaticComplexMethod` 29、`NestedBlockDepth` 11、`SwallowedException` 6、`LoopWithTooManyJumpStatements` 7、`LargeClass` 8、`TooGenericExceptionThrown` 5。
 
 ## Current Status
 
-- Slice 1-93 完成历史均已归档到 `docs/context/planning/exec-plans/completed/`。
+- Slice 1-99 完成历史均已归档到 `docs/context/planning/exec-plans/completed/`。
 - Android / Web / Desktop / Shared baseline 已清零；active plan 现在只保留 backend 的剩余 detekt 收敛。
 - Android 侧既有 `JdkImageTransform` / `jlink` 环境阻塞仍未改变；这不影响 baseline 已清零这一事实。
 
 ## Next Slices
 
-- Slice 94 候选：优先继续处理 `Routing.kt` 中单函数、单职责的剩余异常语义点。
-- Slice 95 候选：如果继续 backend 复杂度，优先按单函数慢拆，不和异常语义 / import 收敛混在同一 slice。
-- Slice 96 候选：如果 backend 异常语义继续推进，优先选单文件里的同类 catch / swallow 点做小批量收敛，不要横跨多个模块。
+- Slice 100 候选：优先继续处理 `Routing.kt` 中单一路由族、可明确区分 parse / validation 的异常语义点，不直接碰整文件聚合的 `Exception` baseline。
+- Slice 101 候选：如果继续 backend 复杂度，优先按单函数慢拆，不和异常语义 / import 收敛混在同一 slice。
+- Slice 102 候选：如果 backend 异常语义继续推进，优先选单文件里的同类 catch / swallow 点做小批量收敛，不要横跨多个模块。
 - 如果某一步发现需要新增 baseline，先停下来判断是否应关规则、补测试或拆小 PR，不要直接把新增项写进 baseline。
 
 ## Handoff Notes
@@ -75,4 +81,5 @@
 - `frontend/shared` baseline 已清空；后续 shared 再出现 lint，只接受“新增问题直接修源码”，不要回填 baseline。
 - `frontend/shared/src/iosMain` 当前不在根 detekt source set 中；本计划按当前 lint 覆盖面推进，不把未启用 iOS 源码混进每一步。
 - 如果回到 backend，优先选择单文件、单函数、单职责的收敛面，不要再按大范围机械清理切片。
+- `Routing.kt` 的 `TooGenericExceptionCaught: ... Exception` 与 `SwallowedException: ... Exception` 现已确认是文件级聚合签名；后续要继续拆异常语义，先按单一路由族收窄，再删 baseline。
 - `WebSocketConfig.kt` 当前 broad-catch baseline 仍以文件级签名聚合；后续要拆异常语义时，先选边界最清晰的一组 catch，不要一次性移除整文件同签名 baseline。

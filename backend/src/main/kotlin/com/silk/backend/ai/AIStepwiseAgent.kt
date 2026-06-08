@@ -4,6 +4,7 @@ import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.models.ChatHistoryEntry
 import com.silk.backend.pdf.PDFReportGenerator
 import kotlinx.coroutines.delay
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -521,7 +522,7 @@ $conclusion
                 ApiMessage(role = "user", content = prompt)
             ),
             temperature = 0.7,
-            max_tokens = 65536,  // ✅ 提升到65536，允许生成超详细的诊断内容
+            maxTokens = 65536,  // ✅ 提升到65536，允许生成超详细的诊断内容
             stream = false
         )
         
@@ -568,7 +569,7 @@ $conclusion
                 ApiMessage(role = "user", content = prompt)
             ),
             temperature = 0.7,
-            max_tokens = 65536,  // ✅ 提升到65536，允许生成超详细的诊断内容
+            maxTokens = 65536,  // ✅ 提升到65536，允许生成超详细的诊断内容
             stream = true  // 启用流式输出
         )
         
@@ -1420,7 +1421,7 @@ $doctorMessage
                     ApiMessage(role = "user", content = prompt)
                 ),
                 temperature = 0.7,
-                max_tokens = 4096,  // ✅ GLM-5 的 max_tokens 限制，避免 4K 超出导致截断
+                maxTokens = 4096,  // ✅ GLM-5 的 max_tokens 限制，避免 4K 超出导致截断
                 stream = true  // 启用streaming
             )
             
@@ -1510,7 +1511,8 @@ data class ApiRequest(
     val model: String,
     val messages: List<ApiMessage>,
     val temperature: Double = 0.7,
-    val max_tokens: Int = 65536,  // ✅ 默认值提升到65536，支持超详细的诊断报告
+    @SerialName("max_tokens")
+    val maxTokens: Int = 65536,  // ✅ 默认值提升到65536，支持超详细的诊断报告
     val stream: Boolean = false  // 支持流式输出
 )
 
@@ -1549,7 +1551,8 @@ data class StreamResponse(
 @Serializable
 data class StreamChoice(
     val delta: StreamDelta,
-    val finish_reason: String? = null
+    @SerialName("finish_reason")
+    val finishReason: String? = null
 )
 
 @Serializable

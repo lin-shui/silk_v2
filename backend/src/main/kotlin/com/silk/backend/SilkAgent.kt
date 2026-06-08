@@ -34,6 +34,9 @@ class SilkAgent {
     // 保留旧 agent 用于兼容（可选）
     private var stepwiseAgent: AIStepwiseAgent? = null
     private var searchAgent: SearchDrivenAgent? = null
+
+    private fun requireStepwiseAgent(): AIStepwiseAgent =
+        checkNotNull(stepwiseAgent) { "Agent not initialized" }
     
     fun initializeAgent(sessionName: String) {
         currentSessionId = sessionName
@@ -203,7 +206,7 @@ class SilkAgent {
         groupDisplayName: String? = null,
         hostId: String? = null
     ): AIStepwiseAgent.DiagnosisResult {
-        return (stepwiseAgent ?: throw IllegalStateException("Agent not initialized"))
+        return requireStepwiseAgent()
             .executeStepwiseDiagnosis(chatHistory, callback, userName, groupDisplayName, hostId)
     }
     
@@ -217,7 +220,7 @@ class SilkAgent {
         userName: String = "用户",
         groupDisplayName: String? = null
     ) {
-        (stepwiseAgent ?: throw IllegalStateException("Agent not initialized"))
+        requireStepwiseAgent()
             .processDoctorDiagnosisUpdate(chatHistory, doctorMessage, callback, userName, groupDisplayName)
     }
     
@@ -230,7 +233,7 @@ class SilkAgent {
         prompt: String,
         callback: suspend (content: String, isComplete: Boolean) -> Unit
     ) {
-        (stepwiseAgent ?: throw IllegalStateException("Agent not initialized"))
+        requireStepwiseAgent()
             .generateQuickResponse(prompt, callback)
     }
     

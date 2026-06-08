@@ -71,7 +71,7 @@ class AnthropicClient(
      * @param messages 内部 Message 列表（含 system 角色会被移入 systemPrompt）
      * @param tools 内部 Tool 定义（含 web_search 特殊处理）
      * @param callback 流式回调 (stepType, content, isComplete)
-     * @return 聚合后的最终文本 + tool_calls
+     * @return 聚合后的最终文本 + toolCalls
      */
     suspend fun streamCompletion(
         systemPrompt: String,
@@ -80,10 +80,8 @@ class AnthropicClient(
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): AnthropicStreamResult {
         // 0. 前置校验
-        if (apiKey.isBlank()) {
-            throw IllegalArgumentException(
-                "ANTHROPIC_API_KEY 未配置。请在 .env 中设置 ANTHROPIC_API_KEY=your_key"
-            )
+        require(apiKey.isNotBlank()) {
+            "ANTHROPIC_API_KEY 未配置。请在 .env 中设置 ANTHROPIC_API_KEY=your_key"
         }
 
         // 1. 转换 system prompt + messages → Anthropic 格式
@@ -408,14 +406,14 @@ class AnthropicClient(
         return when (msg.role) {
             "user" -> {
                 // 区分普通 user 消息和 tool_result
-                if (msg.tool_call_id != null) {
+                if (msg.toolCallId != null) {
                     // 这是 tool_result 包装的 user 消息
                     buildJsonObject {
                         put("role", "user")
                         put("content", buildJsonArray {
                             add(buildJsonObject {
                                 put("type", "tool_result")
-                                put("tool_use_id", msg.tool_call_id)
+                                put("tool_use_id", msg.toolCallId)
                                 put("content", msg.content ?: "")
                             })
                         })
@@ -429,7 +427,7 @@ class AnthropicClient(
             }
 
             "assistant" -> {
-                if (msg.tool_calls != null && msg.tool_calls.isNotEmpty()) {
+                if (msg.toolCalls != null && msg.toolCalls.isNotEmpty()) {
                     // assistant 消息含 tool_use
                     val contentBlocks = buildJsonArray {
                         if (!msg.content.isNullOrBlank()) {
@@ -438,7 +436,7 @@ class AnthropicClient(
                                 put("text", msg.content)
                             })
                         }
-                        for (tc in msg.tool_calls) {
+                        for (tc in msg.toolCalls) {
                             add(buildJsonObject {
                                 put("type", "tool_use")
                                 put("id", tc.id)
@@ -472,7 +470,7 @@ class AnthropicClient(
                     put("content", buildJsonArray {
                         add(buildJsonObject {
                             put("type", "tool_result")
-                            put("tool_use_id", msg.tool_call_id ?: "")
+                            put("tool_use_id", msg.toolCallId ?: "")
                             put("content", msg.content ?: "")
                         })
                     })

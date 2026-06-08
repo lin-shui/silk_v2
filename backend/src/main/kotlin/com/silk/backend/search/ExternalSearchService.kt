@@ -11,6 +11,7 @@ import io.ktor.client.request.parameter
 import io.ktor.client.statement.bodyAsText
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -53,15 +54,15 @@ class ExternalSearchService {
         private val BING_API_KEY: String get() = AIConfig.BING_API_KEY
         private val SERPAPI_KEY: String get() = AIConfig.SERPAPI_KEY
         private val SEARXNG_URL: String get() = AIConfig.SEARXNG_URL
-        val BING_SEARCH_URL: String = "https://api.bing.microsoft.com/v7.0/search"
-        val SERPAPI_URL: String = "https://serpapi.com/search"
+        const val BING_SEARCH_URL: String = "https://api.bing.microsoft.com/v7.0/search"
+        const val SERPAPI_URL: String = "https://serpapi.com/search"
         
         // Wikipedia API（完全免费，国内可访问）
-        val WIKIPEDIA_API_URL: String = "https://zh.wikipedia.org/w/api.php"
-        val WIKIPEDIA_EN_API_URL: String = "https://en.wikipedia.org/w/api.php"
+        const val WIKIPEDIA_API_URL: String = "https://zh.wikipedia.org/w/api.php"
+        const val WIKIPEDIA_EN_API_URL: String = "https://en.wikipedia.org/w/api.php"
         
         // DuckDuckGo Instant Answer API（无需 API Key，但国内可能不通）
-        val DUCKDUCKGO_URL: String = "https://api.duckduckgo.com/"
+        const val DUCKDUCKGO_URL: String = "https://api.duckduckgo.com/"
         
         // 搜索超时 - SearXNG 聚合多个引擎可能需要更长时间
         const val SEARCH_TIMEOUT_MS = 15000L  // 15秒超时，SearXNG 聚合多引擎需等待
@@ -353,7 +354,7 @@ class ExternalSearchService {
                 val body = response.bodyAsText()
                 val serpResult = json.decodeFromString<SerpAPIResponse>(body)
                 
-                val results = serpResult.organic_results?.take(limit)?.map { item ->
+                val results = serpResult.organicResults?.take(limit)?.map { item ->
                     ExternalSearchResult(
                         title = item.title ?: "无标题",
                         snippet = item.snippet ?: "",
@@ -451,22 +452,22 @@ class ExternalSearchService {
                 val results = mutableListOf<ExternalSearchResult>()
                 
                 // 主要结果（Abstract）
-                if (ddgResult.Abstract?.isNotBlank() == true) {
+                if (ddgResult.abstract?.isNotBlank() == true) {
                     results.add(ExternalSearchResult(
-                        title = ddgResult.Heading ?: "搜索结果",
-                        snippet = ddgResult.Abstract,
-                        url = ddgResult.AbstractURL ?: "",
+                        title = ddgResult.heading ?: "搜索结果",
+                        snippet = ddgResult.abstract,
+                        url = ddgResult.abstractUrl ?: "",
                         source = "DuckDuckGo (Abstract)"
                     ))
                 }
                 
                 // 相关主题
-                ddgResult.RelatedTopics?.take(limit - results.size)?.forEach { topic ->
-                    if (topic.Text?.isNotBlank() == true) {
+                ddgResult.relatedTopics?.take(limit - results.size)?.forEach { topic ->
+                    if (topic.text?.isNotBlank() == true) {
                         results.add(ExternalSearchResult(
-                            title = topic.Text.take(50) + if (topic.Text.length > 50) "..." else "",
-                            snippet = topic.Text,
-                            url = topic.FirstURL ?: "",
+                            title = topic.text.take(50) + if (topic.text.length > 50) "..." else "",
+                            snippet = topic.text,
+                            url = topic.firstUrl ?: "",
                             source = "DuckDuckGo (Related)"
                         ))
                     }
@@ -491,14 +492,6 @@ class ExternalSearchService {
                 )
             }
         }
-    }
-    
-    /**
-     * 检查服务是否可用
-     */
-    fun isAvailable(): Boolean {
-        // DuckDuckGo 总是可用的（免费 API）
-        return true
     }
     
     fun close() {
@@ -538,7 +531,8 @@ data class ExternalSearchResults(
  */
 @Serializable
 data class SerpAPIResponse(
-    val organic_results: List<SerpAPIOrganicResult>? = null
+    @SerialName("organic_results")
+    val organicResults: List<SerpAPIOrganicResult>? = null
 )
 
 @Serializable
@@ -553,17 +547,24 @@ data class SerpAPIOrganicResult(
  */
 @Serializable
 data class DuckDuckGoResponse(
-    val Abstract: String? = null,
-    val AbstractText: String? = null,
-    val AbstractURL: String? = null,
-    val Heading: String? = null,
-    val RelatedTopics: List<DuckDuckGoTopic>? = null
+    @SerialName("Abstract")
+    val abstract: String? = null,
+    @SerialName("AbstractText")
+    val abstractText: String? = null,
+    @SerialName("AbstractURL")
+    val abstractUrl: String? = null,
+    @SerialName("Heading")
+    val heading: String? = null,
+    @SerialName("RelatedTopics")
+    val relatedTopics: List<DuckDuckGoTopic>? = null
 )
 
 @Serializable
 data class DuckDuckGoTopic(
-    val Text: String? = null,
-    val FirstURL: String? = null
+    @SerialName("Text")
+    val text: String? = null,
+    @SerialName("FirstURL")
+    val firstUrl: String? = null
 )
 
 /**
@@ -595,7 +596,8 @@ data class BingWebPage(
 @Serializable
 data class SearXNGResponse(
     val query: String? = null,
-    val number_of_results: Int? = null,
+    @SerialName("number_of_results")
+    val numberOfResults: Int? = null,
     val results: List<SearXNGResult>? = null
 )
 
@@ -608,4 +610,3 @@ data class SearXNGResult(
     val engine: String? = null,
     val score: Double? = null
 )
-

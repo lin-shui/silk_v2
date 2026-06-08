@@ -50,8 +50,8 @@ class AcpClientTest {
         val result = deferred.await()
         assertEquals("0.2", result.protocolVersion)
         assertEquals(true, result.agentCapabilities.loadSession)
-        assertEquals(true, result.agentCapabilities._silk.compact)
-        assertEquals(false, result.agentCapabilities._silk.setCwd)
+        assertEquals(true, result.agentCapabilities.silkExtensions.compact)
+        assertEquals(false, result.agentCapabilities.silkExtensions.setCwd)
     }
 
     @Test

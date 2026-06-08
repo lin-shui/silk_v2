@@ -99,6 +99,7 @@ import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import io.ktor.client.engine.cio.CIO
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -2245,7 +2246,7 @@ fun Application.configureRouting() {
                     scope = scope,
                 )
             } catch (e: Exception) {
-                logger.error("❌ Agent Bridge acceptConnection 失败: {}", e.message)
+                logger.error("❌ Agent Bridge acceptConnection 失败", e)
                 close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "accept failed"))
                 return@webSocket
             }
@@ -2268,7 +2269,7 @@ fun Application.configureRouting() {
                 )
                 logger.info("[Agent Bridge] initialize 成功: agentCapabilities={}", result.agentCapabilities)
             } catch (e: Exception) {
-                logger.error("[Agent Bridge] initialize 失败: {}", e.message)
+                logger.error("[Agent Bridge] initialize 失败", e)
                 AcpRegistry.unregister(userId, agentType)
                 close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "initialize failed"))
                 return@webSocket
@@ -2280,10 +2281,15 @@ fun Application.configureRouting() {
                 // which consumes from the same Ktor channel. Two consumers race and lose frames.
                 // Just suspend until connection closes.
                 closeReason.await()
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                // Normal: session scope cancelled on connection close
+            } catch (cancelled: CancellationException) {
+                logger.debug(
+                    "Agent Bridge 会话正常取消: userId={}, agentType={}, reason={}",
+                    userId,
+                    agentType,
+                    cancelled.message,
+                )
             } catch (e: Exception) {
-                logger.error("❌ Agent Bridge WebSocket 错误: userId={}, agentType={}, error={}", userId, agentType, e.message)
+                logger.error("❌ Agent Bridge WebSocket 错误: userId={}, agentType={}", userId, agentType, e)
             } finally {
                 logger.info("🔌 Agent Bridge 断开: userId={}, agentType={}", userId, agentType)
                 scope.cancel()
@@ -2712,8 +2718,10 @@ fun Application.configureRouting() {
                             try {
                                 val message = Json.decodeFromString<Message>(receivedText)
                                 groupChatServer.broadcast(message)
-                            } catch (e: Exception) {
-                                logger.warn("⚠️ 解析消息失败: {}", e.message)
+                            } catch (e: SerializationException) {
+                                logger.warn("⚠️ 解析消息失败: payload 不是合法消息 JSON", e)
+                            } catch (e: IllegalArgumentException) {
+                                logger.warn("⚠️ 解析消息失败: payload 缺少必要字段", e)
                             }
                         }
                         else -> {}
@@ -2758,7 +2766,9 @@ fun Application.configureRouting() {
                                         send(Frame.Text(frame.readText()))
                                     }
                                 }
-                            } catch (_: CancellationException) {}
+                            } catch (cancelled: CancellationException) {
+                                logger.debug("AudioDuplex 上游发送协程正常取消: {}", cancelled.message)
+                            }
                         }
 
                         val sendToClient = launch {
@@ -2768,7 +2778,9 @@ fun Application.configureRouting() {
                                         serverSession.send(Frame.Text(frame.readText()))
                                     }
                                 }
-                            } catch (_: CancellationException) {}
+                            } catch (cancelled: CancellationException) {
+                                logger.debug("AudioDuplex 下游发送协程正常取消: {}", cancelled.message)
+                            }
                         }
 
                         sendToUpstream.join()
@@ -2776,8 +2788,12 @@ fun Application.configureRouting() {
                     }
                 }
             } catch (e: Exception) {
-                logger.error("❌ AudioDuplex proxy error: {}", e.message)
-                try { close(CloseReason(CloseReason.Codes.PROTOCOL_ERROR, e.message ?: "proxy error")) } catch (_: Exception) {}
+                logger.error("❌ AudioDuplex proxy error", e)
+                runCatching {
+                    close(CloseReason(CloseReason.Codes.PROTOCOL_ERROR, e.message ?: "proxy error"))
+                }.onFailure { closeError ->
+                    logger.warn("AudioDuplex proxy close 失败", closeError)
+                }
             } finally {
                 httpClient.close()
             }

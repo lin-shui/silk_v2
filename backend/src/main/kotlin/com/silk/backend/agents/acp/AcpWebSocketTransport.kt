@@ -33,7 +33,7 @@ class AcpWebSocketTransport(
     }
 
     override suspend fun send(line: String) {
-        if (isClosed) throw IllegalStateException("transport closed")
+        check(!isClosed) { "transport closed" }
         session.send(Frame.Text(line))
     }
 
