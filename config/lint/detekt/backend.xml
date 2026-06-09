@@ -2,20 +2,14 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
-    <ID>ComplexCondition:GroupTodoExtractionService.kt$GroupTodoExtractionService$m != null &amp;&amp; d != null &amp;&amp; m in 1..12 &amp;&amp; d in 1..31</ID>
-    <ID>ComplexCondition:UserTodoStore.kt$UserTodoStore$(ta == "alarm" || ta == "calendar") &amp;&amp; (tb == "alarm" || tb == "calendar")</ID>
     <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$private fun generateFallbackReport( stepResults: Map&lt;String, StepResult&gt;, allSuccess: Boolean ): String</ID>
     <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
     <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun generateQuickResponse( prompt: String, callback: suspend (content: String, isComplete: Boolean) -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun processDoctorDiagnosisUpdate( chatHistory: List&lt;ChatHistoryEntry&gt;, doctorMessage: String, callback: suspend (stepType: String, message: String, currentStep: Int?, totalSteps: Int?) -&gt; Unit, userName: String = "用户", groupDisplayName: String? = null )</ID>
-    <ID>CyclomaticComplexMethod:AcpUpdateMapper.kt$AcpUpdateMapper$fun map( update: JsonObject, descriptor: AgentDescriptor, agentType: String, accumulated: StringBuilder, ): Message?</ID>
     <ID>CyclomaticComplexMethod:AgentRuntime.kt$AgentRuntime$private suspend fun handleCommand( ctx: GroupAgentContext, cmd: SilkCommand, broadcastFn: suspend (Message) -&gt; Unit, )</ID>
     <ID>CyclomaticComplexMethod:AnthropicClient.kt$AnthropicClient$private fun convertMessage(msg: Message): JsonElement</ID>
     <ID>CyclomaticComplexMethod:AnthropicClient.kt$AnthropicClient$private fun handleEvent( data: String, fullText: StringBuilder, pendingToolUses: MutableMap&lt;Int, PendingToolUse&gt;, completedToolCalls: MutableList&lt;ToolCall&gt;, collectedCitations: MutableList&lt;Citation&gt;, )</ID>
-    <ID>CyclomaticComplexMethod:Application.kt$private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger)</ID>
-    <ID>CyclomaticComplexMethod:CommandRouter.kt$CommandRouter$fun route( text: String, userId: String, groupId: String, currentAgentType: String?, ): RouteResult</ID>
     <ID>CyclomaticComplexMethod:DirectModelAgent.kt$DirectModelAgent$private fun normalizeCitedReferences(content: String): FinalCitationResult</ID>
-    <ID>CyclomaticComplexMethod:ExternalSearchService.kt$ExternalSearchService$suspend fun search(query: String, limit: Int = MAX_RESULTS): ExternalSearchResults</ID>
     <ID>CyclomaticComplexMethod:FileRoutes.kt$fun Route.fileRoutes()</ID>
     <ID>CyclomaticComplexMethod:FileRoutes.kt$private suspend fun indexFileToWeaviate( file: File, sessionId: String, userId: String, originalFileName: String, contentType: String? ): Boolean</ID>
     <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun dedupeDrafts(list: List&lt;ExtractedTodoDraft&gt;): List&lt;ExtractedTodoDraft&gt;</ID>
@@ -25,7 +19,6 @@
     <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun parseCompactTodoJson( raw: String, validIds: Set&lt;String&gt;, originalsById: Map&lt;String, UserTodoItemDto&gt; ): List&lt;UserTodoItemDto&gt;?</ID>
     <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$suspend fun refreshTodosForUser(userId: String)</ID>
     <ID>CyclomaticComplexMethod:Routing.kt$fun Application.configureRouting()</ID>
-    <ID>CyclomaticComplexMethod:SearchDrivenAgent.kt$SearchDrivenAgent$private fun analyzeIntentOffline(userInput: String): IntentAnalysis</ID>
     <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$fun updateItem( userId: String, itemId: String, done: Boolean? = null, title: String? = null, actionType: String? = null, actionDetail: String? = null, executedAt: Long? = null, reminderId: Long? = null, clearReminderId: Boolean = false, taskKind: String? = null, repeatRule: String? = null, repeatAnchor: String? = null, activeFrom: Long? = null, activeTo: Long? = null, templateId: String? = null, lifecycleState: String? = null, closedAt: Long? = null, lastEvidenceAt: Long? = null, explicitIntent: Boolean? = null, dateBucket: String? = null, reopenCount: Int? = null ): Boolean</ID>
     <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$private fun extractTimeFromTitle(title: String): String?</ID>
     <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$private fun isTemplateDueToday(tpl: UserTodoItemDto, today: LocalDate): Boolean</ID>
@@ -43,42 +36,30 @@
     <ID>LargeClass:WebSocketConfig.kt$ChatServer</ID>
     <ID>LoopWithTooManyJumpStatements:AIStepwiseAgent.kt$AIStepwiseAgent$while</ID>
     <ID>LoopWithTooManyJumpStatements:AgentRuntime.kt$AgentRuntime$for</ID>
-    <ID>LoopWithTooManyJumpStatements:Application.kt$for</ID>
     <ID>LoopWithTooManyJumpStatements:ChatHistoryManager.kt$ChatHistoryManager$for</ID>
     <ID>LoopWithTooManyJumpStatements:DirectModelAgent.kt$DirectModelAgent$for</ID>
     <ID>LoopWithTooManyJumpStatements:GroupTodoExtractionService.kt$GroupTodoExtractionService$for</ID>
     <ID>LoopWithTooManyJumpStatements:UserTodoStore.kt$UserTodoStore$for</ID>
     <ID>NestedBlockDepth:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun generateQuickResponse( prompt: String, callback: suspend (content: String, isComplete: Boolean) -&gt; Unit )</ID>
     <ID>NestedBlockDepth:AnthropicClient.kt$AnthropicClient$private fun handleEvent( data: String, fullText: StringBuilder, pendingToolUses: MutableMap&lt;Int, PendingToolUse&gt;, completedToolCalls: MutableList&lt;ToolCall&gt;, collectedCitations: MutableList&lt;Citation&gt;, )</ID>
-    <ID>NestedBlockDepth:Application.kt$private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger)</ID>
-    <ID>NestedBlockDepth:ExternalSearchService.kt$ExternalSearchService$suspend fun search(query: String, limit: Int = MAX_RESULTS): ExternalSearchResults</ID>
     <ID>NestedBlockDepth:FileRoutes.kt$private fun chunkText(text: String, chunkSize: Int = 10000, overlap: Int = 500): List&lt;ChunkInfo&gt;</ID>
     <ID>NestedBlockDepth:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun buildTranscriptString(slices: List&lt;GroupSlice&gt;): String</ID>
     <ID>NestedBlockDepth:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun extractRecurringTemplateDrafts(slices: List&lt;GroupSlice&gt;): Pair&lt;List&lt;ExtractedTodoDraft&gt;, List&lt;String&gt;&gt;</ID>
     <ID>NestedBlockDepth:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun heuristicFromSlices(slices: List&lt;GroupSlice&gt;): List&lt;ExtractedTodoDraft&gt;</ID>
-    <ID>NestedBlockDepth:SearchDrivenAgent.kt$SearchDrivenAgent$private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
-    <ID>NestedBlockDepth:ToolPolicyManager.kt$ToolPolicyManager$fun validateFilePath(path: String, policy: ToolPolicy): Pair&lt;Boolean, String&gt;</ID>
-    <ID>NestedBlockDepth:ToolPolicyManager.kt$ToolPolicyManager$private fun loadConfigFromFile()</ID>
     <ID>SwallowedException:AIStepwiseAgent.kt$AIStepwiseAgent$e: Exception</ID>
     <ID>SwallowedException:PDFReportGenerator.kt$PDFReportGenerator$e: Exception</ID>
     <ID>SwallowedException:Routing.kt$e: Exception</ID>
-    <ID>SwallowedException:SearchDrivenAgent.kt$SearchDrivenAgent$e: Exception</ID>
-    <ID>SwallowedException:ToolPolicyManager.kt$ToolPolicyManager$e: Exception</ID>
     <ID>ThrowsCount:AIStepwiseAgent.kt$AIStepwiseAgent$private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
     <ID>TooGenericExceptionCaught:AIStepwiseAgent.kt$AIStepwiseAgent$e: Exception</ID>
     <ID>TooGenericExceptionCaught:AgentRuntime.kt$AgentRuntime$e: Exception</ID>
     <ID>TooGenericExceptionCaught:AnthropicClient.kt$AnthropicClient$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:Application.kt$e: Exception</ID>
     <ID>TooGenericExceptionCaught:ChatHistoryManager.kt$ChatHistoryManager$e: Exception</ID>
     <ID>TooGenericExceptionCaught:DirectModelAgent.kt$DirectModelAgent$e: Exception</ID>
     <ID>TooGenericExceptionCaught:ExternalSearchService.kt$ExternalSearchService$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:FileRoutes.kt$e: Exception</ID>
     <ID>TooGenericExceptionCaught:GroupTodoExtractionService.kt$GroupTodoExtractionService$e: Exception</ID>
     <ID>TooGenericExceptionCaught:PDFReportGenerator.kt$PDFReportGenerator$closeEx: Exception</ID>
     <ID>TooGenericExceptionCaught:PDFReportGenerator.kt$PDFReportGenerator$e: Exception</ID>
     <ID>TooGenericExceptionCaught:Routing.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:SearchDrivenAgent.kt$SearchDrivenAgent$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:ToolPolicyManager.kt$ToolPolicyManager$e: Exception</ID>
     <ID>TooGenericExceptionCaught:WeaviateClient.kt$WeaviateClient$e: Exception</ID>
     <ID>TooGenericExceptionCaught:WebSocketConfig.kt$ChatServer$e: Exception</ID>
     <ID>TooGenericExceptionThrown:AcpClientTest.kt$AcpClientTest$throw RuntimeException("boom")</ID>

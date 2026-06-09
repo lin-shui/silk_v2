@@ -10,6 +10,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.statement.bodyAsText
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -68,6 +69,14 @@ class ExternalSearchService {
         const val SEARCH_TIMEOUT_MS = 15000L  // 15秒超时，SearXNG 聚合多引擎需等待
         const val MAX_RESULTS = 5
     }
+
+    private data class SearchAttempt(
+        val startLog: String,
+        val successLabel: String,
+        val failureLabel: String,
+        val isEnabled: () -> Boolean = { true },
+        val search: suspend (String, Int) -> ExternalSearchResults,
+    )
     
     /**
      * 执行外部搜索
@@ -80,76 +89,12 @@ class ExternalSearchService {
      */
     suspend fun search(query: String, limit: Int = MAX_RESULTS): ExternalSearchResults {
         val startTime = System.currentTimeMillis()
-        
         return try {
-            // 1. 优先使用 SearXNG（自托管搜索引擎）
-            if (SEARXNG_URL.isNotBlank()) {
-                logger.info("🔍 [1/5] 尝试 SearXNG (自托管) - 最高优先级")
-                try {
-                    val searxngResult = searchWithSearXNG(query, limit)
-                    if (searxngResult.success && searxngResult.results.isNotEmpty()) {
-                        logger.info("✅ SearXNG 搜索成功 (${System.currentTimeMillis() - startTime}ms)")
-                        return searxngResult
-                    }
-                } catch (e: Exception) {
-                    logger.warn("⚠️ SearXNG 失败: ${e.message?.take(50)}")
-                }
+            for (attempt in buildSearchAttempts()) {
+                runSearchAttempt(attempt, query, limit, startTime)?.let { return it }
             }
 
-            // 2. 优先使用 SerpAPI（Google 搜索结果）
-            if (SERPAPI_KEY.isNotBlank()) {
-                logger.info("🔍 [2/5] 尝试 SerpAPI (Google 搜索)")
-                try {
-                    val serpResult = searchWithSerpAPI(query, limit)
-                    if (serpResult.success && serpResult.results.isNotEmpty()) {
-                        logger.info("✅ SerpAPI 搜索成功 (${System.currentTimeMillis() - startTime}ms)")
-                        return serpResult
-                    }
-                } catch (e: Exception) {
-                    logger.warn("⚠️ SerpAPI 失败: ${e.message?.take(50)}")
-                }
-            }
-            
-            // 3. 尝试 Bing（如果有 API Key，国内可访问）
-            if (BING_API_KEY.isNotBlank()) {
-                logger.info("🔍 [3/5] 尝试 Bing Search API")
-                try {
-                    val bingResult = searchWithBing(query, limit)
-                    if (bingResult.success && bingResult.results.isNotEmpty()) {
-                        logger.info("✅ Bing 搜索成功 (${System.currentTimeMillis() - startTime}ms)")
-                        return bingResult
-                    }
-                } catch (e: Exception) {
-                    logger.warn("⚠️ Bing 失败: ${e.message?.take(50)}")
-                }
-            }
-
-            // 4. 使用 Wikipedia（免费，国内稳定可访问）
-            logger.info("🔍 [4/5] 尝试 Wikipedia API（免费，稳定）")
-            try {
-                val wikiResult = searchWithWikipedia(query, limit)
-                if (wikiResult.success && wikiResult.results.isNotEmpty()) {
-                    logger.info("✅ Wikipedia 搜索成功 (${System.currentTimeMillis() - startTime}ms)")
-                    return wikiResult
-                }
-            } catch (e: Exception) {
-                logger.warn("⚠️ Wikipedia 失败: ${e.message?.take(50)}")
-            }
-            
-            // 5. 尝试 DuckDuckGo（免费，但国内可能超时）
-            logger.info("🔍 [5/5] 尝试 DuckDuckGo API（免费）")
-            try {
-                val ddgResult = searchWithDuckDuckGo(query, limit)
-                if (ddgResult.success && ddgResult.results.isNotEmpty()) {
-                    logger.info("✅ DuckDuckGo 搜索成功 (${System.currentTimeMillis() - startTime}ms)")
-                    return ddgResult
-                }
-            } catch (e: Exception) {
-                logger.warn("⚠️ DuckDuckGo 失败: ${e.message?.take(50)}")
-            }
-            
-            // 所有搜索都失败
-            logger.warn("❌ 所有外部搜索引擎都无法获取结果 (总耗时: ${System.currentTimeMillis() - startTime}ms)")
+            logAllSearchesFailed(startTime)
             ExternalSearchResults(
                 success = false,
                 source = "none",
@@ -157,6 +102,8 @@ class ExternalSearchService {
                 searchTimeMs = System.currentTimeMillis() - startTime,
                 error = "所有搜索引擎都无法获取结果"
             )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
         } catch (e: Exception) {
             logger.error("❌ 外部搜索异常: ${e.message}")
             ExternalSearchResults(
@@ -167,6 +114,71 @@ class ExternalSearchService {
                 error = e.message
             )
         }
+    }
+
+    private fun buildSearchAttempts(): List<SearchAttempt> = listOf(
+        SearchAttempt(
+            startLog = "🔍 [1/5] 尝试 SearXNG (自托管) - 最高优先级",
+            successLabel = "SearXNG",
+            failureLabel = "SearXNG",
+            isEnabled = { SEARXNG_URL.isNotBlank() },
+            search = ::searchWithSearXNG,
+        ),
+        SearchAttempt(
+            startLog = "🔍 [2/5] 尝试 SerpAPI (Google 搜索)",
+            successLabel = "SerpAPI",
+            failureLabel = "SerpAPI",
+            isEnabled = { SERPAPI_KEY.isNotBlank() },
+            search = ::searchWithSerpAPI,
+        ),
+        SearchAttempt(
+            startLog = "🔍 [3/5] 尝试 Bing Search API",
+            successLabel = "Bing",
+            failureLabel = "Bing",
+            isEnabled = { BING_API_KEY.isNotBlank() },
+            search = ::searchWithBing,
+        ),
+        SearchAttempt(
+            startLog = "🔍 [4/5] 尝试 Wikipedia API（免费，稳定）",
+            successLabel = "Wikipedia",
+            failureLabel = "Wikipedia",
+            search = ::searchWithWikipedia,
+        ),
+        SearchAttempt(
+            startLog = "🔍 [5/5] 尝试 DuckDuckGo API（免费）",
+            successLabel = "DuckDuckGo",
+            failureLabel = "DuckDuckGo",
+            search = ::searchWithDuckDuckGo,
+        ),
+    )
+
+    private suspend fun runSearchAttempt(
+        attempt: SearchAttempt,
+        query: String,
+        limit: Int,
+        startTime: Long,
+    ): ExternalSearchResults? {
+        if (!attempt.isEnabled()) return null
+
+        logger.info(attempt.startLog)
+        return try {
+            val result = attempt.search(query, limit)
+            if (result.success && result.results.isNotEmpty()) {
+                logger.info("✅ {} 搜索成功 ({}ms)", attempt.successLabel, System.currentTimeMillis() - startTime)
+                result
+            } else {
+                null
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (e: Exception) {
+            logger.warn("⚠️ {} 失败: {}", attempt.failureLabel, e.message?.take(50))
+            null
+        }
+    }
+
+    private fun logAllSearchesFailed(startTime: Long) {
+        logger.warn("❌ 所有外部搜索引擎都无法获取结果 (总耗时: {}ms)", System.currentTimeMillis() - startTime)
     }
     
     /**
