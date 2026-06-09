@@ -45,6 +45,10 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 
+# Local tunnel scripts (not for version control)
+silk-tunnel.sh
+config/com.silk.tunnel.plist
+
 # Logs and runtime PID
 *.log
 *.pid
