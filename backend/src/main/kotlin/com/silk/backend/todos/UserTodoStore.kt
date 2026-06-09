@@ -610,6 +610,13 @@ object UserTodoStore {
         return normKey(t)
     }
 
+    private fun isStructuredScheduleType(actionType: String?): Boolean {
+        return when (actionType?.trim()?.lowercase(Locale.getDefault())) {
+            "alarm", "calendar" -> true
+            else -> false
+        }
+    }
+
     /** 若归一化标题互为包含则并成一条（解决一事多条）；已完成项也参与合并以清理历史。 */
     private fun mergeContainedUndoneTitles(items: List<UserTodoItemDto>): List<UserTodoItemDto> {
         var pool = items.toMutableList()
@@ -644,9 +651,7 @@ object UserTodoStore {
         val anyDone = a.done || b.done
         // For same-key structured alarm/calendar: let mergeItemsByLogicalKey handle
         // Here we catch cross-key semantic overlap via normKey containment
-        val ta = a.actionType?.trim()?.lowercase(Locale.getDefault()) ?: ""
-        val tb = b.actionType?.trim()?.lowercase(Locale.getDefault()) ?: ""
-        if ((ta == "alarm" || ta == "calendar") && (tb == "alarm" || tb == "calendar")) {
+        if (isStructuredScheduleType(a.actionType) && isStructuredScheduleType(b.actionType)) {
             // both structured: if keys differ, they genuinely refer to different times
             if (logicalDedupKey(a.title, a.actionType, a.actionDetail) !=
                 logicalDedupKey(b.title, b.actionType, b.actionDetail)

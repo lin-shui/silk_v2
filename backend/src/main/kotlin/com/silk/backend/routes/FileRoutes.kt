@@ -6,6 +6,7 @@ import com.silk.backend.buildFileDownloadUrl
 import com.silk.backend.database.SimpleResponse
 import com.silk.backend.search.IndexDocument
 import com.silk.backend.search.WeaviateClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -82,7 +83,7 @@ fun Route.fileRoutes() {
          * - file: 文件
          */
         post("/upload") {
-            try {
+            val uploadError = runCatching {
                 val multipart = call.receiveMultipart()
                 
                 var sessionId: String? = null
@@ -178,7 +179,7 @@ fun Route.fileRoutes() {
                 val fileSize = fileBytes!!.size.toLong()
                 
                 CoroutineScope(Dispatchers.IO).launch {
-                    try {
+                    val indexingError = runCatching {
                         // 广播文件消息到聊天室
                         com.silk.backend.broadcastFileMessage(
                             groupId = finalSessionId,
@@ -206,16 +207,22 @@ fun Route.fileRoutes() {
                         } else {
                             broadcastSystemStatus(finalSessionId, "⚠️ 文件索引失败: $finalFileName")
                         }
-                    } catch (e: Exception) {
-                        logger.error("❌ 异步索引失败: ${e.message}", e)
-                        broadcastSystemStatus(finalSessionId, "❌ 文件索引异常: $finalFileName - ${e.message}")
+                    }.exceptionOrNull()
+
+                    if (indexingError != null) {
+                        indexingError.rethrowIfCancellation()
+                        logger.error("❌ 异步索引失败: ${indexingError.message}", indexingError)
+                        broadcastSystemStatus(finalSessionId, "❌ 文件索引异常: $finalFileName - ${indexingError.message}")
                     }
                 }
-                
-            } catch (e: Exception) {
-                logger.error("❌ 文件上传失败: ${e.message}", e)
+
+            }.exceptionOrNull()
+
+            if (uploadError != null) {
+                uploadError.rethrowIfCancellation()
+                logger.error("❌ 文件上传失败: ${uploadError.message}", uploadError)
                 call.respond(HttpStatusCode.InternalServerError, mapOf(
-                    "error" to "Upload failed: ${e.message}"
+                    "error" to "Upload failed: ${uploadError.message}"
                 ))
             }
         }
@@ -549,10 +556,10 @@ private suspend fun indexFileToWeaviate(
     originalFileName: String,
     contentType: String?
 ): Boolean = withContext(Dispatchers.IO) {
-    try {
+    val indexingResult = runCatching {
         if (AIConfig.WEAVIATE_URL.isBlank()) {
             logger.info("⏭️ 未配置 Weaviate，跳过文件索引: {}", originalFileName)
-            return@withContext false
+            return@runCatching false
         }
 
         logger.info("🔍 开始索引文件到 Weaviate: $originalFileName (type: $contentType)")
@@ -563,7 +570,7 @@ private suspend fun indexFileToWeaviate(
         
         if (!isReady) {
             logger.warn("⚠️ Weaviate 不可用，跳过索引")
-            return@withContext false
+            return@runCatching false
         }
         
         // 读取文件内容（对于文本文件）
@@ -670,10 +677,13 @@ private suspend fun indexFileToWeaviate(
         }
         
         successCount > 0
-    } catch (e: Exception) {
-        logger.error("❌ 索引文件失败: ${e.message}", e)
-        false
     }
+
+    indexingResult.exceptionOrNull()?.let { error ->
+        error.rethrowIfCancellation()
+        logger.error("❌ 索引文件失败: ${error.message}", error)
+    }
+    indexingResult.getOrDefault(false)
 }
 
 /**
@@ -681,23 +691,30 @@ private suspend fun indexFileToWeaviate(
  * 确保提取所有页面
  */
 private fun extractTextFromPdf(file: File): String? {
-    return try {
+    val extractionResult = runCatching {
         logger.info("📄 正在提取 PDF 文本: ${file.name}")
-        val document = org.apache.pdfbox.pdmodel.PDDocument.load(file)
-        val stripper = org.apache.pdfbox.text.PDFTextStripper()
-        
-        // 明确设置提取所有页面（从第1页到最后1页）
-        stripper.startPage = 1
-        stripper.endPage = document.numberOfPages
-        
-        val text = stripper.getText(document)
-        val pageCount = document.numberOfPages
-        document.close()
-        logger.info("✅ PDF 文本提取成功: ${text.length} 字符, 共 $pageCount 页")
-        text // 不再限制长度，由分块处理
-    } catch (e: Exception) {
-        logger.error("❌ PDF 文本提取失败: ${e.message}", e)
-        null
+        org.apache.pdfbox.pdmodel.PDDocument.load(file).use { document ->
+            val stripper = org.apache.pdfbox.text.PDFTextStripper()
+
+            // 明确设置提取所有页面（从第1页到最后1页）
+            stripper.startPage = 1
+            stripper.endPage = document.numberOfPages
+
+            val text = stripper.getText(document)
+            val pageCount = document.numberOfPages
+            logger.info("✅ PDF 文本提取成功: ${text.length} 字符, 共 $pageCount 页")
+            text // 不再限制长度，由分块处理
+        }
+    }
+    extractionResult.exceptionOrNull()?.let { error ->
+        logger.error("❌ PDF 文本提取失败: ${error.message}", error)
+    }
+    return extractionResult.getOrNull()
+}
+
+private fun Throwable.rethrowIfCancellation() {
+    if (this is CancellationException) {
+        throw this
     }
 }
 

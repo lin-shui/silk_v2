@@ -586,11 +586,7 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
         if (t.isEmpty()) return Triple("short_term_instance", null, null)
         if (Regex("(纪念日|周年|生日)").containsMatchIn(t)) {
             val md = Regex("(\\d{1,2})\\s*[-月]\\s*(\\d{1,2})").find(t)
-            val anchor = md?.let {
-                val m = it.groupValues[1].toIntOrNull()
-                val d = it.groupValues[2].toIntOrNull()
-                if (m != null && d != null && m in 1..12 && d in 1..31) "%02d-%02d".format(m, d) else null
-            }
+            val anchor = md?.let(::toMonthDayAnchor)
             return Triple("long_term_template", "yearly", anchor)
         }
         if (Regex("(工作日).*(起床|吃药|提醒)|((起床|吃药).*(工作日))").containsMatchIn(t)) {
@@ -599,6 +595,15 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
             return Triple("long_term_template", "workday", anchor)
         }
         return Triple("short_term_instance", null, null)
+    }
+
+    private fun toMonthDayAnchor(match: MatchResult): String? {
+        val month = match.groupValues[1].toIntOrNull()
+        val day = match.groupValues[2].toIntOrNull()
+        if (month !in 1..12 || day !in 1..31) {
+            return null
+        }
+        return "%02d-%02d".format(month, day)
     }
 
     private fun normalizeDraftsWithKind(list: List<ExtractedTodoDraft>, fallbackTs: Long): List<ExtractedTodoDraft> {
