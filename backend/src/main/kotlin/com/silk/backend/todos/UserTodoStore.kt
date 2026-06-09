@@ -190,74 +190,159 @@ object UserTodoStore {
         now: Long
     ) {
         val lk = logicalDedupKey(title, actionType, actionDetail, "short_term_instance")
-        val idx = existing.indices
-            .filter { existing[it].taskKind != "long_term_template" }
-            .sortedByDescending { existing[it].updatedAt }
-            .firstOrNull { logicalDedupKey(existing[it].title, existing[it].actionType, existing[it].actionDetail, "short_term_instance") == lk }
+        val idx = findLatestShortInstanceIndex(existing, lk)
         if (idx == null) {
             existing.add(
-                UserTodoItemDto(
-                    id = UUID.randomUUID().toString(),
+                createShortInstanceItem(
+                    draft = draft,
                     title = title,
-                    sourceGroupId = draft.sourceGroupId?.ifBlank { null },
-                    sourceGroupName = draft.sourceGroupName?.ifBlank { null },
                     actionType = actionType,
                     actionDetail = actionDetail,
-                    createdAt = now,
-                    updatedAt = now,
-                    done = false,
-                    taskKind = "short_term_instance",
-                    lifecycleState = "active",
-                    lastEvidenceAt = evidenceAt,
-                    explicitIntent = draft.explicitIntent
+                    evidenceAt = evidenceAt,
+                    now = now,
                 )
             )
             return
         }
+
         val cur = existing[idx]
-        val state = cur.lifecycleState.trim().lowercase(Locale.getDefault()).ifBlank {
-            if (cur.done) "done" else "active"
-        }
+        val state = normalizeLifecycleState(cur)
         val closeTs = cur.closedAt ?: cur.updatedAt
-        val canReopen = when (state) {
-            "done" -> evidenceAt > closeTs
-            "cancelled" -> draft.explicitIntent && evidenceAt > closeTs
-            "deferred" -> evidenceAt > closeTs
-            else -> false
-        }
         val mergedEvidenceAt = maxOf(cur.lastEvidenceAt ?: 0L, evidenceAt)
+
         if (state == "active") {
-            existing[idx] = cur.copy(
+            existing[idx] = mergeIntoActiveShortInstance(
+                current = cur,
+                draft = draft,
                 title = title,
-                sourceGroupId = draft.sourceGroupId?.ifBlank { cur.sourceGroupId } ?: cur.sourceGroupId,
-                sourceGroupName = draft.sourceGroupName?.ifBlank { cur.sourceGroupName } ?: cur.sourceGroupName,
-                actionType = actionType ?: cur.actionType,
-                actionDetail = actionDetail ?: cur.actionDetail,
-                done = false,
-                taskKind = "short_term_instance",
-                lifecycleState = "active",
-                lastEvidenceAt = mergedEvidenceAt,
-                explicitIntent = draft.explicitIntent || cur.explicitIntent,
-                updatedAt = now
+                actionType = actionType,
+                actionDetail = actionDetail,
+                mergedEvidenceAt = mergedEvidenceAt,
+                now = now,
             )
             return
         }
-        if (canReopen) {
-            existing[idx] = cur.copy(
-                title = title,
-                sourceGroupId = draft.sourceGroupId?.ifBlank { cur.sourceGroupId } ?: cur.sourceGroupId,
-                sourceGroupName = draft.sourceGroupName?.ifBlank { cur.sourceGroupName } ?: cur.sourceGroupName,
-                actionType = actionType ?: cur.actionType,
-                actionDetail = actionDetail ?: cur.actionDetail,
-                done = false,
-                lifecycleState = "active",
-                closedAt = null,
-                lastEvidenceAt = mergedEvidenceAt,
-                explicitIntent = draft.explicitIntent,
-                reopenCount = cur.reopenCount + 1,
-                updatedAt = now
-            )
+        if (!canReopenShortInstance(state, evidenceAt, closeTs, draft.explicitIntent)) return
+
+        existing[idx] = reopenShortInstance(
+            current = cur,
+            draft = draft,
+            title = title,
+            actionType = actionType,
+            actionDetail = actionDetail,
+            mergedEvidenceAt = mergedEvidenceAt,
+            now = now,
+        )
+    }
+
+    private fun findLatestShortInstanceIndex(
+        existing: List<UserTodoItemDto>,
+        logicalKey: String,
+    ): Int? {
+        return existing.indices
+            .filter { existing[it].taskKind != "long_term_template" }
+            .sortedByDescending { existing[it].updatedAt }
+            .firstOrNull {
+                logicalDedupKey(
+                    existing[it].title,
+                    existing[it].actionType,
+                    existing[it].actionDetail,
+                    "short_term_instance",
+                ) == logicalKey
+            }
+    }
+
+    private fun createShortInstanceItem(
+        draft: ExtractedTodoDraft,
+        title: String,
+        actionType: String?,
+        actionDetail: String?,
+        evidenceAt: Long,
+        now: Long,
+    ): UserTodoItemDto {
+        return UserTodoItemDto(
+            id = UUID.randomUUID().toString(),
+            title = title,
+            sourceGroupId = draft.sourceGroupId?.ifBlank { null },
+            sourceGroupName = draft.sourceGroupName?.ifBlank { null },
+            actionType = actionType,
+            actionDetail = actionDetail,
+            createdAt = now,
+            updatedAt = now,
+            done = false,
+            taskKind = "short_term_instance",
+            lifecycleState = "active",
+            lastEvidenceAt = evidenceAt,
+            explicitIntent = draft.explicitIntent,
+        )
+    }
+
+    private fun normalizeLifecycleState(item: UserTodoItemDto): String {
+        return item.lifecycleState.trim().lowercase(Locale.getDefault()).ifBlank {
+            if (item.done) "done" else "active"
         }
+    }
+
+    private fun canReopenShortInstance(
+        state: String,
+        evidenceAt: Long,
+        closeTs: Long,
+        explicitIntent: Boolean,
+    ): Boolean {
+        return when (state) {
+            "done", "deferred" -> evidenceAt > closeTs
+            "cancelled" -> explicitIntent && evidenceAt > closeTs
+            else -> false
+        }
+    }
+
+    private fun mergeIntoActiveShortInstance(
+        current: UserTodoItemDto,
+        draft: ExtractedTodoDraft,
+        title: String,
+        actionType: String?,
+        actionDetail: String?,
+        mergedEvidenceAt: Long,
+        now: Long,
+    ): UserTodoItemDto {
+        return current.copy(
+            title = title,
+            sourceGroupId = draft.sourceGroupId?.ifBlank { current.sourceGroupId } ?: current.sourceGroupId,
+            sourceGroupName = draft.sourceGroupName?.ifBlank { current.sourceGroupName } ?: current.sourceGroupName,
+            actionType = actionType ?: current.actionType,
+            actionDetail = actionDetail ?: current.actionDetail,
+            done = false,
+            taskKind = "short_term_instance",
+            lifecycleState = "active",
+            lastEvidenceAt = mergedEvidenceAt,
+            explicitIntent = draft.explicitIntent || current.explicitIntent,
+            updatedAt = now,
+        )
+    }
+
+    private fun reopenShortInstance(
+        current: UserTodoItemDto,
+        draft: ExtractedTodoDraft,
+        title: String,
+        actionType: String?,
+        actionDetail: String?,
+        mergedEvidenceAt: Long,
+        now: Long,
+    ): UserTodoItemDto {
+        return current.copy(
+            title = title,
+            sourceGroupId = draft.sourceGroupId?.ifBlank { current.sourceGroupId } ?: current.sourceGroupId,
+            sourceGroupName = draft.sourceGroupName?.ifBlank { current.sourceGroupName } ?: current.sourceGroupName,
+            actionType = actionType ?: current.actionType,
+            actionDetail = actionDetail ?: current.actionDetail,
+            done = false,
+            lifecycleState = "active",
+            closedAt = null,
+            lastEvidenceAt = mergedEvidenceAt,
+            explicitIntent = draft.explicitIntent,
+            reopenCount = current.reopenCount + 1,
+            updatedAt = now,
+        )
     }
 
     private fun instantiateRecurringTemplates(existing: MutableList<UserTodoItemDto>, now: Long) {
@@ -296,25 +381,40 @@ object UserTodoStore {
     }
 
     private fun isTemplateDueToday(tpl: UserTodoItemDto, today: LocalDate): Boolean {
-        val from = tpl.activeFrom?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate() }
-        if (from != null && today.isBefore(from)) return false
-        val to = tpl.activeTo?.let { Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate() }
-        if (to != null && today.isAfter(to)) return false
+        if (!isWithinActiveWindow(tpl, today)) return false
+
         return when (tpl.repeatRule?.trim()?.lowercase(Locale.getDefault())) {
             "workday" -> HolidayCalendarCn.isWorkday(today)
-            "yearly" -> {
-                val anchor = tpl.repeatAnchor?.trim() ?: return false
-                val mmdd = "%02d-%02d".format(today.monthValue, today.dayOfMonth)
-                anchor == mmdd
-            }
-            "monthly" -> {
-                val anchor = tpl.repeatAnchor?.trim() ?: return false
-                val day = anchor.toIntOrNull() ?: return false
-                day == today.dayOfMonth
-            }
+            "yearly" -> matchesYearlyAnchor(tpl.repeatAnchor, today)
+            "monthly" -> matchesMonthlyAnchor(tpl.repeatAnchor, today)
             "custom" -> false
             else -> false
         }
+    }
+
+    private fun isWithinActiveWindow(tpl: UserTodoItemDto, today: LocalDate): Boolean {
+        val from = tpl.activeFrom?.let { epochMillis ->
+            Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).toLocalDate()
+        }
+        if (from != null && today.isBefore(from)) return false
+
+        val to = tpl.activeTo?.let { epochMillis ->
+            Instant.ofEpochMilli(epochMillis).atZone(ZoneId.systemDefault()).toLocalDate()
+        }
+        if (to != null && today.isAfter(to)) return false
+
+        return true
+    }
+
+    private fun matchesYearlyAnchor(anchor: String?, today: LocalDate): Boolean {
+        val normalizedAnchor = anchor?.trim() ?: return false
+        val todayAnchor = "%02d-%02d".format(today.monthValue, today.dayOfMonth)
+        return normalizedAnchor == todayAnchor
+    }
+
+    private fun matchesMonthlyAnchor(anchor: String?, today: LocalDate): Boolean {
+        val day = anchor?.trim()?.toIntOrNull() ?: return false
+        return day == today.dayOfMonth
     }
 
     fun mergeExtracted(userId: String, incoming: List<ExtractedTodoDraft>) {
@@ -507,42 +607,48 @@ object UserTodoStore {
     private fun extractTimeFromTitle(title: String): String? {
         val t = title.trim()
         val pm = t.contains("下午") || t.contains("晚上") || t.contains("傍晚")
-        // Chinese numeral + 点 (e.g. 七点, 十二点半)
-        val cnHalf = Regex("([一二三四五六七八九十两零]+点半)").find(t)
-        if (cnHalf != null) {
-            val cn = cnHalf.groupValues[1].replace("点半", "")
-            val h = parseCnHour(cn) ?: return null
-            val hour = if (pm && h in 1..11) h + 12 else h
-            if (hour in 0..23) return "%02d:%02d".format(hour, 30)
-        }
-        val cnExact = Regex("([一二三四五六七八九十两零]+点)").find(t)
-        if (cnExact != null) {
-            val cn = cnExact.groupValues[1].replace("点", "")
-            val h = parseCnHour(cn) ?: return null
-            val hour = if (pm && h in 1..11) h + 12 else h
-            if (hour in 0..23) return "%02d:%02d".format(hour, 0)
-        }
-        // Arabic numeral + 点 (e.g. 7点, 3点半)
-        val hOnly = Regex("(\\d{1,2})\\s*点").find(t)
-        if (hOnly != null) {
-            val h = hOnly.groupValues[1].toIntOrNull() ?: return null
-            var hour = h
-            if (pm) {
-                if (h in 1..11) hour = h + 12
-                else if (h == 12) hour = 12
-            }
-            if (hour !in 0..23) return null
-            val minute = if (t.contains("半")) 30 else 0
-            return "%02d:%02d".format(hour, minute)
-        }
-        // HH:mm format
-        val hm = Regex("(\\d{1,2})\\s*[:：]\\s*(\\d{2})").find(t)
-        if (hm != null) {
-            val h = hm.groupValues[1].toIntOrNull() ?: return null
-            val m = hm.groupValues[2].toIntOrNull() ?: return null
-            if (h in 0..23 && m in 0..59) return "%02d:%02d".format(h, m)
-        }
+        parseChineseHalfHour(t, pm)?.let { return it }
+        parseChineseExactHour(t, pm)?.let { return it }
+        parseArabicHour(t, pm)?.let { return it }
+        parseHourMinute(t)?.let { return it }
         return null
+    }
+
+    private fun parseChineseHalfHour(text: String, pm: Boolean): String? {
+        val match = Regex("([一二三四五六七八九十两零]+点半)").find(text) ?: return null
+        val hour = parseCnHour(match.groupValues[1].replace("点半", "")) ?: return null
+        return formatHourMinute(adjustPmHour(hour, pm) ?: return null, 30)
+    }
+
+    private fun parseChineseExactHour(text: String, pm: Boolean): String? {
+        val match = Regex("([一二三四五六七八九十两零]+点)").find(text) ?: return null
+        val hour = parseCnHour(match.groupValues[1].replace("点", "")) ?: return null
+        return formatHourMinute(adjustPmHour(hour, pm) ?: return null, 0)
+    }
+
+    private fun parseArabicHour(text: String, pm: Boolean): String? {
+        val match = Regex("(\\d{1,2})\\s*点").find(text) ?: return null
+        val hour = match.groupValues[1].toIntOrNull() ?: return null
+        val normalizedHour = adjustPmHour(hour, pm) ?: return null
+        val minute = if (text.contains("半")) 30 else 0
+        return formatHourMinute(normalizedHour, minute)
+    }
+
+    private fun parseHourMinute(text: String): String? {
+        val match = Regex("(\\d{1,2})\\s*[:：]\\s*(\\d{2})").find(text) ?: return null
+        val hour = match.groupValues[1].toIntOrNull() ?: return null
+        val minute = match.groupValues[2].toIntOrNull() ?: return null
+        return formatHourMinute(hour, minute)
+    }
+
+    private fun adjustPmHour(hour: Int, pm: Boolean): Int? {
+        val normalizedHour = if (pm && hour in 1..11) hour + 12 else hour
+        return normalizedHour.takeIf { it in 0..23 }
+    }
+
+    private fun formatHourMinute(hour: Int, minute: Int): String? {
+        if (minute !in 0..59) return null
+        return "%02d:%02d".format(hour, minute)
     }
 
     /** Parse Chinese numeral hour string: "七"→7, "十二"→12, "十"→10 */
@@ -582,32 +688,41 @@ object UserTodoStore {
     private fun normalizeActionDetailForKey(detail: String?): String? {
         if (detail == null) return null
         val t = detail.trim().lowercase(Locale.getDefault()).ifBlank { return null }
-        // "HH:mm" exact
-        val hm = Regex("^(\\d{1,2})\\s*[:：]\\s*(\\d{2})$").find(t)
-        if (hm != null) {
-            val h = hm.groupValues[1].toIntOrNull() ?: return normKey(t)
-            val m = hm.groupValues[2].toIntOrNull() ?: return normKey(t)
-            if (h in 0..23 && m in 0..59) return "%02d:%02d".format(h, m)
-        }
-        // "YYYY-MM-DD HH:mm" or "YYYY-MM-DDTHH:mm"
-        val fullDt = Regex("(\\d{4})-(\\d{2})-(\\d{2})[T ]?(\\d{1,2})[:：](\\d{2})").find(t)
-        if (fullDt != null) {
-            val h = fullDt.groupValues[4].toIntOrNull() ?: return normKey(t)
-            val m = fullDt.groupValues[5].toIntOrNull() ?: return normKey(t)
-            if (h in 0..23 && m in 0..59) {
-                return "%s-%s-%s %02d:%02d".format(
-                    fullDt.groupValues[1], fullDt.groupValues[2], fullDt.groupValues[3], h, m
-                )
-            }
-        }
-        // "今天 15:00" / "明天 9:30"
-        val relTime = Regex("^(今天|明天|后天|大后天|下周)\\s*(\\d{1,2})\\s*[:：]\\s*(\\d{2})").find(t)
-        if (relTime != null) {
-            val h = relTime.groupValues[2].toIntOrNull() ?: return normKey(t)
-            val m = relTime.groupValues[3].toIntOrNull() ?: return normKey(t)
-            if (h in 0..23 && m in 0..59) return "%s %02d:%02d".format(relTime.groupValues[1], h, m)
-        }
+        parseExactHourMinute(t)?.let { return it }
+        parseFullDateTime(t)?.let { return it }
+        parseRelativeDateTime(t)?.let { return it }
         return normKey(t)
+    }
+
+    private fun parseExactHourMinute(text: String): String? {
+        val match = Regex("^(\\d{1,2})\\s*[:：]\\s*(\\d{2})$").find(text) ?: return null
+        val hour = match.groupValues[1].toIntOrNull() ?: return normKey(text)
+        val minute = match.groupValues[2].toIntOrNull() ?: return normKey(text)
+        if (hour !in 0..23 || minute !in 0..59) return null
+        return "%02d:%02d".format(hour, minute)
+    }
+
+    private fun parseFullDateTime(text: String): String? {
+        val match = Regex("(\\d{4})-(\\d{2})-(\\d{2})[T ]?(\\d{1,2})[:：](\\d{2})").find(text) ?: return null
+        val hour = match.groupValues[4].toIntOrNull() ?: return normKey(text)
+        val minute = match.groupValues[5].toIntOrNull() ?: return normKey(text)
+        if (hour !in 0..23 || minute !in 0..59) return null
+
+        return "%s-%s-%s %02d:%02d".format(
+            match.groupValues[1],
+            match.groupValues[2],
+            match.groupValues[3],
+            hour,
+            minute,
+        )
+    }
+
+    private fun parseRelativeDateTime(text: String): String? {
+        val match = Regex("^(今天|明天|后天|大后天|下周)\\s*(\\d{1,2})\\s*[:：]\\s*(\\d{2})").find(text) ?: return null
+        val hour = match.groupValues[2].toIntOrNull() ?: return normKey(text)
+        val minute = match.groupValues[3].toIntOrNull() ?: return normKey(text)
+        if (hour !in 0..23 || minute !in 0..59) return null
+        return "%s %02d:%02d".format(match.groupValues[1], hour, minute)
     }
 
     private fun isStructuredScheduleType(actionType: String?): Boolean {
@@ -649,40 +764,53 @@ object UserTodoStore {
         // 模板与实例属于不同语义层，禁止互并（否则会吞掉长期模板）
         if (a.taskKind != b.taskKind) return null
         val anyDone = a.done || b.done
-        // For same-key structured alarm/calendar: let mergeItemsByLogicalKey handle
-        // Here we catch cross-key semantic overlap via normKey containment
-        if (isStructuredScheduleType(a.actionType) && isStructuredScheduleType(b.actionType)) {
-            // both structured: if keys differ, they genuinely refer to different times
-            if (logicalDedupKey(a.title, a.actionType, a.actionDetail) !=
-                logicalDedupKey(b.title, b.actionType, b.actionDetail)
-            ) {
-                return null
-            }
-        }
-        val na = normKey(a.title)
-        val nb = normKey(b.title)
-        if (na.length < 2 || nb.length < 2) return null
-        val contained = (na.contains(nb) || nb.contains(na))
-        if (!contained) return null
+        if (!canMergeStructuredSchedules(a, b)) return null
+        if (!hasContainedNormalizedTitle(a.title, b.title)) return null
+
         val newer = if (a.updatedAt >= b.updatedAt) a else b
         val other = if (newer.id == a.id) b else a
-        val shortTitle = if (a.title.trim().length <= b.title.trim().length) a.title.trim() else b.title.trim()
-        val mergedExec = listOfNotNull(a.executedAt, b.executedAt).minOrNull()
-        val mergedRem = newer.reminderId ?: other.reminderId
-            ?: a.reminderId ?: b.reminderId
         return newer.copy(
-            title = shortTitle.take(500),
-            actionType = (newer.actionType ?: other.actionType)
-                ?.trim()?.lowercase(Locale.getDefault())?.ifBlank { null },
-            actionDetail = listOfNotNull(a.actionDetail?.trim(), b.actionDetail?.trim())
-                .filter { it.isNotEmpty() }
-                .maxByOrNull { it.length }
-                ?.ifBlank { null },
+            title = selectShorterTitle(a.title, b.title).take(500),
+            actionType = mergeActionType(newer, other),
+            actionDetail = mergeActionDetail(a, b),
             done = anyDone,
-            executedAt = mergedExec,
-            reminderId = mergedRem,
+            executedAt = listOfNotNull(a.executedAt, b.executedAt).minOrNull(),
+            reminderId = newer.reminderId ?: other.reminderId ?: a.reminderId ?: b.reminderId,
             updatedAt = now
         )
+    }
+
+    private fun canMergeStructuredSchedules(a: UserTodoItemDto, b: UserTodoItemDto): Boolean {
+        if (!isStructuredScheduleType(a.actionType) || !isStructuredScheduleType(b.actionType)) return true
+        return logicalDedupKey(a.title, a.actionType, a.actionDetail) ==
+            logicalDedupKey(b.title, b.actionType, b.actionDetail)
+    }
+
+    private fun hasContainedNormalizedTitle(firstTitle: String, secondTitle: String): Boolean {
+        val first = normKey(firstTitle)
+        val second = normKey(secondTitle)
+        if (first.length < 2 || second.length < 2) return false
+        return first.contains(second) || second.contains(first)
+    }
+
+    private fun selectShorterTitle(firstTitle: String, secondTitle: String): String {
+        val first = firstTitle.trim()
+        val second = secondTitle.trim()
+        return if (first.length <= second.length) first else second
+    }
+
+    private fun mergeActionType(newer: UserTodoItemDto, other: UserTodoItemDto): String? {
+        return (newer.actionType ?: other.actionType)
+            ?.trim()
+            ?.lowercase(Locale.getDefault())
+            ?.ifBlank { null }
+    }
+
+    private fun mergeActionDetail(a: UserTodoItemDto, b: UserTodoItemDto): String? {
+        return listOfNotNull(a.actionDetail?.trim(), b.actionDetail?.trim())
+            .filter { it.isNotEmpty() }
+            .maxByOrNull { it.length }
+            ?.ifBlank { null }
     }
 
     private fun mergeItemsByLogicalKey(items: List<UserTodoItemDto>): List<UserTodoItemDto> {

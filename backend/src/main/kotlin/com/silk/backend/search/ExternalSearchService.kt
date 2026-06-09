@@ -89,10 +89,24 @@ class ExternalSearchService {
      */
     suspend fun search(query: String, limit: Int = MAX_RESULTS): ExternalSearchResults {
         val startTime = System.currentTimeMillis()
-        return try {
-            for (attempt in buildSearchAttempts()) {
-                runSearchAttempt(attempt, query, limit, startTime)?.let { return it }
+        return recoverSearchFailure(
+            onFailure = { error ->
+                logger.error("❌ 外部搜索异常: ${error.message}")
+                ExternalSearchResults(
+                    success = false,
+                    source = "error",
+                    results = emptyList(),
+                    searchTimeMs = System.currentTimeMillis() - startTime,
+                    error = error.message,
+                )
             }
+        ) {
+            var successfulResult: ExternalSearchResults? = null
+            for (attempt in buildSearchAttempts()) {
+                successfulResult = runSearchAttempt(attempt, query, limit, startTime)
+                if (successfulResult != null) break
+            }
+            successfulResult?.let { return@recoverSearchFailure it }
 
             logAllSearchesFailed(startTime)
             ExternalSearchResults(
@@ -101,17 +115,6 @@ class ExternalSearchService {
                 results = emptyList(),
                 searchTimeMs = System.currentTimeMillis() - startTime,
                 error = "所有搜索引擎都无法获取结果"
-            )
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (e: Exception) {
-            logger.error("❌ 外部搜索异常: ${e.message}")
-            ExternalSearchResults(
-                success = false,
-                source = "error",
-                results = emptyList(),
-                searchTimeMs = System.currentTimeMillis() - startTime,
-                error = e.message
             )
         }
     }
@@ -161,7 +164,12 @@ class ExternalSearchService {
         if (!attempt.isEnabled()) return null
 
         logger.info(attempt.startLog)
-        return try {
+        return recoverSearchFailure(
+            onFailure = { error ->
+                logger.warn("⚠️ {} 失败: {}", attempt.failureLabel, error.message?.take(50))
+                null
+            }
+        ) {
             val result = attempt.search(query, limit)
             if (result.success && result.results.isNotEmpty()) {
                 logger.info("✅ {} 搜索成功 ({}ms)", attempt.successLabel, System.currentTimeMillis() - startTime)
@@ -169,16 +177,21 @@ class ExternalSearchService {
             } else {
                 null
             }
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (e: Exception) {
-            logger.warn("⚠️ {} 失败: {}", attempt.failureLabel, e.message?.take(50))
-            null
         }
     }
 
     private fun logAllSearchesFailed(startTime: Long) {
         logger.warn("❌ 所有外部搜索引擎都无法获取结果 (总耗时: {}ms)", System.currentTimeMillis() - startTime)
+    }
+
+    private suspend fun <T> recoverSearchFailure(
+        onFailure: suspend (Throwable) -> T,
+        block: suspend () -> T,
+    ): T {
+        return runCatching { block() }.getOrElse { error ->
+            if (error is CancellationException) throw error
+            onFailure(error)
+        }
     }
     
     /**
@@ -189,7 +202,18 @@ class ExternalSearchService {
         val startTime = System.currentTimeMillis()
         
         return withTimeout(SEARCH_TIMEOUT_MS) {
-            try {
+            recoverSearchFailure(
+                onFailure = { error ->
+                    logger.error("❌ [Wikipedia] 搜索失败: ${error.message}")
+                    ExternalSearchResults(
+                        success = false,
+                        source = "Wikipedia",
+                        results = emptyList(),
+                        searchTimeMs = System.currentTimeMillis() - startTime,
+                        error = error.message,
+                    )
+                }
+            ) {
                 // 先尝试中文维基百科
                 logger.info("🔍 [Wikipedia] 搜索中文维基: $query")
                 var results = searchWikipediaLanguage(query, WIKIPEDIA_API_URL, "zh", limit)
@@ -208,16 +232,7 @@ class ExternalSearchService {
                     success = results.isNotEmpty(),
                     source = "Wikipedia",
                     results = results,
-                    searchTimeMs = System.currentTimeMillis() - startTime
-                )
-            } catch (e: Exception) {
-                logger.error("❌ [Wikipedia] 搜索失败: ${e.message}")
-                ExternalSearchResults(
-                    success = false,
-                    source = "Wikipedia",
-                    results = emptyList(),
                     searchTimeMs = System.currentTimeMillis() - startTime,
-                    error = e.message
                 )
             }
         }
@@ -301,7 +316,18 @@ class ExternalSearchService {
         val startTime = System.currentTimeMillis()
         
         return withTimeout(SEARCH_TIMEOUT_MS) {
-            try {
+            recoverSearchFailure(
+                onFailure = { error ->
+                    logger.error("❌ [Bing] 搜索失败: ${error.message}")
+                    ExternalSearchResults(
+                        success = false,
+                        source = "Bing",
+                        results = emptyList(),
+                        searchTimeMs = System.currentTimeMillis() - startTime,
+                        error = error.message,
+                    )
+                }
+            ) {
                 logger.info("🔍 [Bing] 搜索: $query")
                 
                 val response = client.get(BING_SEARCH_URL) {
@@ -332,16 +358,7 @@ class ExternalSearchService {
                     success = results.isNotEmpty(),
                     source = "Bing",
                     results = results,
-                    searchTimeMs = System.currentTimeMillis() - startTime
-                )
-            } catch (e: Exception) {
-                logger.error("❌ [Bing] 搜索失败: ${e.message}")
-                ExternalSearchResults(
-                    success = false,
-                    source = "Bing",
-                    results = emptyList(),
                     searchTimeMs = System.currentTimeMillis() - startTime,
-                    error = e.message
                 )
             }
         }
@@ -354,7 +371,12 @@ class ExternalSearchService {
         val startTime = System.currentTimeMillis()
         
         return withTimeout(SEARCH_TIMEOUT_MS) {
-            try {
+            recoverSearchFailure(
+                onFailure = { error ->
+                    logger.warn("⚠️ SerpAPI 搜索失败，尝试 DuckDuckGo: ${error.message}")
+                    searchWithDuckDuckGo(query, limit)
+                }
+            ) {
                 val response = client.get(SERPAPI_URL) {
                     parameter("q", query)
                     parameter("api_key", SERPAPI_KEY)
@@ -381,11 +403,8 @@ class ExternalSearchService {
                     success = true,
                     source = "SerpAPI (Google)",
                     results = results,
-                    searchTimeMs = System.currentTimeMillis() - startTime
+                    searchTimeMs = System.currentTimeMillis() - startTime,
                 )
-            } catch (e: Exception) {
-                logger.warn("⚠️ SerpAPI 搜索失败，尝试 DuckDuckGo: ${e.message}")
-                searchWithDuckDuckGo(query, limit)
             }
         }
     }
@@ -398,7 +417,18 @@ class ExternalSearchService {
         val startTime = System.currentTimeMillis()
         
         return withTimeout(SEARCH_TIMEOUT_MS) {
-            try {
+            recoverSearchFailure(
+                onFailure = { error ->
+                    logger.error("❌ [SearXNG] 搜索失败: ${error.message}")
+                    ExternalSearchResults(
+                        success = false,
+                        source = "SearXNG",
+                        results = emptyList(),
+                        searchTimeMs = System.currentTimeMillis() - startTime,
+                        error = error.message,
+                    )
+                }
+            ) {
                 val searchUrl = "${SEARXNG_URL.trimEnd('/')}/search"
                 logger.info("🔍 [SearXNG] 搜索: $query (url=$searchUrl)")
                 
@@ -428,16 +458,7 @@ class ExternalSearchService {
                     success = results.isNotEmpty(),
                     source = "SearXNG",
                     results = results,
-                    searchTimeMs = System.currentTimeMillis() - startTime
-                )
-            } catch (e: Exception) {
-                logger.error("❌ [SearXNG] 搜索失败: ${e.message}")
-                ExternalSearchResults(
-                    success = false,
-                    source = "SearXNG",
-                    results = emptyList(),
                     searchTimeMs = System.currentTimeMillis() - startTime,
-                    error = e.message
                 )
             }
         }
@@ -450,7 +471,18 @@ class ExternalSearchService {
         val startTime = System.currentTimeMillis()
         
         return withTimeout(SEARCH_TIMEOUT_MS) {
-            try {
+            recoverSearchFailure(
+                onFailure = { error ->
+                    logger.error("❌ DuckDuckGo 搜索失败: ${error.message}")
+                    ExternalSearchResults(
+                        success = false,
+                        source = "DuckDuckGo",
+                        results = emptyList(),
+                        searchTimeMs = System.currentTimeMillis() - startTime,
+                        error = error.message,
+                    )
+                }
+            ) {
                 val response = client.get(DUCKDUCKGO_URL) {
                     parameter("q", query)
                     parameter("format", "json")
@@ -491,16 +523,7 @@ class ExternalSearchService {
                     success = true,
                     source = "DuckDuckGo",
                     results = results.take(limit),
-                    searchTimeMs = System.currentTimeMillis() - startTime
-                )
-            } catch (e: Exception) {
-                logger.error("❌ DuckDuckGo 搜索失败: ${e.message}")
-                ExternalSearchResults(
-                    success = false,
-                    source = "DuckDuckGo",
-                    results = emptyList(),
                     searchTimeMs = System.currentTimeMillis() - startTime,
-                    error = e.message
                 )
             }
         }

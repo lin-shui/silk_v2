@@ -729,41 +729,45 @@ private fun chunkText(text: String, chunkSize: Int = 10000, overlap: Int = 500):
     if (text.length <= chunkSize) {
         return listOf(ChunkInfo(text, 0, 1))
     }
-    
+
     val chunks = mutableListOf<ChunkInfo>()
     var start = 0
     var chunkIndex = 0
-    
+
     while (start < text.length) {
-        var end = (start + chunkSize).coerceAtMost(text.length)
-        
-        // 尝试在句子边界分割（避免在单词中间分割）
-        if (end < text.length) {
-            // 查找最近的句号、换行符等分隔符
-            val searchStart = (end - chunkSize / 2).coerceAtLeast(start)
-            val separators = listOf("\n\n", "\n", "。", ". ", "! ", "? ")
-            for (sep in separators) {
-                // 在 searchStart 到 end 范围内查找分隔符
-                val sepPos = text.substring(searchStart, end).lastIndexOf(sep)
-                if (sepPos >= 0) {
-                    end = searchStart + sepPos + sep.length
-                    break
-                }
-            }
-        }
-        
+        val end = resolveChunkEnd(text, start, chunkSize)
         val chunkText = text.substring(start, end).trim()
         if (chunkText.isNotEmpty()) {
             chunks.add(ChunkInfo(chunkText, chunkIndex, -1)) // totalChunks 稍后更新
             chunkIndex++
         }
-        
+
         start = (end - overlap).coerceAtLeast(start + 1) // 确保前进
     }
-    
+
     // 更新所有块的 totalChunks
     val totalChunks = chunks.size
     return chunks.map { it.copy(totalChunks = totalChunks) }
+}
+
+private fun resolveChunkEnd(text: String, start: Int, chunkSize: Int): Int {
+    val proposedEnd = (start + chunkSize).coerceAtMost(text.length)
+    if (proposedEnd >= text.length) return proposedEnd
+
+    val searchStart = (proposedEnd - chunkSize / 2).coerceAtLeast(start)
+    return findChunkBoundary(text, searchStart, proposedEnd) ?: proposedEnd
+}
+
+private fun findChunkBoundary(text: String, searchStart: Int, end: Int): Int? {
+    val searchWindow = text.substring(searchStart, end)
+    val separators = listOf("\n\n", "\n", "。", ". ", "! ", "? ")
+    for (separator in separators) {
+        val separatorPosition = searchWindow.lastIndexOf(separator)
+        if (separatorPosition >= 0) {
+            return searchStart + separatorPosition + separator.length
+        }
+    }
+    return null
 }
 
 /**
