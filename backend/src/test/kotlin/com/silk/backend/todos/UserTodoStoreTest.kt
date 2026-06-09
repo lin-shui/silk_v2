@@ -151,6 +151,38 @@ class UserTodoStoreTest {
     }
 
     @Test
+    fun `dedupe merges contained normalized titles`() {
+        TestWorkspace().use {
+            val userId = "todo-user-contained-dedupe"
+            UserTodoStore.save(
+                userId,
+                listOf(
+                    UserTodoItemDto(
+                        id = "todo-1",
+                        title = "提醒我整理会议纪要",
+                        createdAt = 1_000L,
+                        updatedAt = 2_000L
+                    ),
+                    UserTodoItemDto(
+                        id = "todo-2",
+                        title = "整理会议纪要",
+                        actionDetail = "发给产品组",
+                        createdAt = 1_500L,
+                        updatedAt = 2_500L
+                    )
+                )
+            )
+
+            UserTodoStore.dedupeByLogicalKeyInPlace(userId)
+
+            val merged = UserTodoStore.load(userId)
+            assertEquals(1, merged.size)
+            assertEquals("整理会议纪要", merged.single().title)
+            assertEquals("发给产品组", merged.single().actionDetail)
+        }
+    }
+
+    @Test
     fun `monthly template instantiates one task for today`() {
         TestWorkspace().use {
             val userId = "todo-user-template"

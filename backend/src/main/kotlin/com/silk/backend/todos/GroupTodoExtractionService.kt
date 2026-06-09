@@ -629,42 +629,46 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
     private fun extractRoughHourMinute(text: String): Pair<Int, Int>? {
         val t = text.trim()
         val pm = t.contains("下午") || t.contains("晚上") || t.contains("傍晚")
-        // Chinese numeral + 点
-        val cnHalf = Regex("([一二三四五六七八九十两零]+点半)").find(t)
-        if (cnHalf != null) {
-            val cn = cnHalf.groupValues[1].replace("点半", "")
-            val h = parseCnHourSimple(cn) ?: return null
-            val hour = if (pm && h in 1..11) h + 12 else h
-            if (hour in 0..23) return hour to 30
-        }
-        val cnExact = Regex("([一二三四五六七八九十两零]+点)").find(t)
-        if (cnExact != null) {
-            val cn = cnExact.groupValues[1].replace("点", "")
-            val h = parseCnHourSimple(cn) ?: return null
-            val hour = if (pm && h in 1..11) h + 12 else h
-            if (hour in 0..23) return hour to 0
-        }
-        // Arabic HH:mm
-        val hm = Regex("""(\d{1,2})\s*[:：]\s*(\d{2})""").find(t)
-        if (hm != null) {
-            val h = hm.groupValues[1].toIntOrNull() ?: return null
-            val m = hm.groupValues[2].toIntOrNull() ?: return null
-            if (h in 0..23 && m in 0..59) return h to m
-        }
-        // Arabic 点
-        val hOnly = Regex("""(\d{1,2})\s*点""").find(t)
-        if (hOnly != null) {
-            val h = hOnly.groupValues[1].toIntOrNull() ?: return null
-            var hour = h
-            if (pm) {
-                if (h in 1..11) hour = h + 12
-                else if (h == 12) hour = 12
-            }
-            if (hour !in 0..23) return null
-            val minute = if (t.contains("半")) 30 else 0
-            return hour to minute
-        }
+        parseChineseHalfHour(t, pm)?.let { return it }
+        parseChineseExactHour(t, pm)?.let { return it }
+        parseHourMinute(t)?.let { return it }
+        parseArabicHour(t, pm)?.let { return it }
         return null
+    }
+
+    private fun parseChineseHalfHour(text: String, pm: Boolean): Pair<Int, Int>? {
+        val match = Regex("([一二三四五六七八九十两零]+点半)").find(text) ?: return null
+        val hour = parseCnHourSimple(match.groupValues[1].replace("点半", "")) ?: return null
+        return buildHourMinute(adjustPmHour(hour, pm), 30)
+    }
+
+    private fun parseChineseExactHour(text: String, pm: Boolean): Pair<Int, Int>? {
+        val match = Regex("([一二三四五六七八九十两零]+点)").find(text) ?: return null
+        val hour = parseCnHourSimple(match.groupValues[1].replace("点", "")) ?: return null
+        return buildHourMinute(adjustPmHour(hour, pm), 0)
+    }
+
+    private fun parseHourMinute(text: String): Pair<Int, Int>? {
+        val match = Regex("""(\d{1,2})\s*[:：]\s*(\d{2})""").find(text) ?: return null
+        val hour = match.groupValues[1].toIntOrNull() ?: return null
+        val minute = match.groupValues[2].toIntOrNull() ?: return null
+        return buildHourMinute(hour, minute)
+    }
+
+    private fun parseArabicHour(text: String, pm: Boolean): Pair<Int, Int>? {
+        val match = Regex("""(\d{1,2})\s*点""").find(text) ?: return null
+        val hour = match.groupValues[1].toIntOrNull() ?: return null
+        val minute = if (text.contains("半")) 30 else 0
+        return buildHourMinute(adjustPmHour(hour, pm), minute)
+    }
+
+    private fun adjustPmHour(hour: Int, pm: Boolean): Int {
+        return if (pm && hour in 1..11) hour + 12 else hour
+    }
+
+    private fun buildHourMinute(hour: Int, minute: Int): Pair<Int, Int>? {
+        if (hour !in 0..23 || minute !in 0..59) return null
+        return hour to minute
     }
 
     private fun parseCnHourSimple(cn: String): Int? {
