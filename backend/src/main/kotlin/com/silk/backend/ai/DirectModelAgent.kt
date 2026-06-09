@@ -115,14 +115,17 @@ class DirectModelAgent(
         currentResponseReferences.clear()
         lastAgentResponse = null
 
+        val now = java.time.LocalDateTime.now()
+        val chineseFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
+        val isoFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+
         val effectiveSystemPrompt = buildString {
-            appendLine(withCitationGuidelines(systemPrompt ?: "你是 Silk，一个智能助手。"))
+            appendLine("## 当前日期和时间（系统精确注入）")
+            appendLine("当前日期：${now.format(chineseFormatter)}")
+            appendLine("ISO 格式：${now.format(isoFormatter)}")
+            appendLine("⚠️ 你必须使用上述精确时间回答所有时间/日期相关问题，不得自行推理、猜测或根据训练数据推断。如果用户问\"今天\"、\"现在\"、\"星期几\"等，必须以上述注入的时间为准。")
             appendLine()
-            appendLine("## 当前时间")
-            val now = java.time.LocalDateTime.now()
-            val formatter = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
-            appendLine("当前日期和时间：${now.format(formatter)}")
-            appendLine("这是一条由系统注入的准确时间信息，请以此为准回答任何与时间、日期相关的问题。")
+            appendLine(withCitationGuidelines(systemPrompt ?: "你是 Silk，一个智能助手。"))
         }
 
         // 1. 添加用户消息到历史
@@ -267,6 +270,9 @@ class DirectModelAgent(
                 appendLine("- 使用 `Read` 工具读取 `<文件名>.extracted.md` 查看具体文件内容")
                 appendLine("- 用户提到文件相关问题时，主动读取对应的 .extracted.md 文件")
             }
+            // 追加日期提醒（扁平文本路径下冗余提醒，提高遵从率）
+            appendLine()
+            appendLine("⚠️ 再次提醒：当前真实日期和时间已在系统指令开头给出，回答时间/日期相关问题时必须使用该信息，不得自行猜测或推算。")
         }
 
         val response = try {

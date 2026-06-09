@@ -378,6 +378,10 @@ class ChatServer(
             logger.debug("⏭️ [broadcast] 跳过广播: cc-connect waitingForInput (msg={})", message.content.take(20))
         } else {
             val messageJson = Json.encodeToString(message)
+            if (message.interactiveOptions != null) {
+                logger.info("📨 [broadcast] 广播带 interactiveOptions 的消息: options={}, json(前300字符)={}",
+                    message.interactiveOptions.size, messageJson.take(300))
+            }
             val sessions = allSessions()
             sessions.forEach { session ->
                 try {
@@ -1443,6 +1447,15 @@ class ChatServer(
         
         // 构建系统提示
         val systemPrompt = buildString {
+            // 首先注入当前精确时间（皮带+吊带：此处与 DirectModelAgent.processInput 双重注入）
+            val now = java.time.LocalDateTime.now()
+            val chineseFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
+            val isoFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            appendLine("## 当前日期和时间（系统精确注入，以此为准）")
+            appendLine("当前日期：${now.format(chineseFmt)}")
+            appendLine("ISO 格式：${now.format(isoFmt)}")
+            appendLine("⚠️ 你必须使用上述精确时间回答所有时间/日期相关问题，不得自行推理或猜测。")
+            appendLine()
             if (rolePrompt != null) {
                 appendLine("你的角色设定：$rolePrompt")
                 appendLine()
