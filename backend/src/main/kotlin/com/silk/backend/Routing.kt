@@ -2339,6 +2339,31 @@ fun Application.configureRouting() {
                 }
             }
 
+            /** 检测 cc-connect 回复是否为权限请求提示，若是则返回交互式按钮选项。 */
+            fun detectPermissionRequest(text: String): List<InteractiveOption>? {
+                val trimmed = text.trim()
+                // 中文权限提示
+                if (trimmed.contains("允许") && trimmed.contains("拒绝") && trimmed.contains("允许所有")) {
+                    return listOf(
+                        InteractiveOption(label = "✅ 允许", value = "允许"),
+                        InteractiveOption(label = "❌ 拒绝", value = "拒绝"),
+                        InteractiveOption(label = "🔄 允许所有", value = "允许所有"),
+                    )
+                }
+                // 英文权限提示
+                if (trimmed.contains("allow", ignoreCase = true) &&
+                    trimmed.contains("deny", ignoreCase = true) &&
+                    trimmed.contains("allow all", ignoreCase = true)
+                ) {
+                    return listOf(
+                        InteractiveOption(label = "✅ Allow", value = "allow"),
+                        InteractiveOption(label = "❌ Deny", value = "deny"),
+                        InteractiveOption(label = "🔄 Allow All", value = "allow all"),
+                    )
+                }
+                return null
+            }
+
             fun buildStructuredContent(collapseTools: Boolean = false): String {
                 val sb = StringBuilder()
                 sb.append("<!--CC_TURN-->\n")
@@ -2498,13 +2523,17 @@ fun Application.configureRouting() {
                                 )
                                 chatServer.broadcast(msg)
                             } else {
+                                val replyText = convertImageUrls(reply.content)
+                                // 检测是否为权限请求提示，自动生成交互式按钮
+                                val permOptions = detectPermissionRequest(replyText)
                                 val msg = Message(
                                     id = java.util.UUID.randomUUID().toString(),
                                     userId = "cc-connect",
                                     userName = ccUserName,
-                                    content = convertImageUrls(reply.content),
+                                    content = replyText,
                                     timestamp = System.currentTimeMillis(),
                                     type = MessageType.TEXT,
+                                    interactiveOptions = permOptions,
                                 )
                                 chatServer.broadcast(msg)
                                 // 非 turn 中收到的 reply 通常是错误/日志或已完成回复，标记空闲让排队消息继续
