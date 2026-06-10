@@ -355,15 +355,6 @@ fun ChatScreen(appState: AppState) {
     
     val listState = rememberLazyListState()
 
-    // 自动滚动到底部（正常布局需要手动滚底，替代 reverseLayout）
-    LaunchedEffect(messages.size, transientMessage, transientContentBlocks, interactiveOptions) {
-        kotlinx.coroutines.delay(80)
-        val count = listState.layoutInfo.totalItemsCount
-        if (count > 0) {
-            listState.animateScrollToItem(count - 1)
-        }
-    }
-    
     // ✅ AI 消息展开状态管理 - 使用 Map 存储每个消息的展开状态
     val aiMessageExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
     // 思考过程展开状态（默认折叠）
@@ -422,36 +413,62 @@ fun ChatScreen(appState: AppState) {
     // 历史消息加载状态：由 ChatClient 缓冲完成后一次性刷入
     val isHistoryLoading by chatClient.isLoadingHistory.collectAsState()
     var lastMessageCount by remember { mutableStateOf(0) }
+    // 用户是否手动上滑浏览历史（若用户滑走了，不自动滚底）
+    var userScrolledAway by remember { mutableStateOf(false) }
 
-    // 历史加载完成后跳转到底部（reverseLayout 下 index 0 = 最新）
-    LaunchedEffect(isHistoryLoading) {
-        if (!isHistoryLoading && messages.isNotEmpty()) {
-            listState.scrollToItem(0)
+    // 统一滚动到底部逻辑
+    // 注意：LazyColumn 没有 reverseLayout，所以 index 从 0（最旧）到 count-1（最新）
+    fun scrollToBottom(animated: Boolean) {
+        scopeForScroll.launch {
+            // 给布局一点点时间完成测量
+            kotlinx.coroutines.delay(80)
+            val count = listState.layoutInfo.totalItemsCount
+            if (count > 0) {
+                if (animated) {
+                    listState.animateScrollToItem(count - 1)
+                } else {
+                    listState.scrollToItem(count - 1)
+                }
+            }
         }
     }
 
-    // 新消息到达时动画滚动到底部
+    // 监听用户是否手动滚动 — 如果用户向上翻看历史，停止自动滚底
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .collect { firstVisible ->
+                val totalItems = listState.layoutInfo.totalItemsCount
+                // 如果首个可见 item 不是最新的几条，说明用户手动滑上去了
+                if (totalItems > 0 && firstVisible < totalItems - 3) {
+                    userScrolledAway = true
+                } else {
+                    userScrolledAway = false
+                }
+            }
+    }
+
+    // ① 历史加载完成 → 瞬时跳到底部
+    LaunchedEffect(isHistoryLoading) {
+        if (!isHistoryLoading && messages.isNotEmpty()) {
+            userScrolledAway = false
+            scrollToBottom(animated = false)
+        }
+    }
+
+    // ② 新普通消息到达 → 若用户未滑走，平滑滚到底部
     LaunchedEffect(messages.size) {
         if (!isHistoryLoading && messages.size > lastMessageCount && lastMessageCount > 0) {
-            listState.animateScrollToItem(0)
+            if (!userScrolledAway) {
+                scrollToBottom(animated = true)
+            }
         }
         lastMessageCount = messages.size
     }
-    
-    // 首次出现临时消息时，确保显示在底部
-    val hasTransient = transientMessage != null
-    LaunchedEffect(hasTransient) {
-        if (hasTransient && messages.isNotEmpty()) {
-            kotlinx.coroutines.delay(100)
-            listState.scrollToItem(0)
-        }
-    }
-    
-    // 等待 AI 响应时确保显示等待状态
-    LaunchedEffect(isWaitingForAI) {
-        if (isWaitingForAI) {
-            kotlinx.coroutines.delay(100)
-            listState.scrollToItem(0)
+
+    // ③ 临时消息 / content blocks / 交互按钮变化 → 若用户未滑走，瞬时定位到底部
+    LaunchedEffect(transientMessage, transientContentBlocks, interactiveOptions) {
+        if (!userScrolledAway) {
+            scrollToBottom(animated = false)
         }
     }
     
