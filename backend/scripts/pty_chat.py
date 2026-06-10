@@ -506,9 +506,12 @@ def main():
         print("WARNING: Landlock not available on this platform, skipping sandbox", file=sys.stderr)
 
     # ── Step 4: Build claude command ──
+    # NOTE: Prompt is NOT passed via -p argument because claude CLI silently
+    # crashes when -p contains large amounts of multi-byte (e.g. Chinese)
+    # text (~50KB+).  Instead, prompt is fed via stdin from the prompt file
+    # (the child opens the file and dup2's it to fd 0 before execvp).
     cmd = [
         claude_path,
-        "-p", prompt,
         "--session-id", str(uuid.uuid4()),
         "--disallowedTools", "Bash,Write,Edit,ExecuteCommand",
         "--no-chrome",
@@ -539,9 +542,18 @@ def main():
         # Make the PTY slave the controlling terminal
         os.setsid()
 
-        # Duplicate slave PTY onto stdin/stdout/stderr
-        for fd in (0, 1, 2):
+        # Duplicate slave PTY onto stdout/stderr only (not stdin).
+        # stdin (fd 0) will be redirected from the prompt file below,
+        # because passing the prompt as -p <arg> crashes on multi-byte
+        # text over ~50KB.
+        for fd in (1, 2):
             os.dup2(slave_fd, fd)
+
+        # Open prompt file for reading and use as stdin (fd 0)
+        stdin_fd = os.open(prompt_real, os.O_RDONLY)
+        os.dup2(stdin_fd, 0)
+        os.close(stdin_fd)
+
         if slave_fd > 2:
             os.close(slave_fd)
 
