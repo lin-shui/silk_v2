@@ -482,6 +482,8 @@ fun SilkApp() {
 
     if (appState.currentScene == Scene.LOGIN) {
         LoginScene(appState)
+    } else if (appState.currentScene == Scene.NICKNAME_SETUP) {
+        NicknameSetupScene(appState)
     } else {
         Div({
             style {

@@ -307,7 +307,8 @@ data class HuaweiAuthResponse(
     val message: String = "",
     val user: User? = null,
     val accessToken: String? = null,
-    val refreshToken: String? = null
+    val refreshToken: String? = null,
+    val isNewUser: Boolean = false
 )
 
 /**
@@ -349,6 +350,20 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("华为登录失败:", e)
             HuaweiAuthResponse(false, "登录失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 更新用户昵称
+     */
+    suspend fun updateUserProfile(userId: String, fullName: String): SimpleResponse {
+        return try {
+            val body = """{"fullName":"$fullName"}"""
+            val response = put("/users/$userId/profile", body)
+            jsonParser.decodeFromString<SimpleResponse>(response)
+        } catch (e: Exception) {
+            console.log("更新用户资料失败:", e)
+            SimpleResponse(false, "网络错误")
         }
     }
 

@@ -9,6 +9,7 @@ import kotlinx.serialization.json.Json
 
 enum class Scene {
     LOGIN,
+    NICKNAME_SETUP,
     GROUP_LIST,
     CONTACTS,
     CHAT_ROOM,
@@ -64,14 +65,19 @@ class WebAppState {
     
     /**
      * 设置用户会话（华为 OAuth 登录成功后调用）
+     * @param isNewUser 是否为新注册用户，新用户需要先设置昵称
      */
-    fun setSession(user: User, accessToken: String, refreshToken: String) {
+    fun setSession(user: User, accessToken: String, refreshToken: String, isNewUser: Boolean = false) {
         currentUser = user
         JwtManager.setAccessToken(accessToken)
         JwtManager.setRefreshToken(refreshToken)
         JwtManager.setStoredUser(user)
         explicitLogoutRequested = false
-        navigateTo(Scene.GROUP_LIST)
+        if (isNewUser) {
+            navigateTo(Scene.NICKNAME_SETUP)
+        } else {
+            navigateTo(Scene.GROUP_LIST)
+        }
     }
     
     /**

@@ -41,6 +41,23 @@ object UserRepository {
     }
     
     /**
+     * 更新用户显示昵称
+     */
+    fun updateFullName(userId: String, newFullName: String): User? {
+        return try {
+            transaction {
+                Users.update({ Users.id eq userId }) {
+                    it[fullName] = newFullName
+                }
+                findUserById(userId)
+            }
+        } catch (e: Exception) {
+            logger.error("❌ 更新用户昵称失败: {}", e.message)
+            null
+        }
+    }
+
+    /**
      * 根据ID查找用户
      */
     fun findUserById(userId: String): User? {

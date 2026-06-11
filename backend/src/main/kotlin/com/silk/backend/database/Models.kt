@@ -573,7 +573,8 @@ data class HuaweiAuthResponse(
     val message: String,
     val user: User? = null,
     val accessToken: String? = null,
-    val refreshToken: String? = null
+    val refreshToken: String? = null,
+    val isNewUser: Boolean = false
 )
 
 /**

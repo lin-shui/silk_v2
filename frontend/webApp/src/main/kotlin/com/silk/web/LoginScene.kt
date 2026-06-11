@@ -281,12 +281,12 @@ suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
     val result = ApiClient.huaweiWebLogin(code, redirectUri)
     
     if (result.success && result.user != null && result.accessToken != null && result.refreshToken != null) {
-        console.log("✅ 华为登录成功:", result.user.fullName)
+        console.log("✅ 华为登录成功:", result.user.fullName, "isNewUser=", result.isNewUser)
         
         // 清除 URL 中的 OAuth 参数
         window.history.replaceState(null, "", redirectUri)
         
-        appState.setSession(result.user, result.accessToken!!, result.refreshToken!!)
+        appState.setSession(result.user, result.accessToken!!, result.refreshToken!!, result.isNewUser)
         return true
     } else {
         console.error("❌ 华为登录失败:", result.message)

@@ -18,7 +18,8 @@ object HuaweiAuthService {
         val message: String = "",
         val user: User? = null,
         val accessToken: String? = null,
-        val refreshToken: String? = null
+        val refreshToken: String? = null,
+        val isNewUser: Boolean = false
     )
 
     /**
@@ -108,14 +109,15 @@ object HuaweiAuthService {
 
         logger.info("✅ 华为账号新用户创建成功: {} (openId={})", silkUser.loginName, huaweiUser.openId)
 
-        // 生成 Token
+        // 生成 Token — 标记为新用户，前端需要弹出昵称设置
         val (accessToken, refreshToken) = JwtProvider.generateTokenPair(silkUser.id)
         return AuthResult(
             success = true,
             message = "登录成功",
             user = silkUser,
             accessToken = accessToken,
-            refreshToken = refreshToken
+            refreshToken = refreshToken,
+            isNewUser = true
         )
     }
 }

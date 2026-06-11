@@ -1144,7 +1144,8 @@ fun Application.configureRouting() {
                         message = result.message,
                         user = result.user,
                         accessToken = result.accessToken,
-                        refreshToken = result.refreshToken
+                        refreshToken = result.refreshToken,
+                        isNewUser = result.isNewUser
                     ))
                 } else {
                     call.respond(HttpStatusCode.Unauthorized, HuaweiAuthResponse(
@@ -1171,7 +1172,8 @@ fun Application.configureRouting() {
                         message = result.message,
                         user = result.user,
                         accessToken = result.accessToken,
-                        refreshToken = result.refreshToken
+                        refreshToken = result.refreshToken,
+                        isNewUser = result.isNewUser
                     ))
                 } else {
                     call.respond(HttpStatusCode.Unauthorized, HuaweiAuthResponse(
@@ -1185,6 +1187,41 @@ fun Application.configureRouting() {
             }
         }
         
+        /**
+         * 更新用户资料（昵称）
+         */
+        put("/users/{userId}/profile") {
+            try {
+                val userId = call.parameters["userId"] ?: ""
+                if (userId.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少用户ID"))
+                    return@put
+                }
+
+                val body = call.receive<Map<String, String>>()
+                val newFullName = body["fullName"]?.trim() ?: ""
+
+                if (newFullName.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "昵称不能为空"))
+                    return@put
+                }
+                if (newFullName.length > 50) {
+                    call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "昵称不能超过50个字符"))
+                    return@put
+                }
+
+                val updated = UserRepository.updateFullName(userId, newFullName)
+                if (updated != null) {
+                    call.respond(SimpleResponse(true, "昵称更新成功"))
+                } else {
+                    call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "用户不存在"))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 更新用户资料失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "请求格式错误"))
+            }
+        }
+
         /**
          * 刷新 Access Token
          */
