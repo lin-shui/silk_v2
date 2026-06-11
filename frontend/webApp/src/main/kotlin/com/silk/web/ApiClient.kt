@@ -343,12 +343,7 @@ object ApiClient {
      */
     suspend fun huaweiWebLogin(code: String, redirectUri: String): HuaweiAuthResponse {
         return try {
-            val body = jsonParser.encodeToString(
-                buildJsonObject {
-                    put("code", code)
-                    put("redirectUri", redirectUri)
-                }
-            )
+            val body = """{"code":"$code","redirectUri":"$redirectUri"}"""
             val response = post("/auth/huawei/web-login", body)
             jsonParser.decodeFromString<HuaweiAuthResponse>(response)
         } catch (e: Exception) {

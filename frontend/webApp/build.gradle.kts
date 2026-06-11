@@ -1,14 +1,14 @@
 import java.io.File
 
 // ==================== 读取 .env 文件 ====================
-fun readEnvFile(): Map<String, String> {
+fun readEnvFile(project: Project): Map<String, String> {
     val env = mutableMapOf<String, String>()
-    val cwd = File(System.getProperty("user.dir"))
+    val rootDir = project.rootProject.projectDir
     val candidates = listOf(
-        File(cwd, ".env"),
-        cwd.parentFile?.let { File(it, ".env") },
-        cwd.parentFile?.parentFile?.let { File(it, ".env") }
-    ).filterNotNull()
+        File(rootDir, ".env"),
+        File(project.projectDir, ".env"),
+        File(System.getProperty("user.dir"), ".env")
+    ).filterNotNull().distinct()
 
     for (file in candidates) {
         if (file.isFile) {
@@ -30,7 +30,7 @@ fun readEnvFile(): Map<String, String> {
     }
     return env
 }
-val envFile = readEnvFile()
+val envFile = readEnvFile(project)
 
 val backendPort = envFile["BACKEND_HTTP_PORT"] ?: System.getenv("BACKEND_HTTP_PORT") ?: "8003"
 val backendInternalPort = envFile["BACKEND_INTERNAL_PORT"] ?: System.getenv("BACKEND_INTERNAL_PORT") ?: backendPort

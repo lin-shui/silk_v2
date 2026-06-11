@@ -48,7 +48,10 @@ object HuaweiTokenVerifier {
     private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
     /**
-     * Web OAuth 流程：authorization code → access_token → userinfo
+     * Web OAuth 流程：authorization code → access_token + id_token → 解码 id_token 获取用户信息
+     *
+     * 华为 OAuth 的 token 端点返回的 id_token (JWT) 中直接包含用户信息，
+     * 不需要额外调 userinfo 端点（该端点已废弃/404）。
      */
     fun exchangeCodeForUserInfo(
         code: String,
@@ -57,7 +60,7 @@ object HuaweiTokenVerifier {
         redirectUri: String
     ): HuaweiUserInfo? {
         return try {
-            // 1. 交换 code → access_token
+            // 1. 交换 code → access_token & id_token
             val tokenForm = buildString {
                 append("grant_type=authorization_code")
                 append("&code=").append(URLEncoder.encode(code, "UTF-8"))
@@ -72,17 +75,61 @@ object HuaweiTokenVerifier {
                 .post(tokenForm.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
                 .build()
 
-            val tokenBodyStr = httpClient.newCall(tokenRequest).execute().body?.string() ?: return null
-            val tokenObj = json.parseToJsonElement(tokenBodyStr).jsonObject
-            val accessToken = tokenObj["access_token"]?.jsonPrimitive?.content ?: return null
+            val response = httpClient.newCall(tokenRequest).execute()
+            val tokenBodyStr = response.body?.string()
+            if (tokenBodyStr == null) {
+                logger.error("❌ 华为 token 端点返回空响应, HTTP status=${response.code}")
+                return null
+            }
+            logger.info("📥 华为 token 端点响应 (HTTP ${response.code}, 前300字): {}", tokenBodyStr.take(300))
+            val tokenObj = try {
+                json.parseToJsonElement(tokenBodyStr).jsonObject
+            } catch (e: Exception) {
+                logger.error("❌ 华为 token 响应 JSON 解析失败: {} | 原始响应(前500字): {}", e.message, tokenBodyStr.take(500))
+                return null
+            }
+            // 检查华为是否返回了错误
+            if (tokenObj.containsKey("error") || tokenObj.containsKey("sub_error")) {
+                val errCode = tokenObj["error"]?.jsonPrimitive?.content ?: "?"
+                val errDesc = tokenObj["error_description"]?.jsonPrimitive?.content ?: "?"
+                val subErr = tokenObj["sub_error"]?.jsonPrimitive?.content ?: "?"
+                logger.error("❌ 华为 token 交换失败: error=$errCode, description=$errDesc, sub_error=$subErr")
+                return null
+            }
 
-            // 2. 调 userinfo
+            // 2. 优先从 id_token (JWT) 中解码用户信息 —— 更可靠，不依赖 userinfo 端点
+            val idToken = tokenObj["id_token"]?.jsonPrimitive?.content
+            if (idToken != null) {
+                logger.info("🔑 从 id_token 解码用户信息")
+                // 先尝试签名验证（需要 JWKS 端点可用）
+                val verified = verifyIdToken(idToken)
+                if (verified != null) return verified
+                // JWKS 端点不可用时，直接解码 JWT payload（token 来自于可信的华为 token 端点）
+                logger.info("⚠️ JWKS 验证失败，尝试直接解码 id_token payload")
+                val unverified = decodeIdTokenPayload(idToken)
+                if (unverified != null) return unverified
+                logger.error("❌ id_token 解码也失败")
+                return null
+            }
+
+            // 3. 降级：从 access_token 调 userinfo 端点
+            logger.warn("⚠️ 未获取到 id_token，尝试调 userinfo 端点")
+            val accessToken = tokenObj["access_token"]?.jsonPrimitive?.content ?: return null
             val userInfoRequest = Request.Builder()
                 .url(HUAWEI_USERINFO_URL)
                 .addHeader("Authorization", "Bearer $accessToken")
                 .build()
 
-            val userInfoBody = httpClient.newCall(userInfoRequest).execute().body?.string() ?: return null
+            val userInfoResponse = httpClient.newCall(userInfoRequest).execute()
+            val userInfoBody = userInfoResponse.body?.string()
+            if (userInfoBody == null) {
+                logger.error("❌ 华为 userinfo 端点返回空响应, HTTP status=${userInfoResponse.code}")
+                return null
+            }
+            if (!userInfoBody.trimStart().startsWith("{")) {
+                logger.error("❌ 华为 userinfo 端点返回非 JSON 内容, HTTP ${userInfoResponse.code}, 响应(前500字): {}", userInfoBody.take(500))
+                return null
+            }
             val userInfo = json.parseToJsonElement(userInfoBody).jsonObject
             val openId = userInfo["sub"]?.jsonPrimitive?.content
                 ?: userInfo["openID"]?.jsonPrimitive?.content
@@ -128,10 +175,38 @@ object HuaweiTokenVerifier {
 
             HuaweiUserInfo(openId = openId, name = name, avatar = avatar)
         } catch (e: JwtException) {
-            logger.warn("⚠️ 华为 ID Token 验证失败: {}", e.message)
+            logger.warn("⚠️ 华为 ID Token 签名验证失败: {}", e.message)
             null
         } catch (e: Exception) {
             logger.warn("⚠️ 华为 ID Token 处理异常: {}", e.message)
+            null
+        }
+    }
+
+    /**
+     * 不验证签名，仅解码 id_token 的 payload（用于 Web OAuth 流程）
+     *
+     * 在 Web OAuth 中，id_token 直接从华为 token 端点获取（使用有效 client_secret），
+     * 通信是 HTTPS 服务器到服务器，因此 JWT 本身是可信的，不需要额外验证签名。
+     * 当华为 JWKS 端点不可用时使用此方法作为降级。
+     */
+    private fun decodeIdTokenPayload(idToken: String): HuaweiUserInfo? {
+        return try {
+            val parts = idToken.split(".")
+            if (parts.size != 3) {
+                logger.warn("⚠️ ID Token 格式错误")
+                return null
+            }
+            // 解码 payload（第二部分）
+            val payloadJson = String(Base64.getUrlDecoder().decode(parts[1]))
+            val payload = json.parseToJsonElement(payloadJson).jsonObject
+            val openId = payload["sub"]?.jsonPrimitive?.content ?: return null
+            val name = payload["name"]?.jsonPrimitive?.content ?: ""
+            val avatar = payload["picture"]?.jsonPrimitive?.content ?: ""
+            logger.info("✅ id_token 解码成功: openId={}, name={}", openId.take(12), name)
+            HuaweiUserInfo(openId = openId, name = name, avatar = avatar)
+        } catch (e: Exception) {
+            logger.error("❌ id_token payload 解码失败: {}", e.message)
             null
         }
     }

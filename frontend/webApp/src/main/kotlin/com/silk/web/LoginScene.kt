@@ -166,6 +166,14 @@ fun LoginScene(appState: WebAppState) {
                     if (!isLoading) {
                         isLoading = true
                         errorMessage = ""
+                        // 先检查 clientId 是否配置
+                        val clientId = BuildConfig.HUAWEI_OAUTH_CLIENT_ID
+                        if (clientId.isBlank()) {
+                            console.error("❌ HUAWEI_OAUTH_CLIENT_ID 未配置")
+                            errorMessage = "华为登录暂未配置，请联系管理员"
+                            isLoading = false
+                            return@onClick
+                        }
                         startHuaweiOAuth()
                     }
                 }
@@ -193,10 +201,6 @@ fun LoginScene(appState: WebAppState) {
  */
 private fun startHuaweiOAuth() {
     val clientId = BuildConfig.HUAWEI_OAUTH_CLIENT_ID
-    if (clientId.isBlank()) {
-        console.error("❌ HUAWEI_OAUTH_CLIENT_ID 未配置")
-        return
-    }
     
     // 生成 state 用于 CSRF 防护
     val state = generateRandomState()
