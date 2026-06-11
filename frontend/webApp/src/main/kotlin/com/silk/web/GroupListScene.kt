@@ -202,8 +202,8 @@ fun GroupListScene(appState: WebAppState) {
         style {
             display(DisplayStyle.Flex)
             flexDirection(FlexDirection.Column)
-            height(100.vh)
-            width(100.vw)
+            property("width", "100%")
+            property("height", "100%")
             property("overflow", "hidden")
             property("background", SilkColors.backgroundGradient)
             fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
@@ -223,7 +223,7 @@ fun GroupListScene(appState: WebAppState) {
         }) {
             Div({
                 style {
-                    property("flex", "0 0 35%")
+                    property("flex-shrink", "0")
                     property("min-width", "0")
                 }
             }) {
