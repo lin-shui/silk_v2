@@ -900,6 +900,8 @@ fun ChatScene(appState: WebAppState) {
                                         }
                                     }
                                 }
+                                // 非 Silk 专属对话才显示邀请码
+                                if (!isSilkPrivate) {
                                 Div({
                                     style {
                                         color(Color(SilkColors.textSecondary))
@@ -909,6 +911,7 @@ fun ChatScene(appState: WebAppState) {
                                     }
                                 }) {
                                     Text("[${item.invitationCode}]")
+                                }
                                 }
                             }
                         }
