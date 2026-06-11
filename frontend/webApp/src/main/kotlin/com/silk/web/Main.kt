@@ -499,7 +499,7 @@ fun SilkApp() {
                     property("flex", "1")
                     minWidth(0.px)
                     height(100.percent)
-                    property("overflow", "hidden")
+                    property("overflow", if (appState.currentScene == Scene.SETTINGS) "auto" else "hidden")
                     position(Position.Relative)
                 }
             }) {

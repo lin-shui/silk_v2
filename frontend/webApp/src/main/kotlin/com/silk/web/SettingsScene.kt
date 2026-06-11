@@ -189,6 +189,8 @@ fun SettingsScene(appState: WebAppState) {
                 maxWidth(800.px)
                 width(100.percent)
                 property("margin", "0 auto")
+                property("overflow-y", "auto")
+                property("height", "100%")
             }
         }) {
             if (isLoading) {
