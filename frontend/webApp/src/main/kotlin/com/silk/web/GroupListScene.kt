@@ -485,6 +485,7 @@ fun GroupListScene(appState: WebAppState) {
                         val isSelected = group.id in selectedGroups
                         val unreadCount = unreadCounts[group.id] ?: 0
                         val ccInfo = ccConnectStatus[group.id]
+                        val isSilkPrivate = group.name.startsWith("[Silk]")
                         GroupCard(
                             group = group,
                             isHost = group.hostId == appState.currentUser?.id,
@@ -510,7 +511,7 @@ fun GroupListScene(appState: WebAppState) {
                                     appState.selectGroup(group)
                                 }
                             },
-                            onMembersClick = {
+                            onMembersClick = (if (isSilkPrivate) null else {
                                 selectedGroupForMembers = group
                                 scope.launch {
                                     isLoadingMembers = true
@@ -523,7 +524,8 @@ fun GroupListScene(appState: WebAppState) {
                                     isLoadingMembers = false
                                     showMembersDialog = true
                                 }
-                            }
+                                Unit
+                            }) as (() -> Unit)?
                         )
                     }
 
@@ -810,7 +812,8 @@ fun GroupCard(
                     Text(group.name)
                 }
                 
-                // 邀请码（小字体）
+                // 邀请码（非 Silk 专属对话才显示）
+                if (!group.name.startsWith("[Silk]")) {
                 Span({
                     style {
                         fontSize(11.px)
@@ -819,6 +822,7 @@ fun GroupCard(
                     }
                 }) {
                     Text("[${group.invitationCode}]")
+                }
                 }
                 
                 // cc-connect status badge
