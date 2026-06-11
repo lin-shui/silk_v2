@@ -38,9 +38,9 @@
 
 ## Current Snapshot
 
-当前 detekt baseline 余量（2026-06-11，Slice 148 后）：
+当前 detekt baseline 余量（2026-06-11，Slice 155 后）：
 
-- `backend.xml`: 38
+- `backend.xml`: 29
 - `frontend-androidApp.xml`: 0
 - `frontend-webApp.xml`: 0
 - `frontend-shared.xml`: 0
@@ -107,20 +107,27 @@
 - `GroupTodoExtractionService.kt` 又移除 1 条 `CyclomaticComplexMethod` 和 1 条 `NestedBlockDepth` baseline；`extractRecurringTemplateDrafts(...)` 现已拆成“逐群收集 / 单行判定 / draft 构造 / 标题与时间格式化” helper，继续保持工作日习惯 / 纪念日识别、`matchedLines` 截断、`long_term_template` 合同和 `workday`/`yearly` repeat 语义不变。
 - `GroupTodoExtractionService.kt` 又移除 1 条 `CyclomaticComplexMethod` 和 1 条 `NestedBlockDepth` baseline；`heuristicFromSlices(...)` 现已拆成“逐群收集 / 单行候选识别 / 单条 draft 构造 / alarm fallback 状态控制” helper，继续保持 checklist 提取、alarm 文本弱兜底、同一消息只接受一次非 checklist alarm fallback、标题截断与 `alarm`/`none` 判定语义不变。
 - `GroupTodoExtractionService.kt` 又移除 1 条 `NestedBlockDepth` baseline；`buildTranscriptString(...)` 现已拆成“逐群追加 / 逐消息展开 / 单行标准化” helper，继续保持 transcript 头格式、逐行 `[sender]: content` 输出、空行跳过与 `MAX_TRANSCRIPT_CHARS` 截断语义不变。
+- `GroupTodoExtractionService.kt` 又移除 1 条 `CyclomaticComplexMethod` baseline；`parseCompactTodoJson(...)` 现已拆成单条输出解析、可选字段提取与 `done` 状态回填 helper，继续保持“只接受输入中已有 id、未知/重复 id 跳过、title 长度校验、原始 createdAt/executedAt/reminderId 透传”的去冗写回合同不变。
+- `AcpClientTest.kt` 已移除 1 条 `TooGenericExceptionThrown` baseline；receive-loop 存活性测试里的 handler 失败现在改抛 `IllegalStateException("boom")`，继续保持“单个 handler 崩溃不拖垮后续 RPC”的既有测试语义不变。
+- `GroupTodoExtractionService.kt` 已移除 1 条 `TooGenericExceptionCaught` baseline；LLM 抽取/去冗入口不再依赖 `catch (e: Exception)`，改为 `callLlmOrNull(...)` 对 cancellation 透传、对 `InterruptedException` / `IOException` / `SerializationException` / `IllegalStateException` 等失败分层回退，JSON 解析也只对 decode/shape 异常降级，继续保持“抽取失败回退启发式、去冗失败走本地 logical-key 去重”的既有容错合同不变。
+- `PDFReportGenerator.kt` 已移除 1 条 `UnusedPrivateProperty` baseline；未接线的 `chineseFontPath` 懒加载探测已删除，实际生效的字体路径仍由 `createChineseFont()` 的内置 CJK 字体分支承担，不改变 PDF 生成路径或字体回退合同。
+- `DirectModelAgent.kt` 已移除 1 条 `TooGenericExceptionCaught` baseline；`chat(...)` 与 Claude CLI fallback 入口改为 `runCatching` 收口，继续透传 `CancellationException`，并保持 Claude CLI 失败后优先回退 Anthropic API、前端错误回写、回复持久化与 citation 后处理合同不变。
+- `AIStepwiseAgent.kt` 已移除 1 条 `CyclomaticComplexMethod` 和 1 条 `NestedBlockDepth` baseline；`generateQuickResponse(...)` 现已拆成请求构造、SSE 行消费、增量触发与尾包 flush helper，继续保持 `/chat/completions` streaming、`reasoning` 字段读取、按累计换行数推送增量以及仅在 `[DONE]` 后回调完成消息的既有 quick-response 合同不变。
+- `AIStepwiseAgent.kt` 又移除 1 条 `CyclomaticComplexMethod` 和 1 条 `ThrowsCount` baseline；`callAIApiStreaming(...)` 现已收敛为主流程编排，HTTP 请求构造、状态校验、SSE 行读取与 chunk 消费都已下沉到 helper，继续保持非 200 失败、超时返回已收集文本和逐 chunk 回调前端的既有诊断流式合同不变。
 - `AIStepwiseAgent.kt` 已移除 1 条 `CyclomaticComplexMethod` baseline；`generateFallbackReport(...)` 现已拆成“报告头 / 通用 section 拼接 / 仅成功步骤附正文” helper，继续保持章节标题、step key 映射、成功步骤输出顺序与失败步骤留空的既有 fallback 报告合同不变。
-- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter`、`EmptyFunctionBlock`、`AcpUpdateMapper.kt` 的 `CyclomaticComplexMethod`、`AIStepwiseAgent.kt` 的 `generateFallbackReport(...)` 复杂度基线、`AnthropicClient.kt` 的 `TooGenericExceptionCaught` / `NestedBlockDepth` / `convertMessage(...)` 复杂度基线、`AsrRoutes.kt` 的 `SwallowedException`、`ChatHistoryBackupManager.kt` 的 `PrintStackTrace` / `SwallowedException`、`ChatHistoryManager.kt` 的 `TooGenericExceptionCaught`、`DirectModelAgent.kt` 的 `normalizeCitedReferences(...)` 复杂度基线、`ExternalSearchService.kt` 的 `TooGenericExceptionCaught`、`FileRoutes.kt` 的 `fileRoutes(...)` / `indexFileToWeaviate(...)` / `chunkText(...)` 复杂度基线、`GroupTodoExtractionService.kt` 的 `buildTranscriptString(...)` / `dedupeDrafts(...)` / `extractRecurringTemplateDrafts(...)` / `heuristicFromSlices(...)` / `extractRoughHourMinute(...)` 与 `ComplexCondition` 基线、`UserTodoStore.kt` 的 `ComplexCondition`、`SearchDrivenAgent.kt` 的 `SwallowedException` / `TooGenericExceptionCaught` / `NestedBlockDepth`、`ToolPolicyManager.kt` 的 `SwallowedException`、`UserTodoStore.kt` 的 `isTemplateDueToday(...)` / `normalizeActionDetailForKey(...)` / `extractTimeFromTitle(...)` / `mergeShortInstanceByState(...)` / `tryMergeByContainedNormTitle(...)` 复杂度基线、`WeaviateClient.kt` 的 `indexDocument(...)` 复杂度基线与 `PrintStackTrace`，以及 `WebSocketConfig.kt` 的 `ComplexCondition` / `PrintStackTrace` / `SwallowedException` baseline 和一条陈旧的 `TooGenericExceptionCaught(ex)` 残留；剩余主要是 `CyclomaticComplexMethod` 8、`TooGenericExceptionCaught` 13、`NestedBlockDepth` 1、`SwallowedException` 3、`LoopWithTooManyJumpStatements` 6、`LargeClass` 8。
+- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter`、`EmptyFunctionBlock`、`AcpUpdateMapper.kt` 的 `CyclomaticComplexMethod`、`AIStepwiseAgent.kt` 的 `generateFallbackReport(...)` / `generateQuickResponse(...)` / `callAIApiStreaming(...)` 复杂度基线与 `callAIApiStreaming(...)` 的 `ThrowsCount`、`AnthropicClient.kt` 的 `TooGenericExceptionCaught` / `NestedBlockDepth` / `convertMessage(...)` 复杂度基线、`AsrRoutes.kt` 的 `SwallowedException`、`ChatHistoryBackupManager.kt` 的 `PrintStackTrace` / `SwallowedException`、`ChatHistoryManager.kt` 的 `TooGenericExceptionCaught`、`DirectModelAgent.kt` 的 `normalizeCitedReferences(...)` 复杂度基线与 broad-catch 基线、`ExternalSearchService.kt` 的 `TooGenericExceptionCaught`、`FileRoutes.kt` 的 `fileRoutes(...)` / `indexFileToWeaviate(...)` / `chunkText(...)` 复杂度基线、`GroupTodoExtractionService.kt` 的 `buildTranscriptString(...)` / `dedupeDrafts(...)` / `extractRecurringTemplateDrafts(...)` / `heuristicFromSlices(...)` / `extractRoughHourMinute(...)` 与 `ComplexCondition` 基线、`UserTodoStore.kt` 的 `ComplexCondition`、`SearchDrivenAgent.kt` 的 `SwallowedException` / `TooGenericExceptionCaught` / `NestedBlockDepth`、`ToolPolicyManager.kt` 的 `SwallowedException`、`UserTodoStore.kt` 的 `isTemplateDueToday(...)` / `normalizeActionDetailForKey(...)` / `extractTimeFromTitle(...)` / `mergeShortInstanceByState(...)` / `tryMergeByContainedNormTitle(...)` 复杂度基线、`WeaviateClient.kt` 的 `indexDocument(...)` 复杂度基线与 `PrintStackTrace`，以及 `WebSocketConfig.kt` 的 `ComplexCondition` / `PrintStackTrace` / `SwallowedException` baseline 和一条陈旧的 `TooGenericExceptionCaught(ex)` 残留；剩余主要是 `CyclomaticComplexMethod` 6、`TooGenericExceptionCaught` 12、`SwallowedException` 3、`LoopWithTooManyJumpStatements` 6、`LargeClass` 8。
 
 ## Current Status
 
-- Slice 1-139 完成历史均已归档到 `docs/context/planning/exec-plans/completed/`。
+- Slice 1-155 完成历史均已归档到 `docs/context/planning/exec-plans/completed/`。
 - Android / Web / Desktop / Shared baseline 已清零；active plan 现在只保留 backend 的剩余 detekt 收敛。
 - Android 侧既有 `JdkImageTransform` / `jlink` 环境阻塞仍未改变；这不影响 baseline 已清零这一事实。
 
 ## Next Slices
 
-- Slice 149 候选：优先继续处理 `GroupTodoExtractionService.kt` 的 `parseCompactTodoJson(...)`，保持 Todo 面同文件、单函数推进，不碰 refresh 主流程。
-- Slice 150 候选：如果转向 backend 异常语义，优先处理 `Routing.kt` 中单一路由族、可明确区分 parse / validation 的 catch 点，不直接碰整文件聚合的 `Exception` baseline。
-- Slice 151 候选：如果换文件收复杂度，优先找 `Routing.kt` 之外的单职责 backend 文件，不把 `LargeClass` / `LoopWithTooManyJumpStatements` 这类重构型条目混进异常语义 slice。
+- Slice 156 候选：如果转向 backend 异常语义，优先处理 `Routing.kt` 中单一路由族、可明确区分 parse / validation 的 catch 点，不直接碰整文件聚合的 `Exception` baseline。
+- Slice 157 候选：如果换文件收复杂度，优先找 `Routing.kt` 之外的单职责 backend 文件，不把 `LargeClass` / `LoopWithTooManyJumpStatements` 这类重构型条目混进异常语义 slice。
+- Slice 158 候选：继续留意 `GroupTodoExtractionService.kt` 非 refresh 主流程尾项，或 `AIStepwiseAgent.kt`/`UserTodoStore.kt` 中还能单独下掉一条的 helper 面。
 - 如果某一步发现需要新增 baseline，先停下来判断是否应关规则、补测试或拆小 PR，不要直接把新增项写进 baseline。
 
 ## Handoff Notes

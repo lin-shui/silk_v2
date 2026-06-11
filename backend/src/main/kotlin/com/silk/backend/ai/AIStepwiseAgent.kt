@@ -27,6 +27,11 @@ class AIStepwiseAgent(
     private val apiKey: String = AIConfig.API_KEY,
     private val sessionName: String = "default_room"
 ) {
+    private companion object {
+        const val STREAM_IDLE_TIMEOUT_MS = 30000L
+        const val MAX_STREAM_EMPTY_LINES = 5
+    }
+
     private val logger = LoggerFactory.getLogger(AIStepwiseAgent::class.java)
     
     private val httpClient = HttpClient.newBuilder()
@@ -562,158 +567,145 @@ $conclusion
         // logger.info("   Prompt长度: ${prompt.length} 字符")
         // logger.info("   超时设置: ${AIConfig.TIMEOUT}ms (${AIConfig.TIMEOUT/1000}秒)")
         
-        val requestBody = ApiRequest(
-            model = AIConfig.MODEL,
-            messages = listOf(
-                ApiMessage(role = "user", content = prompt)
-            ),
-            temperature = 0.7,
-            maxTokens = 65536,  // ✅ 提升到65536，允许生成超详细的诊断内容
-            stream = true  // 启用流式输出
-        )
-        
         val startTime = System.currentTimeMillis()
         logger.info("🚀 发送请求时间: ${java.text.SimpleDateFormat("HH:mm:ss").format(java.util.Date(startTime))}")
-        
-        val request = HttpRequest.newBuilder()
+        val response = executeStreamingRequest(buildStreamingApiRequest(prompt), startTime)
+        logStreamingResponse(startTime, response.statusCode())
+        ensureStreamingSuccess(response.statusCode())
+        return readStreamingResponseBody(response, onChunk)
+    }
+
+    private fun buildStreamingApiRequest(prompt: String): HttpRequest {
+        val requestBody = ApiRequest(
+            model = AIConfig.MODEL,
+            messages = listOf(ApiMessage(role = "user", content = prompt)),
+            temperature = 0.7,
+            maxTokens = 65536,
+            stream = true
+        )
+
+        return HttpRequest.newBuilder()
             .uri(URI.create(AIConfig.requireApiBaseUrl()))
             .header("Authorization", "Bearer $apiKey")
             .header("Content-Type", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(requestBody)))
             .timeout(Duration.ofMillis(AIConfig.TIMEOUT))
             .build()
-        
-        // 使用 InputStream 处理流式响应
-        val response = try {
-            httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream())
-        } catch (e: Exception) {
-            val elapsed = System.currentTimeMillis() - startTime
-            logger.error("❌ HTTP 请求失败 (耗时 ${elapsed}ms): ${e.message}", e)
-            throw e
-        }
-        
-        val responseTime = System.currentTimeMillis()
-        val requestDuration = responseTime - startTime
+    }
+
+    private fun executeStreamingRequest(
+        request: HttpRequest,
+        startTime: Long
+    ): HttpResponse<java.io.InputStream> = try {
+        httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream())
+    } catch (e: Exception) {
+        val elapsed = System.currentTimeMillis() - startTime
+        logger.error("❌ HTTP 请求失败 (耗时 ${elapsed}ms): ${e.message}", e)
+        throw e
+    }
+
+    private fun logStreamingResponse(startTime: Long, statusCode: Int) {
+        val requestDuration = System.currentTimeMillis() - startTime
         logger.info("✅ 收到 HTTP 响应 (耗时 ${requestDuration}ms)")
-        logger.info("   状态码: ${response.statusCode()}")
-        
-        if (response.statusCode() != 200) {
-            logger.error("❌ API 返回错误状态码: ${response.statusCode()}")
-            error("API 调用失败：${response.statusCode()}")
+        logger.info("   状态码: $statusCode")
+    }
+
+    private fun ensureStreamingSuccess(statusCode: Int) {
+        if (statusCode == 200) {
+            return
         }
-        
-        val fullText = StringBuilder()
-        var lastDataTime = System.currentTimeMillis()
-        val idleTimeoutMs = 30000L  // 30秒空闲超时
-        var dataChunkCount = 0  // 数据块计数
-        
-        // 移除日志输出以提升性能
-        // logger.info("📖 开始读取流式响应...")
-        
-        // 使用 withTimeout 包裹整个读取过程，防止永久挂起
+        logger.error("❌ API 返回错误状态码: $statusCode")
+        error("API 调用失败：$statusCode")
+    }
+
+    private suspend fun readStreamingResponseBody(
+        response: HttpResponse<java.io.InputStream>,
+        onChunk: suspend (String) -> Unit
+    ): String {
+        val streamState = StreamingReadState()
+
         try {
-            kotlinx.coroutines.withTimeout(AIConfig.TIMEOUT + 10000) {  // 总超时：70秒
-                // 逐行读取 SSE（Server-Sent Events）数据
+            kotlinx.coroutines.withTimeout(AIConfig.TIMEOUT + 10000) {
                 response.body().bufferedReader().use { reader ->
-                    var line: String?
-                    var emptyLineCount = 0  // 连续空行计数
-                    var lineCount = 0
-                    
-                    while (true) {
-                        // 检查空闲超时
-                        val idleTime = System.currentTimeMillis() - lastDataTime
-                        if (idleTime > idleTimeoutMs) {
-                            // 移除详细日志输出
-                            // logger.warn("⚠️ 流式读取空闲超时（${idleTime}ms 无新数据），主动中断")
-                            // logger.warn("   已接收数据: ${fullText.length} 字符, ${dataChunkCount} 个数据块")
-                            break
-                        }
-                        
-                        // 移除心跳日志以提升性能
-                        // if (idleTime > 0 && idleTime % 10000 < 100) {
-                        //     logger.info("💓 流式读取中... (已等待 ${idleTime/1000}秒, 已接收 ${fullText.length} 字符)")
-                        // }
-                        
-                        // 非阻塞式读取一行
-                        line = try {
-                            reader.readLine()
-                        } catch (e: Exception) {
-                            logger.warn("⚠️ 读取行失败: ${e.message}", e)
-                            break
-                        }
-                        
-                        lineCount++
-                        
-                        // 流结束
-                        if (line == null) {
-                            // 移除日志输出以提升性能
-                            // logger.info("✅ 流正常结束（收到 null）")
-                            // logger.info("   共读取 $lineCount 行, 接收 ${fullText.length} 字符")
-                            break
-                        }
-                        
-                        // 跟踪空行（连续多个空行可能表示流结束）
-                        if (line.trim().isEmpty()) {
-                            emptyLineCount++
-                            if (emptyLineCount > 5) {
-                                logger.warn("⚠️ 检测到连续 $emptyLineCount 个空行，可能流已结束")
-                                break
-                            }
-                            continue
-                        } else {
-                            emptyLineCount = 0
-                        }
-                        
-                        // SSE 格式：data: {"choices":[{"delta":{"content":"文本"},...}]}
-                        if (line.startsWith("data: ")) {
-                            lastDataTime = System.currentTimeMillis()  // 更新最后接收数据时间
-                            dataChunkCount++
-                            
-                            val jsonData = line.substring(6).trim()
-                            
-                            // 跳过特殊标记
-                            if (jsonData == "[DONE]") {
-                                // 移除日志输出以提升性能
-                                // logger.info("✅ 收到 [DONE] 标记，流正常结束 - 共接收 $dataChunkCount 个数据块, ${fullText.length} 字符")
-                                break
-                            }
-                            
-                            try {
-                                // 解析流式响应
-                                val streamResponse = json.decodeFromString<StreamResponse>(jsonData)
-                                val content = streamResponse.choices.firstOrNull()?.delta?.content
-                                
-                                if (content != null) {
-                                    fullText.append(content)
-                                    // 实时回调，发送到前端
-                                    onChunk(content)
-                                    
-                                    // 移除日志输出以提升性能
-                                    // if (dataChunkCount % 200 == 0) {
-                                    //     logger.info("📊 AI模型流式输出进度: $dataChunkCount 数据块, ${fullText.length} 字符")
-                                    // }
-                                }
-                            } catch (e: Exception) {
-                                // 移除详细日志输出
-                                // logger.warn("⚠️ 解析流式数据失败 (行$lineCount): ${line.take(100)}...")
-                            }
-                        }
-                        
-                        // 短暂让出 CPU，避免 CPU 100%
+                    while (readStreamingLine(reader, streamState, onChunk)) {
                         kotlinx.coroutines.delay(1)
                     }
                 }
             }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-            logger.error("❌ 流式读取总超时（70秒），当前已接收 ${fullText.length} 字符", e)
-            // 返回已接收的部分数据
+            logger.error("❌ 流式读取总超时（70秒），当前已接收 ${streamState.fullText.length} 字符", e)
         } catch (e: Exception) {
             logger.error("❌ 流式读取异常: ${e.message}", e)
             throw e
         }
-        
-        return fullText.toString()
+
+        return streamState.fullText.toString()
     }
+
+    private suspend fun readStreamingLine(
+        reader: java.io.BufferedReader,
+        streamState: StreamingReadState,
+        onChunk: suspend (String) -> Unit
+    ): Boolean {
+        if (System.currentTimeMillis() - streamState.lastDataTime > STREAM_IDLE_TIMEOUT_MS) {
+            return false
+        }
+
+        val line = readStreamingLineOrNull(reader) ?: return false
+        streamState.lineCount++
+
+        if (line.trim().isEmpty()) {
+            streamState.emptyLineCount++
+            return streamState.emptyLineCount <= MAX_STREAM_EMPTY_LINES
+        }
+
+        streamState.emptyLineCount = 0
+        if (!line.startsWith("data: ")) {
+            return true
+        }
+
+        streamState.lastDataTime = System.currentTimeMillis()
+        streamState.dataChunkCount++
+        return consumeStreamingDataLine(line.substring(6).trim(), streamState, onChunk)
+    }
+
+    private fun readStreamingLineOrNull(reader: java.io.BufferedReader): String? = try {
+        reader.readLine()
+    } catch (e: Exception) {
+        logger.warn("⚠️ 读取行失败: ${e.message}", e)
+        null
+    }
+
+    private suspend fun consumeStreamingDataLine(
+        jsonData: String,
+        streamState: StreamingReadState,
+        onChunk: suspend (String) -> Unit
+    ): Boolean {
+        if (jsonData == "[DONE]") {
+            return false
+        }
+
+        parseStreamingContent(jsonData)?.let { content ->
+            streamState.fullText.append(content)
+            onChunk(content)
+        }
+        return true
+    }
+
+    private fun parseStreamingContent(jsonData: String): String? = try {
+        val streamResponse = json.decodeFromString<StreamResponse>(jsonData)
+        streamResponse.choices.firstOrNull()?.delta?.content
+    } catch (_: Exception) {
+        null
+    }
+
+    private class StreamingReadState(
+        val fullText: StringBuilder = StringBuilder(),
+        var lastDataTime: Long = System.currentTimeMillis(),
+        var emptyLineCount: Int = 0,
+        var lineCount: Int = 0,
+        var dataChunkCount: Int = 0
+    )
     
     /**
      * 生成完整的总结报告
@@ -1373,83 +1365,13 @@ $doctorMessage
         callback: suspend (content: String, isComplete: Boolean) -> Unit
     ) {
         try {
-            val requestBody = ApiRequest(
-                model = AIConfig.MODEL,
-                messages = listOf(
-                    ApiMessage(role = "user", content = prompt)
-                ),
-                temperature = 0.7,
-                maxTokens = 4096,  // ✅ GLM-5 的 max_tokens 限制，避免 4K 超出导致截断
-                stream = true  // 启用streaming
+            val response = httpClient.send(
+                buildQuickResponseRequest(prompt),
+                HttpResponse.BodyHandlers.ofLines()
             )
-            
-            val request = HttpRequest.newBuilder()
-                .uri(URI.create("${AIConfig.requireApiBaseUrl()}/chat/completions"))
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer $apiKey")
-                .timeout(Duration.ofMillis(60000))
-                .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(requestBody)))
-                .build()
-            
-            // Streaming响应处理
-            val response = httpClient.send(request, HttpResponse.BodyHandlers.ofLines())
-            
+
             if (response.statusCode() == 200) {
-                val lines = response.body().toList()
-                val accumulatedContent = StringBuilder()
-                var lastSentContent = ""  // ✅ 记录上次发送的内容
-                var isDone = false  // ✅ 标记是否已完成
-                
-                for (line in lines) {
-                    if (line.startsWith("data: ")) {
-                        val data = line.removePrefix("data: ").trim()
-                        
-                        if (data == "[DONE]") {
-                            isDone = true
-                            break
-                        }
-                        
-                        try {
-                            val streamResponse = json.decodeFromString<StreamResponse>(data)
-                            val delta = streamResponse.choices.firstOrNull()?.delta
-                            
-                            // ✅ GLM-5 模型：content 字段是乱码，reasoning 字段才是真正的中文回答
-                            // 只读取 reasoning 字段，忽略 content
-                            val content = delta?.reasoning ?: ""
-                            
-                            if (content.isNotEmpty()) {
-                                accumulatedContent.append(content)
-                                
-                                // ✅ 累积3行后发送一次临时消息（更频繁更新）
-                                val newlineCount = accumulatedContent.count { it == '\n' }
-                                if (newlineCount >= 3 && accumulatedContent.length > lastSentContent.length) {
-                                    // ✅ 发送增量内容（只发送新增的部分）
-                                    val incrementalContent = accumulatedContent.substring(lastSentContent.length)
-                                    callback(incrementalContent, false)
-                                    lastSentContent = accumulatedContent.toString()
-                                    delay(50)  // 减少延迟，提升响应速度
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // 忽略解析错误，继续处理下一行
-                        }
-                    }
-                }
-                
-                // 确保发送最后的增量内容（如果有）
-                if (accumulatedContent.length > lastSentContent.length) {
-                    val finalIncrement = accumulatedContent.substring(lastSentContent.length)
-                    if (finalIncrement.isNotEmpty()) {
-                        // 先发送最后的增量内容
-                        callback(finalIncrement, false)
-                        delay(50)
-                    }
-                }
-                
-                // ✅ 只发送一次完成标记（包含完整内容）
-                if (isDone) {
-                    callback(accumulatedContent.toString(), true)
-                }
+                deliverQuickResponse(response.body().toList(), callback)
             } else {
                 logger.error("❌ AI API返回错误: ${response.statusCode()}")
                 callback("⚠️ AI暂时无法回答，请稍后重试", true)
@@ -1459,6 +1381,107 @@ $doctorMessage
             callback("⚠️ AI暂时无法回答，请稍后重试", true)
         }
     }
+
+    private fun buildQuickResponseRequest(prompt: String): HttpRequest {
+        val requestBody = ApiRequest(
+            model = AIConfig.MODEL,
+            messages = listOf(ApiMessage(role = "user", content = prompt)),
+            temperature = 0.7,
+            maxTokens = 4096,
+            stream = true
+        )
+
+        return HttpRequest.newBuilder()
+            .uri(URI.create("${AIConfig.requireApiBaseUrl()}/chat/completions"))
+            .header("Content-Type", "application/json")
+            .header("Authorization", "Bearer $apiKey")
+            .timeout(Duration.ofMillis(60000))
+            .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(requestBody)))
+            .build()
+    }
+
+    private suspend fun deliverQuickResponse(
+        lines: List<String>,
+        callback: suspend (content: String, isComplete: Boolean) -> Unit
+    ) {
+        val streamState = QuickResponseStreamState()
+
+        for (line in lines) {
+            if (consumeQuickResponseLine(line, streamState, callback)) {
+                break
+            }
+        }
+
+        flushQuickResponseTail(streamState, callback)
+        if (streamState.isDone) {
+            callback(streamState.accumulatedContent.toString(), true)
+        }
+    }
+
+    private suspend fun consumeQuickResponseLine(
+        line: String,
+        streamState: QuickResponseStreamState,
+        callback: suspend (content: String, isComplete: Boolean) -> Unit
+    ): Boolean {
+        if (!line.startsWith("data: ")) {
+            return false
+        }
+
+        val data = line.removePrefix("data: ").trim()
+        if (data == "[DONE]") {
+            streamState.isDone = true
+            return true
+        }
+
+        parseQuickResponseChunk(data)?.let { content ->
+            streamState.accumulatedContent.append(content)
+            emitQuickResponseIncrementIfNeeded(streamState, callback)
+        }
+        return false
+    }
+
+    private fun parseQuickResponseChunk(data: String): String? = try {
+        val streamResponse = json.decodeFromString<StreamResponse>(data)
+        streamResponse.choices.firstOrNull()?.delta?.reasoning?.takeIf { it.isNotEmpty() }
+    } catch (_: Exception) {
+        null
+    }
+
+    private suspend fun emitQuickResponseIncrementIfNeeded(
+        streamState: QuickResponseStreamState,
+        callback: suspend (content: String, isComplete: Boolean) -> Unit
+    ) {
+        val newlineCount = streamState.accumulatedContent.count { it == '\n' }
+        if (newlineCount < 3 || streamState.accumulatedContent.length <= streamState.lastSentContent.length) {
+            return
+        }
+
+        val incrementalContent = streamState.accumulatedContent.substring(streamState.lastSentContent.length)
+        callback(incrementalContent, false)
+        streamState.lastSentContent = streamState.accumulatedContent.toString()
+        delay(50)
+    }
+
+    private suspend fun flushQuickResponseTail(
+        streamState: QuickResponseStreamState,
+        callback: suspend (content: String, isComplete: Boolean) -> Unit
+    ) {
+        if (streamState.accumulatedContent.length <= streamState.lastSentContent.length) {
+            return
+        }
+
+        val finalIncrement = streamState.accumulatedContent.substring(streamState.lastSentContent.length)
+        if (finalIncrement.isNotEmpty()) {
+            callback(finalIncrement, false)
+            delay(50)
+        }
+    }
+
+    private class QuickResponseStreamState(
+        val accumulatedContent: StringBuilder = StringBuilder(),
+        var lastSentContent: String = "",
+        var isDone: Boolean = false
+    )
 }
 
 /**
