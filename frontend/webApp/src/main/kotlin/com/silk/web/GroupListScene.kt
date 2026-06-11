@@ -467,48 +467,6 @@ fun GroupListScene(appState: WebAppState) {
                 }) {
                     Text("🤖 ${strings.chatWithSilk}")
                 }
-                
-                // 设置按钮
-                Button({
-                    style {
-                        padding(10.px, 14.px)
-                        backgroundColor(Color("rgba(255,255,255,0.2)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                        fontSize(14.px)
-                        property("font-weight", "500")
-                        property("flex-shrink", "0")
-                        property("white-space", "nowrap")
-                    }
-                    onClick { appState.navigateTo(Scene.SETTINGS) }
-                }) {
-                    Text("⚙️ ${strings.settingsButton}")
-                }
-                
-                // 登出按钮
-                Button({
-                    style {
-                        padding(10.px, 14.px)
-                        backgroundColor(Color("rgba(255,255,255,0.15)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                        fontSize(14.px)
-                        property("font-weight", "500")
-                        property("flex-shrink", "0")
-                        property("white-space", "nowrap")
-                    }
-                    onClick { appState.logout() }
-                }) {
-                    Text(strings.logoutButton)
-                }
             }
         }
         
