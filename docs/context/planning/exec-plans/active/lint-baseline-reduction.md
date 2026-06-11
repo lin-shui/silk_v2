@@ -38,9 +38,9 @@
 
 ## Current Snapshot
 
-当前 detekt baseline 余量（2026-06-09，Slice 139 后）：
+当前 detekt baseline 余量（2026-06-11，Slice 148 后）：
 
-- `backend.xml`: 49
+- `backend.xml`: 38
 - `frontend-androidApp.xml`: 0
 - `frontend-webApp.xml`: 0
 - `frontend-shared.xml`: 0
@@ -91,6 +91,8 @@
 - `CommandRouter.kt` 已移除 1 条 `CyclomaticComplexMethod` baseline；agent 路由总入口现按 `/use`、trigger command、`@agent` 与 slash command 分拆 helper，继续保持 alias、插队、无 agent 透传和 `/session` `/cd` 等命令解析语义不变。
 - `FileRoutes.kt` 已移除 1 条 `TooGenericExceptionCaught` baseline；文件上传、异步索引与 PDF 文本提取不再依赖 `catch (e: Exception)`，改为 `runCatching` + cancellation 透传，保持上传失败返回 500、索引失败只回写状态消息、PDF 提取失败回退 `null` 的既有合同。
 - `FileRoutes.kt` 又移除 1 条 `NestedBlockDepth` baseline；长文本分块逻辑现把 chunk 边界探测拆到 helper，继续保持大文档按窗口回退、优先句边界切分和 overlap 续接的既有索引切块语义不变。
+- `FileRoutes.kt` 又移除 1 条 `CyclomaticComplexMethod` baseline；`fileRoutes()` 现已收敛为纯路由挂载入口，上传、下载、版本查询、文件列表与删除均拆到独立 `register*Route()` helper，保持 `/api/files/*` 路径、返回体和异步索引流程不变。
+- `FileRoutes.kt` 又移除 1 条 `CyclomaticComplexMethod` baseline；`indexFileToWeaviate(...)` 现已拆成 Weaviate 就绪检查、内容提取、内容清洗、分块准备、单块索引与关键词构造 helper，保持 PDF/text/binary 分流、分块大小、关键词上限与成功块计数语义不变。
 - `UserTodoStore.kt` 已移除 1 条 `CyclomaticComplexMethod` baseline；模板实例是否在今天触发的判断现拆成 active window / yearly anchor / monthly anchor helper，继续保持工作日、年周期、月周期与 activeFrom/activeTo 窗口判定合同不变。
 - `UserTodoStore.kt` 又移除 1 条 `CyclomaticComplexMethod` baseline；action detail 归一化现拆成 exact time / full datetime / relative datetime helper，继续保持闹钟/日程 logical key 的时间标准化与 fallback `normKey(...)` 合同不变。
 - `UserTodoStore.kt` 又移除 1 条 `CyclomaticComplexMethod` baseline；标题里的时间提取现拆成中文半点、中文整点、阿拉伯数字点钟与 `HH:mm` helper，继续保持 PM 归一化、半点解析和非法时间回退 `null` 的既有合同不变。
@@ -99,7 +101,14 @@
 - `AnthropicClient.kt` 已移除 1 条 `TooGenericExceptionCaught` baseline；Anthropic SSE 事件容错现在只对 `SerializationException`、`IllegalArgumentException` 与 `IllegalStateException` 这类解析失败做 debug 跳过，不再吞掉流式回调或其他运行时错误，继续保持坏事件 best-effort 跳过、正常 chunk 增量回调与 tool/citation 聚合合同不变。
 - `AnthropicClient.kt` 又移除 1 条 `CyclomaticComplexMethod` 和 1 条 `NestedBlockDepth` baseline；SSE 事件处理现按 start/delta/stop helper 分发，引用收集与 tool-use 收口也已下沉到专职 helper，继续保持 tool/citation 聚合、坏事件 best-effort 跳过和增量文本回调合同不变。
 - `AnthropicClient.kt` 又移除 1 条 `CyclomaticComplexMethod` baseline；消息角色转换现按 user/assistant/tool helper 分发，tool_result 与 tool_use block 构造、参数 JSON 解析和 fallback user 映射都已拆出 helper，继续保持 Anthropic message payload 合同不变。
-- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter`、`EmptyFunctionBlock`、`AcpUpdateMapper.kt` 的 `CyclomaticComplexMethod`、`AnthropicClient.kt` 的 `TooGenericExceptionCaught` / `NestedBlockDepth` / `convertMessage(...)` 复杂度基线、`AsrRoutes.kt` 的 `SwallowedException`、`ChatHistoryBackupManager.kt` 的 `PrintStackTrace` / `SwallowedException`、`ChatHistoryManager.kt` 的 `TooGenericExceptionCaught`、`ExternalSearchService.kt` 的 `TooGenericExceptionCaught`、`FileRoutes.kt` 的 `chunkText(...)` `NestedBlockDepth`、`GroupTodoExtractionService.kt` 的 `extractRoughHourMinute(...)` 与 `ComplexCondition` 基线、`UserTodoStore.kt` 的 `ComplexCondition`、`SearchDrivenAgent.kt` 的 `SwallowedException` / `TooGenericExceptionCaught` / `NestedBlockDepth`、`ToolPolicyManager.kt` 的 `SwallowedException`、`UserTodoStore.kt` 的 `isTemplateDueToday(...)` / `normalizeActionDetailForKey(...)` / `extractTimeFromTitle(...)` / `mergeShortInstanceByState(...)` / `tryMergeByContainedNormTitle(...)` 复杂度基线、`WeaviateClient.kt` 的 `PrintStackTrace`，以及 `WebSocketConfig.kt` 的 `ComplexCondition` / `PrintStackTrace` / `SwallowedException` baseline 和一条陈旧的 `TooGenericExceptionCaught(ex)` 残留；剩余主要是 `CyclomaticComplexMethod` 16、`TooGenericExceptionCaught` 13、`NestedBlockDepth` 4、`SwallowedException` 3、`LoopWithTooManyJumpStatements` 6、`LargeClass` 8。
+- `DirectModelAgent.kt` 已移除 1 条 `CyclomaticComplexMethod` baseline；`normalizeCitedReferences(...)` 现已拆成提取 key、匹配已有元数据、补占位引用、正文重编号与 key 解析 helper，继续保持 citation / available 的去重顺序、重编号规则与占位引用合同不变。
+- `WeaviateClient.kt` 已移除 1 条 `CyclomaticComplexMethod` baseline；`indexDocument(...)` 现已拆成文档清洗、JSON 构造与结果记录 helper，继续保持 Weaviate 请求地址、`SilkContext` 字段、JSON 转义、成功/失败日志与 `false` 回退语义不变。
+- `GroupTodoExtractionService.kt` 已移除 1 条 `CyclomaticComplexMethod` baseline；`dedupeDrafts(...)` 现已拆成“是否参与去重 / logical key 生成 / 候选优先级比较” helper，继续保持模板优先、显式意图优先、`actionDetail` 更长优先与最大返回条数限制的既有合并合同不变。
+- `GroupTodoExtractionService.kt` 又移除 1 条 `CyclomaticComplexMethod` 和 1 条 `NestedBlockDepth` baseline；`extractRecurringTemplateDrafts(...)` 现已拆成“逐群收集 / 单行判定 / draft 构造 / 标题与时间格式化” helper，继续保持工作日习惯 / 纪念日识别、`matchedLines` 截断、`long_term_template` 合同和 `workday`/`yearly` repeat 语义不变。
+- `GroupTodoExtractionService.kt` 又移除 1 条 `CyclomaticComplexMethod` 和 1 条 `NestedBlockDepth` baseline；`heuristicFromSlices(...)` 现已拆成“逐群收集 / 单行候选识别 / 单条 draft 构造 / alarm fallback 状态控制” helper，继续保持 checklist 提取、alarm 文本弱兜底、同一消息只接受一次非 checklist alarm fallback、标题截断与 `alarm`/`none` 判定语义不变。
+- `GroupTodoExtractionService.kt` 又移除 1 条 `NestedBlockDepth` baseline；`buildTranscriptString(...)` 现已拆成“逐群追加 / 逐消息展开 / 单行标准化” helper，继续保持 transcript 头格式、逐行 `[sender]: content` 输出、空行跳过与 `MAX_TRANSCRIPT_CHARS` 截断语义不变。
+- `AIStepwiseAgent.kt` 已移除 1 条 `CyclomaticComplexMethod` baseline；`generateFallbackReport(...)` 现已拆成“报告头 / 通用 section 拼接 / 仅成功步骤附正文” helper，继续保持章节标题、step key 映射、成功步骤输出顺序与失败步骤留空的既有 fallback 报告合同不变。
+- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter`、`EmptyFunctionBlock`、`AcpUpdateMapper.kt` 的 `CyclomaticComplexMethod`、`AIStepwiseAgent.kt` 的 `generateFallbackReport(...)` 复杂度基线、`AnthropicClient.kt` 的 `TooGenericExceptionCaught` / `NestedBlockDepth` / `convertMessage(...)` 复杂度基线、`AsrRoutes.kt` 的 `SwallowedException`、`ChatHistoryBackupManager.kt` 的 `PrintStackTrace` / `SwallowedException`、`ChatHistoryManager.kt` 的 `TooGenericExceptionCaught`、`DirectModelAgent.kt` 的 `normalizeCitedReferences(...)` 复杂度基线、`ExternalSearchService.kt` 的 `TooGenericExceptionCaught`、`FileRoutes.kt` 的 `fileRoutes(...)` / `indexFileToWeaviate(...)` / `chunkText(...)` 复杂度基线、`GroupTodoExtractionService.kt` 的 `buildTranscriptString(...)` / `dedupeDrafts(...)` / `extractRecurringTemplateDrafts(...)` / `heuristicFromSlices(...)` / `extractRoughHourMinute(...)` 与 `ComplexCondition` 基线、`UserTodoStore.kt` 的 `ComplexCondition`、`SearchDrivenAgent.kt` 的 `SwallowedException` / `TooGenericExceptionCaught` / `NestedBlockDepth`、`ToolPolicyManager.kt` 的 `SwallowedException`、`UserTodoStore.kt` 的 `isTemplateDueToday(...)` / `normalizeActionDetailForKey(...)` / `extractTimeFromTitle(...)` / `mergeShortInstanceByState(...)` / `tryMergeByContainedNormTitle(...)` 复杂度基线、`WeaviateClient.kt` 的 `indexDocument(...)` 复杂度基线与 `PrintStackTrace`，以及 `WebSocketConfig.kt` 的 `ComplexCondition` / `PrintStackTrace` / `SwallowedException` baseline 和一条陈旧的 `TooGenericExceptionCaught(ex)` 残留；剩余主要是 `CyclomaticComplexMethod` 8、`TooGenericExceptionCaught` 13、`NestedBlockDepth` 1、`SwallowedException` 3、`LoopWithTooManyJumpStatements` 6、`LargeClass` 8。
 
 ## Current Status
 
@@ -109,9 +118,9 @@
 
 ## Next Slices
 
-- Slice 140 候选：优先继续处理 `Routing.kt` 中单一路由族、可明确区分 parse / validation 的异常语义点，不直接碰整文件聚合的 `Exception` baseline。
-- Slice 141 候选：如果继续 backend 复杂度，优先按单函数慢拆，不和异常语义 / import 收敛混在同一 slice。
-- Slice 142 候选：如果 backend 异常语义继续推进，优先选单文件里的同类 catch / swallow 点做小批量收敛，不要横跨多个模块。
+- Slice 149 候选：优先继续处理 `GroupTodoExtractionService.kt` 的 `parseCompactTodoJson(...)`，保持 Todo 面同文件、单函数推进，不碰 refresh 主流程。
+- Slice 150 候选：如果转向 backend 异常语义，优先处理 `Routing.kt` 中单一路由族、可明确区分 parse / validation 的 catch 点，不直接碰整文件聚合的 `Exception` baseline。
+- Slice 151 候选：如果换文件收复杂度，优先找 `Routing.kt` 之外的单职责 backend 文件，不把 `LargeClass` / `LoopWithTooManyJumpStatements` 这类重构型条目混进异常语义 slice。
 - 如果某一步发现需要新增 baseline，先停下来判断是否应关规则、补测试或拆小 PR，不要直接把新增项写进 baseline。
 
 ## Handoff Notes

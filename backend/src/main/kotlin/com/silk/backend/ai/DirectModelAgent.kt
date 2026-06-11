@@ -441,14 +441,7 @@ class DirectModelAgent(
 
     private fun normalizeCitedReferences(content: String): FinalCitationResult {
         val citedPattern = Regex("\\[(citation|available):(\\d+)\\]")
-        val citedKeys = citedPattern.findAll(content)
-            .mapNotNull { match ->
-                val kind = match.groupValues[1]
-                val idx = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
-                "$kind:$idx"
-            }
-            .distinct()
-            .toList()
+        val citedKeys = extractCitedKeys(content, citedPattern)
 
         if (citedKeys.isEmpty()) {
             // 文本中没有引用标记但有搜索结果的，仍然返回 references 供前端展示来源列表
@@ -458,19 +451,12 @@ class DirectModelAgent(
             return FinalCitationResult(content, emptyList())
         }
 
-        val citedRefs = citedKeys.mapNotNull { key ->
-            val kind = key.substringBefore(":")
-            val idx = key.substringAfter(":").toIntOrNull() ?: return@mapNotNull null
-            currentResponseReferences.find { it.kind == kind && it.index == idx }
-        }
-
         val reindexMap = mutableMapOf<String, Int>()
         val newRefs = mutableListOf<com.silk.backend.models.MessageReference>()
         var citationCounter = 0
         var availableCounter = 0
 
-        // 先处理有元数据的引用
-        for (ref in citedRefs) {
+        for (ref in resolveCitedReferences(citedKeys)) {
             val newIndex = if (ref.kind == "citation") {
                 ++citationCounter
             } else {
@@ -480,35 +466,74 @@ class DirectModelAgent(
             newRefs.add(ref.copy(index = newIndex))
         }
 
-        // 对文本中有标记但无对应元数据的（如 Claude CLI 输出的 [citation:N]），创建占位引用
         for (key in citedKeys) {
-            if (reindexMap.containsKey(key)) continue
-            val kind = key.substringBefore(":")
-            val idx = key.substringAfter(":").toIntOrNull() ?: continue
-            val newIndex = if (kind == "citation" || kind == "available") {
-                if (kind == "citation") ++citationCounter else ++availableCounter
-            } else continue
-            reindexMap[key] = newIndex
-            newRefs.add(
-                com.silk.backend.models.MessageReference(
-                    kind = kind,
-                    index = newIndex,
-                    title = "${if (kind == "citation") "来源" else "资料"} $idx",
-                    snippet = null,
-                    url = null,
-                    path = null
-                )
-            )
+            val placeholder = createPlaceholderReference(
+                key = key,
+                reindexMap = reindexMap,
+                nextCitationIndex = { ++citationCounter },
+                nextAvailableIndex = { ++availableCounter }
+            ) ?: continue
+            newRefs.add(placeholder)
         }
 
-        val newContent = citedPattern.replace(content) { match ->
+        val newContent = reindexContent(content, citedPattern, reindexMap)
+        return FinalCitationResult(newContent, newRefs)
+    }
+
+    private fun extractCitedKeys(content: String, citedPattern: Regex): List<String> =
+        citedPattern.findAll(content)
+            .mapNotNull { match ->
+                val kind = match.groupValues[1]
+                val idx = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+                "$kind:$idx"
+            }
+            .distinct()
+            .toList()
+
+    private fun resolveCitedReferences(
+        citedKeys: List<String>
+    ): List<com.silk.backend.models.MessageReference> =
+        citedKeys.mapNotNull { key ->
+            val (kind, idx) = parseCitationKey(key) ?: return@mapNotNull null
+            currentResponseReferences.find { it.kind == kind && it.index == idx }
+        }
+
+    private fun createPlaceholderReference(
+        key: String,
+        reindexMap: MutableMap<String, Int>,
+        nextCitationIndex: () -> Int,
+        nextAvailableIndex: () -> Int
+    ): com.silk.backend.models.MessageReference? {
+        if (reindexMap.containsKey(key)) return null
+        val (kind, idx) = parseCitationKey(key) ?: return null
+        val newIndex = when (kind) {
+            "citation" -> nextCitationIndex()
+            "available" -> nextAvailableIndex()
+            else -> return null
+        }
+        reindexMap[key] = newIndex
+        return com.silk.backend.models.MessageReference(
+            kind = kind,
+            index = newIndex,
+            title = "${if (kind == "citation") "来源" else "资料"} $idx",
+            snippet = null,
+            url = null,
+            path = null
+        )
+    }
+
+    private fun reindexContent(content: String, citedPattern: Regex, reindexMap: Map<String, Int>): String =
+        citedPattern.replace(content) { match ->
             val kind = match.groupValues[1]
             val oldIdx = match.groupValues[2].toInt()
             val newIdx = reindexMap["$kind:$oldIdx"] ?: oldIdx
             "[$kind:$newIdx]"
         }
 
-        return FinalCitationResult(newContent, newRefs)
+    private fun parseCitationKey(key: String): Pair<String, Int>? {
+        val kind = key.substringBefore(":")
+        val idx = key.substringAfter(":").toIntOrNull() ?: return null
+        return kind to idx
     }
 
     // ── 测试辅助 ──────────────────────────────────────────────────────

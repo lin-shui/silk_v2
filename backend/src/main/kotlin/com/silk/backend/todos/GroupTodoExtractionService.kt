@@ -448,19 +448,39 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
     private fun buildTranscriptString(slices: List<GroupSlice>): String {
         val sb = StringBuilder()
         for (slice in slices) {
-            sb.appendLine("=== 群：${slice.groupName} (id=${slice.groupId}) ===")
-            for ((sender, content, _) in slice.messages) {
-                for (line in content.split('\n')) {
-                    val one = line.trim().replace("\r", "")
-                    if (one.isEmpty()) continue
-                    sb.appendLine("[$sender]: $one")
-                    if (sb.length >= MAX_TRANSCRIPT_CHARS) return sb.toString().trim()
-                }
+            appendTranscriptSlice(sb, slice)
+            if (sb.length >= MAX_TRANSCRIPT_CHARS) {
+                return sb.toString().trim()
             }
-            sb.appendLine()
-            if (sb.length >= MAX_TRANSCRIPT_CHARS) break
         }
         return sb.toString().trim()
+    }
+
+    private fun appendTranscriptSlice(sb: StringBuilder, slice: GroupSlice) {
+        sb.appendLine("=== 群：${slice.groupName} (id=${slice.groupId}) ===")
+        for ((sender, content, _) in slice.messages) {
+            val reachedLimit = appendTranscriptLines(sb, sender, content)
+            if (reachedLimit) return
+        }
+        sb.appendLine()
+    }
+
+    private fun appendTranscriptLines(
+        sb: StringBuilder,
+        sender: String,
+        content: String
+    ): Boolean {
+        for (line in content.split('\n')) {
+            val normalizedLine = normalizeTranscriptLine(line) ?: continue
+            sb.appendLine("[$sender]: $normalizedLine")
+            if (sb.length >= MAX_TRANSCRIPT_CHARS) return true
+        }
+        return false
+    }
+
+    private fun normalizeTranscriptLine(line: String): String? {
+        val normalized = line.trim().replace("\r", "")
+        return normalized.ifEmpty { null }
     }
 
     private fun isLikelyAssistantSender(sender: String): Boolean {
@@ -481,52 +501,86 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
             Regex("""(提醒|闹钟|叫醒|起床|几点).{0,80}""")
 
         for (slice in slices) {
-            for ((sender, raw, ts) in slice.messages) {
-                if (isLikelyAssistantSender(sender)) continue
-                var usedAlarmLineFallback = false
-                for (line in raw.split('\n')) {
-                    val t = line.trim()
-                    if (t.length < 4 || t.length > 200) continue
-                    if (skipSmallTalk.matches(t)) continue
-                    if (t.startsWith("http://", true) || t.startsWith("https://", true)) continue
-
-                    val fromCheck = checklist.find(t)?.groupValues?.getOrNull(1)?.trim()
-                    val alarmish = alarmCue.containsMatchIn(t)
-                    val candidate = when {
-                        fromCheck != null && fromCheck.length >= 2 -> fromCheck
-                        alarmish && t.length <= 80 -> t
-                        else -> null
-                    } ?: continue
-
-                    if (fromCheck == null && alarmish) {
-                        if (usedAlarmLineFallback) continue
-                        usedAlarmLineFallback = true
-                    }
-
-                    val title = if (candidate.length > 120) candidate.take(117) + "..." else candidate
-                    val hm = extractRoughHourMinute(t)
-                    val actionType = when {
-                        alarmish || hm != null -> "alarm"
-                        else -> "none"
-                    }
-                    val actionDetail = hm?.let { "%02d:%02d".format(it.first, it.second) }
-                    val explicitIntent = isExplicitTaskIntent(t)
-                    out.add(
-                        ExtractedTodoDraft(
-                            title = title,
-                            sourceGroupId = slice.groupId,
-                            sourceGroupName = slice.groupName,
-                            actionType = actionType,
-                            actionDetail = actionDetail,
-                            evidenceAt = ts,
-                            explicitIntent = explicitIntent
-                        )
-                    )
-                }
-            }
+            collectHeuristicDraftsForSlice(slice, checklist, alarmCue, out)
         }
         return dedupeDrafts(out)
     }
+
+    private fun collectHeuristicDraftsForSlice(
+        slice: GroupSlice,
+        checklist: Regex,
+        alarmCue: Regex,
+        out: MutableList<ExtractedTodoDraft>
+    ) {
+        for ((sender, raw, ts) in slice.messages) {
+            if (isLikelyAssistantSender(sender)) continue
+            val collector = HeuristicDraftCollector()
+            for (line in raw.split('\n')) {
+                val heuristicLine = heuristicCandidateLine(line, checklist, alarmCue) ?: continue
+                if (!collector.accept(heuristicLine)) continue
+                out.add(createHeuristicDraft(slice, heuristicLine, ts))
+            }
+        }
+    }
+
+    private fun heuristicCandidateLine(
+        line: String,
+        checklist: Regex,
+        alarmCue: Regex
+    ): HeuristicCandidateLine? {
+        val text = line.trim()
+        if (!isHeuristicCandidateLine(text)) return null
+
+        val fromChecklist = checklist.find(text)?.groupValues?.getOrNull(1)?.trim()
+        val isAlarmLine = alarmCue.containsMatchIn(text)
+        val candidate = chooseHeuristicCandidate(text, fromChecklist, isAlarmLine) ?: return null
+        return HeuristicCandidateLine(
+            text = text,
+            candidate = candidate,
+            isAlarmLine = isAlarmLine,
+            fromChecklist = fromChecklist != null
+        )
+    }
+
+    private fun isHeuristicCandidateLine(text: String): Boolean {
+        if (text.length !in 4..200) return false
+        if (skipSmallTalk.matches(text)) return false
+        if (text.startsWith("http://", true) || text.startsWith("https://", true)) return false
+        return true
+    }
+
+    private fun chooseHeuristicCandidate(
+        text: String,
+        fromChecklist: String?,
+        isAlarmLine: Boolean
+    ): String? = when {
+        fromChecklist != null && fromChecklist.length >= 2 -> fromChecklist
+        isAlarmLine && text.length <= 80 -> text
+        else -> null
+    }
+
+    private fun createHeuristicDraft(
+        slice: GroupSlice,
+        heuristicLine: HeuristicCandidateLine,
+        timestamp: Long
+    ): ExtractedTodoDraft {
+        val hourMinute = extractRoughHourMinute(heuristicLine.text)
+        return ExtractedTodoDraft(
+            title = compactHeuristicTitle(heuristicLine.candidate),
+            sourceGroupId = slice.groupId,
+            sourceGroupName = slice.groupName,
+            actionType = heuristicActionType(heuristicLine.isAlarmLine, hourMinute),
+            actionDetail = hourMinute?.toTimeString(),
+            evidenceAt = timestamp,
+            explicitIntent = isExplicitTaskIntent(heuristicLine.text)
+        )
+    }
+
+    private fun compactHeuristicTitle(candidate: String): String =
+        if (candidate.length > 120) candidate.take(117) + "..." else candidate
+
+    private fun heuristicActionType(isAlarmLine: Boolean, hourMinute: Pair<Int, Int>?): String =
+        if (isAlarmLine || hourMinute != null) "alarm" else "none"
 
     /**
      * 对“工作日/纪念日”这类长期重复任务做强兜底：
@@ -539,40 +593,74 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
         val anniversaryCue = Regex("(纪念日|周年|生日)")
 
         for (slice in slices) {
-            for ((sender, raw, ts) in slice.messages) {
-                if (isLikelyAssistantSender(sender)) continue
-                for (line in raw.split('\n')) {
-                    val t = line.trim()
-                    if (t.length < 3 || t.length > 200) continue
-                    if (skipSmallTalk.matches(t)) continue
-                    if (t.startsWith("http://", true) || t.startsWith("https://", true)) continue
-
-                    val isWorkdayHabit = workdayHabitCue.containsMatchIn(t)
-                    val isAnniversary = anniversaryCue.containsMatchIn(t)
-                    if (!isWorkdayHabit && !isAnniversary) continue
-                    matchedLines.add(t.take(120))
-
-                    val hm = extractRoughHourMinute(t)
-                    val compactTitle = if (t.length > 80) t.take(77) + "..." else t
-                    out.add(
-                        ExtractedTodoDraft(
-                            title = compactTitle,
-                            sourceGroupId = slice.groupId,
-                            sourceGroupName = slice.groupName,
-                            actionType = if (hm != null) "alarm" else "none",
-                            actionDetail = hm?.let { "%02d:%02d".format(it.first, it.second) },
-                            taskKind = "long_term_template",
-                            repeatRule = if (isWorkdayHabit) "workday" else "yearly",
-                            repeatAnchor = if (isWorkdayHabit) hm?.let { "%02d:%02d".format(it.first, it.second) } else null,
-                            evidenceAt = ts,
-                            explicitIntent = true
-                        )
-                    )
-                }
-            }
+            collectRecurringDraftsForSlice(slice, workdayHabitCue, anniversaryCue, out, matchedLines)
         }
         return dedupeDrafts(out) to matchedLines.distinct()
     }
+
+    private fun collectRecurringDraftsForSlice(
+        slice: GroupSlice,
+        workdayHabitCue: Regex,
+        anniversaryCue: Regex,
+        out: MutableList<ExtractedTodoDraft>,
+        matchedLines: MutableList<String>
+    ) {
+        for ((sender, raw, ts) in slice.messages) {
+            if (isLikelyAssistantSender(sender)) continue
+            for (line in raw.split('\n')) {
+                val recurringLine = recurringTemplateLine(line, workdayHabitCue, anniversaryCue) ?: continue
+                matchedLines.add(recurringLine.text.take(120))
+                out.add(createRecurringTemplateDraft(slice, recurringLine, ts))
+            }
+        }
+    }
+
+    private fun recurringTemplateLine(
+        line: String,
+        workdayHabitCue: Regex,
+        anniversaryCue: Regex
+    ): RecurringTemplateLine? {
+        val text = line.trim()
+        if (!isRecurringCandidateLine(text)) return null
+
+        val isWorkdayHabit = workdayHabitCue.containsMatchIn(text)
+        val isAnniversary = anniversaryCue.containsMatchIn(text)
+        if (!isWorkdayHabit && !isAnniversary) return null
+        return RecurringTemplateLine(text, isWorkdayHabit)
+    }
+
+    private fun isRecurringCandidateLine(text: String): Boolean {
+        if (text.length !in 3..200) return false
+        if (skipSmallTalk.matches(text)) return false
+        if (text.startsWith("http://", true) || text.startsWith("https://", true)) return false
+        return true
+    }
+
+    private fun createRecurringTemplateDraft(
+        slice: GroupSlice,
+        recurringLine: RecurringTemplateLine,
+        timestamp: Long
+    ): ExtractedTodoDraft {
+        val hm = extractRoughHourMinute(recurringLine.text)
+        val repeatAnchor = hm?.toTimeString()
+        return ExtractedTodoDraft(
+            title = compactRecurringTitle(recurringLine.text),
+            sourceGroupId = slice.groupId,
+            sourceGroupName = slice.groupName,
+            actionType = if (hm != null) "alarm" else "none",
+            actionDetail = repeatAnchor,
+            taskKind = "long_term_template",
+            repeatRule = if (recurringLine.isWorkdayHabit) "workday" else "yearly",
+            repeatAnchor = if (recurringLine.isWorkdayHabit) repeatAnchor else null,
+            evidenceAt = timestamp,
+            explicitIntent = true
+        )
+    }
+
+    private fun compactRecurringTitle(text: String): String =
+        if (text.length > 80) text.take(77) + "..." else text
+
+    private fun Pair<Int, Int>.toTimeString(): String = "%02d:%02d".format(first, second)
 
     private fun isExplicitTaskIntent(text: String): Boolean {
         val t = text.trim()
@@ -688,30 +776,66 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
     private fun dedupeDrafts(list: List<ExtractedTodoDraft>): List<ExtractedTodoDraft> {
         val pickedByKey = linkedMapOf<String, ExtractedTodoDraft>()
         for (d in list) {
-            if (d.title.trim().length < 2) continue
-            val key = UserTodoStore.logicalDedupKey(
-                d.title,
-                d.actionType,
-                d.actionDetail,
-                d.taskKind
-            )
-            val old = pickedByKey[key]
-            if (old == null) {
+            if (!isDedupableDraft(d)) continue
+            val key = draftDedupKey(d)
+            val existing = pickedByKey[key]
+            if (existing == null) {
                 pickedByKey[key] = d
                 continue
             }
-            val keep = when {
-                old.taskKind != "long_term_template" && d.taskKind == "long_term_template" -> d
-                old.taskKind == "long_term_template" && d.taskKind != "long_term_template" -> old
-                !old.explicitIntent && d.explicitIntent -> d
-                old.explicitIntent && !d.explicitIntent -> old
-                (old.actionDetail ?: "").length < (d.actionDetail ?: "").length -> d
-                else -> old
-            }
-            pickedByKey[key] = keep
+            pickedByKey[key] = preferredDraft(existing, d)
         }
         return pickedByKey.values.take(MAX_TODOS_PER_REFRESH)
     }
+
+    private fun isDedupableDraft(draft: ExtractedTodoDraft): Boolean = draft.title.trim().length >= 2
+
+    private fun draftDedupKey(draft: ExtractedTodoDraft): String = UserTodoStore.logicalDedupKey(
+        draft.title,
+        draft.actionType,
+        draft.actionDetail,
+        draft.taskKind
+    )
+
+    private fun preferredDraft(
+        existing: ExtractedTodoDraft,
+        incoming: ExtractedTodoDraft
+    ): ExtractedTodoDraft = when {
+        prefersLongTermTemplate(existing, incoming) -> incoming
+        prefersLongTermTemplate(incoming, existing) -> existing
+        !existing.explicitIntent && incoming.explicitIntent -> incoming
+        existing.explicitIntent && !incoming.explicitIntent -> existing
+        existing.actionDetail.orEmpty().length < incoming.actionDetail.orEmpty().length -> incoming
+        else -> existing
+    }
+
+    private fun prefersLongTermTemplate(
+        current: ExtractedTodoDraft,
+        candidate: ExtractedTodoDraft
+    ): Boolean = current.taskKind != "long_term_template" && candidate.taskKind == "long_term_template"
+
+    private data class HeuristicCandidateLine(
+        val text: String,
+        val candidate: String,
+        val isAlarmLine: Boolean,
+        val fromChecklist: Boolean
+    )
+
+    private class HeuristicDraftCollector {
+        private var usedAlarmLineFallback = false
+
+        fun accept(line: HeuristicCandidateLine): Boolean {
+            if (line.fromChecklist) return true
+            if (!line.isAlarmLine || usedAlarmLineFallback) return false
+            usedAlarmLineFallback = true
+            return true
+        }
+    }
+
+    private data class RecurringTemplateLine(
+        val text: String,
+        val isWorkdayHabit: Boolean
+    )
 
     private fun callLlm(system: String, user: String, apiKey: String, temperature: Double = 0.35): String {
         val body = SimpleChatRequest(
