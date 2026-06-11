@@ -249,8 +249,8 @@ fun GroupListScene(appState: WebAppState) {
                     gap(8.px)
                     alignItems(AlignItems.Center)
                     property("overflow-x", "auto")
-                    property("flex-shrink", "0")
-                    property("max-width", "75%")
+                    property("flex-shrink", "1")
+                    property("min-width", "0")
                 }
             }) {
                 // ➖ 删除/退出模式按钮
