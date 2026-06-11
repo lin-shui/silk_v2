@@ -589,6 +589,25 @@ fun SilkNavRail(appState: WebAppState) {
                 }
             }) { Text("\u2699\uFE0F") }
         }
+
+        // 登出
+        Div({
+            style {
+                property("cursor", "pointer")
+                padding(8.px)
+                marginTop(4.px)
+                borderRadius(8.px)
+                property("transition", "background 0.2s")
+            }
+            onClick { appState.logout() }
+        }) {
+            Span({
+                style {
+                    fontSize(20.px)
+                    property("filter", "grayscale(1) brightness(2)")
+                }
+            }) { Text("🚪") }
+        }
     }
 }
 

@@ -211,12 +211,11 @@ fun GroupListScene(appState: WebAppState) {
             style {
                 property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
                 color(Color.white)
-                padding(16.px, 20.px)
+                padding(12.px, 16.px)
                 display(DisplayStyle.Flex)
                 justifyContent(JustifyContent.SpaceBetween)
-                alignItems(AlignItems.Center)
+                alignItems(AlignItems.FlexStart)
                 property("box-shadow", "0 2px 12px rgba(169, 137, 77, 0.25)")
-                property("overflow", "hidden")
             }
         }) {
             Div {
@@ -243,16 +242,15 @@ fun GroupListScene(appState: WebAppState) {
                 }
             }
             
-            // 右侧按钮组
+            // 右侧按钮组 - 自动换行
             Div({
                 style {
                     display(DisplayStyle.Flex)
-                    gap(6.px)
+                    gap(4.px)
                     alignItems(AlignItems.Center)
-                    property("overflow-x", "auto")
-                    property("overflow-y", "hidden")
-                    property("flex-shrink", "1")
-                    property("min-width", "0")
+                    property("flex-wrap", "wrap")
+                    property("justify-content", "flex-end")
+                    property("max-width", "75%")
                 }
             }) {
                 // ➖ 删除/退出模式按钮
