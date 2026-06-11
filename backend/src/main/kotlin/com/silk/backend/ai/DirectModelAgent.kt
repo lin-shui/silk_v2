@@ -264,24 +264,15 @@ class DirectModelAgent(
             appendLine("群聊历史已保存到 `chat_history.md`，你可以用 Grep 搜索历史消息。")
         }
 
-        val response = try {
+        val response = runCatching {
             // 优先使用 Claude CLI（内置 web_search、Grep、Read、glob 工具，原生支持 [citation:N] 引用）
-            try {
-                chatViaClaudeProcess(toolContext, callback)
-            } catch (e: Exception) {
-                logger.warn("⚠️ [DirectModelAgent] Claude CLI 调用失败，回退到 API 路径: ${e.message}")
-                val apiKey = AIConfig.ANTHROPIC_API_KEY
-                if (apiKey.isNotBlank()) {
-                    chatViaAnthropicApi(apiKey, toolContext, callback)
-                } else {
-                    throw e
-                }
+            runClaudeOrApi(toolContext, callback)
+        }.getOrElse { error ->
+            if (error is CancellationException) {
+                throw error
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.error("❌ [DirectModelAgent] AI 调用失败: ${e.message}")
-            callback("error", "❌ AI 调用失败: ${e.message}", true)
+            logger.error("❌ [DirectModelAgent] AI 调用失败: ${error.message}")
+            callback("error", "❌ AI 调用失败: ${error.message}", true)
             "抱歉，处理您的问题时发生了错误。"
         }
 
@@ -289,6 +280,24 @@ class DirectModelAgent(
         conversationHistory.add(Message(role = "assistant", content = response))
         callback("complete", response, true)
         return response
+    }
+
+    private suspend fun runClaudeOrApi(
+        toolContext: String,
+        callback: suspend (String, String, Boolean) -> Unit
+    ): String = runCatching {
+        chatViaClaudeProcess(toolContext, callback)
+    }.getOrElse { error ->
+        if (error is CancellationException) {
+            throw error
+        }
+        logger.warn("⚠️ [DirectModelAgent] Claude CLI 调用失败，回退到 API 路径: ${error.message}")
+        val apiKey = AIConfig.ANTHROPIC_API_KEY
+        if (apiKey.isNotBlank()) {
+            chatViaAnthropicApi(apiKey, toolContext, callback)
+        } else {
+            throw error
+        }
     }
 
     private suspend fun chatViaClaudeProcess(

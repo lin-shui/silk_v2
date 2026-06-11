@@ -43,35 +43,7 @@ class PDFReportGenerator {
     private fun secondaryColor() = DeviceRgb(76, 175, 80)     // 绿色
     private fun headerBgColor() = DeviceRgb(245, 245, 245)    // 浅灰色
     private val commonChineseDiagnosisKeywords = listOf("不寐", "虚劳", "头痛")
-    // 中文字体路径（静态配置）- 优先使用对中英文都支持好的字体
-    private val chineseFontPath: String? by lazy {
-        // macOS 系统自带的字体，优先选择对中英文都支持好的
-        val fontPaths = listOf(
-            "/Library/Fonts/Arial Unicode.ttf",               // ✅ Arial Unicode MS - 对中英文都支持好
-            "/System/Library/Fonts/PingFang.ttc,0",           // PingFang SC Regular
-            "/System/Library/Fonts/STHeiti Light.ttc,0",      // 华文黑体
-            "/System/Library/Fonts/Supplemental/Songti.ttc,0" // 宋体
-        )
-        
-        // 尝试找到第一个可用的字体
-        for (fontPath in fontPaths) {
-            try {
-                val file = java.io.File(fontPath.split(",")[0])
-                if (file.exists()) {
-                    logger.info("✅ 找到中文字体: {}", fontPath)
-                    return@lazy fontPath
-                }
-            } catch (e: Exception) {
-                // 尝试下一个字体
-                continue
-            }
-        }
-        
-        // 如果都失败，返回 null（使用内置字体）
-        logger.warn("⚠️ 未找到系统字体，将使用内置字体")
-        null
-    }
-    
+
     /**
      * 为每个 PDF 文档创建独立的中文字体对象
      * ✅ 使用正确的策略：内置CJK字体不需要embed

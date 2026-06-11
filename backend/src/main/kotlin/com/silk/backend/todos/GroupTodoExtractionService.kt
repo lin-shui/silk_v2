@@ -7,9 +7,11 @@ import com.silk.backend.database.UserRepository
 import com.silk.backend.database.UserTodoItemDto
 import com.silk.backend.models.ChatHistory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -18,6 +20,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
+import java.io.IOException
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -201,12 +204,13 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
 
         val userPrompt = "用户显示名：$userName（userId=${userId.take(8)}…）\n\n$transcript"
 
-        val raw = try {
-            callLlm(system, userPrompt, apiKey, temperature = 0.2)
-        } catch (e: Exception) {
-            println("❌ [GroupTodoExtractionService] LLM 调用失败: ${e.message}")
-            null
-        }
+        val raw = callLlmOrNull(
+            system = system,
+            user = userPrompt,
+            apiKey = apiKey,
+            temperature = 0.2,
+            failurePrefix = "❌ [GroupTodoExtractionService] LLM 调用失败"
+        )
 
         val parseResult = raw?.let { parseTodoJsonStrict(it) }
         val llmDrafts = parseResult?.first ?: emptyList()
@@ -328,10 +332,12 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
 格式：{"todos":[{"id":"必须是输入中的id","title":"...","actionType":"alarm","actionDetail":"07:00","sourceGroupId":"可省略","sourceGroupName":"可省略","done":false}]}
 输出的每条 id 必须出现在输入 JSON 的 id 集合中。"""
 
-        val raw = try {
-            callLlm(system, payload, apiKey)
-        } catch (e: Exception) {
-            println("❌ [GroupTodoExtractionService] 去冗 LLM 失败: ${e.message}")
+        val raw = callLlmOrNull(
+            system = system,
+            user = payload,
+            apiKey = apiKey,
+            failurePrefix = "❌ [GroupTodoExtractionService] 去冗 LLM 失败"
+        ) ?: run {
             UserTodoStore.dedupeByLogicalKeyInPlace(userId)
             return
         }
@@ -366,50 +372,77 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
             val out = mutableListOf<UserTodoItemDto>()
             val seenOutIds = mutableSetOf<String>()
             for (el in arr) {
-                val o = el.jsonObject
-                val id = o["id"]?.jsonPrimitive?.content?.trim() ?: continue
-                if (id !in validIds) {
-                    println("⚠️ [GroupTodoExtractionService] 去冗跳过未知 id: ${id.take(12)}…")
-                    continue
-                }
-                if (id in seenOutIds) continue
-                seenOutIds.add(id)
-                val orig = originalsById[id] ?: continue
-                val title = o["title"]?.jsonPrimitive?.content?.trim() ?: continue
-                if (title.isEmpty() || title.length > 500) continue
-                val gid = o["sourceGroupId"]?.jsonPrimitive?.content?.trim()?.takeIf { it.isNotEmpty() }
-                val gname = o["sourceGroupName"]?.jsonPrimitive?.content?.trim()?.takeIf { it.isNotEmpty() }
-                val at = o["actionType"]?.jsonPrimitive?.content?.trim()?.lowercase()
-                    ?.takeIf { it.isNotEmpty() && it != "null" }
-                val ad = o["actionDetail"]?.jsonPrimitive?.content?.trim()
-                    ?.takeIf { it.isNotEmpty() }
-                val donePrim = o["done"]?.jsonPrimitive
-                val done = when {
-                    donePrim == null -> orig.done
-                    donePrim.booleanOrNull != null -> donePrim.booleanOrNull == true
-                    else -> donePrim.content.equals("true", ignoreCase = true) || donePrim.content == "1"
-                }
-                out.add(
-                    UserTodoItemDto(
-                        id = id,
-                        title = title,
-                        sourceGroupId = gid ?: orig.sourceGroupId,
-                        sourceGroupName = gname ?: orig.sourceGroupName,
-                        actionType = at?.ifBlank { null },
-                        actionDetail = ad?.ifBlank { null },
-                        createdAt = orig.createdAt,
-                        updatedAt = now,
-                        done = done,
-                        executedAt = orig.executedAt,
-                        reminderId = orig.reminderId
-                    )
-                )
+                val parsed = parseCompactTodoEntry(el, validIds, seenOutIds, originalsById, now) ?: continue
+                out.add(parsed)
             }
             if (out.isEmpty()) null else out
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
+            println("⚠️ [GroupTodoExtractionService] 去冗 JSON 解析失败: ${e.message}")
+            null
+        } catch (e: IllegalArgumentException) {
             println("⚠️ [GroupTodoExtractionService] 去冗 JSON 解析失败: ${e.message}")
             null
         }
+    }
+
+    private fun parseCompactTodoEntry(
+        element: kotlinx.serialization.json.JsonElement,
+        validIds: Set<String>,
+        seenOutIds: MutableSet<String>,
+        originalsById: Map<String, UserTodoItemDto>,
+        now: Long
+    ): UserTodoItemDto? {
+        val todoObject = element.jsonObject
+        val id = todoObject["id"]?.jsonPrimitive?.content?.trim() ?: return null
+        if (id !in validIds) {
+            println("⚠️ [GroupTodoExtractionService] 去冗跳过未知 id: ${id.take(12)}…")
+            return null
+        }
+        if (!seenOutIds.add(id)) return null
+
+        val original = originalsById[id] ?: return null
+        val title = todoObject["title"]?.jsonPrimitive?.content?.trim()
+            ?.takeIf(::isCompactTodoTitleValid)
+            ?: return null
+
+        return UserTodoItemDto(
+            id = id,
+            title = title,
+            sourceGroupId = parseCompactTodoOptionalText(todoObject, "sourceGroupId") ?: original.sourceGroupId,
+            sourceGroupName = parseCompactTodoOptionalText(todoObject, "sourceGroupName") ?: original.sourceGroupName,
+            actionType = parseCompactTodoActionType(todoObject),
+            actionDetail = parseCompactTodoOptionalText(todoObject, "actionDetail"),
+            createdAt = original.createdAt,
+            updatedAt = now,
+            done = resolveCompactTodoDone(todoObject, original),
+            executedAt = original.executedAt,
+            reminderId = original.reminderId
+        )
+    }
+
+    private fun isCompactTodoTitleValid(title: String): Boolean = title.isNotEmpty() && title.length <= 500
+
+    private fun parseCompactTodoOptionalText(
+        todoObject: kotlinx.serialization.json.JsonObject,
+        key: String
+    ): String? = todoObject[key]
+        ?.jsonPrimitive
+        ?.content
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+
+    private fun parseCompactTodoActionType(todoObject: kotlinx.serialization.json.JsonObject): String? =
+        parseCompactTodoOptionalText(todoObject, "actionType")
+            ?.lowercase()
+            ?.takeIf { it != "null" }
+
+    private fun resolveCompactTodoDone(
+        todoObject: kotlinx.serialization.json.JsonObject,
+        original: UserTodoItemDto
+    ): Boolean {
+        val doneValue = todoObject["done"]?.jsonPrimitive ?: return original.done
+        doneValue.booleanOrNull?.let { return it }
+        return doneValue.content.equals("true", ignoreCase = true) || doneValue.content == "1"
     }
 
     private fun loadChatHistoryForGroup(groupId: String): ChatHistory? {
@@ -901,10 +934,44 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
                 )
             }
             out to true
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
+            println("⚠️ [GroupTodoExtractionService] JSON 解析失败: ${e.message}")
+            emptyList<ExtractedTodoDraft>() to false
+        } catch (e: IllegalArgumentException) {
             println("⚠️ [GroupTodoExtractionService] JSON 解析失败: ${e.message}")
             emptyList<ExtractedTodoDraft>() to false
         }
+    }
+
+    private fun callLlmOrNull(
+        system: String,
+        user: String,
+        apiKey: String,
+        temperature: Double = 0.35,
+        failurePrefix: String
+    ): String? = try {
+        callLlm(system, user, apiKey, temperature)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        println("$failurePrefix: ${e.message}")
+        null
+    } catch (e: IOException) {
+        println("$failurePrefix: ${e.message}")
+        null
+    } catch (e: SerializationException) {
+        println("$failurePrefix: ${e.message}")
+        null
+    } catch (e: IllegalArgumentException) {
+        println("$failurePrefix: ${e.message}")
+        null
+    } catch (e: IllegalStateException) {
+        println("$failurePrefix: ${e.message}")
+        null
+    } catch (e: SecurityException) {
+        println("$failurePrefix: ${e.message}")
+        null
     }
 
     private fun extractJsonObject(text: String): String? {

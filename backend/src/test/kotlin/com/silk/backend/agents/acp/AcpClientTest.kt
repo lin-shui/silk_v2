@@ -201,7 +201,7 @@ class AcpClientTest {
     fun `handler throwing does not kill receive loop`() = runTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
-        client.onSessionUpdate("s1") { throw RuntimeException("boom") }
+        client.onSessionUpdate("s1") { throw IllegalStateException("boom") }
 
         // first notification — handler throws; loop must survive
         transport.pushFromServer(
