@@ -367,7 +367,7 @@ fun GroupListScene(appState: WebAppState) {
                         }
                         onClick { isDeleteMode = true }
                     }) {
-                        Text("➖ ${strings.exitButton}")
+                        Text("➖")
                     }
                     
                     // 创建群组按钮
@@ -388,7 +388,7 @@ fun GroupListScene(appState: WebAppState) {
                         }
                         onClick { showCreateDialog = true }
                     }) {
-                        Text("➕ ${strings.createButton}")
+                        Text("➕")
                     }
                 }
                 
@@ -410,7 +410,7 @@ fun GroupListScene(appState: WebAppState) {
                     }
                     onClick { showJoinDialog = true }
                 }) {
-                    Text("🔗 ${strings.joinButton}")
+                    Text("🔗")
                 }
                 
                 // 联系人按钮
@@ -431,7 +431,7 @@ fun GroupListScene(appState: WebAppState) {
                     }
                     onClick { appState.navigateTo(Scene.CONTACTS) }
                 }) {
-                    Text("👤 ${strings.contactsButton}")
+                    Text("👤")
                 }
                 
                 // 🤖 与 Silk 对话按钮
@@ -463,7 +463,7 @@ fun GroupListScene(appState: WebAppState) {
                         }
                     }
                 }) {
-                    Text("🤖 ${strings.chatWithSilk}")
+                    Text("🤖")
                 }
             }
         }
