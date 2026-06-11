@@ -738,15 +738,125 @@ fun ChatScene(appState: WebAppState) {
         }) {
             Div({
                 style {
-                    padding(16.px, 16.px, 12.px, 16.px)
+                    padding(12.px, 16.px)
                     property("border-bottom", "1px solid ${SilkColors.border}")
-                    color(Color(SilkColors.textPrimary))
-                    fontSize(16.px)
-                    property("font-weight", "700")
-                    property("letter-spacing", "1px")
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "8px")
                 }
             }) {
-                Text("全部群组")
+                Span({
+                    style {
+                        fontSize(16.px)
+                        color(Color(SilkColors.primary))
+                        property("font-weight", "700")
+                        property("letter-spacing", "1px")
+                        property("flex-shrink", "0")
+                    }
+                }) {
+                    Text("Silk")
+                }
+                Div({
+                    style {
+                        property("flex", "1")
+                    }
+                })
+                Span({
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("overflow", "hidden")
+                        property("text-overflow", "ellipsis")
+                        property("white-space", "nowrap")
+                        property("max-width", "120px")
+                    }
+                }) {
+                    Text(user.fullName)
+                }
+                // 🤖 与 Silk 对话按钮
+                Button({
+                    style {
+                        padding(4.px, 8.px)
+                        backgroundColor(Color("#7BA8C9"))
+                        color(Color.white)
+                        border { width(0.px) }
+                        borderRadius(6.px)
+                        property("cursor", "pointer")
+                        property("box-shadow", "0 2px 8px rgba(123, 168, 201, 0.4)")
+                        fontSize(14.px)
+                        property("flex-shrink", "0")
+                    }
+                    onClick {
+                        scope.launch {
+                            val uid = appState.currentUser?.id ?: return@launch
+                            val r = ApiClient.startSilkPrivateChat(uid)
+                            if (r.success && r.group != null) appState.selectGroup(r.group!!)
+                        }
+                    }
+                }) { Text("🤖") }
+                
+                // ☰ 下拉菜单
+                var showMenu by remember { mutableStateOf(false) }
+                Div({
+                    style {
+                        position(Position.Relative)
+                    }
+                }) {
+                    Button({
+                        style {
+                            padding(4.px, 10.px)
+                            backgroundColor(Color("rgba(255,255,255,0.2)"))
+                            color(Color(SilkColors.textPrimary))
+                            border {
+                                width(1.px)
+                                style(LineStyle.Solid)
+                                color(Color(SilkColors.border))
+                            }
+                            borderRadius(6.px)
+                            property("cursor", "pointer")
+                            fontSize(16.px)
+                        }
+                        onClick { showMenu = !showMenu }
+                    }) { Text("☰") }
+                    
+                    if (showMenu) {
+                        Div({
+                            style {
+                                position(Position.Fixed)
+                                property("top", "0")
+                                property("left", "0")
+                                property("right", "0")
+                                property("bottom", "0")
+                                property("z-index", "99")
+                            }
+                            onClick { showMenu = false }
+                        })
+                        Div({
+                            style {
+                                position(Position.Absolute)
+                                property("top", "100%")
+                                property("right", "0")
+                                property("z-index", "100")
+                                backgroundColor(Color("#2a2a2a"))
+                                borderRadius(10.px)
+                                property("box-shadow", "0 4px 20px rgba(0,0,0,0.3)")
+                                property("min-width", "160px")
+                                padding(6.px)
+                                marginTop(6.px)
+                            }
+                            onClick { showMenu = false }
+                        }) {
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { appState.navigateTo(Scene.SETTINGS); showMenu = false }
+                            }) { Text("⚙️ 设置") }
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { appState.logout(); showMenu = false }
+                            }) { Text("🚪 退出登录") }
+                        }
+                    }
+                }
             }
 
             Div({
