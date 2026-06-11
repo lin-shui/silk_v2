@@ -511,7 +511,7 @@ fun GroupListScene(appState: WebAppState) {
                                     appState.selectGroup(group)
                                 }
                             },
-                            onMembersClick = (if (isSilkPrivate) null else {
+                            onMembersClick = ({
                                 selectedGroupForMembers = group
                                 scope.launch {
                                     isLoadingMembers = true
@@ -525,7 +525,7 @@ fun GroupListScene(appState: WebAppState) {
                                     showMembersDialog = true
                                 }
                                 Unit
-                            }) as (() -> Unit)?
+                            } as (() -> Unit)?).takeIf { !isSilkPrivate }
                         )
                     }
 
