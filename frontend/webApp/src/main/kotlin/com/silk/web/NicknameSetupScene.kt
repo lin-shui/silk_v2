@@ -207,6 +207,11 @@ fun NicknameSetupScene(appState: WebAppState) {
                     scope.launch {
                         val result = ApiClient.updateUserProfile(userId, trimmed)
                         if (result.success) {
+                            // 同步更新当前用户信息，使界面上立即显示新昵称
+                            appState.updateCurrentUserNickname(trimmed)
+                            // 同步更新 localStorage 中存储的用户信息（刷新页面后生效）
+                            val updatedUser = appState.currentUser?.copy(fullName = trimmed)
+                            if (updatedUser != null) JwtManager.setStoredUser(updatedUser)
                             appState.navigateTo(Scene.GROUP_LIST)
                         } else {
                             errorMessage = result.message.ifBlank { "保存失败，请重试" }

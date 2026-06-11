@@ -32,6 +32,11 @@ class WebAppState {
     var currentUser by mutableStateOf<User?>(null)
         private set
     
+    /** 更新当前用户的昵称（不触发网络请求，仅更新本地状态） */
+    fun updateCurrentUserNickname(newFullName: String) {
+        currentUser = currentUser?.copy(fullName = newFullName)
+    }
+    
     var selectedGroup by mutableStateOf<Group?>(null)
         private set
 
