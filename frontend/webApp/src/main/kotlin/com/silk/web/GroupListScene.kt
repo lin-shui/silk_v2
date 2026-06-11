@@ -216,6 +216,7 @@ fun GroupListScene(appState: WebAppState) {
                 justifyContent(JustifyContent.SpaceBetween)
                 alignItems(AlignItems.Center)
                 property("box-shadow", "0 2px 12px rgba(169, 137, 77, 0.25)")
+                property("overflow", "hidden")
             }
         }) {
             Div {
