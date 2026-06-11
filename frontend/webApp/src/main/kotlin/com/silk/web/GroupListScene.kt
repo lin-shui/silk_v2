@@ -243,11 +243,11 @@ fun GroupListScene(appState: WebAppState) {
                 }
             }
             
-            // 右侧按钮组 - 可横向滚动
+            // 右侧按钮组
             Div({
                 style {
                     display(DisplayStyle.Flex)
-                    gap(8.px)
+                    gap(6.px)
                     alignItems(AlignItems.Center)
                     property("overflow-x", "auto")
                     property("overflow-y", "hidden")
@@ -260,7 +260,7 @@ fun GroupListScene(appState: WebAppState) {
                     // 取消按钮
                     Button({
                         style {
-                            padding(10.px, 14.px)
+                            padding(8.px, 10.px)
                             backgroundColor(Color("rgba(255,255,255,0.3)"))
                             color(Color.white)
                             border { width(0.px) }
@@ -268,7 +268,7 @@ fun GroupListScene(appState: WebAppState) {
                             property("cursor", "pointer")
                             property("backdrop-filter", "blur(4px)")
                             property("transition", "all 0.2s ease")
-                            fontSize(14.px)
+                            fontSize(13.px)
                             property("font-weight", "500")
                             property("flex-shrink", "0")
                             property("white-space", "nowrap")
@@ -285,7 +285,7 @@ fun GroupListScene(appState: WebAppState) {
                     if (selectedGroups.isNotEmpty()) {
                         Button({
                             style {
-                                padding(10.px, 14.px)
+                                padding(8.px, 10.px)
                                 backgroundColor(Color("#e74c3c"))
                                 color(Color.white)
                                 border { width(0.px) }
@@ -293,7 +293,7 @@ fun GroupListScene(appState: WebAppState) {
                                 property("cursor", if (isDeleting) "not-allowed" else "pointer")
                                 property("backdrop-filter", "blur(4px)")
                                 property("transition", "all 0.2s ease")
-                                fontSize(14.px)
+                                fontSize(13.px)
                                 property("font-weight", "500")
                                 property("opacity", if (isDeleting) "0.6" else "1")
                                 property("flex-shrink", "0")
@@ -354,7 +354,7 @@ fun GroupListScene(appState: WebAppState) {
                     // ➖ 进入删除模式
                     Button({
                         style {
-                            padding(10.px, 14.px)
+                            padding(8.px, 10.px)
                             backgroundColor(Color("rgba(255,255,255,0.2)"))
                             color(Color.white)
                             border { width(0.px) }
@@ -362,7 +362,7 @@ fun GroupListScene(appState: WebAppState) {
                             property("cursor", "pointer")
                             property("backdrop-filter", "blur(4px)")
                             property("transition", "all 0.2s ease")
-                            fontSize(14.px)
+                            fontSize(13.px)
                             property("font-weight", "500")
                             property("flex-shrink", "0")
                             property("white-space", "nowrap")
@@ -375,7 +375,7 @@ fun GroupListScene(appState: WebAppState) {
                     // 创建群组按钮
                     Button({
                         style {
-                            padding(10.px, 14.px)
+                            padding(8.px, 10.px)
                             backgroundColor(Color("rgba(255,255,255,0.2)"))
                             color(Color.white)
                             border { width(0.px) }
@@ -383,7 +383,7 @@ fun GroupListScene(appState: WebAppState) {
                             property("cursor", "pointer")
                             property("backdrop-filter", "blur(4px)")
                             property("transition", "all 0.2s ease")
-                            fontSize(14.px)
+                            fontSize(13.px)
                             property("font-weight", "500")
                             property("flex-shrink", "0")
                             property("white-space", "nowrap")
@@ -397,7 +397,7 @@ fun GroupListScene(appState: WebAppState) {
                 // 加入群组按钮
                 Button({
                     style {
-                        padding(10.px, 14.px)
+                        padding(8.px, 10.px)
                         backgroundColor(Color("rgba(255,255,255,0.2)"))
                         color(Color.white)
                         border { width(0.px) }
@@ -405,7 +405,7 @@ fun GroupListScene(appState: WebAppState) {
                         property("cursor", "pointer")
                         property("backdrop-filter", "blur(4px)")
                         property("transition", "all 0.2s ease")
-                        fontSize(14.px)
+                        fontSize(13.px)
                         property("font-weight", "500")
                         property("flex-shrink", "0")
                         property("white-space", "nowrap")
@@ -418,7 +418,7 @@ fun GroupListScene(appState: WebAppState) {
                 // 联系人按钮
                 Button({
                     style {
-                        padding(10.px, 14.px)
+                        padding(8.px, 10.px)
                         backgroundColor(Color("rgba(255,255,255,0.2)"))
                         color(Color.white)
                         border { width(0.px) }
@@ -426,7 +426,7 @@ fun GroupListScene(appState: WebAppState) {
                         property("cursor", "pointer")
                         property("backdrop-filter", "blur(4px)")
                         property("transition", "all 0.2s ease")
-                        fontSize(14.px)
+                        fontSize(13.px)
                         property("font-weight", "500")
                         property("flex-shrink", "0")
                         property("white-space", "nowrap")
@@ -439,7 +439,7 @@ fun GroupListScene(appState: WebAppState) {
                 // 🤖 与 Silk 对话按钮
                 Button({
                     style {
-                        padding(10.px, 14.px)
+                        padding(8.px, 10.px)
                         backgroundColor(Color("#7BA8C9"))
                         color(Color.white)
                         border { width(0.px) }
@@ -447,7 +447,7 @@ fun GroupListScene(appState: WebAppState) {
                         property("cursor", "pointer")
                         property("box-shadow", "0 2px 8px rgba(123, 168, 201, 0.4)")
                         property("transition", "all 0.2s ease")
-                        fontSize(14.px)
+                        fontSize(13.px)
                         property("font-weight", "600")
                         property("flex-shrink", "0")
                         property("white-space", "nowrap")
