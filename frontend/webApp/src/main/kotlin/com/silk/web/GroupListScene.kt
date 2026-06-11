@@ -75,6 +75,9 @@ fun GroupListScene(appState: WebAppState) {
     var selectedGroups by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isDeleting by remember { mutableStateOf(false) }
     
+    // 下拉菜单状态
+    var showMenu by remember { mutableStateOf(false) }
+    
     // 成员列表相关状态
     var showMembersDialog by remember { mutableStateOf(false) }
     var selectedGroupForMembers by remember { mutableStateOf<Group?>(null) }
@@ -220,8 +223,8 @@ fun GroupListScene(appState: WebAppState) {
         }) {
             Div({
                 style {
-                    property("max-width", "35%")
-                    property("flex-shrink", "0")
+                    property("flex", "0 0 35%")
+                    property("min-width", "0")
                 }
             }) {
                 // Logo
@@ -249,229 +252,70 @@ fun GroupListScene(appState: WebAppState) {
                 }
             }
             
-            // 右侧按钮组 - 自动换行
+            // 右侧下拉菜单
             Div({
                 style {
-                    display(DisplayStyle.Flex)
-                    gap(4.px)
-                    alignItems(AlignItems.Center)
-                    property("flex-wrap", "wrap")
-                    property("justify-content", "flex-end")
-                    property("margin-left", "auto")
-                    property("min-width", "0")
+                    position(Position.Relative)
                 }
             }) {
-                // ➖ 删除/退出模式按钮
-                if (isDeleteMode) {
-                    // 取消按钮
-                    Button({
-                        style {
-                            padding(8.px, 10.px)
-                            backgroundColor(Color("rgba(255,255,255,0.3)"))
-                            color(Color.white)
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", "pointer")
-                            property("backdrop-filter", "blur(4px)")
-                            property("transition", "all 0.2s ease")
-                            fontSize(13.px)
-                            property("font-weight", "500")
-                            property("flex-shrink", "0")
-                            property("white-space", "nowrap")
-                        }
-                        onClick { 
-                            isDeleteMode = false
-                            selectedGroups = emptySet()
-                        }
-                    }) {
-                        Text(strings.cancelButton)
-                    }
-                    
-                    // 确认退出按钮
-                    if (selectedGroups.isNotEmpty()) {
-                        Button({
-                            style {
-                                padding(8.px, 10.px)
-                                backgroundColor(Color("#e74c3c"))
-                                color(Color.white)
-                                border { width(0.px) }
-                                borderRadius(8.px)
-                                property("cursor", if (isDeleting) "not-allowed" else "pointer")
-                                property("backdrop-filter", "blur(4px)")
-                                property("transition", "all 0.2s ease")
-                                fontSize(13.px)
-                                property("font-weight", "500")
-                                property("opacity", if (isDeleting) "0.6" else "1")
-                                property("flex-shrink", "0")
-                                property("white-space", "nowrap")
-                            }
-                            onClick { 
-                                if (!isDeleting) {
-                                    scope.launch {
-                                        isDeleting = true
-                                        val userId = appState.currentUser?.id ?: return@launch
-                                        
-                                        selectedGroups.forEach { groupId ->
-                                            // 查找群组，判断是否是群主
-                                            val group = groups.find { it.id == groupId }
-                                            if (group != null && group.hostId == userId) {
-                                                // 群主删除群组
-                                                val response = ApiClient.deleteGroup(groupId, userId)
-                                                console.log("删除群组 $groupId: ${response.message}")
-                                            } else {
-                                                // 普通成员退出群组
-                                                val response = ApiClient.leaveGroup(groupId, userId)
-                                                console.log("退出群组 $groupId: ${response.message}")
-                                            }
-                                        }
-                                        
-                                        // 刷新群组列表
-                                        val response = ApiClient.getUserGroups(userId)
-                                        if (response.success) {
-                                            groups = response.groups ?: emptyList()
-                                        }
-                                        
-                                        isDeleting = false
-                                        isDeleteMode = false
-                                        selectedGroups = emptySet()
-                                    }
-                                }
-                            }
-                        }) {
-                            // 检查选中的群组中是否有群主身份的群
-                            val userId = appState.currentUser?.id ?: ""
-                            val hasHostGroups = selectedGroups.any { groupId -> 
-                                groups.find { it.id == groupId }?.hostId == userId 
-                            }
-                            val hasMemberGroups = selectedGroups.any { groupId -> 
-                                groups.find { it.id == groupId }?.hostId != userId 
-                            }
-                            
-                            val actionText = when {
-                                hasHostGroups && hasMemberGroups -> "删除/退出"
-                                hasHostGroups -> "删除"
-                                else -> "退出"
-                            }
-                            
-                            Text(if (isDeleting) strings.exiting else "${actionText} (${selectedGroups.size})")
-                        }
-                    }
-                } else {
-                    // ➖ 进入删除模式
-                    Button({
-                        style {
-                            padding(8.px, 10.px)
-                            backgroundColor(Color("rgba(255,255,255,0.2)"))
-                            color(Color.white)
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", "pointer")
-                            property("backdrop-filter", "blur(4px)")
-                            property("transition", "all 0.2s ease")
-                            fontSize(13.px)
-                            property("font-weight", "500")
-                            property("flex-shrink", "0")
-                            property("white-space", "nowrap")
-                        }
-                        onClick { isDeleteMode = true }
-                    }) {
-                        Text("➖")
-                    }
-                    
-                    // 创建群组按钮
-                    Button({
-                        style {
-                            padding(8.px, 10.px)
-                            backgroundColor(Color("rgba(255,255,255,0.2)"))
-                            color(Color.white)
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", "pointer")
-                            property("backdrop-filter", "blur(4px)")
-                            property("transition", "all 0.2s ease")
-                            fontSize(13.px)
-                            property("font-weight", "500")
-                            property("flex-shrink", "0")
-                            property("white-space", "nowrap")
-                        }
-                        onClick { showCreateDialog = true }
-                    }) {
-                        Text("➕")
-                    }
-                }
-                
-                // 加入群组按钮
+                // 菜单触发按钮
                 Button({
                     style {
-                        padding(8.px, 10.px)
+                        padding(8.px, 14.px)
                         backgroundColor(Color("rgba(255,255,255,0.2)"))
                         color(Color.white)
                         border { width(0.px) }
                         borderRadius(8.px)
                         property("cursor", "pointer")
                         property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                        fontSize(13.px)
-                        property("font-weight", "500")
-                        property("flex-shrink", "0")
-                        property("white-space", "nowrap")
+                        fontSize(18.px)
                     }
-                    onClick { showJoinDialog = true }
+                    onClick { showMenu = !showMenu }
                 }) {
-                    Text("🔗")
+                    Text("☰")
                 }
                 
-                // 联系人按钮
-                Button({
-                    style {
-                        padding(8.px, 10.px)
-                        backgroundColor(Color("rgba(255,255,255,0.2)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                        fontSize(13.px)
-                        property("font-weight", "500")
-                        property("flex-shrink", "0")
-                        property("white-space", "nowrap")
-                    }
-                    onClick { appState.navigateTo(Scene.CONTACTS) }
-                }) {
-                    Text("👤")
-                }
-                
-                // 🤖 与 Silk 对话按钮
-                Button({
-                    style {
-                        padding(8.px, 10.px)
-                        backgroundColor(Color("#7BA8C9"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        property("box-shadow", "0 2px 8px rgba(123, 168, 201, 0.4)")
-                        property("transition", "all 0.2s ease")
-                        fontSize(13.px)
-                        property("font-weight", "600")
-                        property("flex-shrink", "0")
-                        property("white-space", "nowrap")
-                    }
-                    onClick { 
-                        scope.launch {
-                            val userId = appState.currentUser?.id ?: return@launch
-                            val response = ApiClient.startSilkPrivateChat(userId)
-                            if (response.success && response.group != null) {
-                                console.log("✅ 打开与 Silk 的对话: ${response.group!!.name}")
-                                appState.selectGroup(response.group!!)
-                            } else {
-                                console.log("❌ 打开 Silk 对话失败: ${response.message}")
-                            }
+                // 下拉菜单
+                if (showMenu) {
+                    // 点击遮罩关闭
+                    Div({
+                        style {
+                            position(Position.Fixed)
+                            top(0.px); left(0.px); right(0.px); bottom(0.px)
+                            property("z-index", "99")
                         }
+                        onClick { showMenu = false }
+                    })
+                    
+                    Div({
+                        style {
+                            position(Position.Absolute)
+                            top(100.percent)
+                            right(0.px)
+                            property("z-index", "100")
+                            backgroundColor(Color("#2a2a2a"))
+                            borderRadius(10.px)
+                            property("box-shadow", "0 4px 20px rgba(0,0,0,0.3)")
+                            property("min-width", "160px")
+                            padding(6.px)
+                            marginTop(6.px)
+                        }
+                        onClick { showMenu = false }
+                    }) {
+                        // 菜单项列表
+                        if (isDeleteMode) {
+                            Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { isDeleteMode = false; selectedGroups = emptySet(); showMenu = false } }) { Text("🔙  ${strings.cancelButton}") }
+                            if (selectedGroups.isNotEmpty()) {
+                                Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color("#e74c3c")); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { scope.launch { isDeleting = true; val userId = appState.currentUser?.id ?: ""; selectedGroups.forEach { groupId -> val group = groups.find { it.id == groupId }; if (group != null && group.hostId == userId) ApiClient.deleteGroup(groupId, userId) else ApiClient.leaveGroup(groupId, userId) }; val r2 = ApiClient.getUserGroups(userId); if (r2.success) groups = r2.groups ?: emptyList(); isDeleting = false; isDeleteMode = false; selectedGroups = emptySet(); showMenu = false } } }) { Text("🗑  ${strings.exitButton} (${selectedGroups.size})") }
+                            }
+                        } else {
+                            Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { isDeleteMode = true; showMenu = false } }) { Text("➖  ${strings.exitButton}") }
+                            Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { showCreateDialog = true; showMenu = false } }) { Text("➕  ${strings.createButton}") }
+                        }
+                        Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { showJoinDialog = true; showMenu = false } }) { Text("🔗  ${strings.joinButton}") }
+                        Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { appState.navigateTo(Scene.CONTACTS); showMenu = false } }) { Text("👤  ${strings.contactsButton}") }
+                        Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { showMenu = false; scope.launch { val uid = appState.currentUser?.id ?: return@launch; val r = ApiClient.startSilkPrivateChat(uid); if (r.success && r.group != null) appState.selectGroup(r.group!!) } } }) { Text("🤖  ${strings.chatWithSilk}") }
                     }
-                }) {
-                    Text("🤖")
                 }
             }
         }
