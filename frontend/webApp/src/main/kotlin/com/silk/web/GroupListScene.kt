@@ -242,12 +242,15 @@ fun GroupListScene(appState: WebAppState) {
                 }
             }
             
-            // 右侧按钮组
+            // 右侧按钮组 - 可横向滚动
             Div({
                 style {
                     display(DisplayStyle.Flex)
-                    gap(12.px)
+                    gap(8.px)
                     alignItems(AlignItems.Center)
+                    property("overflow-x", "auto")
+                    property("flex-shrink", "0")
+                    property("max-width", "75%")
                 }
             }) {
                 // ➖ 删除/退出模式按钮
@@ -255,7 +258,7 @@ fun GroupListScene(appState: WebAppState) {
                     // 取消按钮
                     Button({
                         style {
-                            padding(10.px, 18.px)
+                            padding(10.px, 14.px)
                             backgroundColor(Color("rgba(255,255,255,0.3)"))
                             color(Color.white)
                             border { width(0.px) }
@@ -265,6 +268,8 @@ fun GroupListScene(appState: WebAppState) {
                             property("transition", "all 0.2s ease")
                             fontSize(14.px)
                             property("font-weight", "500")
+                            property("flex-shrink", "0")
+                            property("white-space", "nowrap")
                         }
                         onClick { 
                             isDeleteMode = false
@@ -278,7 +283,7 @@ fun GroupListScene(appState: WebAppState) {
                     if (selectedGroups.isNotEmpty()) {
                         Button({
                             style {
-                                padding(10.px, 18.px)
+                                padding(10.px, 14.px)
                                 backgroundColor(Color("#e74c3c"))
                                 color(Color.white)
                                 border { width(0.px) }
@@ -289,6 +294,8 @@ fun GroupListScene(appState: WebAppState) {
                                 fontSize(14.px)
                                 property("font-weight", "500")
                                 property("opacity", if (isDeleting) "0.6" else "1")
+                                property("flex-shrink", "0")
+                                property("white-space", "nowrap")
                             }
                             onClick { 
                                 if (!isDeleting) {
@@ -345,7 +352,7 @@ fun GroupListScene(appState: WebAppState) {
                     // ➖ 进入删除模式
                     Button({
                         style {
-                            padding(10.px, 18.px)
+                            padding(10.px, 14.px)
                             backgroundColor(Color("rgba(255,255,255,0.2)"))
                             color(Color.white)
                             border { width(0.px) }
@@ -355,6 +362,8 @@ fun GroupListScene(appState: WebAppState) {
                             property("transition", "all 0.2s ease")
                             fontSize(14.px)
                             property("font-weight", "500")
+                            property("flex-shrink", "0")
+                            property("white-space", "nowrap")
                         }
                         onClick { isDeleteMode = true }
                     }) {
@@ -364,7 +373,7 @@ fun GroupListScene(appState: WebAppState) {
                     // 创建群组按钮
                     Button({
                         style {
-                            padding(10.px, 18.px)
+                            padding(10.px, 14.px)
                             backgroundColor(Color("rgba(255,255,255,0.2)"))
                             color(Color.white)
                             border { width(0.px) }
@@ -374,6 +383,8 @@ fun GroupListScene(appState: WebAppState) {
                             property("transition", "all 0.2s ease")
                             fontSize(14.px)
                             property("font-weight", "500")
+                            property("flex-shrink", "0")
+                            property("white-space", "nowrap")
                         }
                         onClick { showCreateDialog = true }
                     }) {
@@ -384,7 +395,7 @@ fun GroupListScene(appState: WebAppState) {
                 // 加入群组按钮
                 Button({
                     style {
-                        padding(10.px, 18.px)
+                        padding(10.px, 14.px)
                         backgroundColor(Color("rgba(255,255,255,0.2)"))
                         color(Color.white)
                         border { width(0.px) }
@@ -394,6 +405,8 @@ fun GroupListScene(appState: WebAppState) {
                         property("transition", "all 0.2s ease")
                         fontSize(14.px)
                         property("font-weight", "500")
+                        property("flex-shrink", "0")
+                        property("white-space", "nowrap")
                     }
                     onClick { showJoinDialog = true }
                 }) {
@@ -403,7 +416,7 @@ fun GroupListScene(appState: WebAppState) {
                 // 联系人按钮
                 Button({
                     style {
-                        padding(10.px, 18.px)
+                        padding(10.px, 14.px)
                         backgroundColor(Color("rgba(255,255,255,0.2)"))
                         color(Color.white)
                         border { width(0.px) }
@@ -413,6 +426,8 @@ fun GroupListScene(appState: WebAppState) {
                         property("transition", "all 0.2s ease")
                         fontSize(14.px)
                         property("font-weight", "500")
+                        property("flex-shrink", "0")
+                        property("white-space", "nowrap")
                     }
                     onClick { appState.navigateTo(Scene.CONTACTS) }
                 }) {
@@ -422,7 +437,7 @@ fun GroupListScene(appState: WebAppState) {
                 // 🤖 与 Silk 对话按钮
                 Button({
                     style {
-                        padding(10.px, 18.px)
+                        padding(10.px, 14.px)
                         backgroundColor(Color("#7BA8C9"))
                         color(Color.white)
                         border { width(0.px) }
@@ -432,6 +447,8 @@ fun GroupListScene(appState: WebAppState) {
                         property("transition", "all 0.2s ease")
                         fontSize(14.px)
                         property("font-weight", "600")
+                        property("flex-shrink", "0")
+                        property("white-space", "nowrap")
                     }
                     onClick { 
                         scope.launch {
@@ -452,7 +469,7 @@ fun GroupListScene(appState: WebAppState) {
                 // 设置按钮
                 Button({
                     style {
-                        padding(10.px, 18.px)
+                        padding(10.px, 14.px)
                         backgroundColor(Color("rgba(255,255,255,0.2)"))
                         color(Color.white)
                         border { width(0.px) }
@@ -462,6 +479,8 @@ fun GroupListScene(appState: WebAppState) {
                         property("transition", "all 0.2s ease")
                         fontSize(14.px)
                         property("font-weight", "500")
+                        property("flex-shrink", "0")
+                        property("white-space", "nowrap")
                     }
                     onClick { appState.navigateTo(Scene.SETTINGS) }
                 }) {
@@ -471,7 +490,7 @@ fun GroupListScene(appState: WebAppState) {
                 // 登出按钮
                 Button({
                     style {
-                        padding(10.px, 18.px)
+                        padding(10.px, 14.px)
                         backgroundColor(Color("rgba(255,255,255,0.15)"))
                         color(Color.white)
                         border { width(0.px) }
@@ -481,6 +500,8 @@ fun GroupListScene(appState: WebAppState) {
                         property("transition", "all 0.2s ease")
                         fontSize(14.px)
                         property("font-weight", "500")
+                        property("flex-shrink", "0")
+                        property("white-space", "nowrap")
                     }
                     onClick { appState.logout() }
                 }) {
