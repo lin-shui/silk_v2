@@ -249,6 +249,7 @@ fun GroupListScene(appState: WebAppState) {
                     gap(8.px)
                     alignItems(AlignItems.Center)
                     property("overflow-x", "auto")
+                    property("overflow-y", "hidden")
                     property("flex-shrink", "1")
                     property("min-width", "0")
                 }
