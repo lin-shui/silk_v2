@@ -2,22 +2,14 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
-    <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$private fun generateFallbackReport( stepResults: Map&lt;String, StepResult&gt;, allSuccess: Boolean ): String</ID>
     <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
     <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun generateQuickResponse( prompt: String, callback: suspend (content: String, isComplete: Boolean) -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun processDoctorDiagnosisUpdate( chatHistory: List&lt;ChatHistoryEntry&gt;, doctorMessage: String, callback: suspend (stepType: String, message: String, currentStep: Int?, totalSteps: Int?) -&gt; Unit, userName: String = "用户", groupDisplayName: String? = null )</ID>
     <ID>CyclomaticComplexMethod:AgentRuntime.kt$AgentRuntime$private suspend fun handleCommand( ctx: GroupAgentContext, cmd: SilkCommand, broadcastFn: suspend (Message) -&gt; Unit, )</ID>
-    <ID>CyclomaticComplexMethod:DirectModelAgent.kt$DirectModelAgent$private fun normalizeCitedReferences(content: String): FinalCitationResult</ID>
-    <ID>CyclomaticComplexMethod:FileRoutes.kt$fun Route.fileRoutes()</ID>
-    <ID>CyclomaticComplexMethod:FileRoutes.kt$private suspend fun indexFileToWeaviate( file: File, sessionId: String, userId: String, originalFileName: String, contentType: String? ): Boolean</ID>
-    <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun dedupeDrafts(list: List&lt;ExtractedTodoDraft&gt;): List&lt;ExtractedTodoDraft&gt;</ID>
-    <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun extractRecurringTemplateDrafts(slices: List&lt;GroupSlice&gt;): Pair&lt;List&lt;ExtractedTodoDraft&gt;, List&lt;String&gt;&gt;</ID>
-    <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun heuristicFromSlices(slices: List&lt;GroupSlice&gt;): List&lt;ExtractedTodoDraft&gt;</ID>
     <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun parseCompactTodoJson( raw: String, validIds: Set&lt;String&gt;, originalsById: Map&lt;String, UserTodoItemDto&gt; ): List&lt;UserTodoItemDto&gt;?</ID>
     <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$suspend fun refreshTodosForUser(userId: String)</ID>
     <ID>CyclomaticComplexMethod:Routing.kt$fun Application.configureRouting()</ID>
     <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$fun updateItem( userId: String, itemId: String, done: Boolean? = null, title: String? = null, actionType: String? = null, actionDetail: String? = null, executedAt: Long? = null, reminderId: Long? = null, clearReminderId: Boolean = false, taskKind: String? = null, repeatRule: String? = null, repeatAnchor: String? = null, activeFrom: Long? = null, activeTo: Long? = null, templateId: String? = null, lifecycleState: String? = null, closedAt: Long? = null, lastEvidenceAt: Long? = null, explicitIntent: Boolean? = null, dateBucket: String? = null, reopenCount: Int? = null ): Boolean</ID>
-    <ID>CyclomaticComplexMethod:WeaviateClient.kt$WeaviateClient$suspend fun indexDocument( document: IndexDocument, participants: List&lt;String&gt; ): Boolean</ID>
     <ID>LargeClass:AIStepwiseAgent.kt$AIStepwiseAgent</ID>
     <ID>LargeClass:AgentRuntime.kt$AgentRuntime</ID>
     <ID>LargeClass:BackendWebSocketContractTest.kt$BackendWebSocketContractTest</ID>
@@ -33,9 +25,6 @@
     <ID>LoopWithTooManyJumpStatements:GroupTodoExtractionService.kt$GroupTodoExtractionService$for</ID>
     <ID>LoopWithTooManyJumpStatements:UserTodoStore.kt$UserTodoStore$for</ID>
     <ID>NestedBlockDepth:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun generateQuickResponse( prompt: String, callback: suspend (content: String, isComplete: Boolean) -&gt; Unit )</ID>
-    <ID>NestedBlockDepth:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun buildTranscriptString(slices: List&lt;GroupSlice&gt;): String</ID>
-    <ID>NestedBlockDepth:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun extractRecurringTemplateDrafts(slices: List&lt;GroupSlice&gt;): Pair&lt;List&lt;ExtractedTodoDraft&gt;, List&lt;String&gt;&gt;</ID>
-    <ID>NestedBlockDepth:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun heuristicFromSlices(slices: List&lt;GroupSlice&gt;): List&lt;ExtractedTodoDraft&gt;</ID>
     <ID>SwallowedException:AIStepwiseAgent.kt$AIStepwiseAgent$e: Exception</ID>
     <ID>SwallowedException:PDFReportGenerator.kt$PDFReportGenerator$e: Exception</ID>
     <ID>SwallowedException:Routing.kt$e: Exception</ID>

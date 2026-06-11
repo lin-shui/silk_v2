@@ -41,6 +41,15 @@ private val weaviateClient by lazy {
     WeaviateClient(AIConfig.requireWeaviateUrl()) 
 }
 
+private val TEXT_FILE_EXTENSIONS = listOf(
+    ".txt", ".md", ".markdown", ".json", ".xml", ".html", ".htm",
+    ".css", ".js", ".kt", ".java", ".py", ".yaml", ".yml"
+)
+
+private const val DEFAULT_FILE_CHUNK_SIZE = 10000
+private const val DEFAULT_FILE_CHUNK_OVERLAP = 500
+private const val MAX_INDEX_KEYWORDS = 20
+
 private fun chatHistoryRootDir(): File =
     System.getProperty("silk.chatHistoryDir")
         ?.trim()
@@ -70,478 +79,475 @@ data class AppVersionResponse(
  * 文件上传/下载路由
  */
 fun Route.fileRoutes() {
-    
     route("/api/files") {
-        
-        /**
-         * 上传文件到指定会话
-         * POST /api/files/upload
-         * 
-         * Form data:
-         * - sessionId: 会话 ID
-         * - userId: 用户 ID
-         * - file: 文件
-         */
-        post("/upload") {
-            val uploadError = runCatching {
-                val multipart = call.receiveMultipart()
-                
-                var sessionId: String? = null
-                var userId: String? = null
-                var fileName: String? = null
-                var fileBytes: ByteArray? = null
-                var contentType: String? = null
-                
-                multipart.forEachPart { part ->
-                    when (part) {
-                        is PartData.FormItem -> {
-                            when (part.name) {
-                                "sessionId" -> sessionId = part.value
-                                "userId" -> userId = part.value
-                            }
-                        }
-                        is PartData.FileItem -> {
-                            fileName = part.originalFileName
-                            contentType = part.contentType?.toString()
-                            fileBytes = part.streamProvider().readBytes()
-                        }
-                        else -> {}
-                    }
-                    part.dispose()
-                }
-                
-                // 验证参数
-                if (sessionId.isNullOrBlank() || userId.isNullOrBlank()) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing sessionId or userId"))
-                    return@post
-                }
-                
-                if (fileName.isNullOrBlank() || fileBytes == null) {
-                    call.respond(HttpStatusCode.BadRequest, mapOf("error" to "No file provided"))
-                    return@post
-                }
-                
-                // 创建会话文件夹 - 确保使用 group_ 前缀保持一致
-                val sessionDir = uploadsDirForSession(sessionId!!)
-                if (!sessionDir.exists()) {
-                    sessionDir.mkdirs()
-                }
-                
-                // 保留原始文件名，如有重名则添加(数字)后缀
-                val timestamp = System.currentTimeMillis()
-                val originalName = fileName!!
-                val baseName = if (originalName.contains(".")) {
-                    originalName.substringBeforeLast(".")
-                } else {
-                    originalName
-                }
-                val extension = if (originalName.contains(".")) {
-                    "." + originalName.substringAfterLast(".")
-                } else {
-                    ""
-                }
-                
-                // 检查重名并生成唯一文件名
-                var safeFileName = originalName
-                var targetFile = File(sessionDir, safeFileName)
-                var counter = 1
-                while (targetFile.exists()) {
-                    safeFileName = "$baseName($counter)$extension"
-                    targetFile = File(sessionDir, safeFileName)
-                    counter++
-                }
-                targetFile.writeBytes(fileBytes!!)
-                
-                logger.info("📁 文件已保存: ${targetFile.absolutePath}")
-                
-                // 获取用户名（用于显示在聊天消息中）
-                val user = com.silk.backend.database.UserRepository.findUserById(userId!!)
-                val userName = user?.fullName ?: "用户"
-                
-                // 先返回上传成功响应（不阻塞用户）
-                call.respond(HttpStatusCode.OK, FileUploadResponse(
-                    success = true,
-                    fileId = safeFileName,
-                    fileName = fileName!!,
-                    filePath = targetFile.absolutePath,
-                    downloadUrl = buildFileDownloadUrl(sessionId!!, safeFileName),
-                    timestamp = timestamp,
-                    indexed = false, // 先返回 false，异步索引完成后通过 WebSocket 通知
-                    message = "文件已上传，正在索引..."
-                ))
-                
-                // ✅ 发送文件消息到聊天室（让所有群成员都能看到）
-                val finalSessionId = sessionId!!
-                val finalUserId = userId!!
-                val finalUserName = userName
-                val finalFileName = fileName!!
-                val finalSafeFileName = safeFileName
-                val fileSize = fileBytes!!.size.toLong()
-                
-                CoroutineScope(Dispatchers.IO).launch {
-                    val indexingError = runCatching {
-                        // 广播文件消息到聊天室
-                        com.silk.backend.broadcastFileMessage(
-                            groupId = finalSessionId,
-                            userId = finalUserId,
-                            userName = finalUserName,
-                            fileName = finalFileName,
-                            fileSize = fileSize,
-                            downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
-                        )
-                        
-                        // 发送开始索引状态
-                        broadcastSystemStatus(finalSessionId, "🔄 正在索引文件: $finalFileName ...")
-                        
-                        val indexed = indexFileToWeaviate(
-                            file = targetFile,
-                            sessionId = finalSessionId,
-                            userId = finalUserId,
-                            originalFileName = finalFileName,
-                            contentType = contentType
-                        )
-                        
-                        // 发送索引完成状态
-                        if (indexed) {
-                            broadcastSystemStatus(finalSessionId, "✅ 文件索引完成: $finalFileName")
-                        } else {
-                            broadcastSystemStatus(finalSessionId, "⚠️ 文件索引失败: $finalFileName")
-                        }
-                    }.exceptionOrNull()
+        registerFileUploadRoute()
+        registerFileDownloadRoute()
+        registerAppVersionRoute()
+        registerApkDownloadRoute()
+        registerHapVersionRoute()
+        registerHapDownloadRoute()
+        registerFileListRoute()
+        registerFileDeleteRoute()
+    }
+}
 
-                    if (indexingError != null) {
-                        indexingError.rethrowIfCancellation()
-                        logger.error("❌ 异步索引失败: ${indexingError.message}", indexingError)
-                        broadcastSystemStatus(finalSessionId, "❌ 文件索引异常: $finalFileName - ${indexingError.message}")
-                    }
-                }
+private fun Route.registerFileUploadRoute() {
+    post("/upload") {
+        val uploadError = runCatching {
+            val upload = readUploadRequest(call.receiveMultipart())
+            if (upload.sessionId.isNullOrBlank() || upload.userId.isNullOrBlank()) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing sessionId or userId"))
+                return@post
+            }
 
-            }.exceptionOrNull()
+            if (upload.fileName.isNullOrBlank() || upload.fileBytes == null) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "No file provided"))
+                return@post
+            }
 
-            if (uploadError != null) {
-                uploadError.rethrowIfCancellation()
-                logger.error("❌ 文件上传失败: ${uploadError.message}", uploadError)
-                call.respond(HttpStatusCode.InternalServerError, mapOf(
-                    "error" to "Upload failed: ${uploadError.message}"
-                ))
-            }
-        }
-        
-        /**
-         * 下载文件
-         * GET /api/files/download/{sessionId}/{fileId}
-         */
-        get("/download/{sessionId}/{fileId}") {
-            val sessionId = call.parameters["sessionId"]
-            val fileId = call.parameters["fileId"]
-            
-            if (sessionId.isNullOrBlank() || fileId.isNullOrBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing parameters"))
-                return@get
-            }
-            
-            // 处理 sessionId - 确保使用正确的目录格式
-            val file = File(uploadsDirForSession(sessionId), fileId)
-            
-            if (!file.exists()) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "File not found"))
-                return@get
-            }
-            
-            call.response.header(
-                HttpHeaders.ContentDisposition,
-                ContentDisposition.Attachment.withParameter(
-                    ContentDisposition.Parameters.FileName, 
-                    fileId
-                ).toString()
+            val timestamp = System.currentTimeMillis()
+            val sessionId = requireNotNull(upload.sessionId)
+            val userId = requireNotNull(upload.userId)
+            val originalFileName = requireNotNull(upload.fileName)
+            val fileBytes = requireNotNull(upload.fileBytes)
+            val targetFile = persistUploadedFile(sessionId, originalFileName, fileBytes)
+            val safeFileName = targetFile.name
+
+            logger.info("📁 文件已保存: ${targetFile.absolutePath}")
+
+            val user = com.silk.backend.database.UserRepository.findUserById(userId)
+            val userName = user?.fullName ?: "用户"
+
+            call.respond(HttpStatusCode.OK, FileUploadResponse(
+                success = true,
+                fileId = safeFileName,
+                fileName = originalFileName,
+                filePath = targetFile.absolutePath,
+                downloadUrl = buildFileDownloadUrl(sessionId, safeFileName),
+                timestamp = timestamp,
+                indexed = false,
+                message = "文件已上传，正在索引..."
+            ))
+
+            launchFileIndexing(
+                sessionId = sessionId,
+                userId = userId,
+                userName = userName,
+                originalFileName = originalFileName,
+                storedFileName = safeFileName,
+                fileBytes = fileBytes,
+                targetFile = targetFile,
+                contentType = upload.contentType
             )
-            
-            call.respondFile(file)
-        }
-        
-        /**
-         * 获取最新 APK 版本信息
-         * GET /api/files/app-version
-         * 
-         * 版本号基于 APK 文件的修改时间自动生成：
-         * - versionCode: (year-2020)*100000000 + month*1000000 + day*10000 + hour*100 + minute
-         * - versionName: yyyy.MMdd.HHmm
-         */
-        get("/app-version") {
-            // APK 文件路径 - 按优先级查找
-            val possiblePaths = listOf(
-                "static/silk.apk",                              // silk.sh 创建的符号链接（最新版本）
-                "static/downloads/Silk-Android.apk",           // 已部署的稳定版本
-                "../frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk",  // 构建目录
-                "frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk"
-            )
-            
-            val apkFile = possiblePaths
-                .map { File(it) }
-                .firstOrNull { it.exists() && it.length() > 0 }
-            
-            val lastModified = if (apkFile != null && apkFile.exists()) apkFile.lastModified() else System.currentTimeMillis()
-            val fileSize = if (apkFile != null && apkFile.exists()) apkFile.length() else 0L
-            
-            // ✅ 基于 APK 文件修改时间生成版本号
-            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).apply {
-                timeInMillis = lastModified
-            }
-            
-            val year = calendar.get(java.util.Calendar.YEAR) - 2020
-            val month = calendar.get(java.util.Calendar.MONTH) + 1
-            val day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
-            val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
-            val minute = calendar.get(java.util.Calendar.MINUTE)
-            
-            val versionCode = year * 100000000 + month * 1000000 + day * 10000 + hour * 100 + minute
-            val versionName = String.format(Locale.ROOT, "%04d.%02d%02d.%02d%02d",
-                calendar.get(java.util.Calendar.YEAR), month, day, hour, minute)
-            
-            logger.info("📱 APK 版本: $versionName (code=$versionCode) - 文件时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(lastModified))}")
-            
-            call.respond(AppVersionResponse(
-                versionCode = versionCode,
-                versionName = versionName,
-                lastModified = lastModified,
-                fileSize = fileSize,
-                downloadUrl = "/api/files/download-apk"
+        }.exceptionOrNull()
+
+        if (uploadError != null) {
+            uploadError.rethrowIfCancellation()
+            logger.error("❌ 文件上传失败: ${uploadError.message}", uploadError)
+            call.respond(HttpStatusCode.InternalServerError, mapOf(
+                "error" to "Upload failed: ${uploadError.message}"
             ))
         }
-        
-        /**
-         * 下载最新 Android APK
-         * GET /api/files/download-apk
-         * 优先从 static/downloads 目录读取稳定版本
-         */
-        get("/download-apk") {
-            // APK 文件路径 - 优先使用 silk-{version}.apk 或 silk.apk
-            val possiblePaths = listOf(
-                "static/silk.apk",                               // 符号链接指向最新版本（优先）
-                "static/downloads/Silk-Android.apk",             // 已部署的稳定版本
-                "static/silk-*.apk",                             // silk-{version}.apk 通配符
-                "../frontend/androidApp/build/outputs/apk/debug/*.apk",  // 构建目录（备用）
-                "frontend/androidApp/build/outputs/apk/debug/*.apk"
-            )
-            
-            val apkFile = possiblePaths
-                .map { File(it) }
-                .firstOrNull { it.exists() && it.length() > 0 }  // 确保文件存在且不为空
-            
-            if (apkFile == null || !apkFile.exists()) {
-                logger.warn("APK 文件不存在，已检查路径: $possiblePaths")
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "APK 文件不存在，请先构建 Android 应用"))
-                return@get
+    }
+}
+
+private suspend fun readUploadRequest(multipart: io.ktor.http.content.MultiPartData): UploadRequest {
+    var sessionId: String? = null
+    var userId: String? = null
+    var fileName: String? = null
+    var fileBytes: ByteArray? = null
+    var contentType: String? = null
+
+    multipart.forEachPart { part ->
+        when (part) {
+            is PartData.FormItem -> {
+                when (part.name) {
+                    "sessionId" -> sessionId = part.value
+                    "userId" -> userId = part.value
+                }
             }
-            
-            // 检查文件是否正在被写入（最后修改时间在 5 秒内）
-            val lastModified = apkFile.lastModified()
-            val now = System.currentTimeMillis()
-            if (now - lastModified < 5000) {
-                logger.warn("⚠️ APK 文件可能正在更新中，请稍后再试")
-                call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "文件正在更新中，请稍后再试"))
-                return@get
+            is PartData.FileItem -> {
+                fileName = part.originalFileName
+                contentType = part.contentType?.toString()
+                fileBytes = part.streamProvider().readBytes()
             }
-            
-            logger.info("📱 提供 APK 下载: ${apkFile.name} (${apkFile.length()} bytes)")
-            
-            call.response.header(
-                HttpHeaders.ContentDisposition,
-                ContentDisposition.Attachment.withParameter(
-                    ContentDisposition.Parameters.FileName, 
-                    "Silk-Android.apk"
-                ).toString()
-            )
-            
-            call.respondFile(apkFile)
+            else -> {}
         }
-        
-        /**
-         * 获取最新 HAP 版本信息
-         * GET /api/files/hap-version
-         *
-         * 版本号基于 HAP 文件的修改时间自动生成（与 APK 相同算法）：
-         * - versionCode: (year-2020)*100000000 + month*1000000 + day*10000 + hour*100 + minute
-         * - versionName: yyyy.MMdd.HHmm
-         */
-        get("/hap-version") {
-            // HAP 文件路径 - 按优先级查找
-            val possiblePaths = listOf(
-                "static/silk.hap",                              // silk.sh 可能创建的符号链接
-                "frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap",  // 构建目录
-                "../frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap"
+        part.dispose()
+    }
+
+    return UploadRequest(
+        sessionId = sessionId,
+        userId = userId,
+        fileName = fileName,
+        fileBytes = fileBytes,
+        contentType = contentType
+    )
+}
+
+private fun persistUploadedFile(sessionId: String, originalFileName: String, fileBytes: ByteArray): File {
+    val sessionDir = uploadsDirForSession(sessionId)
+    if (!sessionDir.exists()) {
+        sessionDir.mkdirs()
+    }
+
+    val baseName = originalFileName.substringBeforeLast(".", originalFileName)
+    val extension = originalFileName.substringAfterLast(".", "").let { if (it.isEmpty()) "" else ".$it" }
+
+    var safeFileName = originalFileName
+    var targetFile = File(sessionDir, safeFileName)
+    var counter = 1
+    while (targetFile.exists()) {
+        safeFileName = "$baseName($counter)$extension"
+        targetFile = File(sessionDir, safeFileName)
+        counter++
+    }
+    targetFile.writeBytes(fileBytes)
+    return targetFile
+}
+
+private fun launchFileIndexing(
+    sessionId: String,
+    userId: String,
+    userName: String,
+    originalFileName: String,
+    storedFileName: String,
+    fileBytes: ByteArray,
+    targetFile: File,
+    contentType: String?
+) {
+    CoroutineScope(Dispatchers.IO).launch {
+        val indexingError = runCatching {
+            com.silk.backend.broadcastFileMessage(
+                groupId = sessionId,
+                userId = userId,
+                userName = userName,
+                fileName = originalFileName,
+                fileSize = fileBytes.size.toLong(),
+                downloadUrl = buildFileDownloadUrl(sessionId, storedFileName)
             )
 
-            val hapFile = possiblePaths
-                .map { File(it) }
-                .firstOrNull { it.exists() && it.length() > 0 }
+            broadcastSystemStatus(sessionId, "🔄 正在索引文件: $originalFileName ...")
 
-            val lastModified = if (hapFile != null && hapFile.exists()) hapFile.lastModified() else System.currentTimeMillis()
-            val fileSize = if (hapFile != null && hapFile.exists()) hapFile.length() else 0L
-
-            // 基于 HAP 文件修改时间生成版本号
-            val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).apply {
-                timeInMillis = lastModified
-            }
-
-            val year = calendar.get(java.util.Calendar.YEAR) - 2020
-            val month = calendar.get(java.util.Calendar.MONTH) + 1
-            val day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
-            val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
-            val minute = calendar.get(java.util.Calendar.MINUTE)
-
-            val versionCode = year * 100000000 + month * 1000000 + day * 10000 + hour * 100 + minute
-            val versionName = String.format(Locale.ROOT, "%04d.%02d%02d.%02d%02d",
-                calendar.get(java.util.Calendar.YEAR), month, day, hour, minute)
-
-            logger.info("📱 HAP 版本: $versionName (code=$versionCode) - 文件时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(lastModified))}")
-
-            call.respond(AppVersionResponse(
-                versionCode = versionCode,
-                versionName = versionName,
-                lastModified = lastModified,
-                fileSize = fileSize,
-                downloadUrl = "/api/files/download-hap"
-            ))
-        }
-
-        /**
-         * 下载最新 Harmony HAP
-         * GET /api/files/download-hap
-         */
-        get("/download-hap") {
-            // HAP 文件路径 - 按优先级查找
-            val possiblePaths = listOf(
-                "static/silk.hap",                               // 符号链接（优先）
-                "frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap",  // 构建目录
-                "../frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap"
+            val indexed = indexFileToWeaviate(
+                file = targetFile,
+                sessionId = sessionId,
+                userId = userId,
+                originalFileName = originalFileName,
+                contentType = contentType
             )
 
-            val hapFile = possiblePaths
-                .map { File(it) }
-                .firstOrNull { it.exists() && it.length() > 0 }
-
-            if (hapFile == null || !hapFile.exists()) {
-                logger.warn("HAP 文件不存在，已检查路径: $possiblePaths")
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "HAP 文件不存在，请先构建 Harmony 应用"))
-                return@get
-            }
-
-            // 检查文件是否正在被写入（最后修改时间在 5 秒内）
-            val lastModified = hapFile.lastModified()
-            val now = System.currentTimeMillis()
-            if (now - lastModified < 5000) {
-                logger.warn("⚠️ HAP 文件可能正在更新中，请稍后再试")
-                call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "文件正在更新中，请稍后再试"))
-                return@get
-            }
-
-            logger.info("📱 提供 HAP 下载: ${hapFile.name} (${hapFile.length()} bytes)")
-
-            call.response.header(
-                HttpHeaders.ContentDisposition,
-                ContentDisposition.Attachment.withParameter(
-                    ContentDisposition.Parameters.FileName,
-                    "Silk-Harmony.hap"
-                ).toString()
-            )
-
-            call.respondFile(hapFile)
-        }
-
-        /**
-         * 获取会话文件列表
-         * GET /api/files/list/{sessionId}
-         */
-        get("/list/{sessionId}") {
-            val sessionId = call.parameters["sessionId"]
-            
-            if (sessionId.isNullOrBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing sessionId"))
-                return@get
-            }
-            
-            // 处理 sessionId - 确保使用正确的目录格式
-            val uploadsDir = uploadsDirForSession(sessionId)
-            
-            // 读取已处理的 URL 清单
-            val processedUrlsFile = File(uploadsDir, "processed_urls.txt")
-            val processedUrls = if (processedUrlsFile.exists()) {
-                processedUrlsFile.readLines()
-                    .filter { it.isNotBlank() }
-                    .map { it.trim() }
+            if (indexed) {
+                broadcastSystemStatus(sessionId, "✅ 文件索引完成: $originalFileName")
             } else {
-                emptyList()
+                broadcastSystemStatus(sessionId, "⚠️ 文件索引失败: $originalFileName")
             }
-            
-            if (!uploadsDir.exists()) {
-                call.respond(HttpStatusCode.OK, FileListResponse(
-                    sessionId = sessionId,
-                    files = emptyList(),
-                    totalCount = 0,
-                    processedUrls = processedUrls
-                ))
-                return@get
-            }
-            
-            val files = uploadsDir.listFiles()
-                ?.filter { it.name != "processed_urls.txt" }  // 排除 URL 清单文件
-                ?.map { file ->
-                    FileInfo(
-                        fileId = file.name,
-                        fileName = file.name,
-                        size = file.length(),
-                        contentType = Files.probeContentType(file.toPath()) ?: "application/octet-stream",
-                        uploadTime = file.lastModified(),
-                        downloadUrl = buildFileDownloadUrl(sessionId, file.name)
-                    )
-                }?.sortedByDescending { it.uploadTime } ?: emptyList()
-            
+        }.exceptionOrNull()
+
+        if (indexingError != null) {
+            indexingError.rethrowIfCancellation()
+            logger.error("❌ 异步索引失败: ${indexingError.message}", indexingError)
+            broadcastSystemStatus(sessionId, "❌ 文件索引异常: $originalFileName - ${indexingError.message}")
+        }
+    }
+}
+
+private data class UploadRequest(
+    val sessionId: String?,
+    val userId: String?,
+    val fileName: String?,
+    val fileBytes: ByteArray?,
+    val contentType: String?
+)
+
+private fun Route.registerFileDownloadRoute() {
+    get("/download/{sessionId}/{fileId}") {
+        val sessionId = call.parameters["sessionId"]
+        val fileId = call.parameters["fileId"]
+
+        if (sessionId.isNullOrBlank() || fileId.isNullOrBlank()) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing parameters"))
+            return@get
+        }
+
+        val file = File(uploadsDirForSession(sessionId), fileId)
+        if (!file.exists()) {
+            call.respond(HttpStatusCode.NotFound, mapOf("error" to "File not found"))
+            return@get
+        }
+
+        call.response.header(
+            HttpHeaders.ContentDisposition,
+            ContentDisposition.Attachment.withParameter(
+                ContentDisposition.Parameters.FileName,
+                fileId
+            ).toString()
+        )
+
+        call.respondFile(file)
+    }
+}
+
+private fun Route.registerAppVersionRoute() {
+    get("/app-version") {
+        val possiblePaths = listOf(
+            "static/silk.apk",
+            "static/downloads/Silk-Android.apk",
+            "../frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk",
+            "frontend/androidApp/build/outputs/apk/debug/androidApp-debug.apk"
+        )
+
+        val apkFile = possiblePaths
+            .map { File(it) }
+            .firstOrNull { it.exists() && it.length() > 0 }
+
+        val lastModified = if (apkFile != null && apkFile.exists()) apkFile.lastModified() else System.currentTimeMillis()
+        val fileSize = if (apkFile != null && apkFile.exists()) apkFile.length() else 0L
+
+        val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).apply {
+            timeInMillis = lastModified
+        }
+
+        val year = calendar.get(java.util.Calendar.YEAR) - 2020
+        val month = calendar.get(java.util.Calendar.MONTH) + 1
+        val day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
+        val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+        val minute = calendar.get(java.util.Calendar.MINUTE)
+
+        val versionCode = year * 100000000 + month * 1000000 + day * 10000 + hour * 100 + minute
+        val versionName = String.format(
+            Locale.ROOT,
+            "%04d.%02d%02d.%02d%02d",
+            calendar.get(java.util.Calendar.YEAR),
+            month,
+            day,
+            hour,
+            minute
+        )
+
+        logger.info("📱 APK 版本: $versionName (code=$versionCode) - 文件时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(lastModified))}")
+
+        call.respond(AppVersionResponse(
+            versionCode = versionCode,
+            versionName = versionName,
+            lastModified = lastModified,
+            fileSize = fileSize,
+            downloadUrl = "/api/files/download-apk"
+        ))
+    }
+}
+
+private fun Route.registerApkDownloadRoute() {
+    get("/download-apk") {
+        val possiblePaths = listOf(
+            "static/silk.apk",
+            "static/downloads/Silk-Android.apk",
+            "static/silk-*.apk",
+            "../frontend/androidApp/build/outputs/apk/debug/*.apk",
+            "frontend/androidApp/build/outputs/apk/debug/*.apk"
+        )
+
+        val apkFile = possiblePaths
+            .map { File(it) }
+            .firstOrNull { it.exists() && it.length() > 0 }
+
+        if (apkFile == null || !apkFile.exists()) {
+            logger.warn("APK 文件不存在，已检查路径: $possiblePaths")
+            call.respond(HttpStatusCode.NotFound, mapOf("error" to "APK 文件不存在，请先构建 Android 应用"))
+            return@get
+        }
+
+        val lastModified = apkFile.lastModified()
+        val now = System.currentTimeMillis()
+        if (now - lastModified < 5000) {
+            logger.warn("⚠️ APK 文件可能正在更新中，请稍后再试")
+            call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "文件正在更新中，请稍后再试"))
+            return@get
+        }
+
+        logger.info("📱 提供 APK 下载: ${apkFile.name} (${apkFile.length()} bytes)")
+
+        call.response.header(
+            HttpHeaders.ContentDisposition,
+            ContentDisposition.Attachment.withParameter(
+                ContentDisposition.Parameters.FileName,
+                "Silk-Android.apk"
+            ).toString()
+        )
+
+        call.respondFile(apkFile)
+    }
+}
+
+private fun Route.registerHapVersionRoute() {
+    get("/hap-version") {
+        val possiblePaths = listOf(
+            "static/silk.hap",
+            "frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap",
+            "../frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap"
+        )
+
+        val hapFile = possiblePaths
+            .map { File(it) }
+            .firstOrNull { it.exists() && it.length() > 0 }
+
+        val lastModified = if (hapFile != null && hapFile.exists()) hapFile.lastModified() else System.currentTimeMillis()
+        val fileSize = if (hapFile != null && hapFile.exists()) hapFile.length() else 0L
+
+        val calendar = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Shanghai")).apply {
+            timeInMillis = lastModified
+        }
+
+        val year = calendar.get(java.util.Calendar.YEAR) - 2020
+        val month = calendar.get(java.util.Calendar.MONTH) + 1
+        val day = calendar.get(java.util.Calendar.DAY_OF_MONTH)
+        val hour = calendar.get(java.util.Calendar.HOUR_OF_DAY)
+        val minute = calendar.get(java.util.Calendar.MINUTE)
+
+        val versionCode = year * 100000000 + month * 1000000 + day * 10000 + hour * 100 + minute
+        val versionName = String.format(
+            Locale.ROOT,
+            "%04d.%02d%02d.%02d%02d",
+            calendar.get(java.util.Calendar.YEAR),
+            month,
+            day,
+            hour,
+            minute
+        )
+
+        logger.info("📱 HAP 版本: $versionName (code=$versionCode) - 文件时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(lastModified))}")
+
+        call.respond(AppVersionResponse(
+            versionCode = versionCode,
+            versionName = versionName,
+            lastModified = lastModified,
+            fileSize = fileSize,
+            downloadUrl = "/api/files/download-hap"
+        ))
+    }
+}
+
+private fun Route.registerHapDownloadRoute() {
+    get("/download-hap") {
+        val possiblePaths = listOf(
+            "static/silk.hap",
+            "frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap",
+            "../frontend/harmonyApp/entry/build/default/outputs/default/entry-default-signed.hap"
+        )
+
+        val hapFile = possiblePaths
+            .map { File(it) }
+            .firstOrNull { it.exists() && it.length() > 0 }
+
+        if (hapFile == null || !hapFile.exists()) {
+            logger.warn("HAP 文件不存在，已检查路径: $possiblePaths")
+            call.respond(HttpStatusCode.NotFound, mapOf("error" to "HAP 文件不存在，请先构建 Harmony 应用"))
+            return@get
+        }
+
+        val lastModified = hapFile.lastModified()
+        val now = System.currentTimeMillis()
+        if (now - lastModified < 5000) {
+            logger.warn("⚠️ HAP 文件可能正在更新中，请稍后再试")
+            call.respond(HttpStatusCode.ServiceUnavailable, mapOf("error" to "文件正在更新中，请稍后再试"))
+            return@get
+        }
+
+        logger.info("📱 提供 HAP 下载: ${hapFile.name} (${hapFile.length()} bytes)")
+
+        call.response.header(
+            HttpHeaders.ContentDisposition,
+            ContentDisposition.Attachment.withParameter(
+                ContentDisposition.Parameters.FileName,
+                "Silk-Harmony.hap"
+            ).toString()
+        )
+
+        call.respondFile(hapFile)
+    }
+}
+
+private fun Route.registerFileListRoute() {
+    get("/list/{sessionId}") {
+        val sessionId = call.parameters["sessionId"]
+
+        if (sessionId.isNullOrBlank()) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing sessionId"))
+            return@get
+        }
+
+        val uploadsDir = uploadsDirForSession(sessionId)
+        val processedUrlsFile = File(uploadsDir, "processed_urls.txt")
+        val processedUrls = if (processedUrlsFile.exists()) {
+            processedUrlsFile.readLines()
+                .filter { it.isNotBlank() }
+                .map { it.trim() }
+        } else {
+            emptyList()
+        }
+
+        if (!uploadsDir.exists()) {
             call.respond(HttpStatusCode.OK, FileListResponse(
                 sessionId = sessionId,
-                files = files,
-                totalCount = files.size,
+                files = emptyList(),
+                totalCount = 0,
                 processedUrls = processedUrls
             ))
+            return@get
         }
-        
-        /**
-         * 删除文件
-         * DELETE /api/files/{sessionId}/{fileId}
-         */
-        delete("/{sessionId}/{fileId}") {
-            val sessionId = call.parameters["sessionId"]
-            val fileId = call.parameters["fileId"]
-            
-            if (sessionId.isNullOrBlank() || fileId.isNullOrBlank()) {
-                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing parameters"))
-                return@delete
-            }
-            
-            val file = File(uploadsDirForSession(sessionId), fileId)
-            
-            if (!file.exists()) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "File not found"))
-                return@delete
-            }
-            
-            val deleted = file.delete()
-            
-            if (deleted) {
-                logger.debug("文件已删除，搜索索引删除仍未接线: {}", file.absolutePath)
-                
-                call.respond(
-                    HttpStatusCode.OK,
-                    SimpleResponse(
-                        success = true,
-                        message = "File deleted"
-                    )
+
+        val files = uploadsDir.listFiles()
+            ?.filter { it.name != "processed_urls.txt" }
+            ?.map { file ->
+                FileInfo(
+                    fileId = file.name,
+                    fileName = file.name,
+                    size = file.length(),
+                    contentType = Files.probeContentType(file.toPath()) ?: "application/octet-stream",
+                    uploadTime = file.lastModified(),
+                    downloadUrl = buildFileDownloadUrl(sessionId, file.name)
                 )
-            } else {
-                call.respond(HttpStatusCode.InternalServerError, mapOf(
-                    "error" to "Failed to delete file"
-                ))
-            }
+            }?.sortedByDescending { it.uploadTime } ?: emptyList()
+
+        call.respond(HttpStatusCode.OK, FileListResponse(
+            sessionId = sessionId,
+            files = files,
+            totalCount = files.size,
+            processedUrls = processedUrls
+        ))
+    }
+}
+
+private fun Route.registerFileDeleteRoute() {
+    delete("/{sessionId}/{fileId}") {
+        val sessionId = call.parameters["sessionId"]
+        val fileId = call.parameters["fileId"]
+
+        if (sessionId.isNullOrBlank() || fileId.isNullOrBlank()) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing parameters"))
+            return@delete
+        }
+
+        val file = File(uploadsDirForSession(sessionId), fileId)
+        if (!file.exists()) {
+            call.respond(HttpStatusCode.NotFound, mapOf("error" to "File not found"))
+            return@delete
+        }
+
+        val deleted = file.delete()
+        if (deleted) {
+            logger.debug("文件已删除，搜索索引删除仍未接线: {}", file.absolutePath)
+            call.respond(
+                HttpStatusCode.OK,
+                SimpleResponse(
+                    success = true,
+                    message = "File deleted"
+                )
+            )
+        } else {
+            call.respond(HttpStatusCode.InternalServerError, mapOf(
+                "error" to "Failed to delete file"
+            ))
         }
     }
 }
@@ -557,119 +563,25 @@ private suspend fun indexFileToWeaviate(
     contentType: String?
 ): Boolean = withContext(Dispatchers.IO) {
     val indexingResult = runCatching {
-        if (AIConfig.WEAVIATE_URL.isBlank()) {
-            logger.info("⏭️ 未配置 Weaviate，跳过文件索引: {}", originalFileName)
+        if (!canIndexToWeaviate(originalFileName)) {
             return@runCatching false
         }
 
         logger.info("🔍 开始索引文件到 Weaviate: $originalFileName (type: $contentType)")
-        
-        // 检查 Weaviate 是否可用
-        val isReady = weaviateClient.isReady()
-        logger.info("🔍 Weaviate 状态: ${if (isReady) "✅ 可用" else "❌ 不可用"}")
-        
-        if (!isReady) {
-            logger.warn("⚠️ Weaviate 不可用，跳过索引")
+
+        if (!isWeaviateReady()) {
             return@runCatching false
         }
-        
-        // 读取文件内容（对于文本文件）
-        val content = when {
-            // 文本文件（按扩展名判断）
-            originalFileName.endsWith(".txt", ignoreCase = true) ||
-            originalFileName.endsWith(".md", ignoreCase = true) ||
-            originalFileName.endsWith(".markdown", ignoreCase = true) ||
-            originalFileName.endsWith(".json", ignoreCase = true) ||
-            originalFileName.endsWith(".xml", ignoreCase = true) ||
-            originalFileName.endsWith(".html", ignoreCase = true) ||
-            originalFileName.endsWith(".htm", ignoreCase = true) ||
-            originalFileName.endsWith(".css", ignoreCase = true) ||
-            originalFileName.endsWith(".js", ignoreCase = true) ||
-            originalFileName.endsWith(".kt", ignoreCase = true) ||
-            originalFileName.endsWith(".java", ignoreCase = true) ||
-            originalFileName.endsWith(".py", ignoreCase = true) ||
-            originalFileName.endsWith(".yaml", ignoreCase = true) ||
-            originalFileName.endsWith(".yml", ignoreCase = true) ||
-            contentType?.startsWith("text/") == true -> {
-                logger.info("📝 读取文本文件: $originalFileName")
-                file.readText()
-            }
-            // PDF 文件
-            contentType == "application/pdf" || originalFileName.endsWith(".pdf", ignoreCase = true) -> {
-                logger.info("📄 提取 PDF 文本...")
-                extractTextFromPdf(file) ?: "[PDF 文件: $originalFileName, 无法提取文本]"
-            }
-            else -> {
-                logger.info("📦 二进制文件，仅索引元数据: $originalFileName (contentType: $contentType)")
-                "[二进制文件: $originalFileName, 大小: ${file.length()} bytes]"
-            }
-        }
-        
-        logger.info("📊 内容长度: ${content.length} 字符")
-        
-        // 清理无效字符（移除 \x00 等控制字符，保留换行和制表符）
-        val cleanedContent = content
-            .replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]"), "")  // 移除控制字符
-            .replace("\uFFFD", "")  // 移除 Unicode 替换字符
-            .replace("\uFEFF", "")  // 移除 BOM
-        
-        logger.info("📊 清理后内容长度: ${cleanedContent.length} 字符")
-        
-        // 获取会话参与者（简化：只用当前用户）
-        val participants = listOf(userId)
-        
-        // 确保 sessionId 有 group_ 前缀（与聊天消息一致）
-        val normalizedSessionId = if (sessionId.startsWith("group_")) sessionId else "group_$sessionId"
-        
-        // 对长文本进行分块（特别是PDF文件）
-        val chunks = if (cleanedContent.length > 10000) {
-            logger.info("📦 内容较长 (${cleanedContent.length} 字符)，进行分块处理...")
-            chunkText(cleanedContent, chunkSize = 10000, overlap = 500)
-        } else {
-            listOf(ChunkInfo(cleanedContent, 0, 1))
-        }
-        
-        logger.info("📦 共生成 ${chunks.size} 个块")
-        
-        // 提取文件名关键词（用于所有块）
-        val filenameKeywords = extractKeywordsFromFilename(originalFileName)
-        
-        // 索引每个块到 Weaviate
-        var successCount = 0
-        for (chunk in chunks) {
-            // 为每个块生成关键词和摘要
-            val chunkKeywords = extractKeywordsFromContent(chunk.content)
-            val allKeywords = (filenameKeywords + chunkKeywords).distinct().take(20) // 限制关键词数量
-            val summary = generateChunkSummary(
-                chunk = chunk,
-                fileName = originalFileName,
-                fileType = file.extension.uppercase(),
-                keywords = allKeywords
-            )
-            
-            val indexed = weaviateClient.indexDocument(
-                document = IndexDocument(
-                    content = chunk.content,
-                    title = originalFileName,
-                    summary = summary,
-                    sourceType = "FILE",
-                    fileType = file.extension.uppercase(),
-                    sessionId = normalizedSessionId,
-                    authorId = userId,  // 记录上传者，但不用于权限过滤
-                    filePath = file.absolutePath,
-                    timestamp = Instant.now().toString(),
-                    tags = allKeywords, // 将关键词也添加到 tags（虽然不搜索，但可用于过滤）
-                    chunkIndex = chunk.chunkIndex,
-                    totalChunks = chunk.totalChunks
-                ),
-                participants = participants
-            )
-            
-            if (indexed) {
-                successCount++
-            }
-        }
-        
+
+        val content = readIndexableFileContent(file, originalFileName, contentType)
+        val chunks = prepareChunks(cleanContent(content))
+        val successCount = indexChunks(
+            file = file,
+            sessionId = sessionId,
+            userId = userId,
+            originalFileName = originalFileName,
+            chunks = chunks
+        )
         if (successCount == chunks.size) {
             logger.info("✅ 文件已索引到 Weaviate: $originalFileName (${chunks.size} 个块)")
         } else {
@@ -685,6 +597,141 @@ private suspend fun indexFileToWeaviate(
     }
     indexingResult.getOrDefault(false)
 }
+
+private fun canIndexToWeaviate(originalFileName: String): Boolean {
+    if (AIConfig.WEAVIATE_URL.isBlank()) {
+        logger.info("⏭️ 未配置 Weaviate，跳过文件索引: {}", originalFileName)
+        return false
+    }
+    return true
+}
+
+private suspend fun isWeaviateReady(): Boolean {
+    val isReady = weaviateClient.isReady()
+    logger.info("🔍 Weaviate 状态: ${if (isReady) "✅ 可用" else "❌ 不可用"}")
+    if (!isReady) {
+        logger.warn("⚠️ Weaviate 不可用，跳过索引")
+    }
+    return isReady
+}
+
+private fun readIndexableFileContent(file: File, originalFileName: String, contentType: String?): String =
+    when {
+        isTextLikeFile(originalFileName, contentType) -> {
+            logger.info("📝 读取文本文件: $originalFileName")
+            file.readText()
+        }
+
+        isPdfFile(originalFileName, contentType) -> {
+            logger.info("📄 提取 PDF 文本...")
+            extractTextFromPdf(file) ?: "[PDF 文件: $originalFileName, 无法提取文本]"
+        }
+
+        else -> {
+            logger.info("📦 二进制文件，仅索引元数据: $originalFileName (contentType: $contentType)")
+            "[二进制文件: $originalFileName, 大小: ${file.length()} bytes]"
+        }
+    }
+
+private fun isTextLikeFile(originalFileName: String, contentType: String?): Boolean =
+    TEXT_FILE_EXTENSIONS.any { originalFileName.endsWith(it, ignoreCase = true) } ||
+        contentType?.startsWith("text/") == true
+
+private fun isPdfFile(originalFileName: String, contentType: String?): Boolean =
+    contentType == "application/pdf" || originalFileName.endsWith(".pdf", ignoreCase = true)
+
+private fun cleanContent(content: String): String {
+    logger.info("📊 内容长度: ${content.length} 字符")
+    val cleanedContent = content
+        .replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]"), "")
+        .replace("\uFFFD", "")
+        .replace("\uFEFF", "")
+    logger.info("📊 清理后内容长度: ${cleanedContent.length} 字符")
+    return cleanedContent
+}
+
+private fun prepareChunks(cleanedContent: String): List<ChunkInfo> {
+    val chunks = if (cleanedContent.length > DEFAULT_FILE_CHUNK_SIZE) {
+        logger.info("📦 内容较长 (${cleanedContent.length} 字符)，进行分块处理...")
+        chunkText(cleanedContent, chunkSize = DEFAULT_FILE_CHUNK_SIZE, overlap = DEFAULT_FILE_CHUNK_OVERLAP)
+    } else {
+        listOf(ChunkInfo(cleanedContent, 0, 1))
+    }
+    logger.info("📦 共生成 ${chunks.size} 个块")
+    return chunks
+}
+
+private suspend fun indexChunks(
+    file: File,
+    sessionId: String,
+    userId: String,
+    originalFileName: String,
+    chunks: List<ChunkInfo>
+): Int {
+    val fileType = file.extension.uppercase()
+    val participants = listOf(userId)
+    val normalizedSessionId = normalizedSessionDir(sessionId)
+    val filenameKeywords = extractKeywordsFromFilename(originalFileName)
+    var successCount = 0
+
+    for (chunk in chunks) {
+        if (indexChunk(
+                chunk = chunk,
+                file = file,
+                fileType = fileType,
+                sessionId = normalizedSessionId,
+                userId = userId,
+                originalFileName = originalFileName,
+                filenameKeywords = filenameKeywords,
+                participants = participants
+            )
+        ) {
+            successCount++
+        }
+    }
+
+    return successCount
+}
+
+private suspend fun indexChunk(
+    chunk: ChunkInfo,
+    file: File,
+    fileType: String,
+    sessionId: String,
+    userId: String,
+    originalFileName: String,
+    filenameKeywords: List<String>,
+    participants: List<String>
+): Boolean {
+    val allKeywords = buildChunkKeywords(filenameKeywords, chunk)
+    val summary = generateChunkSummary(
+        chunk = chunk,
+        fileName = originalFileName,
+        fileType = fileType,
+        keywords = allKeywords
+    )
+
+    return weaviateClient.indexDocument(
+        document = IndexDocument(
+            content = chunk.content,
+            title = originalFileName,
+            summary = summary,
+            sourceType = "FILE",
+            fileType = fileType,
+            sessionId = sessionId,
+            authorId = userId,
+            filePath = file.absolutePath,
+            timestamp = Instant.now().toString(),
+            tags = allKeywords,
+            chunkIndex = chunk.chunkIndex,
+            totalChunks = chunk.totalChunks
+        ),
+        participants = participants
+    )
+}
+
+private fun buildChunkKeywords(filenameKeywords: List<String>, chunk: ChunkInfo): List<String> =
+    (filenameKeywords + extractKeywordsFromContent(chunk.content)).distinct().take(MAX_INDEX_KEYWORDS)
 
 /**
  * 从 PDF 提取文本（使用 Apache PDFBox）

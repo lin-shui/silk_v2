@@ -803,87 +803,46 @@ $rawReport
     private fun generateFallbackReport(
         stepResults: Map<String, StepResult>,
         allSuccess: Boolean
-    ): String {
-        val report = buildString {
-            append("##承山堂中医诊断总结报告##\n\n")
-            
-            append("###诊断执行状态###\n")
-            append("执行结果: ${if (allSuccess) "✓ 全部成功" else "⚠ 部分失败"}\n")
-            append("完成步骤: ${stepResults.count { it.value.success }}/${stepResults.size}\n\n")
-            
-            // 按章节组织内容
-            append("##一、中西医诊断##\n\n")
-            val diagnosis = stepResults["中西医疾病的诊断"]
-            if (diagnosis != null && diagnosis.success) {
-                append("${diagnosis.result}\n\n")
-            }
-            
-            append("##二、辨证分型与病因病机##\n\n")
-            
-            append("###1. 辨证分型###\n")
-            val dialectics = stepResults["中医辨证分型"]
-            if (dialectics != null && dialectics.success) {
-                append("${dialectics.result}\n\n")
-            }
-            
-            append("###2. 病因病机###\n")
-            val pathogenesis = stepResults["中医的病因病机分析"]
-            if (pathogenesis != null && pathogenesis.success) {
-                append("${pathogenesis.result}\n\n")
-            }
-            
-            append("##三、体质诊断##\n\n")
-            val constitution = stepResults["中医体质诊断"]
-            if (constitution != null && constitution.success) {
-                append("${constitution.result}\n\n")
-            }
-            
-            append("##四、综合分析##\n\n")
-            val analysis = stepResults["分析汇总"]
-            if (analysis != null && analysis.success) {
-                append("${analysis.result}\n\n")
-            }
-            
-            append("##五、治疗方案##\n\n")
-            
-            append("###1. 中药处方###\n")
-            val prescription = stepResults["中医处方建议"]
-            if (prescription != null && prescription.success) {
-                append("${prescription.result}\n\n")
-            }
-            
-            append("###2. 中成药推荐###\n")
-            val patent = stepResults["推荐中成药"]
-            if (patent != null && patent.success) {
-                append("${patent.result}\n\n")
-            }
-            
-            append("###3. 针灸治疗###\n")
-            val acupuncture = stepResults["针灸处方及针灸方法"]
-            if (acupuncture != null && acupuncture.success) {
-                append("${acupuncture.result}\n\n")
-            }
-            
-            append("###4. 艾灸治疗###\n")
-            val moxibustion = stepResults["艾灸选穴及艾灸方法"]
-            if (moxibustion != null && moxibustion.success) {
-                append("${moxibustion.result}\n\n")
-            }
-            
-            append("###5. 生活调养###\n")
-            val lifestyle = stepResults["饮食运动起居调养方案"]
-            if (lifestyle != null && lifestyle.success) {
-                append("${lifestyle.result}\n\n")
-            }
-            
-            append("##六、预后说明##\n\n")
-            val prognosis = stepResults["预后说明"]
-            if (prognosis != null && prognosis.success) {
-                append("${prognosis.result}\n\n")
-            }
+    ): String = buildString {
+        appendFallbackReportHeader(stepResults, allSuccess)
+        appendReportSection("##一、中西医诊断##", stepResults, "中西医疾病的诊断")
+        append("##二、辨证分型与病因病机##\n\n")
+        appendReportSection("###1. 辨证分型###", stepResults, "中医辨证分型")
+        appendReportSection("###2. 病因病机###", stepResults, "中医的病因病机分析")
+        appendReportSection("##三、体质诊断##", stepResults, "中医体质诊断")
+        appendReportSection("##四、综合分析##", stepResults, "分析汇总")
+        append("##五、治疗方案##\n\n")
+        appendReportSection("###1. 中药处方###", stepResults, "中医处方建议")
+        appendReportSection("###2. 中成药推荐###", stepResults, "推荐中成药")
+        appendReportSection("###3. 针灸治疗###", stepResults, "针灸处方及针灸方法")
+        appendReportSection("###4. 艾灸治疗###", stepResults, "艾灸选穴及艾灸方法")
+        appendReportSection("###5. 生活调养###", stepResults, "饮食运动起居调养方案")
+        appendReportSection("##六、预后说明##", stepResults, "预后说明")
+    }
+
+    private fun StringBuilder.appendFallbackReportHeader(
+        stepResults: Map<String, StepResult>,
+        allSuccess: Boolean
+    ) {
+        append("##承山堂中医诊断总结报告##\n\n")
+        append("###诊断执行状态###\n")
+        append("执行结果: ${if (allSuccess) "✓ 全部成功" else "⚠ 部分失败"}\n")
+        append("完成步骤: ${stepResults.count { it.value.success }}/${stepResults.size}\n\n")
+    }
+
+    private fun StringBuilder.appendReportSection(
+        title: String,
+        stepResults: Map<String, StepResult>,
+        stepKey: String
+    ) {
+        append("$title\n\n")
+        appendSuccessfulStepResult(stepResults[stepKey])
+    }
+
+    private fun StringBuilder.appendSuccessfulStepResult(stepResult: StepResult?) {
+        if (stepResult != null && stepResult.success) {
+            append("${stepResult.result}\n\n")
         }
-        
-        return report.toString()
     }
     
     /**
