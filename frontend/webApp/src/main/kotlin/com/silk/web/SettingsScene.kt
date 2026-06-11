@@ -31,11 +31,13 @@ import org.jetbrains.compose.web.css.flex
 import org.jetbrains.compose.web.css.flexDirection
 import org.jetbrains.compose.web.css.fontFamily
 import org.jetbrains.compose.web.css.fontSize
+import org.jetbrains.compose.web.css.fontWeight
 import org.jetbrains.compose.web.css.gap
 import org.jetbrains.compose.web.css.height
 import org.jetbrains.compose.web.css.justifyContent
 import org.jetbrains.compose.web.css.marginBottom
 import org.jetbrains.compose.web.css.marginLeft
+import org.jetbrains.compose.web.css.marginTop
 import org.jetbrains.compose.web.css.maxWidth
 import org.jetbrains.compose.web.css.minHeight
 import org.jetbrains.compose.web.css.padding
@@ -696,6 +698,160 @@ fun SettingsScene(appState: WebAppState) {
                         }
                     }) {
                         Text(if (isSaving) "保存中..." else strings.saveButton)
+                    }
+                }
+
+                // 分隔线
+                Div({
+                    style {
+                        height(1.px)
+                        backgroundColor(Color(SilkColors.divider))
+                        marginTop(48.px)
+                        marginBottom(32.px)
+                    }
+                })
+
+                // 注销账号
+                var showDeleteConfirm by remember { mutableStateOf(false) }
+                var isDeleting by remember { mutableStateOf(false) }
+                var deleteMessage by remember { mutableStateOf<String?>(null) }
+
+                Div({
+                    style {
+                        padding(24.px)
+                        border(1.px, LineStyle.Solid, Color("#F5D0D0"))
+                        borderRadius(12.px)
+                        backgroundColor(Color("#FFF8F8"))
+                    }
+                }) {
+                    Span({
+                        style {
+                            fontSize(16.px)
+                            fontWeight("bold")
+                            color(Color(SilkColors.error))
+                            display(DisplayStyle.Block)
+                            marginBottom(8.px)
+                        }
+                    }) {
+                        Text("危险区域")
+                    }
+
+                    Div({
+                        style {
+                            fontSize(13.px)
+                            color(Color(SilkColors.textSecondary))
+                            marginBottom(16.px)
+                            property("line-height", "1.6")
+                        }
+                    }) {
+                        Text("注销账号将删除您的所有数据（包括群组、联系人、聊天记录等），且无法恢复。该操作不可撤销。")
+                    }
+
+                    if (!showDeleteConfirm) {
+                        Button({
+                            style {
+                                padding(10.px, 20.px)
+                                backgroundColor(Color(SilkColors.error))
+                                color(Color.white)
+                                border { width(0.px) }
+                                borderRadius(8.px)
+                                property("cursor", "pointer")
+                                fontSize(13.px)
+                                property("font-weight", "500")
+                            }
+                            onClick {
+                                showDeleteConfirm = true
+                                deleteMessage = null
+                            }
+                        }) {
+                            Text("注销账号")
+                        }
+                    } else {
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                flexDirection(FlexDirection.Column)
+                                gap(12.px)
+                            }
+                        }) {
+                            Div({
+                                style {
+                                    fontSize(14.px)
+                                    color(Color(SilkColors.error))
+                                    fontWeight("bold")
+                                }
+                            }) {
+                                Text("确认注销？此操作不可撤销！")
+                            }
+
+                            // 操作按钮
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    gap(12.px)
+                                }
+                            }) {
+                                Button({
+                                    style {
+                                        padding(10.px, 20.px)
+                                        backgroundColor(Color("#999"))
+                                        color(Color.white)
+                                        border { width(0.px) }
+                                        borderRadius(8.px)
+                                        property("cursor", "pointer")
+                                        fontSize(13.px)
+                                        property("font-weight", "500")
+                                    }
+                                    onClick {
+                                        showDeleteConfirm = false
+                                        deleteMessage = null
+                                    }
+                                }) {
+                                    Text("取消")
+                                }
+
+                                Button({
+                                    style {
+                                        padding(10.px, 20.px)
+                                        backgroundColor(Color(SilkColors.error))
+                                        color(Color.white)
+                                        border { width(0.px) }
+                                        borderRadius(8.px)
+                                        property("cursor", if (isDeleting) "not-allowed" else "pointer")
+                                        property("opacity", if (isDeleting) "0.6" else "1")
+                                        fontSize(13.px)
+                                        property("font-weight", "500")
+                                    }
+                                    onClick {
+                                        if (!isDeleting) {
+                                            isDeleting = true
+                                            deleteMessage = null
+                                            appState.deleteAccount { success, msg ->
+                                                deleteMessage = msg
+                                                if (!success) {
+                                                    isDeleting = false
+                                                    showDeleteConfirm = false
+                                                }
+                                            }
+                                        }
+                                    }
+                                }) {
+                                    Text(if (isDeleting) "注销中..." else "确认注销")
+                                }
+                            }
+
+                            if (deleteMessage != null) {
+                                Div({
+                                    style {
+                                        fontSize(13.px)
+                                        color(Color(if (deleteMessage == "账号已注销") SilkColors.success else SilkColors.error))
+                                        marginTop(8.px)
+                                    }
+                                }) {
+                                    Text(deleteMessage!!)
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -368,6 +368,19 @@ object ApiClient {
     }
 
     /**
+     * 注销账号（删除用户及其所有数据）
+     */
+    suspend fun deleteAccount(userId: String): SimpleResponse {
+        return try {
+            val response = delete("/users/$userId/account", "")
+            jsonParser.decodeFromString<SimpleResponse>(response)
+        } catch (e: Exception) {
+            console.log("注销账号失败:", e)
+            SimpleResponse(false, "网络错误")
+        }
+    }
+
+    /**
      * 刷新 Access Token
      */
     suspend fun refreshAccessToken(): HuaweiAuthResponse {

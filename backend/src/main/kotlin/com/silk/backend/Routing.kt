@@ -1223,6 +1223,35 @@ fun Application.configureRouting() {
         }
 
         /**
+         * 注销账号（删除用户及其所有关联数据）
+         */
+        delete("/users/{userId}/account") {
+            try {
+                val userId = call.parameters["userId"] ?: ""
+                if (userId.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少用户ID"))
+                    return@delete
+                }
+
+                val user = UserRepository.findUserById(userId)
+                if (user == null) {
+                    call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "用户不存在"))
+                    return@delete
+                }
+
+                val deleted = UserRepository.deleteUser(userId)
+                if (deleted) {
+                    call.respond(SimpleResponse(true, "账号已注销"))
+                } else {
+                    call.respond(HttpStatusCode.InternalServerError, SimpleResponse(false, "注销失败，请稍后重试"))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 注销账号失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "请求格式错误"))
+            }
+        }
+
+        /**
          * 刷新 Access Token
          */
         post("/auth/refresh") {

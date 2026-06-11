@@ -4,6 +4,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.browser.localStorage
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -147,16 +149,43 @@ class WebAppState {
     }
     
     /**
-     * 登出：清除本地状态。后端 Token 撤销由 ApiClient 处理
+     * 登出：清除本地状态
      */
     fun logout() {
         console.log("🚪 用户明确请求退出登录")
+        GlobalScope.launch {
+            ApiClient.logout()
+        }
         JwtManager.clearAll()
         explicitLogoutRequested = true
         currentUser = null
         selectedGroup = null
         sceneHistory.clear()
         currentScene = Scene.LOGIN
+    }
+
+    /**
+     * 注销账号：删除所有数据后跳转到登录页
+     */
+    fun deleteAccount(onResult: (Boolean, String) -> Unit) {
+        val userId = currentUser?.id ?: run {
+            onResult(false, "用户未登录")
+            return
+        }
+        GlobalScope.launch {
+            val result = ApiClient.deleteAccount(userId)
+            if (result.success) {
+                JwtManager.clearAll()
+                explicitLogoutRequested = true
+                currentUser = null
+                selectedGroup = null
+                sceneHistory.clear()
+                currentScene = Scene.LOGIN
+                onResult(true, "账号已注销")
+            } else {
+                onResult(false, result.message.ifBlank { "注销失败" })
+            }
+        }
     }
     
     /**
