@@ -2012,6 +2012,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }
                 
+                // 非 Silk 专属对话才显示邀请、添加成员、查看成员按钮
+                if (!group.name.startsWith("[Silk]")) {
+                
                 // 邀请按钮
                 Button({
                     style {
@@ -2089,6 +2092,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }) {
                     Text(strings.membersButton)
                 }
+                } // end if !group.name.startsWith("[Silk]")
             }
             } // close else (non-selection mode)
         }
