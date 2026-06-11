@@ -7,17 +7,20 @@ import com.silk.shared.models.Language
 import com.silk.shared.models.TrustedDirCheckResponse
 import com.silk.shared.models.UpdateUserSettingsRequest
 import com.silk.shared.models.UserSettingsResponse
+import kotlinx.browser.localStorage
 import kotlinx.browser.window
 import kotlinx.coroutines.await
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import org.w3c.fetch.Headers
 import org.w3c.fetch.RequestInit
 import kotlin.js.json
 
@@ -247,6 +250,76 @@ data class ExportKBResponse(
     val vaultPath: String = "",
     val fileName: String = ""
 )
+/**
+ * JWT 令牌管理
+ */
+object JwtManager {
+    private const val STORAGE_KEY_JWT = "silk_jwt"
+    private const val STORAGE_KEY_REFRESH = "silk_refresh_token"
+    private const val STORAGE_KEY_USER = "silk_user"
+
+    fun getAccessToken(): String? {
+        return try {
+            localStorage.getItem(STORAGE_KEY_JWT)
+        } catch (e: Exception) { null }
+    }
+
+    fun setAccessToken(token: String) {
+        try { localStorage.setItem(STORAGE_KEY_JWT, token) } catch (_: Exception) {}
+    }
+
+    fun getRefreshToken(): String? {
+        return try {
+            localStorage.getItem(STORAGE_KEY_REFRESH)
+        } catch (e: Exception) { null }
+    }
+
+    fun setRefreshToken(token: String) {
+        try { localStorage.setItem(STORAGE_KEY_REFRESH, token) } catch (_: Exception) {}
+    }
+
+    fun getStoredUser(): User? {
+        return try {
+            val json = localStorage.getItem(STORAGE_KEY_USER)
+            if (json != null) Json.decodeFromString<User>(json) else null
+        } catch (e: Exception) { null }
+    }
+
+    fun setStoredUser(user: User) {
+        try { localStorage.setItem(STORAGE_KEY_USER, Json.encodeToString(user)) } catch (_: Exception) {}
+    }
+
+    fun clearAll() {
+        try {
+            localStorage.removeItem(STORAGE_KEY_JWT)
+            localStorage.removeItem(STORAGE_KEY_REFRESH)
+            localStorage.removeItem(STORAGE_KEY_USER)
+        } catch (_: Exception) {}
+    }
+}
+
+/**
+ * 华为 OAuth 认证响应
+ */
+@Serializable
+data class HuaweiAuthResponse(
+    val success: Boolean,
+    val message: String = "",
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null
+)
+
+/**
+ * Token 刷新响应
+ */
+@Serializable
+data class TokenRefreshResponse(
+    val success: Boolean,
+    val message: String = "",
+    val accessToken: String? = null
+)
+
 object ApiClient {
     private val BASE_URL: String
         get() {
@@ -265,40 +338,52 @@ object ApiClient {
         }
     private val jsonParser = Json { ignoreUnknownKeys = true }
 
-    
-    suspend fun register(
-        loginName: String,
-        fullName: String,
-        phoneNumber: String,
-        password: String
-    ): AuthResponse {
+    /**
+     * 华为 Web OAuth 登录：发送 code 到后端交换 token
+     */
+    suspend fun huaweiWebLogin(code: String, redirectUri: String): HuaweiAuthResponse {
         return try {
-            val body = """{"loginName":"$loginName","fullName":"$fullName","phoneNumber":"$phoneNumber","password":"$password"}"""
-            val response = post("/auth/register", body)
-            jsonParser.decodeFromString(response)
+            val body = jsonParser.encodeToString(
+                buildJsonObject {
+                    put("code", code)
+                    put("redirectUri", redirectUri)
+                }
+            )
+            val response = post("/auth/huawei/web-login", body)
+            jsonParser.decodeFromString<HuaweiAuthResponse>(response)
         } catch (e: Exception) {
-            console.log("注册失败:", e)
-            AuthResponse(false, "网络错误: ${e.message}")
+            console.log("华为登录失败:", e)
+            HuaweiAuthResponse(false, "登录失败: ${e.message}")
         }
     }
-    
-    suspend fun login(loginName: String, password: String): AuthResponse {
+
+    /**
+     * 刷新 Access Token
+     */
+    suspend fun refreshAccessToken(): HuaweiAuthResponse {
+        val refreshToken = JwtManager.getRefreshToken() ?: return HuaweiAuthResponse(false, "无 Refresh Token")
         return try {
-            val body = """{"loginName":"$loginName","password":"$password"}"""
-            val response = post("/auth/login", body)
-            jsonParser.decodeFromString(response)
+            val body = """{"refreshToken":"$refreshToken"}"""
+            val response = post("/auth/refresh", body)
+            jsonParser.decodeFromString<HuaweiAuthResponse>(response)
         } catch (e: Exception) {
-            console.log("登录失败:", e)
-            AuthResponse(false, "网络错误")
+            console.log("Token 刷新失败:", e)
+            HuaweiAuthResponse(false, "Token 刷新失败: ${e.message}")
         }
     }
-    
-    suspend fun validateUser(userId: String): AuthResponse {
+
+    /**
+     * 登出
+     */
+    suspend fun logout(): Boolean {
+        val refreshToken = JwtManager.getRefreshToken() ?: return true
         return try {
-            val response = get("/auth/validate/$userId")
-            jsonParser.decodeFromString(response)
+            val body = """{"refreshToken":"$refreshToken"}"""
+            post("/auth/logout", body)
+            true
         } catch (e: Exception) {
-            AuthResponse(false, "验证失败")
+            console.log("登出请求失败:", e)
+            true // 即使失败也清除本地状态
         }
     }
     
@@ -738,27 +823,66 @@ object ApiClient {
         }
     }
     
-    private suspend fun post(endpoint: String, jsonBody: String): String {
+    /**
+     * 获取 Authorization header
+     */
+    private fun authHeaders(): org.w3c.fetch.Headers {
         val headers = org.w3c.fetch.Headers()
         headers.append("Content-Type", "application/json")
+        val token = JwtManager.getAccessToken()
+        if (token != null) {
+            headers.append("Authorization", "Bearer $token")
+        }
+        return headers
+    }
+
+    /**
+     * 尝试刷新 Token：如果 401 且有 Refresh Token，自动刷新后重试
+     */
+    private suspend fun fetchWithRetry(endpoint: String, init: RequestInit): org.w3c.fetch.Response {
+        val url = "$BASE_URL$endpoint"
+        var response = window.fetch(url, init).await()
         
+        // 401 自动刷新 Token
+        if (response.status.toInt() == 401) {
+            val refreshResult = refreshAccessToken()
+            if (refreshResult.success && refreshResult.accessToken != null) {
+                JwtManager.setAccessToken(refreshResult.accessToken!!)
+                // 用新 Token 重建 headers
+                val newHeaders = org.w3c.fetch.Headers()
+                newHeaders.append("Content-Type", "application/json")
+                newHeaders.append("Authorization", "Bearer ${refreshResult.accessToken}")
+                val retryInit = if (init.body != null) {
+                    RequestInit(method = init.method, headers = newHeaders, body = init.body)
+                } else {
+                    RequestInit(method = init.method, headers = newHeaders)
+                }
+                response = window.fetch(url, retryInit).await()
+            }
+        }
+        
+        return response
+    }
+    
+    private suspend fun post(endpoint: String, jsonBody: String): String {
         val init = RequestInit(
             method = "POST",
-            headers = headers,
+            headers = authHeaders(),
             body = jsonBody
         )
         
-        val response = window.fetch("$BASE_URL$endpoint", init).await()
+        val response = fetchWithRetry(endpoint, init)
         return response.text().await()
     }
     
     private suspend fun put(endpoint: String, jsonBody: String): String {
-        val url = "$BASE_URL$endpoint"
-        val response = window.fetch(url, RequestInit(
+        val init = RequestInit(
             method = "PUT",
-            headers = json("Content-Type" to "application/json"),
+            headers = authHeaders(),
             body = jsonBody
-        )).await()
+        )
+        
+        val response = fetchWithRetry(endpoint, init)
         
         if (!response.ok) {
             throw Exception("HTTP ${response.status}: ${response.statusText}")
@@ -768,21 +892,23 @@ object ApiClient {
     }
     
     private suspend fun delete(endpoint: String, jsonBody: String): String {
-        val headers = org.w3c.fetch.Headers()
-        headers.append("Content-Type", "application/json")
-        
         val init = RequestInit(
             method = "DELETE",
-            headers = headers,
+            headers = authHeaders(),
             body = jsonBody
         )
         
-        val response = window.fetch("$BASE_URL$endpoint", init).await()
+        val response = fetchWithRetry(endpoint, init)
         return response.text().await()
     }
 
     private suspend fun get(endpoint: String): String {
-        val response = window.fetch("$BASE_URL$endpoint").await()
+        val init = RequestInit(
+            method = "GET",
+            headers = authHeaders()
+        )
+        
+        val response = fetchWithRetry(endpoint, init)
         return response.text().await()
     }
 

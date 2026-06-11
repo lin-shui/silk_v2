@@ -82,7 +82,7 @@ actual class PlatformWebSocket actual constructor(
     actual val isConnected: Boolean
         get() = session != null && !isExplicitlyDisconnected.get()
     
-    actual fun connect(userId: String, userName: String, groupId: String) {
+    actual fun connect(token: String?, userId: String, userName: String, groupId: String) {
         // 切群场景：先清理旧连接，不做重复连接判断
         val wasConnecting = isConnecting.getAndSet(true)
         if (wasConnecting || session != null) {
@@ -232,7 +232,7 @@ actual class PlatformWebSocket actual constructor(
         delay(actualDelay)
 
         isConnecting.set(false)
-        connect(userId, userName, groupId)
+        connect(null, userId, userName, groupId)
     }
     
     actual fun send(message: String) {

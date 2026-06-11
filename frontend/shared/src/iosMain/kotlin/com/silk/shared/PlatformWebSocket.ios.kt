@@ -33,7 +33,7 @@ actual class PlatformWebSocket actual constructor(
     actual val isConnected: Boolean
         get() = session != null
     
-    actual fun connect(userId: String, userName: String, groupId: String) {
+    actual fun connect(token: String?, userId: String, userName: String, groupId: String) {
         job?.cancel()
         try { session?.close(CloseReason(CloseReason.Codes.NORMAL, "Switching group")) } catch (_: Exception) {}
         session = null

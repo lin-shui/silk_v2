@@ -31,6 +31,15 @@ import com.silk.backend.database.RecallMessageRequest
 import com.silk.backend.database.RefreshUserTodosRequest
 import com.silk.backend.database.RegisterRequest
 import com.silk.backend.database.SendContactRequestByIdData
+import com.silk.backend.auth.HuaweiAuthService
+import com.silk.backend.auth.JwtProvider
+import com.silk.backend.auth.isPublicPath
+import com.silk.backend.database.HuaweiWebLoginRequest
+import com.silk.backend.database.HuaweiLoginRequest
+import com.silk.backend.database.RefreshTokenRequest
+import com.silk.backend.database.LogoutRequest
+import com.silk.backend.database.HuaweiAuthResponse
+import com.silk.backend.database.TokenRefreshResponse
 import com.silk.backend.database.SendContactRequestData
 import com.silk.backend.database.SendMessageRequest
 import com.silk.backend.database.SimpleResponse
@@ -1116,6 +1125,102 @@ fun Application.configureRouting() {
                 call.respond(AuthResponse(true, "验证成功", user))
             } else {
                 call.respond(AuthResponse(false, "用户不存在或已失效"))
+            }
+        }
+        
+        // ==================== 华为账号认证 API ====================
+        
+        /**
+         * 华为 Web OAuth 登录
+         * 前端跳转华为 OAuth 页面 -> 回调 -> 前端发 code -> 后端交换 token
+         */
+        post("/auth/huawei/web-login") {
+            try {
+                val request = call.receive<HuaweiWebLoginRequest>()
+                val result = HuaweiAuthService.webLogin(request.code, request.redirectUri)
+                if (result.success) {
+                    call.respond(HuaweiAuthResponse(
+                        success = true,
+                        message = result.message,
+                        user = result.user,
+                        accessToken = result.accessToken,
+                        refreshToken = result.refreshToken
+                    ))
+                } else {
+                    call.respond(HttpStatusCode.Unauthorized, HuaweiAuthResponse(
+                        success = false,
+                        message = result.message
+                    ))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 华为 Web 登录失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, HuaweiAuthResponse(false, "请求格式错误"))
+            }
+        }
+        
+        /**
+         * 华为 ID Token 登录（Harmony/Android 原生端）
+         */
+        post("/auth/huawei/login") {
+            try {
+                val request = call.receive<HuaweiLoginRequest>()
+                val result = HuaweiAuthService.nativeLogin(request.idToken)
+                if (result.success) {
+                    call.respond(HuaweiAuthResponse(
+                        success = true,
+                        message = result.message,
+                        user = result.user,
+                        accessToken = result.accessToken,
+                        refreshToken = result.refreshToken
+                    ))
+                } else {
+                    call.respond(HttpStatusCode.Unauthorized, HuaweiAuthResponse(
+                        success = false,
+                        message = result.message
+                    ))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 华为原生登录失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, HuaweiAuthResponse(false, "请求格式错误"))
+            }
+        }
+        
+        /**
+         * 刷新 Access Token
+         */
+        post("/auth/refresh") {
+            try {
+                val request = call.receive<RefreshTokenRequest>()
+                val newAccessToken = JwtProvider.refreshAccessToken(request.refreshToken)
+                if (newAccessToken != null) {
+                    call.respond(TokenRefreshResponse(
+                        success = true,
+                        message = "Token 已刷新",
+                        accessToken = newAccessToken
+                    ))
+                } else {
+                    call.respond(HttpStatusCode.Unauthorized, TokenRefreshResponse(
+                        success = false,
+                        message = "Refresh Token 无效或已过期"
+                    ))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ Token 刷新失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, TokenRefreshResponse(false, "请求格式错误"))
+            }
+        }
+        
+        /**
+         * 登出（撤销 Refresh Token）
+         */
+        post("/auth/logout") {
+            try {
+                val request = call.receive<LogoutRequest>()
+                JwtProvider.revokeRefreshToken(request.refreshToken)
+                call.respond(AuthResponse(true, "已登出"))
+            } catch (e: Exception) {
+                logger.error("❌ 登出失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "请求格式错误"))
             }
         }
         
@@ -3468,8 +3573,22 @@ fun Application.configureRouting() {
         }
 
         webSocket("/chat") {
-            val userId = call.parameters["userId"] ?: UUID.randomUUID().toString()
-            val userName = call.parameters["userName"] ?: "User_${userId.take(6)}"
+            // 支持 JWT 认证：优先从 token 参数解析 userId，fallback 到旧版 userId 参数
+            val token = call.parameters["token"]
+            val resolvedUserId = if (!token.isNullOrBlank()) {
+                JwtProvider.verifyAccessToken(token) ?: call.parameters["userId"]
+            } else {
+                call.parameters["userId"]
+            }
+            val userId = resolvedUserId ?: UUID.randomUUID().toString()
+            val userName = if (!token.isNullOrBlank() && JwtProvider.verifyAccessToken(token) != null) {
+                // 从 JWT 登录的用户名（从数据库查找）
+                UserRepository.findUserById(userId)?.fullName
+                    ?: call.parameters["userName"]
+                    ?: "User_${userId.take(6)}"
+            } else {
+                call.parameters["userName"] ?: "User_${userId.take(6)}"
+            }
             val groupId = call.parameters["groupId"] ?: "default_room"
 
             logger.info("👤 用户连接: {} ({}) -> 群组: {}", userName, userId, groupId)

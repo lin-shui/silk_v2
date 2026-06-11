@@ -1,5 +1,6 @@
 package com.silk.backend
 
+import com.silk.backend.auth.configureJwtAuth
 import com.silk.backend.database.DatabaseFactory
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.search.WeaviateClient
@@ -280,6 +281,7 @@ fun Application.module() {
         maxAgeInSeconds = 86400
     }
 
+    configureJwtAuth()
     configureWebSockets()
 
     // 触发 AgentRuntime 单例初始化（注册 ClaudeCodeDescriptor 等）

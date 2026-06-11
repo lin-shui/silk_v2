@@ -7,13 +7,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.browser.window
 import kotlinx.coroutines.launch
-import org.jetbrains.compose.web.attributes.InputType
 import org.jetbrains.compose.web.css.AlignItems
 import org.jetbrains.compose.web.css.Color
 import org.jetbrains.compose.web.css.DisplayStyle
 import org.jetbrains.compose.web.css.JustifyContent
-import org.jetbrains.compose.web.css.LineStyle
 import org.jetbrains.compose.web.css.alignItems
 import org.jetbrains.compose.web.css.backgroundColor
 import org.jetbrains.compose.web.css.border
@@ -37,19 +36,20 @@ import org.jetbrains.compose.web.css.vw
 import org.jetbrains.compose.web.css.width
 import org.jetbrains.compose.web.dom.Button
 import org.jetbrains.compose.web.dom.Div
-import org.jetbrains.compose.web.dom.H2
-import org.jetbrains.compose.web.dom.Input
-import org.jetbrains.compose.web.dom.Label
+import org.jetbrains.compose.web.dom.Img
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Style
 import org.jetbrains.compose.web.dom.Text
 
+/**
+ * 华为 OAuth 登录页面
+ * 使用华为账号登录（无密码方案）
+ */
 @Composable
 fun LoginScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
     
-    // 检查是否是意外到达登录页（用户没有明确退出登录）
-    // 如果是，自动恢复到群组列表页面
+    // 检查是否已有 JWT 会话（未主动登出）
     LaunchedEffect(Unit) {
         console.log("🔍 [LoginScene] 检查是否需要恢复会话...")
         val restored = appState.checkAndRestoreSession()
@@ -58,11 +58,6 @@ fun LoginScene(appState: WebAppState) {
         }
     }
     
-    var isLogin by remember { mutableStateOf(true) }
-    var loginName by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var fullName by remember { mutableStateOf("") }
-    var phoneNumber by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     
@@ -101,34 +96,29 @@ fun LoginScene(appState: WebAppState) {
                 width(420.px)
                 maxWidth(90.vw)
                 property("border", "1px solid ${SilkColors.border}")
+                textAlign("center")
             }
         }) {
             // Logo
-            Div({
+            Span({
                 style {
-                    textAlign("center")
-                    marginBottom(12.px)
+                    fontSize(42.px)
+                    property("font-weight", "700")
+                    color(Color(SilkColors.primary))
+                    property("letter-spacing", "6px")
+                    fontFamily("'Cormorant Garamond'", "Georgia", "serif")
+                    property("text-transform", "uppercase")
+                    display(DisplayStyle.Block)
+                    marginBottom(8.px)
                 }
             }) {
-                Span({
-                    style {
-                        fontSize(42.px)
-                        property("font-weight", "700")
-                        color(Color(SilkColors.primary))
-                        property("letter-spacing", "6px")
-                        fontFamily("'Cormorant Garamond'", "Georgia", "serif")
-                        property("text-transform", "uppercase")
-                    }
-                }) {
-                    Text("Silk")
-                }
+                Text("Silk")
             }
             
             // 副标题
             Div({
                 style {
-                    textAlign("center")
-                    marginBottom(36.px)
+                    marginBottom(48.px)
                     fontSize(13.px)
                     color(Color(SilkColors.textLight))
                     property("letter-spacing", "3px")
@@ -138,171 +128,6 @@ fun LoginScene(appState: WebAppState) {
                 Text("smooth & simple")
             }
             
-            // 标题
-            H2({
-                style {
-                    textAlign("center")
-                    color(Color(SilkColors.textPrimary))
-                    marginBottom(32.px)
-                    fontSize(22.px)
-                    property("font-weight", "600")
-                    property("letter-spacing", "1px")
-                }
-            }) {
-                Text(if (isLogin) "欢迎回来" else "创建账号")
-            }
-            
-            // 登录名
-            Div({ style { marginBottom(20.px) } }) {
-                Label { 
-                    Span({
-                        style {
-                            fontSize(13.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("letter-spacing", "0.5px")
-                        }
-                    }) {
-                        Text("登录名")
-                    }
-                }
-                Input(InputType.Text) {
-                    value(loginName)
-                    onInput { loginName = it.value }
-                    style {
-                        width(100.percent)
-                        padding(14.px)
-                        fontSize(14.px)
-                        marginTop(8.px)
-                        border {
-                            width(1.px)
-                            style(LineStyle.Solid)
-                            color(Color(SilkColors.border))
-                        }
-                        borderRadius(8.px)
-                        property("box-sizing", "border-box")
-                        property("background", SilkColors.surface)
-                        property("color", SilkColors.textPrimary)
-                        property("transition", "all 0.2s ease")
-                        fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                    }
-                    if (!isLoading) {
-                        attr("placeholder", "请输入登录名")
-                    }
-                }
-            }
-            
-            // 密码
-            Div({ style { marginBottom(20.px) } }) {
-                Label { 
-                    Span({
-                        style {
-                            fontSize(13.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("letter-spacing", "0.5px")
-                        }
-                    }) {
-                        Text("密码")
-                    }
-                }
-                Input(InputType.Password) {
-                    value(password)
-                    onInput { password = it.value }
-                    style {
-                        width(100.percent)
-                        padding(14.px)
-                        fontSize(14.px)
-                        marginTop(8.px)
-                        border {
-                            width(1.px)
-                            style(LineStyle.Solid)
-                            color(Color(SilkColors.border))
-                        }
-                        borderRadius(8.px)
-                        property("box-sizing", "border-box")
-                        property("background", SilkColors.surface)
-                        property("color", SilkColors.textPrimary)
-                        property("transition", "all 0.2s ease")
-                        fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                    }
-                    if (!isLoading) {
-                        attr("placeholder", "请输入密码")
-                    }
-                }
-            }
-            
-            // 注册时的额外字段
-            if (!isLogin) {
-                Div({ style { marginBottom(20.px) } }) {
-                    Label { 
-                        Span({
-                            style {
-                                fontSize(13.px)
-                                color(Color(SilkColors.textSecondary))
-                                property("letter-spacing", "0.5px")
-                            }
-                        }) {
-                            Text("姓名")
-                        }
-                    }
-                    Input(InputType.Text) {
-                        value(fullName)
-                        onInput { fullName = it.value }
-                        style {
-                            width(100.percent)
-                            padding(14.px)
-                            fontSize(14.px)
-                            marginTop(8.px)
-                            border {
-                                width(1.px)
-                                style(LineStyle.Solid)
-                                color(Color(SilkColors.border))
-                            }
-                            borderRadius(8.px)
-                            property("box-sizing", "border-box")
-                            property("background", SilkColors.surface)
-                            property("color", SilkColors.textPrimary)
-                            fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                        }
-                        attr("placeholder", "请输入姓名")
-                    }
-                }
-                
-                Div({ style { marginBottom(20.px) } }) {
-                    Label { 
-                        Span({
-                            style {
-                                fontSize(13.px)
-                                color(Color(SilkColors.textSecondary))
-                                property("letter-spacing", "0.5px")
-                            }
-                        }) {
-                            Text("手机号")
-                        }
-                    }
-                    Input(InputType.Text) {
-                        value(phoneNumber)
-                        onInput { phoneNumber = it.value }
-                        style {
-                            width(100.percent)
-                            padding(14.px)
-                            fontSize(14.px)
-                            marginTop(8.px)
-                            border {
-                                width(1.px)
-                                style(LineStyle.Solid)
-                                color(Color(SilkColors.border))
-                            }
-                            borderRadius(8.px)
-                            property("box-sizing", "border-box")
-                            property("background", SilkColors.surface)
-                            property("color", SilkColors.textPrimary)
-                            fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                        }
-                        attr("placeholder", "请输入手机号")
-                    }
-                }
-            }
-            
             // 错误提示
             if (errorMessage.isNotEmpty()) {
                 Div({
@@ -310,7 +135,6 @@ fun LoginScene(appState: WebAppState) {
                         color(Color(SilkColors.error))
                         fontSize(13.px)
                         marginBottom(20.px)
-                        textAlign("center")
                         padding(12.px)
                         backgroundColor(Color("#FDF5F5"))
                         borderRadius(8.px)
@@ -321,75 +145,153 @@ fun LoginScene(appState: WebAppState) {
                 }
             }
             
-            // 登录/注册按钮
+            // 华为账号登录按钮
             Button({
                 style {
                     width(100.percent)
-                    padding(14.px)
-                    property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                    padding(16.px)
+                    property("background", "#CF0A2C")  // 华为红
                     color(Color.white)
                     border { width(0.px) }
                     borderRadius(8.px)
-                    fontSize(15.px)
-                    property("font-weight", "600")
-                    property("letter-spacing", "2px")
+                    fontSize(16.px)
+                    property("font-weight", "500")
                     property("cursor", if (isLoading) "not-allowed" else "pointer")
                     property("opacity", if (isLoading) "0.7" else "1")
-                    property("box-shadow", "0 4px 16px rgba(169, 137, 77, 0.3)")
                     property("transition", "all 0.2s ease")
                     fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
+                    marginBottom(16.px)
                 }
                 onClick {
                     if (!isLoading) {
-                        scope.launch {
-                            isLoading = true
-                            errorMessage = ""
-                            
-                            try {
-                                val response = if (isLogin) {
-                                    ApiClient.login(loginName, password)
-                                } else {
-                                    ApiClient.register(loginName, fullName, phoneNumber, password)
-                                }
-                                
-                                if (response.success && response.user != null) {
-                                    console.log("${if (isLogin) "登录" else "注册"}成功:", response.user.fullName)
-                                    appState.setUser(response.user)
-                                } else {
-                                    errorMessage = response.message
-                                }
-                            } catch (e: Exception) {
-                                errorMessage = "操作失败: ${e.message}"
-                            } finally {
-                                isLoading = false
-                            }
-                        }
+                        isLoading = true
+                        errorMessage = ""
+                        startHuaweiOAuth()
                     }
                 }
             }) {
-                Text(if (isLoading) "处理中..." else if (isLogin) "登 录" else "注 册")
+                Text(if (isLoading) "跳转中..." else "使用华为帐号登录")
             }
             
-            // 切换登录/注册
+            // 说明文字
             Div({
                 style {
-                    textAlign("center")
-                    marginTop(24.px)
-                    fontSize(13.px)
-                    color(Color(SilkColors.textSecondary))
-                    property("cursor", "pointer")
-                    property("letter-spacing", "0.5px")
-                    property("transition", "color 0.2s ease")
-                }
-                onClick {
-                    if (!isLoading) {
-                        isLogin = !isLogin
-                        errorMessage = ""
-                    }
+                    fontSize(12.px)
+                    color(Color(SilkColors.textLight))
+                    property("line-height", "1.6")
                 }
             }) {
-                Text(if (isLogin) "没有账号？点击注册" else "已有账号？点击登录")
+                Text("点击即表示同意使用华为帐号进行身份认证")
             }
         }
     }
+}
+
+/**
+ * 启动华为 OAuth 授权流程
+ * 重定向到华为登录页面，用户授权后回调到当前应用
+ */
+private fun startHuaweiOAuth() {
+    val clientId = BuildConfig.HUAWEI_OAUTH_CLIENT_ID
+    if (clientId.isBlank()) {
+        console.error("❌ HUAWEI_OAUTH_CLIENT_ID 未配置")
+        return
+    }
+    
+    // 生成 state 用于 CSRF 防护
+    val state = generateRandomState()
+    try {
+        kotlinx.browser.sessionStorage.setItem("huawei_oauth_state", state)
+    } catch (_: Exception) {}
+    
+    // 当前页面 URL 作为 redirect_uri（OAuth 回调时重新加载页面）
+    val redirectUri = window.location.href.split("?")[0].split("#")[0]
+    
+    // 构造华为 OAuth 授权 URL
+    val authUrl = buildString {
+        append("https://oauth-login.cloud.huawei.com/oauth2/v3/authorize")
+        append("?client_id=").append(encodeURIComponent(clientId))
+        append("&response_type=code")
+        append("&redirect_uri=").append(encodeURIComponent(redirectUri))
+        append("&scope=openid+profile")
+        append("&state=").append(state)
+    }
+    
+    console.log("🔗 跳转到华为 OAuth: ", authUrl)
+    window.location.href = authUrl
+}
+
+/**
+ * 对字符串进行 URL 编码
+ */
+private fun encodeURIComponent(s: String): String {
+    return js("encodeURIComponent")(s).unsafeCast<String>()
+}
+
+/**
+ * 生成随机 state 字符串（用于 CSRF 防护）
+ */
+private fun generateRandomState(): String {
+    val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+    return (1..32).map { chars[kotlin.random.Random.nextInt(chars.length)] }.joinToString("")
+}
+
+/**
+ * 处理华为 OAuth 回调
+ * 检测 URL 中是否有 code 参数，如有则执行登录流程
+ * 在主页面渲染前调用
+ */
+suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
+    val params = window.location.search
+    if (params.isBlank()) return false
+    
+    val urlParams = params.drop(1).split("&").mapNotNull { param ->
+        val parts = param.split("=", limit = 2)
+        if (parts.size == 2) parts[0] to decodeURIComponent(parts[1])
+        else null
+    }.toMap()
+    
+    val code = urlParams["code"] ?: return false
+    val state = urlParams["state"] ?: ""
+    
+    // 验证 state（CSRF 防护）
+    val savedState = try {
+        kotlinx.browser.sessionStorage.getItem("huawei_oauth_state")
+    } catch (_: Exception) { null }
+    
+    if (savedState != null && state != savedState) {
+        console.error("❌ OAuth state 不匹配，可能的 CSRF 攻击")
+        return false
+    }
+    
+    // 清除 state
+    try {
+        kotlinx.browser.sessionStorage.removeItem("huawei_oauth_state")
+    } catch (_: Exception) {}
+    
+    // redirect_uri = 当前页面 URL（不含查询参数）
+    val redirectUri = window.location.href.split("?")[0].split("#")[0]
+    
+    console.log("🔑 收到 OAuth code，正在登录...")
+    
+    val result = ApiClient.huaweiWebLogin(code, redirectUri)
+    
+    if (result.success && result.user != null && result.accessToken != null && result.refreshToken != null) {
+        console.log("✅ 华为登录成功:", result.user.fullName)
+        
+        // 清除 URL 中的 OAuth 参数
+        window.history.replaceState(null, "", redirectUri)
+        
+        appState.setSession(result.user, result.accessToken!!, result.refreshToken!!)
+        return true
+    } else {
+        console.error("❌ 华为登录失败:", result.message)
+        return false
+    }
+}
+
+private fun decodeURIComponent(s: String): String {
+    return try {
+        js("decodeURIComponent")(s).unsafeCast<String>()
+    } catch (_: Exception) { s }
 }

@@ -45,12 +45,21 @@ dependencies {
     implementation("io.ktor:ktor-server-cors:2.3.6")
     implementation("io.ktor:ktor-server-compression:2.3.6")
     implementation("io.ktor:ktor-server-call-logging:2.3.6")
+    implementation("io.ktor:ktor-server-auth:2.3.6")
     
     // Ktor Client (用于调用外部 AI API)
     implementation("io.ktor:ktor-client-core:2.3.6")
     implementation("io.ktor:ktor-client-cio:2.3.6")
     implementation("io.ktor:ktor-client-content-negotiation:2.3.6")
     implementation("io.ktor:ktor-client-websockets:2.3.6")
+    
+    // JWT (jjwt)
+    implementation("io.jsonwebtoken:jjwt-api:0.12.6")
+    runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.6")
+    runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
+    
+    // OkHttp (用于调用华为 OAuth 端点交换 code)
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     
     // Kotlin
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")

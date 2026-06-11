@@ -27,7 +27,14 @@ expect class PlatformWebSocket(
     onError: (String) -> Unit,
     onLog: LogCallback?
 ) {
-    fun connect(userId: String, userName: String, groupId: String)
+    /**
+     * 连接 WebSocket
+     * @param token JWT token（优先使用，代替 userId）
+     * @param userId 用户 ID（无 token 时的 fallback）
+     * @param userName 用户名
+     * @param groupId 群组 ID
+     */
+    fun connect(token: String?, userId: String, userName: String, groupId: String)
     fun send(message: String)
     fun disconnect()
     val isConnected: Boolean
@@ -89,11 +96,20 @@ class ChatClient(
     private var connectionGen: Int = 0
     private var currentUserId: String = ""
     private var currentUserName: String = ""
+    private var currentToken: String? = null
     
-    suspend fun connect(userId: String, userName: String, groupId: String = "default_room") {
+    /**
+     * 连接 WebSocket
+     * @param userId 用户 ID
+     * @param userName 用户名
+     * @param groupId 群组 ID
+     * @param token JWT token（可选，优先于 userId）
+     */
+    suspend fun connect(userId: String, userName: String, groupId: String = "default_room", token: String? = null) {
         log("🚀 [ChatClient] connect() 开始执行")
         currentUserId = userId
         currentUserName = userName
+        currentToken = token
 
         // 静默断开旧连接 —— 不触发 DISCONNECTED 状态，避免切群时红色"已断开"闪烁
         val oldWs = webSocket
@@ -136,7 +152,7 @@ class ChatClient(
             onLog = onLog
         )
         
-        webSocket?.connect(userId, userName, groupId)
+        webSocket?.connect(currentToken, userId, userName, groupId)
     }
     
     private fun flushHistoryBuffer() {

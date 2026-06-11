@@ -518,3 +518,71 @@ data class RecallMessageResponse(
     val message: String,
     val recalledMessageIds: List<String> = emptyList()  // 被撤回的消息ID列表（可能包含用户消息和AI回复）
 )
+
+// ==================== 华为账号认证模型 ====================
+
+/**
+ * 华为 Web OAuth 登录请求
+ */
+@Serializable
+data class HuaweiWebLoginRequest(
+    val code: String,
+    val redirectUri: String
+)
+
+/**
+ * 华为 ID Token 登录请求（用于 Harmony/Android 原生端）
+ */
+@Serializable
+data class HuaweiLoginRequest(
+    val idToken: String
+)
+
+/**
+ * 刷新 Token 请求
+ */
+@Serializable
+data class RefreshTokenRequest(
+    val refreshToken: String
+)
+
+/**
+ * 登出请求
+ */
+@Serializable
+data class LogoutRequest(
+    val refreshToken: String
+)
+
+/**
+ * 华为 OAuth 用户信息
+ */
+@Serializable
+data class HuaweiUserInfo(
+    val openId: String,
+    val name: String = "",
+    val avatar: String = ""
+)
+
+/**
+ * 华为账号认证响应
+ */
+@Serializable
+data class HuaweiAuthResponse(
+    val success: Boolean,
+    val message: String,
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null
+)
+
+/**
+ * Token 刷新响应
+ */
+@Serializable
+data class TokenRefreshResponse(
+    val success: Boolean,
+    val message: String = "",
+    val accessToken: String? = null,
+    val refreshToken: String? = null
+)

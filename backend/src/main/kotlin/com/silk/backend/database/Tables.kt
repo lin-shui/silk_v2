@@ -92,3 +92,29 @@ object CcConnectTokens : Table("ccconnect_tokens") {
 
     override val primaryKey = PrimaryKey(token)
 }
+
+/**
+ * HuaweiAccounts 表：华为账号绑定，将华为 openId 与 Silk 用户关联
+ */
+object HuaweiAccounts : Table("huawei_accounts") {
+    val openId = varchar("open_id", 128).uniqueIndex()
+    val userId = varchar("user_id", 128).references(Users.id)
+    val huaweiName = varchar("huawei_name", 256).nullable()
+    val huaweiAvatar = varchar("huawei_avatar", 512).nullable()
+    val createdAt = datetime("created_at").default(LocalDateTime.now())
+
+    override val primaryKey = PrimaryKey(openId)
+}
+
+/**
+ * RefreshTokensTable 表：JWT 刷新令牌管理
+ */
+object RefreshTokensTable : Table("refresh_tokens") {
+    val jti = varchar("jti", 64).uniqueIndex()
+    val userId = varchar("user_id", 128).references(Users.id)
+    val expiresAt = datetime("expires_at")
+    val revoked = bool("revoked").default(false)
+    val createdAt = datetime("created_at").default(LocalDateTime.now())
+
+    override val primaryKey = PrimaryKey(jti)
+}

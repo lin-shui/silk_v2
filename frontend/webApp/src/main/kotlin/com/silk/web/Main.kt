@@ -471,6 +471,14 @@ fun main() {
 fun SilkApp() {
     val appState = remember { WebAppState() }
     val scope = rememberCoroutineScope()
+    
+    // 处理华为 OAuth 回调
+    LaunchedEffect(Unit) {
+        val handled = handleOAuthCallback(appState)
+        if (handled) {
+            console.log("✅ OAuth 回调处理完成")
+        }
+    }
 
     if (appState.currentScene == Scene.LOGIN) {
         LoginScene(appState)
@@ -1545,7 +1553,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         
         try {
             console.log("🔌 开始连接WebSocket...")
-            chatClient.connect(user.id, user.fullName, group.id)
+            val jwt = JwtManager.getAccessToken()
+            chatClient.connect(user.id, user.fullName, group.id, token = jwt)
             console.log("✅ WebSocket连接成功")
         } catch (e: dynamic) {
             console.error("❌ WebSocket连接失败:", e.toString())
@@ -2112,7 +2121,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                         onClick {
                             scope.launch {
-                                chatClient.connect(user.id, user.fullName, group.id)
+                                val jwt = JwtManager.getAccessToken()
+                                chatClient.connect(user.id, user.fullName, group.id, token = jwt)
                             }
                         }
                     }) {
