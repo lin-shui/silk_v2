@@ -213,11 +213,17 @@ fun GroupListScene(appState: WebAppState) {
                 color(Color.white)
                 padding(12.px, 16.px)
                 display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
                 alignItems(AlignItems.FlexStart)
                 property("box-shadow", "0 2px 12px rgba(169, 137, 77, 0.25)")
             }
         }) {
-            Div {
+            Div({
+                style {
+                    property("max-width", "35%")
+                    property("flex-shrink", "0")
+                }
+            }) {
                 // Logo
                 Div({
                     style {
@@ -234,7 +240,9 @@ fun GroupListScene(appState: WebAppState) {
                     style { 
                         fontSize(13.px)
                         property("opacity", "0.9")
-                        property("letter-spacing", "1px")
+                        property("white-space", "nowrap")
+                        property("overflow", "hidden")
+                        property("text-overflow", "ellipsis")
                     } 
                 }) {
                     Text(appState.currentUser?.fullName ?: "")
@@ -250,7 +258,6 @@ fun GroupListScene(appState: WebAppState) {
                     property("flex-wrap", "wrap")
                     property("justify-content", "flex-end")
                     property("margin-left", "auto")
-                    property("flex", "1")
                     property("min-width", "0")
                 }
             }) {
