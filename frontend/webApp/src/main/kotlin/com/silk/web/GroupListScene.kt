@@ -241,7 +241,7 @@ fun GroupListScene(appState: WebAppState) {
                 }
             }
             
-            // 右侧按钮组 - 自动换行，marginLeft:auto 推至右侧
+            // 右侧按钮组 - 自动换行
             Div({
                 style {
                     display(DisplayStyle.Flex)
@@ -250,6 +250,7 @@ fun GroupListScene(appState: WebAppState) {
                     property("flex-wrap", "wrap")
                     property("justify-content", "flex-end")
                     property("margin-left", "auto")
+                    property("flex", "1")
                     property("min-width", "0")
                 }
             }) {
