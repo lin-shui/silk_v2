@@ -66,7 +66,7 @@ fun GroupListScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
     
     var groups by remember { mutableStateOf<List<Group>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
+    var isLoading by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
     
