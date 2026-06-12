@@ -296,6 +296,46 @@ object JwtManager {
             localStorage.removeItem(STORAGE_KEY_USER)
         } catch (_: Exception) {}
     }
+
+    /**
+     * 检查当前 Access Token 是否已过期（或即将在 5 分钟内过期）
+     */
+    fun isTokenExpired(): Boolean {
+        val token = getAccessToken() ?: return true
+        return try {
+            val parts = token.split(".")
+            if (parts.size < 3) return true
+            // JWT payload 是 base64 编码的 JSON
+            val payload = js("atob")?.invoke(parts[1]) ?: return true
+            val parsed = JSON.parse<dynamic>(payload as String)
+            val exp = (parsed["exp"] as? Double)?.toLong() ?: return true
+            // 当前时间（秒），预留 5 分钟缓冲
+            val now = js("Date.now").unsafeCast<Double>().toLong() / 1000
+            exp < now + 300
+        } catch (e: Exception) {
+            true
+        }
+    }
+
+    /**
+     * 确保 Access Token 有效：如果已过期则自动刷新
+     * 返回当前有效的 access token，或 null（刷新失败）
+     */
+    suspend fun ensureValidToken(): String? {
+        if (!isTokenExpired()) return getAccessToken()
+        console.log("🔄 Access Token 已过期，尝试刷新...")
+        val result = ApiClient.refreshAccessToken()
+        if (result.success && result.accessToken != null) {
+            setAccessToken(result.accessToken!!)
+            if (result.refreshToken != null) {
+                setRefreshToken(result.refreshToken!!)
+            }
+            console.log("✅ Token 刷新成功")
+            return result.accessToken
+        }
+        console.warn("⚠️ Token 刷新失败: ${result.message}")
+        return null
+    }
 }
 
 /**
