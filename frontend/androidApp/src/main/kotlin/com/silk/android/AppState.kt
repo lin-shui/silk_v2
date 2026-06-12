@@ -34,6 +34,9 @@ class AppState(
     var currentUser by mutableStateOf<User?>(null)
         private set
     
+    var showNicknameDialog by mutableStateOf(false)
+    var nicknameToSet by mutableStateOf("")
+    
     var selectedGroup by mutableStateOf<Group?>(null)
         private set
 
@@ -90,6 +93,32 @@ class AppState(
         currentUser = user
         saveUserToStorage(user)
         navigateTo(Scene.GROUP_LIST)
+    }
+    
+    fun setHuaweiSession(user: User, accessToken: String, refreshToken: String, isNewUser: Boolean) {
+        currentUser = user
+        saveUserToStorage(user)
+        // 存储 Token 以备后续 JWT 认证迁移
+        val prefs = context.getSharedPreferences("silk_prefs", Context.MODE_PRIVATE)
+        prefs.edit().apply {
+            putString("huawei_access_token", accessToken)
+            putString("huawei_refresh_token", refreshToken)
+            putString("huawei_login", "true")
+            apply()
+        }
+        if (isNewUser) {
+            // 新用户需要设置昵称
+            nicknameToSet = user.fullName
+            showNicknameDialog = true
+        } else {
+            navigateTo(Scene.GROUP_LIST)
+        }
+    }
+    
+    fun updateCurrentUserNickname(newFullName: String) {
+        val user = currentUser ?: return
+        currentUser = user.copy(fullName = newFullName)
+        saveUserToStorage(currentUser!!)
     }
     
     fun selectGroup(group: Group) {

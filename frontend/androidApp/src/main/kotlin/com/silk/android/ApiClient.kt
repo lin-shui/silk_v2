@@ -50,6 +50,16 @@ data class AuthResponse(
 )
 
 @Serializable
+data class HuaweiAuthResponse(
+    val success: Boolean,
+    val message: String,
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val isNewUser: Boolean = false
+)
+
+@Serializable
 data class GroupResponse(
     val success: Boolean,
     val message: String,
@@ -232,6 +242,40 @@ object ApiClient {
         } catch (e: Exception) {
             println("登录失败: $e")
             AuthResponse(false, "网络错误")
+        }
+    }
+    
+    suspend fun huaweiLogin(idToken: String): HuaweiAuthResponse = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"idToken":"$idToken"}"""
+            val response = post("/auth/huawei/login", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("华为登录失败: $e")
+            HuaweiAuthResponse(false, "网络错误: ${e.message}")
+        }
+    }
+    
+    suspend fun huaweiWebLogin(code: String, redirectUri: String): HuaweiAuthResponse = withContext(Dispatchers.IO) {
+        try {
+            val escapedUri = redirectUri.replace("\\", "\\\\").replace("\"", "\\\"")
+            val body = """{"code":"$code","redirectUri":"$escapedUri"}"""
+            val response = post("/auth/huawei/web-login", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("华为Web登录失败: $e")
+            HuaweiAuthResponse(false, "网络错误: ${e.message}")
+        }
+    }
+    
+    suspend fun updateUserProfile(userId: String, fullName: String): SimpleResponse = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"fullName":"$fullName"}"""
+            val response = put("/users/$userId/profile", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("更新用户资料失败: $e")
+            SimpleResponse(false, "网络错误")
         }
     }
     
@@ -621,7 +665,18 @@ object ApiClient {
                 os.write(jsonBody.toByteArray())
             }
             
-            connection.inputStream.bufferedReader().use { it.readText() }
+            val responseCode = connection.responseCode
+            if (responseCode in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                val errorBody = try {
+                    val stream = connection.errorStream
+                    if (stream != null) stream.bufferedReader().use { it.readText() } else ""
+                } catch (e: Exception) {
+                    try { connection.inputStream.bufferedReader().use { it.readText() } } catch (e2: Exception) { "" }
+                }
+                throw java.io.IOException("HTTP $responseCode: $errorBody")
+            }
         } finally {
             connection.disconnect()
         }
