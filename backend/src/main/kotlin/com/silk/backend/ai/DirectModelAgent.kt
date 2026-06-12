@@ -475,15 +475,12 @@ class DirectModelAgent(
             newRefs.add(ref.copy(index = newIndex))
         }
 
-        for (key in citedKeys) {
-            val placeholder = createPlaceholderReference(
-                key = key,
-                reindexMap = reindexMap,
-                nextCitationIndex = { ++citationCounter },
-                nextAvailableIndex = { ++availableCounter }
-            ) ?: continue
-            newRefs.add(placeholder)
-        }
+        newRefs += createPlaceholderReferences(
+            citedKeys = citedKeys,
+            reindexMap = reindexMap,
+            nextCitationIndex = { ++citationCounter },
+            nextAvailableIndex = { ++availableCounter },
+        )
 
         val newContent = reindexContent(content, citedPattern, reindexMap)
         return FinalCitationResult(newContent, newRefs)
@@ -529,6 +526,22 @@ class DirectModelAgent(
             url = null,
             path = null
         )
+    }
+
+    private fun createPlaceholderReferences(
+        citedKeys: List<String>,
+        reindexMap: MutableMap<String, Int>,
+        nextCitationIndex: () -> Int,
+        nextAvailableIndex: () -> Int,
+    ): List<com.silk.backend.models.MessageReference> {
+        return citedKeys.mapNotNull { key ->
+            createPlaceholderReference(
+                key = key,
+                reindexMap = reindexMap,
+                nextCitationIndex = nextCitationIndex,
+                nextAvailableIndex = nextAvailableIndex,
+            )
+        }
     }
 
     private fun reindexContent(content: String, citedPattern: Regex, reindexMap: Map<String, Int>): String =

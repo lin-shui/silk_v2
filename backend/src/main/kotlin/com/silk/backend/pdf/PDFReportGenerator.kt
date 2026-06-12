@@ -49,16 +49,16 @@ class PDFReportGenerator {
      * ✅ 使用正确的策略：内置CJK字体不需要embed
      */
     private fun createChineseFont(): PdfFont {
-        return try {
+        return runCatching {
             // ✅ STSong-Light是预定义的CJK字体，不能使用EMBEDDED策略
             // 使用PREFER_NOT_EMBEDDED即可（这是预定义字体的正确策略）
             PdfFontFactory.createFont(
-                "STSong-Light", 
-                "UniGB-UCS2-H", 
+                "STSong-Light",
+                "UniGB-UCS2-H",
                 PdfFontFactory.EmbeddingStrategy.PREFER_NOT_EMBEDDED  // ✅ 预定义字体的正确策略
             )
-        } catch (e: Exception) {
-            logger.error("❌ 内置字体加载失败: {}", e.message, e)
+        }.getOrElse { fontFailure ->
+            logger.error("❌ 内置字体加载失败: {}", fontFailure.message, fontFailure)
             // ✅ 回退到标准字体
             PdfFontFactory.createFont(com.itextpdf.io.font.constants.StandardFonts.HELVETICA)
         }
@@ -76,17 +76,29 @@ class PDFReportGenerator {
         val paragraph = Paragraph(cleanedText)
             .setFont(chineseFont)  // 使用支持中英文的Unicode字体
             .setFontSize(fontSize)  // 默认字体从10f减小到9f
-        
-        // ✅ 增加字符间距，使用更明显的值
-        // 1.2f 表示每个字符后增加1.2点的间距（效果明显）
-        try {
+
+        return applyCharacterSpacing(paragraph, warnOnFailure = true)
+    }
+
+    private fun applyCharacterSpacing(paragraph: Paragraph, warnOnFailure: Boolean = false): Paragraph {
+        runCatching {
             paragraph.setCharacterSpacing(1.2f)
-        } catch (e: Exception) {
-            // 如果设置失败，忽略错误，使用默认间距
-            logger.warn("⚠️ 设置字符间距失败，使用默认值")
+        }.onFailure { spacingFailure ->
+            if (warnOnFailure) {
+                logger.warn("⚠️ 设置字符间距失败，使用默认值: {}", spacingFailure.message)
+            }
         }
-        
         return paragraph
+    }
+
+    private fun closeDocumentAfterFailure(document: Document?) {
+        runCatching {
+            document?.close()
+        }.onSuccess {
+            logger.info("✅ 异常处理：文档已关闭")
+        }.onFailure { closeFailure ->
+            logger.warn("⚠️ 异常处理：关闭文档也失败: {}", closeFailure.message)
+        }
     }
     
     /**
@@ -180,19 +192,17 @@ class PDFReportGenerator {
         
         val pdfPath = "${pdfDir.path}/$fileName"
         
-        // ✅ 增强错误处理：捕获PDF生成过程中的异常
-        var pdfDoc: PdfDocument? = null
         var document: Document? = null
-        
-        try {
+
+        val reportResult = runCatching {
             // 创建 PDF 文档
             val writer = PdfWriter(pdfPath)
-            pdfDoc = PdfDocument(writer)
-            document = Document(pdfDoc)
-            
+            val reportDocument = Document(PdfDocument(writer))
+            document = reportDocument
+
             // ✅ 设置页面边距，增加可用宽度（默认边距为36pt左右）
             // 将边距从默认36pt减少到20pt，增加页面可用宽度
-            document.setMargins(20f, 20f, 20f, 20f)  // 上、右、下、左
+            reportDocument.setMargins(20f, 20f, 20f, 20f)  // 上、右、下、左
             
             // ✅ 为此 PDF 文档创建独立的字体对象（避免跨文档重用）
             val chineseFont = createChineseFont()  // 中文字体
@@ -208,56 +218,47 @@ class PDFReportGenerator {
             logger.debug("📋 诊断步骤数: {}", diagnosisResult.stepResults.size)
             logger.debug("📋 总结报告长度: {}", summaryReportText.length)
             
-            addReportHeader(document, reportTitle, reportGeneratedTime, chineseFont)
+            addReportHeader(reportDocument, reportTitle, reportGeneratedTime, chineseFont)
             
             // 第一部分：患者信息表格
-            addPatientInfo(document, patientInfo, userName, sessionName, diagnosisResult, chineseFont)
+            addPatientInfo(reportDocument, patientInfo, userName, sessionName, diagnosisResult, chineseFont)
             
             // 分页：患者信息 → 诊断步骤
-            document.add(AreaBreak(AreaBreakType.NEXT_PAGE))
+            reportDocument.add(AreaBreak(AreaBreakType.NEXT_PAGE))
             
             // 第二部分：诊断步骤表格
-            addDiagnosisStepsTable(document, diagnosisResult, chineseFont)
+            addDiagnosisStepsTable(reportDocument, diagnosisResult, chineseFont)
             
             // 分页：诊断步骤 → 总结报告
             if (summaryReportText.isNotEmpty() && summaryReportText.length > 100) {
-                document.add(AreaBreak(AreaBreakType.NEXT_PAGE))
+                reportDocument.add(AreaBreak(AreaBreakType.NEXT_PAGE))
                 
                 // 第三部分：格式化的总结报告
-                addSummaryReportSection(document, summaryReportText, chineseFont)
+                addSummaryReportSection(reportDocument, summaryReportText, chineseFont)
             }
             
-            addReportFooter(document, chineseFont)
+            addReportFooter(reportDocument, chineseFont)
             
             // ✅ 正常关闭文档
-            document.close()
+            reportDocument.close()
             logger.info("✅ PDF文档已正确关闭")
             logger.info("✅ PDF 报告已生成并保存: {}", pdfPath)
-            
-        } catch (e: Exception) {
-            logger.error("❌ PDF 生成失败: {}", e.message, e)
-            
-            // ✅ 即使生成失败，也尝试关闭文档避免资源泄漏
-            try {
-                document?.close()
-                logger.info("✅ 异常处理：文档已关闭")
-            } catch (closeEx: Exception) {
-                logger.warn("⚠️ 异常处理：关闭文档也失败: {}", closeEx.message)
-                // 忽略关闭错误
-            }
-            
-            // ✅ 重新抛出异常，让调用方知道PDF生成失败
-            throw IllegalStateException("PDF 生成失败：${e.message}", e)
+
+            // 生成下载 URL（对文件名进行 URL 编码，处理中文和特殊字符）
+            // 使用 URLEncoder 但替换 '+' 为 '%20'，因为在 URL 路径中空格应该是 %20 而不是 +
+            val encodedFileName = java.net.URLEncoder.encode(fileName, "UTF-8")
+                .replace("+", "%20")  // URL 路径中空格应该是 %20
+                .replace("%2F", "/")  // 恢复斜杠（如果有的话）
+            val downloadUrl = "/download/report/$sessionName/$encodedFileName"
+
+            Pair(pdfPath, downloadUrl)
         }
-        
-        // 生成下载 URL（对文件名进行 URL 编码，处理中文和特殊字符）
-        // 使用 URLEncoder 但替换 '+' 为 '%20'，因为在 URL 路径中空格应该是 %20 而不是 +
-        val encodedFileName = java.net.URLEncoder.encode(fileName, "UTF-8")
-            .replace("+", "%20")  // URL 路径中空格应该是 %20
-            .replace("%2F", "/")  // 恢复斜杠（如果有的话）
-        val downloadUrl = "/download/report/$sessionName/$encodedFileName"
-        
-        return Pair(pdfPath, downloadUrl)
+
+        return reportResult.getOrElse { generationFailure ->
+            logger.error("❌ PDF 生成失败: {}", generationFailure.message, generationFailure)
+            closeDocumentAfterFailure(document)
+            throw IllegalStateException("PDF 生成失败：${generationFailure.message}", generationFailure)
+        }
     }
     
     /**
@@ -311,20 +312,15 @@ class PDFReportGenerator {
         diagnosisResult: AIStepwiseAgent.DiagnosisResult,
         chineseFont: PdfFont,
     ) {
-        val sectionTitle = Paragraph(sanitizeText("患者情况"))
-            .setFont(chineseFont)
-            .setFontSize(14f)  // 从16f减到14f
-            .setBold()
-            .setFontColor(primaryColor())
-            .setMarginTop(10f)
-            .setMarginBottom(10f)
-        
-        // ✅ 添加字符间距
-        try {
-            sectionTitle.setCharacterSpacing(1.2f)
-        } catch (e: Exception) {
-            // 忽略错误
-        }
+        val sectionTitle = applyCharacterSpacing(
+            Paragraph(sanitizeText("患者情况"))
+                .setFont(chineseFont)
+                .setFontSize(14f)  // 从16f减到14f
+                .setBold()
+                .setFontColor(primaryColor())
+                .setMarginTop(10f)
+                .setMarginBottom(10f)
+        )
         
         document.add(sectionTitle)
         
@@ -409,7 +405,7 @@ class PDFReportGenerator {
      * 按时间排序，每条消息前加时间戳
      */
     private fun extractDoctorInstructions(sessionName: String): String {
-        return try {
+        return runCatching {
             // 获取群组Host的用户ID
             val groupId = if (sessionName.startsWith("group_")) {
                 sessionName.removePrefix("group_")
@@ -445,9 +441,8 @@ class PDFReportGenerator {
             }
             
             formattedMessages.joinToString("\n\n")
-            
-        } catch (e: Exception) {
-            logger.warn("⚠️ 提取医生指令失败: {}", e.message)
+        }.getOrElse { extractionFailure ->
+            logger.warn("⚠️ 提取医生指令失败: {}", extractionFailure.message)
             ""
         }
     }
@@ -555,7 +550,7 @@ class PDFReportGenerator {
      * 格式：时间戳 + 用户名 + 消息内容，按时间排序
      */
     private fun extractUserSymptomsFromHistory(sessionName: String): String {
-        return try {
+        return runCatching {
             // 加载聊天历史
             val historyManager = ChatHistoryManager()
             val chatHistory = historyManager.loadChatHistory(sessionName)
@@ -587,9 +582,8 @@ class PDFReportGenerator {
             
             // 只取前5条，避免过长
             formattedMessages.take(5).joinToString("\n\n")
-            
-        } catch (e: Exception) {
-            logger.warn("⚠️ 提取用户症状失败: {}", e.message)
+        }.getOrElse { extractionFailure ->
+            logger.warn("⚠️ 提取用户症状失败: {}", extractionFailure.message)
             "提取症状失败"
         }
     }
@@ -598,20 +592,15 @@ class PDFReportGenerator {
      * 添加诊断步骤表格（每个步骤一行，排除总结报告）
      */
     private fun addDiagnosisStepsTable(document: Document, result: AIStepwiseAgent.DiagnosisResult, chineseFont: PdfFont) {
-        val sectionTitle = Paragraph(sanitizeText("诊断详细过程"))
-            .setFont(chineseFont)
-            .setFontSize(14f)  // 从16f减到14f
-            .setBold()
-            .setFontColor(primaryColor())
-            .setMarginTop(15f)
-            .setMarginBottom(10f)
-        
-        // ✅ 添加字符间距
-        try {
-            sectionTitle.setCharacterSpacing(1.2f)
-        } catch (e: Exception) {
-            // 忽略错误
-        }
+        val sectionTitle = applyCharacterSpacing(
+            Paragraph(sanitizeText("诊断详细过程"))
+                .setFont(chineseFont)
+                .setFontSize(14f)  // 从16f减到14f
+                .setBold()
+                .setFontColor(primaryColor())
+                .setMarginTop(15f)
+                .setMarginBottom(10f)
+        )
         
         document.add(sectionTitle)
         
@@ -690,20 +679,15 @@ class PDFReportGenerator {
      */
     private fun addSummaryReportSection(document: Document, summaryText: String, chineseFont: PdfFont) {
         // 不在此处分页，由外部控制
-        val sectionTitle = Paragraph(sanitizeText("诊断总结报告"))
-            .setFont(chineseFont)
-            .setFontSize(15f)  // 从18f减到15f
-            .setBold()
-            .setFontColor(primaryColor())
-            .setMarginTop(20f)
-            .setMarginBottom(15f)
-        
-        // ✅ 添加字符间距
-        try {
-            sectionTitle.setCharacterSpacing(1.2f)
-        } catch (e: Exception) {
-            // 忽略错误
-        }
+        val sectionTitle = applyCharacterSpacing(
+            Paragraph(sanitizeText("诊断总结报告"))
+                .setFont(chineseFont)
+                .setFontSize(15f)  // 从18f减到15f
+                .setBold()
+                .setFontColor(primaryColor())
+                .setMarginTop(20f)
+                .setMarginBottom(15f)
+        )
         
         document.add(sectionTitle)
         
@@ -853,17 +837,12 @@ class PDFReportGenerator {
      */
     private fun createHeaderCell(text: String, chineseFont: PdfFont): Cell {
         val sanitizedText = sanitizeText(text)  // ✅ 清理文本
-        val paragraph = Paragraph(sanitizedText)
-            .setFont(chineseFont)  // 使用中文字体
-            .setBold()
-            .setFontSize(9.5f)  // 从11f减到9.5f
-        
-        // ✅ 增加字符间距（1.2f = 更明显的间距效果）
-        try {
-            paragraph.setCharacterSpacing(1.2f)
-        } catch (e: Exception) {
-            // 忽略错误
-        }
+        val paragraph = applyCharacterSpacing(
+            Paragraph(sanitizedText)
+                .setFont(chineseFont)  // 使用中文字体
+                .setBold()
+                .setFontSize(9.5f)  // 从11f减到9.5f
+        )
         
         return Cell()
             .add(paragraph)
@@ -881,16 +860,11 @@ class PDFReportGenerator {
         chineseFont: PdfFont
     ): Cell {
         val sanitizedText = sanitizeText(text)  // ✅ 清理文本
-        val paragraph = Paragraph(sanitizedText)
-            .setFont(chineseFont)  // 使用中文字体
-            .setFontSize(9f)  // 从10f减到9f
-        
-        // ✅ 增加字符间距（1.2f = 更明显的间距效果）
-        try {
-            paragraph.setCharacterSpacing(1.2f)
-        } catch (e: Exception) {
-            // 忽略错误
-        }
+        val paragraph = applyCharacterSpacing(
+            Paragraph(sanitizedText)
+                .setFont(chineseFont)  // 使用中文字体
+                .setFontSize(9f)  // 从10f减到9f
+        )
         
         if (textColor != null) {
             paragraph.setFontColor(textColor).setBold()
@@ -911,16 +885,11 @@ class PDFReportGenerator {
         chineseFont: PdfFont
     ): Cell {
         val sanitizedText = sanitizeText(text)  // ✅ 清理文本
-        val paragraph = Paragraph(sanitizedText)
-            .setFont(chineseFont)  // 使用中文字体
-            .setFontSize(9f)  // 从10f减到9f
-        
-        // ✅ 增加字符间距（1.2f = 更明显的间距效果）
-        try {
-            paragraph.setCharacterSpacing(1.2f)
-        } catch (e: Exception) {
-            // 忽略错误
-        }
+        val paragraph = applyCharacterSpacing(
+            Paragraph(sanitizedText)
+                .setFont(chineseFont)  // 使用中文字体
+                .setFontSize(9f)  // 从10f减到9f
+        )
         
         if (textColor != null) {
             paragraph.setFontColor(textColor).setBold()

@@ -350,34 +350,47 @@ object UserTodoStore {
         val bucket = today.toString()
         val templates = existing.filter { it.taskKind == "long_term_template" && it.lifecycleState != "cancelled" }
         for (tpl in templates) {
-            if (!isTemplateDueToday(tpl, today)) continue
-            val existsToday = existing.any {
-                it.taskKind == "short_term_instance" &&
-                    it.templateId == tpl.id &&
-                    it.dateBucket == bucket
-            }
-            if (existsToday) continue
-            val actionDetail = tpl.actionDetail ?: tpl.repeatAnchor
-            existing.add(
-                UserTodoItemDto(
-                    id = UUID.randomUUID().toString(),
-                    title = tpl.title,
-                    sourceGroupId = tpl.sourceGroupId,
-                    sourceGroupName = tpl.sourceGroupName,
-                    actionType = tpl.actionType,
-                    actionDetail = actionDetail,
-                    createdAt = now,
-                    updatedAt = now,
-                    done = false,
-                    taskKind = "short_term_instance",
-                    templateId = tpl.id,
-                    lifecycleState = "active",
-                    lastEvidenceAt = now,
-                    explicitIntent = false,
-                    dateBucket = bucket
-                )
-            )
+            buildRecurringInstanceIfDue(
+                template = tpl,
+                existing = existing,
+                today = today,
+                bucket = bucket,
+                now = now,
+            )?.let(existing::add)
         }
+    }
+
+    private fun buildRecurringInstanceIfDue(
+        template: UserTodoItemDto,
+        existing: List<UserTodoItemDto>,
+        today: LocalDate,
+        bucket: String,
+        now: Long,
+    ): UserTodoItemDto? {
+        if (!isTemplateDueToday(template, today)) return null
+        val existsToday = existing.any {
+            it.taskKind == "short_term_instance" &&
+                it.templateId == template.id &&
+                it.dateBucket == bucket
+        }
+        if (existsToday) return null
+        return UserTodoItemDto(
+            id = UUID.randomUUID().toString(),
+            title = template.title,
+            sourceGroupId = template.sourceGroupId,
+            sourceGroupName = template.sourceGroupName,
+            actionType = template.actionType,
+            actionDetail = template.actionDetail ?: template.repeatAnchor,
+            createdAt = now,
+            updatedAt = now,
+            done = false,
+            taskKind = "short_term_instance",
+            templateId = template.id,
+            lifecycleState = "active",
+            lastEvidenceAt = now,
+            explicitIntent = false,
+            dateBucket = bucket
+        )
     }
 
     private fun isTemplateDueToday(tpl: UserTodoItemDto, today: LocalDate): Boolean {
@@ -425,35 +438,63 @@ object UserTodoStore {
             val seenKeys = existing.map { logicalDedupKey(it.title, it.actionType, it.actionDetail) }.toMutableSet()
             val now = System.currentTimeMillis()
             for (draft in incoming) {
-                val t = draft.title.trim()
-                if (t.isEmpty() || t.length > 500) continue
-                val at = draft.actionType?.trim()?.lowercase()?.ifBlank { null }
-                val ad = draft.actionDetail?.trim()?.ifBlank { null }
-                val lk = logicalDedupKey(t, at, ad)
-                if (lk in seenKeys) continue
-                existing.add(
-                    UserTodoItemDto(
-                        id = UUID.randomUUID().toString(),
-                        title = t,
-                        sourceGroupId = draft.sourceGroupId?.ifBlank { null },
-                        sourceGroupName = draft.sourceGroupName?.ifBlank { null },
-                        actionType = at,
-                        actionDetail = ad,
-                        createdAt = now,
-                        updatedAt = now,
-                        done = false
-                    )
-                )
-                seenKeys.add(lk)
+                buildMergedExtractedItem(draft, seenKeys, now)?.let { (item, logicalKey) ->
+                    existing.add(item)
+                    seenKeys.add(logicalKey)
+                }
             }
             existing.sortByDescending { it.updatedAt }
             save(userId, existing)
         }
     }
 
+    private fun buildMergedExtractedItem(
+        draft: ExtractedTodoDraft,
+        seenKeys: Set<String>,
+        now: Long,
+    ): Pair<UserTodoItemDto, String>? {
+        val title = draft.title.trim()
+        if (title.isEmpty() || title.length > 500) return null
+        val actionType = draft.actionType?.trim()?.lowercase()?.ifBlank { null }
+        val actionDetail = draft.actionDetail?.trim()?.ifBlank { null }
+        val logicalKey = logicalDedupKey(title, actionType, actionDetail)
+        if (logicalKey in seenKeys) return null
+        return UserTodoItemDto(
+            id = UUID.randomUUID().toString(),
+            title = title,
+            sourceGroupId = draft.sourceGroupId?.ifBlank { null },
+            sourceGroupName = draft.sourceGroupName?.ifBlank { null },
+            actionType = actionType,
+            actionDetail = actionDetail,
+            createdAt = now,
+            updatedAt = now,
+            done = false
+        ) to logicalKey
+    }
+
     fun setItemDone(userId: String, itemId: String, done: Boolean): Boolean {
         return updateItem(userId, itemId, done = done)
     }
+
+    private data class ResolvedTodoUpdate(
+        val done: Boolean,
+        val actionType: String?,
+        val actionDetail: String?,
+        val reminderId: Long?,
+        val taskKind: String,
+        val repeatRule: String?,
+        val repeatAnchor: String?,
+        val templateId: String?,
+        val lifecycleState: String,
+        val closedAt: Long?,
+        val dateBucket: String?,
+    )
+
+    private data class ContainedTitleMerge(
+        val firstIndex: Int,
+        val secondIndex: Int,
+        val mergedItem: UserTodoItemDto,
+    )
 
     /** 部分字段更新待办项（title/actionType/actionDetail/done/executedAt/reminderId） */
     fun updateItem(
@@ -486,76 +527,141 @@ object UserTodoStore {
             if (idx < 0) return false
             val cur = items[idx]
             val now = System.currentTimeMillis()
-            val resolvedLifecycle = when {
-                lifecycleState != null -> lifecycleState.trim().lowercase(Locale.getDefault()).ifBlank { cur.lifecycleState }
-                done == null -> cur.lifecycleState
-                done -> if (cur.lifecycleState == "cancelled" || cur.lifecycleState == "deferred") cur.lifecycleState else "done"
-                else -> "active"
-            }
-            val resolvedDone = when {
-                done != null -> done
-                resolvedLifecycle == "active" -> false
-                resolvedLifecycle == "done" || resolvedLifecycle == "cancelled" || resolvedLifecycle == "deferred" -> true
-                else -> cur.done
-            }
-            val resolvedClosedAt = when {
-                closedAt != null -> if (closedAt <= 0L) null else closedAt
-                resolvedLifecycle == "active" -> null
-                resolvedLifecycle == cur.lifecycleState -> cur.closedAt
-                else -> now
-            }
+            val resolved = resolveTodoUpdate(
+                current = cur,
+                done = done,
+                actionType = actionType,
+                actionDetail = actionDetail,
+                reminderId = reminderId,
+                clearReminderId = clearReminderId,
+                taskKind = taskKind,
+                repeatRule = repeatRule,
+                repeatAnchor = repeatAnchor,
+                templateId = templateId,
+                lifecycleState = lifecycleState,
+                closedAt = closedAt,
+                dateBucket = dateBucket,
+                now = now,
+            )
             items[idx] = cur.copy(
-                done = resolvedDone,
+                done = resolved.done,
                 title = title ?: cur.title,
-                actionType = when {
-                    actionType == null -> cur.actionType
-                    actionType.isBlank() -> null
-                    else -> actionType.trim().lowercase(Locale.getDefault()).ifBlank { null }
-                },
-                actionDetail = when {
-                    actionDetail == null -> cur.actionDetail
-                    actionDetail.isBlank() -> null
-                    else -> actionDetail.trim().ifBlank { null }
-                },
+                actionType = resolved.actionType,
+                actionDetail = resolved.actionDetail,
                 executedAt = executedAt ?: cur.executedAt,
-                reminderId = when {
-                    clearReminderId -> null
-                    reminderId == null -> cur.reminderId
-                    else -> reminderId
-                },
-                taskKind = taskKind?.trim()?.ifBlank { cur.taskKind } ?: cur.taskKind,
-                repeatRule = when {
-                    repeatRule == null -> cur.repeatRule
-                    repeatRule.isBlank() -> null
-                    else -> repeatRule.trim().lowercase(Locale.getDefault()).ifBlank { null }
-                },
-                repeatAnchor = when {
-                    repeatAnchor == null -> cur.repeatAnchor
-                    repeatAnchor.isBlank() -> null
-                    else -> repeatAnchor.trim().ifBlank { null }
-                },
+                reminderId = resolved.reminderId,
+                taskKind = resolved.taskKind,
+                repeatRule = resolved.repeatRule,
+                repeatAnchor = resolved.repeatAnchor,
                 activeFrom = activeFrom ?: cur.activeFrom,
                 activeTo = activeTo ?: cur.activeTo,
-                templateId = when {
-                    templateId == null -> cur.templateId
-                    templateId.isBlank() -> null
-                    else -> templateId.trim().ifBlank { null }
-                },
-                lifecycleState = resolvedLifecycle,
-                closedAt = resolvedClosedAt,
+                templateId = resolved.templateId,
+                lifecycleState = resolved.lifecycleState,
+                closedAt = resolved.closedAt,
                 lastEvidenceAt = lastEvidenceAt ?: cur.lastEvidenceAt,
                 explicitIntent = explicitIntent ?: cur.explicitIntent,
-                dateBucket = when {
-                    dateBucket == null -> cur.dateBucket
-                    dateBucket.isBlank() -> null
-                    else -> dateBucket.trim().ifBlank { null }
-                },
+                dateBucket = resolved.dateBucket,
                 reopenCount = reopenCount ?: cur.reopenCount,
                 updatedAt = now
             )
             save(userId, items)
             return true
         }
+    }
+
+    private fun resolveTodoUpdate(
+        current: UserTodoItemDto,
+        done: Boolean?,
+        actionType: String?,
+        actionDetail: String?,
+        reminderId: Long?,
+        clearReminderId: Boolean,
+        taskKind: String?,
+        repeatRule: String?,
+        repeatAnchor: String?,
+        templateId: String?,
+        lifecycleState: String?,
+        closedAt: Long?,
+        dateBucket: String?,
+        now: Long,
+    ): ResolvedTodoUpdate {
+        val resolvedLifecycle = resolveUpdatedLifecycle(current, lifecycleState, done)
+        return ResolvedTodoUpdate(
+            done = resolveUpdatedDone(current, done, resolvedLifecycle),
+            actionType = normalizeLowercaseField(actionType, current.actionType),
+            actionDetail = normalizePlainField(actionDetail, current.actionDetail),
+            reminderId = resolveReminderId(current, reminderId, clearReminderId),
+            taskKind = normalizePlainField(taskKind, current.taskKind) ?: current.taskKind,
+            repeatRule = normalizeLowercaseField(repeatRule, current.repeatRule),
+            repeatAnchor = normalizePlainField(repeatAnchor, current.repeatAnchor),
+            templateId = normalizePlainField(templateId, current.templateId),
+            lifecycleState = resolvedLifecycle,
+            closedAt = resolveUpdatedClosedAt(current, closedAt, resolvedLifecycle, now),
+            dateBucket = normalizePlainField(dateBucket, current.dateBucket),
+        )
+    }
+
+    private fun resolveUpdatedLifecycle(
+        current: UserTodoItemDto,
+        lifecycleState: String?,
+        done: Boolean?,
+    ): String {
+        if (lifecycleState != null) {
+            return lifecycleState.trim().lowercase(Locale.getDefault()).ifBlank { current.lifecycleState }
+        }
+        if (done == null) return current.lifecycleState
+        if (!done) return "active"
+        return if (current.lifecycleState == "cancelled" || current.lifecycleState == "deferred") {
+            current.lifecycleState
+        } else {
+            "done"
+        }
+    }
+
+    private fun resolveUpdatedDone(
+        current: UserTodoItemDto,
+        done: Boolean?,
+        lifecycleState: String,
+    ): Boolean {
+        if (done != null) return done
+        return when (lifecycleState) {
+            "active" -> false
+            "done", "cancelled", "deferred" -> true
+            else -> current.done
+        }
+    }
+
+    private fun resolveUpdatedClosedAt(
+        current: UserTodoItemDto,
+        closedAt: Long?,
+        lifecycleState: String,
+        now: Long,
+    ): Long? {
+        if (closedAt != null) return closedAt.takeIf { it > 0L }
+        if (lifecycleState == "active") return null
+        if (lifecycleState == current.lifecycleState) return current.closedAt
+        return now
+    }
+
+    private fun resolveReminderId(
+        current: UserTodoItemDto,
+        reminderId: Long?,
+        clearReminderId: Boolean,
+    ): Long? {
+        if (clearReminderId) return null
+        return reminderId ?: current.reminderId
+    }
+
+    private fun normalizeLowercaseField(value: String?, currentValue: String?): String? {
+        if (value == null) return currentValue
+        if (value.isBlank()) return null
+        return value.trim().lowercase(Locale.getDefault()).ifBlank { null }
+    }
+
+    private fun normalizePlainField(value: String?, currentValue: String?): String? {
+        if (value == null) return currentValue
+        if (value.isBlank()) return null
+        return value.trim().ifBlank { null }
     }
 
     /** 删除指定待办项 */
@@ -737,23 +843,30 @@ object UserTodoStore {
         var pool = items.toMutableList()
         if (pool.size < 2) return items
         val now = System.currentTimeMillis()
-        var changed = true
-        while (changed && pool.size > 1) {
-            changed = false
-            pair@ for (i in 0 until pool.size) {
-                for (j in i + 1 until pool.size) {
-                    val a = pool[i]
-                    val b = pool[j]
-                    val merged = tryMergeByContainedNormTitle(a, b, now) ?: continue
-                    pool.removeAt(j)
-                    pool.removeAt(i)
-                    pool.add(merged)
-                    changed = true
-                    break@pair
-                }
-            }
+        while (pool.size > 1) {
+            val merge = findContainedTitleMerge(pool, now) ?: break
+            pool.removeAt(merge.secondIndex)
+            pool.removeAt(merge.firstIndex)
+            pool.add(merge.mergedItem)
         }
         return pool
+    }
+
+    private fun findContainedTitleMerge(
+        pool: List<UserTodoItemDto>,
+        now: Long,
+    ): ContainedTitleMerge? {
+        return pool.indices.asSequence().flatMap { firstIndex ->
+            (firstIndex + 1 until pool.size).asSequence().mapNotNull { secondIndex ->
+                tryMergeByContainedNormTitle(pool[firstIndex], pool[secondIndex], now)?.let { mergedItem ->
+                    ContainedTitleMerge(
+                        firstIndex = firstIndex,
+                        secondIndex = secondIndex,
+                        mergedItem = mergedItem,
+                    )
+                }
+            }
+        }.firstOrNull()
     }
 
     private fun tryMergeByContainedNormTitle(

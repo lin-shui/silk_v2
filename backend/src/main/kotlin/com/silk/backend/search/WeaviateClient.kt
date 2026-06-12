@@ -16,6 +16,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -92,6 +93,16 @@ class WeaviateClient(
 
     private val logger = LoggerFactory.getLogger(WeaviateClient::class.java)
 
+    private inline fun <T> recoverWeaviateFailure(
+        onFailure: (Throwable) -> T,
+        block: () -> T,
+    ): T {
+        return runCatching(block).getOrElse { failure ->
+            if (failure is CancellationException) throw failure
+            onFailure(failure)
+        }
+    }
+
     /**
      * 检查 Weaviate 是否可用
      * 兼容原生 Weaviate 二进制（ready 端点可能返回空响应导致连接异常）和 Docker Weaviate
@@ -100,12 +111,14 @@ class WeaviateClient(
         logger.debug("🔍 [Weaviate] 检查连接: {}", baseUrl)
 
         // 先尝试 ready 端点（Docker Weaviate 返回 200 OK）
-        val readyOk = try {
+        val readyOk = recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.debug("🔍 [Weaviate] ready 端点异常 (常见于原生二进制): {}", failure.message)
+                false
+            }
+        ) {
             val response = httpClient.get("$baseUrl/v1/.well-known/ready")
             response.status == HttpStatusCode.OK
-        } catch (e: Exception) {
-            logger.debug("🔍 [Weaviate] ready 端点异常 (常见于原生二进制): {}", e.message)
-            false
         }
         if (readyOk) {
             logger.debug("🔍 [Weaviate] 连接状态: ✅ 可用 (ready)")
@@ -114,15 +127,17 @@ class WeaviateClient(
 
         // 某些原生 Weaviate 二进制版本中 ready 端点返回空响应，
         // 此时尝试调用 meta 端点作为备用检查
-        return try {
+        return recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ [Weaviate] 连接失败: {}", failure.message)
+                false
+            }
+        ) {
             logger.debug("🔍 [Weaviate] 尝试 meta 端点...")
             val metaResponse = httpClient.get("$baseUrl/v1/meta")
             val isOk = metaResponse.status == HttpStatusCode.OK
             logger.debug("🔍 [Weaviate] meta 端点状态: {}", if (isOk) "✅ 可用" else "❌ 不可用 (${metaResponse.status})")
             isOk
-        } catch (e: Exception) {
-            logger.error("❌ [Weaviate] 连接失败: {}", e.message)
-            false
         }
     }
     
@@ -357,7 +372,12 @@ class WeaviateClient(
         }
         """.trimIndent()
         
-        try {
+        recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ 获取用户会话失败: {}", failure.message)
+                emptyList()
+            }
+        ) {
             val response = httpClient.post("$baseUrl/v1/graphql") {
                 contentType(ContentType.Application.Json)
                 setBody(GraphQLRequest(query = graphqlQuery))
@@ -378,9 +398,6 @@ class WeaviateClient(
                     isArchived = sessionObj["isArchived"]?.jsonPrimitive?.booleanOrNull ?: false
                 )
             } ?: emptyList()
-        } catch (e: Exception) {
-            logger.error("❌ 获取用户会话失败: {}", e.message)
-            emptyList()
         }
     }
     
@@ -390,7 +407,12 @@ class WeaviateClient(
      * 注册/更新会话
      */
     suspend fun upsertSession(session: SessionInfo): Boolean = withContext(Dispatchers.IO) {
-        try {
+        recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ 会话注册失败: {}", failure.message)
+                false
+            }
+        ) {
             val response = httpClient.post("$baseUrl/v1/objects") {
                 contentType(ContentType.Application.Json)
                 setBody(mapOf(
@@ -405,9 +427,6 @@ class WeaviateClient(
                 ))
             }
             response.status.isSuccess()
-        } catch (e: Exception) {
-            logger.error("❌ 会话注册失败: {}", e.message)
-            false
         }
     }
     
@@ -512,7 +531,12 @@ class WeaviateClient(
         document: IndexDocument,
         participants: List<String>
     ): Boolean = withContext(Dispatchers.IO) {
-        try {
+        recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ [Weaviate] 索引异常: {}", document.title, failure)
+                false
+            }
+        ) {
             logger.debug("📝 [Weaviate] 索引文档: {} (session: {})", document.title, document.sessionId)
             val sanitizedDocument = sanitizeDocumentForIndexing(document)
             val jsonBody = buildIndexDocumentJson(sanitizedDocument, participants)
@@ -522,9 +546,6 @@ class WeaviateClient(
                 setBody(jsonBody)
             }
             logIndexDocumentResult(document.title, response)
-        } catch (e: Exception) {
-            logger.error("❌ [Weaviate] 索引异常: {}", document.title, e)
-            false
         }
     }
 
@@ -626,7 +647,12 @@ class WeaviateClient(
      * 通过 messageId + sessionId 查找 Weaviate 对象并删除
      */
     suspend fun deleteChatMessage(sessionId: String, messageId: String): Boolean = withContext(Dispatchers.IO) {
-        try {
+        recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ [Weaviate] 删除向量异常: {}", failure.message)
+                false
+            }
+        ) {
             // 1. GraphQL 查询找到 Weaviate 内部 UUID
             val graphqlQuery = """
             {
@@ -674,9 +700,6 @@ class WeaviateClient(
                 logger.error("❌ [Weaviate] 删除向量失败: {} - {}", deleteResponse.status, deleteResponse.bodyAsText())
             }
             success
-        } catch (e: Exception) {
-            logger.error("❌ [Weaviate] 删除向量异常: {}", e.message)
-            false
         }
     }
 
@@ -687,11 +710,15 @@ class WeaviateClient(
     suspend fun deleteChatMessages(sessionId: String, messageIds: List<String>): Int {
         var deleted = 0
         for (msgId in messageIds) {
-            try {
-                if (deleteChatMessage(sessionId, msgId)) deleted++
-            } catch (e: Exception) {
-                logger.warn("⚠️ [Weaviate] 批量删除消息 {} 失败: {}", msgId, e.message)
+            val removed = recoverWeaviateFailure(
+                onFailure = { failure ->
+                    logger.warn("⚠️ [Weaviate] 批量删除消息 {} 失败: {}", msgId, failure.message)
+                    false
+                }
+            ) {
+                deleteChatMessage(sessionId, msgId)
             }
+            if (removed) deleted++
         }
         return deleted
     }
@@ -769,7 +796,18 @@ class WeaviateClient(
         
         logger.debug("🔍 [Weaviate] GraphQL Query:\n{}", graphqlQuery)
         
-        try {
+        return recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ [Weaviate] 搜索失败 ({})", searchType, failure)
+                SearchResults(
+                    documents = emptyList(),
+                    totalCount = 0,
+                    queryTimeMs = System.currentTimeMillis() - startTime,
+                    searchType = searchType,
+                    error = failure.message
+                )
+            }
+        ) {
             val response = httpClient.post("$baseUrl/v1/graphql") {
                 contentType(ContentType.Application.Json)
                 setBody(GraphQLRequest(query = graphqlQuery))
@@ -820,15 +858,6 @@ class WeaviateClient(
                 queryTimeMs = System.currentTimeMillis() - startTime,
                 searchType = searchType
             )
-        } catch (e: Exception) {
-            logger.error("❌ [Weaviate] 搜索失败 ({})", searchType, e)
-            return SearchResults(
-                documents = emptyList(),
-                totalCount = 0,
-                queryTimeMs = System.currentTimeMillis() - startTime,
-                searchType = searchType,
-                error = e.message
-            )
         }
     }
     
@@ -874,7 +903,18 @@ class WeaviateClient(
         }
         """.trimIndent()
         
-        try {
+        return recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ [Weaviate] BM25 搜索失败: query={}", query, failure)
+                SearchResults(
+                    documents = emptyList(),
+                    totalCount = 0,
+                    queryTimeMs = System.currentTimeMillis() - startTime,
+                    searchType = searchType,
+                    error = failure.message
+                )
+            }
+        ) {
             val response = httpClient.post("$baseUrl/v1/graphql") {
                 contentType(ContentType.Application.Json)
                 setBody(GraphQLRequest(query = graphqlQuery))
@@ -915,15 +955,6 @@ class WeaviateClient(
                 totalCount = documents.size,
                 queryTimeMs = System.currentTimeMillis() - startTime,
                 searchType = searchType
-            )
-        } catch (e: Exception) {
-            logger.error("❌ [Weaviate] BM25 搜索失败: query={}", query, e)
-            return SearchResults(
-                documents = emptyList(),
-                totalCount = 0,
-                queryTimeMs = System.currentTimeMillis() - startTime,
-                searchType = searchType,
-                error = e.message
             )
         }
     }
