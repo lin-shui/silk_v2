@@ -542,32 +542,63 @@ class ChatHistoryManager(
         val userMessage = chatHistory.messages[userMessageIndex]
         
         val isAgent = { id: String -> AgentRuntime.isAgentUserId(id) }
-
-        // 查找用户消息之后、连续的AI回复消息
-        val agentReplies = mutableListOf<String>()
-
-        for (i in (userMessageIndex + 1) until chatHistory.messages.size) {
-            val msg = chatHistory.messages[i]
-
-            // 如果遇到其他用户的消息，停止查找
-            if (!isAgent(msg.senderId) && msg.senderId != userMessage.senderId) {
-                break
-            }
-
-            // 如果是AI的回复，添加到列表
-            if (isAgent(msg.senderId)) {
-                // 检查是否是连续的AI回复（时间间隔在5分钟内）
-                val prevMsg = if (agentReplies.isEmpty()) userMessage else chatHistory.messages[i - 1]
-                if (msg.timestamp - prevMsg.timestamp < 5 * 60 * 1000) {
-                    agentReplies.add(msg.messageId)
-                } else {
-                    break
-                }
-            }
-        }
+        val agentReplies = collectContiguousAgentReplies(
+            messages = chatHistory.messages,
+            userMessageIndex = userMessageIndex,
+            userSenderId = userMessage.senderId,
+            isAgent = isAgent,
+        )
         
         logger.debug("🔍 查找AI回复: 用户消息 {} -> 找到 {} 条AI回复", userMessageId, agentReplies.size)
         return agentReplies
+    }
+
+    private fun collectContiguousAgentReplies(
+        messages: List<ChatHistoryEntry>,
+        userMessageIndex: Int,
+        userSenderId: String,
+        isAgent: (String) -> Boolean,
+    ): List<String> {
+        return messages.asSequence()
+            .drop(userMessageIndex + 1)
+            .mapIndexed { offset, message -> offset to message }
+            .takeWhile { (offset, message) ->
+                shouldContinueAgentReplyScan(
+                    message = message,
+                    userSenderId = userSenderId,
+                    isAgent = isAgent,
+                ) && isReplyWithinAgentWindow(
+                    messages = messages,
+                    userMessageIndex = userMessageIndex,
+                    offset = offset,
+                    message = message,
+                    isAgent = isAgent,
+                )
+            }
+            .mapNotNull { (_, message) ->
+                message.takeIf { isAgent(it.senderId) }?.messageId
+            }
+            .toList()
+    }
+
+    private fun shouldContinueAgentReplyScan(
+        message: ChatHistoryEntry,
+        userSenderId: String,
+        isAgent: (String) -> Boolean,
+    ): Boolean {
+        return isAgent(message.senderId) || message.senderId == userSenderId
+    }
+
+    private fun isReplyWithinAgentWindow(
+        messages: List<ChatHistoryEntry>,
+        userMessageIndex: Int,
+        offset: Int,
+        message: ChatHistoryEntry,
+        isAgent: (String) -> Boolean,
+    ): Boolean {
+        if (!isAgent(message.senderId)) return true
+        val previousMessage = messages[userMessageIndex + offset]
+        return message.timestamp - previousMessage.timestamp < 5 * 60 * 1000
     }
     
     /**

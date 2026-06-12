@@ -88,6 +88,23 @@ class DirectModelAgentCitationTest {
     }
 
     @Test
+    fun `missing cited references become placeholders after registered ones`() {
+        val agent = DirectModelAgent(sessionId = "test_session")
+        agent.resetReferencesForTest()
+        agent.registerCitationForTest("已注册来源", "https://example.com/used")
+
+        val references = agent.citedReferencesForTest(
+            "先引用真实来源[citation:1]，再引用缺失来源[citation:3]。"
+        )
+
+        assertEquals(2, references.size)
+        assertEquals("https://example.com/used", references.first().url)
+        assertEquals("citation", references.last().kind)
+        assertEquals(2, references.last().index)
+        assertEquals("来源 3", references.last().title)
+    }
+
+    @Test
     fun `old chat history entries decode with empty references`() {
         val json = Json { ignoreUnknownKeys = true }
         val entry = json.decodeFromString<ChatHistoryEntry>(

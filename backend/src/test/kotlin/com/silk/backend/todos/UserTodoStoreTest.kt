@@ -213,6 +213,106 @@ class UserTodoStoreTest {
     }
 
     @Test
+    fun `mergeExtracted skips duplicate logical keys and invalid titles`() {
+        TestWorkspace().use {
+            val userId = "todo-user-merge-extracted"
+            UserTodoStore.save(
+                userId,
+                listOf(
+                    UserTodoItemDto(
+                        id = "existing-1",
+                        title = "整理合同",
+                        createdAt = 1_000L,
+                        updatedAt = 2_000L,
+                    )
+                )
+            )
+
+            UserTodoStore.mergeExtracted(
+                userId,
+                listOf(
+                    ExtractedTodoDraft(title = "  整理合同  "),
+                    ExtractedTodoDraft(title = "   "),
+                    ExtractedTodoDraft(title = "安排演示", actionType = "calendar", actionDetail = "2026-06-12 09:00"),
+                )
+            )
+
+            val items = UserTodoStore.load(userId)
+            assertEquals(2, items.size)
+            assertEquals(1, items.count { it.title == "整理合同" })
+            assertNotNull(items.singleOrNull { it.title == "安排演示" })
+        }
+    }
+
+    @Test
+    fun `updateItem keeps cancelled lifecycle when marking done`() {
+        TestWorkspace().use {
+            val userId = "todo-user-update-cancelled"
+            val item = UserTodoItemDto(
+                id = "todo-1",
+                title = "联系供应商",
+                createdAt = 1_000L,
+                updatedAt = 2_000L,
+                done = true,
+                lifecycleState = "cancelled",
+                closedAt = 2_000L,
+            )
+            UserTodoStore.save(userId, listOf(item))
+
+            assertTrue(UserTodoStore.updateItem(userId, item.id, done = true))
+
+            val updated = UserTodoStore.load(userId).single()
+            assertTrue(updated.done)
+            assertEquals("cancelled", updated.lifecycleState)
+            assertEquals(2_000L, updated.closedAt)
+        }
+    }
+
+    @Test
+    fun `updateItem clears optional fields on blank and explicit clear`() {
+        TestWorkspace().use {
+            val userId = "todo-user-update-clear"
+            val item = UserTodoItemDto(
+                id = "todo-2",
+                title = "安排演示",
+                actionType = "calendar",
+                actionDetail = "2026-06-12 09:00",
+                createdAt = 1_000L,
+                updatedAt = 2_000L,
+                reminderId = 99L,
+                repeatRule = "monthly",
+                repeatAnchor = "12",
+                templateId = "tpl-1",
+                dateBucket = "2026-06-12",
+            )
+            UserTodoStore.save(userId, listOf(item))
+
+            assertTrue(
+                UserTodoStore.updateItem(
+                    userId = userId,
+                    itemId = item.id,
+                    actionType = "  ",
+                    actionDetail = "  ",
+                    clearReminderId = true,
+                    repeatRule = "  ",
+                    repeatAnchor = "  ",
+                    templateId = "  ",
+                    dateBucket = "  ",
+                )
+            )
+
+            val updated = UserTodoStore.load(userId).single()
+            assertNull(updated.actionType)
+            assertNull(updated.actionDetail)
+            assertNull(updated.reminderId)
+            assertNull(updated.repeatRule)
+            assertNull(updated.repeatAnchor)
+            assertNull(updated.templateId)
+            assertNull(updated.dateBucket)
+        }
+    }
+
+    @Test
     fun `load returns empty list for corrupt payload`() {
         TestWorkspace().use {
             val userId = "todo-user-corrupt"

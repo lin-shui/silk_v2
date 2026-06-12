@@ -1051,49 +1051,13 @@ $rawReport
         val lastDiagnosisTime = previousDiagnosis?.second ?: 0L
         
         // 4. 过滤聊天历史：只使用上次诊断之后的新消息
-        val newMessages = if (lastDiagnosisTime > 0) {
-            val filtered = chatHistory.filter { it.timestamp > lastDiagnosisTime }
-            val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                .format(java.util.Date(lastDiagnosisTime))
-            logger.info("📋 过滤消息:")
-            logger.info("   上次诊断时间: $dateTime")
-            logger.info("   总消息数: ${chatHistory.size}")
-            logger.info("   新消息数: ${filtered.size}")
-            filtered
-        } else {
-            logger.info("📋 无历史时间戳，使用所有消息")
-            chatHistory
-        }
+        val newMessages = filterMessagesAfterLastDiagnosis(chatHistory, lastDiagnosisTime)
         
         // 5. 构建新消息的上下文
-        val newMessagesContext = if (newMessages.isNotEmpty()) {
-            buildString {
-                append("【上次诊断后的新对话】\n")
-                newMessages.forEach { entry ->
-                    val timestamp = java.text.SimpleDateFormat("MM-dd HH:mm")
-                        .format(java.util.Date(entry.timestamp))
-                    append("[$timestamp] ${entry.senderName}: ${entry.content}\n")
-                }
-            }
-        } else {
-            "【上次诊断后的新对话】\n暂无新对话"
-        }
+        val newMessagesContext = buildNewMessagesContext(newMessages)
         
         // 6. 构建之前诊断的摘要（✅ 优化：只取关键信息，减少token消耗）
-        val previousDiagnosisSummary = if (previousDiagnosisResults != null && previousDiagnosisResults.isNotEmpty()) {
-            buildString {
-                append("【之前的诊断记录（摘要）】\n")
-                // ✅ 只保留最重要的几个步骤，每个步骤最多100字
-                val keySteps = listOf("中医诊断", "西医诊断", "治疗方案")
-                previousDiagnosisResults.filter { (stepName, _) -> 
-                    keySteps.any { key -> stepName.contains(key) }
-                }.forEach { (stepName, stepResult) ->
-                    append("$stepName：${stepResult.result.take(100)}...\n")
-                }
-            }
-        } else {
-            "【之前的诊断记录】\n暂无之前的诊断记录"
-        }
+        val previousDiagnosisSummary = buildPreviousDiagnosisSummary(previousDiagnosisResults)
         
         // ✅ 优化Prompt：更简洁直接，减少生成时间
         val systemPrompt = """
@@ -1118,43 +1082,7 @@ $doctorMessage
         callback("processing", "🩺 AI正在快速整合诊断信息...", null, 3)
         delay(100)  // ✅ 减少延迟
         
-        val updatedDiagnosis = try {
-            // 使用streaming方式调用AI
-            val response = StringBuilder()
-            var lastSentContent = ""
-            var lastSentTime = System.currentTimeMillis()
-            
-            generateQuickResponse(systemPrompt) { content, isComplete ->
-                response.clear()
-                response.append(content)
-                
-                if (!isComplete) {
-                    // 计算增量内容（只发送新增的部分）
-                    val newContent = if (content.length > lastSentContent.length) {
-                        content.substring(lastSentContent.length)
-                    } else {
-                        ""
-                    }
-                    
-                    // ✅ 改进更新条件：每3行或每2秒更新一次
-                    val currentTime = System.currentTimeMillis()
-                    val timeSinceLastSend = currentTime - lastSentTime
-                    val newlineCount = content.substring(lastSentContent.length).count { it == '\n' }
-                    
-                    if (newContent.isNotEmpty() && (newlineCount >= 3 || timeSinceLastSend >= 2000)) {
-                        // ✅ 每3行或每2秒发送增量内容
-                        callback("streaming_incremental", newContent, 1, 3)
-                        lastSentContent = content
-                        lastSentTime = currentTime
-                    }
-                }
-            }
-            
-            response.toString()
-        } catch (e: Exception) {
-            logger.error("❌ AI调用失败: ${e.message}", e)
-            "⚠️ AI模型调用失败，无法更新诊断"
-        }
+        val updatedDiagnosis = generateDoctorUpdateDiagnosis(systemPrompt, callback)
         
         // 6. 发送AI的诊断更新结果（最终消息）
         callback("doctor_update", updatedDiagnosis, 2, 3)
@@ -1163,31 +1091,10 @@ $doctorMessage
         // 7. 整合所有步骤并重新生成PDF报告
         try {
             // 构建完整的步骤结果（医生医嘱 + 之前的诊断步骤）
-            val stepResults = mutableMapOf<String, StepResult>()
-            
-            // 第一步：添加医生诊断更新（放在最前面）
-            stepResults["医生诊断意见"] = StepResult(
-                stepName = "医生诊断意见",
-                result = """
-【医生医嘱】
-$doctorMessage
-
-【说明】
-以下诊断结果是基于初步诊断报告和上述医生医嘱综合更新后的结果。
-                """.trimIndent(),
-                success = true
-            )
-            
-            // 整合之前的诊断步骤（如果有）
-            if (previousDiagnosisResults != null) {
-                stepResults.putAll(previousDiagnosisResults)
-            }
-            
-            // 添加AI更新诊断步骤
-            stepResults["AI综合诊断（更新）"] = StepResult(
-                stepName = "AI综合诊断（更新）",
-                result = updatedDiagnosis,
-                success = true
+            val stepResults = buildDoctorUpdateStepResults(
+                doctorMessage = doctorMessage,
+                previousDiagnosisResults = previousDiagnosisResults,
+                updatedDiagnosis = updatedDiagnosis
             )
             
             val diagnosisResult = DiagnosisResult(
@@ -1206,16 +1113,7 @@ $doctorMessage
                 groupDisplayName = groupDisplayName
             )
             
-            val pdfMessage = buildString {
-                append("📄 诊断更新报告已生成\n\n")
-                append("文件名：${pdfPath.substringAfterLast("/")}\n\n")
-                append("━".repeat(50) + "\n")
-                append("📥 下载更新报告\n")
-                append("━".repeat(50) + "\n\n")
-                append("$downloadUrl\n\n")
-                append("💡 基于医生的专业意见，诊断已更新\n")
-                append("   报告包含：医生医嘱 + 之前诊断 + 综合更新")
-            }
+            val pdfMessage = buildDoctorUpdatePdfMessage(pdfPath, downloadUrl)
             
             callback("PDF报告", pdfMessage, null, null)
             
@@ -1225,6 +1123,142 @@ $doctorMessage
         } catch (e: Exception) {
             logger.error("❌ 生成更新PDF失败: ${e.message}", e)
         }
+    }
+
+    private fun filterMessagesAfterLastDiagnosis(
+        chatHistory: List<ChatHistoryEntry>,
+        lastDiagnosisTime: Long
+    ): List<ChatHistoryEntry> {
+        if (lastDiagnosisTime <= 0) {
+            logger.info("📋 无历史时间戳，使用所有消息")
+            return chatHistory
+        }
+
+        val filtered = chatHistory.filter { it.timestamp > lastDiagnosisTime }
+        val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+            .format(java.util.Date(lastDiagnosisTime))
+        logger.info("📋 过滤消息:")
+        logger.info("   上次诊断时间: $dateTime")
+        logger.info("   总消息数: ${chatHistory.size}")
+        logger.info("   新消息数: ${filtered.size}")
+        return filtered
+    }
+
+    private fun buildNewMessagesContext(newMessages: List<ChatHistoryEntry>): String {
+        if (newMessages.isEmpty()) {
+            return "【上次诊断后的新对话】\n暂无新对话"
+        }
+
+        return buildString {
+            append("【上次诊断后的新对话】\n")
+            newMessages.forEach { entry ->
+                val timestamp = java.text.SimpleDateFormat("MM-dd HH:mm")
+                    .format(java.util.Date(entry.timestamp))
+                append("[$timestamp] ${entry.senderName}: ${entry.content}\n")
+            }
+        }
+    }
+
+    private fun buildPreviousDiagnosisSummary(
+        previousDiagnosisResults: Map<String, StepResult>?
+    ): String {
+        if (previousDiagnosisResults.isNullOrEmpty()) {
+            return "【之前的诊断记录】\n暂无之前的诊断记录"
+        }
+
+        val keySteps = listOf("中医诊断", "西医诊断", "治疗方案")
+        return buildString {
+            append("【之前的诊断记录（摘要）】\n")
+            previousDiagnosisResults
+                .filter { (stepName, _) -> keySteps.any { key -> stepName.contains(key) } }
+                .forEach { (stepName, stepResult) ->
+                    append("$stepName：${stepResult.result.take(100)}...\n")
+                }
+        }
+    }
+
+    private suspend fun generateDoctorUpdateDiagnosis(
+        systemPrompt: String,
+        callback: suspend (stepType: String, message: String, currentStep: Int?, totalSteps: Int?) -> Unit
+    ): String = try {
+        val response = StringBuilder()
+        val streamState = DoctorUpdateStreamState()
+
+        generateQuickResponse(systemPrompt) { content, isComplete ->
+            response.clear()
+            response.append(content)
+
+            if (!isComplete) {
+                streamDoctorUpdateIncrement(content, streamState, callback)
+            }
+        }
+
+        response.toString()
+    } catch (e: Exception) {
+        logger.error("❌ AI调用失败: ${e.message}", e)
+        "⚠️ AI模型调用失败，无法更新诊断"
+    }
+
+    private suspend fun streamDoctorUpdateIncrement(
+        content: String,
+        streamState: DoctorUpdateStreamState,
+        callback: suspend (stepType: String, message: String, currentStep: Int?, totalSteps: Int?) -> Unit
+    ) {
+        val newContent = content.safeIncrementFrom(streamState.lastSentContent)
+        val currentTime = System.currentTimeMillis()
+        val timeSinceLastSend = currentTime - streamState.lastSentTime
+        val newlineCount = newContent.count { it == '\n' }
+
+        if (newContent.isEmpty() || (newlineCount < 3 && timeSinceLastSend < 2000)) {
+            return
+        }
+
+        callback("streaming_incremental", newContent, 1, 3)
+        streamState.lastSentContent = content
+        streamState.lastSentTime = currentTime
+    }
+
+    private fun String.safeIncrementFrom(previousContent: String): String {
+        return if (length > previousContent.length) substring(previousContent.length) else ""
+    }
+
+    private fun buildDoctorUpdateStepResults(
+        doctorMessage: String,
+        previousDiagnosisResults: Map<String, StepResult>?,
+        updatedDiagnosis: String
+    ): MutableMap<String, StepResult> {
+        val stepResults = linkedMapOf<String, StepResult>()
+        stepResults["医生诊断意见"] = StepResult(
+            stepName = "医生诊断意见",
+            result = """
+【医生医嘱】
+$doctorMessage
+
+【说明】
+以下诊断结果是基于初步诊断报告和上述医生医嘱综合更新后的结果。
+            """.trimIndent(),
+            success = true
+        )
+        if (previousDiagnosisResults != null) {
+            stepResults.putAll(previousDiagnosisResults)
+        }
+        stepResults["AI综合诊断（更新）"] = StepResult(
+            stepName = "AI综合诊断（更新）",
+            result = updatedDiagnosis,
+            success = true
+        )
+        return stepResults
+    }
+
+    private fun buildDoctorUpdatePdfMessage(pdfPath: String, downloadUrl: String): String = buildString {
+        append("📄 诊断更新报告已生成\n\n")
+        append("文件名：${pdfPath.substringAfterLast("/")}\n\n")
+        append("━".repeat(50) + "\n")
+        append("📥 下载更新报告\n")
+        append("━".repeat(50) + "\n\n")
+        append("$downloadUrl\n\n")
+        append("💡 基于医生的专业意见，诊断已更新\n")
+        append("   报告包含：医生医嘱 + 之前诊断 + 综合更新")
     }
     
     /**
@@ -1481,6 +1515,11 @@ $doctorMessage
         val accumulatedContent: StringBuilder = StringBuilder(),
         var lastSentContent: String = "",
         var isDone: Boolean = false
+    )
+
+    private class DoctorUpdateStreamState(
+        var lastSentContent: String = "",
+        var lastSentTime: Long = System.currentTimeMillis()
     )
 }
 
