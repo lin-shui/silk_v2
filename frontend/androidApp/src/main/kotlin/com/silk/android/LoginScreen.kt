@@ -290,6 +290,13 @@ fun LoginScreen(appState: AppState) {
                                     if (response.success && response.user != null) {
                                         println("登录成功: ${response.user.fullName}")
                                         pendingUser = response.user
+                                        // 保存 JWT Token，供绑定 API 使用
+                                        if (response.accessToken != null) {
+                                            JwtManager.setAccessToken(response.accessToken!!)
+                                            if (response.refreshToken != null) {
+                                                JwtManager.setRefreshToken(response.refreshToken!!)
+                                            }
+                                        }
                                         showBindPrompt = true  // 停留在此页，先问是否绑定
                                     } else {
                                         errorMessage = response.message

@@ -67,7 +67,9 @@ object AuthService {
         }
         
         logger.debug("🔐 [Login] 成功: {}", user.loginName)
-        return AuthResponse(true, "登录成功", user)
+        // 生成 JWT Token，供绑定 API 等需要鉴权的端点使用
+        val (accessToken, refreshToken) = JwtProvider.generateTokenPair(user.id)
+        return AuthResponse(true, "登录成功", user, accessToken, refreshToken)
     }
     
     /**

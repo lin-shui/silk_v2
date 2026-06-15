@@ -232,6 +232,13 @@ fun LoginScene(appState: WebAppState) {
                                     if (response.success && response.user != null) {
                                         console.log("✅ 登录成功:", response.user.fullName)
                                         pendingUser = response.user
+                                        // 保存 JWT Token，供绑定 API 使用
+                                        if (response.accessToken != null) {
+                                            JwtManager.setAccessToken(response.accessToken!!)
+                                            if (response.refreshToken != null) {
+                                                JwtManager.setRefreshToken(response.refreshToken!!)
+                                            }
+                                        }
                                         showBindPrompt = true
                                     } else {
                                         errorMessage = response.message
