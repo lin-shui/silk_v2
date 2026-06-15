@@ -58,7 +58,7 @@ fun LoginScene(appState: WebAppState) {
         }
     }
     
-    var errorMessage by remember { mutableStateOf("") }
+    var errorMessage by remember { mutableStateOf(appState.loginError.also { appState.loginError = "" }) }
     var isLoading by remember { mutableStateOf(false) }
     
     // 设置全局样式，去掉浏览器滚动条
@@ -145,56 +145,9 @@ fun LoginScene(appState: WebAppState) {
                 }
             }
             
-            // 微信登录按钮（首选）
-            Button({
-                style {
-                    width(100.percent)
-                    padding(16.px)
-                    property("background", "#07C160")  // 微信绿
-                    color(Color.white)
-                    border { width(0.px) }
-                    borderRadius(8.px)
-                    fontSize(16.px)
-                    property("font-weight", "500")
-                    property("cursor", if (isLoading) "not-allowed" else "pointer")
-                    property("opacity", if (isLoading) "0.7" else "1")
-                    property("transition", "all 0.2s ease")
-                    fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                    marginBottom(12.px)
-                }
-                onClick {
-                    if (!isLoading) {
-                        isLoading = true
-                        errorMessage = ""
-                        // 先检查 appId 是否配置
-                        val appId = BuildConfig.WECHAT_APP_ID
-                        if (appId.isBlank()) {
-                            console.error("❌ WECHAT_APP_ID 未配置")
-                            errorMessage = "微信登录暂未配置，请联系管理员"
-                            isLoading = false
-                            return@onClick
-                        }
-                        startWeChatOAuth()
-                    }
-                }
-            }) {
-                Text(if (isLoading) "跳转中..." else "使用微信登录")
-            }
+            // 微信登录暂时不可用（需微信开放平台企业认证），启用后可取消注释
+            // Button(...) { Text("使用微信登录") }
 
-            // 分隔线
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    marginBottom(16.px)
-                    property("gap", "12px")
-                }
-            }) {
-                Div({ style { property("flex", "1"); property("height", "1px"); backgroundColor(Color(SilkColors.divider)) } })
-                Span({ style { fontSize(12.px); color(Color(SilkColors.textLight)) } }) { Text("其他方式") }
-                Div({ style { property("flex", "1"); property("height", "1px"); backgroundColor(Color(SilkColors.divider)) } })
-            }
-            
             // 华为账号登录按钮
             Button({
                 style {
@@ -388,6 +341,7 @@ suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
             return true
         } else {
             console.error("❌ 华为登录失败:", result.message)
+            appState.loginError = "华为登录失败: ${result.message}"
             return false
         }
     }

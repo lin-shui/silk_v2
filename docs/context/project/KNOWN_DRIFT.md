@@ -16,7 +16,7 @@
   - Web / Android / Desktop Gradle 后端地址 fallback
 - Web 前端端口也不完全一致：
   - `silk.sh` 的 Python 静态服务器默认 `8005`
-  - `frontend/webApp` / `frontend/androidApp` 生成 `FRONTEND_PORT` 的 fallback 仍是 `8004`
+  - `frontend/webApp` / `frontend/androidApp` 生成 `FRONTEND_PORT` 的 fallback 已修复为优先读 `FRONTEND_HTTP_PORT`（见 `build.gradle.kts`），无配置时仍回 `8004`
   - `frontend/webApp` dev server `runTask` 端口是 `8005`
 - 实际运行和构建任务中优先读 `.env` / Gradle 属性；不要只抄 README 端口表。
 

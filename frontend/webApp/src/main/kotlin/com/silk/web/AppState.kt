@@ -32,6 +32,10 @@ class WebAppState {
     var currentUser by mutableStateOf<User?>(null)
         private set
     
+    /** OAuth 登录失败时的错误信息，由 handleOAuthCallback 设置，LoginScene 展示 */
+    var loginError by mutableStateOf("")
+        internal set
+    
     /** 更新当前用户的昵称（不触发网络请求，仅更新本地状态） */
     fun updateCurrentUserNickname(newFullName: String) {
         currentUser = currentUser?.copy(fullName = newFullName)

@@ -34,7 +34,7 @@ val envFile = readEnvFile(project)
 
 val backendPort = envFile["BACKEND_HTTP_PORT"] ?: System.getenv("BACKEND_HTTP_PORT") ?: "8003"
 val backendInternalPort = envFile["BACKEND_INTERNAL_PORT"] ?: System.getenv("BACKEND_INTERNAL_PORT") ?: backendPort
-val frontendPort = envFile["FRONTEND_PORT"] ?: System.getenv("FRONTEND_PORT") ?: "8004"
+val frontendPort = envFile["FRONTEND_PORT"] ?: envFile["FRONTEND_HTTP_PORT"] ?: System.getenv("FRONTEND_PORT") ?: System.getenv("FRONTEND_HTTP_PORT") ?: "8004"
 val huaweiOAuthClientId = envFile["HUAWEI_OAUTH_CLIENT_ID"] ?: System.getenv("HUAWEI_OAUTH_CLIENT_ID") ?: ""
 val wechatAppId = envFile["WECHAT_APP_ID"] ?: System.getenv("WECHAT_APP_ID") ?: ""
 println("📦 [webApp] BACKEND_HTTP_PORT = $backendPort, BACKEND_INTERNAL_PORT = $backendInternalPort, FRONTEND_PORT = $frontendPort")
