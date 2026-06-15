@@ -91,9 +91,15 @@ android {
                 "http://$host:$backendPort"
             }
             ?: "http://10.0.2.2:$backendPort"
+        val backendHost = envFile["BACKEND_HOST"] ?: System.getenv("BACKEND_HOST") ?: ""
+        val frontendHttpPort = envFile["FRONTEND_HTTP_PORT"] ?: System.getenv("FRONTEND_HTTP_PORT") ?: frontendPort
+        val huaweiOAuthClientId = envFile["HUAWEI_OAUTH_CLIENT_ID"] ?: System.getenv("HUAWEI_OAUTH_CLIENT_ID") ?: ""
         buildConfigField("String", "BACKEND_BASE_URL", "\"$baseUrl\"")
+        buildConfigField("String", "BACKEND_HOST", "\"$backendHost\"")
         buildConfigField("String", "FRONTEND_PORT", "\"$frontendPort\"")
-        println("📱 [Android] BACKEND_BASE_URL = $baseUrl, FRONTEND_PORT = $frontendPort")
+        buildConfigField("String", "FRONTEND_HTTP_PORT", "\"$frontendHttpPort\"")
+        buildConfigField("String", "HUAWEI_OAUTH_CLIENT_ID", "\"$huaweiOAuthClientId\"")
+        println("📱 [Android] BACKEND_BASE_URL = $baseUrl, BACKEND_HOST = $backendHost, FRONTEND_PORT = $frontendPort, FRONTEND_HTTP_PORT = $frontendHttpPort")
     }
     
     buildFeatures {
