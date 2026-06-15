@@ -57,6 +57,7 @@ fun LoginScreen(appState: AppState) {
     var showHuaweiWebView by remember { mutableStateOf(false) }
     var huaweiOAuthState by remember { mutableStateOf("") }
     var huaweiOAuthUrl by remember { mutableStateOf("") }
+    var huaweiOAuthRedirectUri by remember { mutableStateOf("") }
     
     // 防止重复处理回调（shouldOverrideUrlLoading 和 onPageStarted 都会触发）
     var huaweiOAuthHandled = false
@@ -94,8 +95,7 @@ fun LoginScreen(appState: AppState) {
             isLoading = true
             errorMessage = ""
             try {
-                val redirectUri = url.substringBefore("?code=")
-                val response = ApiClient.huaweiWebLogin(code, redirectUri)
+                val response = ApiClient.huaweiWebLogin(code, huaweiOAuthRedirectUri)
                 if (response.success && response.user != null) {
                     println("✅ [华为登录] 成功: ${response.user.fullName}, isNewUser=${response.isNewUser}")
                     appState.setHuaweiSession(
@@ -379,14 +379,14 @@ fun LoginScreen(appState: AppState) {
                         onClick = {
                             // 使用 WebView 方式进行华为 OAuth 登录
                             val clientId = BuildConfig.HUAWEI_OAUTH_CLIENT_ID.ifBlank { "117992035" }
-                            val redirectUri = "https://${BuildConfig.BACKEND_HOST}:${BuildConfig.FRONTEND_HTTP_PORT}"
+                            huaweiOAuthRedirectUri = "https://${BuildConfig.BACKEND_HOST}:${BuildConfig.FRONTEND_HTTP_PORT}"
                             val state = (1..32).map { "abcdefghijklmnopqrstuvwxyz0123456789".random() }.joinToString("")
                             huaweiOAuthState = state
                             val authUrl = buildString {
                                 append("https://oauth-login.cloud.huawei.com/oauth2/v3/authorize")
                                 append("?client_id=").append(java.net.URLEncoder.encode(clientId, "UTF-8"))
                                 append("&response_type=code")
-                                append("&redirect_uri=").append(java.net.URLEncoder.encode(redirectUri, "UTF-8"))
+                                append("&redirect_uri=").append(java.net.URLEncoder.encode(huaweiOAuthRedirectUri, "UTF-8"))
                                 append("&scope=openid+profile")
                                 append("&state=").append(state)
                             }
@@ -513,6 +513,7 @@ fun LoginScreen(appState: AppState) {
             AlertDialog(
                 onDismissRequest = {
                     showHuaweiWebView = false
+                    huaweiOAuthHandled = false
                 },
                 title = {
                     Text(
@@ -563,7 +564,7 @@ fun LoginScreen(appState: AppState) {
                 },
                 confirmButton = {},
                 dismissButton = {
-                    TextButton(onClick = { showHuaweiWebView = false }) {
+                    TextButton(onClick = { showHuaweiWebView = false; huaweiOAuthHandled = false }) {
                         Text("取消", color = SilkColors.textSecondary)
                     }
                 }
