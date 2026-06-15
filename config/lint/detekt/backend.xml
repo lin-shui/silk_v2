@@ -2,7 +2,6 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
-    <ID>CyclomaticComplexMethod:Routing.kt$fun Application.configureRouting()</ID>
     <ID>LargeClass:AIStepwiseAgent.kt$AIStepwiseAgent</ID>
     <ID>LargeClass:AgentRuntime.kt$AgentRuntime</ID>
     <ID>LargeClass:BackendWebSocketContractTest.kt$BackendWebSocketContractTest</ID>
@@ -11,6 +10,5 @@
     <ID>LargeClass:UserTodoStore.kt$UserTodoStore</ID>
     <ID>LargeClass:WeaviateClient.kt$WeaviateClient</ID>
     <ID>LargeClass:WebSocketConfig.kt$ChatServer</ID>
-    <ID>TooGenericExceptionCaught:Routing.kt$e: Exception</ID>
   </CurrentIssues>
 </SmellBaseline>
