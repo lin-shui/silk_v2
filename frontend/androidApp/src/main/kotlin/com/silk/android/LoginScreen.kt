@@ -63,6 +63,8 @@ fun LoginScreen(appState: AppState) {
     
     // 绑定引导对话框
     var showBindPrompt by remember { mutableStateOf(false) }
+    // 等待绑定的已登录用户
+    var pendingUser by remember { mutableStateOf<User?>(null) }
 
     // 华为 OAuth 回调处理器
     fun handleHuaweiOAuthCallback(url: String) {
@@ -118,6 +120,12 @@ fun LoginScreen(appState: AppState) {
                         println("✅ [华为绑定] 成功")
                         errorMessage = ""
                         showBindPrompt = false
+                        // 绑定成功后导航到主界面
+                        val user = pendingUser
+                        if (user != null) {
+                            appState.setUser(user)
+                            pendingUser = null
+                        }
                         Toast.makeText(context, "华为账号绑定成功", Toast.LENGTH_SHORT).show()
                     } else {
                         errorMessage = response.message.ifBlank { "华为账号绑定失败" }
@@ -281,9 +289,8 @@ fun LoginScreen(appState: AppState) {
                                     
                                     if (response.success && response.user != null) {
                                         println("登录成功: ${response.user.fullName}")
-                                        appState.setUser(response.user)
-                                        // 登录成功后提示绑定华为账号
-                                        showBindPrompt = true
+                                        pendingUser = response.user
+                                        showBindPrompt = true  // 停留在此页，先问是否绑定
                                     } else {
                                         errorMessage = response.message
                                     }
@@ -529,7 +536,14 @@ fun LoginScreen(appState: AppState) {
         // 华为账号绑定引导对话框
         if (showBindPrompt) {
             AlertDialog(
-                onDismissRequest = { showBindPrompt = false },
+                onDismissRequest = {
+                    showBindPrompt = false
+                    val user = pendingUser
+                    if (user != null) {
+                        appState.setUser(user)
+                        pendingUser = null
+                    }
+                },
                 title = {
                     Text(
                         text = "绑定华为账号",
@@ -575,7 +589,14 @@ fun LoginScreen(appState: AppState) {
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showBindPrompt = false }) {
+                    TextButton(onClick = {
+                        showBindPrompt = false
+                        val user = pendingUser
+                        if (user != null) {
+                            appState.setUser(user)
+                            pendingUser = null
+                        }
+                    }) {
                         Text("稍后再说", color = SilkColors.textSecondary)
                     }
                 }

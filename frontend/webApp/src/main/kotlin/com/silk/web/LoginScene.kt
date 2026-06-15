@@ -72,6 +72,7 @@ fun LoginScene(appState: WebAppState) {
     // 绑定引导
     var showBindPrompt by remember { mutableStateOf(false) }
     var showBindSuccess by remember { mutableStateOf(false) }
+    var pendingUser by remember { mutableStateOf<User?>(null) }
     // 华为 OAuth 模式: true=登录, false=绑定
     var huaweiOAuthMode by remember { mutableStateOf(true) }
     var pendingBind by remember { mutableStateOf(false) }
@@ -230,8 +231,8 @@ fun LoginScene(appState: WebAppState) {
                                     val response = ApiClient.login(loginName, password)
                                     if (response.success && response.user != null) {
                                         console.log("✅ 登录成功:", response.user.fullName)
-                                        appState.setUser(response.user)
-                                        showBindSuccess = true
+                                        pendingUser = response.user
+                                        showBindPrompt = true
                                     } else {
                                         errorMessage = response.message
                                     }
@@ -299,6 +300,90 @@ fun LoginScene(appState: WebAppState) {
                 }
             }) {
                 Text(if (isLoading) "跳转中..." else "使用华为帐号登录")
+            }
+
+            // ─── 绑定华为引导 ───
+            if (showBindPrompt && pendingUser != null) {
+                Div({
+                    style {
+                        marginTop(16.px)
+                        padding(16.px)
+                        backgroundColor(Color("#FFF8F0"))
+                        borderRadius(8.px)
+                        border(1.px, LineStyle.Solid, Color("#F0DDB0"))
+                        textAlign("center")
+                    }
+                }) {
+                    Div({ style { fontSize(14.px); property("font-weight", "500"); color(Color(SilkColors.textPrimary)); marginBottom(8.px) } }) {
+                        Text("绑定华为账号，下次可一键登录")
+                    }
+                    Span({ style { fontSize(12.px); color(Color(SilkColors.textLight)); property("line-height", "1.5") } }) {
+                        Text("将华为账号绑定到当前账户后，下次可直接点击\"使用华为帐号登录\"一键登录，无需再输入密码。")
+                    }
+                    Div({
+                        style {
+                            marginTop(12.px)
+                            display(DisplayStyle.Flex)
+                            justifyContent(JustifyContent.Center)
+                            property("gap", "12px")
+                        }
+                    }) {
+                        Button({
+                            style {
+                                padding(10.px, 20.px)
+                                property("background", "#CF0A2C")
+                                color(Color.white)
+                                border { width(0.px) }
+                                borderRadius(6.px)
+                                fontSize(14.px)
+                                property("cursor", "pointer")
+                            }
+                            onClick {
+                                showBindPrompt = false
+                                startHuaweiOAuthForBind()
+                            }
+                        }) {
+                            Text("立即绑定")
+                        }
+                        Button({
+                            style {
+                                padding(10.px, 20.px)
+                                property("background", "#E8E8E8")
+                                color(Color(SilkColors.textSecondary))
+                                border { width(0.px) }
+                                borderRadius(6.px)
+                                fontSize(14.px)
+                                property("cursor", "pointer")
+                            }
+                            onClick {
+                                val user = pendingUser
+                                pendingUser = null
+                                showBindPrompt = false
+                                if (user != null) appState.setUser(user)
+                            }
+                        }) {
+                            Text("稍后再说")
+                        }
+                    }
+                }
+            }
+
+            // 绑定成功提示
+            if (showBindSuccess) {
+                Div({
+                    style {
+                        marginTop(12.px)
+                        padding(12.px)
+                        backgroundColor(Color("#F0FFF0"))
+                        borderRadius(8.px)
+                        border(1.px, LineStyle.Solid, Color("#B0E0B0"))
+                        fontSize(14.px)
+                        color(Color("#2E7D32"))
+                        textAlign("center")
+                    }
+                }) {
+                    Text("华为账号绑定成功！下次可直接使用华为帐号登录。")
+                }
             }
             
             // 说明文字
