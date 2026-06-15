@@ -2,7 +2,6 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
-    <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$suspend fun refreshTodosForUser(userId: String)</ID>
     <ID>CyclomaticComplexMethod:Routing.kt$fun Application.configureRouting()</ID>
     <ID>LargeClass:AIStepwiseAgent.kt$AIStepwiseAgent</ID>
     <ID>LargeClass:AgentRuntime.kt$AgentRuntime</ID>
@@ -12,14 +11,6 @@
     <ID>LargeClass:UserTodoStore.kt$UserTodoStore</ID>
     <ID>LargeClass:WeaviateClient.kt$WeaviateClient</ID>
     <ID>LargeClass:WebSocketConfig.kt$ChatServer</ID>
-    <ID>LoopWithTooManyJumpStatements:AIStepwiseAgent.kt$AIStepwiseAgent$while</ID>
-    <ID>LoopWithTooManyJumpStatements:AgentRuntime.kt$AgentRuntime$for</ID>
-    <ID>LoopWithTooManyJumpStatements:GroupTodoExtractionService.kt$GroupTodoExtractionService$for</ID>
-    <ID>SwallowedException:AIStepwiseAgent.kt$AIStepwiseAgent$e: Exception</ID>
-    <ID>SwallowedException:Routing.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:AIStepwiseAgent.kt$AIStepwiseAgent$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:AgentRuntime.kt$AgentRuntime$e: Exception</ID>
     <ID>TooGenericExceptionCaught:Routing.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:WebSocketConfig.kt$ChatServer$e: Exception</ID>
   </CurrentIssues>
 </SmellBaseline>

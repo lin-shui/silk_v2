@@ -994,6 +994,7 @@ fun Application.configureRouting() {
             val req = try {
                 Json.decodeFromString<AddTrustRequest>(call.receiveText())
             } catch (e: Exception) {
+                logger.warn("Trusted dir add request JSON parse failed: {}", e.message, e)
                 call.respondText(
                     """{"success":false,"message":"请求体非法 JSON"}""",
                     ContentType.Application.Json,
@@ -1023,6 +1024,7 @@ fun Application.configureRouting() {
             val req = try {
                 Json.decodeFromString<AddTrustRequest>(call.receiveText())
             } catch (e: Exception) {
+                logger.warn("Trusted dir delete request JSON parse failed: {}", e.message, e)
                 call.respondText(
                     """{"success":false,"message":"请求体非法 JSON"}""",
                     ContentType.Application.Json,
@@ -1747,6 +1749,7 @@ fun Application.configureRouting() {
                 UnreadRepository.markAsRead(request.userId, request.groupId)
                 call.respond(SimpleResponse(true, "已标记为已读"))
             } catch (e: Exception) {
+                logger.warn("Mark-read request failed: {}", e.message, e)
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "请求格式错误"))
             }
         }
@@ -1776,6 +1779,7 @@ fun Application.configureRouting() {
                     )
                 )
             } catch (e: Exception) {
+                logger.warn("Workday request failed for date {}: {}", dateRaw, e.message, e)
                 call.respond(
                     HttpStatusCode.BadRequest,
                     mapOf(
@@ -1890,6 +1894,7 @@ fun Application.configureRouting() {
                     else UserTodosResponse(false, "待办不存在", items)
                 )
             } catch (e: Exception) {
+                logger.warn("User todo update request failed: {}", e.message, e)
                 call.respond(HttpStatusCode.BadRequest, UserTodosResponse(false, "请求格式错误"))
             }
         }
@@ -1907,6 +1912,7 @@ fun Application.configureRouting() {
                     else UserTodosResponse(false, "待办不存在", items)
                 )
             } catch (e: Exception) {
+                logger.warn("User todo delete request failed: {}", e.message, e)
                 call.respond(HttpStatusCode.BadRequest, UserTodosResponse(false, "请求格式错误"))
             }
         }

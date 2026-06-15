@@ -17,6 +17,7 @@ import com.silk.backend.agents.acp.StopReason
 import com.silk.backend.agents.adapters.claudecode.ClaudeCodeDescriptor
 import com.silk.backend.agents.adapters.codex.CodexDescriptor
 import com.silk.backend.agents.adapters.cursor.CursorDescriptor
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -49,6 +50,11 @@ object AgentRuntime {
         AgentRegistry.register(CodexDescriptor)
         AgentRegistry.register(CursorDescriptor)
     }
+
+    private inline fun <T> runAgentCatching(block: () -> T): Result<T> =
+        runCatching(block).onFailure { e ->
+            if (e is CancellationException) throw e
+        }
 
     // ========== Workflow 持久化（Plan E2） ==========
 
@@ -125,8 +131,8 @@ object AgentRuntime {
     private fun persistWorkingDirAsync(groupId: String, workingDir: String) {
         val p = persistence ?: return
         CoroutineScope(Dispatchers.IO).launch {
-            try { p.persistWorkingDir(stripGroupPrefix(groupId), workingDir) }
-            catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 workingDir 失败: {}", e.message) }
+            runAgentCatching { p.persistWorkingDir(stripGroupPrefix(groupId), workingDir) }
+                .onFailure { e -> logger.warn("[AgentRuntime] 持久化 workingDir 失败: {}", e.message) }
         }
     }
 
@@ -134,8 +140,8 @@ object AgentRuntime {
     private fun persistCliSessionAsync(groupId: String, agentType: String, cliSessionId: String, started: Boolean) {
         val p = persistence ?: return
         CoroutineScope(Dispatchers.IO).launch {
-            try { p.persistCliSession(stripGroupPrefix(groupId), agentType, cliSessionId, started) }
-            catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 cliSessionId 失败: {}", e.message) }
+            runAgentCatching { p.persistCliSession(stripGroupPrefix(groupId), agentType, cliSessionId, started) }
+                .onFailure { e -> logger.warn("[AgentRuntime] 持久化 cliSessionId 失败: {}", e.message) }
         }
     }
 
@@ -143,8 +149,8 @@ object AgentRuntime {
     private fun persistPermissionModeAsync(groupId: String, permissionMode: PermissionMode) {
         val p = persistence ?: return
         CoroutineScope(Dispatchers.IO).launch {
-            try { p.persistPermissionMode(stripGroupPrefix(groupId), permissionMode.name) }
-            catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 permissionMode 失败: {}", e.message) }
+            runAgentCatching { p.persistPermissionMode(stripGroupPrefix(groupId), permissionMode.name) }
+                .onFailure { e -> logger.warn("[AgentRuntime] 持久化 permissionMode 失败: {}", e.message) }
         }
     }
 
@@ -152,8 +158,8 @@ object AgentRuntime {
     private fun persistActiveAgentAsync(groupId: String, agentType: String) {
         val p = persistence ?: return
         CoroutineScope(Dispatchers.IO).launch {
-            try { p.persistActiveAgent(stripGroupPrefix(groupId), agentType) }
-            catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 activeAgent 失败: {}", e.message) }
+            runAgentCatching { p.persistActiveAgent(stripGroupPrefix(groupId), agentType) }
+                .onFailure { e -> logger.warn("[AgentRuntime] 持久化 activeAgent 失败: {}", e.message) }
         }
     }
 
@@ -247,12 +253,11 @@ object AgentRuntime {
         ctx.currentAgentType = agentType
         val session = ctx.getOrCreateSession(agentType)
         // 优先从 WorkflowPersistence 加载该 agent 的 per-agent seed
-        val seed = try {
+        val seed = runAgentCatching {
             persistence?.loadSeed(stripGroupPrefix(groupId), agentType)
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.warn("[AgentRuntime] loadSeed 失败: {}", e.message)
-            null
-        }
+        }.getOrNull()
         if (seed != null) {
             if (seed.workingDir.isNotBlank()) ctx.workingDir = seed.workingDir
             if (!seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
@@ -272,33 +277,44 @@ object AgentRuntime {
 
     /** Bridge 断线时由 Routing.kt 调用 */
     fun handleAgentDisconnect(userId: String, agentType: String) {
-        for ((_, ctx) in contexts) {
-            if (ctx.userId != userId) continue
-            val session = ctx.sessions[agentType] ?: continue
-
-            // Clean up handlers before nulling acpSessionId
-            cleanupSessionHandlers(session)
-
-            // Clean up any pending card reply handler to prevent memory leak
-            val pending = session.pendingQuestion
-            if (pending != null) {
-                CardReplyRouter.unregister("agent_question_${pending.requestId}")
-                session.pendingQuestion = null
+        contexts.values
+            .filter { it.userId == userId }
+            .forEach { ctx ->
+                ctx.sessions[agentType]?.let { session ->
+                    handleDisconnectedSession(ctx, session, agentType)
+                }
             }
+    }
 
-            if (session.running) {
-                session.promptJob?.cancel()
-                session.promptJob = null
-                session.running = false
-                session.cancelled = false
-                session.pendingQuestion = null
-                logger.info(
-                    "[AgentRuntime] Bridge 断线，agent 任务已终止: userId={}, groupId={}, agentType={}",
-                    userId, ctx.groupId, agentType
-                )
-            }
-            session.acpSessionId = null
+    private fun handleDisconnectedSession(
+        ctx: GroupAgentContext,
+        session: AgentSession,
+        agentType: String,
+    ) {
+        // Clean up handlers before nulling acpSessionId
+        cleanupSessionHandlers(session)
+
+        // Clean up any pending card reply handler to prevent memory leak
+        clearPendingQuestion(session)
+
+        if (session.running) {
+            session.promptJob?.cancel()
+            session.promptJob = null
+            session.running = false
+            session.cancelled = false
+            session.pendingQuestion = null
+            logger.info(
+                "[AgentRuntime] Bridge 断线，agent 任务已终止: userId={}, groupId={}, agentType={}",
+                ctx.userId, ctx.groupId, agentType
+            )
         }
+        session.acpSessionId = null
+    }
+
+    private fun clearPendingQuestion(session: AgentSession) {
+        val pending = session.pendingQuestion ?: return
+        CardReplyRouter.unregister("agent_question_${pending.requestId}")
+        session.pendingQuestion = null
     }
 
     // ========== 内部方法 ==========
@@ -342,12 +358,11 @@ object AgentRuntime {
         // M4 Task 3: per-agent loadSeed —— 取该 agent 自己的 cliSessionId，
         // 不再受其他 agent 干扰。同时持久化 activeAgent 让重启后保持选择。
         val session = ctx.getOrCreateSession(agentType)
-        val seed = try {
+        val seed = runAgentCatching {
             persistence?.loadSeed(stripGroupPrefix(ctx.groupId), agentType)
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.warn("[AgentRuntime] /use {} loadSeed 失败: {}", agentType, e.message)
-            null
-        }
+        }.getOrNull()
         if (seed != null && !seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
             session.cliSessionId = seed.cliSessionId
             logger.info(
@@ -601,12 +616,14 @@ object AgentRuntime {
             broadcastFn(systemMessage("compact 需要 bridge 连接", descriptor))
             return
         }
-        try {
+        val compactResult = runAgentCatching {
             withContext(Dispatchers.IO) {
                 AcpExtensions.compact(acp, acpSessionId)
             }
+        }
+        compactResult.onSuccess {
             broadcastFn(systemMessage("会话已压缩", descriptor))
-        } catch (e: Exception) {
+        }.onFailure { e ->
             broadcastFn(systemMessage("压缩失败: ${e.message}", descriptor))
         }
     }
@@ -623,14 +640,15 @@ object AgentRuntime {
             broadcastFn(statusMessage("本地会话列表（待 bridge 连接后拉取）", descriptor))
             return
         }
-        try {
-            val result = withContext(Dispatchers.IO) {
+        val result = runAgentCatching {
+            withContext(Dispatchers.IO) {
                 AcpExtensions.listLocalSessions(acp, ctx.workingDir)
             }
-            broadcastFn(statusMessage(AcpExtensions.formatLocalSessionsForDisplay(result), descriptor))
-        } catch (e: Exception) {
+        }.getOrElse { e ->
             broadcastFn(statusMessage("获取会话列表失败: ${e.message}", descriptor))
+            return
         }
+        broadcastFn(statusMessage(AcpExtensions.formatLocalSessionsForDisplay(result), descriptor))
     }
 
     private suspend fun handleSessionLoadCommand(
@@ -647,19 +665,23 @@ object AgentRuntime {
             return
         }
         cleanupSessionHandlers(session)
-        try {
+        val result = runAgentCatching {
             val result = withContext(Dispatchers.IO) {
                 acp.sessionLoad(cmd.sessionIdPrefix, ctx.workingDir)
             }
-            session.acpSessionId = result.sessionId
-            session.cliSessionId = cmd.sessionIdPrefix
-            broadcastFn(systemMessage("已加载会话: ${cmd.sessionIdPrefix.take(8)}...", descriptor))
-        } catch (e: AcpRpcException) {
-            broadcastFn(systemMessage("加载会话失败: ${e.rpcError.message}", descriptor))
-        } catch (e: Exception) {
-            logger.warn("[AgentRuntime] sessionLoad 异常: {}", e.message)
-            broadcastFn(systemMessage("加载会话异常: ${e.message}", descriptor))
+            result
+        }.getOrElse { e ->
+            if (e is AcpRpcException) {
+                broadcastFn(systemMessage("加载会话失败: ${e.rpcError.message}", descriptor))
+            } else {
+                logger.warn("[AgentRuntime] sessionLoad 异常: {}", e.message)
+                broadcastFn(systemMessage("加载会话异常: ${e.message}", descriptor))
+            }
+            return
         }
+        session.acpSessionId = result.sessionId
+        session.cliSessionId = cmd.sessionIdPrefix
+        broadcastFn(systemMessage("已加载会话: ${cmd.sessionIdPrefix.take(8)}...", descriptor))
     }
 
     private suspend fun handleDescriptorCommand(
@@ -759,13 +781,12 @@ object AgentRuntime {
             try {
                 // 1. Ensure acpSessionId exists (sessionNew if needed)
                 if (session.acpSessionId == null) {
-                    try {
-                        val result = acp.sessionNew(
+                    val result = runAgentCatching {
+                        acp.sessionNew(
                             cwd = ctx.workingDir,
                             cliSessionId = session.cliSessionId,
                         )
-                        session.acpSessionId = result.sessionId
-                    } catch (e: Exception) {
+                    }.getOrElse { e ->
                         logger.error("[AgentRuntime] sessionNew 失败: userId={}, agentType={}", userId, agentType, e)
                         broadcastFn(AgentMessages.system(
                             "创建会话失败: ${e.message}",
@@ -774,6 +795,7 @@ object AgentRuntime {
                         ))
                         return@launch  // finally sets running=false
                     }
+                    session.acpSessionId = result.sessionId
                 }
 
                 // 2. Register handlers (acpSessionId is now known)
@@ -832,10 +854,25 @@ object AgentRuntime {
         session.currentRequestId = requestId
 
         try {
-            val result = acp.sessionPrompt(
+            val result = runAgentCatching {
+                acp.sessionPrompt(
                 sessionId = session.acpSessionId!!,
                 prompt = listOf(ContentBlock.Text(text)),
             )
+            }.getOrElse { e ->
+                logger.error(
+                    "[AgentRuntime] sessionPrompt 失败: userId={}, agentType={}",
+                    session.userId,
+                    session.agentType,
+                    e,
+                )
+                broadcastFn(AgentMessages.system(
+                    "执行失败: ${e.message}",
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
+                ))
+                return
+            }
 
             // 从 result.meta 拿 cliSessionId 持久化（adapter complete.meta.sessionId → response.meta.cliSessionId）
             val metaCliSid = result.meta?.let { meta ->
@@ -894,14 +931,6 @@ object AgentRuntime {
                     agentName = descriptor.displayName,
                 ))
             }
-
-        } catch (e: Exception) {
-            logger.error("[AgentRuntime] sessionPrompt 失败: userId={}, agentType={}", session.userId, session.agentType, e)
-            broadcastFn(AgentMessages.system(
-                "执行失败: ${e.message}",
-                agentUserId = descriptor.agentUserId,
-                agentName = descriptor.displayName,
-            ))
         } finally {
             session.currentRequestId = null
             session.pendingQuestion = null
@@ -927,11 +956,8 @@ object AgentRuntime {
 
         val acp = getAcpClient(session.agentType, session.userId)
         if (acp != null && session.acpSessionId != null) {
-            try {
-                acp.sessionCancel(session.acpSessionId!!)
-            } catch (e: Exception) {
-                logger.warn("[AgentRuntime] sessionCancel 失败: {}", e.message)
-            }
+            runAgentCatching { acp.sessionCancel(session.acpSessionId!!) }
+                .onFailure { e -> logger.warn("[AgentRuntime] sessionCancel 失败: {}", e.message) }
         }
 
         session.promptJob?.cancelAndJoin()
@@ -1020,13 +1046,14 @@ object AgentRuntime {
             return
         }
 
-        try {
+        runAgentCatching {
             AcpExtensions.resolveQuestion(acp, pending.requestId, resolveText)
+        }.onSuccess {
             logger.info(
                 "[AgentRuntime] All {}/{} questions answered: requestId={}",
                 total, total, pending.requestId.take(8),
             )
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.error(
                 "[AgentRuntime] resolveQuestion failed: requestId={}, error={}",
                 pending.requestId.take(8), e.message,
@@ -1137,7 +1164,7 @@ object AgentRuntime {
                 }
             }
             if (kind == "plan_review") {
-                handlePlanReviewUpdate(notif, session, descriptor, acp, broadcastFn, scope)
+                handlePlanReviewUpdate(notif, descriptor, acp, broadcastFn, scope)
                 return@onSessionUpdate
             }
 
@@ -1218,10 +1245,11 @@ object AgentRuntime {
 
         if (autoAllow) {
             scope.launch {
-                try {
+                runAgentCatching {
                     AcpExtensions.resolvePermission(acp, requestId, "allow")
+                }.onSuccess {
                     logger.info("[AgentRuntime] Permission auto-allow: tool={}, mode={}", toolName, mode)
-                } catch (e: Exception) {
+                }.onFailure { e ->
                     logger.error("[AgentRuntime] resolvePermission failed: {}", e.message)
                 }
             }
@@ -1299,10 +1327,11 @@ object AgentRuntime {
                 }
 
                 // Resolve via ACP
-                try {
+                runAgentCatching {
                     AcpExtensions.resolvePermission(acp, requestId, decision, reason)
+                }.onSuccess {
                     logger.info("[AgentRuntime] Permission resolved: tool={}, decision={}", toolName, decision)
-                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                }.onFailure { e ->
                     logger.error("[AgentRuntime] resolvePermission failed: {}", e.message)
                     broadcastFn(AgentMessages.system(
                         "权限决定发送失败: ${e.message}",
@@ -1316,10 +1345,8 @@ object AgentRuntime {
         scope.launch { broadcastFn(cardMsg) }
     }
 
-    @Suppress("UnusedParameter")
     private fun handlePlanReviewUpdate(
         notif: com.silk.backend.agents.acp.SessionUpdateNotification,
-        session: AgentSession,
         descriptor: AgentDescriptor,
         acp: AcpClient,
         broadcastFn: suspend (Message) -> Unit,
@@ -1366,10 +1393,11 @@ object AgentRuntime {
                     agentName = descriptor.displayName,
                 ))
 
-                try {
+                runAgentCatching {
                     AcpExtensions.resolvePlanReview(acp, requestId, decision, feedback)
+                }.onSuccess {
                     logger.info("[AgentRuntime] Plan review resolved: decision={}", decision)
-                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                }.onFailure { e ->
                     logger.error("[AgentRuntime] resolvePlanReview failed: {}", e.message)
                     broadcastFn(AgentMessages.system(
                         "计划审批决定发送失败: ${e.message}",
@@ -1430,12 +1458,11 @@ object AgentRuntime {
         val ctx = context(userId, groupId)
         ctx.currentAgentType = agentType
         val session = ctx.getOrCreateSession(agentType)
-        val seed = try {
+        val seed = runAgentCatching {
             persistence?.loadSeed(stripGroupPrefix(groupId), agentType)
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.warn("[AgentRuntime] switchAgent {} loadSeed failed: {}", agentType, e.message)
-            null
-        }
+        }.getOrNull()
         if (seed != null && !seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
             session.cliSessionId = seed.cliSessionId
         }
@@ -1515,37 +1542,40 @@ object AgentRuntime {
         val session = ctx.getOrCreateSession(agentType)
         var acpSessionId = session.acpSessionId
         if (acpSessionId == null) {
-            try {
-                val newSession = acp.sessionNew(cwd = path)
-                acpSessionId = newSession.sessionId
-                session.acpSessionId = acpSessionId
-            } catch (e: Exception) {
+            val newSession = runAgentCatching {
+                acp.sessionNew(cwd = path)
+            }.getOrElse { e ->
                 logger.warn("[AgentRuntime] cdSync 创建 ACP session 失败: {}", e.message)
                 return CdResult.Err("创建 ACP session 失败: ${e.message}")
             }
+            acpSessionId = newSession.sessionId
+            session.acpSessionId = acpSessionId
         }
 
-        return try {
-            val resp = AcpExtensions.setCwd(acp, acpSessionId!!, path)
-            // adapter 返回 {ok: true, path: <resolved>}
-            val resolvedPath = resp.jsonObject["path"]?.jsonPrimitive?.contentOrNull ?: path
-            ctx.workingDir = resolvedPath
-            // adapter 已经把它的 cli_session_id 设为 null；本地也重置 acpSessionId + cliSessionId
-            // 让下次 prompt 走 sessionNew 重建（与旧 cdSync 重置 sessionId 行为对齐）
-            cleanupSessionHandlers(session)
-            session.acpSessionId = null
-            session.cliSessionId = null
-            persistWorkingDirAsync(groupId, resolvedPath)
-            // 切目录等价于 /new：清空已持久化的 cliSessionId 让重启不会盲目 resume 一个废 session
-            persistCliSessionAsync(groupId, agentType, "", false)
-            logger.info("[AgentRuntime] cdSync 成功: userId={}, groupId={}, path={}", userId, groupId, resolvedPath)
-            CdResult.Ok(resolvedPath)
-        } catch (e: com.silk.backend.agents.acp.AcpRpcException) {
-            CdResult.Err(e.rpcError.message)
-        } catch (e: Exception) {
-            logger.warn("[AgentRuntime] cdSync 异常: {}", e.message)
-            CdResult.Err("set_cwd 异常: ${e.message}")
+        val currentAcpSessionId = checkNotNull(acpSessionId) { "ACP session id should be initialized" }
+        val resp = runAgentCatching {
+            AcpExtensions.setCwd(acp, currentAcpSessionId, path)
+        }.getOrElse { e ->
+            return if (e is AcpRpcException) {
+                CdResult.Err(e.rpcError.message)
+            } else {
+                logger.warn("[AgentRuntime] cdSync 异常: {}", e.message)
+                CdResult.Err("set_cwd 异常: ${e.message}")
+            }
         }
+        // adapter 返回 {ok: true, path: <resolved>}
+        val resolvedPath = resp.jsonObject["path"]?.jsonPrimitive?.contentOrNull ?: path
+        ctx.workingDir = resolvedPath
+        // adapter 已经把它的 cli_session_id 设为 null；本地也重置 acpSessionId + cliSessionId
+        // 让下次 prompt 走 sessionNew 重建（与旧 cdSync 重置 sessionId 行为对齐）
+        cleanupSessionHandlers(session)
+        session.acpSessionId = null
+        session.cliSessionId = null
+        persistWorkingDirAsync(groupId, resolvedPath)
+        // 切目录等价于 /new：清空已持久化的 cliSessionId 让重启不会盲目 resume 一个废 session
+        persistCliSessionAsync(groupId, agentType, "", false)
+        logger.info("[AgentRuntime] cdSync 成功: userId={}, groupId={}, path={}", userId, groupId, resolvedPath)
+        return CdResult.Ok(resolvedPath)
     }
 
     /**
@@ -1560,16 +1590,17 @@ object AgentRuntime {
         agentType: String = "claude-code",
     ): kotlinx.serialization.json.JsonObject? {
         val acp = AcpRegistry.get(userId, agentType) ?: return null
-        return try {
-            val resp = AcpExtensions.listDir(acp, path ?: "", showHidden)
-            resp.jsonObject
-        } catch (e: com.silk.backend.agents.acp.AcpRpcException) {
-            logger.warn("[AgentRuntime] _silk/list_dir 失败: {}", e.rpcError.message)
-            null
-        } catch (e: Exception) {
-            logger.warn("[AgentRuntime] _silk/list_dir 异常: {}", e.message)
-            null
+        val resp = runAgentCatching {
+            AcpExtensions.listDir(acp, path ?: "", showHidden)
+        }.getOrElse { e ->
+            if (e is AcpRpcException) {
+                logger.warn("[AgentRuntime] _silk/list_dir 失败: {}", e.rpcError.message)
+            } else {
+                logger.warn("[AgentRuntime] _silk/list_dir 异常: {}", e.message)
+            }
+            return null
         }
+        return resp.jsonObject
     }
 
     fun cleanupState(userId: String, groupId: String) {
@@ -1577,11 +1608,7 @@ object AgentRuntime {
         for ((_, session) in ctx.sessions) {
             cleanupSessionHandlers(session)
             // Clean up any pending card reply handler to prevent memory leak
-            val pending = session.pendingQuestion
-            if (pending != null) {
-                CardReplyRouter.unregister("agent_question_${pending.requestId}")
-                session.pendingQuestion = null
-            }
+            clearPendingQuestion(session)
         }
         ctx.scope.cancel()
     }
@@ -1591,11 +1618,7 @@ object AgentRuntime {
         contexts.values.forEach { ctx ->
             for ((_, session) in ctx.sessions) {
                 cleanupSessionHandlers(session)
-                val pending = session.pendingQuestion
-                if (pending != null) {
-                    CardReplyRouter.unregister("agent_question_${pending.requestId}")
-                    session.pendingQuestion = null
-                }
+                clearPendingQuestion(session)
             }
             ctx.scope.cancel()
         }

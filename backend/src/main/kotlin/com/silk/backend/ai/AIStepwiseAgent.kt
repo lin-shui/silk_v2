@@ -3,9 +3,12 @@ package com.silk.backend.ai
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.models.ChatHistoryEntry
 import com.silk.backend.pdf.PDFReportGenerator
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.boolean
@@ -13,6 +16,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import org.slf4j.LoggerFactory
+import java.io.IOException
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -166,19 +170,17 @@ class AIStepwiseAgent(
                 // 短暂延迟，避免 API 请求过快
                 delay(800)
                 
-            } catch (e: Exception) {
-                allSuccess = false
-                val errorResult = StepResult(
-                    stepName = taskName,
-                    result = "",
-                    success = false,
-                    error = e.message
-                )
-                stepResults[taskName] = errorResult
-                executionSummary.append("❌ [$stepNumber] $taskName - 异常\n\n")
-                
-                // 继续执行下一步
-                continue
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                allSuccess = recordDiagnosisStepFailure(stepResults, executionSummary, stepNumber, taskName, e)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                allSuccess = recordDiagnosisStepFailure(stepResults, executionSummary, stepNumber, taskName, e)
+            } catch (e: IllegalStateException) {
+                allSuccess = recordDiagnosisStepFailure(stepResults, executionSummary, stepNumber, taskName, e)
+            } catch (e: IllegalArgumentException) {
+                allSuccess = recordDiagnosisStepFailure(stepResults, executionSummary, stepNumber, taskName, e)
             }
         }
         
@@ -222,7 +224,18 @@ class AIStepwiseAgent(
             }
             
             callback("PDF报告", pdfMessage, null, null)
-        } catch (e: Exception) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            logger.error("⚠️ PDF 生成失败: ${e.message}", e)
+            callback("PDF报告", "⚠️ PDF 生成失败：${e.message}\n\n文字版总结报告已在上方显示。", null, null)
+        } catch (e: SecurityException) {
+            logger.error("⚠️ PDF 生成失败: ${e.message}", e)
+            callback("PDF报告", "⚠️ PDF 生成失败：${e.message}\n\n文字版总结报告已在上方显示。", null, null)
+        } catch (e: IllegalStateException) {
+            logger.error("⚠️ PDF 生成失败: ${e.message}", e)
+            callback("PDF报告", "⚠️ PDF 生成失败：${e.message}\n\n文字版总结报告已在上方显示。", null, null)
+        } catch (e: IllegalArgumentException) {
             logger.error("⚠️ PDF 生成失败: ${e.message}", e)
             callback("PDF报告", "⚠️ PDF 生成失败：${e.message}\n\n文字版总结报告已在上方显示。", null, null)
         }
@@ -243,6 +256,23 @@ class AIStepwiseAgent(
             stepResults = stepResults,
             allSuccess = allSuccess
         )
+    }
+
+    private fun recordDiagnosisStepFailure(
+        stepResults: MutableMap<String, StepResult>,
+        executionSummary: StringBuilder,
+        stepNumber: Int,
+        taskName: String,
+        error: Throwable
+    ): Boolean {
+        stepResults[taskName] = StepResult(
+            stepName = taskName,
+            result = "",
+            success = false,
+            error = error.message
+        )
+        executionSummary.append("❌ [$stepNumber] $taskName - 异常\n\n")
+        return false
     }
     
     /**
@@ -446,30 +476,46 @@ $taskPrompt
                 result = result,
                 success = true
             )
-        } catch (e: Exception) {
-            logger.error("❌ 步骤异常: $taskName - ${e.message}", e)
-            
-            // 如果已经接收到部分数据，返回部分数据而不是空字符串
-            if (result.isNotEmpty()) {
-                logger.warn("⚠️ 步骤部分完成: $taskName (已接收 ${result.length} 字符)")
-                StepResult(
-                    stepName = taskName,
-                    result = result + "\n\n⚠️ 注意：此步骤因超时或异常而提前结束，以上为部分结果。",
-                    success = true,  // 标记为成功，因为有部分数据
-                    error = null
-                )
-            } else {
-                logger.error("❌ 步骤完全失败: $taskName - 无数据返回")
-                StepResult(
-                    stepName = taskName,
-                    result = "",
-                    success = false,
-                    error = "步骤执行失败: ${e.message}"
-                )
-            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            buildFailedDiagnosisStep(taskName, result, e)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            buildFailedDiagnosisStep(taskName, result, e)
+        } catch (e: IllegalStateException) {
+            buildFailedDiagnosisStep(taskName, result, e)
+        } catch (e: IllegalArgumentException) {
+            buildFailedDiagnosisStep(taskName, result, e)
         }
     }
-    
+
+    private fun buildFailedDiagnosisStep(
+        taskName: String,
+        partialResult: String,
+        error: Throwable
+    ): StepResult {
+        logger.error("❌ 步骤异常: $taskName - ${error.message}", error)
+
+        return if (partialResult.isNotEmpty()) {
+            logger.warn("⚠️ 步骤部分完成: $taskName (已接收 ${partialResult.length} 字符)")
+            StepResult(
+                stepName = taskName,
+                result = partialResult + "\n\n⚠️ 注意：此步骤因超时或异常而提前结束，以上为部分结果。",
+                success = true,
+                error = null
+            )
+        } else {
+            logger.error("❌ 步骤完全失败: $taskName - 无数据返回")
+            StepResult(
+                stepName = taskName,
+                result = "",
+                success = false,
+                error = "步骤执行失败: ${error.message}"
+            )
+        }
+    }
+
     /**
      * 更新累积的诊断信息
      */
@@ -598,7 +644,12 @@ $conclusion
         startTime: Long
     ): HttpResponse<java.io.InputStream> = try {
         httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream())
-    } catch (e: Exception) {
+    } catch (e: IOException) {
+        val elapsed = System.currentTimeMillis() - startTime
+        logger.error("❌ HTTP 请求失败 (耗时 ${elapsed}ms): ${e.message}", e)
+        throw e
+    } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
         val elapsed = System.currentTimeMillis() - startTime
         logger.error("❌ HTTP 请求失败 (耗时 ${elapsed}ms): ${e.message}", e)
         throw e
@@ -632,14 +683,24 @@ $conclusion
                     }
                 }
             }
-        } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
+        } catch (e: TimeoutCancellationException) {
             logger.error("❌ 流式读取总超时（70秒），当前已接收 ${streamState.fullText.length} 字符", e)
-        } catch (e: Exception) {
-            logger.error("❌ 流式读取异常: ${e.message}", e)
+        } catch (e: CancellationException) {
             throw e
+        } catch (e: IOException) {
+            failStreamingRead(e)
+        } catch (e: IllegalStateException) {
+            failStreamingRead(e)
+        } catch (e: IllegalArgumentException) {
+            failStreamingRead(e)
         }
 
         return streamState.fullText.toString()
+    }
+
+    private fun failStreamingRead(error: Throwable): Nothing {
+        logger.error("❌ 流式读取异常: ${error.message}", error)
+        throw error
     }
 
     private suspend fun readStreamingLine(
@@ -671,7 +732,7 @@ $conclusion
 
     private fun readStreamingLineOrNull(reader: java.io.BufferedReader): String? = try {
         reader.readLine()
-    } catch (e: Exception) {
+    } catch (e: IOException) {
         logger.warn("⚠️ 读取行失败: ${e.message}", e)
         null
     }
@@ -736,7 +797,19 @@ $conclusion
         val formattedReport = if (apiKey.isNotEmpty()) {
             try {
                 formatReportWithAI(rawReport)
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                logger.warn("⚠️ AI格式化失败，使用原始格式: ${e.message}", e)
+                generateFallbackReport(stepResults, allSuccess)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                logger.warn("⚠️ AI格式化失败，使用原始格式: ${e.message}", e)
+                generateFallbackReport(stepResults, allSuccess)
+            } catch (e: IllegalStateException) {
+                logger.warn("⚠️ AI格式化失败，使用原始格式: ${e.message}", e)
+                generateFallbackReport(stepResults, allSuccess)
+            } catch (e: IllegalArgumentException) {
                 logger.warn("⚠️ AI格式化失败，使用原始格式: ${e.message}", e)
                 generateFallbackReport(stepResults, allSuccess)
             }
@@ -1120,7 +1193,15 @@ $doctorMessage
             // 保存当前诊断结果供下次使用
             saveDiagnosisResults(stepResults)
             
-        } catch (e: Exception) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            logger.error("❌ 生成更新PDF失败: ${e.message}", e)
+        } catch (e: SecurityException) {
+            logger.error("❌ 生成更新PDF失败: ${e.message}", e)
+        } catch (e: IllegalStateException) {
+            logger.error("❌ 生成更新PDF失败: ${e.message}", e)
+        } catch (e: IllegalArgumentException) {
             logger.error("❌ 生成更新PDF失败: ${e.message}", e)
         }
     }
@@ -1194,7 +1275,19 @@ $doctorMessage
         }
 
         response.toString()
-    } catch (e: Exception) {
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: IOException) {
+        logger.error("❌ AI调用失败: ${e.message}", e)
+        "⚠️ AI模型调用失败，无法更新诊断"
+    } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        logger.error("❌ AI调用失败: ${e.message}", e)
+        "⚠️ AI模型调用失败，无法更新诊断"
+    } catch (e: IllegalStateException) {
+        logger.error("❌ AI调用失败: ${e.message}", e)
+        "⚠️ AI模型调用失败，无法更新诊断"
+    } catch (e: IllegalArgumentException) {
         logger.error("❌ AI调用失败: ${e.message}", e)
         "⚠️ AI模型调用失败，无法更新诊断"
     }
@@ -1313,7 +1406,19 @@ $doctorMessage
                 logger.info("ℹ️ 所有路径都不存在历史诊断文件")
                 null
             }
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
+            logger.error("❌ 加载诊断历史失败: ${e.message}", e)
+            null
+        } catch (e: IOException) {
+            logger.error("❌ 加载诊断历史失败: ${e.message}", e)
+            null
+        } catch (e: SecurityException) {
+            logger.error("❌ 加载诊断历史失败: ${e.message}", e)
+            null
+        } catch (e: IllegalStateException) {
+            logger.error("❌ 加载诊断历史失败: ${e.message}", e)
+            null
+        } catch (e: IllegalArgumentException) {
             logger.error("❌ 加载诊断历史失败: ${e.message}", e)
             null
         }
@@ -1383,7 +1488,13 @@ $doctorMessage
             } else {
                 logger.error("❌ 文件保存后不存在！")
             }
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            logger.error("❌ 保存诊断结果失败: ${e.message}", e)
+        } catch (e: SecurityException) {
+            logger.error("❌ 保存诊断结果失败: ${e.message}", e)
+        } catch (e: IllegalStateException) {
+            logger.error("❌ 保存诊断结果失败: ${e.message}", e)
+        } catch (e: IllegalArgumentException) {
             logger.error("❌ 保存诊断结果失败: ${e.message}", e)
         }
     }
@@ -1410,7 +1521,19 @@ $doctorMessage
                 logger.error("❌ AI API返回错误: ${response.statusCode()}")
                 callback("⚠️ AI暂时无法回答，请稍后重试", true)
             }
-        } catch (e: Exception) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            logger.error("❌ 调用AI API异常: ${e.message}", e)
+            callback("⚠️ AI暂时无法回答，请稍后重试", true)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            logger.error("❌ 调用AI API异常: ${e.message}", e)
+            callback("⚠️ AI暂时无法回答，请稍后重试", true)
+        } catch (e: IllegalStateException) {
+            logger.error("❌ 调用AI API异常: ${e.message}", e)
+            callback("⚠️ AI暂时无法回答，请稍后重试", true)
+        } catch (e: IllegalArgumentException) {
             logger.error("❌ 调用AI API异常: ${e.message}", e)
             callback("⚠️ AI暂时无法回答，请稍后重试", true)
         }
