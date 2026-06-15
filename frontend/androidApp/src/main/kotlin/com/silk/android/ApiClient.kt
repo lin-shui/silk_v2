@@ -220,6 +220,9 @@ object ApiClient {
     private val baseUrl: String get() = BackendUrlHolder.getBaseUrl()
     private val jsonParser = Json { ignoreUnknownKeys = true }
     
+    /** 密码登录后保存的 JWT token，供后续需鉴权的 API 使用 */
+    var accessToken: String? = null
+    
     suspend fun register(
         loginName: String,
         fullName: String,
@@ -673,6 +676,10 @@ object ApiClient {
                 setRequestProperty("Content-Type", "application/json")
                 connectTimeout = 10000
                 readTimeout = 10000
+            }
+            // 添加 JWT Bearer Token（如已保存）
+            if (!accessToken.isNullOrBlank()) {
+                connection.setRequestProperty("Authorization", "Bearer $accessToken")
             }
             
             connection.outputStream.use { os ->

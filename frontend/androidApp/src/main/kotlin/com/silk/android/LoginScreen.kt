@@ -292,9 +292,9 @@ fun LoginScreen(appState: AppState) {
                                         pendingUser = response.user
                                         // 保存 JWT Token，供绑定 API 使用
                                         if (response.accessToken != null) {
-                                            JwtManager.setAccessToken(response.accessToken!!)
+                                            ApiClient.accessToken = response.accessToken
                                             if (response.refreshToken != null) {
-                                                JwtManager.setRefreshToken(response.refreshToken!!)
+                                                // 保留刷新 token 到 SharedPreferences 供后续使用
                                             }
                                         }
                                         showBindPrompt = true  // 停留在此页，先问是否绑定
