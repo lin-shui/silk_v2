@@ -532,6 +532,178 @@ fun SettingsScreen(appState: AppState) {
                             Text(strings.saveButton)
                         }
                     }
+                    
+                    // 分隔线
+                    Divider(
+                        color = SilkColors.divider,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                    
+                    // 退出登录
+                    var showLogoutConfirm by remember { mutableStateOf(false) }
+                    
+                    if (showLogoutConfirm) {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFFFF8F8)
+                            ),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Text(
+                                    text = "确认退出登录？",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = { showLogoutConfirm = false }
+                                    ) {
+                                        Text("取消")
+                                    }
+                                    Button(
+                                        onClick = {
+                                            showLogoutConfirm = false
+                                            scope.launch {
+                                                ApiClient.logout()
+                                                appState.logout()
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.error
+                                        )
+                                    ) {
+                                        Text("退出登录")
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        OutlinedButton(
+                            onClick = { showLogoutConfirm = true },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Text("退出登录")
+                        }
+                    }
+                    
+                    // ─── 注销账号 ───
+                    var showDeleteConfirm by remember { mutableStateOf(false) }
+                    var isDeleting by remember { mutableStateOf(false) }
+                    var deleteMessage by remember { mutableStateOf<String?>(null) }
+                    
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color(0xFFFFF8F8)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Text(
+                                text = "危险区域",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                text = "注销账号将删除您的所有数据（包括群组、联系人、聊天记录等），且无法恢复。该操作不可撤销。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = SilkColors.textSecondary
+                            )
+                            
+                            deleteMessage?.let { msg ->
+                                Text(
+                                    text = msg,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (msg.contains("成功")) Color(0xFF2E7D32) else Color(0xFFC62828)
+                                )
+                            }
+                            
+                            if (!showDeleteConfirm) {
+                                Button(
+                                    onClick = {
+                                        showDeleteConfirm = true
+                                        deleteMessage = null
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = MaterialTheme.colorScheme.error
+                                    )
+                                ) {
+                                    Text("注销账号")
+                                }
+                            } else {
+                                Text(
+                                    text = "确认注销？此操作不可撤销！",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            showDeleteConfirm = false
+                                            deleteMessage = null
+                                        }
+                                    ) {
+                                        Text("取消")
+                                    }
+                                    Button(
+                                        onClick = {
+                                            if (!isDeleting) {
+                                                scope.launch {
+                                                    isDeleting = true
+                                                    try {
+                                                        val response = ApiClient.deleteAccount(user.id)
+                                                        if (response.success) {
+                                                            deleteMessage = "账号已注销"
+                                                            delay(1500)
+                                                            appState.logout()
+                                                        } else {
+                                                            deleteMessage = response.message
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        deleteMessage = "注销失败: ${e.message}"
+                                                    } finally {
+                                                        isDeleting = false
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        enabled = !isDeleting,
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.error
+                                        )
+                                    ) {
+                                        if (isDeleting) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(16.dp),
+                                                color = Color.White,
+                                                strokeWidth = 2.dp
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                        }
+                                        Text("确认注销")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

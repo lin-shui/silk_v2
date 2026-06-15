@@ -664,7 +664,34 @@ object ApiClient {
      * 获取 APK 下载 URL
      */
     fun getApkDownloadUrl(): String = "$baseUrl/api/files/download-apk"
-    
+
+    /**
+     * 注销账号（删除用户及其所有数据）
+     */
+    suspend fun deleteAccount(userId: String): SimpleResponse = withContext(Dispatchers.IO) {
+        try {
+            val response = delete("/users/$userId/account")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("注销账号失败: $e")
+            SimpleResponse(false, "网络错误")
+        }
+    }
+
+    /**
+     * 登出
+     */
+    suspend fun logout(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"refreshToken":""}"""
+            post("/auth/logout", body)
+            true
+        } catch (e: Exception) {
+            println("登出请求失败: $e")
+            true // 即使失败也清除本地状态
+        }
+    }
+
     private fun post(endpoint: String, jsonBody: String): String {
         val url = URL("$baseUrl$endpoint")
         val connection = AndroidHttpCompat.openConnection(url)
