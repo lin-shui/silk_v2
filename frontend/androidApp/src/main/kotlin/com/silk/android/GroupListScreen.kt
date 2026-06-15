@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Contacts
 import androidx.compose.material.icons.filled.GroupAdd
 import androidx.compose.material.icons.filled.Logout
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartToy
@@ -53,6 +54,9 @@ fun GroupListScreen(appState: AppState) {
     var isDeleteMode by remember { mutableStateOf(false) }
     var selectedGroups by remember { mutableStateOf<Set<String>>(emptySet()) }
     var isDeleting by remember { mutableStateOf(false) }
+    
+    // 顶部栏下拉菜单
+    var showTopBarMenu by remember { mutableStateOf(false) }
     
     // 成员列表相关状态
     var showMembersDialog by remember { mutableStateOf(false) }
@@ -188,31 +192,19 @@ fun GroupListScreen(appState: AppState) {
                         }
                         
                         Row(
-                            modifier = Modifier
-                                .weight(1f, fill = false)
-                                .horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             if (isDeleteMode) {
-                                // 取消按钮
                                 IconButton(
                                     onClick = { 
                                         isDeleteMode = false
                                         selectedGroups = emptySet()
                                     },
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        contentColor = Color.White
-                                    )
+                                    colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White)
                                 ) {
-                                    Icon(
-                                        Icons.Default.Close, 
-                                        contentDescription = "取消",
-                                        modifier = Modifier.size(22.dp)
-                                    )
+                                    Icon(Icons.Default.Close, contentDescription = "取消", modifier = Modifier.size(22.dp))
                                 }
-                                
-                                // 确认退出按钮
                                 if (selectedGroups.isNotEmpty()) {
                                     IconButton(
                                         onClick = {
@@ -220,22 +212,12 @@ fun GroupListScreen(appState: AppState) {
                                                 scope.launch {
                                                     isDeleting = true
                                                     val userId = appState.currentUser?.id ?: return@launch
-                                                    
                                                     selectedGroups.forEach { groupId ->
-                                                        val response = ApiClient.leaveGroup(groupId, userId)
-                                                        println("退出群组 $groupId: ${response.message}")
+                                                        ApiClient.leaveGroup(groupId, userId)
                                                     }
-                                                    
-                                                    // 刷新群组列表
-                                                    val response = ApiClient.getUserGroups(userId)
-                                                    if (response.success) {
-                                                        groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
-                                                    }
-                                                    
-                                                    isDeleting = false
-                                                    isDeleteMode = false
-                                                    selectedGroups = emptySet()
-                                                    
+                                                    val r = ApiClient.getUserGroups(userId)
+                                                    if (r.success) groups = (r.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
+                                                    isDeleting = false; isDeleteMode = false; selectedGroups = emptySet()
                                                     Toast.makeText(context, "已退出 ${selectedGroups.size} 个群组", Toast.LENGTH_SHORT).show()
                                                 }
                                             }
@@ -245,84 +227,14 @@ fun GroupListScreen(appState: AppState) {
                                         )
                                     ) {
                                         if (isDeleting) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(20.dp),
-                                                color = Color.White,
-                                                strokeWidth = 2.dp
-                                            )
+                                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
                                         } else {
-                                            Icon(
-                                                Icons.Default.Check, 
-                                                contentDescription = "确认退出",
-                                                modifier = Modifier.size(22.dp)
-                                            )
+                                            Icon(Icons.Default.Check, contentDescription = "确认退出", modifier = Modifier.size(22.dp))
                                         }
                                     }
                                 }
-                                
-                                // 显示选中数量
-                                Text(
-                                    text = "已选${selectedGroups.size}个",
-                                    color = Color.White,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
+                                Text(text = "已选${selectedGroups.size}个", color = Color.White, style = MaterialTheme.typography.bodyMedium)
                             } else {
-                                // 退出模式按钮
-                                IconButton(
-                                    onClick = { isDeleteMode = true },
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        contentColor = Color.White
-                                    )
-                                ) {
-                                    Icon(
-                                        Icons.Default.Remove, 
-                                        contentDescription = "退出群组",
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                                
-                                // 升级按钮 - 图标按钮
-                                IconButton(
-                                    onClick = { showUpgradeDialog = true },
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        contentColor = Color.White
-                                    )
-                                ) {
-                                    Icon(
-                                        Icons.Default.SystemUpdate, 
-                                        contentDescription = "升级",
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                                
-                                // 创建群组按钮 - 图标按钮
-                                IconButton(
-                                    onClick = { showCreateDialog = true },
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        contentColor = Color.White
-                                    )
-                                ) {
-                                    Icon(
-                                        Icons.Default.Add, 
-                                        contentDescription = "创建",
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                                
-                                // 加入群组按钮 - 图标按钮
-                                IconButton(
-                                    onClick = { showJoinDialog = true },
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        contentColor = Color.White
-                                    )
-                                ) {
-                                    Icon(
-                                        Icons.Default.GroupAdd, 
-                                        contentDescription = "加入",
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                                
                                 // 🤖 与 Silk 对话按钮
                                 IconButton(
                                     onClick = {
@@ -330,65 +242,66 @@ fun GroupListScreen(appState: AppState) {
                                             val userId = appState.currentUser?.id ?: return@launch
                                             val response = ApiClient.startSilkPrivateChat(userId)
                                             if (response.success && response.group != null) {
-                                                println("✅ 打开与 Silk 的对话: ${response.group!!.name}")
                                                 appState.selectGroup(response.group!!)
                                             } else {
-                                                println("❌ 打开 Silk 对话失败: ${response.message}")
                                                 Toast.makeText(context, response.message, Toast.LENGTH_SHORT).show()
                                             }
                                         }
                                     },
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        contentColor = Color(0xFF7BA8C9) // 蓝色，区别于其他按钮
-                                    )
+                                    colors = IconButtonDefaults.iconButtonColors(contentColor = Color(0xFF7BA8C9))
                                 ) {
-                                    Icon(
-                                        Icons.Default.SmartToy,
-                                        contentDescription = "与 Silk 对话",
-                                        modifier = Modifier.size(22.dp)
-                                    )
+                                    Icon(Icons.Default.SmartToy, contentDescription = "与 Silk 对话", modifier = Modifier.size(22.dp))
                                 }
-                                
-                                // 联系人按钮 - 图标按钮
-                                IconButton(
-                                    onClick = { appState.navigateTo(Scene.CONTACTS) },
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        contentColor = Color.White
-                                    )
-                                ) {
-                                    Icon(
-                                        Icons.Default.Contacts, 
-                                        contentDescription = "联系人",
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                                
-                                // 设置按钮 - 图标按钮
-                                IconButton(
-                                    onClick = { appState.navigateTo(Scene.SETTINGS) },
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        contentColor = Color.White
-                                    )
-                                ) {
-                                    Icon(
-                                        Icons.Default.Settings, 
-                                        contentDescription = "设置",
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                                
-                                // 登出按钮 - 图标按钮
-                                IconButton(
-                                    onClick = { appState.logout() },
-                                    colors = IconButtonDefaults.iconButtonColors(
-                                        contentColor = Color.White.copy(alpha = 0.8f)
-                                    )
-                                ) {
-                                    Icon(
-                                        Icons.Default.Logout, 
-                                        contentDescription = "登出",
-                                        modifier = Modifier.size(22.dp)
-                                    )
+                                // ☰ 下拉菜单
+                                Box {
+                                    IconButton(
+                                        onClick = { showTopBarMenu = true },
+                                        colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White.copy(alpha = 0.9f))
+                                    ) {
+                                        Icon(Icons.Default.Menu, contentDescription = "更多", modifier = Modifier.size(22.dp))
+                                    }
+                                    DropdownMenu(
+                                        expanded = showTopBarMenu,
+                                        onDismissRequest = { showTopBarMenu = false }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("退出/删除群组") },
+                                            onClick = { showTopBarMenu = false; isDeleteMode = true },
+                                            leadingIcon = { Icon(Icons.Default.Remove, contentDescription = null) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("创建群组") },
+                                            onClick = { showTopBarMenu = false; showCreateDialog = true },
+                                            leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("加入群组") },
+                                            onClick = { showTopBarMenu = false; showJoinDialog = true },
+                                            leadingIcon = { Icon(Icons.Default.GroupAdd, contentDescription = null) }
+                                        )
+                                        Divider()
+                                        DropdownMenuItem(
+                                            text = { Text("升级") },
+                                            onClick = { showTopBarMenu = false; showUpgradeDialog = true },
+                                            leadingIcon = { Icon(Icons.Default.SystemUpdate, contentDescription = null) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("联系人") },
+                                            onClick = { showTopBarMenu = false; appState.navigateTo(Scene.CONTACTS) },
+                                            leadingIcon = { Icon(Icons.Default.Contacts, contentDescription = null) }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("设置") },
+                                            onClick = { showTopBarMenu = false; appState.navigateTo(Scene.SETTINGS) },
+                                            leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                                        )
+                                        Divider()
+                                        DropdownMenuItem(
+                                            text = { Text("退出登录", color = Color(0xFFe74c3c)) },
+                                            onClick = { showTopBarMenu = false; appState.logout() },
+                                            leadingIcon = { Icon(Icons.Default.Logout, contentDescription = null, tint = Color(0xFFe74c3c)) }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -842,13 +755,15 @@ fun GroupCard(
 
                     Spacer(modifier = Modifier.width(6.dp))
 
-                    // 邀请码
-                    Text(
-                        text = "[${group.invitationCode}]",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = SilkColors.textSecondary,
-                        letterSpacing = 1.sp
-                    )
+                    // 邀请码（Silk 专属对话不显示）
+                    if (!group.name.startsWith("[Silk]")) {
+                        Text(
+                            text = "[${group.invitationCode}]",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SilkColors.textSecondary,
+                            letterSpacing = 1.sp
+                        )
+                    }
                 }
 
                 // 右侧按钮区域
@@ -865,7 +780,8 @@ fun GroupCard(
                         )
                     }
 
-                    if (!isDeleteMode && onMembersClick != null) {
+                    // 👥 成员按钮（Silk 专属对话不显示）
+                    if (!isDeleteMode && onMembersClick != null && !group.name.startsWith("[Silk]")) {
                         Surface(
                             onClick = { onMembersClick() },
                             color = SilkColors.secondary.copy(alpha = 0.5f),

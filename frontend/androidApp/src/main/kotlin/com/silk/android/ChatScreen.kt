@@ -900,41 +900,45 @@ fun ChatScreen(appState: AppState) {
                                     enabled = !isUploading
                                 )
 
-                                // ➕ 添加成员
-                                DropdownMenuItem(
-                                    text = { Text("添加成员") },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        scope.launch {
-                                            isLoadingContacts = true
-                                            val contactsResponse = ApiClient.getContacts(user.id)
-                                            contacts = contactsResponse.contacts ?: emptyList()
-                                            val membersResponse = ApiClient.getGroupMembers(group.id)
-                                            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                                            isLoadingContacts = false
-                                            showAddMemberDialog = true
-                                        }
-                                    },
-                                    leadingIcon = { Text("➕", fontSize = 14.sp) }
-                                )
+                                // ➕ 添加成员（Silk 专属对话不显示）
+                                if (!group.name.startsWith("[Silk]")) {
+                                    DropdownMenuItem(
+                                        text = { Text("添加成员") },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            scope.launch {
+                                                isLoadingContacts = true
+                                                val contactsResponse = ApiClient.getContacts(user.id)
+                                                contacts = contactsResponse.contacts ?: emptyList()
+                                                val membersResponse = ApiClient.getGroupMembers(group.id)
+                                                groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                                                isLoadingContacts = false
+                                                showAddMemberDialog = true
+                                            }
+                                        },
+                                        leadingIcon = { Text("➕", fontSize = 14.sp) }
+                                    )
+                                }
 
-                                // 👥 查看成员
-                                DropdownMenuItem(
-                                    text = { Text("群组成员") },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        scope.launch {
-                                            isLoadingContacts = true
-                                            val contactsResponse = ApiClient.getContacts(user.id)
-                                            contacts = contactsResponse.contacts ?: emptyList()
-                                            val membersResponse = ApiClient.getGroupMembers(group.id)
-                                            groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                                            isLoadingContacts = false
-                                            showMembersDialog = true
-                                        }
-                                    },
-                                    leadingIcon = { Text("👥", fontSize = 14.sp) }
-                                )
+                                // 👥 查看成员（Silk 专属对话不显示）
+                                if (!group.name.startsWith("[Silk]")) {
+                                    DropdownMenuItem(
+                                        text = { Text("群组成员") },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            scope.launch {
+                                                isLoadingContacts = true
+                                                val contactsResponse = ApiClient.getContacts(user.id)
+                                                contacts = contactsResponse.contacts ?: emptyList()
+                                                val membersResponse = ApiClient.getGroupMembers(group.id)
+                                                groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                                                isLoadingContacts = false
+                                                showMembersDialog = true
+                                            }
+                                        },
+                                        leadingIcon = { Text("👥", fontSize = 14.sp) }
+                                    )
+                                }
                             }
                         }
                     }
