@@ -24,6 +24,8 @@ import org.jetbrains.compose.web.css.bottom
 import org.jetbrains.compose.web.css.color
 import org.jetbrains.compose.web.css.display
 import org.jetbrains.compose.web.css.flexDirection
+import org.jetbrains.compose.web.css.flexGrow
+import org.jetbrains.compose.web.css.fontFamily
 import org.jetbrains.compose.web.css.fontSize
 import org.jetbrains.compose.web.css.fontWeight
 import org.jetbrains.compose.web.css.height
@@ -47,6 +49,12 @@ import org.jetbrains.compose.web.dom.Input
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
 import org.jetbrains.compose.web.dom.TextArea
+
+private enum class KnowledgeEditorMode(val label: String) {
+    EDIT("编辑"),
+    PREVIEW("预览"),
+    SPLIT("分栏"),
+}
 
 @Composable
 private fun TopicSidebar(
@@ -213,7 +221,9 @@ private fun KnowledgeEditorPane(
     editorContent: String,
     isSaving: Boolean,
     saveMessage: String,
+    editorMode: KnowledgeEditorMode,
     onContentChange: (String) -> Unit,
+    onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onSave: () -> Unit,
     onExport: () -> Unit,
 ) {
@@ -232,26 +242,178 @@ private fun KnowledgeEditorPane(
                 title = selectedEntry.title,
                 isSaving = isSaving,
                 saveMessage = saveMessage,
+                editorMode = editorMode,
+                onEditorModeChange = onEditorModeChange,
                 onSave = onSave,
                 onExport = onExport,
             )
-            TextArea {
-                value(editorContent)
-                onInput { event -> onContentChange(event.value) }
-                attr("placeholder", "在这里输入 Markdown 内容...")
-                style {
-                    property("flex", "1")
-                    width(100.percent)
-                    border(0.px)
-                    padding(16.px)
-                    fontSize(14.px)
-                    property("font-family", "monospace")
-                    property("resize", "none")
-                    property("outline", "none")
-                    backgroundColor(Color(SilkColors.background))
-                    color(Color(SilkColors.textPrimary))
+            KnowledgeMarkdownWorkspace(
+                content = editorContent,
+                onContentChange = onContentChange,
+                editorMode = editorMode,
+                onSave = onSave,
+            )
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeMarkdownWorkspace(
+    content: String,
+    onContentChange: (String) -> Unit,
+    editorMode: KnowledgeEditorMode,
+    onSave: () -> Unit,
+) {
+    Div({
+        style {
+            property("flex", "1")
+            display(DisplayStyle.Flex)
+            flexDirection(if (editorMode == KnowledgeEditorMode.SPLIT) FlexDirection.Row else FlexDirection.Column)
+            backgroundColor(Color(SilkColors.background))
+            minWidth(0.px)
+            property("min-height", "0")
+        }
+    }) {
+        if (editorMode != KnowledgeEditorMode.PREVIEW) {
+            MarkdownSourcePane(
+                content = content,
+                onContentChange = onContentChange,
+                onSave = onSave,
+                isSplit = editorMode == KnowledgeEditorMode.SPLIT,
+            )
+        }
+        if (editorMode != KnowledgeEditorMode.EDIT) {
+            MarkdownPreviewPane(
+                content = content,
+                isSplit = editorMode == KnowledgeEditorMode.SPLIT,
+            )
+        }
+    }
+}
+
+private fun shouldSaveKnowledgeEntry(event: org.jetbrains.compose.web.events.SyntheticKeyboardEvent): Boolean {
+    return (event.metaKey || event.ctrlKey) && event.key.equals("s", ignoreCase = true)
+}
+
+@Composable
+private fun MarkdownSourcePane(
+    content: String,
+    onContentChange: (String) -> Unit,
+    onSave: () -> Unit,
+    isSplit: Boolean,
+) {
+    Div({
+        style {
+            flexGrow(1)
+            minWidth(0.px)
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("min-height", "0")
+            if (isSplit) {
+                property("border-right", "1px solid ${SilkColors.border}")
+            }
+        }
+    }) {
+        KnowledgePaneHeader(
+            title = "Markdown",
+            detail = "Cmd/Ctrl+S 保存",
+        )
+        TextArea {
+            value(content)
+            onInput { onContentChange(it.value) }
+            onKeyDown { event ->
+                if (shouldSaveKnowledgeEntry(event)) {
+                    event.preventDefault()
+                    onSave()
                 }
             }
+            attr("placeholder", "在这里输入 Markdown 内容...")
+            style {
+                flexGrow(1)
+                minWidth(0.px)
+                border(0.px)
+                borderRadius(0.px)
+                padding(16.px)
+                fontSize(14.px)
+                property("line-height", "1.7")
+                fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
+                backgroundColor(Color("#FFFDF8"))
+                color(Color(SilkColors.textPrimary))
+                property("box-sizing", "border-box")
+                property("resize", "none")
+                property("outline", "none")
+                property("white-space", "pre-wrap")
+                property("overflow-y", "auto")
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownPreviewPane(
+    content: String,
+    isSplit: Boolean,
+) {
+    Div({
+        style {
+            flexGrow(1)
+            minWidth(0.px)
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("min-height", "0")
+            backgroundColor(Color(SilkColors.surface))
+        }
+    }) {
+        KnowledgePaneHeader(
+            title = "预览",
+            detail = if (content.isBlank()) "支持公式、代码、表格" else null,
+        )
+        Div({
+            style {
+                flexGrow(1)
+                minWidth(0.px)
+                padding(16.px)
+                property("overflow-y", "auto")
+                if (!isSplit) {
+                    property("border-top", "1px solid ${SilkColors.border}")
+                }
+            }
+        }) {
+            if (content.isBlank()) {
+                KnowledgeCenteredMessage("输入 Markdown 后这里会实时渲染", SilkColors.textLight, 24.px)
+            } else {
+                MarkdownContent(content = content)
+            }
+        }
+    }
+}
+
+@Composable
+private fun KnowledgePaneHeader(title: String, detail: String?) {
+    Div({
+        style {
+            padding(10.px, 16.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.SpaceBetween)
+            alignItems(AlignItems.Center)
+            backgroundColor(Color(SilkColors.surfaceElevated))
+        }
+    }) {
+        Span({
+            style {
+                fontSize(12.px)
+                fontWeight("500")
+                color(Color(SilkColors.textSecondary))
+            }
+        }) { Text(title) }
+        if (!detail.isNullOrBlank()) {
+            Span({
+                style {
+                    fontSize(12.px)
+                    color(Color(SilkColors.textLight))
+                }
+            }) { Text(detail) }
         }
     }
 }
@@ -261,6 +423,8 @@ private fun KnowledgeEditorToolbar(
     title: String,
     isSaving: Boolean,
     saveMessage: String,
+    editorMode: KnowledgeEditorMode,
+    onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onSave: () -> Unit,
     onExport: () -> Unit,
 ) {
@@ -278,8 +442,12 @@ private fun KnowledgeEditorToolbar(
             style { fontSize(16.px); fontWeight("600"); color(Color(SilkColors.textPrimary)) }
         }) { Text(title) }
         Div({
-            style { display(DisplayStyle.Flex); property("gap", "8px"); alignItems(AlignItems.Center) }
+            style { display(DisplayStyle.Flex); property("gap", "12px"); alignItems(AlignItems.Center) }
         }) {
+            KnowledgeEditorModeSwitch(
+                selectedMode = editorMode,
+                onModeChange = onEditorModeChange,
+            )
             if (saveMessage.isNotEmpty()) {
                 Span({ style { fontSize(12.px); color(Color(SilkColors.success)) } }) { Text(saveMessage) }
             }
@@ -293,6 +461,40 @@ private fun KnowledgeEditorToolbar(
                 background = SilkColors.info,
                 onClick = onExport,
             )
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeEditorModeSwitch(
+    selectedMode: KnowledgeEditorMode,
+    onModeChange: (KnowledgeEditorMode) -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("overflow", "hidden")
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            borderRadius(7.px)
+            backgroundColor(Color(SilkColors.surface))
+        }
+    }) {
+        KnowledgeEditorMode.entries.forEach { mode ->
+            Button({
+                style {
+                    backgroundColor(Color(if (selectedMode == mode) SilkColors.primary else SilkColors.surface))
+                    color(Color(if (selectedMode == mode) "#FFFFFF" else SilkColors.textSecondary))
+                    border(0.px)
+                    borderRadius(0.px)
+                    padding(6.px, 12.px)
+                    property("cursor", "pointer")
+                    fontSize(12.px)
+                    fontWeight(if (selectedMode == mode) "600" else "500")
+                    property("min-width", "52px")
+                }
+                onClick { onModeChange(mode) }
+            }) { Text(mode.label) }
         }
     }
 }
@@ -568,6 +770,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var editorContent by remember { mutableStateOf("") }
     var isSaving by remember { mutableStateOf(false) }
     var saveMessage by remember { mutableStateOf("") }
+    var editorMode by remember { mutableStateOf(KnowledgeEditorMode.SPLIT) }
 
     LaunchedEffect(user.id) {
         isLoading = true
@@ -620,7 +823,14 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             editorContent = editorContent,
             isSaving = isSaving,
             saveMessage = saveMessage,
-            onContentChange = { editorContent = it },
+            editorMode = editorMode,
+            onContentChange = {
+                editorContent = it
+                if (saveMessage.isNotEmpty()) {
+                    saveMessage = ""
+                }
+            },
+            onEditorModeChange = { editorMode = it },
             onSave = {
                 scope.launch {
                     saveKnowledgeEntry(
