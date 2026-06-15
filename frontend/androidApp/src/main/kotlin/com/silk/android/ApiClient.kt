@@ -267,6 +267,18 @@ object ApiClient {
             HuaweiAuthResponse(false, "网络错误: ${e.message}")
         }
     }
+
+    suspend fun huaweiBind(code: String, redirectUri: String): HuaweiAuthResponse = withContext(Dispatchers.IO) {
+        try {
+            val escapedUri = redirectUri.replace("\\", "\\\\").replace("\"", "\\\"")
+            val body = """{"code":"$code","redirectUri":"$escapedUri"}"""
+            val response = post("/api/account/bind-huawei", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("华为账号绑定失败: $e")
+            HuaweiAuthResponse(false, "网络错误: ${e.message}")
+        }
+    }
     
     suspend fun updateUserProfile(userId: String, fullName: String): SimpleResponse = withContext(Dispatchers.IO) {
         try {

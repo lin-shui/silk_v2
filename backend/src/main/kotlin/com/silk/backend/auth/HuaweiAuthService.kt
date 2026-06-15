@@ -53,6 +53,58 @@ object HuaweiAuthService {
     }
 
     /**
+     * 将华为账号绑定到已有用户（老账号迁移）
+     * 老用户登录后，调用此方法将华为 openId 绑定到其 userId
+     */
+    fun bindToUser(code: String, redirectUri: String, userId: String): AuthResult {
+        val clientId = EnvLoader.get("HUAWEI_OAUTH_CLIENT_ID")
+            ?: return AuthResult(false, "华为 OAuth 未配置（缺少 CLIENT_ID）")
+        val clientSecret = EnvLoader.get("HUAWEI_OAUTH_CLIENT_SECRET")
+            ?: return AuthResult(false, "华为 OAuth 未配置（缺少 CLIENT_SECRET）")
+
+        // 1. 交换 code 获取华为用户信息
+        val huaweiUser = HuaweiTokenVerifier.exchangeCodeForUserInfo(
+            code = code,
+            clientId = clientId,
+            clientSecret = clientSecret,
+            redirectUri = redirectUri
+        ) ?: return AuthResult(false, "华为账号验证失败")
+
+        // 2. 检查该华为账号是否已被其他用户绑定
+        val existingBinding = HuaweiAccountRepository.findByOpenId(huaweiUser.openId)
+        if (existingBinding != null) {
+            if (existingBinding.userId == userId) {
+                return AuthResult(true, "该华为账号已绑定到当前用户")
+            }
+            return AuthResult(false, "该华为账号已被其他用户绑定")
+        }
+
+        // 3. 检查当前用户是否已绑定其他华为账号
+        val userBinding = HuaweiAccountRepository.findByUserId(userId)
+        if (userBinding != null) {
+            return AuthResult(false, "当前用户已绑定华为账号，请先解绑")
+        }
+
+        // 4. 创建绑定
+        val silkUser = UserRepository.findUserById(userId)
+            ?: return AuthResult(false, "用户不存在")
+
+        HuaweiAccountRepository.create(
+            openId = huaweiUser.openId,
+            userId = userId,
+            huaweiName = huaweiUser.name,
+            huaweiAvatar = huaweiUser.avatar
+        )
+        logger.info("✅ 华为账号绑定成功: userId={}, openId={}", userId, huaweiUser.openId)
+
+        return AuthResult(
+            success = true,
+            message = "华为账号绑定成功",
+            user = silkUser
+        )
+    }
+
+    /**
      * 核心逻辑：根据华为用户信息登录或创建 Silk 用户
      */
     private fun loginOrCreateUser(huaweiUser: HuaweiUserInfo): AuthResult {

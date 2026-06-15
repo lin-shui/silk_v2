@@ -45,11 +45,8 @@ fun LoginScreen(appState: AppState) {
     val context = LocalContext.current
     val activity = LocalContext.current as? Activity
     
-    var isLogin by remember { mutableStateOf(true) }
     var loginName by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var fullName by remember { mutableStateOf("") }
-    var phoneNumber by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
     
@@ -58,9 +55,14 @@ fun LoginScreen(appState: AppState) {
     var huaweiOAuthState by remember { mutableStateOf("") }
     var huaweiOAuthUrl by remember { mutableStateOf("") }
     var huaweiOAuthRedirectUri by remember { mutableStateOf("") }
+    // true=登录模式, false=绑定模式（老账号迁移）
+    var huaweiOAuthMode by remember { mutableStateOf(true) }
     
     // 防止重复处理回调（shouldOverrideUrlLoading 和 onPageStarted 都会触发）
     var huaweiOAuthHandled = false
+    
+    // 绑定引导对话框
+    var showBindPrompt by remember { mutableStateOf(false) }
 
     // 华为 OAuth 回调处理器
     fun handleHuaweiOAuthCallback(url: String) {
@@ -95,17 +97,31 @@ fun LoginScreen(appState: AppState) {
             isLoading = true
             errorMessage = ""
             try {
-                val response = ApiClient.huaweiWebLogin(code, huaweiOAuthRedirectUri)
-                if (response.success && response.user != null) {
-                    println("✅ [华为登录] 成功: ${response.user.fullName}, isNewUser=${response.isNewUser}")
-                    appState.setHuaweiSession(
-                        user = response.user,
-                        accessToken = response.accessToken ?: "",
-                        refreshToken = response.refreshToken ?: "",
-                        isNewUser = response.isNewUser
-                    )
+                if (huaweiOAuthMode) {
+                    // 登录模式
+                    val response = ApiClient.huaweiWebLogin(code, huaweiOAuthRedirectUri)
+                    if (response.success && response.user != null) {
+                        println("✅ [华为登录] 成功: ${response.user.fullName}, isNewUser=${response.isNewUser}")
+                        appState.setHuaweiSession(
+                            user = response.user,
+                            accessToken = response.accessToken ?: "",
+                            refreshToken = response.refreshToken ?: "",
+                            isNewUser = response.isNewUser
+                        )
+                    } else {
+                        errorMessage = response.message.ifBlank { "华为账号登录失败" }
+                    }
                 } else {
-                    errorMessage = response.message.ifBlank { "华为账号登录失败" }
+                    // 绑定模式（老账号迁移）
+                    val response = ApiClient.huaweiBind(code, huaweiOAuthRedirectUri)
+                    if (response.success) {
+                        println("✅ [华为绑定] 成功")
+                        errorMessage = ""
+                        showBindPrompt = false
+                        Toast.makeText(context, "华为账号绑定成功", Toast.LENGTH_SHORT).show()
+                    } else {
+                        errorMessage = response.message.ifBlank { "华为账号绑定失败" }
+                    }
                 }
             } catch (e: Exception) {
                 println("❌ [华为登录] 失败: ${e.message}")
@@ -194,7 +210,7 @@ fun LoginScreen(appState: AppState) {
                 ) {
                     // 标题
                     Text(
-                        text = if (isLogin) "欢迎回来" else "创建账户",
+                        text = "欢迎回来",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.SemiBold,
                         color = SilkColors.textPrimary,
@@ -235,52 +251,12 @@ fun LoginScreen(appState: AppState) {
                         visualTransformation = PasswordVisualTransformation(),
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Password,
-                            imeAction = if (isLogin) ImeAction.Done else ImeAction.Next
+                            imeAction = ImeAction.Done
                         ),
                         keyboardActions = KeyboardActions(
-                            onNext = { focusManager.moveFocus(FocusDirection.Down) },
-                            onDone = {
-                                if (isLogin) {
-                                    focusManager.clearFocus()
-                                }
-                            }
+                            onDone = { focusManager.clearFocus() }
                         )
                     )
-                    
-                    // 注册时的额外字段
-                    if (!isLogin) {
-                        OutlinedTextField(
-                            value = fullName,
-                            onValueChange = { fullName = it; errorMessage = "" },
-                            label = { Text("姓名") },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isLoading,
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Text,
-                                imeAction = ImeAction.Next
-                            ),
-                            keyboardActions = KeyboardActions(
-                                onNext = { focusManager.moveFocus(FocusDirection.Down) }
-                            )
-                        )
-                        
-                        OutlinedTextField(
-                            value = phoneNumber,
-                            onValueChange = { phoneNumber = it; errorMessage = "" },
-                            label = { Text("手机号") },
-                            modifier = Modifier.fillMaxWidth(),
-                            enabled = !isLoading,
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Phone,
-                                imeAction = ImeAction.Done
-                            ),
-                            keyboardActions = KeyboardActions(
-                                onDone = { focusManager.clearFocus() }
-                            )
-                        )
-                    }
                     
                     // 错误提示
                     if (errorMessage.isNotEmpty()) {
@@ -293,7 +269,7 @@ fun LoginScreen(appState: AppState) {
                     
                     Spacer(modifier = Modifier.height(8.dp))
                     
-                    // 登录/注册按钮 - Silk 金色风格
+                    // 登录按钮 - Silk 金色风格
                     Button(
                         onClick = {
                             scope.launch {
@@ -301,20 +277,18 @@ fun LoginScreen(appState: AppState) {
                                 errorMessage = ""
                                 
                                 try {
-                                    val response = if (isLogin) {
-                                        ApiClient.login(loginName, password)
-                                    } else {
-                                        ApiClient.register(loginName, fullName, phoneNumber, password)
-                                    }
+                                    val response = ApiClient.login(loginName, password)
                                     
                                     if (response.success && response.user != null) {
-                                        println("${if (isLogin) "登录" else "注册"}成功: ${response.user.fullName}")
+                                        println("登录成功: ${response.user.fullName}")
                                         appState.setUser(response.user)
+                                        // 登录成功后提示绑定华为账号
+                                        showBindPrompt = true
                                     } else {
                                         errorMessage = response.message
                                     }
                                 } catch (e: Exception) {
-                                    errorMessage = "操作失败: ${e.message}"
+                                    errorMessage = "登录失败: ${e.message}"
                                 } finally {
                                     isLoading = false
                                 }
@@ -323,8 +297,7 @@ fun LoginScreen(appState: AppState) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp),
-                        enabled = !isLoading && loginName.isNotBlank() && password.isNotBlank() &&
-                                (isLogin || (fullName.isNotBlank() && phoneNumber.isNotBlank())),
+                        enabled = !isLoading && loginName.isNotBlank() && password.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = SilkColors.primary,
                             contentColor = androidx.compose.ui.graphics.Color.White,
@@ -342,31 +315,12 @@ fun LoginScreen(appState: AppState) {
                             Spacer(modifier = Modifier.width(8.dp))
                         }
                         Text(
-                            text = if (isLoading) "处理中..." else if (isLogin) "登录" else "注册",
+                            text = if (isLoading) "登录中..." else "登录",
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
                     
-                    // 切换登录/注册
-                    TextButton(
-                        onClick = {
-                            if (!isLoading) {
-                                isLogin = !isLogin
-                                errorMessage = ""
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !isLoading,
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = SilkColors.primary
-                        )
-                    ) {
-                        Text(
-                            text = if (isLogin) "没有账号？点击注册" else "已有账号？点击登录",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
                     
                     // 分隔线
                     Divider(
@@ -392,6 +346,7 @@ fun LoginScreen(appState: AppState) {
                             }
                             println("🔑 [华为OAuth] 打开 WebView: $authUrl")
                             huaweiOAuthUrl = authUrl
+                            huaweiOAuthMode = true  // 登录模式
                             showHuaweiWebView = true
                         },
                         modifier = Modifier
@@ -566,6 +521,62 @@ fun LoginScreen(appState: AppState) {
                 dismissButton = {
                     TextButton(onClick = { showHuaweiWebView = false; huaweiOAuthHandled = false }) {
                         Text("取消", color = SilkColors.textSecondary)
+                    }
+                }
+            )
+        }
+        
+        // 华为账号绑定引导对话框
+        if (showBindPrompt) {
+            AlertDialog(
+                onDismissRequest = { showBindPrompt = false },
+                title = {
+                    Text(
+                        text = "绑定华为账号",
+                        fontWeight = FontWeight.Bold,
+                        color = SilkColors.primary
+                    )
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            text = "将华为账号绑定到当前账户后，下次可直接点击\"使用华为帐号登录\"一键登录，无需再输入密码。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = SilkColors.textSecondary
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showBindPrompt = false
+                            // 以绑定模式打开华为 OAuth WebView
+                            val clientId = BuildConfig.HUAWEI_OAUTH_CLIENT_ID.ifBlank { "117992035" }
+                            huaweiOAuthRedirectUri = "https://${BuildConfig.BACKEND_HOST}:${BuildConfig.FRONTEND_HTTP_PORT}"
+                            val state = (1..32).map { "abcdefghijklmnopqrstuvwxyz0123456789".random() }.joinToString("")
+                            huaweiOAuthState = state
+                            huaweiOAuthMode = false  // 绑定模式
+                            val authUrl = buildString {
+                                append("https://oauth-login.cloud.huawei.com/oauth2/v3/authorize")
+                                append("?client_id=").append(java.net.URLEncoder.encode(clientId, "UTF-8"))
+                                append("&response_type=code")
+                                append("&redirect_uri=").append(java.net.URLEncoder.encode(huaweiOAuthRedirectUri, "UTF-8"))
+                                append("&scope=openid+profile")
+                                append("&state=").append(state)
+                            }
+                            huaweiOAuthUrl = authUrl
+                            showHuaweiWebView = true
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = Color(0xFFCF0A2C)  // 华为红
+                        )
+                    ) {
+                        Text("立即绑定")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showBindPrompt = false }) {
+                        Text("稍后再说", color = SilkColors.textSecondary)
                     }
                 }
             )

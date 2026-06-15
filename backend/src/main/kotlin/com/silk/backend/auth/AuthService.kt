@@ -13,47 +13,11 @@ object AuthService {
     /**
      * 注册新用户
      */
+    /**
+     * 注册已关闭：新用户请使用华为帐号登录
+     */
     fun register(request: RegisterRequest): AuthResponse {
-        // 验证输入
-        if (request.loginName.isBlank()) {
-            return AuthResponse(false, "登录名不能为空")
-        }
-        if (request.fullName.isBlank()) {
-            return AuthResponse(false, "姓名不能为空")
-        }
-        if (request.phoneNumber.isBlank()) {
-            return AuthResponse(false, "手机号不能为空")
-        }
-        if (request.password.length < 6) {
-            return AuthResponse(false, "密码至少需要6位字符")
-        }
-        
-        // 检查登录名是否已存在
-        if (UserRepository.loginNameExists(request.loginName)) {
-            return AuthResponse(false, "该登录名已被使用")
-        }
-        
-        // 检查手机号是否已存在
-        if (UserRepository.phoneNumberExists(request.phoneNumber)) {
-            return AuthResponse(false, "该手机号已被注册")
-        }
-        
-        // 生成密码哈希
-        val passwordHash = BCrypt.hashpw(request.password, BCrypt.gensalt(12))
-        
-        // 创建用户
-        val user = UserRepository.createUser(
-            loginName = request.loginName,
-            fullName = request.fullName,
-            phoneNumber = request.phoneNumber,
-            passwordHash = passwordHash
-        )
-        
-        return if (user != null) {
-            AuthResponse(true, "注册成功", user)
-        } else {
-            AuthResponse(false, "注册失败，请稍后重试")
-        }
+        return AuthResponse(false, "注册已关闭，请使用华为帐号登录")
     }
     
     /**

@@ -367,6 +367,20 @@ object ApiClient {
     }
 
     /**
+     * 华为 OAuth 账号绑定：将华为账号绑定到当前登录用户
+     */
+    suspend fun huaweiBind(code: String, redirectUri: String): AuthResponse {
+        return try {
+            val body = """{"code":"$code","redirectUri":"$redirectUri"}"""
+            val response = post("/api/account/bind-huawei", body)
+            jsonParser.decodeFromString<AuthResponse>(response)
+        } catch (e: Exception) {
+            console.log("华为绑定失败:", e)
+            AuthResponse(false, "绑定失败: ${e.message}")
+        }
+    }
+
+    /**
      * 微信 OAuth 登录：发送 code 到后端交换 token
      * 适用于 Web 端扫码登录和 Android 端 SDK 登录
      */
@@ -378,6 +392,20 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("微信登录失败:", e)
             WechatAuthResponse(false, "登录失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 用户名/密码登录
+     */
+    suspend fun login(loginName: String, password: String): AuthResponse {
+        return try {
+            val body = """{"loginName":"$loginName","password":"$password"}"""
+            val response = post("/auth/login", body)
+            jsonParser.decodeFromString<AuthResponse>(response)
+        } catch (e: Exception) {
+            console.log("登录失败:", e)
+            AuthResponse(false, "登录失败: ${e.message}")
         }
     }
 

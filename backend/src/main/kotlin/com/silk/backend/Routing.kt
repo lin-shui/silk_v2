@@ -36,6 +36,7 @@ import com.silk.backend.auth.JwtProvider
 import com.silk.backend.auth.isPublicPath
 import com.silk.backend.database.HuaweiWebLoginRequest
 import com.silk.backend.database.HuaweiLoginRequest
+import com.silk.backend.database.HuaweiBindRequest
 import com.silk.backend.database.RefreshTokenRequest
 import com.silk.backend.database.LogoutRequest
 import com.silk.backend.database.HuaweiAuthResponse
@@ -1189,7 +1190,34 @@ fun Application.configureRouting() {
                 call.respond(HttpStatusCode.BadRequest, HuaweiAuthResponse(false, "请求格式错误"))
             }
         }
-        
+
+        /**
+         * 华为 OAuth 账号绑定（老账号迁移，需 JWT 鉴权）
+         * 老用户登录后，将华为账号绑定到当前 userId
+         */
+        post("/api/account/bind-huawei") {
+            try {
+                val request = call.receive<HuaweiBindRequest>()
+                // 从 JWT 中获取当前用户 ID
+                val authHeader = call.request.headers[HttpHeaders.Authorization]
+                val token = authHeader?.removePrefix("Bearer ")?.trim()
+                val userId = if (token != null) JwtProvider.verifyAccessToken(token) else null
+                if (userId == null) {
+                    call.respond(HttpStatusCode.Unauthorized, HuaweiAuthResponse(false, "未登录"))
+                    return@post
+                }
+                val result = HuaweiAuthService.bindToUser(request.code, request.redirectUri, userId)
+                if (result.success) {
+                    call.respond(HuaweiAuthResponse(success = true, message = result.message))
+                } else {
+                    call.respond(HttpStatusCode.BadRequest, HuaweiAuthResponse(false, result.message))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 华为账号绑定失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, HuaweiAuthResponse(false, "请求格式错误"))
+            }
+        }
+
         // ==================== 微信账号认证 API ====================
 
         /**

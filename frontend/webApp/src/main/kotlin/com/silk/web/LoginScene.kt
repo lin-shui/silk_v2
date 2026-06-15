@@ -37,9 +37,15 @@ import org.jetbrains.compose.web.css.width
 import org.jetbrains.compose.web.dom.Button
 import org.jetbrains.compose.web.dom.Div
 import org.jetbrains.compose.web.dom.Img
+import org.jetbrains.compose.web.attributes.InputType
+import org.jetbrains.compose.web.dom.Input
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Style
 import org.jetbrains.compose.web.dom.Text
+import org.jetbrains.compose.web.css.LineStyle
+import org.w3c.dom.HTMLInputElement
+import org.w3c.dom.events.Event
+import org.w3c.dom.get
 
 /**
  * 华为 OAuth 登录页面
@@ -60,6 +66,15 @@ fun LoginScene(appState: WebAppState) {
     
     var errorMessage by remember { mutableStateOf(appState.loginError.also { appState.loginError = "" }) }
     var isLoading by remember { mutableStateOf(false) }
+    // 密码登录表单
+    var loginName by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    // 绑定引导
+    var showBindPrompt by remember { mutableStateOf(false) }
+    var showBindSuccess by remember { mutableStateOf(false) }
+    // 华为 OAuth 模式: true=登录, false=绑定
+    var huaweiOAuthMode by remember { mutableStateOf(true) }
+    var pendingBind by remember { mutableStateOf(false) }
     
     // 设置全局样式，去掉浏览器滚动条
     Style {
@@ -143,6 +158,108 @@ fun LoginScene(appState: WebAppState) {
                 }) {
                     Text(errorMessage)
                 }
+            }
+            
+            // ─── 密码登录表单（老账号登录） ───
+            Div({
+                style { marginBottom(12.px) }
+            }) {
+                // 登录名
+                Span({ style { fontSize(13.px); color(Color(SilkColors.textLight)); marginBottom(6.px); display(DisplayStyle.Block) } }) {
+                    Text("登录名")
+                }
+                Input(InputType.Text, {
+                    style {
+                        width(100.percent)
+                        padding(12.px, 14.px)
+                        fontSize(14.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(8.px)
+                        property("box-sizing", "border-box")
+                        property("outline", "none")
+                        property("background", "#FAFAFA")
+                        marginBottom(12.px)
+                    }
+                    attr("placeholder", "输入登录名、手机号或姓名")
+                    onInput { e -> loginName = (e.target as HTMLInputElement).value }
+                })
+                
+                // 密码
+                Span({ style { fontSize(13.px); color(Color(SilkColors.textLight)); marginBottom(6.px); display(DisplayStyle.Block) } }) {
+                    Text("密码")
+                }
+                Input(InputType.Text, {
+                    style {
+                        width(100.percent)
+                        padding(12.px, 14.px)
+                        fontSize(14.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(8.px)
+                        property("box-sizing", "border-box")
+                        property("outline", "none")
+                        property("background", "#FAFAFA")
+                        marginBottom(16.px)
+                    }
+                    attr("type", "password")
+                    attr("placeholder", "输入密码")
+                    onInput { e -> password = (e.target as HTMLInputElement).value }
+                })
+                
+                // 登录按钮
+                Button({
+                    style {
+                        width(100.percent)
+                        padding(14.px)
+                        property("background", SilkColors.primary)
+                        color(Color.white)
+                        border { width(0.px) }
+                        borderRadius(8.px)
+                        fontSize(15.px)
+                        property("font-weight", "500")
+                        property("cursor", if (isLoading) "not-allowed" else "pointer")
+                        property("opacity", if (isLoading) "0.7" else "1")
+                        property("transition", "all 0.2s ease")
+                        fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
+                    }
+                    onClick {
+                        if (!isLoading && loginName.isNotBlank() && password.isNotBlank()) {
+                            isLoading = true
+                            errorMessage = ""
+                            scope.launch {
+                                try {
+                                    val response = ApiClient.login(loginName, password)
+                                    if (response.success && response.user != null) {
+                                        console.log("✅ 登录成功:", response.user.fullName)
+                                        appState.setUser(response.user)
+                                        showBindSuccess = true
+                                    } else {
+                                        errorMessage = response.message
+                                    }
+                                } catch (e: Exception) {
+                                    errorMessage = "登录失败: ${e.message}"
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
+                        }
+                    }
+                }) {
+                    Text(if (isLoading) "登录中..." else "登录")
+                }
+            }
+            
+            // ─── 分隔线 ───
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    marginBottom(16.px)
+                    property("gap", "12px")
+                }
+            }) {
+                Div({ style { property("flex", "1"); property("height", "1px"); backgroundColor(Color(SilkColors.divider)) } })
+                Span({ style { fontSize(12.px); color(Color(SilkColors.textLight)) } }) { Text("其他方式") }
+                Div({ style { property("flex", "1"); property("height", "1px"); backgroundColor(Color(SilkColors.divider)) } })
             }
             
             // 微信登录暂时不可用（需微信开放平台企业认证），启用后可取消注释
@@ -231,16 +348,32 @@ private fun startWeChatOAuth() {
 }
 
 /**
- * 启动华为 OAuth 授权流程
+ * 启动华为 OAuth 授权流程（登录模式）
  * 重定向到华为登录页面，用户授权后回调到当前应用
  */
 private fun startHuaweiOAuth() {
+    startHuaweiOAuthCommon(false)
+}
+
+/**
+ * 启动华为 OAuth 授权流程（绑定模式）
+ * 老用户登录后绑定华为账号
+ */
+private fun startHuaweiOAuthForBind() {
+    startHuaweiOAuthCommon(true)
+}
+
+/**
+ * 启动华为 OAuth 授权流程（通用）
+ */
+private fun startHuaweiOAuthCommon(isBind: Boolean) {
     val clientId = BuildConfig.HUAWEI_OAUTH_CLIENT_ID
     
     // 生成 state 用于 CSRF 防护
     val state = generateRandomState()
     try {
         kotlinx.browser.sessionStorage.setItem("huawei_oauth_state", state)
+        kotlinx.browser.sessionStorage.setItem("huawei_oauth_bind", if (isBind) "1" else "0")
     } catch (_: Exception) {}
     
     // 当前页面 URL 作为 redirect_uri（OAuth 回调时重新加载页面）
@@ -333,16 +466,40 @@ suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
             return false
         }
     } else {
-        val result = ApiClient.huaweiWebLogin(code, redirectUri)
-        if (result.success && result.user != null && result.accessToken != null && result.refreshToken != null) {
-            console.log("✅ 华为登录成功:", result.user.fullName, "isNewUser=", result.isNewUser)
-            window.history.replaceState(null, "", redirectUri)
-            appState.setSession(result.user, result.accessToken!!, result.refreshToken!!, result.isNewUser)
-            return true
+        // 检查是否为绑定模式
+        val isBind = try {
+            kotlinx.browser.sessionStorage.getItem("huawei_oauth_bind") == "1"
+        } catch (_: Exception) { false }
+        try {
+            kotlinx.browser.sessionStorage.removeItem("huawei_oauth_bind")
+        } catch (_: Exception) {}
+
+        if (isBind) {
+            // 绑定模式
+            val result = ApiClient.huaweiBind(code, redirectUri)
+            if (result.success) {
+                console.log("✅ 华为绑定成功")
+                window.history.replaceState(null, "", redirectUri)
+                appState.loginError = "华为账号绑定成功"
+                return true
+            } else {
+                console.error("❌ 华为绑定失败:", result.message)
+                appState.loginError = "华为绑定失败: ${result.message}"
+                return false
+            }
         } else {
-            console.error("❌ 华为登录失败:", result.message)
-            appState.loginError = "华为登录失败: ${result.message}"
-            return false
+            // 登录模式
+            val result = ApiClient.huaweiWebLogin(code, redirectUri)
+            if (result.success && result.user != null && result.accessToken != null && result.refreshToken != null) {
+                console.log("✅ 华为登录成功:", result.user.fullName, "isNewUser=", result.isNewUser)
+                window.history.replaceState(null, "", redirectUri)
+                appState.setSession(result.user, result.accessToken!!, result.refreshToken!!, result.isNewUser)
+                return true
+            } else {
+                console.error("❌ 华为登录失败:", result.message)
+                appState.loginError = "华为登录失败: ${result.message}"
+                return false
+            }
         }
     }
 }

@@ -599,6 +599,16 @@ data class HuaweiUserInfo(
 )
 
 /**
+ * 华为 OAuth 账号绑定请求
+ * 老用户登录后，将华为账号绑定到已有 userId
+ */
+@Serializable
+data class HuaweiBindRequest(
+    val code: String,
+    val redirectUri: String
+)
+
+/**
  * 华为账号认证响应
  */
 @Serializable
