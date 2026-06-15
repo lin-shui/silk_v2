@@ -92,6 +92,11 @@ class ChatServer(
     @Volatile
     private var activeAiJob: Job? = null
 
+    private inline fun <T> runChatCatching(block: () -> T): Result<T> =
+        runCatching(block).onFailure { e ->
+            if (e is CancellationException) throw e
+        }
+
     // 已处理的URL缓存，避免重复下载（从持久化文件恢复）
     private val processedUrls = Collections.synchronizedSet(mutableSetOf<String>())
     private val processedUrlsFile: java.io.File
@@ -103,20 +108,20 @@ class ChatServer(
         processedUrlsFile = java.io.File(uploadDir, "processed_urls.txt")
 
         if (processedUrlsFile.exists()) {
-            try {
+            runChatCatching {
                 processedUrlsFile.readLines().forEach { line ->
                     if (line.isNotBlank()) {
                         processedUrls.add(line.trim().lowercase())
                     }
                 }
                 logger.debug("📋 已从缓存恢复 {} 个已处理的URL", processedUrls.size)
-            } catch (e: Exception) {
+            }.onFailure { e ->
                 logger.warn("⚠️ 读取URL缓存失败: {}", e.message)
             }
         }
 
         // 从持久化存储加载历史消息到内存（用于消息撤回等功能）
-        try {
+        runChatCatching {
             val chatHistory = historyManager.loadChatHistory(sessionName)
             if (chatHistory != null && chatHistory.messages.isNotEmpty()) {
                 chatHistory.messages.forEach { entry ->
@@ -133,16 +138,16 @@ class ChatServer(
                 }
                 logger.debug("📜 已从持久化加载 {} 条历史消息到内存 (session: {})", messageHistory.size, sessionName)
             }
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.warn("⚠️ 加载历史消息到内存失败: {}", e.message)
         }
     }
 
     // 保存已处理的URL到文件
     private fun saveProcessedUrl(url: String) {
-        try {
+        runChatCatching {
             processedUrlsFile.appendText("$url\n")
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.warn("⚠️ 保存URL缓存失败: {}", e.message)
         }
     }
@@ -245,13 +250,13 @@ class ChatServer(
     private fun getSessionParticipants(userId: String): List<String> {
         if (sessionName.startsWith("group_")) {
             val groupId = sessionName.removePrefix("group_")
-            try {
-                val members = com.silk.backend.database.GroupRepository.getGroupMembers(groupId)
-                if (members.isNotEmpty()) {
-                    return members.map { it.userId }
-                }
-            } catch (e: Exception) {
+            val members = runChatCatching {
+                com.silk.backend.database.GroupRepository.getGroupMembers(groupId)
+            }.onFailure { e ->
                 logger.warn("⚠️ 获取群组成员失败，回退到连接列表: {}", e.message)
+            }.getOrNull()
+            if (!members.isNullOrEmpty()) {
+                return members.map { it.userId }
             }
         }
         // 非群组或获取失败时，从 WebSocket 连接获取
@@ -300,14 +305,14 @@ class ChatServer(
     }
 
     private suspend fun routeCardReplyMessage(message: Message) {
-        try {
+        runChatCatching {
             val reply = Json.decodeFromString<com.silk.backend.card.CardReplyPayload>(message.content)
             val broadcastRef: suspend (Message) -> Unit = { msg -> broadcast(msg) }
             val expired = com.silk.backend.card.CardReplyRouter.route(sessionName, reply, broadcastRef)
             if (expired) {
                 broadcastExpiredCardReplyFeedback(reply)
             }
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.error("🃏 [broadcast] 卡片回复解析失败: {}", e.message)
         }
     }
@@ -363,7 +368,7 @@ class ChatServer(
 
     private fun launchWeaviateMessageIndex(message: Message) {
         CoroutineScope(Dispatchers.IO).launch {
-            try {
+            runChatCatching {
                 val historyEntry = com.silk.backend.models.ChatHistoryEntry(
                     messageId = message.id,
                     senderId = message.userId,
@@ -377,25 +382,25 @@ class ChatServer(
                 if (indexed) {
                     logger.debug("🔍 [broadcast] 消息已索引到 Weaviate: {}", message.id)
                 }
-            } catch (e: Exception) {
+            }.onFailure { e ->
                 logger.warn("⚠️ [broadcast] Weaviate 索引失败: {}", e.message)
             }
         }
     }
 
-    @Suppress("TooGenericExceptionCaught")
     private suspend fun sendFrameSafely(
         session: WebSocketSession,
         messageJson: String,
-        onFailure: (Exception) -> Unit,
+        onFailure: (Throwable) -> Unit,
     ): Boolean {
-        try {
+        val failure = runChatCatching {
             session.send(Frame.Text(messageJson))
-            return true
-        } catch (e: Exception) {
-            onFailure(e)
+        }.exceptionOrNull()
+        if (failure != null) {
+            onFailure(failure)
             return false
         }
+        return true
     }
 
     private suspend fun broadcastMessageToAllSessions(message: Message) {
@@ -409,7 +414,7 @@ class ChatServer(
         logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
     }
 
-    private fun logSessionSendFailure(scope: String, error: Exception) {
+    private fun logSessionSendFailure(scope: String, error: Throwable) {
         logger.warn("⚠️ [{}] 向会话发送消息失败", scope, error)
     }
 
@@ -419,11 +424,8 @@ class ChatServer(
         }
 
         CoroutineScope(Dispatchers.IO).launch {
-            try {
-                processUrlsInMessage(message)
-            } catch (e: Exception) {
-                logger.warn("⚠️ URL处理失败: {}", e.message)
-            }
+            runChatCatching { processUrlsInMessage(message) }
+                .onFailure { e -> logger.warn("⚠️ URL处理失败: {}", e.message) }
         }
     }
 
@@ -451,7 +453,7 @@ class ChatServer(
     }
 
     private fun createCcBroadcastFn(ccUserId: String): suspend (Message) -> Unit = { msg ->
-        try {
+        runChatCatching {
             if (!msg.isTransient) {
                 messageHistory.add(msg)
                 historyManager.addMessage(sessionName, msg)
@@ -463,7 +465,7 @@ class ChatServer(
                     logSessionSendFailure("CC", error)
                 }
             }
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.warn("[CC] 发送消息失败", e)
         }
     }
@@ -573,18 +575,22 @@ class ChatServer(
 
     private fun launchActiveAiJob(
         cancelLog: String,
-        onError: suspend (Exception) -> Unit = {},
+        onError: suspend (Throwable) -> Unit = {},
         block: suspend () -> Unit,
     ) {
         activeAiJob?.cancel()
         activeAiJob = CoroutineScope(Dispatchers.IO).launch {
-            try {
+            val failure = runCatching {
                 block()
-            } catch (@Suppress("SwallowedException") e: CancellationException) {
-                logger.info(cancelLog)
-                throw e
-            } catch (@Suppress("TooGenericExceptionCaught", "SwallowedException") e: Exception) {
-                onError(e)
+            }.exceptionOrNull()
+            try {
+                if (failure is CancellationException) {
+                    logger.info(cancelLog)
+                    throw failure
+                }
+                if (failure != null) {
+                    onError(failure)
+                }
             } finally {
                 activeAiJob = null
             }
@@ -662,7 +668,7 @@ class ChatServer(
         url: String,
         uploadDir: java.io.File,
     ) {
-        try {
+        runChatCatching {
             broadcastSystemStatus("🌐 正在下载: $url")
             val content = com.silk.backend.utils.WebPageDownloader.downloadAndExtract(url)
             if (content == null) {
@@ -670,7 +676,7 @@ class ChatServer(
                 return
             }
             handleDownloadedUrlContent(message, url, uploadDir, content)
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.error("❌ 处理URL失败: {}", url, e)
             broadcastSystemStatus("❌ 处理链接失败: $url")
         }
@@ -1033,11 +1039,8 @@ class ChatServer(
         }
 
         CoroutineScope(Dispatchers.IO).launch {
-            try {
-                GroupTodoExtractionService.refreshTodosForUser(userId)
-            } catch (e: Exception) {
-                logger.warn("⚠️ 专属对话待办提取失败", e)
-            }
+            runChatCatching { GroupTodoExtractionService.refreshTodosForUser(userId) }
+                .onFailure { e -> logger.warn("⚠️ 专属对话待办提取失败", e) }
         }
     }
 
@@ -1056,30 +1059,34 @@ class ChatServer(
         initializeDirectModelWorkspace()
 
         val state = IntelligentResponseState()
-        try {
-            val response = directModelAgent.processInput(
+        val responseResult = runCatching {
+            directModelAgent.processInput(
                 userInput = userMessage,
                 systemPrompt = systemPrompt
             ) { stepType, content, isComplete ->
                 handleDirectModelStep(callId, stepType, content, state)
                 maybeSendFinalAgentMessage(callId, userId, stepType, isComplete, state)
             }
-
-            syncAgentResponseState(state, response)
-            logger.debug(
-                "🏁 [generateIntelligentResponse-{}] 函数执行完成，响应长度: {}, 引用数: {}",
-                callId,
-                state.fullResponse.length,
-                state.agentReferences.size
-            )
-            refreshSilkPrivateChatTodosIfNeeded(userId)
-        } catch (e: CancellationException) {
-            logger.info("🛑 [generateIntelligentResponse-{}] 生成被取消", callId)
-            throw e
-        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-            logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败", callId, e)
-            sendMessageToAllSessions(buildSilkTextMessage("抱歉，处理您的问题时发生了错误: ${e.message}"))
         }
+        val responseFailure = responseResult.exceptionOrNull()
+        if (responseFailure != null) {
+            if (responseFailure is CancellationException) {
+                logger.info("🛑 [generateIntelligentResponse-{}] 生成被取消", callId)
+                throw responseFailure
+            }
+            logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败", callId, responseFailure)
+            sendMessageToAllSessions(buildSilkTextMessage("抱歉，处理您的问题时发生了错误: ${responseFailure.message}"))
+            return
+        }
+
+        syncAgentResponseState(state, responseResult.getOrThrow())
+        logger.debug(
+            "🏁 [generateIntelligentResponse-{}] 函数执行完成，响应长度: {}, 引用数: {}",
+            callId,
+            state.fullResponse.length,
+            state.agentReferences.size
+        )
+        refreshSilkPrivateChatTodosIfNeeded(userId)
     }
 
     /**
@@ -1089,23 +1096,28 @@ class ChatServer(
         val callId = System.currentTimeMillis()
         logger.info("[/recall-{}] userId={}, query={}...", callId, userId, query.take(50))
 
-        try {
-            val fullResponse = userHistoryAgent.queryWithHistory(
+        val recallResult = runCatching {
+            userHistoryAgent.queryWithHistory(
                 userId = userId,
                 userMessage = query,
             ) { _, content, isComplete ->
                 sendHistoryRecallDelta(content, isComplete)
             }
-
-            sendFinalHistoryRecallResponse(fullResponse)
-            logger.info("[/recall-{}] 完成, responseLen={}", callId, fullResponse.length)
-        } catch (e: CancellationException) {
-            logger.info("[/recall-{}] 已取消", callId)
-            throw e
-        } catch (e: Exception) {
-            logger.error("[/recall-{}] 失败", callId, e)
-            sendMessageToAllSessions(buildSilkTextMessage("历史查询失败: ${e.message}"))
         }
+        val recallFailure = recallResult.exceptionOrNull()
+        if (recallFailure != null) {
+            if (recallFailure is CancellationException) {
+                logger.info("[/recall-{}] 已取消", callId)
+                throw recallFailure
+            }
+            logger.error("[/recall-{}] 失败", callId, recallFailure)
+            sendMessageToAllSessions(buildSilkTextMessage("历史查询失败: ${recallFailure.message}"))
+            return
+        }
+        val fullResponse = recallResult.getOrThrow()
+
+        sendFinalHistoryRecallResponse(fullResponse)
+        logger.info("[/recall-{}] 完成, responseLen={}", callId, fullResponse.length)
     }
 
     private suspend fun sendHistoryRecallDelta(content: String, isComplete: Boolean) {
@@ -1183,7 +1195,7 @@ class ChatServer(
             .lastOrNull()?.senderName ?: "用户"
 
         // 执行医生诊断更新
-        try {
+        runChatCatching {
             silkAgent.executeDoctorDiagnosisUpdate(
                 chatHistory = historyEntries,
                 doctorMessage = doctorMessage,
@@ -1191,7 +1203,7 @@ class ChatServer(
                 userName = userName,
                 groupDisplayName = groupDisplayName
             )
-        } catch (e: Exception) {
+        }.onFailure { e ->
             logger.error("❌ 医生诊断更新失败", e)
         }
     }
@@ -1202,13 +1214,11 @@ class ChatServer(
     private fun getGroupHostId(sessionName: String): String? {
         return if (sessionName.startsWith("group_")) {
             val groupId = sessionName.removePrefix("group_")
-            try {
-                val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
-                group?.hostId
-            } catch (e: Exception) {
+            runChatCatching {
+                com.silk.backend.database.GroupRepository.findGroupById(groupId)?.hostId
+            }.onFailure { e ->
                 logger.warn("⚠️ 获取Host ID失败: {}", e.message)
-                null
-            }
+            }.getOrNull()
         } else {
             null
         }
@@ -1225,20 +1235,24 @@ class ChatServer(
             logger.debug("📋 正在查询群组名称，groupId: {}", groupId)
 
             // 从数据库查询群组名称
-            try {
-                val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
-                if (group != null) {
-                    logger.debug("📋 找到群组名称: {}", group.name)
-                    group.name  // 返回群组的实际名称，例如："liaoheng's Sophie Ankle"
-                } else {
-                    logger.warn("⚠️ 未找到群组：{}", groupId)
-                    null
-                }
-            } catch (e: Exception) {
+            runChatCatching {
+                com.silk.backend.database.GroupRepository.findGroupById(groupId)
+            }.fold(
+                onSuccess = { group ->
+                    if (group != null) {
+                        logger.debug("📋 找到群组名称: {}", group.name)
+                        group.name  // 返回群组的实际名称，例如："liaoheng's Sophie Ankle"
+                    } else {
+                        logger.warn("⚠️ 未找到群组：{}", groupId)
+                        null
+                    }
+                },
+                onFailure = { e ->
                 logger.warn("⚠️ 查询群组名称失败: {}", e.message)
                 logger.debug("⚠️ 查询群组名称异常详情", e)
                 null
-            }
+                },
+            )
         } else {
             // 不是群组session，返回null（使用sessionName作为标题）
             logger.debug("📋 非群组session，使用sessionName: {}", sessionName)
@@ -1293,9 +1307,9 @@ class ChatServer(
             broadcastRecallNotification(listOf(messageId, silkReply.messageId))
             // 同步删除 Weaviate 向量索引
             CoroutineScope(Dispatchers.IO).launch {
-                try {
+                runChatCatching {
                     WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId, silkReply.messageId))
-                } catch (e: Exception) {
+                }.onFailure { e ->
                     logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败", e)
                 }
             }
@@ -1308,9 +1322,9 @@ class ChatServer(
             broadcastRecallNotification(listOf(messageId))
             // 同步删除 Weaviate 向量索引
             CoroutineScope(Dispatchers.IO).launch {
-                try {
+                runChatCatching {
                     WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
-                } catch (e: Exception) {
+                }.onFailure { e ->
                     logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败", e)
                 }
             }
@@ -1355,9 +1369,9 @@ class ChatServer(
         broadcastRecallNotification(listOf(messageId))
         // 同步删除 Weaviate 向量索引
         CoroutineScope(Dispatchers.IO).launch {
-            try {
+            runChatCatching {
                 WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
-            } catch (e: Exception) {
+            }.onFailure { e ->
                 logger.warn("⚠️ [deleteMessage] Weaviate 删除向量失败", e)
             }
         }
