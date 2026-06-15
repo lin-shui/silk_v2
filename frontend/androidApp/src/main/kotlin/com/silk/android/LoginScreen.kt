@@ -58,8 +58,12 @@ fun LoginScreen(appState: AppState) {
     var huaweiOAuthState by remember { mutableStateOf("") }
     var huaweiOAuthUrl by remember { mutableStateOf("") }
     
+    // 防止重复处理回调（shouldOverrideUrlLoading 和 onPageStarted 都会触发）
+    var huaweiOAuthHandled = false
+
     // 华为 OAuth 回调处理器
     fun handleHuaweiOAuthCallback(url: String) {
+        if (huaweiOAuthHandled) return  // 已处理过，跳过重复回调
         println("🔑 [华为OAuth] 回调URL: $url")
         if (!url.contains("code=")) {
             println("❌ [华为OAuth] URL中没有code参数，可能是错误")
@@ -83,6 +87,7 @@ fun LoginScreen(appState: AppState) {
         }
         val code = try { java.net.URLDecoder.decode(rawCode, "UTF-8") } catch (e: Exception) { rawCode }
         println("🔑 [华为OAuth] 获取到code (len=${code.length})，开始登录...")
+        huaweiOAuthHandled = true
         showHuaweiWebView = false
         
         scope.launch {
