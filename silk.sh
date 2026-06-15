@@ -376,6 +376,11 @@ kill_all_ports() {
 # ============================================================
 
 ensure_nginx() {
+    # 如果内网端口等于公网端口，说明服务直接监听公网端口，不需要 nginx
+    if [ "$BACKEND_PORT" = "$BACKEND_HTTP_PORT" ] && [ "${FRONTEND_PORT:-$FRONTEND_HTTP_PORT}" = "$FRONTEND_HTTP_PORT" ]; then
+        echo -e "  ${GREEN}✓ 服务直接监听公网端口，跳过 nginx${NC}"
+        return 0
+    fi
     echo -e "${BLUE}检查 Nginx 反向代理...${NC}"
     if command -v nginx >/dev/null 2>&1; then
         if pgrep -x nginx > /dev/null; then
@@ -760,6 +765,10 @@ check_status() {
 
     # Nginx 状态
     echo ""
+    if [ "$BACKEND_PORT" = "$BACKEND_HTTP_PORT" ] && [ "${FRONTEND_PORT:-$FRONTEND_HTTP_PORT}" = "$FRONTEND_HTTP_PORT" ]; then
+        echo -e "${BLUE}【Nginx 反向代理】${NC}"
+        echo -e "  状态: ${YELLOW}○ 未使用（服务直接监听公网端口）${NC}"
+    else
     echo -e "${BLUE}【Nginx 反向代理】${NC}"
     if command -v nginx >/dev/null 2>&1; then
         if pgrep -x nginx > /dev/null; then
@@ -780,6 +789,7 @@ check_status() {
         fi
     else
         echo -e "  ${YELLOW}⚠ nginx 未安装${NC}"
+    fi
     fi
     
     echo ""
@@ -1277,9 +1287,8 @@ deploy() {
     echo -e "${BLUE}[5/5] 启动后端和前端...${NC}"
     start_services_internal
 
-    # 6. 确保 Nginx 反向代理运行
+    # 6. Nginx（如果内网端口等于公网端口则跳过）
     echo ""
-    echo -e "${BLUE}[6/6] 检查 Nginx 反向代理...${NC}"
     ensure_nginx
 }
 
@@ -1457,7 +1466,7 @@ start_services() {
     echo ""
     echo -e "${YELLOW}⚠ 部分服务可能仍在启动中，请运行 './silk.sh status' 检查${NC}"
 
-    # 确保 Nginx 反向代理运行
+    # Nginx（如果内网端口等于公网端口则跳过）
     echo ""
     ensure_nginx
 }

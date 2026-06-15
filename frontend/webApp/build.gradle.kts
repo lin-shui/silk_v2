@@ -36,6 +36,7 @@ val backendPort = envFile["BACKEND_HTTP_PORT"] ?: System.getenv("BACKEND_HTTP_PO
 val backendInternalPort = envFile["BACKEND_INTERNAL_PORT"] ?: System.getenv("BACKEND_INTERNAL_PORT") ?: backendPort
 val frontendPort = envFile["FRONTEND_PORT"] ?: System.getenv("FRONTEND_PORT") ?: "8004"
 val huaweiOAuthClientId = envFile["HUAWEI_OAUTH_CLIENT_ID"] ?: System.getenv("HUAWEI_OAUTH_CLIENT_ID") ?: ""
+val wechatAppId = envFile["WECHAT_APP_ID"] ?: System.getenv("WECHAT_APP_ID") ?: ""
 println("📦 [webApp] BACKEND_HTTP_PORT = $backendPort, BACKEND_INTERNAL_PORT = $backendInternalPort, FRONTEND_PORT = $frontendPort")
 
 plugins {
@@ -59,6 +60,7 @@ val generateBuildConfig by tasks.registering {
                 const val BACKEND_INTERNAL_PORT = "$backendInternalPort"
                 const val FRONTEND_PORT = "$frontendPort"
                 const val HUAWEI_OAUTH_CLIENT_ID = "$huaweiOAuthClientId"
+                const val WECHAT_APP_ID = "$wechatAppId"
             }
         """.trimIndent())
         println("📦 [webApp] 已生成 BuildConfig.kt (BACKEND_HTTP_PORT=$backendPort, BACKEND_INTERNAL_PORT=$backendInternalPort)")

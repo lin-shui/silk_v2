@@ -145,6 +145,56 @@ fun LoginScene(appState: WebAppState) {
                 }
             }
             
+            // 微信登录按钮（首选）
+            Button({
+                style {
+                    width(100.percent)
+                    padding(16.px)
+                    property("background", "#07C160")  // 微信绿
+                    color(Color.white)
+                    border { width(0.px) }
+                    borderRadius(8.px)
+                    fontSize(16.px)
+                    property("font-weight", "500")
+                    property("cursor", if (isLoading) "not-allowed" else "pointer")
+                    property("opacity", if (isLoading) "0.7" else "1")
+                    property("transition", "all 0.2s ease")
+                    fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
+                    marginBottom(12.px)
+                }
+                onClick {
+                    if (!isLoading) {
+                        isLoading = true
+                        errorMessage = ""
+                        // 先检查 appId 是否配置
+                        val appId = BuildConfig.WECHAT_APP_ID
+                        if (appId.isBlank()) {
+                            console.error("❌ WECHAT_APP_ID 未配置")
+                            errorMessage = "微信登录暂未配置，请联系管理员"
+                            isLoading = false
+                            return@onClick
+                        }
+                        startWeChatOAuth()
+                    }
+                }
+            }) {
+                Text(if (isLoading) "跳转中..." else "使用微信登录")
+            }
+
+            // 分隔线
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    marginBottom(16.px)
+                    property("gap", "12px")
+                }
+            }) {
+                Div({ style { property("flex", "1"); property("height", "1px"); backgroundColor(Color(SilkColors.divider)) } })
+                Span({ style { fontSize(12.px); color(Color(SilkColors.textLight)) } }) { Text("其他方式") }
+                Div({ style { property("flex", "1"); property("height", "1px"); backgroundColor(Color(SilkColors.divider)) } })
+            }
+            
             // 华为账号登录按钮
             Button({
                 style {
@@ -160,7 +210,7 @@ fun LoginScene(appState: WebAppState) {
                     property("opacity", if (isLoading) "0.7" else "1")
                     property("transition", "all 0.2s ease")
                     fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                    marginBottom(16.px)
+                    marginBottom(12.px)
                 }
                 onClick {
                     if (!isLoading) {
@@ -187,12 +237,44 @@ fun LoginScene(appState: WebAppState) {
                     fontSize(12.px)
                     color(Color(SilkColors.textLight))
                     property("line-height", "1.6")
+                    marginTop(4.px)
                 }
             }) {
-                Text("点击即表示同意使用华为帐号进行身份认证")
+                Text("点击即表示同意使用对应平台帐号进行身份认证")
             }
         }
     }
+}
+
+/**
+ * 启动微信 OAuth 授权流程
+ * 重定向到微信扫码登录页面，用户使用微信扫码授权后回调到当前应用
+ */
+private fun startWeChatOAuth() {
+    val appId = BuildConfig.WECHAT_APP_ID
+
+    // 生成 state 用于 CSRF 防护
+    val state = generateRandomState()
+    try {
+        kotlinx.browser.sessionStorage.setItem("wechat_oauth_state", state)
+    } catch (_: Exception) {}
+
+    // 当前页面 URL 作为 redirect_uri（OAuth 回调时重新加载页面）
+    val redirectUri = window.location.href.split("?")[0].split("#")[0]
+
+    // 构造微信 OAuth 授权 URL（微信开放平台扫码登录）
+    val authUrl = buildString {
+        append("https://open.weixin.qq.com/connect/qrconnect")
+        append("?appid=").append(encodeURIComponent(appId))
+        append("&redirect_uri=").append(encodeURIComponent(redirectUri))
+        append("&response_type=code")
+        append("&scope=snsapi_login")
+        append("&state=").append(state)
+        append("#wechat_redirect")
+    }
+
+    console.log("🔗 跳转到微信 OAuth: ", authUrl)
+    window.location.href = authUrl
 }
 
 /**
@@ -241,8 +323,8 @@ private fun generateRandomState(): String {
 }
 
 /**
- * 处理华为 OAuth 回调
- * 检测 URL 中是否有 code 参数，如有则执行登录流程
+ * 处理 OAuth 回调（同时支持微信和华为）
+ * 检测 URL 中是否有 code 参数，区分是微信还是华为的回调
  * 在主页面渲染前调用
  */
 suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
@@ -258,9 +340,18 @@ suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
     val code = urlParams["code"] ?: return false
     val state = urlParams["state"] ?: ""
     
+    // 判断 OAuth 来源：优先检查微信 state，再检查华为 state
+    val isWeChat = try {
+        val savedState = kotlinx.browser.sessionStorage.getItem("wechat_oauth_state")
+        savedState != null
+    } catch (_: Exception) { false }
+
+    val oauthType = if (isWeChat) "wechat" else "huawei"
+    val stateKey = "${oauthType}_oauth_state"
+
     // 验证 state（CSRF 防护）
     val savedState = try {
-        kotlinx.browser.sessionStorage.getItem("huawei_oauth_state")
+        kotlinx.browser.sessionStorage.getItem(stateKey)
     } catch (_: Exception) { null }
     
     if (savedState != null && state != savedState) {
@@ -270,27 +361,35 @@ suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
     
     // 清除 state
     try {
-        kotlinx.browser.sessionStorage.removeItem("huawei_oauth_state")
+        kotlinx.browser.sessionStorage.removeItem(stateKey)
     } catch (_: Exception) {}
     
-    // redirect_uri = 当前页面 URL（不含查询参数）
     val redirectUri = window.location.href.split("?")[0].split("#")[0]
     
-    console.log("🔑 收到 OAuth code，正在登录...")
+    console.log("🔑 收到 $oauthType OAuth code，正在登录...")
     
-    val result = ApiClient.huaweiWebLogin(code, redirectUri)
-    
-    if (result.success && result.user != null && result.accessToken != null && result.refreshToken != null) {
-        console.log("✅ 华为登录成功:", result.user.fullName, "isNewUser=", result.isNewUser)
-        
-        // 清除 URL 中的 OAuth 参数
-        window.history.replaceState(null, "", redirectUri)
-        
-        appState.setSession(result.user, result.accessToken!!, result.refreshToken!!, result.isNewUser)
-        return true
+    if (isWeChat) {
+        val result = ApiClient.wechatLogin(code)
+        if (result.success && result.user != null && result.accessToken != null && result.refreshToken != null) {
+            console.log("✅ 微信登录成功:", result.user.fullName, "isNewUser=", result.isNewUser)
+            window.history.replaceState(null, "", redirectUri)
+            appState.setSession(result.user, result.accessToken!!, result.refreshToken!!, result.isNewUser)
+            return true
+        } else {
+            console.error("❌ 微信登录失败:", result.message)
+            return false
+        }
     } else {
-        console.error("❌ 华为登录失败:", result.message)
-        return false
+        val result = ApiClient.huaweiWebLogin(code, redirectUri)
+        if (result.success && result.user != null && result.accessToken != null && result.refreshToken != null) {
+            console.log("✅ 华为登录成功:", result.user.fullName, "isNewUser=", result.isNewUser)
+            window.history.replaceState(null, "", redirectUri)
+            appState.setSession(result.user, result.accessToken!!, result.refreshToken!!, result.isNewUser)
+            return true
+        } else {
+            console.error("❌ 华为登录失败:", result.message)
+            return false
+        }
     }
 }
 

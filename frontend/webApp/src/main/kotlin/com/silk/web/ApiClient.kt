@@ -312,6 +312,19 @@ data class HuaweiAuthResponse(
 )
 
 /**
+ * 微信 OAuth 认证响应
+ */
+@Serializable
+data class WechatAuthResponse(
+    val success: Boolean,
+    val message: String = "",
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val isNewUser: Boolean = false
+)
+
+/**
  * Token 刷新响应
  */
 @Serializable
@@ -350,6 +363,21 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("华为登录失败:", e)
             HuaweiAuthResponse(false, "登录失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 微信 OAuth 登录：发送 code 到后端交换 token
+     * 适用于 Web 端扫码登录和 Android 端 SDK 登录
+     */
+    suspend fun wechatLogin(code: String): WechatAuthResponse {
+        return try {
+            val body = """{"code":"$code"}"""
+            val response = post("/auth/wechat/login", body)
+            jsonParser.decodeFromString<WechatAuthResponse>(response)
+        } catch (e: Exception) {
+            console.log("微信登录失败:", e)
+            WechatAuthResponse(false, "登录失败: ${e.message}")
         }
     }
 

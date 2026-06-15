@@ -107,6 +107,20 @@ object HuaweiAccounts : Table("huawei_accounts") {
 }
 
 /**
+ * WechatAccounts 表：微信账号绑定，将微信 openId/unionId 与 Silk 用户关联
+ */
+object WechatAccounts : Table("wechat_accounts") {
+    val openId = varchar("open_id", 128).uniqueIndex()
+    val unionId = varchar("union_id", 128).nullable()
+    val userId = varchar("user_id", 128).references(Users.id)
+    val wechatName = varchar("wechat_name", 256).nullable()
+    val wechatAvatar = varchar("wechat_avatar", 512).nullable()
+    val createdAt = datetime("created_at").default(LocalDateTime.now())
+
+    override val primaryKey = PrimaryKey(openId)
+}
+
+/**
  * RefreshTokensTable 表：JWT 刷新令牌管理
  */
 object RefreshTokensTable : Table("refresh_tokens") {

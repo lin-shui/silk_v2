@@ -39,6 +39,9 @@ import com.silk.backend.database.HuaweiLoginRequest
 import com.silk.backend.database.RefreshTokenRequest
 import com.silk.backend.database.LogoutRequest
 import com.silk.backend.database.HuaweiAuthResponse
+import com.silk.backend.database.WechatLoginRequest
+import com.silk.backend.database.WechatAuthResponse
+import com.silk.backend.auth.WechatAuthService
 import com.silk.backend.database.TokenRefreshResponse
 import com.silk.backend.database.SendContactRequestData
 import com.silk.backend.database.SendMessageRequest
@@ -1187,6 +1190,37 @@ fun Application.configureRouting() {
             }
         }
         
+        // ==================== 微信账号认证 API ====================
+
+        /**
+         * 微信 OAuth 登录
+         * Android 端微信 SDK 授权 -> 回调 -> 前端发 code -> 后端用 code 交换 token
+         */
+        post("/auth/wechat/login") {
+            try {
+                val request = call.receive<WechatLoginRequest>()
+                val result = WechatAuthService.login(request.code)
+                if (result.success) {
+                    call.respond(WechatAuthResponse(
+                        success = true,
+                        message = result.message,
+                        user = result.user,
+                        accessToken = result.accessToken,
+                        refreshToken = result.refreshToken,
+                        isNewUser = result.isNewUser
+                    ))
+                } else {
+                    call.respond(HttpStatusCode.Unauthorized, WechatAuthResponse(
+                        success = false,
+                        message = result.message
+                    ))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 微信登录失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, WechatAuthResponse(false, "请求格式错误"))
+            }
+        }
+
         /**
          * 更新用户资料（昵称）
          */
@@ -1294,6 +1328,11 @@ fun Application.configureRouting() {
         post("/groups/create") {
             try {
                 val request = call.receive<CreateGroupRequest>()
+                // 禁止创建以 [Silk] 开头的群组（系统保留）
+                if (request.groupName.trimStart().startsWith("[Silk]")) {
+                    call.respond(HttpStatusCode.BadRequest, GroupResponse(false, "群组名不能以 [Silk] 开头"))
+                    return@post
+                }
                 val response = GroupService.createGroup(request)
                 
                 if (response.success && response.group != null && request.type == "ccconnect") {
@@ -1313,6 +1352,12 @@ fun Application.configureRouting() {
         post("/groups/join") {
             try {
                 val request = call.receive<JoinGroupRequest>()
+                // 禁止通过邀请码加入 [Silk] 专属对话
+                val targetGroup = GroupRepository.findGroupByInvitationCode(request.invitationCode)
+                if (targetGroup != null && targetGroup.name.startsWith("[Silk]")) {
+                    call.respond(HttpStatusCode.Forbidden, GroupResponse(false, "该群组为专属对话，无法通过邀请码加入"))
+                    return@post
+                }
                 val response = GroupService.joinGroup(request)
                 call.respond(response)
             } catch (e: Exception) {
@@ -1596,6 +1641,12 @@ fun Application.configureRouting() {
                 val group = GroupRepository.findGroupById(groupId)
                 if (group == null) {
                     call.respond(SimpleResponse(false, "群组不存在"))
+                    return@post
+                }
+                
+                // 禁止向 Silk 专属对话添加成员
+                if (group.name.startsWith("[Silk]")) {
+                    call.respond(SimpleResponse(false, "专属对话无法添加成员"))
                     return@post
                 }
                 

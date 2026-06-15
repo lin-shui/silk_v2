@@ -519,6 +519,40 @@ data class RecallMessageResponse(
     val recalledMessageIds: List<String> = emptyList()  // 被撤回的消息ID列表（可能包含用户消息和AI回复）
 )
 
+// ==================== 微信账号认证模型 ====================
+
+/**
+ * 微信登录请求（接收 Android 端微信 SDK 返回的授权 code）
+ */
+@Serializable
+data class WechatLoginRequest(
+    val code: String
+)
+
+/**
+ * 微信用户信息
+ */
+@Serializable
+data class WechatUserInfo(
+    val openId: String,
+    val unionId: String = "",
+    val nickname: String = "",
+    val headimgurl: String = ""
+)
+
+/**
+ * 微信账号认证响应
+ */
+@Serializable
+data class WechatAuthResponse(
+    val success: Boolean,
+    val message: String,
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val isNewUser: Boolean = false
+)
+
 // ==================== 华为账号认证模型 ====================
 
 /**

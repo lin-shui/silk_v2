@@ -374,7 +374,7 @@ fun LoginScreen(appState: AppState) {
                         onClick = {
                             // 使用 WebView 方式进行华为 OAuth 登录
                             val clientId = "117992035"  // 与 Web 端一致的 OAuth Client ID
-                            val redirectUri = "https://ai-silk.duckdns.org:13095/login"
+                            val redirectUri = "https://www.ai-silk.cloud:13095/login"
                             val state = (1..32).map { "abcdefghijklmnopqrstuvwxyz0123456789".random() }.joinToString("")
                             huaweiOAuthState = state
                             val authUrl = buildString {

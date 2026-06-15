@@ -143,6 +143,7 @@ object UserRepository {
 
                 // 1. 删除华为账号绑定
                 HuaweiAccounts.deleteWhere { HuaweiAccounts.userId eq userId }
+                WechatAccounts.deleteWhere { WechatAccounts.userId eq userId }
 
                 // 2. 删除群组成员关系
                 GroupMembers.deleteWhere { GroupMembers.userId eq userId }

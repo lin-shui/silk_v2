@@ -27,7 +27,7 @@ object DatabaseFactory {
         
         transaction(database) {
             // 创建所有表
-            SchemaUtils.create(Users, Groups, GroupMembers, Contacts, ContactRequests, UserSettingsTable, CcConnectTokens, HuaweiAccounts, RefreshTokensTable)
+            SchemaUtils.create(Users, Groups, GroupMembers, Contacts, ContactRequests, UserSettingsTable, CcConnectTokens, HuaweiAccounts, WechatAccounts, RefreshTokensTable)
             SchemaUtils.createMissingTablesAndColumns(
                 Users,
                 Groups,
@@ -37,6 +37,7 @@ object DatabaseFactory {
                 UserSettingsTable,
                 CcConnectTokens,
                 HuaweiAccounts,
+                WechatAccounts,
                 RefreshTokensTable
             )
         }
