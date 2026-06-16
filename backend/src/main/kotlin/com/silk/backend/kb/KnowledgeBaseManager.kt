@@ -96,6 +96,9 @@ class KnowledgeBaseManager(
     fun getEntry(entryId: String): KBEntry? =
         load().entries.find { it.id == entryId }
 
+    fun getEntry(entryId: String, userId: String): KBEntry? =
+        load().entries.find { it.id == entryId && it.ownerId == userId }
+
     fun createEntry(topicId: String, title: String, content: String, tags: List<String>, userId: String): KBEntry? {
         val store = load()
         if (store.topics.none { it.id == topicId && it.ownerId == userId }) return null
@@ -139,4 +142,7 @@ class KnowledgeBaseManager(
     }
 
     fun getTopic(topicId: String): KBTopic? = load().topics.find { it.id == topicId }
+
+    fun getTopic(topicId: String, userId: String): KBTopic? =
+        load().topics.find { it.id == topicId && it.ownerId == userId }
 }

@@ -15,6 +15,7 @@ class DirectModelAgentCitationTest {
         val prompt = agent.citationGuidelinesForTest("你是 Silk。")
 
         assertContains(prompt, "[citation:数字]")
+        assertContains(prompt, "[available:数字]")
         assertContains(prompt, "引用标记必须放在相关内容的句末或段末")
         assertContains(prompt, "禁止堆砌大量引用标记")
     }
@@ -55,6 +56,22 @@ class DirectModelAgentCitationTest {
 
         assertContains(content, "[citation:1]")
         assertTrue(!content.contains("[citation:9]"))
+    }
+
+    @Test
+    fun `citation verifier keeps mixed available and citation markers with per kind indexes`() {
+        val agent = DirectModelAgent(sessionId = "test_session")
+        agent.resetReferencesForTest()
+        agent.registerAvailableForTest("知识库文档", "kb://topic-1/entry-1")
+        agent.registerCitationForTest("网络来源", "https://example.com/valid")
+
+        val content = agent.ensureCitationMarkersForTest(
+            "本地资料 [available:1] 网络资料 [citation:1] 无效 [available:9]"
+        )
+
+        assertContains(content, "[available:1]")
+        assertContains(content, "[citation:1]")
+        assertTrue(!content.contains("[available:9]"))
     }
 
     @Test

@@ -33,6 +33,9 @@ class WebAppState {
         private set
 
     var currentTab by mutableStateOf(NavTab.SILK)
+
+    var knowledgeBaseNavigationTarget by mutableStateOf<KnowledgeBaseNavigationTarget?>(null)
+        private set
     
     // 标记用户是否明确请求了退出登录
     private var explicitLogoutRequested = false
@@ -89,6 +92,22 @@ class WebAppState {
         if (currentScene == Scene.SETTINGS) navigateBack()
         currentTab = tab
     }
+
+    fun openKnowledgeBaseEntry(entryId: String, topicId: String? = null) {
+        knowledgeBaseNavigationTarget = KnowledgeBaseNavigationTarget(
+            entryId = entryId,
+            topicId = topicId,
+            requestId = kotlin.js.Date.now().toLong(),
+        )
+        selectTab(NavTab.KNOWLEDGE_BASE)
+    }
+
+    fun consumeKnowledgeBaseNavigationTarget(requestId: Long) {
+        val current = knowledgeBaseNavigationTarget ?: return
+        if (current.requestId == requestId) {
+            knowledgeBaseNavigationTarget = null
+        }
+    }
     
     fun navigateBack(): Boolean {
         return if (sceneHistory.isNotEmpty()) {
@@ -133,6 +152,7 @@ class WebAppState {
         explicitLogoutRequested = true
         currentUser = null
         selectedGroup = null
+        knowledgeBaseNavigationTarget = null
         sceneHistory.clear()
         localStorage.removeItem("silk_user")
         currentScene = Scene.LOGIN

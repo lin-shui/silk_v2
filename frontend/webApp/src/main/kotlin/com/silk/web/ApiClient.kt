@@ -947,6 +947,16 @@ object ApiClient {
         }
     }
 
+    suspend fun getKBEntry(entryId: String, userId: String): KBEntryItem? {
+        return recoverApiCall(
+            logMessage = "获取知识库条目详情失败:",
+            fallback = { null },
+        ) {
+            val response = get("/api/kb/entries/$entryId?userId=$userId")
+            jsonParser.decodeFromString(response)
+        }
+    }
+
     suspend fun createKBEntry(topicId: String, title: String, content: String, tags: List<String>, userId: String): KBEntryItem? {
         return recoverApiCall(
             logMessage = "创建知识库条目失败:",

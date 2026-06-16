@@ -22,6 +22,12 @@ import java.io.File
 class DirectModelAgent(
     private val sessionId: String = "default"
 ) {
+    data class AvailableReferenceSeed(
+        val title: String,
+        val snippet: String? = null,
+        val path: String? = null,
+    )
+
     private val logger = LoggerFactory.getLogger(DirectModelAgent::class.java)
 
     /**
@@ -133,12 +139,22 @@ class DirectModelAgent(
     suspend fun processInput(
         userInput: String,
         systemPrompt: String? = null,
+        additionalContext: String? = null,
+        availableReferences: List<AvailableReferenceSeed> = emptyList(),
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
         currentResponseReferences.clear()
         lastAgentResponse = null
 
         val effectiveSystemPrompt = withCitationGuidelines(systemPrompt ?: "你是 Silk，一个智能助手。")
+        availableReferences.forEach { ref ->
+            registerReference(
+                kind = "available",
+                title = ref.title,
+                snippet = ref.snippet,
+                path = ref.path,
+            )
+        }
 
         // 1. 添加用户消息到历史
         conversationHistory.add(Message(role = "user", content = userInput))
@@ -161,7 +177,10 @@ class DirectModelAgent(
                 callback(stepType, content, isComplete)
             }
         }
-        val rawResponse = chat(wrappedCallback)
+        val rawResponse = chat(
+            currentTurnContext = additionalContext,
+            callback = wrappedCallback,
+        )
         if (lastAgentResponse == null) {
             val finalized = finalizeAgentResponse(rawResponse)
             lastAgentResponse = AgentResponse(content = finalized.content, references = finalized.references)
@@ -188,11 +207,13 @@ class DirectModelAgent(
             appendLine("## 引用规则（必须遵守）")
             appendLine("当你使用网络搜索获取信息后，必须在回答中标注信息来源：")
             appendLine("- 引用网络搜索结果时，在相关内容末尾添加 [citation:数字]")
+            appendLine("- 引用用户明确提供的本地知识库/文档时，在相关内容末尾添加 [available:数字]")
             appendLine("- 第一个搜索结果的引用编号为 [citation:1]，第二个为 [citation:2]，以此类推")
+            appendLine("- 第一个本地资料的引用编号为 [available:1]，第二个为 [available:2]，以此类推")
             appendLine("- 引用标记必须放在相关内容的句末或段末")
             appendLine("- 每个重要观点都必须标注来源引用，不能遗漏")
             appendLine("- 禁止堆砌大量引用标记；只为对应观点添加必要引用")
-            appendLine("- 如果你没有使用网络搜索，则不需要添加引用标记")
+            appendLine("- 如果你没有使用任何外部或本地资料，则不需要添加引用标记")
         }
     }
 
@@ -203,7 +224,7 @@ class DirectModelAgent(
         snippet: String? = null,
         path: String? = null
     ): Int {
-        val index = currentResponseReferences.size + 1
+        val index = currentResponseReferences.count { it.kind == kind } + 1
         currentResponseReferences.add(
             com.silk.backend.models.MessageReference(
                 kind = kind,
@@ -222,6 +243,7 @@ class DirectModelAgent(
      * 将 conversationHistory 格式化为文本 prompt，包含 system + 对话轮次 + 当前消息。
      */
     private suspend fun chat(
+        currentTurnContext: String?,
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
         if (!::claudeProcessClient.isInitialized) {
@@ -266,7 +288,7 @@ class DirectModelAgent(
 
         val response = runCatching {
             // 优先使用 Claude CLI（内置 web_search、Grep、Read、glob 工具，原生支持 [citation:N] 引用）
-            runClaudeOrApi(toolContext, callback)
+            runClaudeOrApi(toolContext, currentTurnContext, callback)
         }.getOrElse { error ->
             if (error is CancellationException) {
                 throw error
@@ -284,9 +306,10 @@ class DirectModelAgent(
 
     private suspend fun runClaudeOrApi(
         toolContext: String,
+        currentTurnContext: String?,
         callback: suspend (String, String, Boolean) -> Unit
     ): String = runCatching {
-        chatViaClaudeProcess(toolContext, callback)
+        chatViaClaudeProcess(toolContext, currentTurnContext, callback)
     }.getOrElse { error ->
         if (error is CancellationException) {
             throw error
@@ -294,7 +317,7 @@ class DirectModelAgent(
         logger.warn("⚠️ [DirectModelAgent] Claude CLI 调用失败，回退到 API 路径: ${error.message}")
         val apiKey = AIConfig.ANTHROPIC_API_KEY
         if (apiKey.isNotBlank()) {
-            chatViaAnthropicApi(apiKey, toolContext, callback)
+            chatViaAnthropicApi(apiKey, toolContext, currentTurnContext, callback)
         } else {
             throw error
         }
@@ -302,10 +325,12 @@ class DirectModelAgent(
 
     private suspend fun chatViaClaudeProcess(
         toolContext: String,
+        currentTurnContext: String?,
         callback: suspend (String, String, Boolean) -> Unit
     ): String {
+        val requestHistory = buildRequestHistory(currentTurnContext)
         val fullPrompt = buildString {
-            for (msg in conversationHistory) {
+            for (msg in requestHistory) {
                 when (msg.role) {
                     "system" -> {
                         appendLine(msg.content)
@@ -338,9 +363,11 @@ class DirectModelAgent(
     private suspend fun chatViaAnthropicApi(
         apiKey: String,
         toolContext: String,
+        currentTurnContext: String?,
         callback: suspend (String, String, Boolean) -> Unit
     ): String {
-        val systemMessages = conversationHistory.filter { it.role == "system" }.mapNotNull { it.content }
+        val requestHistory = buildRequestHistory(currentTurnContext)
+        val systemMessages = requestHistory.filter { it.role == "system" }.mapNotNull { it.content }
         val mergedSystem = buildString {
             if (systemMessages.isNotEmpty()) {
                 systemMessages.forEach { appendLine(it) }
@@ -348,7 +375,7 @@ class DirectModelAgent(
             }
             appendLine(toolContext)
         }
-        val nonSystemMessages = conversationHistory.filter { it.role != "system" }
+        val nonSystemMessages = requestHistory.filter { it.role != "system" }
 
         val apiPromptForLog = buildString {
             appendLine("[System]")
@@ -408,6 +435,27 @@ class DirectModelAgent(
 
         logPromptAndResponse("anthropic-api", apiPromptForLog, result.content, System.currentTimeMillis() - apiStartTime)
         return result.content
+    }
+
+    private fun buildRequestHistory(currentTurnContext: String?): List<Message> {
+        if (currentTurnContext.isNullOrBlank()) {
+            return conversationHistory.toList()
+        }
+        val lastUserIndex = conversationHistory.indexOfLast { it.role == "user" }
+        if (lastUserIndex < 0) {
+            return conversationHistory.toList()
+        }
+        return conversationHistory.mapIndexed { index, message ->
+            if (index != lastUserIndex) {
+                message
+            } else {
+                message.copy(content = buildString {
+                    appendLine(message.content)
+                    appendLine()
+                    append(currentTurnContext)
+                })
+            }
+        }
     }
 
     // ── 引用处理 ──────────────────────────────────────────────────────
@@ -574,6 +622,9 @@ class DirectModelAgent(
 
     internal fun registerCitationForTest(title: String, url: String): Int =
         registerReference(kind = "citation", title = title, url = url)
+
+    internal fun registerAvailableForTest(title: String, path: String): Int =
+        registerReference(kind = "available", title = title, path = path)
 
     internal fun citedReferencesForTest(content: String): List<com.silk.backend.models.MessageReference> {
         val result = normalizeCitedReferences(content)

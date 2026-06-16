@@ -226,6 +226,7 @@ private fun KnowledgeEditorPane(
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onSave: () -> Unit,
     onExport: () -> Unit,
+    onCopyReference: () -> Unit,
 ) {
     Div({
         style {
@@ -246,6 +247,7 @@ private fun KnowledgeEditorPane(
                 onEditorModeChange = onEditorModeChange,
                 onSave = onSave,
                 onExport = onExport,
+                onCopyReference = onCopyReference,
             )
             KnowledgeMarkdownWorkspace(
                 content = editorContent,
@@ -427,6 +429,7 @@ private fun KnowledgeEditorToolbar(
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onSave: () -> Unit,
     onExport: () -> Unit,
+    onCopyReference: () -> Unit,
 ) {
     Div({
         style {
@@ -451,6 +454,11 @@ private fun KnowledgeEditorToolbar(
             if (saveMessage.isNotEmpty()) {
                 Span({ style { fontSize(12.px); color(Color(SilkColors.success)) } }) { Text(saveMessage) }
             }
+            KnowledgeToolbarButton(
+                label = "复制引用",
+                background = SilkColors.primaryDark,
+                onClick = onCopyReference,
+            )
             KnowledgeToolbarButton(
                 label = if (isSaving) "保存中..." else "保存",
                 background = SilkColors.primary,
@@ -652,6 +660,32 @@ private suspend fun loadKnowledgeEntries(
     onEntriesChange(ApiClient.getKBEntries(topic.id, userId))
 }
 
+private suspend fun navigateToKnowledgeBaseTarget(
+    target: KnowledgeBaseNavigationTarget,
+    userId: String,
+    existingTopics: List<KBTopicItem>,
+    onTopicsChange: (List<KBTopicItem>) -> Unit,
+    onSelectedTopicChange: (KBTopicItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+): Boolean {
+    val entry = ApiClient.getKBEntry(target.entryId, userId) ?: return false
+    val topics = if (existingTopics.any { it.id == entry.topicId }) {
+        existingTopics
+    } else {
+        ApiClient.getKBTopics(userId).also(onTopicsChange)
+    }
+    val topic = topics.find { it.id == entry.topicId } ?: return false
+    val entries = ApiClient.getKBEntries(topic.id, userId)
+    onSelectedTopicChange(topic)
+    onEntriesChange(entries)
+    val selected = entries.find { it.id == entry.id } ?: entry
+    onSelectedEntryChange(selected)
+    onEditorContentChange(selected.content)
+    return true
+}
+
 private fun loadKnowledgeEntry(
     entry: KBEntryItem,
     onSelectedEntryChange: (KBEntryItem?) -> Unit,
@@ -778,6 +812,25 @@ fun KnowledgeBaseScene(appState: WebAppState) {
         isLoading = false
     }
 
+    val kbNavigationTarget = appState.knowledgeBaseNavigationTarget
+    LaunchedEffect(user.id, kbNavigationTarget?.requestId) {
+        val target = kbNavigationTarget ?: return@LaunchedEffect
+        val handled = navigateToKnowledgeBaseTarget(
+            target = target,
+            userId = user.id,
+            existingTopics = topics,
+            onTopicsChange = { topics = it },
+            onSelectedTopicChange = { selectedTopic = it },
+            onEntriesChange = { entries = it },
+            onSelectedEntryChange = { selectedEntry = it },
+            onEditorContentChange = { editorContent = it },
+        )
+        if (handled) {
+            saveMessage = "已打开引用文档"
+        }
+        appState.consumeKnowledgeBaseNavigationTarget(target.requestId)
+    }
+
     Div({
         style {
             display(DisplayStyle.Flex)
@@ -853,6 +906,11 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                         onSaveMessageChange = { saveMessage = it },
                     )
                 }
+            },
+            onCopyReference = {
+                val entry = selectedEntry ?: return@KnowledgeEditorPane
+                copyTextToClipboard(buildKnowledgeBaseReference(entry))
+                saveMessage = "引用已复制"
             },
         )
     }
