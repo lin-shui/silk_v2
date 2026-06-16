@@ -33,6 +33,7 @@
 - `/api/messages/*`
 - `/api/workflows` (POST **requires directory trust**)
 - `/api/kb/*`
+  - `GET /api/kb/entries/{entryId}?userId=...` 供 UI 通过 entryId 深链定位单篇知识库文档
 - `/api/files/app-version`
 - `/api/files/hap-version`
 - `/api/files/download-hap`
@@ -72,7 +73,8 @@
 7. 对普通文本异步触发 URL/PDF 处理
 8. Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
 9. `/recall` 命令交给 `UserHistoryAgent`，在 per-user hardlink workspace 中只读检索历史会话
-10. Silk AI / `DirectModelAgent` 响应
+10. 解析 `[[kb:entryId|标题]]` 形式的知识库引用，并把文档放入当前轮次 AI 上下文
+11. Silk AI / `DirectModelAgent` 响应
 
 ## Contracts Visible To Clients
 

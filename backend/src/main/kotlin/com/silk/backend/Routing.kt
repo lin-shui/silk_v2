@@ -567,6 +567,7 @@ fun Application.configureRouting() {
         registerApiKbTopicsPostRoute()
         registerApiKbTopicsTopicIdDeleteRoute()
         registerApiKbEntriesGetRoute()
+        registerApiKbEntriesEntryIdGetRoute()
         registerApiKbEntriesPostRoute()
         registerApiKbEntriesEntryIdPutRoute()
         registerApiKbEntriesEntryIdDeleteRoute()
@@ -2973,6 +2974,27 @@ private fun Route.registerApiKbEntriesGetRoute() {
         val list = knowledgeBaseManager.listEntries(topicId, userId)
         call.respondText(
             Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBEntry.serializer()), list),
+            ContentType.Application.Json
+        )
+    }
+}
+
+private fun Route.registerApiKbEntriesEntryIdGetRoute() {
+
+    get("/api/kb/entries/{entryId}") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val userId = call.request.queryParameters["userId"]
+        if (entryId.isBlank() || userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing entryId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val entry = knowledgeBaseManager.getEntry(entryId, userId)
+        if (entry == null) {
+            call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@get
+        }
+        call.respondText(
+            Json.encodeToString(KBEntry.serializer(), entry),
             ContentType.Application.Json
         )
     }

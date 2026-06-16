@@ -197,6 +197,16 @@ fun SilkApp() {
     val appState = remember { WebAppState() }
     val scope = rememberCoroutineScope()
 
+    DisposableEffect(appState) {
+        val bridge: (String?, String) -> Unit = { topicId, entryId ->
+            appState.openKnowledgeBaseEntry(entryId = entryId, topicId = topicId)
+        }
+        window.asDynamic().__silkOpenKnowledgeBaseEntry = bridge
+        onDispose {
+            window.asDynamic().__silkOpenKnowledgeBaseEntry = null
+        }
+    }
+
     if (appState.currentScene == Scene.LOGIN) {
         LoginScene(appState)
     } else {
@@ -4470,6 +4480,9 @@ private fun linkCitationMarkers(
             val label = if (kind == "citation") "来源 $idx" else "资料 $idx"
             if (ref.url != null) {
                 "<a href=\"${ref.url}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"silk-citation-chip\">$label</a>"
+            } else if (parseKnowledgeBaseDeepLink(ref.path) != null) {
+                val kbLink = parseKnowledgeBaseDeepLink(ref.path)!!
+                "<a href=\"#\" class=\"silk-citation-chip silk-kb-link\" data-kb-entry-id=\"${kbLink.entryId}\">$label</a>"
             } else {
                 "<a href=\"#${anchorPrefix}ref-$idx\" class=\"silk-citation-chip silk-citation-nav\" data-idx=\"$idx\">$label</a>"
             }
@@ -4529,7 +4542,9 @@ private fun renderMarkdownSafely(
     return try {
         val rendered = markdownEngine.render(normalizeMathBlocks(prepareMarkdownForRendering(content)))
         val sanitized = sanitizeHtml(rendered, createSanitizeConfig())
-        linkCitationMarkers(sanitized, references, referenceAnchorPrefix)
+        renderKnowledgeBaseMarkersInHtml(
+            linkCitationMarkers(sanitized, references, referenceAnchorPrefix)
+        )
     } catch (_: Throwable) {
         escapeHtmlText(content)
     }
@@ -4608,6 +4623,7 @@ private fun updateMarkdownElement(containerId: String, safeHtml: String): HTMLEl
     val element = document.getElementById(containerId) as? HTMLElement ?: return null
     element.innerHTML = safeHtml
     decorateMarkdownLinks(element)
+    attachKnowledgeBaseLinkHandlers(element)
     wrapMarkdownCodeBlocks(element)
     renderMarkdownMath(element)
     return element
@@ -4727,6 +4743,20 @@ fun ReferenceSourcesList(
                                         property("text-decoration", "none")
                                         property("word-break", "break-all")
                                     }
+                                }) { Text(ref.title) }
+                            } else if (parseKnowledgeBaseDeepLink(ref.path) != null) {
+                                val kbLink = parseKnowledgeBaseDeepLink(ref.path)!!
+                                Span({
+                                    style {
+                                        fontSize(13.px)
+                                        color(Color("#2F80B7"))
+                                        property("text-decoration", "underline")
+                                        property("text-decoration-style", "dotted")
+                                        property("cursor", "pointer")
+                                        property("word-break", "break-all")
+                                    }
+                                    attr("title", "打开知识库文档")
+                                    onClick { openKnowledgeBaseEntryLink(entryId = kbLink.entryId, topicId = kbLink.topicId) }
                                 }) { Text(ref.title) }
                             } else {
                                 Span({
@@ -5290,7 +5320,7 @@ private fun UserTextMessageCard(
     ) {
         StandardMessageBody {
             if (pdfReport == null) {
-                Text(message.content)
+                InlineKnowledgeBaseText(message.content)
             } else {
                 PdfReportMessageBody(pdfReport)
             }

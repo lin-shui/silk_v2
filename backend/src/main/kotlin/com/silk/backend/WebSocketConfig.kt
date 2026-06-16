@@ -28,6 +28,8 @@ import com.silk.backend.database.UnreadRepository
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.todos.GroupTodoExtractionService
 import com.silk.backend.ai.AIConfig
+import com.silk.backend.kb.KnowledgeBaseManager
+import com.silk.backend.kb.resolveKnowledgeBasePromptContext
 import com.silk.backend.search.WeaviateClient
 import com.silk.backend.agents.core.AgentRuntime
 import org.slf4j.LoggerFactory
@@ -84,6 +86,7 @@ class ChatServer(
     }
     // 直接调用模型的 Agent（简化流程：让模型自动使用 tool 能力）
     private val directModelAgent = com.silk.backend.ai.DirectModelAgent(sessionId = sessionName)
+    private val knowledgeBaseManager = KnowledgeBaseManager()
     // 用户历史回忆 Agent（/recall 命令使用）
     private val userHistoryAgent = com.silk.backend.ai.UserHistoryAgent()
     private var messagesSinceAgentResponse = 0
@@ -1057,12 +1060,26 @@ class ChatServer(
         val systemPrompt = buildDirectModelSystemPrompt(historyManager.getRolePrompt(sessionName))
         prepareDirectModelAgentContext()
         initializeDirectModelWorkspace()
+        val kbContext = resolveKnowledgeBasePromptContext(
+            rawInput = userMessage,
+            userId = userId,
+            knowledgeBaseManager = knowledgeBaseManager,
+        )
+        if (kbContext.availableReferences.isNotEmpty()) {
+            logger.info(
+                "📚 [Agent-{}] 注入 {} 条知识库引用到本轮上下文",
+                callId,
+                kbContext.availableReferences.size,
+            )
+        }
 
         val state = IntelligentResponseState()
         val responseResult = runCatching {
             directModelAgent.processInput(
-                userInput = userMessage,
-                systemPrompt = systemPrompt
+                userInput = kbContext.resolvedUserInput,
+                systemPrompt = systemPrompt,
+                additionalContext = kbContext.promptBlock,
+                availableReferences = kbContext.availableReferences,
             ) { stepType, content, isComplete ->
                 handleDirectModelStep(callId, stepType, content, state)
                 maybeSendFinalAgentMessage(callId, userId, stepType, isComplete, state)
