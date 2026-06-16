@@ -29,7 +29,7 @@ import com.silk.backend.database.GroupRepository
 import com.silk.backend.todos.GroupTodoExtractionService
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.kb.KnowledgeBaseManager
-import com.silk.backend.kb.resolveKnowledgeBasePromptContext
+import com.silk.backend.kb.KnowledgeBaseReferenceResolver
 import com.silk.backend.search.WeaviateClient
 import com.silk.backend.agents.core.AgentRuntime
 import org.slf4j.LoggerFactory
@@ -1060,7 +1060,7 @@ class ChatServer(
         val systemPrompt = buildDirectModelSystemPrompt(historyManager.getRolePrompt(sessionName))
         prepareDirectModelAgentContext()
         initializeDirectModelWorkspace()
-        val kbContext = resolveKnowledgeBasePromptContext(
+        val kbContext = KnowledgeBaseReferenceResolver.resolvePromptContext(
             rawInput = userMessage,
             userId = userId,
             knowledgeBaseManager = knowledgeBaseManager,

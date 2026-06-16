@@ -86,14 +86,17 @@ fun openKnowledgeBaseEntryLink(entryId: String, topicId: String? = null): Boolea
 fun attachKnowledgeBaseLinkHandlers(root: HTMLElement) {
     val links = root.querySelectorAll(".silk-kb-link")
     for (index in 0 until links.length) {
-        val link = links.item(index) as? HTMLElement ?: continue
-        if (link.dataset.asDynamic().silkKbBound == "true") continue
-        link.dataset.asDynamic().silkKbBound = "true"
-        link.addEventListener("click", { event ->
-            event.preventDefault()
-            val entryId = link.getAttribute("data-kb-entry-id") ?: return@addEventListener
-            openKnowledgeBaseEntryLink(entryId = entryId)
-        })
+        val link = links.item(index) as? HTMLElement
+        if (link != null && link.dataset.asDynamic().silkKbBound != "true") {
+            link.dataset.asDynamic().silkKbBound = "true"
+            link.addEventListener("click", { event ->
+                event.preventDefault()
+                val entryId = link.getAttribute("data-kb-entry-id")
+                if (entryId != null) {
+                    openKnowledgeBaseEntryLink(entryId = entryId)
+                }
+            })
+        }
     }
 }
 

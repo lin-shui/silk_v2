@@ -22,7 +22,7 @@ class KnowledgeBaseReferenceResolverTest {
         )
         assertNotNull(entry)
 
-        val context = resolveKnowledgeBasePromptContext(
+        val context = KnowledgeBaseReferenceResolver.resolvePromptContext(
             rawInput = "请根据 [[kb:${entry.id}|知识库引用协议]] 给我总结一下",
             userId = userId,
             knowledgeBaseManager = manager,
@@ -48,7 +48,7 @@ class KnowledgeBaseReferenceResolverTest {
         )
         assertNotNull(entry)
 
-        val context = resolveKnowledgeBasePromptContext(
+        val context = KnowledgeBaseReferenceResolver.resolvePromptContext(
             rawInput = "看看 [[kb:${entry.id}]]",
             userId = "guest",
             knowledgeBaseManager = manager,
