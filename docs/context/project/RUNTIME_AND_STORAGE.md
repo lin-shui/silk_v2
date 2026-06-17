@@ -19,6 +19,7 @@
 | Chat history root | `chat_history/` or `-Dsilk.chatHistoryDir=...` | `ChatHistoryManager`, 文件上传、URL 缓存 |
 | Session history | `chat_history/<session>/session.json`, `chat_history.json` | WebSocket 历史回放 |
 | Uploaded files | `chat_history/<session>/uploads/` | 文件消息、下载 |
+| AI workspace (cross-group) | `backend/chat_workspaces/<session>/other_groups/` | Silk 专属对话 AI 跨群搜索上下文 |
 | URL dedupe | `chat_history/<session>/uploads/processed_urls.txt` | URL/PDF 下载去重 |
 | User todos | `chat_history/user_todos/*.json` or `-Dsilk.userTodoBaseDir=...` | `UserTodoStore`（兼容旧 `backend/chat_history/user_todos` / `../chat_history/user_todos` 查找） |
 | Workflow store | `~/.silk-data/workflows/workflow_store.json`, `SILK_WORKFLOW_DIR`, or `-Dsilk.workflowDir=...` | `WorkflowManager` |

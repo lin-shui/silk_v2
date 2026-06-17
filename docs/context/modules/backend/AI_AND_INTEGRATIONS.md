@@ -38,6 +38,11 @@
   - 基于 `DirectModelAgent.accessibleSessionIds` 限制搜索范围
   - 搜索 `_text.txt`（PDF 提取文本）和 `session.json`（聊天消息）
   - 结果截断至 30000 字符，路径层级限制防逃逸
+- `writeOtherGroupsHistories()` 跨群上下文注入：
+  - 仅在 Silk 专属对话中触发（`accessibleSessionIds.size > 1`）
+  - 遍历用户所有群组，读取最近 50 条 TEXT 消息
+  - 写入 `workspaceDir/other_groups/chat_history_<群名>.md`
+  - AI 可通过 Grep/Read 工具跨群搜索，提示词中明确告知跨群访问权限
 - `utils/WebPageDownloader.kt`：
   - URL 提取、HTML/PDF 下载、提取、落盘
   - `WebPageDownloaderSmokeTest` 覆盖本地 smoke

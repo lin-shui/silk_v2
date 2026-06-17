@@ -655,6 +655,9 @@ fun ChatScene(appState: WebAppState) {
     var unreadCounts by remember(user?.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var isLoadingGroups by remember(user?.id) { mutableStateOf(true) }
     var sidebarCcStatus by remember(user?.id) { mutableStateOf<Map<String, CcConnectTokenInfo>>(emptyMap()) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var showJoinDialog by remember { mutableStateOf(false) }
+    val strings = com.silk.shared.i18n.getStrings(com.silk.shared.models.Language.CHINESE)
     
     console.log("   群组:", group?.name ?: "null")
     console.log("   用户:", user?.fullName ?: "null")
@@ -848,12 +851,24 @@ fun ChatScene(appState: WebAppState) {
                         }) {
                             Div({
                                 style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { showCreateDialog = true; showMenu = false }
+                            }) { Text("➕ ${strings.createButton}") }
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { showJoinDialog = true; showMenu = false }
+                            }) { Text("🔗 ${strings.joinButton}") }
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { appState.navigateTo(Scene.CONTACTS); showMenu = false }
+                            }) { Text("👤 ${strings.contactsButton}") }
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
                                 onClick { appState.navigateTo(Scene.SETTINGS); showMenu = false }
-                            }) { Text("⚙️ 设置") }
+                            }) { Text("⚙️ ${strings.settingsButton}") }
                             Div({
                                 style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
                                 onClick { appState.logout(); showMenu = false }
-                            }) { Text("🚪 退出登录") }
+                            }) { Text("🚪 ${strings.logoutButton}") }
                         }
                     }
                 }
@@ -1135,6 +1150,30 @@ fun ChatScene(appState: WebAppState) {
         }) {
             ChatAppWithGroup(user, group, appState)
         }
+    }
+    
+    // 创建/加入群组对话框
+    if (showCreateDialog) {
+        CreateGroupDialog(
+            appState = appState,
+            strings = strings,
+            onDismiss = { showCreateDialog = false },
+            onGroupCreated = { newGroup ->
+                userGroups = userGroups + newGroup
+            },
+            onComplete = { showCreateDialog = false }
+        )
+    }
+    if (showJoinDialog) {
+        JoinGroupDialog(
+            appState = appState,
+            strings = strings,
+            onDismiss = { showJoinDialog = false },
+            onGroupJoined = { newGroup ->
+                userGroups = userGroups + newGroup
+                showJoinDialog = false
+            }
+        )
     }
 }
 
