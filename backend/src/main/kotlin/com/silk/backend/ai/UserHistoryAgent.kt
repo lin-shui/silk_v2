@@ -30,10 +30,11 @@ class UserHistoryAgent(
     ): String {
         val workspace = workspaceManager.ensureWorkspace(userId)
 
+        // feat 版 ClaudeProcessClient 通过 Landlock 沙箱 + strict-settings 控制权限，
+        // 不接受 chore 的 permissionMode 参数；recall 为只读历史查询，沿用默认权限即可。
         val historyClient = ClaudeProcessClient(
             groupId = "history_$userId",
             workspaceDir = workspace.toString(),
-            permissionMode = "dontAsk",
         )
 
         val prompt = buildHistoryPrompt(userMessage)
