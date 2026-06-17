@@ -4,6 +4,7 @@ PTY bridge for claude CLI - forces real-time token streaming via --include-parti
 Parses stream-json output, streams thinking and text deltas incrementally to stdout.
 """
 
+import argparse
 import json
 import os
 import pty
@@ -13,11 +14,17 @@ import uuid
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: pty_chat.py <prompt_file>", file=sys.stderr)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="PTY bridge for claude CLI")
+    parser.add_argument("prompt_file", help="Path to prompt text file")
+    parser.add_argument("--permission-mode", dest="permission_mode", default=None,
+                        choices=["dontAsk", "bypassPermissions"],
+                        help="Claude CLI permission mode")
+    parser.add_argument("--disallowed-tools", dest="disallowed_tools",
+                        default="Bash,Write,Edit,ExecuteCommand",
+                        help="Comma-separated list of disallowed tools")
+    args = parser.parse_args()
 
-    prompt_file = sys.argv[1]
+    prompt_file = args.prompt_file
 
     with open(prompt_file, "r", encoding="utf-8") as f:
         prompt = f.read()
@@ -26,7 +33,6 @@ def main():
         "claude",
         "-p", prompt,
         "--session-id", str(uuid.uuid4()),
-        "--disallowedTools", "Bash,Write,Edit,ExecuteCommand",
         "--no-chrome",
         "--print",
         "--output-format", "stream-json",
@@ -34,12 +40,18 @@ def main():
         "--include-partial-messages",
     ]
 
-    # root 用户下 claude CLI 拒绝 --permission-mode bypassPermissions，
-    # 非 root 时加上可跳过权限交互提示。
-    if os.getuid() != 0:
-        cmd.insert(cmd.index("--no-chrome") + 1, "--permission-mode")
-        cmd.insert(cmd.index("--permission-mode") + 1, "bypassPermissions")
-        cmd.insert(cmd.index("--permission-mode") + 2, "--allow-dangerously-skip-permissions")
+    permission_mode = args.permission_mode
+
+    if permission_mode == "dontAsk":
+        # dontAsk 模式自带只读 + 目录沙盒，不需要 --disallowedTools
+        cmd.extend(["--permission-mode", "dontAsk"])
+    else:
+        # 默认行为：禁用危险工具
+        cmd.extend(["--disallowedTools", args.disallowed_tools])
+        # root 用户下 claude CLI 拒绝 --permission-mode bypassPermissions，
+        # 非 root 时加上可跳过权限交互提示。
+        if os.getuid() != 0:
+            cmd.extend(["--permission-mode", permission_mode or "bypassPermissions"])
 
     pid, fd = pty.fork()
 

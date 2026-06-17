@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# CC Bridge 管理脚本
+# Cursor Bridge 管理脚本
 # ============================================================
 # 用法:
 #   ./bridge.sh start   - 后台启动 Bridge
@@ -32,18 +32,16 @@ BRIDGE_SERVER="${BRIDGE_SERVER:-}"
 BRIDGE_TOKEN="${BRIDGE_TOKEN:-}"
 BRIDGE_WORKING_DIR="${BRIDGE_WORKING_DIR:-$(pwd)}"
 BRIDGE_LOG_LEVEL="${BRIDGE_LOG_LEVEL:-INFO}"
-# Export proxy vars so Python subprocess can read them via os.environ
-export CLAUDE_HTTP_PROXY="${CLAUDE_HTTP_PROXY:-}"
-export CLAUDE_HTTPS_PROXY="${CLAUDE_HTTPS_PROXY:-}"
-# Export permission mode so executor can control --permission-mode behavior
-export CLAUDE_CODE_PERMISSION_MODE="${CLAUDE_CODE_PERMISSION_MODE:-}"
-# Export raw CLI I/O log toggle (writes stdin/stdout JSON to cli_raw.log)
-export BRIDGE_CLI_RAW_LOG="${BRIDGE_CLI_RAW_LOG:-}"
 # 可选：WSS 自签证书时设为 1（bridge.sh 会传 --tls-insecure）
 BRIDGE_TLS_INSECURE="${BRIDGE_TLS_INSECURE:-}"
 # 可选：仓库外 venv 的 python 绝对路径，例如 /Users/you/venvs/silk-bridge/bin/python3
 BRIDGE_PYTHON="${BRIDGE_PYTHON:-}"
-BRIDGE_SCRIPT="acp_adapter.py"
+# Export Cursor agent path so cursor_acp_relay can find the binary
+export CURSOR_AGENT_PATH="${CURSOR_AGENT_PATH:-}"
+# Export idle timeout override (default 1800s = 30min)
+export CURSOR_IDLE_TIMEOUT="${CURSOR_IDLE_TIMEOUT:-}"
+
+BRIDGE_SCRIPT="cursor_adapter.py"
 
 # ---- 辅助函数 ----
 
@@ -73,6 +71,7 @@ _check_config() {
         echo "     # BRIDGE_WORKING_DIR=/path/to/workdir  (可选)"
         echo "     # BRIDGE_LOG_LEVEL=INFO                (可选)"
         echo "     # BRIDGE_TLS_INSECURE=1                (可选，自签 WSS 证书)"
+        echo "     # CURSOR_AGENT_PATH=/path/to/agent     (可选，Cursor agent CLI 路径)"
         echo ""
         echo "  2) 设置环境变量:"
         echo "     export BRIDGE_SERVER=localhost:8006"
@@ -115,7 +114,8 @@ do_start() {
     _check_config || return 1
     _resolve_python_bin || return 1
 
-    echo -e "${BLUE}启动 CC Bridge...${NC}"
+    echo -e "${BLUE}启动 Cursor Bridge...${NC}"
+    echo -e "  Script:      ${GREEN}$BRIDGE_SCRIPT${NC}"
     echo -e "  Server:      ${GREEN}$BRIDGE_SERVER${NC}"
     echo -e "  Python:      $PYTHON_BIN"
     echo -e "  Working dir: $BRIDGE_WORKING_DIR"
@@ -162,7 +162,7 @@ do_stop() {
     pid=$(_get_pid)
     echo -e "${BLUE}停止 Bridge (PID: $pid)...${NC}"
 
-    # 发送 SIGTERM，让 bridge 优雅关闭
+    # 发送 SIGTERM，让 cursor_adapter.py 优雅关闭
     kill "$pid" 2>/dev/null
 
     # 等待最多 10 秒
@@ -191,7 +191,7 @@ do_status() {
     if _is_running; then
         local pid
         pid=$(_get_pid)
-        echo -e "${GREEN}Bridge 运行中 (PID: $pid)${NC}"
+        echo -e "${GREEN}Cursor Bridge 运行中 (PID: $pid)${NC}"
         if [ -n "$BRIDGE_SERVER" ]; then
             echo -e "  Server: $BRIDGE_SERVER"
         fi
@@ -228,7 +228,7 @@ case "${1:-}" in
         ;;
     *)
         echo ""
-        echo -e "${BLUE}CC Bridge 管理脚本${NC}"
+        echo -e "${BLUE}Cursor Bridge 管理脚本${NC}"
         echo ""
         echo "用法: $0 <命令>"
         echo ""
@@ -240,6 +240,10 @@ case "${1:-}" in
         echo "  logs, l    查看日志 (tail -f)"
         echo ""
         echo "配置: 在 $BRIDGE_DIR/.env 中设置 BRIDGE_SERVER 和 BRIDGE_TOKEN"
+        echo ""
+        echo "环境变量:"
+        echo "  CURSOR_AGENT_PATH=/path/to/agent  Cursor agent CLI 路径（不设则自动探测）"
+        echo "  CURSOR_IDLE_TIMEOUT=1800          空闲回收超时秒数（默认 30 分钟）"
         echo ""
         ;;
 esac

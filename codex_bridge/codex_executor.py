@@ -1,22 +1,34 @@
 """Codex CLI executor — wraps `codex exec --json` and parses its JSONL stream.
 
-M1 scope: text-only prompt/response. tool_call mapping (command_execution,
-file_change, reasoning) is deferred to M2.
+Normalizes agent messages, reasoning, command/file edits, function calls,
+built-in tool events, and terminal turn status for the ACP bridge layer.
 """
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
+import os
 import shlex
+import signal
 import time
-from dataclasses import dataclass
 from typing import Any, AsyncGenerator
 
 logger = logging.getLogger("codex_bridge.executor")
 
 # Seconds between idle heartbeat status updates (matches cc_bridge).
 IDLE_REFRESH_S: float = 2.0
+
+# Subprocess cleanup guards. The initial grace period gives Codex time to flush
+# rollout/session data; the kill grace period bounds bridge-side hangs.
+PROCESS_EXIT_GRACE_S: float = 30.0
+PROCESS_KILL_GRACE_S: float = 5.0
+STDERR_DRAIN_GRACE_S: float = 5.0
+
+# Total execution timeout (seconds). Kill the subprocess if it exceeds this.
+# Mirrors cc_bridge's CLAUDE_CODE_TIMEOUT. Default: 10 hours.
+CODEX_TIMEOUT: int = int(os.environ.get("CODEX_TIMEOUT", "36000"))
 
 
 # ---------------------------------------------------------------------------
@@ -34,7 +46,13 @@ def parse_jsonl_event(raw: dict[str, Any]) -> dict[str, Any]:
         {"kind": "command_completed", "tool_id": str, "command": str, "exit_code": int, "output": str}
         {"kind": "file_change_started", "tool_id": str, "paths": list[str], "kinds": list[str]}
         {"kind": "file_change_completed", "tool_id": str, "paths": list[str], "kinds": list[str]}
+        {"kind": "function_call_started", "tool_id": str, "name": str, "arguments": str}
+        {"kind": "function_call_completed", "tool_id": str, "name": str, "status": str, "output": str}
+        {"kind": "tool_started", "tool_id": str, "tool_name": str, "input": str}
+        {"kind": "tool_completed", "tool_id": str, "tool_name": str, "output": str}
         {"kind": "turn_completed", "input_tokens": int, "output_tokens": int, "reasoning_tokens": int}
+        {"kind": "turn_failed", "error": str}
+        {"kind": "error", "message": str, "transient": bool}
         {"kind": "ignore"}
     """
     t = raw.get("type")
@@ -56,7 +74,8 @@ def parse_jsonl_event(raw: dict[str, Any]) -> dict[str, Any]:
 
         # Reasoning: only emitted as item.completed (when show_raw_agent_reasoning=true)
         if item_type == "reasoning" and t == "item.completed":
-            return {"kind": "reasoning", "text": item.get("text", "")}
+            text = _extract_reasoning_text(item)
+            return {"kind": "reasoning", "text": text}
 
         # Command execution: paired item.started + item.completed
         if item_type == "command_execution":
@@ -87,6 +106,42 @@ def parse_jsonl_event(raw: dict[str, Any]) -> dict[str, Any]:
                 "kinds": kinds_list,
             }
 
+        # Function call (custom functions / MCP): paired started + completed
+        if item_type == "function_call":
+            name = item.get("name", "")
+            if t == "item.started":
+                return {
+                    "kind": "function_call_started",
+                    "tool_id": item_id,
+                    "name": name,
+                    "arguments": item.get("arguments", ""),
+                }
+            return {
+                "kind": "function_call_completed",
+                "tool_id": item_id,
+                "name": name,
+                "status": item.get("status", ""),
+                "output": item.get("output", ""),
+            }
+
+        # Built-in tools: web_search, file_search, code_interpreter, computer_use, mcp_tool
+        tool_name = _CODEX_TOOL_NAMES.get(item_type)
+        if tool_name is not None:
+            tool_input = _extract_tool_input(item)
+            if t == "item.started":
+                return {
+                    "kind": "tool_started",
+                    "tool_id": item_id,
+                    "tool_name": tool_name,
+                    "input": tool_input,
+                }
+            return {
+                "kind": "tool_completed",
+                "tool_id": item_id,
+                "tool_name": tool_name,
+                "output": tool_input,
+            }
+
         return {"kind": "ignore"}
 
     if t == "turn.completed":
@@ -98,7 +153,148 @@ def parse_jsonl_event(raw: dict[str, Any]) -> dict[str, Any]:
             "reasoning_tokens": int(usage.get("reasoning_output_tokens") or 0),
         }
 
+    if t == "turn.failed":
+        err_msg = ""
+        err_obj = raw.get("error")
+        if isinstance(err_obj, dict):
+            err_msg = err_obj.get("message", "")
+        if not err_msg:
+            err_msg = "turn failed (no details)"
+        return {"kind": "turn_failed", "error": err_msg}
+
+    if t == "error":
+        msg = raw.get("message", "")
+        transient = any(kw in msg for kw in ("Reconnecting", "Falling back"))
+        return {"kind": "error", "message": msg, "transient": transient}
+
     return {"kind": "ignore"}
+
+
+# Mapping of Codex item types to human-readable tool names
+# (mirrors cc-connect codexToolNames)
+_CODEX_TOOL_NAMES: dict[str, str] = {
+    "web_search": "WebSearch",
+    "file_search": "FileSearch",
+    "code_interpreter": "CodeInterpreter",
+    "computer_use": "ComputerUse",
+    "mcp_tool": "MCP",
+}
+
+
+def _extract_tool_input(item: dict[str, Any]) -> str:
+    """Extract a human-readable input/output string from a Codex tool item."""
+    # web_search: action.queries[] or query
+    action = item.get("action")
+    if isinstance(action, dict):
+        queries = action.get("queries")
+        if isinstance(queries, list) and queries:
+            parts = [str(q) for q in queries if q]
+            if parts:
+                return "\n".join(parts)
+        query = action.get("query")
+        if query:
+            return str(query)
+    query = item.get("query")
+    if query:
+        return str(query)
+    name = item.get("name")
+    if name:
+        return str(name)
+    return ""
+
+
+def _extract_reasoning_text(item: dict[str, Any]) -> str:
+    """Extract text from a reasoning item, handling both summary[] and text formats."""
+    summary = item.get("summary")
+    if isinstance(summary, list):
+        parts = []
+        for entry in summary:
+            if isinstance(entry, dict):
+                t = entry.get("type", "")
+                if t == "summary_text":
+                    text = entry.get("text", "")
+                    if text:
+                        parts.append(text)
+            elif isinstance(entry, str) and entry.strip():
+                parts.append(entry)
+        if parts:
+            return "\n".join(parts)
+    return item.get("text", "")
+
+
+def _proc_pid(proc: Any) -> str:
+    pid = getattr(proc, "pid", None)
+    return str(pid) if pid is not None else "?"
+
+
+def _signal_name(sig: int) -> str:
+    try:
+        return signal.Signals(sig).name
+    except ValueError:
+        return str(sig)
+
+
+def _send_signal(proc: Any, sig: int, *, phase: str) -> None:
+    pid = getattr(proc, "pid", None)
+    sig_name = _signal_name(sig)
+    try:
+        if os.name == "posix" and pid is not None:
+            os.killpg(pid, sig)
+            logger.warning(
+                "sent %s to codex process group pgid=%s during %s",
+                sig_name,
+                pid,
+                phase,
+            )
+            return
+        if sig == signal.SIGKILL:
+            proc.kill()
+        else:
+            proc.send_signal(sig)
+        logger.warning(
+            "sent %s to codex process pid=%s during %s",
+            sig_name,
+            _proc_pid(proc),
+            phase,
+        )
+    except ProcessLookupError:
+        logger.info(
+            "codex process already exited before %s during %s: pid=%s",
+            sig_name,
+            phase,
+            _proc_pid(proc),
+        )
+
+
+async def _wait_for_process_exit(proc: Any, *, timeout: float, phase: str) -> bool:
+    if proc.returncode is not None:
+        return True
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=timeout)
+        return True
+    except asyncio.TimeoutError:
+        logger.warning(
+            "codex process still running after %.1fs during %s: pid=%s",
+            timeout,
+            phase,
+            _proc_pid(proc),
+        )
+        return False
+
+
+async def _drain_stderr_task(stderr_task: asyncio.Task[bytes], *, timeout: float, phase: str) -> bytes:
+    try:
+        return await asyncio.wait_for(asyncio.shield(stderr_task), timeout=timeout)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "timed out draining codex stderr after %.1fs during %s; cancelling stderr reader",
+            timeout,
+            phase,
+        )
+        stderr_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await stderr_task
+        return b""
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +342,15 @@ class CodexExecutor:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            start_new_session=(os.name == "posix"),
+            limit=10 * 1024 * 1024,  # 10 MB — Codex JSONL lines can exceed the 64 KB default
+        )
+        logger.info(
+            "codex exec started: pid=%s cwd=%s resume=%s prompt_chars=%d",
+            _proc_pid(proc),
+            cwd,
+            resume_thread_id or "-",
+            len(prompt),
         )
         assert proc.stdin is not None
         proc.stdin.write(prompt.encode("utf-8"))
@@ -161,9 +366,15 @@ class CodexExecutor:
 
         assert proc.stdout is not None
 
+        # Timeout watchdog — kill subprocess after CODEX_TIMEOUT seconds
+        # (mirrors cc_bridge's _timeout_watchdog).
+        timeout_task = asyncio.create_task(self._timeout_watchdog(proc))
+
         # Phase-aware idle heartbeat (mirrors cc_bridge/executor.py)
         model_thinking = True
         phase_start_time = time.monotonic()
+        last_kind = "_proc"
+        saw_stdout_eof = False
 
         try:
             while True:
@@ -185,7 +396,14 @@ class CodexExecutor:
                     continue
 
                 if not raw_line:
-                    break  # EOF
+                    saw_stdout_eof = True
+                    logger.info(
+                        "codex stdout EOF: pid=%s returncode=%s last_kind=%s",
+                        _proc_pid(proc),
+                        proc.returncode,
+                        last_kind,
+                    )
+                    break
 
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line:
@@ -201,42 +419,113 @@ class CodexExecutor:
                 # Phase transitions for heartbeat status text
                 prev_thinking = model_thinking
                 kind = parsed.get("kind")
-                if kind in ("command_started", "file_change_started", "agent_message"):
+                if kind:
+                    last_kind = str(kind)
+                if kind in ("command_started", "file_change_started", "agent_message",
+                            "function_call_started", "tool_started"):
                     model_thinking = False
-                elif kind in ("command_completed", "file_change_completed", "reasoning"):
+                elif kind in ("command_completed", "file_change_completed", "reasoning",
+                              "function_call_completed", "tool_completed"):
                     model_thinking = True
                 if model_thinking != prev_thinking:
                     phase_start_time = time.monotonic()
 
                 yield parsed
         finally:
-            rc = await proc.wait()
-            stderr_bytes = await stderr_task
-            yield {
-                "kind": "_done",
-                "exit_code": rc,
-                "stderr": stderr_bytes.decode("utf-8", errors="replace"),
-            }
+            timeout_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await timeout_task
+
+            # Wait for process exit with a short grace period. If the caller
+            # broke out of the loop (e.g. after turn_completed), we cannot
+            # yield here (GeneratorExit would be raised). Just wait/kill and log.
+            exit_phase = (
+                "executor cleanup after stdout EOF"
+                if saw_stdout_eof
+                else "executor cleanup after caller break"
+            )
+            exited = await _wait_for_process_exit(
+                proc,
+                timeout=PROCESS_EXIT_GRACE_S,
+                phase=exit_phase,
+            )
+            if not exited:
+                _send_signal(proc, signal.SIGKILL, phase=exit_phase)
+                exited = await _wait_for_process_exit(
+                    proc,
+                    timeout=PROCESS_KILL_GRACE_S,
+                    phase=f"{exit_phase} after SIGKILL",
+                )
+                if not exited:
+                    logger.error(
+                        "codex process did not exit after SIGKILL; continuing cleanup without it: pid=%s last_kind=%s",
+                        _proc_pid(proc),
+                        last_kind,
+                    )
+
+            stderr_phase = exit_phase if exited else f"{exit_phase} (process still running)"
+            stderr_bytes = await _drain_stderr_task(
+                stderr_task,
+                timeout=STDERR_DRAIN_GRACE_S,
+                phase=stderr_phase,
+            )
+            rc = proc.returncode or 0
+            if rc != 0:
+                stderr_text = stderr_bytes.decode("utf-8", errors="replace")
+                logger.warning(
+                    "codex process exited with code %d: %s", rc, stderr_text[:500],
+                )
+
+    @staticmethod
+    async def _timeout_watchdog(proc: asyncio.subprocess.Process) -> None:
+        """Kill the subprocess after CODEX_TIMEOUT seconds."""
+        try:
+            await asyncio.sleep(CODEX_TIMEOUT)
+            if proc.returncode is None:
+                logger.warning(
+                    "codex subprocess timed out (%ds), killing", CODEX_TIMEOUT,
+                )
+                _send_signal(proc, signal.SIGKILL, phase="timeout watchdog")
+        except asyncio.CancelledError:
+            pass
 
 
 async def cancel_process(
     proc: Any,  # asyncio.subprocess.Process or compatible
     *,
     sigint_grace_seconds: float = 1.0,
+    sigkill_grace_seconds: float = PROCESS_KILL_GRACE_S,
 ) -> None:
     """Cancel a running codex subprocess: SIGINT first, then SIGKILL after grace.
 
     Sends SIGINT to give codex a chance to flush its session file and exit
     cleanly. If the process hasn't exited within `sigint_grace_seconds`,
-    escalates to SIGKILL. No-op if the process is already dead.
+    escalates to SIGKILL, but never waits forever. No-op if the process is
+    already dead.
     """
     if proc.returncode is not None:
         return  # already exited
-    import signal as _signal
-    proc.send_signal(_signal.SIGINT)
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=sigint_grace_seconds)
-    except asyncio.TimeoutError:
-        logger.warning("codex did not exit %ss after SIGINT, escalating to SIGKILL", sigint_grace_seconds)
-        proc.kill()
-        await proc.wait()
+    _send_signal(proc, signal.SIGINT, phase="cancel")
+    exited = await _wait_for_process_exit(
+        proc,
+        timeout=sigint_grace_seconds,
+        phase="cancel after SIGINT",
+    )
+    if exited:
+        return
+    logger.warning(
+        "codex did not exit %.1fs after SIGINT, escalating to SIGKILL: pid=%s",
+        sigint_grace_seconds,
+        _proc_pid(proc),
+    )
+    _send_signal(proc, signal.SIGKILL, phase="cancel escalation")
+    exited = await _wait_for_process_exit(
+        proc,
+        timeout=sigkill_grace_seconds,
+        phase="cancel after SIGKILL",
+    )
+    if not exited:
+        logger.error(
+            "codex process did not exit after SIGKILL during cancel; continuing anyway: pid=%s",
+            _proc_pid(proc),
+        )
