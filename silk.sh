@@ -18,45 +18,142 @@
 # ============================================================
 
 
-# Java Home - 支持 macOS Homebrew 和 Linux
-if [ -d "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" ]; then
-    export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
-elif [ -d "/usr/lib/jvm/java-17-openjdk-amd64" ]; then
-    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-elif [ -d "/usr/lib/jvm/java-17-openjdk" ]; then
-    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
-else
-    export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java) 2>/dev/null || echo "/usr/bin/java") 2>/dev/null) 2>/dev/null)
-fi
-export PATH=$JAVA_HOME/bin:$PATH
+path_prepend_if_dir() {
+    local dir="$1"
+    [ -d "$dir" ] || return 0
+    case ":$PATH:" in
+        *":$dir:"*) ;;
+        *) PATH="$dir:$PATH" ;;
+    esac
+}
 
-# Android SDK - 支持 macOS Homebrew、Linux 和 Android Studio
-if [ -d "/opt/homebrew/share/android-commandlinetools" ]; then
-    export ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
-elif [ -d "$HOME/Library/Android/sdk" ]; then
-    export ANDROID_HOME="$HOME/Library/Android/sdk"
-elif [ -d "/usr/lib/android-sdk" ]; then
-    export ANDROID_HOME=/usr/lib/android-sdk
-elif [ -d "/root/Android/Sdk" ]; then
-    export ANDROID_HOME=/root/Android/Sdk
-elif [ -d "/root/android-sdk" ]; then
-    export ANDROID_HOME=/root/android-sdk
+is_android_sdk_root() {
+    local dir="$1"
+    [ -n "$dir" ] || return 1
+    [ -d "$dir" ] || return 1
+    [ -d "$dir/platform-tools" ] || [ -d "$dir/build-tools" ] || [ -d "$dir/cmdline-tools" ]
+}
+
+detect_java_home() {
+    if [ -n "$JAVA_HOME" ] && [ -x "$JAVA_HOME/bin/java" ]; then
+        printf '%s\n' "$JAVA_HOME"
+        return 0
+    fi
+
+    if [ "$(uname -s)" = "Darwin" ] && [ -x /usr/libexec/java_home ]; then
+        local mac_java_home
+        mac_java_home=$(/usr/libexec/java_home -v 17 2>/dev/null)
+        if [ -n "$mac_java_home" ]; then
+            printf '%s\n' "$mac_java_home"
+            return 0
+        fi
+
+        mac_java_home=$(/usr/libexec/java_home 2>/dev/null)
+        if [ -n "$mac_java_home" ]; then
+            printf '%s\n' "$mac_java_home"
+            return 0
+        fi
+    fi
+
+    for candidate in \
+        "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" \
+        "/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home" \
+        "/usr/lib/jvm/java-17-openjdk-amd64" \
+        "/usr/lib/jvm/java-17-openjdk"; do
+        if [ -x "$candidate/bin/java" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    local java_bin
+    java_bin=$(command -v java 2>/dev/null || true)
+    if [ -n "$java_bin" ]; then
+        if [ "$(uname -s)" = "Darwin" ]; then
+            java_bin=$(perl -MCwd=abs_path -e 'print abs_path(shift) // q()' "$java_bin" 2>/dev/null)
+        else
+            java_bin=$(readlink -f "$java_bin" 2>/dev/null || printf '%s' "$java_bin")
+        fi
+        if [ -n "$java_bin" ]; then
+            dirname "$(dirname "$java_bin")"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+detect_android_sdk_root() {
+    for candidate in \
+        "$ANDROID_SDK_ROOT" \
+        "$ANDROID_HOME" \
+        "$HOME/Library/Android/sdk" \
+        "$HOME/Android/Sdk" \
+        "/usr/lib/android-sdk" \
+        "/root/Android/Sdk" \
+        "/root/android-sdk"; do
+        if is_android_sdk_root "$candidate"; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+JAVA_HOME_DETECTED=$(detect_java_home 2>/dev/null || true)
+if [ -n "$JAVA_HOME_DETECTED" ]; then
+    export JAVA_HOME="$JAVA_HOME_DETECTED"
+    path_prepend_if_dir "$JAVA_HOME/bin"
 fi
-if [ -n "$ANDROID_HOME" ]; then
-    export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
+unset JAVA_HOME_DETECTED
+
+ANDROID_SDK_ROOT_DETECTED=$(detect_android_sdk_root 2>/dev/null || true)
+if [ -n "$ANDROID_SDK_ROOT_DETECTED" ]; then
+    export ANDROID_HOME="$ANDROID_SDK_ROOT_DETECTED"
+    export ANDROID_SDK_ROOT="$ANDROID_SDK_ROOT_DETECTED"
+    path_prepend_if_dir "$ANDROID_SDK_ROOT/bin"
+    path_prepend_if_dir "$ANDROID_SDK_ROOT/platform-tools"
+    path_prepend_if_dir "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin"
 fi
+unset ANDROID_SDK_ROOT_DETECTED
+
+path_prepend_if_dir "/opt/homebrew/share/android-commandlinetools/cmdline-tools/latest/bin"
+path_prepend_if_dir "/opt/homebrew/share/android-commandlinetools/bin"
 
 # AAPT2 架构自动检测与配置
 # ARM64 系统需要指定本地 ARM64 AAPT2，否则 Gradle 会下载 x86-64 版本导致无法执行
+is_arm64_arch() {
+    case "$(uname -m)" in
+        arm64|aarch64) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+sed_in_place() {
+    local script="$1"
+    local file="$2"
+    sed -i.bak "$script" "$file" && rm -f "${file}.bak"
+}
+
+file_mtime_human() {
+    local file="$1"
+    if stat -f '%Sm' "$file" >/dev/null 2>&1; then
+        stat -f '%Sm' "$file"
+    else
+        stat -c '%y' "$file" 2>/dev/null | cut -d. -f1
+    fi
+}
+
 setup_aapt2_for_arch() {
     local CURRENT_ARCH=$(uname -m)
     local LOCAL_PROPERTIES="$SILK_DIR/local.properties"
     
     # 只在 ARM64 系统上需要特殊处理
-    if [ "$CURRENT_ARCH" != "aarch64" ]; then
+    if ! is_arm64_arch; then
         # 非 ARM64 系统，移除 override 配置（如果存在）
         if grep -q "android.aapt2FromMavenOverride" "$LOCAL_PROPERTIES" 2>/dev/null; then
-            sed -i '/android.aapt2FromMavenOverride/d' "$LOCAL_PROPERTIES"
+            sed_in_place '/android.aapt2FromMavenOverride/d' "$LOCAL_PROPERTIES"
         fi
         return 0
     fi
@@ -65,7 +162,8 @@ setup_aapt2_for_arch() {
     local ARM64_AAPT2=""
     for build_tools_dir in "$ANDROID_HOME/build-tools"/*/; do
         if [ -x "${build_tools_dir}aapt2" ]; then
-            local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -E 'aarch64|ARM aarch64' | head -1)
+            local aapt2_arch
+            aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -E 'arm64|aarch64|ARM aarch64' | head -1)
             if [ -n "$aapt2_arch" ]; then
                 ARM64_AAPT2="${build_tools_dir}aapt2"
                 break
@@ -80,7 +178,7 @@ setup_aapt2_for_arch() {
     
     # 写入 local.properties
     if grep -q "android.aapt2FromMavenOverride" "$LOCAL_PROPERTIES" 2>/dev/null; then
-        sed -i "s|android.aapt2FromMavenOverride=.*|android.aapt2FromMavenOverride=$ARM64_AAPT2|" "$LOCAL_PROPERTIES"
+        sed_in_place "s|android.aapt2FromMavenOverride=.*|android.aapt2FromMavenOverride=$ARM64_AAPT2|" "$LOCAL_PROPERTIES"
     else
         echo "" >> "$LOCAL_PROPERTIES"
         echo "# ARM64 aapt2 override - 自动检测" >> "$LOCAL_PROPERTIES"
@@ -726,7 +824,7 @@ check_status() {
     APK_FILE=$(ls -t $APK_OUTPUT_DIR/*.apk 2>/dev/null | head -1)
     if [ -n "$APK_FILE" ]; then
         APK_SIZE=$(du -h "$APK_FILE" | cut -f1)
-        APK_TIME=$(stat -c %y "$APK_FILE" 2>/dev/null | cut -d. -f1)
+        APK_TIME=$(file_mtime_human "$APK_FILE")
         echo -e "  ${GREEN}✓$APK_SIZE${NC} - $APK_TIME"
         echo -e "  路径: $APK_FILE"
     else
@@ -779,7 +877,7 @@ clean_aapt2_cache() {
     local CURRENT_ARCH=$(uname -m)
     
     # 只在 ARM64 系统上检查
-    if [ "$CURRENT_ARCH" != "aarch64" ]; then
+    if ! is_arm64_arch; then
         return 0
     fi
     
@@ -794,8 +892,9 @@ clean_aapt2_cache() {
     if [ -z "$LOCAL_AAPT2" ] && [ -n "$ANDROID_HOME" ]; then
         for build_tools_dir in "$ANDROID_HOME/build-tools"/*/; do
             if [ -x "${build_tools_dir}aapt2" ]; then
-                local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -E 'x86-64|aarch64|ARM aarch64' | head -1)
-                if [[ "$aapt2_arch" == "aarch64" || "$aapt2_arch" == "ARM aarch64" ]]; then
+                local aapt2_arch
+                aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -E 'x86_64|x86-64|arm64|aarch64|ARM aarch64' | head -1)
+                if [[ "$aapt2_arch" == *arm64* || "$aapt2_arch" == *aarch64* || "$aapt2_arch" == *"ARM aarch64"* ]]; then
                     LOCAL_AAPT2="${build_tools_dir}aapt2"
                     break
                 fi
@@ -854,11 +953,12 @@ build_apk() {
     
     # ARM64 系统需要传递 AAPT2 override 参数（local.properties 设置不可靠）
     AAPT2_OVERRIDE_PARAM=""
-    if [ "$(uname -m)" = "aarch64" ]; then
+    if is_arm64_arch; then
         # 查找本地 ARM64 AAPT2
         for build_tools_dir in "$ANDROID_HOME/build-tools"/*/; do
             if [ -x "${build_tools_dir}aapt2" ]; then
-                local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -E 'aarch64|ARM aarch64' | head -1)
+                local aapt2_arch
+                aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -E 'arm64|aarch64|ARM aarch64' | head -1)
                 if [ -n "$aapt2_arch" ]; then
                     AAPT2_OVERRIDE_PARAM="-Pandroid.aapt2FromMavenOverride=${build_tools_dir}aapt2"
                     break

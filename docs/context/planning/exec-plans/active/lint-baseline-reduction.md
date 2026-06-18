@@ -38,9 +38,9 @@
 
 ## Current Snapshot
 
-当前 detekt baseline 余量（2026-06-15，Slice 171 后）：
+当前 detekt baseline 余量（2026-06-18，Slice 178 后）：
 
-- `backend.xml`: 8
+- `backend.xml`: 1
 - `frontend-androidApp.xml`: 0
 - `frontend-webApp.xml`: 0
 - `frontend-shared.xml`: 0
@@ -52,6 +52,13 @@
 - `frontend/webApp` detekt baseline 已清空；后续 Web 再出现 lint 只接受“新增问题直接修源码”，不要回填 baseline。
 - `frontend/desktopApp` detekt baseline 已清空；后续 Desktop 再出现 lint 只接受“新增问题直接修源码”，不要回填 baseline。
 - `frontend/shared` detekt baseline 已清空，并于 2026-06-05 通过 `:frontend:shared:detekt`、三端 consumer 编译与 `silkLint` 复验。
+- `AIStepwiseAgent.kt` 已移除 1 条 `LargeClass` baseline；主类现在只保留诊断主流程、AI 调用入口、医生增量诊断编排与对外数据模型，步骤失败收口、聊天上下文/离线结果、诊断历史持久化、fallback 报告拼装与 streaming/quick-response helper 已拆到 `AIStepwise*Support.kt` 顶层文件，继续保持诊断步骤顺序、PDF 生成入口、诊断历史文件结构与流式增量回调语义不变。
+- `AgentRuntime.kt` 已移除 1 条 `LargeClass` baseline；`AgentRuntime` 现只保留对外门面、workflow/状态快照数据模型与 filesystem proxy API，状态/persistence、命令编排与 ACP question/permission/plan-review 交互分别拆到 `AgentRuntimeStateSupport.kt`、`AgentRuntimeCommandSupport.kt` 与 `AgentRuntimeAcpSupport.kt`，继续保持 `/use` / `@agent` / `/session` / `/compact` / AskUserQuestion / permission card / plan review / `_silk` bridge 调用路径与工作流持久化合同不变。
+- `PDFReportGenerator.kt` 已移除 1 条 `LargeClass` baseline；PDF 报告主类现只保留文件名/文档生命周期编排，文本清洗与字体/表格 helper、聊天历史抽取以及章节渲染拆到独立顶层 helper 文件，继续保持 PDF 文件名规则、报告章节顺序、诊断摘要提取与下载 URL 合同不变。
+- `WeaviateClient.kt` 已移除 1 条 `LargeClass` baseline；Weaviate 客户端现只保留公开搜索/索引编排、HTTP 客户端和失败恢复，文本清洗、GraphQL query 构造/解析、搜索结果映射和索引 JSON helper 已拆到 `WeaviateClientSupport.kt`，继续保持 Weaviate REST/GraphQL 路径、字段名和 false/empty-result 回退语义不变。
+- `UserTodoStore.kt` 已移除 1 条 `LargeClass` baseline；待办存储主对象现只保留文件读写、生命周期 merge、部分字段更新和去重入口，周期模板实例化、更新字段解析与逻辑去重/包含式标题合并 helper 已拆到 `UserTodoStoreSupport.kt`，继续保持 `/api/user-todos*` 存储结构、模板实例化、logical-key dedupe 与包含式标题合并合同不变。
+- `GroupTodoExtractionService.kt` 已移除 1 条 `LargeClass` baseline；待办抽取主对象现只保留刷新编排、diagnostics 写回和对外入口，transcript 构造、启发式/周期模板抽取、LLM prompt/调用、JSON 解析和去冗 helper 已拆到 `GroupTodoExtractionSupport.kt`，继续保持 `/api/user-todos*` 抽取写回、周期模板、logical-key 去重与失败回退语义不变。
+- `KnowledgeBaseReferenceResolver.kt` 的新增命名阻塞已清掉；知识库引用 helper 现落到 `KnowledgeBasePromptContext.kt`，继续保留 `resolveKnowledgeBasePromptContext(...)` / `buildKnowledgeBasePath(...)` 对外符号与 KB 引用 prompt 合同不变。
 - `ExternalSearchService.kt` 已移除 1 条 `FunctionOnlyReturningConstant` 和 5 条 `MayBeConst` baseline；静态搜索 URL 现已收敛为 `const val`，未使用的 `isAvailable()` 已删除。
 - `ExternalSearchService.kt` 的 9 条 `ConstructorParameterNaming` baseline 已清理；对外 JSON 字段改为 `@SerialName(...) + camelCase`，不改变 SerpAPI / DuckDuckGo / SearXNG 的响应反序列化合同。
 - `ExternalSearchService.kt` 又移除 1 条 `CyclomaticComplexMethod` 与 1 条 `NestedBlockDepth` baseline；外部搜索优先级链现改为统一的 attempt helper 执行，继续保持 SearXNG -> SerpAPI -> Bing -> Wikipedia -> DuckDuckGo 的回退顺序、成功短路和日志语义不变。
@@ -133,17 +140,18 @@
 - `WebSocketConfig.kt` 已移除 1 条 `TooGenericExceptionCaught` baseline；历史/URL 缓存、成员查询、卡片回复、Weaviate best-effort 索引、URL 下载、AI job、历史召回、医生诊断和撤回/删除索引分支已改为 `runChatCatching` / `Result` 收口，文件内不再保留 broad-catch suppress。
 - `Routing.kt` 已移除 1 条 `TooGenericExceptionCaught` baseline；用户设置、Bridge 文件系统、trusted-dir、认证/群组/联系人、todo、消息、Agent Bridge、聊天 WebSocket 与 Audio Duplex 代理的宽 catch 改为 `runCatching` + cancellation 语义收口，继续保持原 HTTP 状态码、响应体和 best-effort 日志行为。
 - `Routing.kt` 已移除 1 条 `CyclomaticComplexMethod` baseline；`configureRouting()` 现在只负责 AgentRuntime persistence wiring 和 73 个 route registration helper 的挂载顺序，5 个拆分后仍偏复杂的 Bridge FS、CC settings、workflow 创建与 chat WebSocket handler 已继续抽到小 helper，保持原路径、状态码、响应体、广播文案和 WebSocket 行为不变。
-- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter`、`EmptyFunctionBlock`、`AcpUpdateMapper.kt` 的 `CyclomaticComplexMethod`、`AgentRuntime.kt` 的 `handleCommand(...)` 复杂度基线、loop-jump 基线与 broad-catch 基线、`AIStepwiseAgent.kt` 的 `generateFallbackReport(...)` / `generateQuickResponse(...)` / `callAIApiStreaming(...)` / `processDoctorDiagnosisUpdate(...)` 复杂度基线与 `callAIApiStreaming(...)` 的 `ThrowsCount`、文件级 `TooGenericExceptionCaught` / `SwallowedException` / loop-jump 基线、`AnthropicClient.kt` 的 `TooGenericExceptionCaught` / `NestedBlockDepth` / `convertMessage(...)` 复杂度基线、`AsrRoutes.kt` 的 `SwallowedException`、`ChatHistoryBackupManager.kt` 的 `PrintStackTrace` / `SwallowedException`、`ChatHistoryManager.kt` 的 `TooGenericExceptionCaught` 与 agent-reply scan loop 基线、`DirectModelAgent.kt` 的 `normalizeCitedReferences(...)` 复杂度基线、引用占位 loop 基线与 broad-catch 基线、`ExternalSearchService.kt` 的 `TooGenericExceptionCaught`、`FileRoutes.kt` 的 `fileRoutes(...)` / `indexFileToWeaviate(...)` / `chunkText(...)` 复杂度基线、`GroupTodoExtractionService.kt` 的 `buildTranscriptString(...)` / `dedupeDrafts(...)` / `extractRecurringTemplateDrafts(...)` / `heuristicFromSlices(...)` / `extractRoughHourMinute(...)`、loop-jump 与 `ComplexCondition` 基线、`UserTodoStore.kt` 的 `ComplexCondition`、`updateItem(...)` 复杂度基线与包含式标题合并 loop 基线、`PDFReportGenerator.kt` 的 `closeEx: Exception` broad-catch 基线与文件级 `e: Exception` broad-catch / swallow 基线、`SearchDrivenAgent.kt` 的 `SwallowedException` / `TooGenericExceptionCaught` / `NestedBlockDepth`、`ToolPolicyManager.kt` 的 `SwallowedException`、`UserTodoStore.kt` 的 `isTemplateDueToday(...)` / `normalizeActionDetailForKey(...)` / `extractTimeFromTitle(...)` / `mergeShortInstanceByState(...)` / `tryMergeByContainedNormTitle(...)` 复杂度基线、`WeaviateClient.kt` 的 `indexDocument(...)` 复杂度基线与 `PrintStackTrace` / broad-catch 基线，以及 `Routing.kt` / `WebSocketConfig.kt` 的宽异常 baseline；剩余为 `LargeClass` 8。
+- `BackendWebSocketContractTest.kt` 已移除 1 条 `LargeClass` baseline；聊天回放/鉴权合同与 URL 导入合同现已拆成独立 test class，仍保持历史回放、实时广播、URL 下载状态推送与失败回退验证覆盖不变。
+- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter`、`EmptyFunctionBlock`、`AcpUpdateMapper.kt` 的 `CyclomaticComplexMethod`、`AgentRuntime.kt` 的 `handleCommand(...)` 复杂度基线、loop-jump / broad-catch / `LargeClass` 基线、`AIStepwiseAgent.kt` 的 `generateFallbackReport(...)` / `generateQuickResponse(...)` / `callAIApiStreaming(...)` / `processDoctorDiagnosisUpdate(...)` 复杂度基线与 `callAIApiStreaming(...)` 的 `ThrowsCount`、文件级 `TooGenericExceptionCaught` / `SwallowedException` / loop-jump 基线与 `LargeClass`、`AnthropicClient.kt` 的 `TooGenericExceptionCaught` / `NestedBlockDepth` / `convertMessage(...)` 复杂度基线、`AsrRoutes.kt` 的 `SwallowedException`、`ChatHistoryBackupManager.kt` 的 `PrintStackTrace` / `SwallowedException`、`ChatHistoryManager.kt` 的 `TooGenericExceptionCaught` 与 agent-reply scan loop 基线、`DirectModelAgent.kt` 的 `normalizeCitedReferences(...)` 复杂度基线、引用占位 loop 基线与 broad-catch 基线、`ExternalSearchService.kt` 的 `TooGenericExceptionCaught`、`FileRoutes.kt` 的 `fileRoutes(...)` / `indexFileToWeaviate(...)` / `chunkText(...)` 复杂度基线、`GroupTodoExtractionService.kt` 的 `buildTranscriptString(...)` / `dedupeDrafts(...)` / `extractRecurringTemplateDrafts(...)` / `heuristicFromSlices(...)` / `extractRoughHourMinute(...)`、loop-jump / `ComplexCondition` / `LargeClass` 基线、`UserTodoStore.kt` 的 `ComplexCondition`、`updateItem(...)` 复杂度基线与包含式标题合并 loop 基线、`PDFReportGenerator.kt` 的 `closeEx: Exception` broad-catch 基线、文件级 `e: Exception` broad-catch / swallow 基线与 `LargeClass`、`SearchDrivenAgent.kt` 的 `SwallowedException` / `TooGenericExceptionCaught` / `NestedBlockDepth`、`ToolPolicyManager.kt` 的 `SwallowedException`、`UserTodoStore.kt` 的 `isTemplateDueToday(...)` / `normalizeActionDetailForKey(...)` / `extractTimeFromTitle(...)` / `mergeShortInstanceByState(...)` / `tryMergeByContainedNormTitle(...)` 复杂度基线、`WeaviateClient.kt` 的 `indexDocument(...)` 复杂度基线与 `PrintStackTrace` / broad-catch 基线，以及 `Routing.kt` / `WebSocketConfig.kt` 的宽异常 baseline；剩余为 `LargeClass` 1（`WebSocketConfig.kt$ChatServer`）。
 
 ## Current Status
 
-- Slice 1-171 完成历史均已归档到 `docs/context/planning/exec-plans/completed/`。
-- Android / Web / Desktop / Shared baseline 已清零；active plan 现在只保留 backend 的剩余 detekt 收敛。
+- Slice 1-175 完成历史均已归档到 `docs/context/planning/exec-plans/completed/`。
+- Slice 178 已归档；Android / Web / Desktop / Shared baseline 已清零；active plan 现在只保留 backend 的 1 条剩余 `LargeClass` detekt 收敛。
 - Android 侧既有 `JdkImageTransform` / `jlink` 环境阻塞仍未改变；这不影响 baseline 已清零这一事实。
 
 ## Next Slices
 
-- Slice 172 候选：`LargeClass` 仍有 8 条，属于结构性收敛；只有在能按模块边界迁移并补验证时再做。
+- Slice 179 候选：只剩 `WebSocketConfig.kt$ChatServer` 1 条 `LargeClass`；优先沿现有 `runChatCatching` / helper 边界继续拆分 broadcast、prompt drain 与 URL/KB/tooling 分支，避免把协议合同和消息 payload 改动混进同一轮。
 - 如果某一步发现需要新增 baseline，先停下来判断是否应关规则、补测试或拆小 PR，不要直接把新增项写进 baseline。
 
 ## Handoff Notes
