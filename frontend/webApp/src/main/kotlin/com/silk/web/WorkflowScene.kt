@@ -1465,16 +1465,16 @@ private fun WorkflowChatPanel(
                 if (selectedPath != workingDir) {
                     scope.launch {
                         when (val tc = ApiClient.checkTrustedDir(userId, selectedPath)) {
-                            is TrustCheckResult.BridgeDisconnected ->
+                            is ApiClient.TrustCheckResult.BridgeDisconnected ->
                                 switchError = "Bridge 未连接，无法切换目录。"
-                            is TrustCheckResult.NotTrusted -> {
+                            is ApiClient.TrustCheckResult.NotTrusted -> {
                                 trustConfirmPath = selectedPath
                                 trustConfirmBridgeId = tc.bridgeId
                                 showTrustConfirm = true
                             }
-                            is TrustCheckResult.Error ->
+                            is ApiClient.TrustCheckResult.Error ->
                                 switchError = "检查信任状态失败：${tc.message}"
-                            is TrustCheckResult.Trusted -> {
+                            is ApiClient.TrustCheckResult.Trusted -> {
                                 val cdResp = ApiClient.cdCcDir(userId, groupId, selectedPath)
                                 if (cdResp.success) {
                                     workingDir = cdResp.workingDir

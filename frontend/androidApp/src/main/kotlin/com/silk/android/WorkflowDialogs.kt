@@ -307,6 +307,12 @@ private fun FolderRow(name: String, subtle: Boolean = false, onClick: () -> Unit
     }
 }
 
+internal fun permModeLabel(mode: String): String = when (mode) {
+    "ACCEPT_EDITS" -> "Accept Edits"
+    "BYPASS" -> "Bypass"
+    else -> "Interactive"
+}
+
 /**
  * 会话设置弹窗：工作目录 / Agent / 权限模式三合一。
  */
