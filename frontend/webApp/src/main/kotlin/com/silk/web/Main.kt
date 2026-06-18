@@ -5707,7 +5707,11 @@ fun MessageItem(
     }
 
     // Agent 提问消息 - 橙色警告样式
-    if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION) {
+    // 注意：仅处理 cc-connect 的文本型提问（type=TEXT，按钮走底部 interactiveOptions）。
+    // ACP/Workflow agent 的提问是 CARD 类型（questionCard），必须落到下面 when(type) 的
+    // CARD 分支由 CardMessageRenderer 渲染，不能在此被当作文本拦截。
+    if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION &&
+        message.type != MessageType.CARD && message.type != MessageType.CARD_REPLY) {
         Div({
             style {
                 padding(12.px, 16.px)
