@@ -1,20 +1,13 @@
 package com.silk.backend.ai
 
-import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.models.ChatHistoryEntry
 import com.silk.backend.pdf.PDFReportGenerator
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.boolean
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.long
 import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.net.URI
@@ -31,11 +24,6 @@ class AIStepwiseAgent(
     private val apiKey: String = AIConfig.API_KEY,
     private val sessionName: String = "default_room"
 ) {
-    private companion object {
-        const val STREAM_IDLE_TIMEOUT_MS = 30000L
-        const val MAX_STREAM_EMPTY_LINES = 5
-    }
-
     private val logger = LoggerFactory.getLogger(AIStepwiseAgent::class.java)
     
     private val httpClient = HttpClient.newBuilder()
@@ -88,7 +76,7 @@ class AIStepwiseAgent(
         hostId: String? = null
     ): DiagnosisResult {
         // 1. 从聊天历史生成患者上下文（区分医生和病人）
-        val patientContext = generatePatientContext(chatHistory, hostId)
+        val patientContext = buildPatientContext(chatHistory, hostId)
         
         val totalSteps = AIConfig.TO_DO_LIST.size
         
@@ -152,7 +140,7 @@ class AIStepwiseAgent(
                     callback("step_complete", stepCompleteMessage, stepNumber, totalSteps)
                     
                     // 更新累积信息
-                    accumulatedInfo = updateAccumulatedInfo(
+                    accumulatedInfo = updateDiagnosisAccumulatedInfo(
                         accumulatedInfo,
                         taskName,
                         stepResult.result
@@ -187,7 +175,7 @@ class AIStepwiseAgent(
         // 3. 生成总结报告（✅ 不发送到chat，只用于PDF生成）
         delay(200)
         // ✅ 生成总结报告，但不发送到chat（避免超长消息）
-        val summaryReport = generateSummaryReport(stepResults, allSuccess)
+        val summaryReport = generateSummaryReport(stepResults, allSuccess, apiKey.isNotEmpty(), logger, ::formatReportWithAI)
         // ✅ 注释掉：不发送总结报告到chat，内容已在PDF中
         // callback("总结报告", summaryReport, null, null)
         
@@ -249,7 +237,7 @@ class AIStepwiseAgent(
         }
         
         // 保存诊断结果供医生更新时使用
-        saveDiagnosisResults(stepResults)
+        saveDiagnosisResults(sessionName, stepResults, logger)
         
         return DiagnosisResult(
             patientContext = patientContext,
@@ -258,87 +246,6 @@ class AIStepwiseAgent(
         )
     }
 
-    private fun recordDiagnosisStepFailure(
-        stepResults: MutableMap<String, StepResult>,
-        executionSummary: StringBuilder,
-        stepNumber: Int,
-        taskName: String,
-        error: Throwable
-    ): Boolean {
-        stepResults[taskName] = StepResult(
-            stepName = taskName,
-            result = "",
-            success = false,
-            error = error.message
-        )
-        executionSummary.append("❌ [$stepNumber] $taskName - 异常\n\n")
-        return false
-    }
-    
-    /**
-     * 从聊天历史生成用户上下文
-     * @param chatHistory 聊天历史记录
-     * @param hostId Host用户ID，用于区分医生和病人
-     */
-    private fun generatePatientContext(chatHistory: List<ChatHistoryEntry>, hostId: String? = null): String {
-        if (chatHistory.isEmpty()) {
-            return "【聊天历史】\n暂无聊天记录。用户刚刚加入对话。"
-        }
-        
-        val contextBuilder = StringBuilder()
-        contextBuilder.append("【完整对话记录】\n")
-        contextBuilder.append("以下是去除AI回复后的完整对话，用于诊断参考：\n\n")
-        
-        // 只提取非Silk的消息（去除AI回复）
-        val userMessages = chatHistory
-            .filter { !AgentRuntime.isAgentUserId(it.senderId) }  // 排除AI消息
-            .filter { it.messageType == "TEXT" }  // 只要文本消息
-            .filter { !it.content.startsWith("@诊断") && !it.content.startsWith("@diagnosis") }  // 排除命令
-            .takeLast(50)  // 最近50条
-        
-        if (userMessages.isEmpty()) {
-            contextBuilder.append("暂无对话记录。\n")
-        } else {
-            contextBuilder.append("对话记录（共 ${userMessages.size} 条）：\n")
-            contextBuilder.append("═".repeat(50) + "\n\n")
-            
-            userMessages.forEach { entry ->
-                val timestamp = java.text.SimpleDateFormat("MM-dd HH:mm").format(java.util.Date(entry.timestamp))
-                
-                // 区分医生（Host）和病人（Guest）
-                val rolePrefix = if (hostId != null && entry.senderId == hostId) {
-                    "医生${entry.senderName}叙述"
-                } else {
-                    "病人${entry.senderName}叙述"
-                }
-                
-                contextBuilder.append("[$timestamp] $rolePrefix: ${entry.content}\n\n")
-            }
-            
-            contextBuilder.append("═".repeat(50) + "\n")
-        }
-        
-        // 添加统计信息
-        if (userMessages.isNotEmpty()) {
-            contextBuilder.append("\n【统计信息】\n")
-            contextBuilder.append("参与人数: ${userMessages.map { it.senderId }.distinct().size}\n")
-            contextBuilder.append("消息总数: ${userMessages.size}\n")
-            
-            if (hostId != null) {
-                val doctorMsgCount = userMessages.count { it.senderId == hostId }
-                val patientMsgCount = userMessages.size - doctorMsgCount
-                contextBuilder.append("医生消息: ${doctorMsgCount} 条\n")
-                contextBuilder.append("病人消息: ${patientMsgCount} 条\n")
-            }
-        }
-        
-        contextBuilder.append("\n【分析要求】\n")
-        contextBuilder.append("请仔细阅读以上完整的聊天历史，理解用户的需求、问题和讨论的上下文。\n")
-        contextBuilder.append("基于这些对话内容，进行专业的分析和建议。\n")
-        
-        return contextBuilder.toString()
-    }
-    
     /**
      * 执行单个诊断步骤
      * 
@@ -396,7 +303,7 @@ $taskPrompt
         if (apiKey.isEmpty()) {
             return StepResult(
                 stepName = taskName,
-                result = getOfflineResult(taskName, accumulatedInfo),
+                result = offlineDiagnosisResult(taskName, accumulatedInfo),
                 success = true
             )
         }
@@ -413,7 +320,7 @@ $taskPrompt
             var totalBytesSent = 0  // 统计总字节数
             
             // 使用流式API调用，带智能缓冲
-            result = callAIApiStreaming(fullPrompt) { chunk ->
+            result = callStreamingDiagnosisApi(httpClient, json, apiKey, fullPrompt, logger) { chunk ->
                 // 累积到完整文本
                 fullTextBuffer.append(chunk)
                 pendingChunks.append(chunk)
@@ -479,86 +386,14 @@ $taskPrompt
         } catch (e: CancellationException) {
             throw e
         } catch (e: IOException) {
-            buildFailedDiagnosisStep(taskName, result, e)
+            buildFailedDiagnosisStep(logger, taskName, result, e)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
-            buildFailedDiagnosisStep(taskName, result, e)
+            buildFailedDiagnosisStep(logger, taskName, result, e)
         } catch (e: IllegalStateException) {
-            buildFailedDiagnosisStep(taskName, result, e)
+            buildFailedDiagnosisStep(logger, taskName, result, e)
         } catch (e: IllegalArgumentException) {
-            buildFailedDiagnosisStep(taskName, result, e)
-        }
-    }
-
-    private fun buildFailedDiagnosisStep(
-        taskName: String,
-        partialResult: String,
-        error: Throwable
-    ): StepResult {
-        logger.error("❌ 步骤异常: $taskName - ${error.message}", error)
-
-        return if (partialResult.isNotEmpty()) {
-            logger.warn("⚠️ 步骤部分完成: $taskName (已接收 ${partialResult.length} 字符)")
-            StepResult(
-                stepName = taskName,
-                result = partialResult + "\n\n⚠️ 注意：此步骤因超时或异常而提前结束，以上为部分结果。",
-                success = true,
-                error = null
-            )
-        } else {
-            logger.error("❌ 步骤完全失败: $taskName - 无数据返回")
-            StepResult(
-                stepName = taskName,
-                result = "",
-                success = false,
-                error = "步骤执行失败: ${error.message}"
-            )
-        }
-    }
-
-    /**
-     * 更新累积的诊断信息
-     */
-    private fun updateAccumulatedInfo(
-        currentInfo: String,
-        taskName: String,
-        stepResult: String
-    ): String {
-        // 提取关键结论
-        val conclusion = extractConclusion(stepResult)
-        
-        // 拼接到累积信息中
-        return """$currentInfo
-
-【$taskName 的结论】：
-$conclusion
-"""
-    }
-    
-    /**
-     * 从完整结果中提取关键结论
-     */
-    private fun extractConclusion(fullResult: String): String {
-        // 如果结果太长，截取关键部分
-        return if (fullResult.length > 300) {
-            val lines = fullResult.split("\n")
-            val keyLines = lines.filter { line ->
-                line.contains("总结") || 
-                line.contains("结论") || 
-                line.contains("需求") ||
-                line.contains("计划") ||
-                line.startsWith("1.") ||
-                line.startsWith("2.") ||
-                line.startsWith("3.")
-            }
-            
-            if (keyLines.isNotEmpty()) {
-                keyLines.take(5).joinToString("\n")
-            } else {
-                fullResult.take(300) + "..."
-            }
-        } else {
-            fullResult
+            buildFailedDiagnosisStep(logger, taskName, result, e)
         }
     }
     
@@ -593,231 +428,6 @@ $conclusion
         } else {
             error("API 调用失败：${response.statusCode()} - ${response.body()}")
         }
-    }
-    
-    /**
-     * 调用 AI API（流式输出）
-     * 
-     * @param prompt 提示词
-     * @param onChunk 每接收到一个文本块时的回调函数（用于实时显示）
-     * @return 完整的响应文本
-     */
-    private suspend fun callAIApiStreaming(
-        prompt: String,
-        onChunk: suspend (String) -> Unit
-    ): String {
-        logger.info("🌐 准备发送 API 请求...")
-        logger.info("   模型: ${AIConfig.MODEL}")
-        // 移除详细日志输出以提升性能
-        // logger.info("   API地址: ${AIConfig.API_BASE_URL}")
-        // logger.info("   Prompt长度: ${prompt.length} 字符")
-        // logger.info("   超时设置: ${AIConfig.TIMEOUT}ms (${AIConfig.TIMEOUT/1000}秒)")
-        
-        val startTime = System.currentTimeMillis()
-        logger.info("🚀 发送请求时间: ${java.text.SimpleDateFormat("HH:mm:ss").format(java.util.Date(startTime))}")
-        val response = executeStreamingRequest(buildStreamingApiRequest(prompt), startTime)
-        logStreamingResponse(startTime, response.statusCode())
-        ensureStreamingSuccess(response.statusCode())
-        return readStreamingResponseBody(response, onChunk)
-    }
-
-    private fun buildStreamingApiRequest(prompt: String): HttpRequest {
-        val requestBody = ApiRequest(
-            model = AIConfig.MODEL,
-            messages = listOf(ApiMessage(role = "user", content = prompt)),
-            temperature = 0.7,
-            maxTokens = 65536,
-            stream = true
-        )
-
-        return HttpRequest.newBuilder()
-            .uri(URI.create(AIConfig.requireApiBaseUrl()))
-            .header("Authorization", "Bearer $apiKey")
-            .header("Content-Type", "application/json")
-            .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(requestBody)))
-            .timeout(Duration.ofMillis(AIConfig.TIMEOUT))
-            .build()
-    }
-
-    private fun executeStreamingRequest(
-        request: HttpRequest,
-        startTime: Long
-    ): HttpResponse<java.io.InputStream> = try {
-        httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream())
-    } catch (e: IOException) {
-        val elapsed = System.currentTimeMillis() - startTime
-        logger.error("❌ HTTP 请求失败 (耗时 ${elapsed}ms): ${e.message}", e)
-        throw e
-    } catch (e: InterruptedException) {
-        Thread.currentThread().interrupt()
-        val elapsed = System.currentTimeMillis() - startTime
-        logger.error("❌ HTTP 请求失败 (耗时 ${elapsed}ms): ${e.message}", e)
-        throw e
-    }
-
-    private fun logStreamingResponse(startTime: Long, statusCode: Int) {
-        val requestDuration = System.currentTimeMillis() - startTime
-        logger.info("✅ 收到 HTTP 响应 (耗时 ${requestDuration}ms)")
-        logger.info("   状态码: $statusCode")
-    }
-
-    private fun ensureStreamingSuccess(statusCode: Int) {
-        if (statusCode == 200) {
-            return
-        }
-        logger.error("❌ API 返回错误状态码: $statusCode")
-        error("API 调用失败：$statusCode")
-    }
-
-    private suspend fun readStreamingResponseBody(
-        response: HttpResponse<java.io.InputStream>,
-        onChunk: suspend (String) -> Unit
-    ): String {
-        val streamState = StreamingReadState()
-
-        try {
-            kotlinx.coroutines.withTimeout(AIConfig.TIMEOUT + 10000) {
-                response.body().bufferedReader().use { reader ->
-                    while (readStreamingLine(reader, streamState, onChunk)) {
-                        kotlinx.coroutines.delay(1)
-                    }
-                }
-            }
-        } catch (e: TimeoutCancellationException) {
-            logger.error("❌ 流式读取总超时（70秒），当前已接收 ${streamState.fullText.length} 字符", e)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: IOException) {
-            failStreamingRead(e)
-        } catch (e: IllegalStateException) {
-            failStreamingRead(e)
-        } catch (e: IllegalArgumentException) {
-            failStreamingRead(e)
-        }
-
-        return streamState.fullText.toString()
-    }
-
-    private fun failStreamingRead(error: Throwable): Nothing {
-        logger.error("❌ 流式读取异常: ${error.message}", error)
-        throw error
-    }
-
-    private suspend fun readStreamingLine(
-        reader: java.io.BufferedReader,
-        streamState: StreamingReadState,
-        onChunk: suspend (String) -> Unit
-    ): Boolean {
-        if (System.currentTimeMillis() - streamState.lastDataTime > STREAM_IDLE_TIMEOUT_MS) {
-            return false
-        }
-
-        val line = readStreamingLineOrNull(reader) ?: return false
-        streamState.lineCount++
-
-        if (line.trim().isEmpty()) {
-            streamState.emptyLineCount++
-            return streamState.emptyLineCount <= MAX_STREAM_EMPTY_LINES
-        }
-
-        streamState.emptyLineCount = 0
-        if (!line.startsWith("data: ")) {
-            return true
-        }
-
-        streamState.lastDataTime = System.currentTimeMillis()
-        streamState.dataChunkCount++
-        return consumeStreamingDataLine(line.substring(6).trim(), streamState, onChunk)
-    }
-
-    private fun readStreamingLineOrNull(reader: java.io.BufferedReader): String? = try {
-        reader.readLine()
-    } catch (e: IOException) {
-        logger.warn("⚠️ 读取行失败: ${e.message}", e)
-        null
-    }
-
-    private suspend fun consumeStreamingDataLine(
-        jsonData: String,
-        streamState: StreamingReadState,
-        onChunk: suspend (String) -> Unit
-    ): Boolean {
-        if (jsonData == "[DONE]") {
-            return false
-        }
-
-        parseStreamingContent(jsonData)?.let { content ->
-            streamState.fullText.append(content)
-            onChunk(content)
-        }
-        return true
-    }
-
-    private fun parseStreamingContent(jsonData: String): String? = try {
-        val streamResponse = json.decodeFromString<StreamResponse>(jsonData)
-        streamResponse.choices.firstOrNull()?.delta?.content
-    } catch (_: Exception) {
-        null
-    }
-
-    private class StreamingReadState(
-        val fullText: StringBuilder = StringBuilder(),
-        var lastDataTime: Long = System.currentTimeMillis(),
-        var emptyLineCount: Int = 0,
-        var lineCount: Int = 0,
-        var dataChunkCount: Int = 0
-    )
-    
-    /**
-     * 生成完整的总结报告
-     */
-    private suspend fun generateSummaryReport(
-        stepResults: Map<String, StepResult>,
-        allSuccess: Boolean
-    ): String {
-        // 先生成原始总结
-        val rawReport = buildString {
-            append("执行状态: ${if (allSuccess) "全部成功" else "部分失败"}\n")
-            append("完成步骤: ${stepResults.count { it.value.success }}/${stepResults.size}\n\n")
-            
-            append("各步骤总结：\n\n")
-            
-            stepResults.forEach { (taskName, result) ->
-                if (result.success) {
-                    append("$taskName:\n")
-                    append("${result.result}\n\n")
-                } else {
-                    append("$taskName: 执行失败\n")
-                    append("错误: ${result.error}\n\n")
-                }
-            }
-        }
-        
-        // 如果有API Key，使用AI美化格式
-        val formattedReport = if (apiKey.isNotEmpty()) {
-            try {
-                formatReportWithAI(rawReport)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: IOException) {
-                logger.warn("⚠️ AI格式化失败，使用原始格式: ${e.message}", e)
-                generateFallbackReport(stepResults, allSuccess)
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                logger.warn("⚠️ AI格式化失败，使用原始格式: ${e.message}", e)
-                generateFallbackReport(stepResults, allSuccess)
-            } catch (e: IllegalStateException) {
-                logger.warn("⚠️ AI格式化失败，使用原始格式: ${e.message}", e)
-                generateFallbackReport(stepResults, allSuccess)
-            } catch (e: IllegalArgumentException) {
-                logger.warn("⚠️ AI格式化失败，使用原始格式: ${e.message}", e)
-                generateFallbackReport(stepResults, allSuccess)
-            }
-        } else {
-            generateFallbackReport(stepResults, allSuccess)
-        }
-        
-        return formattedReport
     }
     
     /**
@@ -863,238 +473,6 @@ $rawReport
     }
     
     /**
-     * 生成备用格式的总结报告（当AI不可用时）
-     */
-    private fun generateFallbackReport(
-        stepResults: Map<String, StepResult>,
-        allSuccess: Boolean
-    ): String = buildString {
-        appendFallbackReportHeader(stepResults, allSuccess)
-        appendReportSection("##一、中西医诊断##", stepResults, "中西医疾病的诊断")
-        append("##二、辨证分型与病因病机##\n\n")
-        appendReportSection("###1. 辨证分型###", stepResults, "中医辨证分型")
-        appendReportSection("###2. 病因病机###", stepResults, "中医的病因病机分析")
-        appendReportSection("##三、体质诊断##", stepResults, "中医体质诊断")
-        appendReportSection("##四、综合分析##", stepResults, "分析汇总")
-        append("##五、治疗方案##\n\n")
-        appendReportSection("###1. 中药处方###", stepResults, "中医处方建议")
-        appendReportSection("###2. 中成药推荐###", stepResults, "推荐中成药")
-        appendReportSection("###3. 针灸治疗###", stepResults, "针灸处方及针灸方法")
-        appendReportSection("###4. 艾灸治疗###", stepResults, "艾灸选穴及艾灸方法")
-        appendReportSection("###5. 生活调养###", stepResults, "饮食运动起居调养方案")
-        appendReportSection("##六、预后说明##", stepResults, "预后说明")
-    }
-
-    private fun StringBuilder.appendFallbackReportHeader(
-        stepResults: Map<String, StepResult>,
-        allSuccess: Boolean
-    ) {
-        append("##承山堂中医诊断总结报告##\n\n")
-        append("###诊断执行状态###\n")
-        append("执行结果: ${if (allSuccess) "✓ 全部成功" else "⚠ 部分失败"}\n")
-        append("完成步骤: ${stepResults.count { it.value.success }}/${stepResults.size}\n\n")
-    }
-
-    private fun StringBuilder.appendReportSection(
-        title: String,
-        stepResults: Map<String, StepResult>,
-        stepKey: String
-    ) {
-        append("$title\n\n")
-        appendSuccessfulStepResult(stepResults[stepKey])
-    }
-
-    private fun StringBuilder.appendSuccessfulStepResult(stepResult: StepResult?) {
-        if (stepResult != null && stepResult.success) {
-            append("${stepResult.result}\n\n")
-        }
-    }
-    
-    /**
-     * 离线模式结果（当没有 API Key 时）
-     * 基于 MoxiTreat 的 11 步流程提供示例结果
-     */
-    private fun getOfflineResult(taskName: String, context: String): String {
-        // 从上下文中提取症状信息
-        val symptoms = extractSymptomsFromContext(context)
-        val symptomsText = if (symptoms.isNotEmpty()) symptoms.joinToString("、") else "相关症状"
-        
-        return when (taskName) {
-            "中西医疾病的诊断" -> """
-【西医诊断】
-1. 西医诊断：基于患者主诉「$symptomsText」，可能的疾病包括：[需要结合四诊进行诊断]
-2. 中医诊断：根据症状表现，中医病名可能为：[需要辨证论治]
-3. 鉴别诊断：需要排除类似疾病，建议进一步检查
-4. 诊断依据：根据患者主诉症状和聊天历史中的描述
-
-【离线模式】配置 API Key 后可获得详细的专业诊断。
-""".trimIndent()
-            
-            "中医辨证分型" -> """
-【中医辨证分型】
-1. 八纲辨证：根据症状表现，初步判断为 [里证/表证]、[寒证/热证]、[虚证/实证]
-2. 脏腑辨证：可能涉及脏腑 [需要四诊合参]
-3. 气血津液辨证：初步判断为 [气虚/血瘀/津液不足等]
-4. 六经辨证：根据症状可能属于 [太阳/阳明/少阳等]
-5. 主要证型总结：[需要专业中医师综合判断]
-
-【离线模式】配置 API Key 后可获得详细的辨证分析。
-""".trimIndent()
-            
-            "中医的病因病机分析" -> """
-【病因病机分析】
-1. 病因：根据患者情况，可能涉及外感、内伤等因素
-2. 病机：发病机理需要结合四诊信息综合判断
-3. 病位：病变主要涉及的脏腑和经络
-4. 病性：虚实寒热的具体性质
-5. 病势：疾病的发展趋势和预后
-
-【离线模式】配置 API Key 后可获得详细的病因病机分析。
-""".trimIndent()
-            
-            "中医体质诊断" -> """
-【中医体质诊断】
-1. 九种体质分类：根据表现，需要评估是否属于气虚质、阳虚质、阴虚质等
-2. 主要体质类型：需要通过详细问诊确定
-3. 兼夹体质：可能存在多种体质兼夹
-4. 体质与疾病关系：体质因素在疾病发生发展中的作用
-5. 体质调理建议：根据体质类型提供调理方案
-
-【离线模式】配置 API Key 后可获得详细的体质分析。
-""".trimIndent()
-            
-            "分析汇总" -> """
-【综合分析汇总】
-1. 整体病情评估：综合中西医诊断，患者病情需要系统治疗
-2. 中西医诊断的关联性：中西医诊断相互印证，病机明确
-3. 核心病机总结：[需要根据前面的辨证分析总结]
-4. 治疗的关键点：治疗需要注重调理脏腑功能，扶正祛邪
-5. 预期治疗难度：根据病情轻重和患者配合度综合评估
-
-【离线模式】配置 API Key 后可获得详细的综合分析。
-""".trimIndent()
-            
-            "中医处方建议" -> """
-【中医处方建议】
-1. 治疗法则：根据证型，采用相应的治法和治则
-2. 推荐方剂：建议选用经典方剂，如 [需要专业中医师开具]
-3. 方剂组成：药物名称及剂量需要根据患者具体情况调整
-4. 方解：方剂配伍体现了中医的整体观念和辨证论治原则
-5. 加减化裁：根据兼症和体质进行个性化调整
-6. 服用方法：煎服方法、服用时间、疗程等需要医嘱指导
-
-【离线模式】配置 API Key 后可获得具体的处方建议。
-⚠️ 重要提示：中药处方需要由持证中医师开具，切勿自行配药。
-""".trimIndent()
-            
-            "推荐中成药" -> """
-【推荐中成药】
-1. 推荐中成药：根据证型，可考虑相应的中成药（需医师指导）
-2. 功效主治：各药物的具体功效和适应证
-3. 用法用量：严格按照说明书或医嘱服用
-4. 注意事项：注意禁忌症和不良反应
-5. 配合建议：中成药可与汤药配合使用，增强疗效
-
-【离线模式】配置 API Key 后可获得具体的中成药建议。
-⚠️ 重要提示：请在医师指导下使用中成药。
-""".trimIndent()
-            
-            "针灸处方及针灸方法" -> """
-【针灸治疗方案】
-1. 主穴选择：根据证型选择主要穴位
-2. 配穴选择：配合辅助穴位增强疗效
-3. 针刺方法：进针方向、深度、手法需要专业针灸师操作
-4. 灸法选择：温针灸、艾灸等方法
-5. 疗程安排：建议每周2-3次，疗程因人而异
-6. 注意事项：孕妇、出血性疾病等禁忌
-
-【离线模式】配置 API Key 后可获得详细的针灸方案。
-⚠️ 重要提示：针灸需要由专业针灸师进行，切勿自行操作。
-""".trimIndent()
-            
-            "艾灸选穴及艾灸方法" -> """
-【艾灸治疗方案】
-1. 艾灸主穴：根据证型和病机选择主要艾灸穴位
-2. 艾灸配穴：辅助穴位配合，增强疗效
-3. 艾灸方法：
-   - 艾灸类型：温和灸、隔姜灸等
-   - 施灸时间：每穴15-20分钟
-   - 操作要点：保持适当距离，感觉温热为度
-4. 灸量把握：
-   - 施灸时间：根据个体耐受度调整
-   - 施灸强度：以患者感觉舒适为宜
-5. 疗程安排：
-   - 每日或隔日1次
-   - 连续施灸7-10天为一疗程
-6. 注意事项：
-   - 禁忌症：孕妇、急性炎症、出血倾向等
-   - 注意事项：避免烫伤，保持通风
-   - 灸后调护：注意保暖，避免受风
-
-【离线模式】配置 API Key 后可获得详细的艾灸方案。
-⚠️ 重要提示：首次艾灸建议在专业人士指导下进行。
-""".trimIndent()
-            
-            "饮食运动起居调养方案" -> """
-【生活调养方案】
-1. 饮食调理：
-   - 宜食：根据证型选择合适的食材
-   - 忌食：避免辛辣刺激、生冷食物（具体需根据证型）
-   - 食疗方：建议在医师指导下选用
-2. 运动建议：
-   - 运动方式：适度的有氧运动，如散步、八段锦
-   - 运动时间：每天30分钟左右
-   - 注意事项：避免剧烈运动，量力而行
-3. 起居调摄：
-   - 作息时间：规律作息，早睡早起
-   - 生活习惯：保持心情舒畅
-   - 情志调理：避免过度紧张和焦虑
-4. 季节养生：根据四时节气调整养生方案
-
-【离线模式】配置 API Key 后可获得个性化的调养建议。
-""".trimIndent()
-            
-            "预后说明" -> """
-【预后说明】
-1. 疾病预后：需要根据具体病情判断，及时治疗预后较好
-2. 治疗周期：根据病情轻重，一般需要1-3个月
-3. 复发可能：注意调理可降低复发风险
-4. 注意事项：
-   - 遵医嘱服药
-   - 注意饮食起居调理
-   - 保持良好心态
-5. 复诊建议：建议1-2周复诊一次，观察治疗效果
-6. 长期管理：慢性疾病需要长期调理，定期复查
-
-【离线模式】配置 API Key 后可获得详细的预后分析。
-
-【免责声明】
-本诊断分析仅供参考，不构成医疗建议。
-请务必咨询专业中医师进行正式诊断和治疗。
-""".trimIndent()
-            
-            else -> "【$taskName】\n正在处理患者信息..."
-        }
-    }
-    
-    // 从聊天历史中提取症状信息
-    private fun extractSymptomsFromContext(context: String): List<String> {
-        val symptoms = mutableListOf<String>()
-        val commonSymptoms = listOf(
-            "头痛", "失眠", "疲劳", "咳嗽", "发热", "腹痛", "腹泻",
-            "便秘", "食欲不振", "心悸", "胸闷", "腰痛", "关节痛"
-        )
-        
-        commonSymptoms.forEach { symptom ->
-            if (context.contains(symptom)) {
-                symptoms.add(symptom)
-            }
-        }
-        
-        return symptoms
-    }
-    
-    /**
      * 处理医生诊断更新（Host角色的额外诊断）
      * 整合之前的诊断结果，添加医生医嘱，重新生成完整报告
      * 
@@ -1116,15 +494,15 @@ $rawReport
         delay(500)
         
         // 2. 生成患者上下文（暂时不区分医生病人，因为医生更新时已经在医嘱中）
-        val patientContext = generatePatientContext(chatHistory, null)
+        val patientContext = buildPatientContext(chatHistory, null)
         
         // 3. 尝试加载之前的诊断结果和时间戳
-        val previousDiagnosis = loadPreviousDiagnosisResults()
+        val previousDiagnosis = loadPreviousDiagnosisResults(sessionName, logger)
         val previousDiagnosisResults = previousDiagnosis?.first
         val lastDiagnosisTime = previousDiagnosis?.second ?: 0L
         
         // 4. 过滤聊天历史：只使用上次诊断之后的新消息
-        val newMessages = filterMessagesAfterLastDiagnosis(chatHistory, lastDiagnosisTime)
+        val newMessages = filterMessagesAfterLastDiagnosis(chatHistory, lastDiagnosisTime, logger)
         
         // 5. 构建新消息的上下文
         val newMessagesContext = buildNewMessagesContext(newMessages)
@@ -1191,7 +569,7 @@ $doctorMessage
             callback("PDF报告", pdfMessage, null, null)
             
             // 保存当前诊断结果供下次使用
-            saveDiagnosisResults(stepResults)
+            saveDiagnosisResults(sessionName, stepResults, logger)
             
         } catch (e: CancellationException) {
             throw e
@@ -1203,58 +581,6 @@ $doctorMessage
             logger.error("❌ 生成更新PDF失败: ${e.message}", e)
         } catch (e: IllegalArgumentException) {
             logger.error("❌ 生成更新PDF失败: ${e.message}", e)
-        }
-    }
-
-    private fun filterMessagesAfterLastDiagnosis(
-        chatHistory: List<ChatHistoryEntry>,
-        lastDiagnosisTime: Long
-    ): List<ChatHistoryEntry> {
-        if (lastDiagnosisTime <= 0) {
-            logger.info("📋 无历史时间戳，使用所有消息")
-            return chatHistory
-        }
-
-        val filtered = chatHistory.filter { it.timestamp > lastDiagnosisTime }
-        val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-            .format(java.util.Date(lastDiagnosisTime))
-        logger.info("📋 过滤消息:")
-        logger.info("   上次诊断时间: $dateTime")
-        logger.info("   总消息数: ${chatHistory.size}")
-        logger.info("   新消息数: ${filtered.size}")
-        return filtered
-    }
-
-    private fun buildNewMessagesContext(newMessages: List<ChatHistoryEntry>): String {
-        if (newMessages.isEmpty()) {
-            return "【上次诊断后的新对话】\n暂无新对话"
-        }
-
-        return buildString {
-            append("【上次诊断后的新对话】\n")
-            newMessages.forEach { entry ->
-                val timestamp = java.text.SimpleDateFormat("MM-dd HH:mm")
-                    .format(java.util.Date(entry.timestamp))
-                append("[$timestamp] ${entry.senderName}: ${entry.content}\n")
-            }
-        }
-    }
-
-    private fun buildPreviousDiagnosisSummary(
-        previousDiagnosisResults: Map<String, StepResult>?
-    ): String {
-        if (previousDiagnosisResults.isNullOrEmpty()) {
-            return "【之前的诊断记录】\n暂无之前的诊断记录"
-        }
-
-        val keySteps = listOf("中医诊断", "西医诊断", "治疗方案")
-        return buildString {
-            append("【之前的诊断记录（摘要）】\n")
-            previousDiagnosisResults
-                .filter { (stepName, _) -> keySteps.any { key -> stepName.contains(key) } }
-                .forEach { (stepName, stepResult) ->
-                    append("$stepName：${stepResult.result.take(100)}...\n")
-                }
         }
     }
 
@@ -1311,194 +637,6 @@ $doctorMessage
         streamState.lastSentTime = currentTime
     }
 
-    private fun String.safeIncrementFrom(previousContent: String): String {
-        return if (length > previousContent.length) substring(previousContent.length) else ""
-    }
-
-    private fun buildDoctorUpdateStepResults(
-        doctorMessage: String,
-        previousDiagnosisResults: Map<String, StepResult>?,
-        updatedDiagnosis: String
-    ): MutableMap<String, StepResult> {
-        val stepResults = linkedMapOf<String, StepResult>()
-        stepResults["医生诊断意见"] = StepResult(
-            stepName = "医生诊断意见",
-            result = """
-【医生医嘱】
-$doctorMessage
-
-【说明】
-以下诊断结果是基于初步诊断报告和上述医生医嘱综合更新后的结果。
-            """.trimIndent(),
-            success = true
-        )
-        if (previousDiagnosisResults != null) {
-            stepResults.putAll(previousDiagnosisResults)
-        }
-        stepResults["AI综合诊断（更新）"] = StepResult(
-            stepName = "AI综合诊断（更新）",
-            result = updatedDiagnosis,
-            success = true
-        )
-        return stepResults
-    }
-
-    private fun buildDoctorUpdatePdfMessage(pdfPath: String, downloadUrl: String): String = buildString {
-        append("📄 诊断更新报告已生成\n\n")
-        append("文件名：${pdfPath.substringAfterLast("/")}\n\n")
-        append("━".repeat(50) + "\n")
-        append("📥 下载更新报告\n")
-        append("━".repeat(50) + "\n\n")
-        append("$downloadUrl\n\n")
-        append("💡 基于医生的专业意见，诊断已更新\n")
-        append("   报告包含：医生医嘱 + 之前诊断 + 综合更新")
-    }
-    
-    /**
-     * 加载之前的诊断结果
-     * @return Pair<诊断结果, 诊断时间戳>
-     */
-    private fun loadPreviousDiagnosisResults(): Pair<Map<String, StepResult>, Long>? {
-        return try {
-            // 尝试多个可能的路径
-            val possiblePaths = listOf(
-                "chat_history/$sessionName/last_diagnosis.json",
-                "backend/chat_history/$sessionName/last_diagnosis.json"
-            )
-            
-            val file = possiblePaths
-                .map { java.io.File(it) }
-                .firstOrNull { it.exists() }
-            
-            if (file != null && file.exists()) {
-                logger.info("📖 正在加载诊断历史:")
-                logger.info("   找到文件: ${file.absolutePath}")
-                logger.info("   大小: ${file.length()} bytes")
-                
-                val json = file.readText()
-                
-                // 使用kotlinx.serialization.json解析
-                val jsonElement = Json.parseToJsonElement(json)
-                val jsonObject = jsonElement.jsonObject
-                
-                val timestamp = jsonObject["timestamp"]?.jsonPrimitive?.long ?: 0L
-                val resultsObject = jsonObject["results"]?.jsonObject
-                
-                val results = mutableMapOf<String, StepResult>()
-                resultsObject?.forEach { (key, value) ->
-                    val obj = value.jsonObject
-                    val stepResult = StepResult(
-                        stepName = obj["stepName"]?.jsonPrimitive?.content ?: "",
-                        result = obj["result"]?.jsonPrimitive?.content?.replace("\\n", "\n") ?: "",
-                        success = obj["success"]?.jsonPrimitive?.boolean ?: false
-                    )
-                    results[key] = stepResult
-                }
-                
-                val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                    .format(java.util.Date(timestamp))
-                logger.info("✅ 加载成功")
-                logger.info("   诊断时间: $dateTime")
-                logger.info("   步骤数量: ${results.size}")
-                
-                Pair(results, timestamp)
-            } else {
-                logger.info("ℹ️ 所有路径都不存在历史诊断文件")
-                null
-            }
-        } catch (e: SerializationException) {
-            logger.error("❌ 加载诊断历史失败: ${e.message}", e)
-            null
-        } catch (e: IOException) {
-            logger.error("❌ 加载诊断历史失败: ${e.message}", e)
-            null
-        } catch (e: SecurityException) {
-            logger.error("❌ 加载诊断历史失败: ${e.message}", e)
-            null
-        } catch (e: IllegalStateException) {
-            logger.error("❌ 加载诊断历史失败: ${e.message}", e)
-            null
-        } catch (e: IllegalArgumentException) {
-            logger.error("❌ 加载诊断历史失败: ${e.message}", e)
-            null
-        }
-    }
-    
-    /**
-     * 保存诊断结果供下次使用
-     * 同时保存诊断时间戳，用于增量诊断时过滤消息
-     */
-    private fun saveDiagnosisResults(stepResults: Map<String, StepResult>) {
-        try {
-            // 统一使用backend/chat_history路径
-            val file = java.io.File("backend/chat_history/$sessionName/last_diagnosis.json")
-            
-            logger.info("💾 正在保存诊断结果:")
-            logger.info("   sessionName: $sessionName")
-            logger.info("   文件路径: ${file.absolutePath}")
-            logger.info("   步骤数量: ${stepResults.size}")
-            
-            // 确保父目录存在
-            val parentDir = file.parentFile
-            if (parentDir != null && !parentDir.exists()) {
-                val created = parentDir.mkdirs()
-                logger.info("   创建目录: ${if (created) "成功" else "失败"}")
-            } else {
-                logger.info("   目录已存在: ${parentDir?.absolutePath}")
-            }
-            
-            // 创建包含时间戳的诊断记录（使用简单的手动JSON格式）
-            val timestamp = System.currentTimeMillis()
-            
-            // 手动构建JSON以避免序列化问题
-            val json = buildString {
-                append("{\n")
-                append("  \"timestamp\": $timestamp,\n")
-                append("  \"results\": {\n")
-                
-                stepResults.entries.forEachIndexed { index, (key, value) ->
-                    append("    \"$key\": {\n")
-                    append("      \"stepName\": \"${value.stepName.replace("\"", "\\\"")}\",\n")
-                    append("      \"result\": \"${value.result.replace("\"", "\\\"").replace("\n", "\\n")}\",\n")
-                    append("      \"success\": ${value.success}\n")
-                    append("    }")
-                    if (index < stepResults.size - 1) append(",")
-                    append("\n")
-                }
-                
-                append("  }\n")
-                append("}")
-            }
-            
-            // 移除详细日志输出
-            // logger.info("   JSON大小: ${json.length} 字符")
-            // logger.info("   步骤列表: ${stepResults.keys.take(3).joinToString(", ")}...")
-            
-            // 写入文件
-            file.writeText(json)
-            
-            // 验证写入
-            if (file.exists()) {
-                val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                    .format(java.util.Date(timestamp))
-                logger.info("✅ 诊断结果已成功保存")
-                logger.info("   诊断时间: $dateTime")
-                logger.info("   文件大小: ${file.length()} bytes")
-                logger.info("   包含步骤: ${stepResults.keys.joinToString(", ")}")
-            } else {
-                logger.error("❌ 文件保存后不存在！")
-            }
-        } catch (e: IOException) {
-            logger.error("❌ 保存诊断结果失败: ${e.message}", e)
-        } catch (e: SecurityException) {
-            logger.error("❌ 保存诊断结果失败: ${e.message}", e)
-        } catch (e: IllegalStateException) {
-            logger.error("❌ 保存诊断结果失败: ${e.message}", e)
-        } catch (e: IllegalArgumentException) {
-            logger.error("❌ 保存诊断结果失败: ${e.message}", e)
-        }
-    }
-    
     /**
      * 生成快速响应（对话模式）
      * 使用streaming方式逐步输出
@@ -1516,7 +654,7 @@ $doctorMessage
             )
 
             if (response.statusCode() == 200) {
-                deliverQuickResponse(response.body().toList(), callback)
+                streamQuickResponseLines(response.body().toList(), json, callback)
             } else {
                 logger.error("❌ AI API返回错误: ${response.statusCode()}")
                 callback("⚠️ AI暂时无法回答，请稍后重试", true)
@@ -1556,89 +694,6 @@ $doctorMessage
             .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(requestBody)))
             .build()
     }
-
-    private suspend fun deliverQuickResponse(
-        lines: List<String>,
-        callback: suspend (content: String, isComplete: Boolean) -> Unit
-    ) {
-        val streamState = QuickResponseStreamState()
-
-        for (line in lines) {
-            if (consumeQuickResponseLine(line, streamState, callback)) {
-                break
-            }
-        }
-
-        flushQuickResponseTail(streamState, callback)
-        if (streamState.isDone) {
-            callback(streamState.accumulatedContent.toString(), true)
-        }
-    }
-
-    private suspend fun consumeQuickResponseLine(
-        line: String,
-        streamState: QuickResponseStreamState,
-        callback: suspend (content: String, isComplete: Boolean) -> Unit
-    ): Boolean {
-        if (!line.startsWith("data: ")) {
-            return false
-        }
-
-        val data = line.removePrefix("data: ").trim()
-        if (data == "[DONE]") {
-            streamState.isDone = true
-            return true
-        }
-
-        parseQuickResponseChunk(data)?.let { content ->
-            streamState.accumulatedContent.append(content)
-            emitQuickResponseIncrementIfNeeded(streamState, callback)
-        }
-        return false
-    }
-
-    private fun parseQuickResponseChunk(data: String): String? = try {
-        val streamResponse = json.decodeFromString<StreamResponse>(data)
-        streamResponse.choices.firstOrNull()?.delta?.reasoning?.takeIf { it.isNotEmpty() }
-    } catch (_: Exception) {
-        null
-    }
-
-    private suspend fun emitQuickResponseIncrementIfNeeded(
-        streamState: QuickResponseStreamState,
-        callback: suspend (content: String, isComplete: Boolean) -> Unit
-    ) {
-        val newlineCount = streamState.accumulatedContent.count { it == '\n' }
-        if (newlineCount < 3 || streamState.accumulatedContent.length <= streamState.lastSentContent.length) {
-            return
-        }
-
-        val incrementalContent = streamState.accumulatedContent.substring(streamState.lastSentContent.length)
-        callback(incrementalContent, false)
-        streamState.lastSentContent = streamState.accumulatedContent.toString()
-        delay(50)
-    }
-
-    private suspend fun flushQuickResponseTail(
-        streamState: QuickResponseStreamState,
-        callback: suspend (content: String, isComplete: Boolean) -> Unit
-    ) {
-        if (streamState.accumulatedContent.length <= streamState.lastSentContent.length) {
-            return
-        }
-
-        val finalIncrement = streamState.accumulatedContent.substring(streamState.lastSentContent.length)
-        if (finalIncrement.isNotEmpty()) {
-            callback(finalIncrement, false)
-            delay(50)
-        }
-    }
-
-    private class QuickResponseStreamState(
-        val accumulatedContent: StringBuilder = StringBuilder(),
-        var lastSentContent: String = "",
-        var isDone: Boolean = false
-    )
 
     private class DoctorUpdateStreamState(
         var lastSentContent: String = "",
