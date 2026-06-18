@@ -1206,6 +1206,17 @@ object ApiClient {
         }
     }
 
+    // KB 内联引用：按 entryId 取单条 entry 详情（[[kb:entryId|标题]] 预览/导航用）
+    suspend fun getKBEntry(entryId: String, userId: String): KBEntryItem? {
+        return try {
+            val response = get("/api/kb/entries/$entryId?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取知识库条目详情失败:", e)
+            null
+        }
+    }
+
     suspend fun createKBEntry(topicId: String, title: String, content: String, tags: List<String>, userId: String): KBEntryItem? {
         return try {
             val tagsJson = tags.joinToString(",") { "\"$it\"" }

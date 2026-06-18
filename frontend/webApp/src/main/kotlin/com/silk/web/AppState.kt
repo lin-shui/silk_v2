@@ -45,7 +45,11 @@ class WebAppState {
         private set
 
     var currentTab by mutableStateOf(NavTab.SILK)
-    
+
+    // KB 内联引用：点击聊天里的 [[kb:...]] 链接 → 跳转到知识库对应条目
+    var knowledgeBaseNavigationTarget by mutableStateOf<KnowledgeBaseNavigationTarget?>(null)
+        private set
+
     // 标记用户是否明确请求了退出登录
     private var explicitLogoutRequested = false
     
@@ -117,6 +121,22 @@ class WebAppState {
     fun selectTab(tab: NavTab) {
         if (currentScene == Scene.SETTINGS) navigateBack()
         currentTab = tab
+    }
+
+    fun openKnowledgeBaseEntry(entryId: String, topicId: String? = null) {
+        knowledgeBaseNavigationTarget = KnowledgeBaseNavigationTarget(
+            entryId = entryId,
+            topicId = topicId,
+            requestId = kotlin.js.Date.now().toLong(),
+        )
+        selectTab(NavTab.KNOWLEDGE_BASE)
+    }
+
+    fun consumeKnowledgeBaseNavigationTarget(requestId: Long) {
+        val current = knowledgeBaseNavigationTarget ?: return
+        if (current.requestId == requestId) {
+            knowledgeBaseNavigationTarget = null
+        }
     }
     
     fun navigateBack(): Boolean {

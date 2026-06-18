@@ -3795,6 +3795,25 @@ fun Application.configureRouting() {
             )
         }
 
+        // KB 内联引用：按 entryId 取单条 entry（前端 [[kb:entryId|标题]] 预览/解析用）
+        get("/api/kb/entries/{entryId}") {
+            val entryId = call.parameters["entryId"] ?: ""
+            val userId = call.request.queryParameters["userId"]
+            if (entryId.isBlank() || userId.isNullOrBlank()) {
+                call.respondText("""{"success":false,"message":"Missing entryId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+                return@get
+            }
+            val entry = knowledgeBaseManager.getEntry(entryId, userId)
+            if (entry == null) {
+                call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+                return@get
+            }
+            call.respondText(
+                Json.encodeToString(KBEntry.serializer(), entry),
+                ContentType.Application.Json
+            )
+        }
+
         get("/api/kb/entries/{entryId}/export") {
             val entryId = call.parameters["entryId"] ?: ""
             val entry = knowledgeBaseManager.getEntry(entryId)

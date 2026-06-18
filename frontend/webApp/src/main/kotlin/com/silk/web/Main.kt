@@ -700,6 +700,17 @@ fun ChatScene(appState: WebAppState) {
         refreshSidebarGroups()
     }
 
+    // KB 内联引用：注册 window 桥，供聊天内 [[kb:...]] 链接点击跳转到知识库对应条目
+    DisposableEffect(appState) {
+        val bridge: (String?, String) -> Unit = { topicId, entryId ->
+            appState.openKnowledgeBaseEntry(entryId = entryId, topicId = topicId)
+        }
+        window.asDynamic().__silkOpenKnowledgeBaseEntry = bridge
+        onDispose {
+            window.asDynamic().__silkOpenKnowledgeBaseEntry = null
+        }
+    }
+
     LaunchedEffect(user.id) {
         while (true) {
             kotlinx.coroutines.delay(30000)
@@ -5051,13 +5062,15 @@ fun MarkdownContent(
             val unquotedBlockquotes = fixedFences
                 .replace(Regex("""^>\s*(-{3,})\s*$""", RegexOption.MULTILINE), "\n$1")
                 .replace(Regex("""^>\s*(\*\*Sources?:?\*\*)\s*$""", RegexOption.MULTILINE), "\n$1")
-            val linked = linkCitationMarkers(
-                DOMPurify.sanitize(
-                    markdownEngine.render(normalizeMathBlocks(unquotedBlockquotes)),
-                    createSanitizeConfig()
-                ),
-                references,
-                referenceAnchorPrefix
+            val linked = renderKnowledgeBaseMarkersInHtml(
+                linkCitationMarkers(
+                    DOMPurify.sanitize(
+                        markdownEngine.render(normalizeMathBlocks(unquotedBlockquotes)),
+                        createSanitizeConfig()
+                    ),
+                    references,
+                    referenceAnchorPrefix
+                )
             )
             linked
         } catch (_: Throwable) {
@@ -5077,6 +5090,9 @@ fun MarkdownContent(
         val element = document.getElementById(containerId) as? HTMLElement
         if (element != null) {
             element.innerHTML = safeHtml
+
+            // KB 内联引用：给 [[kb:...]] 渲染出的链接挂上点击处理（→ window.__silkOpenKnowledgeBaseEntry）
+            attachKnowledgeBaseLinkHandlers(element)
 
             // Rewrite HTTP image src through backend proxy to avoid Mixed Content
             val images = element.querySelectorAll("img")

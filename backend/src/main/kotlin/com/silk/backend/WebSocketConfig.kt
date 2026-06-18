@@ -96,6 +96,7 @@ class ChatServer(
     }
     // 直接调用模型的 Agent（简化流程：让模型自动使用 tool 能力）
     private val directModelAgent = com.silk.backend.ai.DirectModelAgent(sessionId = sessionName)
+    private val knowledgeBaseManager = com.silk.backend.kb.KnowledgeBaseManager()
     // 用户历史回忆 Agent（/recall 命令使用）
     private val userHistoryAgent = com.silk.backend.ai.UserHistoryAgent()
     private var messagesSinceAgentResponse = 0
@@ -1624,12 +1625,22 @@ class ChatServer(
         // we rely on blocks_state for display and suppress competing streaming_incremental
         // transient messages. CLI fallback path only emits streaming_incremental.
         var hasStructuredBlocks = false
+        val kbContext = com.silk.backend.kb.KnowledgeBaseReferenceResolver.resolvePromptContext(
+            rawInput = userMessage,
+            userId = userId,
+            knowledgeBaseManager = knowledgeBaseManager,
+        )
+        if (kbContext.availableReferences.isNotEmpty()) {
+            logger.info("📚 [Agent] 注入 {} 条知识库引用到本轮上下文", kbContext.availableReferences.size)
+        }
         try {
             val response = directModelAgent.processInput(
-                userInput = userMessage,
+                userInput = kbContext.resolvedUserInput,
                 systemPrompt = systemPrompt,
                 requestUserId = userId,
-                accessibleSessionIds = accessibleSessionIds
+                accessibleSessionIds = accessibleSessionIds,
+                additionalContext = kbContext.promptBlock,
+                availableReferences = kbContext.availableReferences,
             ) { stepType, content, isComplete ->
                 when (stepType) {
                     "thinking" -> {

@@ -19,6 +19,12 @@ import java.io.File
 class DirectModelAgent(
     private val sessionId: String = "default"
 ) {
+    data class AvailableReferenceSeed(
+        val title: String,
+        val snippet: String? = null,
+        val path: String? = null,
+    )
+
     private val logger = LoggerFactory.getLogger(DirectModelAgent::class.java)
 
     /**
@@ -132,10 +138,17 @@ class DirectModelAgent(
         systemPrompt: String? = null,
         requestUserId: String = "",
         accessibleSessionIds: List<String> = listOf(sessionId),
+        additionalContext: String? = null,
+        availableReferences: List<AvailableReferenceSeed> = emptyList(),
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
         currentResponseReferences.clear()
         lastAgentResponse = null
+
+        // 注册用户提供的本地知识库引用（用于 [available:N] 引用解析）
+        availableReferences.forEach { ref ->
+            registerReference(kind = "available", title = ref.title, snippet = ref.snippet, path = ref.path)
+        }
 
         val now = java.time.LocalDateTime.now()
         val chineseFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
@@ -147,6 +160,11 @@ class DirectModelAgent(
             appendLine("ISO 格式：${now.format(isoFormatter)}")
             appendLine("⚠️ 你必须使用上述精确时间回答所有时间/日期相关问题，不得自行推理、猜测或根据训练数据推断。如果用户问\"今天\"、\"现在\"、\"星期几\"等，必须以上述注入的时间为准。")
             appendLine()
+            if (!additionalContext.isNullOrBlank()) {
+                appendLine("## 用户提供的本地知识库资料（引用时用 [available:数字]）")
+                appendLine(additionalContext)
+                appendLine()
+            }
             appendLine(withCitationGuidelines(systemPrompt ?: "你是 Silk，一个智能助手。"))
         }
 
@@ -198,9 +216,11 @@ class DirectModelAgent(
             appendLine("## 引用规则（必须遵守）")
             appendLine("当你使用网络搜索获取信息后，必须在回答中标注信息来源：")
             appendLine("- 引用网络搜索结果时，在相关内容末尾添加 [citation:数字]")
+            appendLine("- 引用用户明确提供的本地知识库/文档时，在相关内容末尾添加 [available:数字]")
             appendLine("- 第一个搜索结果的引用编号为 [citation:1]，第二个为 [citation:2]，以此类推")
+            appendLine("- 第一个本地资料的引用编号为 [available:1]，第二个为 [available:2]，以此类推")
             appendLine("- 每个重要观点都必须标注来源引用，不能遗漏")
-            appendLine("- 如果你没有使用网络搜索，则不需要添加引用标记")
+            appendLine("- 如果你没有使用任何外部或本地资料，则不需要添加引用标记")
             appendLine()
             appendLine("## 参考来源列表（必须遵守）")
             appendLine("当你使用了网络搜索，必须在回答末尾附上完整的参考来源列表，格式如下：")
@@ -220,7 +240,7 @@ class DirectModelAgent(
         snippet: String? = null,
         path: String? = null
     ): Int {
-        val index = currentResponseReferences.size + 1
+        val index = currentResponseReferences.count { it.kind == kind } + 1
         currentResponseReferences.add(
             com.silk.backend.models.MessageReference(
                 kind = kind,
