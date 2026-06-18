@@ -2304,8 +2304,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     isTransient = false,
                     isLastMessage = message.id == lastMessageId,
                     currentUserId = user.id,
+                    currentUserName = user.fullName,
                     groupId = group.id,
                     isRecalling = message.id in recallingMessageIds,
+                    chatClient = chatClient,
                     onRecall = { messageId ->
                         if (messageId !in recallingMessageIds) {
                             recallingMessageIds = recallingMessageIds + messageId
@@ -5614,9 +5616,11 @@ fun MessageItem(
     message: Message,
     isTransient: Boolean = false,
     currentUserId: String = "",
+    currentUserName: String = "",
     groupId: String = "",
     isLastMessage: Boolean = false,
     isRecalling: Boolean = false,
+    chatClient: com.silk.shared.ChatClient? = null,
     onRecall: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {},
@@ -6490,6 +6494,15 @@ fun MessageItem(
         MessageType.STOP_GENERATE -> {
         }
         MessageType.CC_COMMAND -> {
+        }
+        MessageType.CARD -> {
+            // ACP/Workflow agent 交互卡片（问题/权限/计划）→ CardMessageRenderer
+            chatClient?.let {
+                CardMessageRenderer(message, it, currentUserId, currentUserName)
+            }
+        }
+        MessageType.CARD_REPLY -> {
+            // 卡片回复（用户点击）由服务器回放为卡片 edit，这里不单独渲染
         }
     }
 }
