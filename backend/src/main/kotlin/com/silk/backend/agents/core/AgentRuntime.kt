@@ -1222,6 +1222,7 @@ object AgentRuntime {
                     toolName = toolName,
                     toolDetail = detail,
                     decision = decisionText,
+                    approved = (decision == "allow"),
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))

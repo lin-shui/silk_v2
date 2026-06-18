@@ -250,11 +250,12 @@ object AgentMessages {
         toolName: String,
         toolDetail: String,
         decision: String,
+        approved: Boolean,
         agentUserId: String,
         agentName: String,
     ): Message {
-        val template = if (decision.contains("允许")) "green" else "red"
-        val title = if (decision.contains("允许")) "✓ 已允许" else "✗ 已拒绝"
+        val template = if (approved) "green" else "red"
+        val title = if (approved) "✓ 已允许" else "✗ 已拒绝"
         val builder = CardBuilder(title, template = template)
         builder.addText("**工具**: $toolName")
         if (toolDetail.isNotBlank()) {
@@ -293,6 +294,61 @@ object AgentMessages {
         }
     }
 
+    /** 构建计划审批卡片（ExitPlanMode）。 */
+    fun planReviewCard(
+        requestId: String,
+        planContent: String,
+        agentUserId: String,
+        agentName: String,
+    ): Message {
+        val builder = CardBuilder("📋 $agentName 提交计划审批", template = "blue")
+        val truncated = if (planContent.length > 2000) planContent.take(2000) + "\n\n...(已截断)" else planContent
+        builder.addText(truncated)
+        builder.addDivider()
+        builder.addButton("批准执行", "plan_allow_$requestId", type = ButtonType.PRIMARY)
+        builder.addButton("拒绝", "plan_deny_$requestId", type = ButtonType.DANGER)
+        builder.addTextInput(
+            name = "plan_feedback_$requestId",
+            placeholder = "输入修改意见...",
+        )
+        builder.addButton("拒绝并反馈", "plan_deny_feedback_$requestId", type = ButtonType.DEFAULT)
+
+        return Message(
+            id = "agent_plan_review_$requestId",
+            userId = agentUserId,
+            userName = agentName,
+            content = builder.build(),
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.CARD,
+            isTransient = false,
+            category = MessageCategory.AGENT_PERMISSION,
+        )
+    }
+
+    /** 构建已处理的计划审批卡片（禁用态）。 */
+    fun planReviewCardResolved(
+        requestId: String,
+        decision: String,
+        approved: Boolean,
+        agentUserId: String,
+        agentName: String,
+    ): Message {
+        val template = if (approved) "green" else "red"
+        val title = if (approved) "✓ 计划已批准" else "✗ 计划已拒绝"
+        val builder = CardBuilder(title, template = template)
+        builder.addText(decision)
+
+        return Message(
+            id = "agent_plan_review_$requestId",
+            userId = agentUserId,
+            userName = agentName,
+            content = builder.buildDisabled(),
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.CARD,
+            action = "edit",
+        )
+    }
+
     /** 将问题列表格式化为展示文本。供重连恢复等场景共用。 */
     fun formatQuestionText(questions: List<StructuredQuestion>): String = buildString {
         appendLine("💬 Claude Code 想问你：")
@@ -306,7 +362,7 @@ object AgentMessages {
             }
         } else {
             questions.forEachIndexed { i, sq ->
-                appendLine("${i + 1}. ${sq.question}")
+                appendLine("问题 ${i + 1}/${questions.size}: ${sq.question}")
             }
         }
         appendLine()
