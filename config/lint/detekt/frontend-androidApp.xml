@@ -4,25 +4,32 @@
   <CurrentIssues>
     <ID>ComplexCondition:AppState.kt$AppState$savedUserId != null &amp;&amp; savedLoginName != null &amp;&amp; savedFullName != null &amp;&amp; savedPhoneNumber != null</ID>
     <ID>ComplexCondition:AppState.kt$AppState$userId != null &amp;&amp; loginName != null &amp;&amp; fullName != null &amp;&amp; phoneNumber != null</ID>
+    <ID>ComplexCondition:ChatScreen.kt$hasToolsPty &amp;&amp; rawToolsText.isNotEmpty() &amp;&amp; bodyContent.isEmpty() &amp;&amp; rawToolsText.contains(toolsSep)</ID>
     <ID>ComplexCondition:ChatScreen.kt$i &lt; line.length &amp;&amp; (line[i].isDigit() || line[i] == '.' || line[i] == 'x' || line[i] == 'X')</ID>
     <ID>ComplexCondition:ChatScreen.kt$line[i].isDigit() || (line[i] == '-' &amp;&amp; i + 1 &lt; line.length &amp;&amp; line[i + 1].isDigit())</ID>
     <ID>ComplexCondition:ChatScreen.kt$messages.isEmpty() &amp;&amp; transientMessage == null &amp;&amp; statusMessages.isEmpty() &amp;&amp; !isWaitingForAI</ID>
+    <ID>ComplexCondition:ChatScreen.kt$modeKey.isNotBlank() || modelName.isNotBlank() || !ccConnectInfo?.availableModes.isNullOrEmpty() || !ccConnectInfo?.availableModels.isNullOrEmpty()</ID>
     <ID>ComplexCondition:ChatScreen.kt$text[i] == '$' &amp;&amp; (i == 0 || text[i - 1] != '$') &amp;&amp; (i + 1 &gt;= text.length || text[i + 1] != '$')</ID>
+    <ID>ComplexCondition:ChatScreen.kt$ti &lt; 0 &amp;&amp; te &lt; 0 &amp;&amp; et &lt; 0 &amp;&amp; eto &lt; 0</ID>
+    <ID>ComplexCondition:WorkflowChatScreen.kt$latest.type == com.silk.shared.models.MessageType.SYSTEM &amp;&amp; (latest.content.startsWith("已切换到") || latest.content.contains("已激活") || latest.content.contains("已退出 agent"))</ID>
     <ID>CyclomaticComplexMethod:AudioDuplexScreen.kt$@Composable fun AudioDuplexScreen(appState: AppState)</ID>
-    <ID>CyclomaticComplexMethod:ChatScreen.kt$@Composable fun AIMessageCardAndroid( message: Message, timeString: String, isTransient: Boolean = false, isExpanded: Boolean = true, onExpandChange: (Boolean) -&gt; Unit = {}, onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {} )</ID>
+    <ID>CyclomaticComplexMethod:ChatScreen.kt$@Composable fun AIMessageCardAndroid( message: Message, timeString: String, isTransient: Boolean = false, isExpanded: Boolean = true, onExpandChange: (Boolean) -&gt; Unit = {}, isThinkingExpanded: Boolean = false, onThinkingExpandChange: (Boolean) -&gt; Unit = {}, isToolsExpanded: Boolean = false, onToolsExpandChange: (Boolean) -&gt; Unit = {}, onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {} )</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$@Composable fun FileItemCard( file: FileItem, onClick: () -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$@Composable fun InlineMarkdownAndroid(text: String, context: Context? = null)</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$@Composable fun MarkdownContentAndroid(content: String)</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$@Composable fun MarkdownTableAndroid(lines: List&lt;String&gt;)</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$@Composable private fun ForwardedMessageBubble( parts: ForwardedMessageParts, isOwn: Boolean, isExpanded: Boolean, onExpand: () -&gt; Unit, onCollapse: () -&gt; Unit, )</ID>
-    <ID>CyclomaticComplexMethod:ChatScreen.kt$@OptIn(ExperimentalFoundationApi::class) @Composable fun MessageItem( message: Message, currentUserId: String, context: android.content.Context, isTransient: Boolean = false, isSelectionMode: Boolean = false, isSelected: Boolean = false, onToggleSelection: (String) -&gt; Unit = {}, onLongPress: (String) -&gt; Unit = {}, onUserNameClick: ((Message) -&gt; Unit)? = null, // 撤回功能相关参数 isRecalling: Boolean = false, onRecall: (String) -&gt; Unit = {}, // AI 消息展开状态相关参数 isAIExpanded: Boolean = true, onAIExpandChange: (String, Boolean) -&gt; Unit = { _, _ -&gt; }, /** 长文本/转发全文收起后由列表滚回该条，与 Harmony onLongContentCollapsed 一致 */ onLongContentCollapsed: (String) -&gt; Unit = {}, // 复制和转发功能相关参数 onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {} )</ID>
+    <ID>CyclomaticComplexMethod:ChatScreen.kt$@OptIn(ExperimentalFoundationApi::class) @Composable fun MessageItem( message: Message, currentUserId: String, context: android.content.Context, isTransient: Boolean = false, isSelectionMode: Boolean = false, isSelected: Boolean = false, onToggleSelection: (String) -&gt; Unit = {}, onLongPress: (String) -&gt; Unit = {}, onUserNameClick: ((Message) -&gt; Unit)? = null, // 撤回功能相关参数 isRecalling: Boolean = false, onRecall: (String) -&gt; Unit = {}, // AI 消息展开状态相关参数 isAIExpanded: Boolean = true, onAIExpandChange: (String, Boolean) -&gt; Unit = { _, _ -&gt; }, // AI 思考过程展开状态相关参数 isThinkingExpanded: Boolean = false, onThinkingExpandChange: (String, Boolean) -&gt; Unit = { _, _ -&gt; }, // 工具调用过程展开状态相关参数 isToolsExpanded: Boolean = false, onToolsExpandChange: (String, Boolean) -&gt; Unit = { _, _ -&gt; }, /** 长文本/转发全文收起后由列表滚回该条，与 Harmony onLongContentCollapsed 一致 */ onLongContentCollapsed: (String) -&gt; Unit = {}, // 复制和转发功能相关参数 onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {} )</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ChatScreen(appState: AppState)</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun MembersDialog( members: List&lt;GroupMember&gt;, contacts: List&lt;Contact&gt;, currentUserId: String, isLoading: Boolean, onMemberClick: (GroupMember) -&gt; Unit, onDismiss: () -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$private fun AnnotatedString.Builder.highlightLine(line: String, language: String)</ID>
     <ID>CyclomaticComplexMethod:ChatScreen.kt$private fun extractInlineMath(text: String): Pair&lt;String, List&lt;Pair&lt;Int, String&gt;&gt;&gt;</ID>
+    <ID>CyclomaticComplexMethod:ChatScreen.kt$private fun extractToolSummary(name: String, content: String): String</ID>
+    <ID>CyclomaticComplexMethod:ChatScreen.kt$private fun getToolIcon(name: String): String</ID>
     <ID>CyclomaticComplexMethod:ContactsScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun ContactsScreen(appState: AppState)</ID>
     <ID>CyclomaticComplexMethod:ContactsScreen.kt$@Suppress("UNUSED_PARAMETER") @Composable fun AddContactDialog( appState: AppState, strings: com.silk.shared.i18n.Strings, onDismiss: () -&gt; Unit, onContactAdded: () -&gt; Unit // 保留以便将来刷新列表 )</ID>
-    <ID>CyclomaticComplexMethod:GroupListScreen.kt$@Composable fun GroupCard( group: Group, isHost: Boolean, isDeleteMode: Boolean = false, isSelected: Boolean = false, unreadCount: Int = 0, onClick: () -&gt; Unit, onMembersClick: (() -&gt; Unit)? = null )</ID>
+    <ID>CyclomaticComplexMethod:GroupListScreen.kt$@Composable @OptIn(ExperimentalMaterial3Api::class) fun CreateGroupDialog( appState: AppState, strings: com.silk.shared.i18n.Strings, onDismiss: () -&gt; Unit, onGroupCreated: (Group) -&gt; Unit, onCcConnectCreated: ((Group) -&gt; Unit)? = null, )</ID>
+    <ID>CyclomaticComplexMethod:GroupListScreen.kt$@Composable fun GroupCard( group: Group, isHost: Boolean, isDeleteMode: Boolean = false, isSelected: Boolean = false, unreadCount: Int = 0, ccConnectInfo: CcConnectTokenInfo? = null, onClick: () -&gt; Unit, onMembersClick: (() -&gt; Unit)? = null )</ID>
     <ID>CyclomaticComplexMethod:GroupListScreen.kt$@Composable fun GroupMembersListDialog( group: Group, members: List&lt;GroupMember&gt;, contacts: List&lt;Contact&gt;, currentUserId: String, isLoading: Boolean, onMemberClick: (GroupMember) -&gt; Unit, onDismiss: () -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:GroupListScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun GroupListScreen(appState: AppState)</ID>
     <ID>CyclomaticComplexMethod:KnowledgeBaseScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun KnowledgeBaseScreen(appState: AppState)</ID>
@@ -31,17 +38,22 @@
     <ID>CyclomaticComplexMethod:SettingsScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun SettingsScreen(appState: AppState)</ID>
     <ID>CyclomaticComplexMethod:WorkflowChatScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun WorkflowChatScreen(appState: AppState)</ID>
     <ID>CyclomaticComplexMethod:WorkflowDialogs.kt$@Composable fun FolderPickerDialog( userId: String, initialPath: String?, onDismiss: () -&gt; Unit, onConfirm: (String) -&gt; Unit, )</ID>
+    <ID>CyclomaticComplexMethod:WorkflowDialogs.kt$@Composable fun WorkflowSettingsDialog( userId: String, groupId: String, currentWorkingDir: String, currentAgentDisplay: String, currentPermissionMode: String, onDismiss: () -&gt; Unit, onApplied: (workingDir: String, agentDisplay: String, permissionMode: String) -&gt; Unit, )</ID>
     <ID>CyclomaticComplexMethod:WorkflowScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable private fun CreateWorkflowDialog( userId: String, onDismiss: () -&gt; Unit, onCreated: (WorkflowItem) -&gt; Unit, )</ID>
     <ID>EmptyCatchBlock:ChatScreen.kt${ }</ID>
     <ID>ImplicitDefaultLocale:ApkDownloader.kt$ApkDownloader$String.format("%.1f MB", size / (1024.0 * 1024.0))</ID>
     <ID>ImplicitDefaultLocale:MarkdownWebView.kt$String.format("%04x", c.code)</ID>
     <ID>InstanceOfCheckForException:ApiClient.kt$ApiClient$e is CancellationException</ID>
+    <ID>LargeClass:ApiClient.kt$ApiClient</ID>
     <ID>LoopWithTooManyJumpStatements:AudioDuplexScreen.kt$for</ID>
     <ID>LoopWithTooManyJumpStatements:ChatScreen.kt$while</ID>
+    <ID>NestedBlockDepth:ApiClient.kt$ApiClient$private fun post(endpoint: String, jsonBody: String): String</ID>
+    <ID>NestedBlockDepth:ChatScreen.kt$@Composable fun AIMessageCardAndroid( message: Message, timeString: String, isTransient: Boolean = false, isExpanded: Boolean = true, onExpandChange: (Boolean) -&gt; Unit = {}, isThinkingExpanded: Boolean = false, onThinkingExpandChange: (Boolean) -&gt; Unit = {}, isToolsExpanded: Boolean = false, onToolsExpandChange: (Boolean) -&gt; Unit = {}, onCopy: (String) -&gt; Unit = {}, onForward: (Message) -&gt; Unit = {} )</ID>
     <ID>NestedBlockDepth:ChatScreen.kt$fun getFileName(context: android.content.Context, uri: Uri): String</ID>
     <ID>NestedBlockDepth:ChatScreen.kt$private fun AnnotatedString.Builder.highlightLine(line: String, language: String)</ID>
     <ID>PrintStackTrace:ApkDownloader.kt$ApkDownloader$e</ID>
     <ID>PrintStackTrace:VersionChecker.kt$VersionChecker$e</ID>
+    <ID>SwallowedException:ApiClient.kt$ApiClient$e2: Exception</ID>
     <ID>SwallowedException:ApiClient.kt$ApiClient$e: Exception</ID>
     <ID>SwallowedException:ApiClient.kt$ApiClient$e: java.net.ConnectException</ID>
     <ID>SwallowedException:ApkDownloader.kt$ApkDownloader$e: Exception</ID>
@@ -49,6 +61,8 @@
     <ID>SwallowedException:AudioDuplexScreen.kt$e: CancellationException</ID>
     <ID>SwallowedException:AudioDuplexScreen.kt$e: Exception</ID>
     <ID>SwallowedException:ChatScreen.kt$e: Exception</ID>
+    <ID>SwallowedException:LoginScreen.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:ApiClient.kt$ApiClient$e2: Exception</ID>
     <ID>TooGenericExceptionCaught:ApiClient.kt$ApiClient$e: Exception</ID>
     <ID>TooGenericExceptionCaught:ApkDownloader.kt$ApkDownloader$e: Exception</ID>
     <ID>TooGenericExceptionCaught:AppState.kt$AppState$e: Exception</ID>
@@ -64,10 +78,13 @@
     <ID>UnusedParameter:AudioDuplexScreen.kt$appState: AppState</ID>
     <ID>UnusedParameter:ChatScreen.kt$currentUser: User</ID>
     <ID>UnusedParameter:ChatScreen.kt$groupId: String</ID>
+    <ID>UnusedParameter:ChatScreen.kt$isToolsExpanded: Boolean = false</ID>
+    <ID>UnusedParameter:ChatScreen.kt$onToolsExpandChange: (Boolean) -&gt; Unit = {}</ID>
     <ID>UnusedParameter:GroupListScreen.kt$isHost: Boolean</ID>
     <ID>UnusedParameter:WebSocketForegroundService.kt$WebSocketForegroundService$status: String</ID>
     <ID>UnusedPrivateProperty:ChatScreen.kt$val canShowContextMenu = !isTransient &amp;&amp; !isSystemMessage &amp;&amp; message.type == MessageType.TEXT</ID>
     <ID>UnusedPrivateProperty:ChatScreen.kt$var recallResult by remember { mutableStateOf&lt;String?&gt;(null) } // 撤回结果提示</ID>
+    <ID>UnusedPrivateProperty:LoginScreen.kt$val activity = LocalContext.current as? Activity</ID>
     <ID>WildcardImport:ApiClient.kt$import com.silk.shared.models.*</ID>
     <ID>WildcardImport:AudioDuplexScreen.kt$import androidx.compose.foundation.layout.*</ID>
     <ID>WildcardImport:AudioDuplexScreen.kt$import androidx.compose.material3.*</ID>
