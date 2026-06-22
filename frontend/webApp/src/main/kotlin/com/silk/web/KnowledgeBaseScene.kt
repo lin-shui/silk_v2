@@ -1212,6 +1212,7 @@ private suspend fun createKnowledgeEntry(
     resetEntryDialog(onVisibilityChange, onTitleChange)
 }
 
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun KnowledgeBaseScene(appState: WebAppState) {
     val user = appState.currentUser ?: return
