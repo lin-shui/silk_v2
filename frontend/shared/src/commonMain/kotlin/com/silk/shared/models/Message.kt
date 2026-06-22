@@ -42,7 +42,9 @@ data class MessageReference(
     val title: String,
     val url: String? = null,
     val snippet: String? = null,
-    val path: String? = null
+    val path: String? = null,
+    val origin: String? = null,
+    val reason: String? = null,
 )
 
 @Serializable
@@ -57,4 +59,3 @@ const val SILK_AGENT_DISPLAY_NAME = "Silk"
 
 /** 判断某个 userId 是否属于 AI agent（所有 agent 的 userId 均以 _ai_agent 结尾）。 */
 fun isAgentUserId(userId: String): Boolean = userId.endsWith("_ai_agent")
-

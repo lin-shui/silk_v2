@@ -26,6 +26,8 @@ class DirectModelAgent(
         val title: String,
         val snippet: String? = null,
         val path: String? = null,
+        val origin: String? = null,
+        val reason: String? = null,
     )
 
     private val logger = LoggerFactory.getLogger(DirectModelAgent::class.java)
@@ -153,6 +155,8 @@ class DirectModelAgent(
                 title = ref.title,
                 snippet = ref.snippet,
                 path = ref.path,
+                origin = ref.origin,
+                reason = ref.reason,
             )
         }
 
@@ -222,7 +226,9 @@ class DirectModelAgent(
         title: String,
         url: String? = null,
         snippet: String? = null,
-        path: String? = null
+        path: String? = null,
+        origin: String? = null,
+        reason: String? = null,
     ): Int {
         val index = currentResponseReferences.count { it.kind == kind } + 1
         currentResponseReferences.add(
@@ -232,7 +238,9 @@ class DirectModelAgent(
                 title = title,
                 url = url,
                 snippet = snippet,
-                path = path
+                path = path,
+                origin = origin,
+                reason = reason,
             )
         )
         return index

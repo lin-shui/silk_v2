@@ -4,6 +4,7 @@ import com.silk.backend.ai.AIConfig
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.kb.resolveKnowledgeBasePromptContext
+import com.silk.backend.models.MessageReference
 import com.silk.backend.todos.GroupTodoExtractionService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -75,9 +76,30 @@ internal suspend fun ChatServer.generateIntelligentResponseSupport(
         rawInput = userMessage,
         userId = userId,
         knowledgeBaseManager = knowledgeBaseManager,
+        preferredGroupId = currentSessionName.removePrefix("group_").takeIf { currentSessionName.startsWith("group_") },
     )
     if (kbContext.availableReferences.isNotEmpty()) {
-        logger.info("📚 [Agent-{}] 注入 {} 条知识库引用到本轮上下文", callId, kbContext.availableReferences.size)
+        logger.info(
+            "📚 [Agent-{}] 注入 {} 条知识库上下文（手动={}, 自动={}）",
+            callId,
+            kbContext.availableReferences.size,
+            kbContext.diagnostics.manualReferenceCount,
+            kbContext.diagnostics.autoCandidateCount,
+        )
+        broadcastSystemStatus(
+            status = buildKnowledgeBaseContextStatus(kbContext),
+            references = kbContext.availableReferences.mapIndexed { index, reference ->
+                MessageReference(
+                    kind = "available",
+                    index = index + 1,
+                    title = reference.title,
+                    snippet = reference.snippet,
+                    path = reference.path,
+                    origin = reference.origin,
+                    reason = reference.reason,
+                )
+            },
+        )
     }
 
     val state = IntelligentResponseState()
@@ -267,6 +289,21 @@ private fun ChatServer.refreshSilkPrivateChatTodosIfNeeded(userId: String) {
     CoroutineScope(Dispatchers.IO).launch {
         runChatCatching { GroupTodoExtractionService.refreshTodosForUser(userId) }
             .onFailure { error -> logger.warn("⚠️ 专属对话待办提取失败", error) }
+    }
+}
+
+private fun buildKnowledgeBaseContextStatus(kbContext: com.silk.backend.kb.KnowledgeBasePromptContext): String {
+    val total = kbContext.availableReferences.size
+    val manual = kbContext.diagnostics.manualReferenceCount
+    val auto = kbContext.diagnostics.autoCandidateCount
+    return buildString {
+        append("📚 本轮知识库上下文已准备")
+        append("（共 $total 条")
+        if (manual > 0 || auto > 0) {
+            append("：手动 $manual")
+            if (auto > 0) append("，自动 $auto")
+        }
+        append("）")
     }
 }
 

@@ -35,7 +35,9 @@ data class MessageReference(
     val title: String,
     val url: String? = null,
     val snippet: String? = null,
-    val path: String? = null
+    val path: String? = null,
+    val origin: String? = null,
+    val reason: String? = null,
 )
 
 /**
@@ -62,4 +64,3 @@ data class ChatHistory(
     // @Silk 设置的角色提示，作为 AI 回复的 system prompt suffix
     var rolePrompt: String? = null
 )
-
