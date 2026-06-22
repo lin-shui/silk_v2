@@ -219,6 +219,8 @@ class DirectModelAgent(
             appendLine("- 引用用户明确提供的本地知识库/文档时，在相关内容末尾添加 [available:数字]")
             appendLine("- 第一个搜索结果的引用编号为 [citation:1]，第二个为 [citation:2]，以此类推")
             appendLine("- 第一个本地资料的引用编号为 [available:1]，第二个为 [available:2]，以此类推")
+            appendLine("- 引用标记必须放在相关内容的句末或段末")
+            appendLine("- 禁止堆砌大量引用标记；只为对应观点添加必要引用")
             appendLine("- 每个重要观点都必须标注来源引用，不能遗漏")
             appendLine("- 如果你没有使用任何外部或本地资料，则不需要添加引用标记")
             appendLine()
