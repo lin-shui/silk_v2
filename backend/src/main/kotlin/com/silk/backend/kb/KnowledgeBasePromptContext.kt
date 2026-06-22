@@ -8,6 +8,12 @@ data class KnowledgeBasePromptContext(
     val resolvedUserInput: String,
     val promptBlock: String? = null,
     val availableReferences: List<DirectModelAgent.AvailableReferenceSeed> = emptyList(),
+    val diagnostics: KnowledgeBaseContextDiagnostics = KnowledgeBaseContextDiagnostics(),
+)
+
+data class KnowledgeBaseContextDiagnostics(
+    val manualReferenceCount: Int = 0,
+    val autoCandidateCount: Int = 0,
 )
 
 private data class KnowledgeBaseReferenceToken(
@@ -22,12 +28,20 @@ private data class ResolvedKnowledgeBaseReference(
     val label: String,
 )
 
+private data class AutoKnowledgeBaseReference(
+    val entry: KBEntry,
+    val topic: KBTopic,
+    val reasons: List<String>,
+)
+
 private val kbReferenceRegex = Regex("""\[\[kb:([A-Za-z0-9_\-]+)(?:\|([^\]]+))?\]\]""")
 
 fun resolveKnowledgeBasePromptContext(
     rawInput: String,
     userId: String,
     knowledgeBaseManager: KnowledgeBaseManager,
+    preferredGroupId: String? = null,
+    autoCandidateLimit: Int = 3,
 ): KnowledgeBasePromptContext {
     val tokens = kbReferenceRegex.findAll(rawInput).map { match ->
         KnowledgeBaseReferenceToken(
@@ -36,10 +50,6 @@ fun resolveKnowledgeBasePromptContext(
             label = match.groupValues.getOrNull(2)?.trim()?.takeIf { it.isNotEmpty() },
         )
     }.toList()
-    if (tokens.isEmpty()) {
-        return KnowledgeBasePromptContext(resolvedUserInput = rawInput)
-    }
-
     val resolvedByEntryId = linkedMapOf<String, ResolvedKnowledgeBaseReference>()
     tokens.forEach { token ->
         if (resolvedByEntryId.containsKey(token.entryId)) return@forEach
@@ -56,7 +66,22 @@ fun resolveKnowledgeBasePromptContext(
         val label = resolvedByEntryId[token.entryId]?.label ?: (token.label ?: "知识库文档 ${token.entryId}")
         acc.replace(token.fullMatch, "《$label》")
     }
-    if (resolvedByEntryId.isEmpty()) {
+
+    val autoReferences = knowledgeBaseManager.searchEntriesForContext(
+        userId = userId,
+        query = resolvedUserInput,
+        preferredGroupId = preferredGroupId,
+        limit = autoCandidateLimit,
+        excludedEntryIds = resolvedByEntryId.keys,
+    ).map { hit ->
+        AutoKnowledgeBaseReference(
+            entry = hit.entry,
+            topic = hit.topic,
+            reasons = hit.reasons,
+        )
+    }
+
+    if (resolvedByEntryId.isEmpty() && autoReferences.isEmpty()) {
         return KnowledgeBasePromptContext(resolvedUserInput = resolvedUserInput)
     }
 
@@ -65,13 +90,30 @@ fun resolveKnowledgeBasePromptContext(
             title = "${resolved.topic.name} / ${resolved.entry.title}",
             snippet = buildKnowledgeBaseSnippet(resolved.entry),
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
+            origin = "manual",
+            reason = "用户手动引用",
+        )
+    } + autoReferences.map { resolved ->
+        DirectModelAgent.AvailableReferenceSeed(
+            title = "${resolved.topic.name} / ${resolved.entry.title}",
+            snippet = buildKnowledgeBaseSnippet(resolved.entry),
+            path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
+            origin = "auto",
+            reason = resolved.reasons.joinToString("、"),
         )
     }
-    val promptBlock = buildKnowledgeBasePromptBlock(resolvedByEntryId.values.toList())
+    val promptBlock = buildKnowledgeBasePromptBlock(
+        manualReferences = resolvedByEntryId.values.toList(),
+        autoReferences = autoReferences,
+    )
     return KnowledgeBasePromptContext(
         resolvedUserInput = resolvedUserInput,
         promptBlock = promptBlock,
         availableReferences = references,
+        diagnostics = KnowledgeBaseContextDiagnostics(
+            manualReferenceCount = resolvedByEntryId.size,
+            autoCandidateCount = autoReferences.size,
+        ),
     )
 }
 
@@ -79,22 +121,58 @@ internal fun buildKnowledgeBasePath(topicId: String, entryId: String): String =
     "kb://$topicId/$entryId"
 
 private fun buildKnowledgeBasePromptBlock(
-    references: List<ResolvedKnowledgeBaseReference>,
+    manualReferences: List<ResolvedKnowledgeBaseReference>,
+    autoReferences: List<AutoKnowledgeBaseReference>,
 ): String = buildString {
-    appendLine("## 用户显式引用的知识库文档")
-    appendLine("以下文档已被用户明确放入本轮上下文。")
+    appendLine("## 知识库上下文")
+    appendLine("以下知识库文档已进入本轮上下文。")
     appendLine("如果你的回答使用了这些文档中的事实、定义或步骤，请在相关句末使用对应的 [available:数字] 标记。")
     appendLine()
-    references.forEachIndexed { index, resolved ->
-        val marker = "[available:${index + 1}]"
-        appendLine("$marker ${resolved.topic.name} / ${resolved.entry.title}")
-        if (resolved.entry.tags.isNotEmpty()) {
-            appendLine("标签: ${resolved.entry.tags.joinToString(", ")}")
+    var nextIndex = 1
+
+    if (manualReferences.isNotEmpty()) {
+        appendLine("### 用户显式引用")
+        manualReferences.forEach { resolved ->
+            val marker = "[available:${nextIndex++}]"
+            appendReferenceBlock(
+                marker = marker,
+                topic = resolved.topic,
+                entry = resolved.entry,
+                reasons = listOf("用户手动引用"),
+            )
         }
-        appendLine("内容:")
-        appendLine(truncateKnowledgeBaseContent(resolved.entry.content))
-        appendLine()
     }
+
+    if (autoReferences.isNotEmpty()) {
+        appendLine("### 自动补充候选")
+        autoReferences.forEach { resolved ->
+            val marker = "[available:${nextIndex++}]"
+            appendReferenceBlock(
+                marker = marker,
+                topic = resolved.topic,
+                entry = resolved.entry,
+                reasons = resolved.reasons,
+            )
+        }
+    }
+}
+
+private fun StringBuilder.appendReferenceBlock(
+    marker: String,
+    topic: KBTopic,
+    entry: KBEntry,
+    reasons: List<String>,
+) {
+    appendLine("$marker ${topic.name} / ${entry.title}")
+    if (reasons.isNotEmpty()) {
+        appendLine("加入原因: ${reasons.joinToString("、")}")
+    }
+    if (entry.tags.isNotEmpty()) {
+        appendLine("标签: ${entry.tags.joinToString(", ")}")
+    }
+    appendLine("内容:")
+    appendLine(truncateKnowledgeBaseContent(entry.content))
+    appendLine()
 }
 
 private fun buildKnowledgeBaseSnippet(entry: KBEntry): String {

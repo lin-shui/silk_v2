@@ -24,7 +24,7 @@
 | User todos | `chat_history/user_todos/*.json` or `-Dsilk.userTodoBaseDir=...` | `UserTodoStore`（兼容旧 `backend/chat_history/user_todos` / `../chat_history/user_todos` 查找） |
 | Workflow store | `~/.silk-data/workflows/workflow_store.json`, `SILK_WORKFLOW_DIR`, or `-Dsilk.workflowDir=...` | `WorkflowManager` |
 | Trusted directories | `~/.silk-data/workflows/trusted_dirs.json` (co-located with workflow store) | `TrustedDirManager` |
-| KB store | `knowledge_base/kb_store.json` or `-Dsilk.kbDir=...` | `KnowledgeBaseManager` |
+| KB store | `knowledge_base/kb_store.json` or `-Dsilk.kbDir=...` | `KnowledgeBaseManager`（topic-level personal/team scope、ACL、旧 store 兼容读取） |
 | Web static / APK / HAP | `backend/static/` | 后端静态分发 |
 | Claude Code sessions | `~/.silk/cc_sessions.json` | `cc_bridge/session_manager.py` |
 | Codex sessions | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `codex_bridge/codex_session_index.py` |
@@ -42,6 +42,7 @@
 - 聊天文本消息持久化到 `session.json`
 - URL/PDF 链接经 `WebPageDownloader` 下载提取后可生成文件消息并持久化
 - AI 搜索由 `DirectModelAgent.searchContext()` 通过 grep 检索 `_text.txt` 和 `session.json`，受 accessibleSessionIds 隔离
+- KB 上下文由 `KnowledgeBaseManager.searchEntriesForContext()` 做服务端 lexical 检索，只会命中当前用户可读、且 `PUBLISHED` 的 entries；群聊场景会优先 boost 当前 group 对应的 team topics
 
 ## Cross-Client Contract Surface
 

@@ -1216,6 +1216,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             strings = strings,
             connectionState = connectionState,
             chatClient = chatClient,
+            statusMessages = statusMessages,
             sessionUsers = sessionUsers,
             pendingQuestionId = pendingQuestionId,
             isGenerating = isGenerating,
@@ -1868,6 +1869,9 @@ private fun ChatAppMessagePane(
     onSelectionModeChanged: (Boolean) -> Unit,
     onSelectedMessageIdsChanged: (Set<String>) -> Unit,
 ) {
+    val contextTrayStatus = statusMessages.lastOrNull(::isKnowledgeBaseContextStatusMessage)
+    val visibleStatusMessages = statusMessages.filterNot { it.id == contextTrayStatus?.id }
+
     Div({
         classes(SilkStylesheet.messagesContainer)
         id("messages")
@@ -1882,7 +1886,7 @@ private fun ChatAppMessagePane(
             }
         }) {}
 
-        if (statusMessages.isNotEmpty()) {
+        if (visibleStatusMessages.isNotEmpty()) {
             Div({
                 style {
                     backgroundColor(Color("#F5F5F5"))
@@ -1892,7 +1896,7 @@ private fun ChatAppMessagePane(
                     property("border-left", "3px solid #9E9E9E")
                 }
             }) {
-                statusMessages.forEach { status ->
+                visibleStatusMessages.forEach { status ->
                     Div({
                         style {
                             color(Color("#757575"))
@@ -2187,6 +2191,7 @@ private fun ChatAppInputSection(
     strings: com.silk.shared.i18n.Strings,
     connectionState: ConnectionState,
     chatClient: ChatClient,
+    statusMessages: List<Message>,
     sessionUsers: List<Pair<String, String>>,
     pendingQuestionId: String?,
     isGenerating: Boolean,
@@ -2232,6 +2237,7 @@ private fun ChatAppInputSection(
             property("gap", "12px")
         }
     }) {
+        KnowledgeBaseContextTray(statusMessages)
         ChatAppSilkShortcut(group = group, messageText = messageText, onMessageTextChanged = onMessageTextChanged)
         ChatAppTextInput(
             group = group,
@@ -2270,6 +2276,145 @@ private fun ChatAppInputSection(
             sendMessage = sendMessage,
         )
     }
+}
+
+private fun isKnowledgeBaseContextStatusMessage(message: Message): Boolean {
+    return message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS &&
+        message.references.any { it.kind == "available" && parseKnowledgeBaseDeepLink(it.path) != null }
+}
+
+@Composable
+private fun KnowledgeBaseContextTray(statusMessages: List<Message>) {
+    val status = statusMessages.lastOrNull(::isKnowledgeBaseContextStatusMessage) ?: return
+    val references = status.references.filter { it.kind == "available" && parseKnowledgeBaseDeepLink(it.path) != null }
+    if (references.isEmpty()) return
+
+    Div({
+        style {
+            property("border", "1px solid #E8E0D4")
+            borderRadius(12.px)
+            padding(12.px)
+            property("background", "linear-gradient(135deg, #FFFBF2 0%, #FFF7E5 100%)")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("gap", "10px")
+        }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                property("justify-content", "space-between")
+                alignItems(AlignItems.Center)
+                property("gap", "12px")
+            }
+        }) {
+            Div {
+                Div({
+                    style {
+                        fontSize(13.px)
+                        color(Color("#8B7355"))
+                        fontWeight("600")
+                    }
+                }) { Text("本轮 Context Tray") }
+                Div({
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        marginTop(4.px)
+                    }
+                }) { Text(status.content) }
+            }
+            ContextTrayBadge("KB ${references.size}", SilkColors.primary)
+        }
+
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("gap", "8px")
+            }
+        }) {
+            references.forEach { ref ->
+                val kbLink = parseKnowledgeBaseDeepLink(ref.path)
+                Button({
+                    style {
+                        backgroundColor(Color("#FFFFFF"))
+                        border(0.px)
+                        borderRadius(10.px)
+                        padding(10.px, 12.px)
+                        property("cursor", "pointer")
+                        property("text-align", "left")
+                        property("box-shadow", "0 1px 0 rgba(201, 168, 108, 0.14)")
+                    }
+                    onClick {
+                        kbLink?.let { openKnowledgeBaseEntryLink(entryId = it.entryId, topicId = it.topicId) }
+                    }
+                }) {
+                    Div({
+                        style {
+                            display(DisplayStyle.Flex)
+                            property("justify-content", "space-between")
+                            alignItems(AlignItems.Center)
+                            property("gap", "10px")
+                        }
+                    }) {
+                        Div({
+                            style {
+                                fontSize(13.px)
+                                color(Color(SilkColors.textPrimary))
+                                fontWeight("600")
+                                property("flex", "1")
+                                property("min-width", "0")
+                                property("word-break", "break-word")
+                            }
+                        }) { Text("[available:${ref.index}] ${ref.title}") }
+                        ContextTrayBadge(
+                            label = if (ref.origin == "manual") "手动" else "自动",
+                            accent = if (ref.origin == "manual") SilkColors.success else SilkColors.info,
+                        )
+                    }
+                    ref.reason?.takeIf { it.isNotBlank() }?.let { reason ->
+                        Div({
+                            style {
+                                fontSize(12.px)
+                                color(Color(SilkColors.textSecondary))
+                                marginTop(6.px)
+                            }
+                        }) { Text("加入原因：$reason") }
+                    }
+                    ref.snippet?.takeIf { it.isNotBlank() }?.let { snippet ->
+                        Div({
+                            style {
+                                fontSize(12.px)
+                                color(Color(SilkColors.textLight))
+                                marginTop(6.px)
+                                property("display", "-webkit-box")
+                                property("-webkit-line-clamp", "2")
+                                property("-webkit-box-orient", "vertical")
+                                property("overflow", "hidden")
+                                property("word-break", "break-word")
+                            }
+                        }) { Text(snippet) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContextTrayBadge(label: String, accent: String) {
+    Span({
+        style {
+            backgroundColor(Color("rgba(201, 168, 108, 0.12)"))
+            color(Color(accent))
+            borderRadius(999.px)
+            padding(3.px, 8.px)
+            fontSize(11.px)
+            fontWeight("600")
+            property("white-space", "nowrap")
+        }
+    }) { Text(label) }
 }
 
 @Composable

@@ -659,7 +659,10 @@ class ChatServer(
     /**
      * 广播系统状态消息（灰色显示）- 公开方法，供其他模块调用
      */
-    internal suspend fun broadcastSystemStatus(status: String) {
+    internal suspend fun broadcastSystemStatus(
+        status: String,
+        references: List<MessageReference> = emptyList(),
+    ) {
         logger.debug("📢 [状态广播] {} (连接数: {})", status, allSessions().size)
 
         val statusMessage = Message(
@@ -670,7 +673,8 @@ class ChatServer(
             timestamp = System.currentTimeMillis(),
             type = MessageType.SYSTEM,
             isTransient = true,
-            category = MessageCategory.AGENT_STATUS
+            category = MessageCategory.AGENT_STATUS,
+            references = references,
         )
 
         val messageJson = Json.encodeToString(statusMessage)
