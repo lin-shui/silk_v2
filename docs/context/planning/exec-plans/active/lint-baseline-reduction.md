@@ -6,8 +6,7 @@
 
 ## Remaining Surfaces
 
-- `config/lint/detekt/backend.xml`
-- `backend/src/main/kotlin/com/silk/backend/`
+- 当前无剩余 detekt baseline；后续只处理新增 lint，不再维护历史豁免。
 
 已完成并归档：
 
@@ -38,9 +37,9 @@
 
 ## Current Snapshot
 
-当前 detekt baseline 余量（2026-06-18，Slice 178 后）：
+当前 detekt baseline 余量（2026-06-22，Slice 179 后）：
 
-- `backend.xml`: 1
+- `backend.xml`: 0
 - `frontend-androidApp.xml`: 0
 - `frontend-webApp.xml`: 0
 - `frontend-shared.xml`: 0
@@ -142,16 +141,17 @@
 - `Routing.kt` 已移除 1 条 `CyclomaticComplexMethod` baseline；`configureRouting()` 现在只负责 AgentRuntime persistence wiring 和 73 个 route registration helper 的挂载顺序，5 个拆分后仍偏复杂的 Bridge FS、CC settings、workflow 创建与 chat WebSocket handler 已继续抽到小 helper，保持原路径、状态码、响应体、广播文案和 WebSocket 行为不变。
 - `BackendWebSocketContractTest.kt` 已移除 1 条 `LargeClass` baseline；聊天回放/鉴权合同与 URL 导入合同现已拆成独立 test class，仍保持历史回放、实时广播、URL 下载状态推送与失败回退验证覆盖不变。
 - `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter`、`EmptyFunctionBlock`、`AcpUpdateMapper.kt` 的 `CyclomaticComplexMethod`、`AgentRuntime.kt` 的 `handleCommand(...)` 复杂度基线、loop-jump / broad-catch / `LargeClass` 基线、`AIStepwiseAgent.kt` 的 `generateFallbackReport(...)` / `generateQuickResponse(...)` / `callAIApiStreaming(...)` / `processDoctorDiagnosisUpdate(...)` 复杂度基线与 `callAIApiStreaming(...)` 的 `ThrowsCount`、文件级 `TooGenericExceptionCaught` / `SwallowedException` / loop-jump 基线与 `LargeClass`、`AnthropicClient.kt` 的 `TooGenericExceptionCaught` / `NestedBlockDepth` / `convertMessage(...)` 复杂度基线、`AsrRoutes.kt` 的 `SwallowedException`、`ChatHistoryBackupManager.kt` 的 `PrintStackTrace` / `SwallowedException`、`ChatHistoryManager.kt` 的 `TooGenericExceptionCaught` 与 agent-reply scan loop 基线、`DirectModelAgent.kt` 的 `normalizeCitedReferences(...)` 复杂度基线、引用占位 loop 基线与 broad-catch 基线、`ExternalSearchService.kt` 的 `TooGenericExceptionCaught`、`FileRoutes.kt` 的 `fileRoutes(...)` / `indexFileToWeaviate(...)` / `chunkText(...)` 复杂度基线、`GroupTodoExtractionService.kt` 的 `buildTranscriptString(...)` / `dedupeDrafts(...)` / `extractRecurringTemplateDrafts(...)` / `heuristicFromSlices(...)` / `extractRoughHourMinute(...)`、loop-jump / `ComplexCondition` / `LargeClass` 基线、`UserTodoStore.kt` 的 `ComplexCondition`、`updateItem(...)` 复杂度基线与包含式标题合并 loop 基线、`PDFReportGenerator.kt` 的 `closeEx: Exception` broad-catch 基线、文件级 `e: Exception` broad-catch / swallow 基线与 `LargeClass`、`SearchDrivenAgent.kt` 的 `SwallowedException` / `TooGenericExceptionCaught` / `NestedBlockDepth`、`ToolPolicyManager.kt` 的 `SwallowedException`、`UserTodoStore.kt` 的 `isTemplateDueToday(...)` / `normalizeActionDetailForKey(...)` / `extractTimeFromTitle(...)` / `mergeShortInstanceByState(...)` / `tryMergeByContainedNormTitle(...)` 复杂度基线、`WeaviateClient.kt` 的 `indexDocument(...)` 复杂度基线与 `PrintStackTrace` / broad-catch 基线，以及 `Routing.kt` / `WebSocketConfig.kt` 的宽异常 baseline；剩余为 `LargeClass` 1（`WebSocketConfig.kt$ChatServer`）。
+- `backend` 已无 `WildcardImport`、`UnusedPrivateMember`、`UnusedParameter`、`EmptyFunctionBlock`、`AcpUpdateMapper.kt` 的 `CyclomaticComplexMethod`、`AgentRuntime.kt` 的 `handleCommand(...)` 复杂度基线、loop-jump / broad-catch / `LargeClass` 基线、`AIStepwiseAgent.kt` 的 `generateFallbackReport(...)` / `generateQuickResponse(...)` / `callAIApiStreaming(...)` / `processDoctorDiagnosisUpdate(...)` 复杂度基线与 `callAIApiStreaming(...)` 的 `ThrowsCount`、文件级 `TooGenericExceptionCaught` / `SwallowedException` / loop-jump 基线与 `LargeClass`、`AnthropicClient.kt` 的 `TooGenericExceptionCaught` / `NestedBlockDepth` / `convertMessage(...)` 复杂度基线、`AsrRoutes.kt` 的 `SwallowedException`、`ChatHistoryBackupManager.kt` 的 `PrintStackTrace` / `SwallowedException`、`ChatHistoryManager.kt` 的 `TooGenericExceptionCaught` 与 agent-reply scan loop 基线、`DirectModelAgent.kt` 的 `normalizeCitedReferences(...)` 复杂度基线、引用占位 loop 基线与 broad-catch 基线、`ExternalSearchService.kt` 的 `TooGenericExceptionCaught`、`FileRoutes.kt` 的 `fileRoutes(...)` / `indexFileToWeaviate(...)` / `chunkText(...)` 复杂度基线、`GroupTodoExtractionService.kt` 的 `buildTranscriptString(...)` / `dedupeDrafts(...)` / `extractRecurringTemplateDrafts(...)` / `heuristicFromSlices(...)` / `extractRoughHourMinute(...)`、loop-jump / `ComplexCondition` / `LargeClass` 基线、`UserTodoStore.kt` 的 `ComplexCondition`、`updateItem(...)` 复杂度基线与包含式标题合并 loop 基线、`PDFReportGenerator.kt` 的 `closeEx: Exception` broad-catch 基线、文件级 `e: Exception` broad-catch / swallow 基线与 `LargeClass`、`SearchDrivenAgent.kt` 的 `SwallowedException` / `TooGenericExceptionCaught` / `NestedBlockDepth`、`ToolPolicyManager.kt` 的 `SwallowedException`、`UserTodoStore.kt` 的 `isTemplateDueToday(...)` / `normalizeActionDetailForKey(...)` / `extractTimeFromTitle(...)` / `mergeShortInstanceByState(...)` / `tryMergeByContainedNormTitle(...)` 复杂度基线、`WeaviateClient.kt` 的 `indexDocument(...)` 复杂度基线与 `PrintStackTrace` / broad-catch 基线，以及 `Routing.kt` / `WebSocketConfig.kt` 的宽异常 baseline；backend detekt baseline 已清零。
 
 ## Current Status
 
-- Slice 1-175 完成历史均已归档到 `docs/context/planning/exec-plans/completed/`。
-- Slice 178 已归档；Android / Web / Desktop / Shared baseline 已清零；active plan 现在只保留 backend 的 1 条剩余 `LargeClass` detekt 收敛。
+- Slice 1-179 完成历史均已归档到 `docs/context/planning/exec-plans/completed/`。
+- Slice 179 已归档；Android / Web / Desktop / Shared / backend baseline 已全部清零。
 - Android 侧既有 `JdkImageTransform` / `jlink` 环境阻塞仍未改变；这不影响 baseline 已清零这一事实。
 
 ## Next Slices
 
-- Slice 179 候选：只剩 `WebSocketConfig.kt$ChatServer` 1 条 `LargeClass`；优先沿现有 `runChatCatching` / helper 边界继续拆分 broadcast、prompt drain 与 URL/KB/tooling 分支，避免把协议合同和消息 payload 改动混进同一轮。
+- 当前没有剩余 slice。后续若出现新的 lint，只接受“新增问题直接修源码”，不要回填 baseline。
 - 如果某一步发现需要新增 baseline，先停下来判断是否应关规则、补测试或拆小 PR，不要直接把新增项写进 baseline。
 
 ## Handoff Notes
@@ -161,6 +161,6 @@
 - `frontend/desktopApp` baseline 已清空；后续 Desktop 再出现 lint，只接受“新增问题直接修源码”，不要回填 baseline。
 - `frontend/shared` baseline 已清空；后续 shared 再出现 lint，只接受“新增问题直接修源码”，不要回填 baseline。
 - `frontend/shared/src/iosMain` 当前不在根 detekt source set 中；本计划按当前 lint 覆盖面推进，不把未启用 iOS 源码混进每一步。
-- 如果回到 backend，优先选择单文件、单函数、单职责的收敛面，不要再按大范围机械清理切片。
+- 如果回到 backend，直接修新增 lint；不要重新积累 backend baseline。
 - `Routing.kt` 的 `SwallowedException: ... Exception`、`TooGenericExceptionCaught: ... Exception` 与 `configureRouting()` 复杂度 baseline 已清理；后续 Routing 再出现 lint 只接受按路由/handler 边界修源码，不回填 baseline。
 - `WebSocketConfig.kt` broad-catch baseline 已清理；后续 WebSocket 再出现异常语义 lint，直接按失败边界修源码，不回填 baseline。
