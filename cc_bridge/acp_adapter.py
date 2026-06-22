@@ -207,6 +207,8 @@ class AcpAgentServer:
 
         future: asyncio.Future[dict[str, Any]] = asyncio.get_event_loop().create_future()
         self._pending_permissions[ctrl_request_id] = future
+        # 存原始 tool_input（含 questions），resolve 时构造 updatedInput 需要它
+        self._pending_tool_inputs[ctrl_request_id] = tool_input
 
         logger.info(
             "[ACP] AskUserQuestion: forwarding %d question(s), request=%s, session=%s",
@@ -232,6 +234,7 @@ class AcpAgentServer:
             result = {"behavior": "deny", "message": "AskUserQuestion timed out."}
         finally:
             self._pending_permissions.pop(ctrl_request_id, None)
+            self._pending_tool_inputs.pop(ctrl_request_id, None)
 
         return result
 
@@ -850,7 +853,7 @@ class AcpAgentServer:
         """Resolve an AskUserQuestion request with the user's answer."""
         p = params or {}
         request_id = p.get("requestId", "")
-        answer = p.get("answer", "")
+        answers = p.get("answers")
 
         if not request_id:
             await self._send_error(msg_id, -32602, "Missing requestId")
@@ -862,14 +865,19 @@ class AcpAgentServer:
             await self._send_error(msg_id, -32602, f"Unknown request: {request_id}")
             return
 
-        # Build the updatedInput with the user's answer for AskUserQuestion.
-        # The control_response "allow" with updatedInput.answers is the proper
-        # way to pass answers back to Claude Code CLI.
+        # 构造 AskUserQuestion 的 control_response.updatedInput：
+        # 保留原始 tool_input（含 questions 数组）+ answers 为 {问题文本: 答案} 的 map。
+        # 这是 Claude Code CLI 期望的格式（参照 cc-connect buildAskQuestionResponse）；
+        # 缺失原始 input 或 answers 非 map 时回退到旧的 answer 字符串以兼容。
+        original = self._pending_tool_inputs.get(request_id) or {}
+        updated_input: dict[str, Any] = dict(original)
+        if isinstance(answers, dict):
+            updated_input["answers"] = answers
+        else:
+            updated_input["answers"] = p.get("answer", "")
         future.set_result({
             "behavior": "allow",
-            "updatedInput": {
-                "answers": answer,
-            },
+            "updatedInput": updated_input,
         })
         logger.info("[ACP] resolve_question: resolved %s", request_id[:8])
         await self._send_response(msg_id, {"ok": True})

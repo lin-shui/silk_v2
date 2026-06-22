@@ -44,11 +44,21 @@ object AcpExtensions {
         })
     }
 
-    /** AskUserQuestion 回答传回 bridge */
-    suspend fun resolveQuestion(acp: AcpClient, requestId: String, answer: String): JsonElement {
+    /**
+     * AskUserQuestion 回答传回 bridge。
+     * answersByQuestion: {问题文本 -> 答案}，bridge 会合并进原始 tool_input 的 updatedInput.answers
+     * （对齐 Claude Code CLI 期望格式，见 cc-connect buildAskQuestionResponse）。
+     */
+    suspend fun resolveQuestion(
+        acp: AcpClient,
+        requestId: String,
+        answersByQuestion: Map<String, String>,
+    ): JsonElement {
         return acp.callExtension("_silk/resolve_question", buildJsonObject {
             put("requestId", requestId)
-            put("answer", answer)
+            put("answers", buildJsonObject {
+                answersByQuestion.forEach { (question, answer) -> put(question, answer) }
+            })
         })
     }
 

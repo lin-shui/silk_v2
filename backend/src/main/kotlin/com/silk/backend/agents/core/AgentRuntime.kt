@@ -939,18 +939,11 @@ object AgentRuntime {
         CardReplyRouter.unregister(cardId)
         session.pendingQuestion = null
 
-        // Build aggregated answer text (clean internal prefixes)
+        // 构造 {问题文本 -> 答案} map，供 bridge 拼成 CLI 期望的 updatedInput.answers
+        // （清掉 __opt__/__custom__ 等内部前缀；key 必须与原始问题文本一致）
         val cleanAnswer = { raw: String -> AgentMessages.cleanAnswerText(raw) }
-        val resolveText = if (total == 1) {
-            "用户选择了「${cleanAnswer(pending.answers[0] ?: "")}」。" +
-                "请按照用户的选择继续执行，不要再次调用 AskUserQuestion 询问同一个问题。"
-        } else {
-            val lines = (0 until total).map { qi ->
-                val qText = pending.questions[qi].question.take(80)
-                "${qi + 1}. $qText → 「${cleanAnswer(pending.answers[qi] ?: "")}」"
-            }
-            "用户回答了以下问题：\n${lines.joinToString("\n")}\n" +
-                "请按照用户的回答继续执行，不要再次调用 AskUserQuestion 询问同一个问题。"
+        val answersByQuestion = (0 until total).associate { qi ->
+            pending.questions[qi].question to cleanAnswer(pending.answers[qi] ?: "")
         }
 
         // Send completed card
@@ -973,7 +966,7 @@ object AgentRuntime {
         }
 
         try {
-            AcpExtensions.resolveQuestion(acp, pending.requestId, resolveText)
+            AcpExtensions.resolveQuestion(acp, pending.requestId, answersByQuestion)
             logger.info(
                 "[AgentRuntime] All {}/{} questions answered: requestId={}",
                 total, total, pending.requestId.take(8),
