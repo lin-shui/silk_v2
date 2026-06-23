@@ -3,19 +3,10 @@
   <ManuallySuppressedIssues/>
   <CurrentIssues>
     <ID>ComplexCondition:FileRoutes.kt$isCcConnected &amp;&amp; isImage &amp;&amp; (isSoloMode || matchedPrefix != null)</ID>
-    <ID>ComplexCondition:GroupTodoExtractionService.kt$GroupTodoExtractionService$m != null &amp;&amp; d != null &amp;&amp; m in 1..12 &amp;&amp; d in 1..31</ID>
-    <ID>ComplexCondition:PDFReportGenerator.kt$PDFReportGenerator$trimmed.isEmpty() || trimmed.startsWith("═") || trimmed.startsWith("─") || trimmed.contains("Silk AI Agent")</ID>
-    <ID>ComplexCondition:PDFReportGenerator.kt$PDFReportGenerator$trimmed.matches(Regex(".*[：:].+")) || trimmed.matches(Regex("\\d+[.、].*")) || trimmed.contains("不寐") || trimmed.contains("虚劳") || trimmed.contains("头痛")</ID>
-    <ID>ComplexCondition:PDFReportGenerator.kt$PDFReportGenerator$trimmed.matches(Regex(".*[：:].+")) || trimmed.matches(Regex("\\d+[.、].*")) || trimmed.contains("可能") || trimmed.contains("考虑")</ID>
     <ID>ComplexCondition:Routing.kt$message.type == MessageType.TEXT &amp;&amp; !message.isTransient &amp;&amp; message.userId != "cc-connect" &amp;&amp; message.userId != "system"</ID>
-    <ID>ComplexCondition:UserTodoStore.kt$UserTodoStore$(ta == "alarm" || ta == "calendar") &amp;&amp; (tb == "alarm" || tb == "calendar")</ID>
     <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$!isSilkPrivateChat &amp;&amp; message.type == MessageType.TEXT &amp;&amp; !message.isTransient &amp;&amp; !AgentRuntime.isAgentMessage(message)</ID>
     <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId) &amp;&amp; message.type == MessageType.TEXT &amp;&amp; !message.isTransient &amp;&amp; message.userId != "cc-connect" &amp;&amp; message.userId != "system"</ID>
     <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$message.type == MessageType.TEXT &amp;&amp; message.userId != "cc-connect" &amp;&amp; message.userId != "system" &amp;&amp; com.silk.backend.ccconnect.CcConnectRegistry.isConnected(sessionName.removePrefix("group_")) &amp;&amp; com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(sessionName.removePrefix("group_"))</ID>
-    <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$@Suppress("ThrowsCount") private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
-    <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$private fun generateFallbackReport( stepResults: Map&lt;String, StepResult&gt;, allSuccess: Boolean ): String</ID>
-    <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun generateQuickResponse( prompt: String, callback: suspend (content: String, isComplete: Boolean) -&gt; Unit )</ID>
-    <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun processDoctorDiagnosisUpdate( chatHistory: List&lt;ChatHistoryEntry&gt;, doctorMessage: String, callback: suspend (stepType: String, message: String, currentStep: Int?, totalSteps: Int?) -&gt; Unit, userName: String = "用户", groupDisplayName: String? = null )</ID>
     <ID>CyclomaticComplexMethod:AgentRuntime.kt$AgentRuntime$private fun setupAcpHandlers( acp: AcpClient, acpSessionId: String, session: AgentSession, descriptor: AgentDescriptor, broadcastFn: suspend (Message) -&gt; Unit, accumulated: StringBuilder, scope: CoroutineScope, ctx: GroupAgentContext? = null, )</ID>
     <ID>CyclomaticComplexMethod:AgentRuntime.kt$AgentRuntime$private suspend fun handleCommand( ctx: GroupAgentContext, cmd: SilkCommand, broadcastFn: suspend (Message) -&gt; Unit, )</ID>
     <ID>CyclomaticComplexMethod:AnthropicClient.kt$AnthropicClient$@Suppress("UnusedParameter") private suspend fun handleEvent( data: String, fullText: StringBuilder, pendingToolUses: MutableMap&lt;Int, PendingToolUse&gt;, completedToolCalls: MutableList&lt;ToolCall&gt;, collectedCitations: MutableList&lt;Citation&gt;, streamingBlocks: MutableMap&lt;Int, ContentBlock&gt;, currentThinkingIndexRef: () -&gt; Int, setCurrentThinkingIndex: (Int) -&gt; Unit, onBlockChanged: suspend () -&gt; Unit )</ID>
@@ -29,24 +20,10 @@
     <ID>CyclomaticComplexMethod:ExternalSearchService.kt$ExternalSearchService$suspend fun search(query: String, limit: Int = MAX_RESULTS): ExternalSearchResults</ID>
     <ID>CyclomaticComplexMethod:FileRoutes.kt$@Suppress("TooGenericExceptionCaught") fun Route.fileRoutes()</ID>
     <ID>CyclomaticComplexMethod:FileRoutes.kt$private fun detectImageContentTypeFromMagicBytes(file: File): String?</ID>
-    <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun dedupeDrafts(list: List&lt;ExtractedTodoDraft&gt;): List&lt;ExtractedTodoDraft&gt;</ID>
-    <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun extractRecurringTemplateDrafts(slices: List&lt;GroupSlice&gt;): Pair&lt;List&lt;ExtractedTodoDraft&gt;, List&lt;String&gt;&gt;</ID>
-    <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun extractRoughHourMinute(text: String): Pair&lt;Int, Int&gt;?</ID>
-    <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun heuristicFromSlices(slices: List&lt;GroupSlice&gt;): List&lt;ExtractedTodoDraft&gt;</ID>
-    <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun parseCompactTodoJson( raw: String, validIds: Set&lt;String&gt;, originalsById: Map&lt;String, UserTodoItemDto&gt; ): List&lt;UserTodoItemDto&gt;?</ID>
-    <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$suspend fun refreshTodosForUser(userId: String)</ID>
     <ID>CyclomaticComplexMethod:HuaweiTokenVerifier.kt$HuaweiTokenVerifier$fun exchangeCodeForUserInfo( code: String, clientId: String, clientSecret: String, redirectUri: String ): HuaweiUserInfo?</ID>
-    <ID>CyclomaticComplexMethod:PDFReportGenerator.kt$PDFReportGenerator$private fun extractDiagnosisSummary(diagnosisResult: AIStepwiseAgent.DiagnosisResult): String</ID>
     <ID>CyclomaticComplexMethod:Routing.kt$@Suppress("TooGenericExceptionCaught", "SwallowedException") fun Application.configureRouting()</ID>
     <ID>CyclomaticComplexMethod:SearchDrivenAgent.kt$SearchDrivenAgent$private fun analyzeIntentOffline(userInput: String): IntentAnalysis</ID>
-    <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$@Suppress("UnusedParameter") private fun normalizeActionDetailForKey(actionType: String?, detail: String?): String?</ID>
-    <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$fun updateItem( userId: String, itemId: String, done: Boolean? = null, title: String? = null, actionType: String? = null, actionDetail: String? = null, executedAt: Long? = null, reminderId: Long? = null, clearReminderId: Boolean = false, taskKind: String? = null, repeatRule: String? = null, repeatAnchor: String? = null, activeFrom: Long? = null, activeTo: Long? = null, templateId: String? = null, lifecycleState: String? = null, closedAt: Long? = null, lastEvidenceAt: Long? = null, explicitIntent: Boolean? = null, dateBucket: String? = null, reopenCount: Int? = null ): Boolean</ID>
-    <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$private fun extractTimeFromTitle(title: String): String?</ID>
-    <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$private fun isTemplateDueToday(tpl: UserTodoItemDto, today: LocalDate): Boolean</ID>
-    <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$private fun mergeShortInstanceByState( existing: MutableList&lt;UserTodoItemDto&gt;, draft: ExtractedTodoDraft, title: String, actionType: String?, actionDetail: String?, evidenceAt: Long, now: Long )</ID>
-    <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$private fun tryMergeByContainedNormTitle( a: UserTodoItemDto, b: UserTodoItemDto, now: Long ): UserTodoItemDto?</ID>
     <ID>CyclomaticComplexMethod:WeaviateClient.kt$WeaviateClient$suspend fun indexDocument( document: IndexDocument, participants: List&lt;String&gt; ): Boolean</ID>
-    <ID>CyclomaticComplexMethod:WebPageDownloader.kt$WebPageDownloader$private fun downloadWithSimpleHttp(url: String): WebPageContent?</ID>
     <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$@Suppress("UnusedParameter") suspend fun handleVisionImageAndText( imageFile: java.io.File, base64Data: String, userText: String, downloadUrl: String, userId: String )</ID>
     <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "")</ID>
     <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$private suspend fun handleCombinedVisionAndText( pendingImg: PendingImageState, userText: String, userId: String )</ID>
@@ -58,28 +35,18 @@
     <ID>LargeClass:UserTodoStore.kt$UserTodoStore</ID>
     <ID>LargeClass:WeaviateClient.kt$WeaviateClient</ID>
     <ID>LargeClass:WebSocketConfig.kt$ChatServer</ID>
-    <ID>LoopWithTooManyJumpStatements:AIStepwiseAgent.kt$AIStepwiseAgent$while</ID>
     <ID>LoopWithTooManyJumpStatements:AgentRuntime.kt$AgentRuntime$for</ID>
     <ID>LoopWithTooManyJumpStatements:Application.kt$for</ID>
     <ID>LoopWithTooManyJumpStatements:ChatHistoryManager.kt$ChatHistoryManager$for</ID>
     <ID>LoopWithTooManyJumpStatements:DirectModelAgent.kt$DirectModelAgent$for</ID>
-    <ID>LoopWithTooManyJumpStatements:GroupTodoExtractionService.kt$GroupTodoExtractionService$for</ID>
     <ID>LoopWithTooManyJumpStatements:HuaweiTokenVerifier.kt$HuaweiTokenVerifier$for</ID>
-    <ID>LoopWithTooManyJumpStatements:PdfPipeline.kt$PdfPipeline$for</ID>
     <ID>LoopWithTooManyJumpStatements:Routing.kt$for</ID>
-    <ID>LoopWithTooManyJumpStatements:UserTodoStore.kt$UserTodoStore$for</ID>
-    <ID>NestedBlockDepth:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun generateQuickResponse( prompt: String, callback: suspend (content: String, isComplete: Boolean) -&gt; Unit )</ID>
     <ID>NestedBlockDepth:AnthropicClient.kt$AnthropicClient$@Suppress("UnusedParameter") private suspend fun handleEvent( data: String, fullText: StringBuilder, pendingToolUses: MutableMap&lt;Int, PendingToolUse&gt;, completedToolCalls: MutableList&lt;ToolCall&gt;, collectedCitations: MutableList&lt;Citation&gt;, streamingBlocks: MutableMap&lt;Int, ContentBlock&gt;, currentThinkingIndexRef: () -&gt; Int, setCurrentThinkingIndex: (Int) -&gt; Unit, onBlockChanged: suspend () -&gt; Unit )</ID>
     <ID>NestedBlockDepth:Application.kt$@Suppress("TooGenericExceptionCaught") private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger)</ID>
     <ID>NestedBlockDepth:ExternalSearchService.kt$ExternalSearchService$suspend fun search(query: String, limit: Int = MAX_RESULTS): ExternalSearchResults</ID>
-    <ID>NestedBlockDepth:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun buildTranscriptString(slices: List&lt;GroupSlice&gt;): String</ID>
-    <ID>NestedBlockDepth:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun extractRecurringTemplateDrafts(slices: List&lt;GroupSlice&gt;): Pair&lt;List&lt;ExtractedTodoDraft&gt;, List&lt;String&gt;&gt;</ID>
-    <ID>NestedBlockDepth:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun heuristicFromSlices(slices: List&lt;GroupSlice&gt;): List&lt;ExtractedTodoDraft&gt;</ID>
-    <ID>NestedBlockDepth:PdfPipeline.kt$PdfPipeline$private fun extractImagesFromPage( document: PDDocument, pageIndex: Int, pdfFileName: String, uploadsDir: File ): List&lt;ExtractedImage&gt;</ID>
     <ID>NestedBlockDepth:SearchDrivenAgent.kt$SearchDrivenAgent$private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
     <ID>NestedBlockDepth:ToolPolicyManager.kt$ToolPolicyManager$fun validateFilePath(path: String, policy: ToolPolicy): Pair&lt;Boolean, String&gt;</ID>
     <ID>NestedBlockDepth:ToolPolicyManager.kt$ToolPolicyManager$private fun loadConfigFromFile()</ID>
-    <ID>NestedBlockDepth:WebPageDownloader.kt$WebPageDownloader$private fun downloadWithPlaywright(url: String): WebPageContent?</ID>
     <ID>NestedBlockDepth:WebSocketConfig.kt$ChatServer$private suspend fun processUrlsInMessage(message: Message)</ID>
     <ID>NestedBlockDepth:WebSocketConfig.kt$ChatServer$suspend fun broadcast(message: Message)</ID>
   </CurrentIssues>

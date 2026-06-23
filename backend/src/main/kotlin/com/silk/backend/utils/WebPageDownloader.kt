@@ -232,105 +232,137 @@ object WebPageDownloader {
             ?.takeIf { it > 0 }
     
     /**
+     * 构造 Playwright 浏览器上下文选项
+     */
+    private fun createPlaywrightContextOptions(): Browser.NewContextOptions =
+        Browser.NewContextOptions()
+            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+            .setViewportSize(1920, 1080)
+            .setLocale("zh-CN")
+            .setExtraHTTPHeaders(mapOf(
+                "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
+                "Accept-Encoding" to "gzip, deflate, br",
+                "Connection" to "keep-alive",
+                "Upgrade-Insecure-Requests" to "1",
+                "Sec-Fetch-Dest" to "document",
+                "Sec-Fetch-Mode" to "navigate",
+                "Sec-Fetch-Site" to "none",
+                "Sec-Fetch-User" to "?1"
+            ))
+
+    /**
+     * 处理导航后的初始响应。返回 false 表示应中止抓取。
+     */
+    private fun handlePlaywrightNavigation(page: Page, response: com.microsoft.playwright.Response?): Boolean {
+        // 处理 Cloudflare 等 JS 挑战
+        // 即使初始响应是 403，也继续等待，因为 JS 可能会自动重定向
+        val statusCode = response?.status() ?: 0
+        logger.debug("📊 初始响应状态: {}", statusCode)
+
+        if (statusCode == 403 || statusCode == 503) {
+            logger.debug("🔒 检测到安全挑战（可能是 Cloudflare），等待 JS 处理...")
+            // 等待 Cloudflare JS 挑战完成
+            try {
+                page.waitForTimeout(8000.0)  // 等待8秒让挑战完成
+                // 检查页面是否已经变化
+                page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                    Page.WaitForLoadStateOptions().setTimeout(15000.0))
+            } catch (e: Exception) {
+                logger.debug("⏱️ 等待超时，继续尝试获取内容...")
+            }
+            return true
+        }
+
+        if (response == null || (!response.ok() && statusCode != 0)) {
+            logger.warn("⚠️ 页面加载失败: {}", statusCode)
+            return false
+        }
+
+        return true
+    }
+
+    /**
+     * 等待页面内容（含动态内容）加载完成
+     */
+    private fun waitForPlaywrightContent(page: Page) {
+        // 等待页面内容加载完成
+        try {
+            page.waitForLoadState(com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED)
+        } catch (e: Exception) {
+            // 忽略
+        }
+
+        // 额外等待动态内容（针对 SPA）
+        try {
+            page.waitForTimeout(3000.0)  // 等待3秒让 JS 完成渲染
+        } catch (e: Exception) {
+            // 忽略超时
+        }
+    }
+
+    /**
+     * 从已加载的 Playwright 页面构造网页内容
+     */
+    private fun buildPlaywrightContent(page: Page, url: String): WebPageContent {
+        // 获取页面标题
+        val title = page.title().ifBlank { extractTitleFromUrl(url) }
+
+        // 获取页面内容
+        val htmlContent = page.content()
+
+        // 使用 Jsoup 解析并提取文本
+        val document = Jsoup.parse(htmlContent)
+        document.select("script, style, nav, header, footer, aside, noscript, iframe").remove()
+        val textContent = document.body()?.text() ?: ""
+
+        // 清理文本
+        val cleanedText = cleanText(textContent)
+
+        // 生成文件名
+        val fileName = generateFileName(url, title, "html")
+
+        logger.info("✅ Playwright 下载成功: {} ({} 字符)", title, cleanedText.length)
+
+        return WebPageContent(
+            url = url,
+            title = title,
+            textContent = cleanedText,
+            fileName = fileName,
+            htmlContent = htmlContent,
+            isPdf = false
+        )
+    }
+
+    /**
      * 使用 Playwright 无头浏览器下载网页
      * 支持 JavaScript 渲染，可处理 SPA 和部分反爬虫
      */
     private fun downloadWithPlaywright(url: String): WebPageContent? {
         return try {
             logger.debug("🎭 使用 Playwright 下载: {}", url)
-            
-            val context = browser?.newContext(
-                Browser.NewContextOptions()
-                    .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
-                    .setViewportSize(1920, 1080)
-                    .setLocale("zh-CN")
-                    .setExtraHTTPHeaders(mapOf(
-                        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                        "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
-                        "Accept-Encoding" to "gzip, deflate, br",
-                        "Connection" to "keep-alive",
-                        "Upgrade-Insecure-Requests" to "1",
-                        "Sec-Fetch-Dest" to "document",
-                        "Sec-Fetch-Mode" to "navigate",
-                        "Sec-Fetch-Site" to "none",
-                        "Sec-Fetch-User" to "?1"
-                    ))
-            ) ?: return null
-            
+
+            val context = browser?.newContext(createPlaywrightContextOptions()) ?: return null
+
             val page = context.newPage()
-            
+
             try {
                 // 设置超时
                 page.setDefaultTimeout(45000.0)
-                
+
                 // 导航到页面 - 使用 DOMCONTENTLOADED
                 val response = page.navigate(url, Page.NavigateOptions()
                     .setWaitUntil(com.microsoft.playwright.options.WaitUntilState.DOMCONTENTLOADED)
                     .setTimeout(60000.0)
                 )
-                
-                // 处理 Cloudflare 等 JS 挑战
-                // 即使初始响应是 403，也继续等待，因为 JS 可能会自动重定向
-                val statusCode = response?.status() ?: 0
-                logger.debug("📊 初始响应状态: {}", statusCode)
-                
-                if (statusCode == 403 || statusCode == 503) {
-                    logger.debug("🔒 检测到安全挑战（可能是 Cloudflare），等待 JS 处理...")
-                    // 等待 Cloudflare JS 挑战完成
-                    try {
-                        page.waitForTimeout(8000.0)  // 等待8秒让挑战完成
-                        // 检查页面是否已经变化
-                        page.waitForLoadState(com.microsoft.playwright.options.LoadState.NETWORKIDLE, 
-                            Page.WaitForLoadStateOptions().setTimeout(15000.0))
-                    } catch (e: Exception) {
-                        logger.debug("⏱️ 等待超时，继续尝试获取内容...")
-                    }
-                } else if (response == null || (!response.ok() && statusCode != 0)) {
-                    logger.warn("⚠️ 页面加载失败: {}", statusCode)
+
+                if (!handlePlaywrightNavigation(page, response)) {
                     return null
                 }
-                
-                // 等待页面内容加载完成
-                try {
-                    page.waitForLoadState(com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED)
-                } catch (e: Exception) {
-                    // 忽略
-                }
-                
-                // 额外等待动态内容（针对 SPA）
-                try {
-                    page.waitForTimeout(3000.0)  // 等待3秒让 JS 完成渲染
-                } catch (e: Exception) {
-                    // 忽略超时
-                }
-                
-                // 获取页面标题
-                val title = page.title().ifBlank { extractTitleFromUrl(url) }
-                
-                // 获取页面内容
-                val htmlContent = page.content()
-                
-                // 使用 Jsoup 解析并提取文本
-                val document = Jsoup.parse(htmlContent)
-                document.select("script, style, nav, header, footer, aside, noscript, iframe").remove()
-                val textContent = document.body()?.text() ?: ""
-                
-                // 清理文本
-                val cleanedText = cleanText(textContent)
-                
-                // 生成文件名
-                val fileName = generateFileName(url, title, "html")
-                
-                logger.info("✅ Playwright 下载成功: {} ({} 字符)", title, cleanedText.length)
-                
-                WebPageContent(
-                    url = url,
-                    title = title,
-                    textContent = cleanedText,
-                    fileName = fileName,
-                    htmlContent = htmlContent,
-                    isPdf = false
-                )
+
+                waitForPlaywrightContent(page)
+
+                buildPlaywrightContent(page, url)
             } finally {
                 page.close()
                 context.close()
@@ -342,43 +374,102 @@ object WebPageDownloader {
     }
     
     /**
+     * 配置全局 SSL（允许所有证书，用于开发环境）
+     */
+    private fun configureTrustAllSsl() {
+        val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) { /* intentionally empty: trust all */ }
+            override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) { /* intentionally empty: trust all */ }
+            override fun getAcceptedIssuers(): Array<X509Certificate>? = null
+        })
+
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, trustAllCerts, java.security.SecureRandom())
+        HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.socketFactory)
+        HttpsURLConnection.setDefaultHostnameVerifier { _, _ -> true }
+    }
+
+    /**
+     * 打开一个模拟浏览器请求头的 HTTP 连接
+     */
+    private fun openBrowserLikeConnection(url: String): HttpURLConnection {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        return connection.apply {
+            requestMethod = "GET"
+            connectTimeout = connectTimeoutMillis(DEFAULT_HTTP_CONNECT_TIMEOUT_MILLIS)
+            readTimeout = readTimeoutMillis(DEFAULT_HTTP_READ_TIMEOUT_MILLIS)
+            // 模拟真实浏览器请求
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+            setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
+            setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+            setRequestProperty("Accept-Encoding", "gzip, deflate, br")
+            setRequestProperty("Connection", "keep-alive")
+            setRequestProperty("Upgrade-Insecure-Requests", "1")
+            setRequestProperty("Sec-Fetch-Dest", "document")
+            setRequestProperty("Sec-Fetch-Mode", "navigate")
+            setRequestProperty("Sec-Fetch-Site", "none")
+            setRequestProperty("Sec-Fetch-User", "?1")
+            setRequestProperty("Cache-Control", "max-age=0")
+            instanceFollowRedirects = true
+        }
+    }
+
+    private fun isSupportedHtmlContentType(contentType: String): Boolean =
+        contentType.contains("text/html") ||
+            contentType.contains("text/plain") ||
+            contentType.contains("application/xhtml")
+
+    /**
+     * 根据 Content-Encoding 解码响应输入流
+     */
+    private fun openDecodedInputStream(connection: HttpURLConnection): InputStream {
+        val contentEncoding = connection.contentEncoding?.lowercase() ?: ""
+        return when {
+            contentEncoding.contains("gzip") -> GZIPInputStream(connection.inputStream)
+            contentEncoding.contains("deflate") -> InflaterInputStream(connection.inputStream)
+            else -> connection.inputStream
+        }
+    }
+
+    /**
+     * 读取 HTML 响应正文并构造网页内容
+     */
+    private fun readHtmlResponseContent(url: String, connection: HttpURLConnection, contentType: String): WebPageContent {
+        val inputStream = openDecodedInputStream(connection)
+        val charset = extractCharset(contentType) ?: "UTF-8"
+        val htmlContent = inputStream.bufferedReader(charset = java.nio.charset.Charset.forName(charset)).use { it.readText() }
+        inputStream.close()
+        connection.disconnect()
+
+        // 使用Jsoup解析HTML
+        val document = Jsoup.parse(htmlContent)
+        val title = document.title().ifBlank { extractTitleFromUrl(url) }
+        document.select("script, style, nav, header, footer, aside, noscript, iframe").remove()
+        val textContent = document.body()?.text() ?: ""
+        val cleanedText = cleanText(textContent)
+        val fileName = generateFileName(url, title, "html")
+
+        logger.info("✅ HTTP 下载成功: {} ({} 字符)", title, cleanedText.length)
+
+        return WebPageContent(
+            url = url,
+            title = title,
+            textContent = cleanedText,
+            fileName = fileName,
+            htmlContent = htmlContent,
+            isPdf = false
+        )
+    }
+
+    /**
      * 使用简单 HTTP 下载网页（降级方案）
      */
     private fun downloadWithSimpleHttp(url: String): WebPageContent? {
         return try {
             logger.debug("📡 使用简单 HTTP 下载: {}", url)
-            
-            // 配置SSL（允许所有证书，用于开发环境）
-            val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) { /* intentionally empty: trust all */ }
-                override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) { /* intentionally empty: trust all */ }
-                override fun getAcceptedIssuers(): Array<X509Certificate>? = null
-            })
 
-            val sslContext = SSLContext.getInstance("TLS")
-            sslContext.init(null, trustAllCerts, java.security.SecureRandom())
-            HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.socketFactory)
-            HttpsURLConnection.setDefaultHostnameVerifier { _, _ -> true }
-
-            val connection = URL(url).openConnection() as HttpURLConnection
-            connection.apply {
-                requestMethod = "GET"
-                connectTimeout = connectTimeoutMillis(DEFAULT_HTTP_CONNECT_TIMEOUT_MILLIS)
-                readTimeout = readTimeoutMillis(DEFAULT_HTTP_READ_TIMEOUT_MILLIS)
-                // 模拟真实浏览器请求
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
-                setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
-                setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-                setRequestProperty("Accept-Encoding", "gzip, deflate, br")
-                setRequestProperty("Connection", "keep-alive")
-                setRequestProperty("Upgrade-Insecure-Requests", "1")
-                setRequestProperty("Sec-Fetch-Dest", "document")
-                setRequestProperty("Sec-Fetch-Mode", "navigate")
-                setRequestProperty("Sec-Fetch-Site", "none")
-                setRequestProperty("Sec-Fetch-User", "?1")
-                setRequestProperty("Cache-Control", "max-age=0")
-                instanceFollowRedirects = true
-            }
+            configureTrustAllSsl()
+            val connection = openBrowserLikeConnection(url)
 
             val responseCode = connection.responseCode
             if (responseCode != HttpURLConnection.HTTP_OK) {
@@ -386,54 +477,23 @@ object WebPageDownloader {
                 connection.disconnect()
                 return null
             }
-            
+
             // 检查Content-Type
             val contentType = connection.contentType ?: ""
-            
+
             // 如果是 PDF，使用专门的方法
             if (contentType.contains("application/pdf") || isPdfUrl(url)) {
                 return downloadPdfFromConnection(url, connection)
             }
-            
+
             // 检查是否是 HTML
-            if (!contentType.contains("text/html") && !contentType.contains("text/plain") && !contentType.contains("application/xhtml")) {
+            if (!isSupportedHtmlContentType(contentType)) {
                 logger.warn("⚠️ 不支持的内容类型: {}", contentType)
                 connection.disconnect()
                 return null
             }
-            
-            // 根据 Content-Encoding 处理压缩响应
-            val contentEncoding = connection.contentEncoding?.lowercase() ?: ""
-            val inputStream: InputStream = when {
-                contentEncoding.contains("gzip") -> GZIPInputStream(connection.inputStream)
-                contentEncoding.contains("deflate") -> InflaterInputStream(connection.inputStream)
-                else -> connection.inputStream
-            }
-            
-            // 读取HTML内容
-            val charset = extractCharset(contentType) ?: "UTF-8"
-            val htmlContent = inputStream.bufferedReader(charset = java.nio.charset.Charset.forName(charset)).use { it.readText() }
-            inputStream.close()
-            connection.disconnect()
-            
-            // 使用Jsoup解析HTML
-            val document = Jsoup.parse(htmlContent)
-            val title = document.title().ifBlank { extractTitleFromUrl(url) }
-            document.select("script, style, nav, header, footer, aside, noscript, iframe").remove()
-            val textContent = document.body()?.text() ?: ""
-            val cleanedText = cleanText(textContent)
-            val fileName = generateFileName(url, title, "html")
-            
-            logger.info("✅ HTTP 下载成功: {} ({} 字符)", title, cleanedText.length)
-            
-            WebPageContent(
-                url = url,
-                title = title,
-                textContent = cleanedText,
-                fileName = fileName,
-                htmlContent = htmlContent,
-                isPdf = false
-            )
+
+            readHtmlResponseContent(url, connection, contentType)
         } catch (e: Exception) {
             logger.error("❌ HTTP 下载失败: {}", e.message)
             null

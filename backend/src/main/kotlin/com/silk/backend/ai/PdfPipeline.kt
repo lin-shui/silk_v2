@@ -83,21 +83,36 @@ object PdfPipeline {
 
             var imgIndex = 0
             for (name in xObjectNames) {
-                val xObject = resources.getXObject(name) ?: continue
-                if (xObject is PDImageXObject) {
-                    imgIndex++
-                    val bufferedImage = xObject.image
-                    if (bufferedImage.width < 50 || bufferedImage.height < 50) continue
-
-                    val imgFile = File(uploadsDir, "${pdfFileName}_page${pageIndex + 1}_img${imgIndex}.png")
-                    ImageIO.write(bufferedImage, "png", imgFile)
-                    images.add(ExtractedImage(imgFile, pageIndex + 1, imgIndex))
+                val xObject = resources.getXObject(name)
+                if (xObject !is PDImageXObject) continue
+                imgIndex++
+                val extracted = writeImageIfLargeEnough(xObject, pageIndex, imgIndex, pdfFileName, uploadsDir)
+                if (extracted != null) {
+                    images.add(extracted)
                 }
             }
         } catch (e: Exception) {
             logger.warn("提取第 {} 页图片失败: {}", pageIndex + 1, e.message)
         }
         return images
+    }
+
+    /**
+     * 将单个嵌入图片写出为 PNG。图片过小（任一边 < 50px）时跳过并返回 null。
+     */
+    private fun writeImageIfLargeEnough(
+        xObject: PDImageXObject,
+        pageIndex: Int,
+        imgIndex: Int,
+        pdfFileName: String,
+        uploadsDir: File
+    ): ExtractedImage? {
+        val bufferedImage = xObject.image
+        if (bufferedImage.width < 50 || bufferedImage.height < 50) return null
+
+        val imgFile = File(uploadsDir, "${pdfFileName}_page${pageIndex + 1}_img${imgIndex}.png")
+        ImageIO.write(bufferedImage, "png", imgFile)
+        return ExtractedImage(imgFile, pageIndex + 1, imgIndex)
     }
 
     @Suppress("UnusedParameter")
