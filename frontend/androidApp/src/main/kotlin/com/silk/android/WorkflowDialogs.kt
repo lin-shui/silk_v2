@@ -122,6 +122,7 @@ internal fun joinPath(parent: String, child: String, separator: String): String 
     return if (parent.endsWith(separator)) parent + child else parent + separator + child
 }
 
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun FolderPickerDialog(
     userId: String,
@@ -316,6 +317,7 @@ internal fun permModeLabel(mode: String): String = when (mode) {
 /**
  * 会话设置弹窗：工作目录 / Agent / 权限模式三合一。
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun WorkflowSettingsDialog(
     userId: String,

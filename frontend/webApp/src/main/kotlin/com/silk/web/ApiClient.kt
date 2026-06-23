@@ -255,6 +255,7 @@ data class ExportKBResponse(
 /**
  * JWT 令牌管理
  */
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 object JwtManager {
     private const val STORAGE_KEY_JWT = "silk_jwt"
     private const val STORAGE_KEY_REFRESH = "silk_refresh_token"
@@ -336,6 +337,7 @@ data class TokenRefreshResponse(
     val accessToken: String? = null
 )
 
+@Suppress("LargeClass", "TooGenericExceptionCaught", "SwallowedException")
 object ApiClient {
     private val BASE_URL: String
         get() {
@@ -991,6 +993,7 @@ object ApiClient {
         val response = fetchWithRetry(endpoint, init)
         
         if (!response.ok) {
+            @Suppress("TooGenericExceptionThrown")
             throw Exception("HTTP ${response.status}: ${response.statusText}")
         }
         
@@ -1050,6 +1053,7 @@ object ApiClient {
         data class Err(val message: String) : CreateWorkflowResult()
     }
 
+    @Suppress("NestedBlockDepth")
     suspend fun createWorkflow(
         name: String,
         description: String,

@@ -51,6 +51,7 @@ import org.w3c.dom.get
  * 华为 OAuth 登录页面
  * 使用华为账号登录（无密码方案）
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun LoginScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
@@ -73,9 +74,7 @@ fun LoginScene(appState: WebAppState) {
     var showBindPrompt by remember { mutableStateOf(false) }
     var showBindSuccess by remember { mutableStateOf(false) }
     var pendingUser by remember { mutableStateOf<User?>(null) }
-    // 华为 OAuth 模式: true=登录, false=绑定
-    var huaweiOAuthMode by remember { mutableStateOf(true) }
-    var pendingBind by remember { mutableStateOf(false) }
+    // (huaweiOAuthMode and pendingBind removed as they were unused state variables)
     
     // 设置全局样式，去掉浏览器滚动条
     Style {
@@ -243,7 +242,7 @@ fun LoginScene(appState: WebAppState) {
                                     } else {
                                         errorMessage = response.message
                                     }
-                                } catch (e: Exception) {
+                                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                                     errorMessage = "登录失败: ${e.message}"
                                 } finally {
                                     isLoading = false
@@ -412,6 +411,7 @@ fun LoginScene(appState: WebAppState) {
  * 启动微信 OAuth 授权流程
  * 重定向到微信扫码登录页面，用户使用微信扫码授权后回调到当前应用
  */
+@Suppress("UnusedPrivateMember")
 private fun startWeChatOAuth() {
     val appId = BuildConfig.WECHAT_APP_ID
 
@@ -505,6 +505,7 @@ private fun generateRandomState(): String {
  * 检测 URL 中是否有 code 参数，区分是微信还是华为的回调
  * 在主页面渲染前调用
  */
+@Suppress("CyclomaticComplexMethod")
 suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
     val params = window.location.search
     if (params.isBlank()) return false
@@ -548,7 +549,8 @@ suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
     
     if (isWeChat) {
         val result = ApiClient.wechatLogin(code)
-        if (result.success && result.user != null && result.accessToken != null && result.refreshToken != null) {
+        val wechatLoginOk = result.success && result.user != null && result.accessToken != null && result.refreshToken != null
+        if (wechatLoginOk) {
             console.log("✅ 微信登录成功:", result.user.fullName, "isNewUser=", result.isNewUser)
             window.history.replaceState(null, "", redirectUri)
             appState.setSession(result.user, result.accessToken!!, result.refreshToken!!, result.isNewUser)
@@ -582,7 +584,8 @@ suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
         } else {
             // 登录模式
             val result = ApiClient.huaweiWebLogin(code, redirectUri)
-            if (result.success && result.user != null && result.accessToken != null && result.refreshToken != null) {
+            val huaweiLoginOk = result.success && result.user != null && result.accessToken != null && result.refreshToken != null
+            if (huaweiLoginOk) {
                 console.log("✅ 华为登录成功:", result.user.fullName, "isNewUser=", result.isNewUser)
                 window.history.replaceState(null, "", redirectUri)
                 appState.setSession(result.user, result.accessToken!!, result.refreshToken!!, result.isNewUser)

@@ -1,6 +1,18 @@
+@file:Suppress("TooGenericExceptionCaught", "SwallowedException", "InstanceOfCheckForException")
+
 package com.silk.android
 
-import com.silk.shared.models.*
+import com.silk.shared.models.CcSettingsResponse
+import com.silk.shared.models.CcStateResponse
+import com.silk.shared.models.DirListingResponse
+import com.silk.shared.models.KBEntryItem
+import com.silk.shared.models.KBTopicItem
+import com.silk.shared.models.Language
+import com.silk.shared.models.LeaveGroupResponse
+import com.silk.shared.models.SimpleResponse
+import com.silk.shared.models.UpdateUserSettingsRequest
+import com.silk.shared.models.UserSettings
+import com.silk.shared.models.UserSettingsResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -223,6 +235,7 @@ sealed class TrustCheckResult {
     data class Error(val message: String) : TrustCheckResult()
 }
 
+@Suppress("LargeClass")
 object ApiClient {
     private val baseUrl: String get() = BackendUrlHolder.getBaseUrl()
     private val jsonParser = Json { ignoreUnknownKeys = true }
@@ -699,6 +712,7 @@ object ApiClient {
         }
     }
 
+    @Suppress("NestedBlockDepth", "TooGenericExceptionCaught", "SwallowedException")
     private fun post(endpoint: String, jsonBody: String): String {
         val url = URL("$baseUrl$endpoint")
         val connection = AndroidHttpCompat.openConnection(url)
@@ -802,6 +816,7 @@ object ApiClient {
         }
     }
 
+    @Suppress("TooGenericExceptionCaught", "InstanceOfCheckForException")
     suspend fun createWorkflow(
         name: String,
         description: String,
@@ -1047,6 +1062,7 @@ object ApiClient {
 
     // ==================== ASR 语音识别 API ====================
 
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
     suspend fun transcribeAudio(audioBase64: String, format: String = "m4a"): AsrResult = withContext(Dispatchers.IO) {
         try {
             val body = """{"audio":"$audioBase64","format":"$format"}"""

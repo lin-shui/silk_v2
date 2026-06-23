@@ -45,6 +45,7 @@ import org.jetbrains.compose.web.dom.Text
  * 昵称设置页面
  * 首次华为登录后显示，让用户设置/确认显示昵称
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun NicknameSetupScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()

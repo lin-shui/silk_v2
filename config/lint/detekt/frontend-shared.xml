@@ -1,13 +1,5 @@
 <?xml version="1.0" ?>
 <SmellBaseline>
   <ManuallySuppressedIssues/>
-  <CurrentIssues>
-    <ID>ClassNaming:Strings_EN.kt$Strings_EN : Strings</ID>
-    <ID>ClassNaming:Strings_ZH.kt$Strings_ZH : Strings</ID>
-    <ID>ComplexCondition:ChatClient.kt$ChatClient$_isLoadingHistory.value &amp;&amp; !message.isTransient &amp;&amp; message.category != MessageCategory.AGENT_STATUS &amp;&amp; message.type != MessageType.RECALL</ID>
-    <ID>CyclomaticComplexMethod:ChatClient.kt$ChatClient$private fun handleMessage(text: String)</ID>
-    <ID>CyclomaticComplexMethod:PlatformWebSocket.android.kt$PlatformWebSocket$actual fun connect(token: String?, userId: String, userName: String, groupId: String)</ID>
-    <ID>CyclomaticComplexMethod:PlatformWebSocket.jvm.kt$PlatformWebSocket$actual fun connect(token: String?, userId: String, userName: String, groupId: String)</ID>
-    <ID>NestedBlockDepth:ChatClient.kt$ChatClient$private fun handleMessage(text: String)</ID>
-  </CurrentIssues>
+  <CurrentIssues/>
 </SmellBaseline>

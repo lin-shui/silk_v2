@@ -63,6 +63,7 @@ class WebAppState {
         sceneHistory.clear()
         
         // 清除可能的旧版本LocalStorage数据
+        @Suppress("TooGenericExceptionCaught")
         try {
             localStorage.removeItem("silk_selected_group")
             localStorage.removeItem("silk_scene")

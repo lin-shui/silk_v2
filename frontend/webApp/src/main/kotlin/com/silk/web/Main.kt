@@ -176,6 +176,7 @@ internal fun downloadAsFile(content: String, fileName: String) {
     windowJs.URL.revokeObjectURL(objectUrl)
 }
 
+@Suppress("UnusedPrivateMember")
 private fun parseFileNameFromContentDisposition(contentDisposition: String?): String? {
     if (contentDisposition.isNullOrBlank()) return null
     val fileNameStar = Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE)
@@ -644,6 +645,7 @@ fun SilkTabContent(appState: WebAppState) {
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
 @Composable
 fun ChatScene(appState: WebAppState) {
     console.log("🎬 ChatScene被调用")
@@ -1492,6 +1494,7 @@ object SilkStylesheet : StyleSheet() {
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "LoopWithTooManyJumpStatements", "TooGenericExceptionCaught", "SwallowedException", "UnusedPrivateProperty")
 @Composable
 fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     console.log("🎯 ChatAppWithGroup - 用户:", user.fullName, "群组:", group.name)
@@ -2382,12 +2385,11 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             // 显示临时消息（如果有）
             transientMessage?.let { message ->
                 val isStructuredCcContent = message.content.contains("<!--CC_TURN-->")
-                if (
-                    message.content.isNotBlank() &&
+                val shouldShowTransientMsg = message.content.isNotBlank() &&
                     message.currentStep == null &&
                     message.totalSteps == null &&
                     (isStructuredCcContent || !isLikelyAgentStatusContent(message.content))
-                ) {
+                if (shouldShowTransientMsg) {
                     MessageItem(
                         message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                         isTransient = true,
@@ -3740,7 +3742,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         // 先断开当前WebSocket
                         try {
                             chatClient.disconnect()
-                        } catch (e: dynamic) { }
+                        } catch (e: dynamic) { /* ignore disconnect errors */ }
                         
                         // 调用API获取或创建与该联系人的对话
                         val response = ApiClient.startPrivateChat(user.id, member.id)
@@ -4089,6 +4091,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught")
 @Composable
 fun FolderExplorerDialog(
     groupId: String,
@@ -4110,7 +4113,7 @@ fun FolderExplorerDialog(
             console.log("📁 请求文件列表:", apiUrl)
             val response = window.fetch(apiUrl).await()
             if (!response.ok) {
-                throw IllegalStateException("HTTP ${response.status}")
+                error("HTTP ${response.status}")
             }
             val body = response.text().await()
             val parsed = parseWebFolderContents(body)
@@ -4479,6 +4482,7 @@ private external val markdownItTaskLists: dynamic
 
 @JsModule("highlight.js")
 @JsNonModule
+@Suppress("UnusedParameter")
 private external object HighlightJs {
     fun highlight(code: String, options: dynamic): dynamic
     fun highlightAuto(code: String): dynamic
@@ -4487,6 +4491,7 @@ private external object HighlightJs {
 
 @JsModule("dompurify")
 @JsNonModule
+@Suppress("UnusedParameter")
 private external object DOMPurify {
     fun sanitize(dirty: String, config: dynamic = definedExternally): String
 }
@@ -4507,6 +4512,7 @@ private external val githubMarkdownStylesheet: dynamic
 @JsNonModule
 private external val highlightStylesheet: dynamic
 
+@Suppress("TopLevelPropertyNaming")
 private const val markdownRuntimeStyleId = "silk-markdown-runtime-style"
 
 private val silkMarkdownRuntimeCss = """
@@ -4724,6 +4730,7 @@ private val mathDelimiters = listOf(
     MathDelimiter("\\(", "\\)")
 )
 
+@Suppress("LoopWithTooManyJumpStatements")
 private fun normalizeMathBlocks(markdown: String): String {
     val output = StringBuilder()
     var cursor = 0
@@ -4785,6 +4792,7 @@ private fun fixHeaderlessTables(markdown: String): String {
     return result.joinToString("\n")
 }
 
+@Suppress("CyclomaticComplexMethod", "NestedBlockDepth", "LoopWithTooManyJumpStatements")
 private fun fixOrphanCodeFences(markdown: String): String {
     val lines = markdown.split("\n").toMutableList()
     var idx = 0
@@ -4947,6 +4955,7 @@ private fun rememberMarkdownEngine(): MarkdownIt {
     return remember { createMarkdownEngine() }
 }
 
+@Suppress("UnusedParameter")
 private fun linkCitationMarkers(
     html: String,
     references: List<com.silk.shared.models.MessageReference>,
@@ -4971,6 +4980,7 @@ private fun linkCitationMarkers(
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "UnusedParameter", "TooGenericExceptionCaught", "LoopWithTooManyJumpStatements")
 @Composable
 fun MarkdownContent(
     content: String,
@@ -5297,8 +5307,8 @@ fun ReferenceSourcesList(
  * 3. Markdown 内容优化渲染
  * 4. 可折叠的长内容
  */
+@Suppress("CyclomaticComplexMethod", "NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS")
 @Composable
-@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS")
 @NoLiveLiterals
 fun AIMessageCard(
     message: Message,
@@ -5627,6 +5637,7 @@ Div({
     } // close outer selection wrapper
 }
 
+@Suppress("CyclomaticComplexMethod", "NestedBlockDepth", "UnusedParameter")
 @Composable
 fun MessageItem(
     message: Message,
@@ -6705,6 +6716,7 @@ internal fun isLikelyAgentStatusContent(content: String): Boolean {
     return statusHints.any { hint -> text.contains(hint) }
 }
 
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun CcConnectTokenDialog(
     groupId: String,
@@ -7095,6 +7107,7 @@ fun AddMemberDialog(
 /**
  * 群组成员列表对话框
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun MembersDialog(
     members: List<GroupMember>,
@@ -7322,9 +7335,8 @@ fun MembersDialog(
                                         property("gap", "8px")
                                     }
                                 }) {
-                                    if (isCcConnectGroup && isHost && !isCurrentUser
-                                        && member.role != "HOST"
-                                    ) {
+                                    val canManageOperator = isCcConnectGroup && isHost && !isCurrentUser && member.role != "HOST"
+                                    if (canManageOperator) {
                                         val isOperator = member.role == "OPERATOR"
                                         Div({
                                             style {

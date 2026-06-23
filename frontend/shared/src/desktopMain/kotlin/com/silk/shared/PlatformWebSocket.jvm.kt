@@ -48,6 +48,7 @@ actual class PlatformWebSocket actual constructor(
     actual val isConnected: Boolean
         get() = session != null
     
+    @Suppress("CyclomaticComplexMethod")
     actual fun connect(token: String?, userId: String, userName: String, groupId: String) {
         val connectToken = connectionGen.incrementAndGet()
 

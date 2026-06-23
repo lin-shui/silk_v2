@@ -7,7 +7,25 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.silk.shared.models.MessageReference
-import org.jetbrains.compose.web.css.*
+import org.jetbrains.compose.web.css.AlignItems
+import org.jetbrains.compose.web.css.Color
+import org.jetbrains.compose.web.css.DisplayStyle
+import org.jetbrains.compose.web.css.alignItems
+import org.jetbrains.compose.web.css.backgroundColor
+import org.jetbrains.compose.web.css.borderRadius
+import org.jetbrains.compose.web.css.color
+import org.jetbrains.compose.web.css.display
+import org.jetbrains.compose.web.css.fontFamily
+import org.jetbrains.compose.web.css.fontSize
+import org.jetbrains.compose.web.css.height
+import org.jetbrains.compose.web.css.margin
+import org.jetbrains.compose.web.css.marginLeft
+import org.jetbrains.compose.web.css.padding
+import org.jetbrains.compose.web.css.paddingLeft
+import org.jetbrains.compose.web.css.percent
+import org.jetbrains.compose.web.css.px
+import org.jetbrains.compose.web.css.style
+import org.jetbrains.compose.web.css.width
 import org.jetbrains.compose.web.dom.Div
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
@@ -33,6 +51,7 @@ private sealed class Segment {
 
 // ── Parser: robust against partial/fragmented markers ──
 
+@Suppress("CyclomaticComplexMethod", "NestedBlockDepth")
 private fun parseSegments(raw: String): List<Segment> {
     if (!raw.contains("<!--THINKING") && !raw.contains("<!--TOOL")) {
         return listOf(Segment.Text(raw.trim()))
@@ -41,18 +60,15 @@ private fun parseSegments(raw: String): List<Segment> {
     val segs = mutableListOf<Segment>()
     var rest = raw
 
-    // Phase 1: extract <!--TOOL ...--> ... <!--END_TOOL--> pairs
-    val toolResults = mutableListOf<Pair<Int, Int>>()  // (start, end) in original text
-    val toolMeta = mutableListOf<Pair<String, String>>()
-
-    // We'll process sequentially instead
+    // We'll process sequentially
     while (rest.isNotEmpty()) {
         val ti = rest.indexOf("<!--THINKING")
         val te = rest.indexOf("<!--TOOL")
         val et = rest.indexOf("<!--END_TOOL-->")
         val eth = rest.indexOf("<!--END_THINKING-->")
 
-        if (ti < 0 && te < 0 && et < 0 && eth < 0) {
+        val noMarkersRemain = ti < 0 && te < 0 && et < 0 && eth < 0
+        if (noMarkersRemain) {
             segs.add(Segment.Text(rest.trim()))
             break
         }
@@ -140,6 +156,7 @@ private fun extractAttr(s: String, key: String): String {
 // ── Top-level composable ──
 
 @Composable
+@Suppress("UnusedParameter")
 fun StructuredContent(content: String, references: List<MessageReference>, msgId: String) {
     val segments = remember(content) { parseSegments(content) }
 
@@ -359,6 +376,7 @@ private fun buildLabel(name: String, content: String): String {
     return if (summary.isNotEmpty()) "$shortName: $summary" else shortName
 }
 
+@Suppress("CyclomaticComplexMethod")
 private fun extractToolSummary(name: String, content: String): String {
     // Normalize: collapse newlines/spaces in JSON for single-line regex matching
     val flat = content.replace("\n", " ").replace("\r", " ").replace(Regex("\\s+"), " ")
@@ -417,6 +435,7 @@ private fun extractToolSummary(name: String, content: String): String {
     return ""
 }
 
+@Suppress("CyclomaticComplexMethod")
 private fun getToolIcon(name: String): String {
     val n = name.lowercase()
     return when {

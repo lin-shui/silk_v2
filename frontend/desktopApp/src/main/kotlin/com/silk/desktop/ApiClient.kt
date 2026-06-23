@@ -1,6 +1,12 @@
 package com.silk.desktop
 
-import com.silk.shared.models.*
+import com.silk.shared.models.Group
+import com.silk.shared.models.Language
+import com.silk.shared.models.LeaveGroupResponse
+import com.silk.shared.models.SimpleResponse
+import com.silk.shared.models.UpdateUserSettingsRequest
+import com.silk.shared.models.User
+import com.silk.shared.models.UserSettingsResponse
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
@@ -81,6 +87,7 @@ data class GroupResponse(
 /**
  * API客户端
  */
+@Suppress("TooGenericExceptionCaught")
 object ApiClient {
     private val BASE_URL = BuildConfig.BACKEND_BASE_URL
     private val json = Json { ignoreUnknownKeys = true }

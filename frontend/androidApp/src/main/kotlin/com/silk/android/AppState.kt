@@ -67,6 +67,7 @@ class AppState(
         BackendUrlHolder.init(context)
 
         // 获取当前 App 版本信息
+        @Suppress("SwallowedException")
         val packageInfo = try {
             context.packageManager.getPackageInfo(context.packageName, 0)
         } catch (e: PackageManager.NameNotFoundException) {
@@ -196,7 +197,9 @@ class AppState(
         }
         
         // 如果有保存的用户数据，说明用户没有明确退出，是意外到达登录页的
-        if (savedUserId != null && savedLoginName != null && savedFullName != null && savedPhoneNumber != null) {
+        val hasSavedCredentials = savedUserId != null && savedLoginName != null &&
+            savedFullName != null && savedPhoneNumber != null
+        if (hasSavedCredentials) {
             println("🔄 检测到保存的用户数据，用户未明确退出登录，自动恢复到群组列表")
             // 恢复用户数据
             currentUser = User(savedUserId, savedLoginName, savedFullName, savedPhoneNumber)
@@ -221,6 +224,7 @@ class AppState(
      * 重新验证用户
      * @return Pair<Boolean, Boolean> - first: 是否验证成功, second: 是否是网络错误
      */
+    @Suppress("TooGenericExceptionCaught")
     suspend fun revalidateUser(): Pair<Boolean, Boolean> {
         isValidating = true
         return try {
@@ -255,7 +259,8 @@ class AppState(
         val fullName = prefs.getString("user_full_name", null)
         val phoneNumber = prefs.getString("user_phone_number", null)
         
-        if (userId != null && loginName != null && fullName != null && phoneNumber != null) {
+        val hasStoredUser = userId != null && loginName != null && fullName != null && phoneNumber != null
+        if (hasStoredUser) {
             currentUser = User(userId, loginName, fullName, phoneNumber)
             
             // 启动时重新验证用户，但即使验证失败（网络问题）也保持登录状态

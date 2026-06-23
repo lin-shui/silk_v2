@@ -44,7 +44,7 @@ object ObsidianVaultManager {
             opts.mode = "readwrite"
             val state = (h.queryPermission(opts) as Promise<dynamic>).await()
             if (state.toString() == "granted") h else null
-        } catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             console.warn("queryPermission failed:", e)
             null
         }

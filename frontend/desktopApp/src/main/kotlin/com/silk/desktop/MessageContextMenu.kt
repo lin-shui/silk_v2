@@ -2,12 +2,25 @@ package com.silk.desktop
 
 import androidx.compose.foundation.ContextMenuArea
 import androidx.compose.foundation.ContextMenuItem
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Message
+import androidx.compose.material.icons.filled.Sms
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -22,6 +35,7 @@ import kotlinx.coroutines.delay
  * 使用SelectionContainer提供文本选择和复制功能
  * 使用remember和LaunchedEffect确保正确的生命周期，避免ID冲突
  */
+@Suppress("UnusedParameter")
 @Composable
 fun MessageWithContextMenu(
     content: @Composable () -> Unit,
@@ -48,6 +62,7 @@ fun MessageWithContextMenu(
 /**
  * 复制消息到剪贴板
  */
+@Suppress("TooGenericExceptionCaught")
 fun copyMessageToClipboard(text: String) {
     try {
         val clipboard = Toolkit.getDefaultToolkit().systemClipboard
@@ -62,6 +77,7 @@ fun copyMessageToClipboard(text: String) {
 /**
  * 转发消息到微信
  */
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 fun forwardToWeChat(text: String) {
     try {
         val osName = System.getProperty("os.name").lowercase()
@@ -97,6 +113,7 @@ fun forwardToWeChat(text: String) {
 /**
  * 转发消息到SMS
  */
+@Suppress("TooGenericExceptionCaught", "SwallowedException", "NestedBlockDepth")
 fun forwardToSMS(text: String) {
     try {
         val osName = System.getProperty("os.name").lowercase()
@@ -143,7 +160,6 @@ fun MessageActionBar(
     onForwardWeChat: () -> Unit,
     onForwardSMS: () -> Unit
 ) {
-    var showActions by remember { mutableStateOf(false) }
     var showSuccessMessage by remember { mutableStateOf<String?>(null) }
     
     Box {

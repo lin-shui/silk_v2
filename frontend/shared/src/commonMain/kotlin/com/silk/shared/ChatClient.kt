@@ -164,6 +164,7 @@ class ChatClient(
         _isLoadingHistory.value = false
     }
 
+    @Suppress("CyclomaticComplexMethod", "NestedBlockDepth")
     private fun handleMessage(text: String) {
         // 批量历史帧：服务端将最多 50 条消息编码为 JSON 数组一次性发送
         // 不依赖 _isLoadingHistory 状态，防止超时后历史消息被丢弃
@@ -211,7 +212,9 @@ class ChatClient(
             }
 
             // 历史加载期间：缓冲普通消息，不逐条更新 UI
-            if (_isLoadingHistory.value && !message.isTransient && message.category != MessageCategory.AGENT_STATUS && message.type != MessageType.RECALL) {
+            val shouldBufferDuringHistory = _isLoadingHistory.value && !message.isTransient &&
+                message.category != MessageCategory.AGENT_STATUS && message.type != MessageType.RECALL
+            if (shouldBufferDuringHistory) {
                 historyBuffer.add(message)
                 return
             }

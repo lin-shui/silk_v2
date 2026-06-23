@@ -57,6 +57,7 @@ import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
 import org.jetbrains.compose.web.dom.TextArea
 
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun SettingsScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
@@ -107,7 +108,7 @@ fun SettingsScene(appState: WebAppState) {
                     ccBridgeConnected = ccResponse.bridgeConnected
                     ccBridgeIp = ccResponse.bridgeIp
                 }
-            } catch (e: Exception) {
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                 console.error("加载设置失败:", e)
                 // Use defaults on error
                 selectedLanguage = Language.CHINESE
@@ -459,7 +460,7 @@ fun SettingsScene(appState: WebAppState) {
                                                 ccBridgeConnected = resp.bridgeConnected
                                                 ccBridgeIp = resp.bridgeIp
                                                 ccTestResult = if (resp.bridgeConnected) strings.ccTestSuccess else strings.ccTestFailed
-                                            } catch (e: Exception) {
+                                            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                                                 console.error("刷新 Bridge 状态失败:", e)
                                                 ccTestResult = strings.ccTestFailed
                                             } finally {
@@ -689,7 +690,7 @@ fun SettingsScene(appState: WebAppState) {
                                         } else {
                                             saveMessage = strings.settingsSaveError
                                         }
-                                    } catch (e: Exception) {
+                                    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                                         console.error("保存设置失败:", e)
                                         saveMessage = strings.settingsSaveError
                                     } finally {

@@ -82,6 +82,7 @@ actual class PlatformWebSocket actual constructor(
     actual val isConnected: Boolean
         get() = session != null && !isExplicitlyDisconnected.get()
     
+    @Suppress("CyclomaticComplexMethod")
     actual fun connect(token: String?, userId: String, userName: String, groupId: String) {
         // 切群场景：先清理旧连接，不做重复连接判断
         val wasConnecting = isConnecting.getAndSet(true)

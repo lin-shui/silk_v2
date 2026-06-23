@@ -61,6 +61,7 @@ import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Style
 import org.jetbrains.compose.web.dom.Text
 
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught")
 @Composable
 fun GroupListScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
@@ -328,7 +329,7 @@ fun GroupListScene(appState: WebAppState) {
                             if (isDeleteMode) {
                                 Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { isDeleteMode = false; selectedGroups = emptySet(); showMenu = false } }) { Text("🔙  ${strings.cancelButton}") }
                                 if (selectedGroups.isNotEmpty()) {
-                                    Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color("#e74c3c")); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { scope.launch { isDeleting = true; val userId = appState.currentUser?.id ?: ""; selectedGroups.forEach { groupId -> val group = groups.find { it.id == groupId }; if (group != null && group.hostId == userId) ApiClient.deleteGroup(groupId, userId) else ApiClient.leaveGroup(groupId, userId) }; val r2 = ApiClient.getUserGroups(userId); if (r2.success) groups = r2.groups ?: emptyList(); isDeleting = false; isDeleteMode = false; selectedGroups = emptySet(); showMenu = false } } }) { Text("🗑  ${strings.exitButton} (${selectedGroups.size})") }
+                                    Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color("#e74c3c")); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { scope.launch { isDeleting = true; val userId = appState.currentUser?.id ?: ""; selectedGroups.forEach { groupId -> val group = groups.find { it.id == groupId }; if (group != null && group.hostId == userId) ApiClient.deleteGroup(groupId, userId) else ApiClient.leaveGroup(groupId, userId) }; val r2 = ApiClient.getUserGroups(userId); if (r2.success) { groups = r2.groups ?: emptyList() } else { /* keep existing groups on failure */ }; isDeleting = false; isDeleteMode = false; selectedGroups = emptySet(); showMenu = false } } }) { Text("🗑  ${strings.exitButton} (${selectedGroups.size})") }
                                 }
                             } else {
                                 Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { isDeleteMode = true; showMenu = false } }) { Text("➖  ${strings.exitButton}") }
@@ -722,9 +723,10 @@ fun GroupListScene(appState: WebAppState) {
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "UnusedParameter")
 @Composable
 fun GroupCard(
-    group: Group, 
+    group: Group,
     isHost: Boolean, 
     isDeleteMode: Boolean = false,
     isSelected: Boolean = false,
@@ -968,6 +970,7 @@ fun GroupCard(
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught")
 @Composable
 fun CreateGroupDialog(
     appState: WebAppState,
@@ -1238,6 +1241,7 @@ token  = "${generatedToken}"
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught")
 @Composable
 fun JoinGroupDialog(
     appState: WebAppState,
@@ -1417,6 +1421,7 @@ fun JoinGroupDialog(
 /**
  * 群组成员列表对话框（在群列表页面使用）
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun GroupMembersListDialog(
     group: Group,

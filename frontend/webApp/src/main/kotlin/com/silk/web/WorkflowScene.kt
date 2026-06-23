@@ -70,6 +70,7 @@ private fun shouldSubmitWorkflowMessage(event: org.jetbrains.compose.web.events.
     return !isComposing && messageText.isNotBlank()
 }
 
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun WorkflowScene(appState: WebAppState) {
     val user = appState.currentUser ?: return
@@ -874,6 +875,7 @@ fun WorkflowScene(appState: WebAppState) {
     }
 }
 
+@Suppress("CyclomaticComplexMethod")
 @Composable
 private fun WorkflowChatPanel(
     userId: String,
@@ -932,9 +934,9 @@ private fun WorkflowChatPanel(
     // 新增消息改变 messages.size → 触发此 effect → 仅检查最新一条是否匹配。
     LaunchedEffect(messages.size) {
         val latest = messages.lastOrNull() ?: return@LaunchedEffect
-        if (latest.type == com.silk.shared.models.MessageType.SYSTEM &&
+        val isAgentStatusMessage = latest.type == com.silk.shared.models.MessageType.SYSTEM &&
             (latest.content.startsWith("已切换到") || latest.content.contains("已激活") || latest.content.contains("已退出 agent"))
-        ) {
+        if (isAgentStatusMessage) {
             val snap = ApiClient.getCcState(userId, groupId)
             if (snap.success) {
                 activeAgentDisplay = snap.agentDisplayName
@@ -1127,12 +1129,11 @@ private fun WorkflowChatPanel(
 
         // Transient (streaming) message
         transientMessage?.let { message ->
-            if (
-                message.content.isNotBlank() &&
+            val shouldShowTransient = message.content.isNotBlank() &&
                 message.currentStep == null &&
                 message.totalSteps == null &&
                 !isLikelyAgentStatusContent(message.content)
-            ) {
+            if (shouldShowTransient) {
                 MessageItem(
                     message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                     isTransient = true,
@@ -1518,7 +1519,7 @@ private fun WorkflowChatPanel(
 /**
  * 会话设置弹窗：工作目录 / Agent / 权限模式三合一。
  */
-@Suppress("UnusedPrivateMember")
+@Suppress("UnusedPrivateMember", "CyclomaticComplexMethod")
 @Composable
 private fun WorkflowSettingsDialog(
     userId: String,
@@ -1829,6 +1830,7 @@ private fun WorkflowSettingsDialog(
  * - 底部：显示当前路径（只读展示），支持手动输入跳转
  * - 确认按钮：以当前展示的路径作为结果
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 private fun FolderPickerDialog(
     userId: String,
