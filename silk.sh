@@ -1303,7 +1303,7 @@ start_services_internal() {
     echo -e "${BLUE}启动 Silk 后端...${NC}"
     cd "$SILK_DIR"
     clean_gradle_kotlin_snapshots
-    nohup env LANG=C.UTF-8 LC_ALL=C.UTF-8 JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
+    nohup env LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=Asia/Shanghai JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR -Duser.timezone=Asia/Shanghai" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
     echo -e "  ${GREEN}后端启动命令已执行${NC}"
     echo -e "  日志: /tmp/silk_backend.log"
     
@@ -1394,7 +1394,7 @@ start_services() {
         cd "$SILK_DIR"
         clean_gradle_kotlin_snapshots
         mkdir -p "$SILK_WORKFLOW_DIR"
-        nohup env LANG=C.UTF-8 LC_ALL=C.UTF-8 JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
+        nohup env LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=Asia/Shanghai JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR -Duser.timezone=Asia/Shanghai" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
         echo -e "  ${GREEN}后端启动命令已执行${NC}"
         echo -e "  日志: /tmp/silk_backend.log"
     fi
@@ -1588,7 +1588,7 @@ quick_restart() {
     cd "$SILK_DIR"
     clean_gradle_kotlin_snapshots
     mkdir -p "$SILK_WORKFLOW_DIR"
-    nohup env LANG=C.UTF-8 LC_ALL=C.UTF-8 JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
+    nohup env LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=Asia/Shanghai JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR -Duser.timezone=Asia/Shanghai" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
     echo "  后端启动中..."
     
     # 启动前端 (使用预编译的生产版本)

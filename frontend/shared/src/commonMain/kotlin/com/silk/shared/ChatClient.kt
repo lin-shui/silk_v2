@@ -311,7 +311,11 @@ class ChatClient(
                         log("💬 [ChatClient] 普通消息，添加到列表")
                         _messages.value = _messages.value + message
                     } else {
-                        log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
+                        // 消息已在本地列表（发送者预添加），用服务端广播回来的归一化时间戳覆盖
+                        log("📌 [ChatClient] 更新消息时间戳: serverTs=${message.timestamp}")
+                        _messages.value = _messages.value.map {
+                            if (it.id == message.id) it.copy(timestamp = message.timestamp) else it
+                        }
                     }
                     // Track pending question state
                     if (message.category == MessageCategory.AGENT_QUESTION) {
