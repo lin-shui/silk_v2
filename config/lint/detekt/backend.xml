@@ -2,17 +2,7 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
-    <ID>ComplexCondition:Routing.kt$message.type == MessageType.TEXT &amp;&amp; !message.isTransient &amp;&amp; message.userId != "cc-connect" &amp;&amp; message.userId != "system"</ID>
-    <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$!isSilkPrivateChat &amp;&amp; message.type == MessageType.TEXT &amp;&amp; !message.isTransient &amp;&amp; !AgentRuntime.isAgentMessage(message)</ID>
-    <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId) &amp;&amp; message.type == MessageType.TEXT &amp;&amp; !message.isTransient &amp;&amp; message.userId != "cc-connect" &amp;&amp; message.userId != "system"</ID>
-    <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$message.type == MessageType.TEXT &amp;&amp; message.userId != "cc-connect" &amp;&amp; message.userId != "system" &amp;&amp; com.silk.backend.ccconnect.CcConnectRegistry.isConnected(sessionName.removePrefix("group_")) &amp;&amp; com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(sessionName.removePrefix("group_"))</ID>
-    <ID>CyclomaticComplexMethod:AgentRuntime.kt$AgentRuntime$private fun setupAcpHandlers( acp: AcpClient, acpSessionId: String, session: AgentSession, descriptor: AgentDescriptor, broadcastFn: suspend (Message) -&gt; Unit, accumulated: StringBuilder, scope: CoroutineScope, ctx: GroupAgentContext? = null, )</ID>
-    <ID>CyclomaticComplexMethod:AgentRuntime.kt$AgentRuntime$private suspend fun handleCommand( ctx: GroupAgentContext, cmd: SilkCommand, broadcastFn: suspend (Message) -&gt; Unit, )</ID>
     <ID>CyclomaticComplexMethod:Routing.kt$@Suppress("TooGenericExceptionCaught", "SwallowedException") fun Application.configureRouting()</ID>
-    <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$@Suppress("UnusedParameter") suspend fun handleVisionImageAndText( imageFile: java.io.File, base64Data: String, userText: String, downloadUrl: String, userId: String )</ID>
-    <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "")</ID>
-    <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$private suspend fun handleCombinedVisionAndText( pendingImg: PendingImageState, userText: String, userId: String )</ID>
-    <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$suspend fun broadcast(message: Message)</ID>
     <ID>LargeClass:AIStepwiseAgent.kt$AIStepwiseAgent</ID>
     <ID>LargeClass:AgentRuntime.kt$AgentRuntime</ID>
     <ID>LargeClass:BackendWebSocketContractTest.kt$BackendWebSocketContractTest</ID>
@@ -20,9 +10,5 @@
     <ID>LargeClass:UserTodoStore.kt$UserTodoStore</ID>
     <ID>LargeClass:WeaviateClient.kt$WeaviateClient</ID>
     <ID>LargeClass:WebSocketConfig.kt$ChatServer</ID>
-    <ID>LoopWithTooManyJumpStatements:AgentRuntime.kt$AgentRuntime$for</ID>
-    <ID>LoopWithTooManyJumpStatements:Routing.kt$for</ID>
-    <ID>NestedBlockDepth:WebSocketConfig.kt$ChatServer$private suspend fun processUrlsInMessage(message: Message)</ID>
-    <ID>NestedBlockDepth:WebSocketConfig.kt$ChatServer$suspend fun broadcast(message: Message)</ID>
   </CurrentIssues>
 </SmellBaseline>

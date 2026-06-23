@@ -278,6 +278,7 @@ object AgentRuntime {
 
     /** Bridge 断线时由 Routing.kt 调用 */
     fun handleAgentDisconnect(userId: String, agentType: String) {
+        @Suppress("LoopWithTooManyJumpStatements")
         for ((_, ctx) in contexts) {
             if (ctx.userId != userId) continue
             val session = ctx.sessions[agentType] ?: continue
@@ -421,6 +422,7 @@ object AgentRuntime {
         }
     }
 
+    @Suppress("CyclomaticComplexMethod")
     private suspend fun handleCommand(
         ctx: GroupAgentContext,
         cmd: SilkCommand,
@@ -985,6 +987,7 @@ object AgentRuntime {
         }
     }
 
+    @Suppress("CyclomaticComplexMethod")
     private fun setupAcpHandlers(
         acp: AcpClient,
         acpSessionId: String,

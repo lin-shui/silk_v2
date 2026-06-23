@@ -2811,6 +2811,7 @@ fun Application.configureRouting() {
             val ccUserName = com.silk.backend.ccconnect.agentTriggerName(hello.agentType).replaceFirstChar { it.uppercaseChar() }
 
             try {
+                @Suppress("LoopWithTooManyJumpStatements")
                 for (frame in incoming) {
                     val text = (frame as? Frame.Text)?.readText() ?: continue
                     val msgType = com.silk.backend.ccconnect.parseMessageType(text) ?: continue
@@ -3902,9 +3903,10 @@ fun Application.configureRouting() {
                                 // 机器 token，不应作为聊天消息显示。拦截在 broadcast() 之前，
                                 // 完全不存历史、不广播给客户端。
                                 // 仅拦截已知的按钮 token 格式（自然语言回复仍正常显示）。
-                                if (message.type == MessageType.TEXT && !message.isTransient
-                                    && message.userId != "cc-connect" && message.userId != "system"
-                                ) {
+                                val isCcButtonAnswerCandidate = message.type == MessageType.TEXT &&
+                                    !message.isTransient &&
+                                    message.userId != "cc-connect" && message.userId != "system"
+                                if (isCcButtonAnswerCandidate) {
                                     val ccGid = groupId
                                     val ccReg = com.silk.backend.ccconnect.CcConnectRegistry
                                     if (ccReg.isConnected(ccGid) && ccReg.isWaitingForInput(ccGid)) {

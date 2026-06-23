@@ -329,6 +329,7 @@ class ChatServer(
         return connections.keys.toList().ifEmpty { listOf(userId) }
     }
 
+    @Suppress("CyclomaticComplexMethod", "NestedBlockDepth")
     suspend fun broadcast(message: Message) {
         // 🛑 停止生成：立即取消活跃的 AI 任务并通知客户端
         if (message.type == MessageType.STOP_GENERATE) {
@@ -444,11 +445,11 @@ class ChatServer(
 
         // ⛔ cc-connect 等待回答时，用户 TEXT 消息由下方 cc-connect 路由直接转发给引擎，
         // 不必在此广播——否则按钮值（如 "perm:allow"）会作为用户消息展示给所有人。
-        if (message.type == MessageType.TEXT
-            && message.userId != "cc-connect" && message.userId != "system"
-            && com.silk.backend.ccconnect.CcConnectRegistry.isConnected(sessionName.removePrefix("group_"))
-            && com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(sessionName.removePrefix("group_"))
-        ) {
+        val isCcWaitingForUserInput = message.type == MessageType.TEXT &&
+            message.userId != "cc-connect" && message.userId != "system" &&
+            com.silk.backend.ccconnect.CcConnectRegistry.isConnected(sessionName.removePrefix("group_")) &&
+            com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(sessionName.removePrefix("group_"))
+        if (isCcWaitingForUserInput) {
             logger.debug("⏭️ [broadcast] 跳过广播: cc-connect waitingForInput (msg={})", message.content.take(20))
         } else {
             val messageJson = Json.encodeToString(message)
@@ -511,10 +512,10 @@ class ChatServer(
         // cc-connect 群组：仅 HOST / OPERATOR 的消息转发给适配器，GUEST 消息不触发命令
         // 多人群需要 @-prefix 触发（@cc 通用或 @claude/@cursor 等代理特定前缀）；单人直接转发
         val ccGroupId = sessionName.removePrefix("group_")
-        if (com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId)
-            && message.type == MessageType.TEXT && !message.isTransient
-            && message.userId != "cc-connect" && message.userId != "system"
-        ) {
+        val isCcForwardCandidate = com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId) &&
+            message.type == MessageType.TEXT && !message.isTransient &&
+            message.userId != "cc-connect" && message.userId != "system"
+        if (isCcForwardCandidate) {
             val memberRole = com.silk.backend.database.GroupRepository.getMemberRole(ccGroupId, message.userId)
             if (memberRole == MemberRole.HOST || memberRole == MemberRole.OPERATOR) {
                 val memberCount = com.silk.backend.database.GroupRepository.getGroupMemberCount(ccGroupId)
@@ -592,9 +593,9 @@ class ChatServer(
         // ==================== Claude Code 模式拦截 ====================
         // 专属对话 [Silk] 必须走下方 Silk AI（DirectModelAgent）；否则用户若在其它群激活过 /cc，
         // 此处会把「你好」当成 CC prompt，Bridge 未就绪时表现为空白回复。
-        if (!isSilkPrivateChat && message.type == MessageType.TEXT && !message.isTransient
-            && !AgentRuntime.isAgentMessage(message)
-        ) {
+        val shouldRouteToCcConnect = !isSilkPrivateChat && message.type == MessageType.TEXT &&
+            !message.isTransient && !AgentRuntime.isAgentMessage(message)
+        if (shouldRouteToCcConnect) {
             val groupId = sessionName
             // 构造单用户发送函数（CC 响应只发给触发用户的所有连接）
             val ccUserId = message.userId
@@ -833,6 +834,7 @@ class ChatServer(
     /**
      * 处理消息中的URL - 下载网页并索引
      */
+    @Suppress("NestedBlockDepth")
     private suspend fun processUrlsInMessage(message: Message) {
         logger.debug("🔗 [URL检测] 开始检测消息: {}...", message.content.take(50))
         val urls = com.silk.backend.utils.WebPageDownloader.extractUrls(message.content)
@@ -1230,7 +1232,7 @@ class ChatServer(
         }
     }
 
-    @Suppress("UnusedParameter")
+    @Suppress("UnusedParameter", "CyclomaticComplexMethod")
     suspend fun handleVisionImageAndText(
         imageFile: java.io.File,
         base64Data: String,
@@ -1390,6 +1392,7 @@ class ChatServer(
         }
     }
     
+    @Suppress("CyclomaticComplexMethod")
     private suspend fun handleCombinedVisionAndText(
         pendingImg: PendingImageState,
         userText: String,
@@ -1559,6 +1562,7 @@ class ChatServer(
             try { generateIntelligentResponse(userText, userId) } catch (_: Exception) {}
         }
     }
+    @Suppress("CyclomaticComplexMethod")
     private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "") {
         val callId = System.currentTimeMillis()
         logger.info("🤖 [Agent-{}] 开始直接调用模型 (userId={})", callId, userId)
