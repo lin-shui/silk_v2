@@ -493,6 +493,27 @@ class ChatHistoryManager(
         return deletedCount
     }
     
+    /** 扫描连续AI回复时对单条消息的判定结果。 */
+    private enum class AgentReplyScan { STOP, SKIP, ADD }
+
+    /**
+     * 判定扫描到的一条消息应当：停止扫描(STOP)、跳过但继续(SKIP)、计入AI回复(ADD)。
+     * 与原内联逻辑等价：遇到其他用户的非AI消息停止；AI回复需与上一条间隔 < 5 分钟才计入，否则停止。
+     */
+    private fun classifyAgentReplyScan(
+        msg: com.silk.backend.models.ChatHistoryEntry,
+        userMessage: com.silk.backend.models.ChatHistoryEntry,
+        prevMsg: com.silk.backend.models.ChatHistoryEntry,
+        isAgent: (String) -> Boolean,
+    ): AgentReplyScan {
+        if (!isAgent(msg.senderId)) {
+            // 其他用户的消息：停止；同一用户的后续消息：跳过
+            return if (msg.senderId != userMessage.senderId) AgentReplyScan.STOP else AgentReplyScan.SKIP
+        }
+        // AI回复：仅当与上一条间隔在 5 分钟内才视为连续
+        return if (msg.timestamp - prevMsg.timestamp < 5 * 60 * 1000) AgentReplyScan.ADD else AgentReplyScan.STOP
+    }
+
     /**
      * 查找指定消息后的AI回复消息
      * 用于撤回 @silk 消息时，同时删除AI的回复
@@ -516,21 +537,12 @@ class ChatHistoryManager(
 
         for (i in (userMessageIndex + 1) until chatHistory.messages.size) {
             val msg = chatHistory.messages[i]
+            val prevMsg = if (agentReplies.isEmpty()) userMessage else chatHistory.messages[i - 1]
 
-            // 如果遇到其他用户的消息，停止查找
-            if (!isAgent(msg.senderId) && msg.senderId != userMessage.senderId) {
-                break
-            }
-
-            // 如果是AI的回复，添加到列表
-            if (isAgent(msg.senderId)) {
-                // 检查是否是连续的AI回复（时间间隔在5分钟内）
-                val prevMsg = if (agentReplies.isEmpty()) userMessage else chatHistory.messages[i - 1]
-                if (msg.timestamp - prevMsg.timestamp < 5 * 60 * 1000) {
-                    agentReplies.add(msg.messageId)
-                } else {
-                    break
-                }
+            when (classifyAgentReplyScan(msg, userMessage, prevMsg, isAgent)) {
+                AgentReplyScan.STOP -> break
+                AgentReplyScan.SKIP -> {} // 同一用户的后续非AI消息：跳过但继续扫描
+                AgentReplyScan.ADD -> agentReplies.add(msg.messageId)
             }
         }
         

@@ -3,6 +3,7 @@ package com.silk.backend.auth
 import com.silk.backend.database.HuaweiUserInfo
 import io.jsonwebtoken.JwtException
 import io.jsonwebtoken.Jwts
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -62,90 +63,119 @@ object HuaweiTokenVerifier {
     ): HuaweiUserInfo? {
         return try {
             // 1. 交换 code → access_token & id_token
-            val tokenForm = buildString {
-                append("grant_type=authorization_code")
-                append("&code=").append(URLEncoder.encode(code, "UTF-8"))
-                append("&client_id=").append(URLEncoder.encode(clientId, "UTF-8"))
-                append("&client_secret=").append(URLEncoder.encode(clientSecret, "UTF-8"))
-                append("&redirect_uri=").append(URLEncoder.encode(redirectUri, "UTF-8"))
-            }
-
-            val tokenRequest = Request.Builder()
-                .url(HUAWEI_TOKEN_URL)
-                .addHeader("Content-Type", "application/x-www-form-urlencoded")
-                .post(tokenForm.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
-                .build()
-
-            val response = httpClient.newCall(tokenRequest).execute()
-            val tokenBodyStr = response.body?.string()
-            if (tokenBodyStr == null) {
-                logger.error("❌ 华为 token 端点返回空响应, HTTP status=${response.code}")
-                return null
-            }
-            logger.info("📥 华为 token 端点响应 (HTTP ${response.code}, 前300字): {}", tokenBodyStr.take(300))
-            val tokenObj = try {
-                json.parseToJsonElement(tokenBodyStr).jsonObject
-            } catch (e: Exception) {
-                logger.error("❌ 华为 token 响应 JSON 解析失败: {} | 原始响应(前500字): {}", e.message, tokenBodyStr.take(500))
-                return null
-            }
-            // 检查华为是否返回了错误
-            if (tokenObj.containsKey("error") || tokenObj.containsKey("sub_error")) {
-                val errCode = tokenObj["error"]?.jsonPrimitive?.content ?: "?"
-                val errDesc = tokenObj["error_description"]?.jsonPrimitive?.content ?: "?"
-                val subErr = tokenObj["sub_error"]?.jsonPrimitive?.content ?: "?"
-                logger.error("❌ 华为 token 交换失败: error=$errCode, description=$errDesc, sub_error=$subErr")
-                return null
-            }
+            val tokenObj = requestHuaweiTokenObject(code, clientId, clientSecret, redirectUri)
+                ?: return null
 
             // 2. 优先从 id_token (JWT) 中解码用户信息 —— 更可靠，不依赖 userinfo 端点
+            // 一旦拿到 id_token 即硬停（成功或失败都不再尝试 userinfo 降级），与原逻辑一致。
             val idToken = tokenObj["id_token"]?.jsonPrimitive?.content
             if (idToken != null) {
-                logger.info("🔑 从 id_token 解码用户信息")
-                // 先尝试签名验证（需要 JWKS 端点可用）
-                val verified = verifyIdToken(idToken)
-                if (verified != null) return verified
-                // JWKS 端点不可用时，直接解码 JWT payload（token 来自于可信的华为 token 端点）
-                logger.info("⚠️ JWKS 验证失败，尝试直接解码 id_token payload")
-                val unverified = decodeIdTokenPayload(idToken)
-                if (unverified != null) return unverified
-                logger.error("❌ id_token 解码也失败")
-                return null
+                return decodeUserInfoFromIdToken(idToken)
             }
 
             // 3. 降级：从 access_token 调 userinfo 端点
             logger.warn("⚠️ 未获取到 id_token，尝试调 userinfo 端点")
             val accessToken = tokenObj["access_token"]?.jsonPrimitive?.content ?: return null
-            val userInfoRequest = Request.Builder()
-                .url(HUAWEI_USERINFO_URL)
-                .addHeader("Authorization", "Bearer $accessToken")
-                .build()
-
-            val userInfoResponse = httpClient.newCall(userInfoRequest).execute()
-            val userInfoBody = userInfoResponse.body?.string()
-            if (userInfoBody == null) {
-                logger.error("❌ 华为 userinfo 端点返回空响应, HTTP status=${userInfoResponse.code}")
-                return null
-            }
-            if (!userInfoBody.trimStart().startsWith("{")) {
-                logger.error("❌ 华为 userinfo 端点返回非 JSON 内容, HTTP ${userInfoResponse.code}, 响应(前500字): {}", userInfoBody.take(500))
-                return null
-            }
-            val userInfo = json.parseToJsonElement(userInfoBody).jsonObject
-            val openId = userInfo["sub"]?.jsonPrimitive?.content
-                ?: userInfo["openID"]?.jsonPrimitive?.content
-                ?: userInfo["open_id"]?.jsonPrimitive?.content
-                ?: return null
-
-            HuaweiUserInfo(
-                openId = openId,
-                name = userInfo["name"]?.jsonPrimitive?.content ?: "",
-                avatar = userInfo["picture"]?.jsonPrimitive?.content ?: ""
-            )
+            fetchUserInfoFromUserinfoEndpoint(accessToken)
         } catch (e: Exception) {
             logger.error("❌ 华为 OAuth code 交换失败: {}", e.message)
             null
         }
+    }
+
+    /**
+     * 第 1 步：用 authorization code 交换 token，返回解析后的 token JSON 对象。
+     * 空响应/解析失败/华为返回错误时返回 null（与原内联早返回等价）。
+     */
+    private fun requestHuaweiTokenObject(
+        code: String,
+        clientId: String,
+        clientSecret: String,
+        redirectUri: String,
+    ): JsonObject? {
+        val tokenForm = buildString {
+            append("grant_type=authorization_code")
+            append("&code=").append(URLEncoder.encode(code, "UTF-8"))
+            append("&client_id=").append(URLEncoder.encode(clientId, "UTF-8"))
+            append("&client_secret=").append(URLEncoder.encode(clientSecret, "UTF-8"))
+            append("&redirect_uri=").append(URLEncoder.encode(redirectUri, "UTF-8"))
+        }
+
+        val tokenRequest = Request.Builder()
+            .url(HUAWEI_TOKEN_URL)
+            .addHeader("Content-Type", "application/x-www-form-urlencoded")
+            .post(tokenForm.toRequestBody("application/x-www-form-urlencoded".toMediaType()))
+            .build()
+
+        val response = httpClient.newCall(tokenRequest).execute()
+        val tokenBodyStr = response.body?.string()
+        if (tokenBodyStr == null) {
+            logger.error("❌ 华为 token 端点返回空响应, HTTP status=${response.code}")
+            return null
+        }
+        logger.info("📥 华为 token 端点响应 (HTTP ${response.code}, 前300字): {}", tokenBodyStr.take(300))
+        val tokenObj = try {
+            json.parseToJsonElement(tokenBodyStr).jsonObject
+        } catch (e: Exception) {
+            logger.error("❌ 华为 token 响应 JSON 解析失败: {} | 原始响应(前500字): {}", e.message, tokenBodyStr.take(500))
+            return null
+        }
+        // 检查华为是否返回了错误
+        if (tokenObj.containsKey("error") || tokenObj.containsKey("sub_error")) {
+            val errCode = tokenObj["error"]?.jsonPrimitive?.content ?: "?"
+            val errDesc = tokenObj["error_description"]?.jsonPrimitive?.content ?: "?"
+            val subErr = tokenObj["sub_error"]?.jsonPrimitive?.content ?: "?"
+            logger.error("❌ 华为 token 交换失败: error=$errCode, description=$errDesc, sub_error=$subErr")
+            return null
+        }
+        return tokenObj
+    }
+
+    /**
+     * 第 2 步：从 id_token 解码用户信息。先尝试 JWKS 签名验证，失败再直接解码 payload；
+     * 都失败返回 null。调用方在 id_token 存在时硬停于此结果，不再降级。
+     */
+    private fun decodeUserInfoFromIdToken(idToken: String): HuaweiUserInfo? {
+        logger.info("🔑 从 id_token 解码用户信息")
+        // 先尝试签名验证（需要 JWKS 端点可用）
+        verifyIdToken(idToken)?.let { return it }
+        // JWKS 端点不可用时，直接解码 JWT payload（token 来自于可信的华为 token 端点）
+        logger.info("⚠️ JWKS 验证失败，尝试直接解码 id_token payload")
+        decodeIdTokenPayload(idToken)?.let { return it }
+        logger.error("❌ id_token 解码也失败")
+        return null
+    }
+
+    /**
+     * 第 3 步（降级）：用 access_token 调 userinfo 端点解析用户信息。
+     */
+    private fun fetchUserInfoFromUserinfoEndpoint(accessToken: String): HuaweiUserInfo? {
+        val userInfoRequest = Request.Builder()
+            .url(HUAWEI_USERINFO_URL)
+            .addHeader("Authorization", "Bearer $accessToken")
+            .build()
+
+        val userInfoResponse = httpClient.newCall(userInfoRequest).execute()
+        val userInfoBody = userInfoResponse.body?.string()
+        if (userInfoBody == null) {
+            logger.error("❌ 华为 userinfo 端点返回空响应, HTTP status=${userInfoResponse.code}")
+            return null
+        }
+        if (!userInfoBody.trimStart().startsWith("{")) {
+            logger.error("❌ 华为 userinfo 端点返回非 JSON 内容, HTTP ${userInfoResponse.code}, 响应(前500字): {}", userInfoBody.take(500))
+            return null
+        }
+        val userInfo = json.parseToJsonElement(userInfoBody).jsonObject
+        val openId = userInfo["sub"]?.jsonPrimitive?.content
+            ?: userInfo["openID"]?.jsonPrimitive?.content
+            ?: userInfo["open_id"]?.jsonPrimitive?.content
+            ?: return null
+
+        return HuaweiUserInfo(
+            openId = openId,
+            name = userInfo["name"]?.jsonPrimitive?.content ?: "",
+            avatar = userInfo["picture"]?.jsonPrimitive?.content ?: ""
+        )
     }
 
     /**
@@ -226,26 +256,31 @@ object HuaweiTokenVerifier {
             val root = json.parseToJsonElement(body).jsonObject
             val keys = root["keys"]?.jsonArray ?: return
 
-            val parsed = mutableMapOf<String, PublicKey>()
-            for (elem in keys) {
-                val keyObj = elem.jsonObject
-                val kid = keyObj["kid"]?.jsonPrimitive?.content ?: continue
-                if (keyObj["kty"]?.jsonPrimitive?.content != "RSA") continue
-                val n = keyObj["n"]?.jsonPrimitive?.content ?: continue
-                val e = keyObj["e"]?.jsonPrimitive?.content ?: continue
-                try {
-                    val modulus = BigInteger(1, Base64.getUrlDecoder().decode(n))
-                    val exponent = BigInteger(1, Base64.getUrlDecoder().decode(e))
-                    parsed[kid] = KeyFactory.getInstance("RSA").generatePublic(RSAPublicKeySpec(modulus, exponent))
-                } catch (ex: Exception) {
-                    logger.debug("⚠️ 跳过 RSA key {}: {}", kid, ex.message)
-                }
-            }
+            val parsed = keys.mapNotNull { parseRsaJwk(it.jsonObject) }.toMap().toMutableMap()
             cachedJwkSet = parsed
             cacheTimestamp = System.currentTimeMillis()
             logger.info("✅ 成功拉取华为 JWKS，共 {} 个公钥", parsed.size)
         } catch (e: Exception) {
             logger.error("❌ 拉取华为 JWKS 失败: {}", e.message)
+        }
+    }
+
+    /**
+     * 解析单个 JWK 为 (kid, PublicKey)，无法解析（缺字段/非RSA/异常）时返回 null。
+     * 与原循环体逐项 continue/try-catch 跳过的语义等价。
+     */
+    private fun parseRsaJwk(keyObj: JsonObject): Pair<String, PublicKey>? {
+        val kid = keyObj["kid"]?.jsonPrimitive?.content ?: return null
+        if (keyObj["kty"]?.jsonPrimitive?.content != "RSA") return null
+        val n = keyObj["n"]?.jsonPrimitive?.content ?: return null
+        val e = keyObj["e"]?.jsonPrimitive?.content ?: return null
+        return try {
+            val modulus = BigInteger(1, Base64.getUrlDecoder().decode(n))
+            val exponent = BigInteger(1, Base64.getUrlDecoder().decode(e))
+            kid to KeyFactory.getInstance("RSA").generatePublic(RSAPublicKeySpec(modulus, exponent))
+        } catch (ex: Exception) {
+            logger.debug("⚠️ 跳过 RSA key {}: {}", kid, ex.message)
+            null
         }
     }
 }

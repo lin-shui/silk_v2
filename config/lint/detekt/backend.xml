@@ -2,28 +2,13 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
-    <ID>ComplexCondition:FileRoutes.kt$isCcConnected &amp;&amp; isImage &amp;&amp; (isSoloMode || matchedPrefix != null)</ID>
     <ID>ComplexCondition:Routing.kt$message.type == MessageType.TEXT &amp;&amp; !message.isTransient &amp;&amp; message.userId != "cc-connect" &amp;&amp; message.userId != "system"</ID>
     <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$!isSilkPrivateChat &amp;&amp; message.type == MessageType.TEXT &amp;&amp; !message.isTransient &amp;&amp; !AgentRuntime.isAgentMessage(message)</ID>
     <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId) &amp;&amp; message.type == MessageType.TEXT &amp;&amp; !message.isTransient &amp;&amp; message.userId != "cc-connect" &amp;&amp; message.userId != "system"</ID>
     <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$message.type == MessageType.TEXT &amp;&amp; message.userId != "cc-connect" &amp;&amp; message.userId != "system" &amp;&amp; com.silk.backend.ccconnect.CcConnectRegistry.isConnected(sessionName.removePrefix("group_")) &amp;&amp; com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(sessionName.removePrefix("group_"))</ID>
     <ID>CyclomaticComplexMethod:AgentRuntime.kt$AgentRuntime$private fun setupAcpHandlers( acp: AcpClient, acpSessionId: String, session: AgentSession, descriptor: AgentDescriptor, broadcastFn: suspend (Message) -&gt; Unit, accumulated: StringBuilder, scope: CoroutineScope, ctx: GroupAgentContext? = null, )</ID>
     <ID>CyclomaticComplexMethod:AgentRuntime.kt$AgentRuntime$private suspend fun handleCommand( ctx: GroupAgentContext, cmd: SilkCommand, broadcastFn: suspend (Message) -&gt; Unit, )</ID>
-    <ID>CyclomaticComplexMethod:AnthropicClient.kt$AnthropicClient$@Suppress("UnusedParameter") private suspend fun handleEvent( data: String, fullText: StringBuilder, pendingToolUses: MutableMap&lt;Int, PendingToolUse&gt;, completedToolCalls: MutableList&lt;ToolCall&gt;, collectedCitations: MutableList&lt;Citation&gt;, streamingBlocks: MutableMap&lt;Int, ContentBlock&gt;, currentThinkingIndexRef: () -&gt; Int, setCurrentThinkingIndex: (Int) -&gt; Unit, onBlockChanged: suspend () -&gt; Unit )</ID>
-    <ID>CyclomaticComplexMethod:AnthropicClient.kt$AnthropicClient$private fun convertMessage(msg: Message): JsonElement</ID>
-    <ID>CyclomaticComplexMethod:AnthropicClient.kt$AnthropicClient$private fun generateToolDescription(name: String, argumentsJson: String): String</ID>
-    <ID>CyclomaticComplexMethod:Application.kt$@Suppress("TooGenericExceptionCaught") private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger)</ID>
-    <ID>CyclomaticComplexMethod:ClaudeProcessClient.kt$ClaudeProcessClient$suspend fun streamCompletion( fullPrompt: String, callback: suspend (stepType: String, content: String, isComplete: Boolean) -&gt; Unit, ): String</ID>
-    <ID>CyclomaticComplexMethod:CommandRouter.kt$CommandRouter$fun route( text: String, userId: String, groupId: String, currentAgentType: String?, ): RouteResult</ID>
-    <ID>CyclomaticComplexMethod:DirectModelAgent.kt$DirectModelAgent$private fun finalizeAgentResponse(content: String): FinalCitationResult</ID>
-    <ID>CyclomaticComplexMethod:DirectModelAgent.kt$DirectModelAgent$private fun normalizeCitedReferences(content: String): FinalCitationResult</ID>
-    <ID>CyclomaticComplexMethod:ExternalSearchService.kt$ExternalSearchService$suspend fun search(query: String, limit: Int = MAX_RESULTS): ExternalSearchResults</ID>
-    <ID>CyclomaticComplexMethod:FileRoutes.kt$@Suppress("TooGenericExceptionCaught") fun Route.fileRoutes()</ID>
-    <ID>CyclomaticComplexMethod:FileRoutes.kt$private fun detectImageContentTypeFromMagicBytes(file: File): String?</ID>
-    <ID>CyclomaticComplexMethod:HuaweiTokenVerifier.kt$HuaweiTokenVerifier$fun exchangeCodeForUserInfo( code: String, clientId: String, clientSecret: String, redirectUri: String ): HuaweiUserInfo?</ID>
     <ID>CyclomaticComplexMethod:Routing.kt$@Suppress("TooGenericExceptionCaught", "SwallowedException") fun Application.configureRouting()</ID>
-    <ID>CyclomaticComplexMethod:SearchDrivenAgent.kt$SearchDrivenAgent$private fun analyzeIntentOffline(userInput: String): IntentAnalysis</ID>
-    <ID>CyclomaticComplexMethod:WeaviateClient.kt$WeaviateClient$suspend fun indexDocument( document: IndexDocument, participants: List&lt;String&gt; ): Boolean</ID>
     <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$@Suppress("UnusedParameter") suspend fun handleVisionImageAndText( imageFile: java.io.File, base64Data: String, userText: String, downloadUrl: String, userId: String )</ID>
     <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "")</ID>
     <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$private suspend fun handleCombinedVisionAndText( pendingImg: PendingImageState, userText: String, userId: String )</ID>
@@ -36,17 +21,7 @@
     <ID>LargeClass:WeaviateClient.kt$WeaviateClient</ID>
     <ID>LargeClass:WebSocketConfig.kt$ChatServer</ID>
     <ID>LoopWithTooManyJumpStatements:AgentRuntime.kt$AgentRuntime$for</ID>
-    <ID>LoopWithTooManyJumpStatements:Application.kt$for</ID>
-    <ID>LoopWithTooManyJumpStatements:ChatHistoryManager.kt$ChatHistoryManager$for</ID>
-    <ID>LoopWithTooManyJumpStatements:DirectModelAgent.kt$DirectModelAgent$for</ID>
-    <ID>LoopWithTooManyJumpStatements:HuaweiTokenVerifier.kt$HuaweiTokenVerifier$for</ID>
     <ID>LoopWithTooManyJumpStatements:Routing.kt$for</ID>
-    <ID>NestedBlockDepth:AnthropicClient.kt$AnthropicClient$@Suppress("UnusedParameter") private suspend fun handleEvent( data: String, fullText: StringBuilder, pendingToolUses: MutableMap&lt;Int, PendingToolUse&gt;, completedToolCalls: MutableList&lt;ToolCall&gt;, collectedCitations: MutableList&lt;Citation&gt;, streamingBlocks: MutableMap&lt;Int, ContentBlock&gt;, currentThinkingIndexRef: () -&gt; Int, setCurrentThinkingIndex: (Int) -&gt; Unit, onBlockChanged: suspend () -&gt; Unit )</ID>
-    <ID>NestedBlockDepth:Application.kt$@Suppress("TooGenericExceptionCaught") private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger)</ID>
-    <ID>NestedBlockDepth:ExternalSearchService.kt$ExternalSearchService$suspend fun search(query: String, limit: Int = MAX_RESULTS): ExternalSearchResults</ID>
-    <ID>NestedBlockDepth:SearchDrivenAgent.kt$SearchDrivenAgent$private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
-    <ID>NestedBlockDepth:ToolPolicyManager.kt$ToolPolicyManager$fun validateFilePath(path: String, policy: ToolPolicy): Pair&lt;Boolean, String&gt;</ID>
-    <ID>NestedBlockDepth:ToolPolicyManager.kt$ToolPolicyManager$private fun loadConfigFromFile()</ID>
     <ID>NestedBlockDepth:WebSocketConfig.kt$ChatServer$private suspend fun processUrlsInMessage(message: Message)</ID>
     <ID>NestedBlockDepth:WebSocketConfig.kt$ChatServer$suspend fun broadcast(message: Message)</ID>
   </CurrentIssues>

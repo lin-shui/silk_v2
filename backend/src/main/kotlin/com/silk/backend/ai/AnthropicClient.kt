@@ -293,241 +293,322 @@ class AnthropicClient(
         val type = obj["type"]?.jsonPrimitive?.content ?: ""
 
         when (type) {
-            "content_block_start" -> {
-                val index = obj["index"]?.jsonPrimitive?.int ?: return
-                val block = obj["content_block"]?.jsonObject ?: return
-                val blockType = block["type"]?.jsonPrimitive?.content
-                logger.info("[Anthropic SSE] content_block_start index={}, type={}", index, blockType)
+            "content_block_start" -> handleContentBlockStart(
+                obj, fullText, pendingToolUses, collectedCitations,
+                streamingBlocks, setCurrentThinkingIndex, onBlockChanged
+            )
+            "content_block_delta" -> handleContentBlockDelta(
+                obj, fullText, pendingToolUses, streamingBlocks, onBlockChanged
+            )
+            "content_block_stop" -> handleContentBlockStop(
+                obj, pendingToolUses, completedToolCalls, streamingBlocks, onBlockChanged
+            )
+            "message_delta" -> handleMessageDelta(obj)
+        }
+    }
 
-                when (blockType) {
-                    "tool_use", "server_tool_use" -> {
-                        val id = block["id"]?.jsonPrimitive?.content ?: ""
-                        val name = block["name"]?.jsonPrimitive?.content ?: ""
-                        logger.info("[Anthropic] {}: id={}, name={}", blockType, id, name)
-                        // 服务端工具不加入 pendingToolUses（Anthropic 自行处理）
-                        if (blockType == "server_tool_use") {
-                            logger.info("[Anthropic] 服务端工具调用: {}", name)
-                        } else {
-                            pendingToolUses[index] = PendingToolUse(id = id, name = name, arguments = StringBuilder())
-                        }
-                        // 注入结构化 block（工具调用在 stream 中展示为 card）
-                        streamingBlocks[index] = ContentBlock(
-                            index = index, type = "tool_use",
-                            content = "", isComplete = false,
-                            toolName = name, toolId = id
-                        )
-                        onBlockChanged()
-                    }
-                    "text" -> {
-                        // 服务端 web_search 的引用元数据嵌入在 text content block 中
-                        streamingBlocks[index] = ContentBlock(
-                            index = index, type = "text",
-                            content = "", isComplete = false
-                        )
-                        val citationsArray = block["citations"]?.jsonArray
-                        if (citationsArray != null) {
-                            logger.info("[Anthropic] text block 发现 citations, count={}", citationsArray.size)
-                        }
-                        citationsArray?.forEach { citElem ->
-                            val cit = citElem.jsonObject
-                            collectedCitations.add(Citation(
-                                title = cit["title"]?.jsonPrimitive?.content ?: "",
-                                url = cit["url"]?.jsonPrimitive?.content ?: "",
-                                text = cit["text"]?.jsonPrimitive?.content ?: "",
-                            ))
-                        }
-                        // text block 可能初始就有内容（如引用嵌入的搜索结果片段）
-                        val initialText = block["text"]?.jsonPrimitive?.content ?: ""
-                        if (initialText.isNotEmpty()) {
-                            streamingBlocks[index] = streamingBlocks[index]!!.copy(content = initialText)
-                            fullText.append(initialText)
-                            onBlockChanged()
-                        }
-                    }
-                    "web_search_tool_result" -> {
-                        logger.info("[Anthropic] web_search_tool_result block keys: {}",
-                            block.keys.joinToString(", "))
-                        streamingBlocks[index] = ContentBlock(
-                            index = index, type = "tool_use",
-                            content = "", isComplete = false,
-                            toolName = "web_search", toolId = ""
-                        )
-                        val content = extractTextContent(block)
-                        if (content.isNotEmpty()) {
-                            streamingBlocks[index] = streamingBlocks[index]!!.copy(content = content)
-                            fullText.append(content)
-                            onBlockChanged()
-                        }
-                        // 优先从 citations/sources 字段提取引用
-                        val citationsArray = block["citations"]?.jsonArray
-                        if (citationsArray != null) {
-                            logger.info("[Anthropic] web_search_tool_result: citations={}", citationsArray.size)
-                            citationsArray.forEach { citElem ->
-                                val cit = citElem.jsonObject
-                                collectedCitations.add(Citation(
-                                    title = cit["title"]?.jsonPrimitive?.content ?: "",
-                                    url = cit["url"]?.jsonPrimitive?.content ?: "",
-                                    text = cit["text"]?.jsonPrimitive?.content ?: "",
-                                ))
-                            }
-                        } else {
-                            // DeepSeek 等代理：从 web_search_result 数组中提取 URL 作为引用
-                            val searchResults = block["content"]?.jsonArray
-                            if (searchResults != null) {
-                                var count = 0
-                                for (result in searchResults) {
-                                    val obj = try { result.jsonObject } catch (_: Exception) { null } ?: continue
-                                    val title = obj["title"]?.jsonPrimitive?.content ?: ""
-                                    val url = obj["url"]?.jsonPrimitive?.content ?: ""
-                                    if (url.isNotEmpty()) {
-                                        collectedCitations.add(Citation(
-                                            title = title.ifEmpty { "搜索结果 #${count + 1}" },
-                                            url = url,
-                                            text = title.ifEmpty { url }
-                                        ))
-                                        count++
-                                    }
-                                }
-                                logger.info("[Anthropic] web_search_tool_result: 从 content 提取 {} 条引用", count)
-                            }
-                        }
-                    }
-                    "thinking" -> {
-                        setCurrentThinkingIndex(index)
-                        val initial = block["thinking"]?.jsonPrimitive?.content ?: ""
-                        streamingBlocks[index] = ContentBlock(
-                            index = index, type = "thinking",
-                            content = initial, isComplete = false
-                        )
-                        // thinking 内容不加入 fullText（纯文本版不包含思考过程）
-                        onBlockChanged()
-                    }
-                    else -> {
-                        logger.warn("[Anthropic] 未知 content_block 类型: {}", blockType)
-                    }
-                }
+    @Suppress("UnusedParameter")
+    private suspend fun handleContentBlockStart(
+        obj: JsonObject,
+        fullText: StringBuilder,
+        pendingToolUses: MutableMap<Int, PendingToolUse>,
+        collectedCitations: MutableList<Citation>,
+        streamingBlocks: MutableMap<Int, ContentBlock>,
+        setCurrentThinkingIndex: (Int) -> Unit,
+        onBlockChanged: suspend () -> Unit
+    ) {
+        val index = obj["index"]?.jsonPrimitive?.int ?: return
+        val block = obj["content_block"]?.jsonObject ?: return
+        val blockType = block["type"]?.jsonPrimitive?.content
+        logger.info("[Anthropic SSE] content_block_start index={}, type={}", index, blockType)
+
+        when (blockType) {
+            "tool_use", "server_tool_use" ->
+                handleToolUseBlockStart(index, block, blockType, pendingToolUses, streamingBlocks, onBlockChanged)
+            "text" ->
+                handleTextBlockStart(index, block, fullText, collectedCitations, streamingBlocks, onBlockChanged)
+            "web_search_tool_result" ->
+                handleWebSearchResultBlockStart(index, block, fullText, collectedCitations, streamingBlocks, onBlockChanged)
+            "thinking" -> {
+                setCurrentThinkingIndex(index)
+                val initial = block["thinking"]?.jsonPrimitive?.content ?: ""
+                streamingBlocks[index] = ContentBlock(
+                    index = index, type = "thinking",
+                    content = initial, isComplete = false
+                )
+                // thinking 内容不加入 fullText（纯文本版不包含思考过程）
+                onBlockChanged()
             }
-
-            "content_block_delta" -> {
-                val index = obj["index"]?.jsonPrimitive?.int ?: return
-                val delta = obj["delta"]?.jsonObject ?: return
-                val deltaType = delta["type"]?.jsonPrimitive?.content
-
-                when (deltaType) {
-                    "text_delta" -> {
-                        val text = delta["text"]?.jsonPrimitive?.content ?: ""
-                        fullText.append(text)
-                        // 更新结构化 block
-                        val existing = streamingBlocks[index]
-                        if (existing != null && existing.type == "text") {
-                            streamingBlocks[index] = existing.copy(content = existing.content + text)
-                            onBlockChanged()
-                        }
-                    }
-                    "input_json_delta" -> {
-                        val partial = delta["partial_json"]?.jsonPrimitive?.content ?: ""
-                        pendingToolUses[index]?.arguments?.append(partial)
-                    }
-                    "thinking_delta" -> {
-                        val text = delta["thinking"]?.jsonPrimitive?.content ?: ""
-                        val existing = streamingBlocks[index]
-                        if (existing != null && existing.type == "thinking") {
-                            streamingBlocks[index] = existing.copy(content = existing.content + text)
-                            onBlockChanged()
-                        }
-                    }
-                    // web_search_tool_result 等块的 delta 可能含文本
-                    "content_delta" -> {
-                        val text = delta["text"]?.jsonPrimitive?.content ?: delta["content"]?.jsonPrimitive?.content ?: ""
-                        if (text.isNotEmpty()) {
-                            fullText.append(text)
-                            val existing = streamingBlocks[index]
-                            if (existing != null) {
-                                streamingBlocks[index] = existing.copy(content = existing.content + text)
-                                onBlockChanged()
-                            }
-                        }
-                    }
-                    else -> {
-                        // 尝试从任何 delta 中提取文本
-                        val text = delta["text"]?.jsonPrimitive?.content
-                            ?: delta["content"]?.jsonPrimitive?.content ?: ""
-                        if (text.isNotEmpty()) {
-                            logger.info("[Anthropic] 非标准 delta '{}' 含文本: {}...", deltaType, text.take(80))
-                            fullText.append(text)
-                        }
-                    }
-                }
-            }
-
-            "content_block_stop" -> {
-                val index = obj["index"]?.jsonPrimitive?.int ?: return
-
-                val pending = pendingToolUses.remove(index)
-                if (pending != null) {
-                    // web_search 是服务端工具，Anthropic 自行处理，我们无需响应
-                    if (pending.name == "web_search") {
-                        logger.info("[Anthropic] Claude 使用了 web_search")
-                        val existing = streamingBlocks[index]
-                        if (existing != null) {
-                            streamingBlocks[index] = existing.copy(isComplete = true)
-                            onBlockChanged()
-                        }
-                        return
-                    }
-
-                    val rawArgs = pending.arguments.toString().trim()
-                    // 修复/验证 JSON
-                    val validArgs = try {
-                        json.parseToJsonElement(rawArgs).toString()
-                    } catch (_: Exception) {
-                        // 尝试修复残缺 JSON
-                        val fixed = repairJsonArgs(rawArgs)
-                        if (fixed != null) json.parseToJsonElement(fixed).toString() else "{}"
-                    }
-
-                    // 从工具参数生成人类可读的描述（匹配 cc-connect 的显示效果）
-                    val toolSummary = generateToolDescription(pending.name, validArgs)
-
-                    // 标记 block 完成并设置描述内容，通知前端
-                    val existing = streamingBlocks[index]
-                    if (existing != null) {
-                        streamingBlocks[index] = existing.copy(
-                            isComplete = true,
-                            content = toolSummary
-                        )
-                        onBlockChanged()
-                    }
-
-                    completedToolCalls.add(
-                        ToolCall(
-                            id = pending.id,
-                            type = "function",
-                            function = ToolFunction(
-                                name = pending.name,
-                                arguments = validArgs
-                            )
-                        )
-                    )
-                } else {
-                    // 非 tool_use block（text/thinking），仅标记完成
-                    val existing = streamingBlocks[index]
-                    if (existing != null) {
-                        streamingBlocks[index] = existing.copy(isComplete = true)
-                        onBlockChanged()
-                    }
-                }
-            }
-
-            "message_delta" -> {
-                val usage = obj["usage"]?.jsonObject
-                if (usage != null) {
-                    val inputTokens = usage["input_tokens"]?.jsonPrimitive?.int ?: 0
-                    val outputTokens = usage["output_tokens"]?.jsonPrimitive?.int ?: 0
-                    logger.info("📊 [Anthropic] 用量: input=$inputTokens, output=$outputTokens")
-                }
+            else -> {
+                logger.warn("[Anthropic] 未知 content_block 类型: {}", blockType)
             }
         }
+    }
+
+    private suspend fun handleToolUseBlockStart(
+        index: Int,
+        block: JsonObject,
+        blockType: String,
+        pendingToolUses: MutableMap<Int, PendingToolUse>,
+        streamingBlocks: MutableMap<Int, ContentBlock>,
+        onBlockChanged: suspend () -> Unit
+    ) {
+        val id = block["id"]?.jsonPrimitive?.content ?: ""
+        val name = block["name"]?.jsonPrimitive?.content ?: ""
+        logger.info("[Anthropic] {}: id={}, name={}", blockType, id, name)
+        // 服务端工具不加入 pendingToolUses（Anthropic 自行处理）
+        if (blockType == "server_tool_use") {
+            logger.info("[Anthropic] 服务端工具调用: {}", name)
+        } else {
+            pendingToolUses[index] = PendingToolUse(id = id, name = name, arguments = StringBuilder())
+        }
+        // 注入结构化 block（工具调用在 stream 中展示为 card）
+        streamingBlocks[index] = ContentBlock(
+            index = index, type = "tool_use",
+            content = "", isComplete = false,
+            toolName = name, toolId = id
+        )
+        onBlockChanged()
+    }
+
+    private suspend fun handleTextBlockStart(
+        index: Int,
+        block: JsonObject,
+        fullText: StringBuilder,
+        collectedCitations: MutableList<Citation>,
+        streamingBlocks: MutableMap<Int, ContentBlock>,
+        onBlockChanged: suspend () -> Unit
+    ) {
+        // 服务端 web_search 的引用元数据嵌入在 text content block 中
+        streamingBlocks[index] = ContentBlock(
+            index = index, type = "text",
+            content = "", isComplete = false
+        )
+        val citationsArray = block["citations"]?.jsonArray
+        if (citationsArray != null) {
+            logger.info("[Anthropic] text block 发现 citations, count={}", citationsArray.size)
+        }
+        citationsArray?.forEach { citElem ->
+            collectedCitations.add(citationFromJson(citElem.jsonObject))
+        }
+        // text block 可能初始就有内容（如引用嵌入的搜索结果片段）
+        val initialText = block["text"]?.jsonPrimitive?.content ?: ""
+        if (initialText.isNotEmpty()) {
+            streamingBlocks[index] = streamingBlocks[index]!!.copy(content = initialText)
+            fullText.append(initialText)
+            onBlockChanged()
+        }
+    }
+
+    private suspend fun handleWebSearchResultBlockStart(
+        index: Int,
+        block: JsonObject,
+        fullText: StringBuilder,
+        collectedCitations: MutableList<Citation>,
+        streamingBlocks: MutableMap<Int, ContentBlock>,
+        onBlockChanged: suspend () -> Unit
+    ) {
+        logger.info("[Anthropic] web_search_tool_result block keys: {}",
+            block.keys.joinToString(", "))
+        streamingBlocks[index] = ContentBlock(
+            index = index, type = "tool_use",
+            content = "", isComplete = false,
+            toolName = "web_search", toolId = ""
+        )
+        val content = extractTextContent(block)
+        if (content.isNotEmpty()) {
+            streamingBlocks[index] = streamingBlocks[index]!!.copy(content = content)
+            fullText.append(content)
+            onBlockChanged()
+        }
+        collectWebSearchCitations(block, collectedCitations)
+    }
+
+    /** 从 web_search_tool_result block 提取引用（优先 citations 字段，否则从 content 数组提取）。 */
+    private fun collectWebSearchCitations(block: JsonObject, collectedCitations: MutableList<Citation>) {
+        // 优先从 citations/sources 字段提取引用
+        val citationsArray = block["citations"]?.jsonArray
+        if (citationsArray != null) {
+            logger.info("[Anthropic] web_search_tool_result: citations={}", citationsArray.size)
+            citationsArray.forEach { citElem ->
+                collectedCitations.add(citationFromJson(citElem.jsonObject))
+            }
+            return
+        }
+        // DeepSeek 等代理：从 web_search_result 数组中提取 URL 作为引用
+        val searchResults = block["content"]?.jsonArray ?: return
+        var count = 0
+        for (result in searchResults) {
+            val resultObj = try { result.jsonObject } catch (_: Exception) { null } ?: continue
+            val title = resultObj["title"]?.jsonPrimitive?.content ?: ""
+            val url = resultObj["url"]?.jsonPrimitive?.content ?: ""
+            if (url.isNotEmpty()) {
+                collectedCitations.add(Citation(
+                    title = title.ifEmpty { "搜索结果 #${count + 1}" },
+                    url = url,
+                    text = title.ifEmpty { url }
+                ))
+                count++
+            }
+        }
+        logger.info("[Anthropic] web_search_tool_result: 从 content 提取 {} 条引用", count)
+    }
+
+    /** 从 citation JSON 对象构造 Citation（title/url/text 缺失时为空串）。 */
+    private fun citationFromJson(cit: JsonObject): Citation = Citation(
+        title = cit["title"]?.jsonPrimitive?.content ?: "",
+        url = cit["url"]?.jsonPrimitive?.content ?: "",
+        text = cit["text"]?.jsonPrimitive?.content ?: "",
+    )
+
+    private suspend fun handleContentBlockDelta(
+        obj: JsonObject,
+        fullText: StringBuilder,
+        pendingToolUses: MutableMap<Int, PendingToolUse>,
+        streamingBlocks: MutableMap<Int, ContentBlock>,
+        onBlockChanged: suspend () -> Unit
+    ) {
+        val index = obj["index"]?.jsonPrimitive?.int ?: return
+        val delta = obj["delta"]?.jsonObject ?: return
+        val deltaType = delta["type"]?.jsonPrimitive?.content
+
+        when (deltaType) {
+            "text_delta" -> {
+                val text = delta["text"]?.jsonPrimitive?.content ?: ""
+                fullText.append(text)
+                // 更新结构化 block
+                appendToTypedBlock(index, "text", text, streamingBlocks, onBlockChanged)
+            }
+            "input_json_delta" -> {
+                val partial = delta["partial_json"]?.jsonPrimitive?.content ?: ""
+                pendingToolUses[index]?.arguments?.append(partial)
+            }
+            "thinking_delta" -> {
+                val text = delta["thinking"]?.jsonPrimitive?.content ?: ""
+                appendToTypedBlock(index, "thinking", text, streamingBlocks, onBlockChanged)
+            }
+            // web_search_tool_result 等块的 delta 可能含文本
+            "content_delta" ->
+                handleContentDelta(index, delta, fullText, streamingBlocks, onBlockChanged)
+            else ->
+                handleUnknownDelta(deltaType, delta, fullText)
+        }
+    }
+
+    /** 把 text 追加到 streamingBlocks[index] 上（仅当该 block 存在且类型匹配），并通知前端。 */
+    private suspend fun appendToTypedBlock(
+        index: Int,
+        expectedType: String,
+        text: String,
+        streamingBlocks: MutableMap<Int, ContentBlock>,
+        onBlockChanged: suspend () -> Unit
+    ) {
+        val existing = streamingBlocks[index]
+        if (existing != null && existing.type == expectedType) {
+            streamingBlocks[index] = existing.copy(content = existing.content + text)
+            onBlockChanged()
+        }
+    }
+
+    private suspend fun handleContentDelta(
+        index: Int,
+        delta: JsonObject,
+        fullText: StringBuilder,
+        streamingBlocks: MutableMap<Int, ContentBlock>,
+        onBlockChanged: suspend () -> Unit
+    ) {
+        val text = delta["text"]?.jsonPrimitive?.content ?: delta["content"]?.jsonPrimitive?.content ?: ""
+        if (text.isEmpty()) return
+        fullText.append(text)
+        val existing = streamingBlocks[index] ?: return
+        streamingBlocks[index] = existing.copy(content = existing.content + text)
+        onBlockChanged()
+    }
+
+    private fun handleUnknownDelta(deltaType: String?, delta: JsonObject, fullText: StringBuilder) {
+        // 尝试从任何 delta 中提取文本
+        val text = delta["text"]?.jsonPrimitive?.content
+            ?: delta["content"]?.jsonPrimitive?.content ?: ""
+        if (text.isNotEmpty()) {
+            logger.info("[Anthropic] 非标准 delta '{}' 含文本: {}...", deltaType, text.take(80))
+            fullText.append(text)
+        }
+    }
+
+    private suspend fun handleContentBlockStop(
+        obj: JsonObject,
+        pendingToolUses: MutableMap<Int, PendingToolUse>,
+        completedToolCalls: MutableList<ToolCall>,
+        streamingBlocks: MutableMap<Int, ContentBlock>,
+        onBlockChanged: suspend () -> Unit
+    ) {
+        val index = obj["index"]?.jsonPrimitive?.int ?: return
+
+        val pending = pendingToolUses.remove(index)
+        if (pending == null) {
+            // 非 tool_use block（text/thinking），仅标记完成
+            markBlockComplete(index, streamingBlocks, onBlockChanged)
+            return
+        }
+
+        // web_search 是服务端工具，Anthropic 自行处理，我们无需响应
+        if (pending.name == "web_search") {
+            logger.info("[Anthropic] Claude 使用了 web_search")
+            markBlockComplete(index, streamingBlocks, onBlockChanged)
+            return
+        }
+
+        val rawArgs = pending.arguments.toString().trim()
+        // 修复/验证 JSON
+        val validArgs = try {
+            json.parseToJsonElement(rawArgs).toString()
+        } catch (_: Exception) {
+            // 尝试修复残缺 JSON
+            val fixed = repairJsonArgs(rawArgs)
+            if (fixed != null) json.parseToJsonElement(fixed).toString() else "{}"
+        }
+
+        // 从工具参数生成人类可读的描述（匹配 cc-connect 的显示效果）
+        val toolSummary = generateToolDescription(pending.name, validArgs)
+
+        // 标记 block 完成并设置描述内容，通知前端
+        val existing = streamingBlocks[index]
+        if (existing != null) {
+            streamingBlocks[index] = existing.copy(
+                isComplete = true,
+                content = toolSummary
+            )
+            onBlockChanged()
+        }
+
+        completedToolCalls.add(
+            ToolCall(
+                id = pending.id,
+                type = "function",
+                function = ToolFunction(
+                    name = pending.name,
+                    arguments = validArgs
+                )
+            )
+        )
+    }
+
+    /** 标记 streamingBlocks[index] 为完成并通知前端（若该 block 存在）。 */
+    private suspend fun markBlockComplete(
+        index: Int,
+        streamingBlocks: MutableMap<Int, ContentBlock>,
+        onBlockChanged: suspend () -> Unit
+    ) {
+        val existing = streamingBlocks[index] ?: return
+        streamingBlocks[index] = existing.copy(isComplete = true)
+        onBlockChanged()
+    }
+
+    private fun handleMessageDelta(obj: JsonObject) {
+        val usage = obj["usage"]?.jsonObject ?: return
+        val inputTokens = usage["input_tokens"]?.jsonPrimitive?.int ?: 0
+        val outputTokens = usage["output_tokens"]?.jsonPrimitive?.int ?: 0
+        logger.info("📊 [Anthropic] 用量: input=$inputTokens, output=$outputTokens")
     }
 
     // ── 消息格式转换 ──────────────────────────────────────────────────────
@@ -537,86 +618,70 @@ class AnthropicClient(
      */
     private fun convertMessage(msg: Message): JsonElement {
         return when (msg.role) {
-            "user" -> {
-                // 区分普通 user 消息和 tool_result
-                if (msg.tool_call_id != null) {
-                    // 这是 tool_result 包装的 user 消息
-                    buildJsonObject {
-                        put("role", "user")
-                        put("content", buildJsonArray {
-                            add(buildJsonObject {
-                                put("type", "tool_result")
-                                put("tool_use_id", msg.tool_call_id)
-                                put("content", msg.content ?: "")
-                            })
-                        })
-                    }
-                } else {
-                    buildJsonObject {
-                        put("role", "user")
-                        put("content", msg.content ?: "")
-                    }
-                }
-            }
+            "user" -> convertUserMessage(msg)
+            "assistant" -> convertAssistantMessage(msg)
+            "tool" -> toolResultMessage(msg.tool_call_id ?: "", msg.content ?: "")
+            else -> simpleRoleMessage("user", msg.content ?: "") // fallback：user 角色
+        }
+    }
 
-            "assistant" -> {
-                if (msg.tool_calls != null && msg.tool_calls.isNotEmpty()) {
-                    // assistant 消息含 tool_use
-                    val contentBlocks = buildJsonArray {
-                        if (!msg.content.isNullOrBlank()) {
-                            add(buildJsonObject {
-                                put("type", "text")
-                                put("text", msg.content)
-                            })
-                        }
-                        for (tc in msg.tool_calls) {
-                            add(buildJsonObject {
-                                put("type", "tool_use")
-                                put("id", tc.id)
-                                put("name", tc.function.name)
-                                // arguments 是 JSON 字符串，需解析为对象
-                                val argsObj = try {
-                                    json.parseToJsonElement(tc.function.arguments)
-                                } catch (_: Exception) {
-                                    buildJsonObject { }
-                                }
-                                put("input", argsObj)
-                            })
-                        }
-                    }
-                    buildJsonObject {
-                        put("role", "assistant")
-                        put("content", contentBlocks)
-                    }
-                } else {
-                    buildJsonObject {
-                        put("role", "assistant")
-                        put("content", msg.content ?: "")
-                    }
-                }
-            }
+    /** 普通文本消息（role + 字符串 content）。 */
+    private fun simpleRoleMessage(role: String, content: String): JsonObject = buildJsonObject {
+        put("role", role)
+        put("content", content)
+    }
 
-            "tool" -> {
-                // tool 角色 → Anthropic 的 tool_result
-                buildJsonObject {
-                    put("role", "user")
-                    put("content", buildJsonArray {
-                        add(buildJsonObject {
-                            put("type", "tool_result")
-                            put("tool_use_id", msg.tool_call_id ?: "")
-                            put("content", msg.content ?: "")
-                        })
-                    })
-                }
-            }
+    /** Anthropic 的 tool_result（包装为 user 角色）。 */
+    private fun toolResultMessage(toolUseId: String, content: String): JsonObject = buildJsonObject {
+        put("role", "user")
+        put("content", buildJsonArray {
+            add(buildJsonObject {
+                put("type", "tool_result")
+                put("tool_use_id", toolUseId)
+                put("content", content)
+            })
+        })
+    }
 
-            else -> {
-                // fallback：user 角色
-                buildJsonObject {
-                    put("role", "user")
-                    put("content", msg.content ?: "")
-                }
+    private fun convertUserMessage(msg: Message): JsonObject {
+        // 区分普通 user 消息和 tool_result
+        return if (msg.tool_call_id != null) {
+            toolResultMessage(msg.tool_call_id, msg.content ?: "")
+        } else {
+            simpleRoleMessage("user", msg.content ?: "")
+        }
+    }
+
+    private fun convertAssistantMessage(msg: Message): JsonObject {
+        if (msg.tool_calls.isNullOrEmpty()) {
+            return simpleRoleMessage("assistant", msg.content ?: "")
+        }
+        // assistant 消息含 tool_use
+        val contentBlocks = buildJsonArray {
+            if (!msg.content.isNullOrBlank()) {
+                add(buildJsonObject {
+                    put("type", "text")
+                    put("text", msg.content)
+                })
             }
+            for (tc in msg.tool_calls) {
+                add(buildJsonObject {
+                    put("type", "tool_use")
+                    put("id", tc.id)
+                    put("name", tc.function.name)
+                    // arguments 是 JSON 字符串，需解析为对象
+                    val argsObj = try {
+                        json.parseToJsonElement(tc.function.arguments)
+                    } catch (_: Exception) {
+                        buildJsonObject { }
+                    }
+                    put("input", argsObj)
+                })
+            }
+        }
+        return buildJsonObject {
+            put("role", "assistant")
+            put("content", contentBlocks)
         }
     }
 
@@ -684,46 +749,26 @@ class AnthropicClient(
 
         return when {
             // bash / execute_command: 显示命令内容
-            name.equals("bash", true) || name.equals("execute_command", true) || name.equals("ExecuteCommand", true) -> {
-                val cmd = argsObj["command"]?.jsonPrimitive?.content ?: ""
-                if (cmd.length > 80) cmd.take(80) + "..." else cmd
-            }
+            isAnyName(name, "bash", "execute_command", "ExecuteCommand") ->
+                truncateWithEllipsis(argsObj["command"]?.jsonPrimitive?.content ?: "", 80)
 
             // Read / Write / Edit: 显示文件路径的最后部分
-            name.equals("Read", true) || name.equals("Write", true) || name.equals("Edit", true) -> {
-                val path = argsObj["file_path"]?.jsonPrimitive?.content
-                    ?: argsObj["path"]?.jsonPrimitive?.content ?: ""
-                if (path.isNotEmpty()) {
-                    val idx = path.lastIndexOf("/")
-                    if (idx >= 0) path.substring(idx + 1) else path
-                } else ""
-            }
+            isAnyName(name, "Read", "Write", "Edit") ->
+                fileNameFromArgs(argsObj)
 
-            // grep: 显示搜索模式
-            name.equals("grep", true) -> {
-                val pattern = argsObj["pattern"]?.jsonPrimitive?.content ?: ""
-                if (pattern.length > 60) pattern.take(60) + "..." else pattern
-            }
-
-            // glob: 显示文件匹配模式
-            name.equals("glob", true) -> {
-                val pattern = argsObj["pattern"]?.jsonPrimitive?.content ?: ""
-                if (pattern.length > 60) pattern.take(60) + "..." else pattern
-            }
+            // grep / glob: 显示搜索/匹配模式
+            isAnyName(name, "grep", "glob") ->
+                truncateWithEllipsis(argsObj["pattern"]?.jsonPrimitive?.content ?: "", 60)
 
             // web_search: 显示搜索查询
-            name.equals("web_search", true) -> {
+            name.equals("web_search", true) ->
                 argsObj["query"]?.jsonPrimitive?.content ?: ""
-            }
 
             // 其它工具：尝试提取第一个有意义的字段值
-            else -> {
-                val firstValue = argsObj.values.firstOrNull()?.jsonPrimitive?.content
-                if (firstValue != null && firstValue.length <= 80) firstValue
-                else firstValue?.take(80)?.let { "$it..." } ?: ""
-            }
+            else -> firstFieldValue(argsObj)
         }
     }
+
 
     /** 从各种类型的 content 字段中提取文本 */
     private fun extractTextContent(block: JsonObject): String {
@@ -745,4 +790,30 @@ class AnthropicClient(
 
     internal fun convertMessageForTest(msg: Message): JsonElement =
         convertMessage(msg)
+}
+
+// ── 工具描述纯函数辅助（无实例状态，置于文件作用域以控制类体积）──────────────
+
+/** name 是否（忽略大小写）等于给定候选名之一。 */
+private fun isAnyName(name: String, vararg candidates: String): Boolean =
+    candidates.any { name.equals(it, true) }
+
+/** 超过 max 长度时截断并追加省略号，否则原样返回（空串原样返回）。 */
+private fun truncateWithEllipsis(value: String, max: Int): String =
+    if (value.length > max) value.take(max) + "..." else value
+
+/** 从 file_path/path 取文件名（最后一段）。 */
+private fun fileNameFromArgs(argsObj: JsonObject): String {
+    val path = argsObj["file_path"]?.jsonPrimitive?.content
+        ?: argsObj["path"]?.jsonPrimitive?.content ?: ""
+    if (path.isEmpty()) return ""
+    val idx = path.lastIndexOf("/")
+    return if (idx >= 0) path.substring(idx + 1) else path
+}
+
+/** 提取第一个字段值，过长则截断追加省略号；无值返回空串。 */
+private fun firstFieldValue(argsObj: JsonObject): String {
+    val firstValue = argsObj.values.firstOrNull()?.jsonPrimitive?.content
+    return if (firstValue != null && firstValue.length <= 80) firstValue
+    else firstValue?.take(80)?.let { "$it..." } ?: ""
 }

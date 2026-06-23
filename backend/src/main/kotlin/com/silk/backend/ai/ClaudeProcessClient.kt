@@ -4,6 +4,7 @@ import com.silk.backend.EnvLoader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
@@ -118,22 +119,7 @@ class ClaudeProcessClient(
             callId, groupId, fullPrompt.length, ptyChatPath)
 
         return withContext(Dispatchers.IO) {
-            val env = mutableMapOf("PYTHONUNBUFFERED" to "1")
-            // Inject claude env vars from ~/.claude/settings.json (claude -p doesn't auto-read them)
-            env.putAll(claudeEnvVars)
-            // Defense-in-depth: inject strict settings path so pty_chat.py
-            // always enforces --settings regardless of wrapper bypass.
-            val strictSettingsFile = java.io.File(
-                System.getProperty("user.home"), ".claude/settings-strict.json"
-            )
-            if (strictSettingsFile.exists()) {
-                env["CLAUDE_STRICT_SETTINGS"] = strictSettingsFile.absolutePath
-            }
-            // 注入代理环境变量，确保 claude CLI 子进程能访问 Anthropic API
-            listOf("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy",
-                   "CLAUDE_HTTPS_PROXY", "CLAUDE_HTTP_PROXY", "NO_PROXY", "no_proxy").forEach { key ->
-                (System.getenv(key) ?: EnvLoader.get(key))?.takeIf { it.isNotBlank() }?.let { env[key] = it }
-            }
+            val env = buildClaudeProcessEnv()
             val processBuilder = ProcessBuilder(cmd)
                 .directory(File(absWorkspaceDir))
                 .redirectErrorStream(false)
@@ -162,56 +148,9 @@ class ClaudeProcessClient(
                     }
 
                     try {
-                        val output = StringBuilder()
-                        var lastSentLength = 0
-                        var overflow = ByteArray(0)
-
-                        val buf = ByteArray(256)
-
-                        while (true) {
-                            val bytesRead = process.inputStream.read(buf)
-                            if (bytesRead == -1) break
-                            ensureActive()
-
-                            val merged = if (overflow.isNotEmpty()) {
-                                ByteArray(overflow.size + bytesRead).apply {
-                                    overflow.copyInto(this)
-                                    buf.copyInto(this, overflow.size, 0, bytesRead)
-                                }
-                            } else {
-                                buf.copyOfRange(0, bytesRead)
-                            }
-
-                            val decoded = merged.decodeToString()
-                            overflow = captureTrailingPartial(decoded, merged)
-
-                            val cleaned = decoded
-                                .replace("\r", "")
-                                .replace(Regex("\\e\\[[\\d;?<>]*[a-zA-Z]"), "")
-                                .replace(Regex("\\e\\][^\\e\\x07]*[\\e\\x07]"), "")
-                                .replace(Regex("\\e[()][a-zA-Z]"), "")
-
-                            if (cleaned.isNotBlank()) {
-                                output.append(cleaned)
-
-                                if (output.length - lastSentLength >= sendThreshold) {
-                                    val delta = output.substring(lastSentLength)
-                                    lastSentLength = output.length
-                                    callback("streaming_incremental", delta, false)
-                                }
-                            }
-                        }
-
-                        // 发送剩余文本
-                        if (output.length > lastSentLength) {
-                            val remaining = output.substring(lastSentLength)
-                            if (remaining.isNotBlank()) {
-                                callback("streaming_incremental", remaining, false)
-                            }
-                        }
+                        val result = streamProcessOutput(process, callback)
 
                         val exitCode = process.waitFor()
-                        val result = output.toString()
 
                         if (exitCode == 0) {
                             logger.info("[ClaudeProcessClient-{}] 完成: groupId={}, chars={}", callId, groupId, result.length)
@@ -237,6 +176,89 @@ class ClaudeProcessClient(
                 promptFile.delete()
             }
         }
+    }
+
+    /**
+     * 构建 claude PTY 子进程的环境变量（与原内联逻辑等价）。
+     */
+    private fun buildClaudeProcessEnv(): MutableMap<String, String> {
+        val env = mutableMapOf("PYTHONUNBUFFERED" to "1")
+        // Inject claude env vars from ~/.claude/settings.json (claude -p doesn't auto-read them)
+        env.putAll(claudeEnvVars)
+        // Defense-in-depth: inject strict settings path so pty_chat.py
+        // always enforces --settings regardless of wrapper bypass.
+        val strictSettingsFile = java.io.File(
+            System.getProperty("user.home"), ".claude/settings-strict.json"
+        )
+        if (strictSettingsFile.exists()) {
+            env["CLAUDE_STRICT_SETTINGS"] = strictSettingsFile.absolutePath
+        }
+        // 注入代理环境变量，确保 claude CLI 子进程能访问 Anthropic API
+        listOf("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy",
+               "CLAUDE_HTTPS_PROXY", "CLAUDE_HTTP_PROXY", "NO_PROXY", "no_proxy").forEach { key ->
+            (System.getenv(key) ?: EnvLoader.get(key))?.takeIf { it.isNotBlank() }?.let { env[key] = it }
+        }
+        return env
+    }
+
+    /**
+     * 读取子进程 stdout，按阈值流式回调增量文本，返回累计的完整文本。
+     * 与原内联读取循环等价：清理 ANSI/回车，处理跨 read 边界的不完整 UTF-8 尾字节，
+     * 累计长度达到 sendThreshold 时回调增量，结束后回调剩余文本。
+     */
+    private suspend fun streamProcessOutput(
+        process: Process,
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+    ): String {
+        val output = StringBuilder()
+        var lastSentLength = 0
+        var overflow = ByteArray(0)
+
+        val buf = ByteArray(256)
+
+        while (true) {
+            val bytesRead = process.inputStream.read(buf)
+            if (bytesRead == -1) break
+            currentCoroutineContext().ensureActive()
+
+            val merged = if (overflow.isNotEmpty()) {
+                ByteArray(overflow.size + bytesRead).apply {
+                    overflow.copyInto(this)
+                    buf.copyInto(this, overflow.size, 0, bytesRead)
+                }
+            } else {
+                buf.copyOfRange(0, bytesRead)
+            }
+
+            val decoded = merged.decodeToString()
+            overflow = captureTrailingPartial(decoded, merged)
+
+            val cleaned = decoded
+                .replace("\r", "")
+                .replace(Regex("\\e\\[[\\d;?<>]*[a-zA-Z]"), "")
+                .replace(Regex("\\e\\][^\\e\\x07]*[\\e\\x07]"), "")
+                .replace(Regex("\\e[()][a-zA-Z]"), "")
+
+            if (cleaned.isNotBlank()) {
+                output.append(cleaned)
+
+                if (output.length - lastSentLength >= sendThreshold) {
+                    val delta = output.substring(lastSentLength)
+                    lastSentLength = output.length
+                    callback("streaming_incremental", delta, false)
+                }
+            }
+        }
+
+        // 发送剩余文本
+        if (output.length > lastSentLength) {
+            val remaining = output.substring(lastSentLength)
+            if (remaining.isNotBlank()) {
+                callback("streaming_incremental", remaining, false)
+            }
+        }
+
+        return output.toString()
     }
 
     /**

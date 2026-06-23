@@ -527,7 +527,30 @@ class DirectModelAgent(
     private fun finalizeAgentResponse(content: String): FinalCitationResult {
         // 从正文末尾提取 "Sources:" / "参考来源:" 节，避免前端重复渲染
         val (cleanedContent, sourcesRefs) = extractSourcesSection(content)
-        // 注册来源节中的 URL 引用（去重）
+        // 注册来源节中的 URL 引用（去重），并在缺 URL 引用时回退提取正文 Markdown 链接
+        registerSourcesAndFallbackRefs(sourcesRefs, cleanedContent)
+
+        val hasRefs = currentResponseReferences.isNotEmpty() && currentResponseReferences.any { it.url != null || it.path != null }
+        if (!hasRefs) {
+            return finalizeWithoutMetadataRefs(cleanedContent)
+        }
+        val withMarkers = ensureCitationMarkers(cleanedContent)
+        val result = normalizeCitedReferences(withMarkers)
+        // references 有 URL → 剥离标记，前端用引用列表渲染可点击链接
+        return FinalCitationResult(
+            stripCitationMarkers(result.content),
+            result.references
+        )
+    }
+
+    /**
+     * 注册来源节中的 URL 引用（按 url+title 去重）；若当前没有任何带 URL/path 的引用，
+     * 再回退从正文 Markdown 链接补充引用。与原内联两段循环等价。
+     */
+    private fun registerSourcesAndFallbackRefs(
+        sourcesRefs: List<com.silk.backend.models.MessageReference>,
+        cleanedContent: String,
+    ) {
         for (ref in sourcesRefs) {
             if (currentResponseReferences.none { it.url == ref.url && it.title == ref.title }) {
                 currentResponseReferences.add(ref)
@@ -554,33 +577,28 @@ class DirectModelAgent(
                 }
             }
         }
+    }
 
-        val hasRefs = currentResponseReferences.isNotEmpty() && currentResponseReferences.any { it.url != null || it.path != null }
-        if (!hasRefs) {
-            val hasCitationMarkers = Regex("\\[citation:\\d+\\]").containsMatchIn(cleanedContent)
-            if (hasCitationMarkers) {
-                val result = normalizeCitedReferences(cleanedContent)
-                // 无 URL → 保留标记在正文中（前端渲染为可读的引用编号），引用列表不丢
-                //（stripCitationMarkers 仅在 references 有 URL 时才剥离，保证点击链接着陆页干净）
-                if (result.references.any { it.url != null || it.path != null }) {
-                    return FinalCitationResult(
-                        stripCitationMarkers(result.content),
-                        result.references
-                    )
-                }
-                return FinalCitationResult(result.content, result.references)
+    /**
+     * 当没有任何带 URL/path 元数据的引用时的最终化处理（原 !hasRefs 分支）。
+     */
+    private fun finalizeWithoutMetadataRefs(cleanedContent: String): FinalCitationResult {
+        val hasCitationMarkers = Regex("\\[citation:\\d+\\]").containsMatchIn(cleanedContent)
+        if (hasCitationMarkers) {
+            val result = normalizeCitedReferences(cleanedContent)
+            // 无 URL → 保留标记在正文中（前端渲染为可读的引用编号），引用列表不丢
+            //（stripCitationMarkers 仅在 references 有 URL 时才剥离，保证点击链接着陆页干净）
+            if (result.references.any { it.url != null || it.path != null }) {
+                return FinalCitationResult(
+                    stripCitationMarkers(result.content),
+                    result.references
+                )
             }
-            // 无任何引用标记 → 清理 available 标记后返回
-            val stripped = cleanedContent.replace(Regex("\\[(citation|available):\\d+\\]"), "")
-            return FinalCitationResult(stripped, currentResponseReferences.toList())
+            return FinalCitationResult(result.content, result.references)
         }
-        val withMarkers = ensureCitationMarkers(cleanedContent)
-        val result = normalizeCitedReferences(withMarkers)
-        // references 有 URL → 剥离标记，前端用引用列表渲染可点击链接
-        return FinalCitationResult(
-            stripCitationMarkers(result.content),
-            result.references
-        )
+        // 无任何引用标记 → 清理 available 标记后返回
+        val stripped = cleanedContent.replace(Regex("\\[(citation|available):\\d+\\]"), "")
+        return FinalCitationResult(stripped, currentResponseReferences.toList())
     }
 
     private fun stripCitationMarkers(content: String): String {
@@ -612,51 +630,71 @@ class DirectModelAgent(
             currentResponseReferences.find { it.kind == kind && it.index == idx }
         }
 
-        val reindexMap = mutableMapOf<String, Int>()
-        val newRefs = mutableListOf<com.silk.backend.models.MessageReference>()
-        var citationCounter = 0
-        var availableCounter = 0
-
+        val reindexer = CitationReindexer()
         // 先处理有元数据的引用
-        for (ref in citedRefs) {
-            val newIndex = if (ref.kind == "citation") {
-                ++citationCounter
-            } else {
-                ++availableCounter
-            }
-            reindexMap["${ref.kind}:${ref.index}"] = newIndex
-            newRefs.add(ref.copy(index = newIndex))
-        }
-
+        reindexer.addMetadataRefs(citedRefs)
         // 对文本中有标记但无对应元数据的（如 Claude CLI 输出的 [citation:N]），创建占位引用
-        for (key in citedKeys) {
-            if (reindexMap.containsKey(key)) continue
-            val kind = key.substringBefore(":")
-            val idx = key.substringAfter(":").toIntOrNull() ?: continue
-            val newIndex = if (kind == "citation" || kind == "available") {
-                if (kind == "citation") ++citationCounter else ++availableCounter
-            } else continue
-            reindexMap[key] = newIndex
-            newRefs.add(
-                com.silk.backend.models.MessageReference(
-                    kind = kind,
-                    index = newIndex,
-                    title = "${if (kind == "citation") "来源" else "资料"} $idx",
-                    snippet = null,
-                    url = null,
-                    path = null
-                )
-            )
-        }
+        reindexer.addPlaceholderRefs(citedKeys)
 
         val newContent = citedPattern.replace(content) { match ->
             val kind = match.groupValues[1]
             val oldIdx = match.groupValues[2].toInt()
-            val newIdx = reindexMap["$kind:$oldIdx"] ?: oldIdx
+            val newIdx = reindexer.reindexMap["$kind:$oldIdx"] ?: oldIdx
             "[$kind:$newIdx]"
         }
 
-        return FinalCitationResult(newContent, newRefs)
+        return FinalCitationResult(newContent, reindexer.newRefs)
+    }
+
+    /**
+     * 引用重新编号的状态机：把有元数据的引用与占位引用按 citation/available 各自连续编号。
+     * 拆分自原 normalizeCitedReferences 的两个内联循环，行为等价。
+     */
+    private class CitationReindexer {
+        val reindexMap = mutableMapOf<String, Int>()
+        val newRefs = mutableListOf<com.silk.backend.models.MessageReference>()
+        private var citationCounter = 0
+        private var availableCounter = 0
+
+        private fun nextIndex(kind: String): Int =
+            if (kind == "citation") ++citationCounter else ++availableCounter
+
+        /** 处理有元数据的引用（原第一个循环）。 */
+        fun addMetadataRefs(citedRefs: List<com.silk.backend.models.MessageReference>) {
+            for (ref in citedRefs) {
+                val newIndex = nextIndex(ref.kind)
+                reindexMap["${ref.kind}:${ref.index}"] = newIndex
+                newRefs.add(ref.copy(index = newIndex))
+            }
+        }
+
+        /** 为有标记但无元数据的 key 创建占位引用（原第二个循环）。 */
+        fun addPlaceholderRefs(citedKeys: List<String>) {
+            for (key in citedKeys) {
+                placeholderRefFor(key)?.let { newRefs.add(it) }
+            }
+        }
+
+        /**
+         * 为单个 key 生成占位引用，无需创建时返回 null（已存在 / idx 不可解析 / kind 未知）。
+         * 与原循环体的三处跳过等价。
+         */
+        private fun placeholderRefFor(key: String): com.silk.backend.models.MessageReference? {
+            if (reindexMap.containsKey(key)) return null
+            val kind = key.substringBefore(":")
+            val idx = key.substringAfter(":").toIntOrNull() ?: return null
+            if (kind != "citation" && kind != "available") return null
+            val newIndex = nextIndex(kind)
+            reindexMap[key] = newIndex
+            return com.silk.backend.models.MessageReference(
+                kind = kind,
+                index = newIndex,
+                title = "${if (kind == "citation") "来源" else "资料"} $idx",
+                snippet = null,
+                url = null,
+                path = null
+            )
+        }
     }
 
     // ── 测试辅助 ──────────────────────────────────────────────────────

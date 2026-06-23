@@ -519,6 +519,52 @@ class WeaviateClient(
         return result.toString().replace(Regex("\\s+"), " ").trim()
     }
     
+    /** 转义 JSON 字符串特殊字符。 */
+    private fun escapeJsonString(s: String): String = s
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+
+    /**
+     * 构建索引文档的 Weaviate JSON 请求体（与原内联 buildString 等价）。
+     */
+    private fun buildIndexDocumentJson(document: IndexDocument, participants: List<String>): String {
+        // 清理文本内容，优化搜索
+        val cleanedContent = cleanTextForSearch(document.content)
+        val cleanedTitle = document.title?.let { cleanTextForSearch(it) }
+        val cleanedSummary = document.summary?.let { cleanTextForSearch(it) }
+
+        // 构建 JSON 字符串（避免 Map 序列化问题）
+        val participantsJson = participants.joinToString(",") { "\"$it\"" }
+        val tagsJson = document.tags.joinToString(",") { "\"$it\"" }
+
+        return buildString {
+            append("{")
+            append("\"class\":\"SilkContext\",")
+            append("\"properties\":{")
+            append("\"content\":\"${escapeJsonString(cleanedContent)}\",")
+            cleanedTitle?.let { append("\"title\":\"${escapeJsonString(it)}\",") }
+            cleanedSummary?.let { append("\"summary\":\"${escapeJsonString(it)}\",") }
+            append("\"sourceType\":\"${document.sourceType}\",")
+            document.fileType?.let { append("\"fileType\":\"$it\",") }
+            append("\"sessionId\":\"${document.sessionId}\",")
+            append("\"participants\":[$participantsJson],")
+            document.authorId?.let { append("\"authorId\":\"$it\",") }
+            document.authorName?.let { append("\"authorName\":\"${escapeJsonString(it)}\",") }
+            document.filePath?.let { append("\"filePath\":\"${escapeJsonString(it)}\",") }
+            document.sourceUrl?.let { append("\"sourceUrl\":\"$it\",") }
+            document.timestamp?.let { append("\"timestamp\":\"$it\",") }
+            document.messageId?.let { append("\"messageId\":\"${it}\",") }
+            if (document.tags.isNotEmpty()) { append("\"tags\":[$tagsJson],") }
+            append("\"chunkIndex\":${document.chunkIndex},")
+            append("\"totalChunks\":${document.totalChunks},")
+            append("\"importance\":${document.importance}")
+            append("}}")
+        }
+    }
+
     /**
      * 索引文档 (带用户隔离)
      */
@@ -528,48 +574,9 @@ class WeaviateClient(
     ): Boolean = withContext(Dispatchers.IO) {
         try {
             logger.debug("📝 [Weaviate] 索引文档: {} (session: {})", document.title, document.sessionId)
-            
-            // 清理文本内容，优化搜索
-            val cleanedContent = cleanTextForSearch(document.content)
-            val cleanedTitle = document.title?.let { cleanTextForSearch(it) }
-            val cleanedSummary = document.summary?.let { cleanTextForSearch(it) }
-            
-            // 构建 JSON 字符串（避免 Map 序列化问题）
-            val participantsJson = participants.joinToString(",") { "\"$it\"" }
-            val tagsJson = document.tags.joinToString(",") { "\"$it\"" }
-            
-            // 转义 JSON 特殊字符的辅助函数
-            fun escapeJson(s: String): String = s
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t")
-            
-            val jsonBody = buildString {
-                append("{")
-                append("\"class\":\"SilkContext\",")
-                append("\"properties\":{")
-                append("\"content\":\"${escapeJson(cleanedContent)}\",")
-                cleanedTitle?.let { append("\"title\":\"${escapeJson(it)}\",") }
-                cleanedSummary?.let { append("\"summary\":\"${escapeJson(it)}\",") }
-                append("\"sourceType\":\"${document.sourceType}\",")
-                document.fileType?.let { append("\"fileType\":\"$it\",") }
-                append("\"sessionId\":\"${document.sessionId}\",")
-                append("\"participants\":[$participantsJson],")
-                document.authorId?.let { append("\"authorId\":\"$it\",") }
-                document.authorName?.let { append("\"authorName\":\"${escapeJson(it)}\",") }
-                document.filePath?.let { append("\"filePath\":\"${escapeJson(it)}\",") }
-                document.sourceUrl?.let { append("\"sourceUrl\":\"$it\",") }
-                document.timestamp?.let { append("\"timestamp\":\"$it\",") }
-                document.messageId?.let { append("\"messageId\":\"${it}\",") }
-                if (document.tags.isNotEmpty()) { append("\"tags\":[$tagsJson],") }
-                append("\"chunkIndex\":${document.chunkIndex},")
-                append("\"totalChunks\":${document.totalChunks},")
-                append("\"importance\":${document.importance}")
-                append("}}")
-            }
-            
+
+            val jsonBody = buildIndexDocumentJson(document, participants)
+
             logger.debug("📝 [Weaviate] JSON Body: {}...", jsonBody.take(200))
             
             val response = httpClient.post("$baseUrl/v1/objects") {
