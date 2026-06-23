@@ -137,9 +137,42 @@ private val trustedDirManager = TrustedDirManager()
 private val knowledgeBaseManager: KnowledgeBaseManager
     get() = KnowledgeBaseManager()
 private val kbRouteJson = Json { ignoreUnknownKeys = true }
+private const val KB_AUTHENTICATED_USER_ID_HEADER = "X-Silk-Authenticated-User-Id"
+
+private data class KbCallerResolution(
+    val userId: String?,
+    val mismatch: Boolean = false,
+)
 
 private fun sanitizeFileName(input: String): String =
     input.replace(Regex("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]"), "_").take(100)
+
+private fun resolveKbCallerUserId(call: ApplicationCall, fallbackUserId: String?): KbCallerResolution {
+    val authenticatedUserId = call.request.headers[KB_AUTHENTICATED_USER_ID_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
+    val requestUserId = fallbackUserId?.trim()?.takeIf { it.isNotEmpty() }
+    return when {
+        authenticatedUserId != null && requestUserId != null && authenticatedUserId != requestUserId ->
+            KbCallerResolution(userId = authenticatedUserId, mismatch = true)
+        authenticatedUserId != null -> KbCallerResolution(userId = authenticatedUserId)
+        else -> KbCallerResolution(userId = requestUserId)
+    }
+}
+
+private suspend fun resolveKbCallerUserIdOrRespond(
+    call: ApplicationCall,
+    fallbackUserId: String?,
+): String? {
+    val resolution = resolveKbCallerUserId(call, fallbackUserId)
+    if (resolution.mismatch) {
+        call.respondText(
+            """{"success":false,"message":"Authenticated user mismatch"}""",
+            ContentType.Application.Json,
+            HttpStatusCode.Forbidden,
+        )
+        return null
+    }
+    return resolution.userId
+}
 
 private fun <T> Result<T>.rethrowRoutingCancellation(): Result<T> =
     onFailure { error ->
@@ -2918,7 +2951,7 @@ private fun Route.registerApiKbTopicsGetRoute() {
     // ==================== Knowledge Base API ====================
 
     get("/api/kb/topics") {
-        val userId = call.request.queryParameters["userId"]
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
         if (userId.isNullOrBlank()) {
             call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@get
@@ -2936,7 +2969,7 @@ private fun Route.registerApiKbTopicsPostRoute() {
     post("/api/kb/topics") {
         val body = call.receiveText()
         val req = kbRouteJson.decodeFromString<JsonObject>(body)
-        val userId = req["userId"]?.jsonPrimitive?.content
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
         val name = req["name"]?.jsonPrimitive?.content
         if (userId.isNullOrBlank() || name.isNullOrBlank()) {
             call.respondText("""{"success":false,"message":"Missing userId or name"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
@@ -2984,7 +3017,7 @@ private fun Route.registerApiKbTopicsTopicIdPutRoute() {
         val topicId = call.parameters["topicId"] ?: ""
         val body = call.receiveText()
         val req = kbRouteJson.decodeFromString<JsonObject>(body)
-        val userId = req["userId"]?.jsonPrimitive?.content
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
         if (userId.isNullOrBlank()) {
             call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@put
@@ -3016,7 +3049,7 @@ private fun Route.registerApiKbTopicsTopicIdDeleteRoute() {
 
     delete("/api/kb/topics/{topicId}") {
         val topicId = call.parameters["topicId"] ?: ""
-        val userId = call.request.queryParameters["userId"]
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
         if (userId.isNullOrBlank()) {
             call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@delete
@@ -3034,7 +3067,7 @@ private fun Route.registerApiKbEntriesGetRoute() {
 
     get("/api/kb/entries") {
         val topicId = call.request.queryParameters["topicId"]
-        val userId = call.request.queryParameters["userId"]
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
         if (topicId.isNullOrBlank() || userId.isNullOrBlank()) {
             call.respondText("""{"success":false,"message":"Missing topicId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@get
@@ -3051,7 +3084,7 @@ private fun Route.registerApiKbEntriesEntryIdGetRoute() {
 
     get("/api/kb/entries/{entryId}") {
         val entryId = call.parameters["entryId"] ?: ""
-        val userId = call.request.queryParameters["userId"]
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
         if (entryId.isBlank() || userId.isNullOrBlank()) {
             call.respondText("""{"success":false,"message":"Missing entryId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@get
@@ -3073,7 +3106,7 @@ private fun Route.registerApiKbEntriesPostRoute() {
     post("/api/kb/entries") {
         val body = call.receiveText()
         val req = kbRouteJson.decodeFromString<JsonObject>(body)
-        val userId = req["userId"]?.jsonPrimitive?.content
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
         val topicId = req["topicId"]?.jsonPrimitive?.content
         val title = req["title"]?.jsonPrimitive?.content
         if (userId.isNullOrBlank() || topicId.isNullOrBlank() || title.isNullOrBlank()) {
@@ -3104,7 +3137,7 @@ private fun Route.registerApiKbCapturesPostRoute() {
     post("/api/kb/captures") {
         val body = call.receiveText()
         val req = kbRouteJson.decodeFromString<JsonObject>(body)
-        val userId = req["userId"]?.jsonPrimitive?.contentOrNull
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.contentOrNull)
         val topicId = req["topicId"]?.jsonPrimitive?.contentOrNull
         val title = req["title"]?.jsonPrimitive?.contentOrNull?.trim()
         val content = req["content"]?.jsonPrimitive?.contentOrNull
@@ -3112,6 +3145,7 @@ private fun Route.registerApiKbCapturesPostRoute() {
             runCatching { tagsEl.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull } }.getOrNull()
         } ?: emptyList()
         val source = parseKbEntrySource(req)
+        val requestedStatus = parseKbEntryStatus(req)
 
         if (isMissingKbCaptureFields(userId, topicId, title, content)) {
             call.respondText("""{"success":false,"message":"Missing required capture fields"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
@@ -3121,10 +3155,18 @@ private fun Route.registerApiKbCapturesPostRoute() {
             call.respondText("""{"success":false,"message":"Invalid capture source"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@post
         }
+        if (req["status"] != null && requestedStatus == null) {
+            call.respondText("""{"success":false,"message":"Invalid capture status"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
         val validUserId = userId!!
         val validTopicId = topicId!!
         val validTitle = title!!
         val validContent = content!!
+        val status = when (source.sourceType) {
+            KBSourceType.CHAT, KBSourceType.WORKFLOW -> KBEntryStatus.CANDIDATE
+            else -> requestedStatus ?: KBEntryStatus.CANDIDATE
+        }
 
         val entry = knowledgeBaseManager.createEntry(
             topicId = validTopicId,
@@ -3132,7 +3174,7 @@ private fun Route.registerApiKbCapturesPostRoute() {
             content = validContent,
             tags = tags,
             userId = validUserId,
-            status = KBEntryStatus.CANDIDATE,
+            status = status,
             source = source,
         )
         if (entry == null) {
@@ -3166,7 +3208,7 @@ private fun Route.registerApiKbEntriesEntryIdPutRoute() {
         val entryId = call.parameters["entryId"] ?: ""
         val body = call.receiveText()
         val req = kbRouteJson.decodeFromString<JsonObject>(body)
-        val userId = req["userId"]?.jsonPrimitive?.content
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
         if (userId.isNullOrBlank()) {
             call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@put
@@ -3201,7 +3243,7 @@ private fun Route.registerApiKbEntriesEntryIdDeleteRoute() {
 
     delete("/api/kb/entries/{entryId}") {
         val entryId = call.parameters["entryId"] ?: ""
-        val userId = call.request.queryParameters["userId"]
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
         if (userId.isNullOrBlank()) {
             call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@delete
@@ -3219,7 +3261,7 @@ private fun Route.registerApiKbEntriesEntryIdExportGetRoute() {
 
     get("/api/kb/entries/{entryId}/export") {
         val entryId = call.parameters["entryId"] ?: ""
-        val userId = call.request.queryParameters["userId"]
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
         if (userId.isNullOrBlank()) {
             call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@get
@@ -3261,6 +3303,11 @@ private fun parseKbAccessPolicy(req: JsonObject): KBAccessPolicy? {
 private fun parseKbEntrySource(req: JsonObject): KBEntrySource? {
     val source = req["source"] ?: return null
     return runCatching { kbRouteJson.decodeFromJsonElement(KBEntrySource.serializer(), source) }.getOrNull()
+}
+
+private fun parseKbEntryStatus(req: JsonObject): KBEntryStatus? {
+    val raw = req["status"]?.jsonPrimitive?.contentOrNull ?: return null
+    return runCatching { KBEntryStatus.valueOf(raw.trim().uppercase()) }.getOrNull()
 }
 
 private fun Route.registerChatWebSocketRoute() {
