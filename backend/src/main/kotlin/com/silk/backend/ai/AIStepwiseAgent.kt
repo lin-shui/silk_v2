@@ -31,6 +31,7 @@ import java.time.Duration
  * AI 逐步执行代理
  * 类似于 MoxiTreat 的 DeepSeekDiagnosis.stepwise_diagnosis
  */
+@Suppress("TooGenericExceptionCaught", "TooGenericExceptionThrown", "SwallowedException")
 class AIStepwiseAgent(
     private val apiKey: String = AIConfig.API_KEY,
     private val sessionName: String = "default_room"

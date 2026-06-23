@@ -37,6 +37,7 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Agent 框架对外门面。
  */
+@Suppress("TooGenericExceptionCaught")
 object AgentRuntime {
 
     private val logger = LoggerFactory.getLogger(AgentRuntime::class.java)

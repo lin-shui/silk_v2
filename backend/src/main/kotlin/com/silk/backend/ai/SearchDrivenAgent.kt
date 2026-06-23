@@ -36,6 +36,7 @@ import java.time.Duration
  * 4. 分析用户意图和情绪
  * 5. 基于搜索结果生成回复
  */
+@Suppress("TooGenericExceptionCaught", "TooGenericExceptionThrown", "SwallowedException")
 class SearchDrivenAgent(
     private val apiKey: String = AIConfig.API_KEY,
     private val sessionId: String = "default",

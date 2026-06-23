@@ -14,6 +14,7 @@ import java.util.UUID
 /**
  * 联系人数据访问层
  */
+@Suppress("TooGenericExceptionCaught")
 object ContactRepository {
     private val logger = LoggerFactory.getLogger(ContactRepository::class.java)
     

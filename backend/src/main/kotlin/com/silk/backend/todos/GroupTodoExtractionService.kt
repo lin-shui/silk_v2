@@ -30,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap
  * - 多路径查找 `chat_history`（兼容从仓库根目录或 backend 子目录启动进程）
  * - LLM 抽取 + 启发式兜底（二选一，不叠加）；每次成功刷新用新列表**替换**未完成项（保留已完成），避免一事多条堆叠
  */
+@Suppress("TooGenericExceptionCaught")
 object GroupTodoExtractionService {
     data class ExtractionDiagnostics(
         val userId: String,

@@ -15,6 +15,7 @@ import java.io.File
  * - SANDBOXED: 在沙箱/限制环境下执行（如路径限制）
  * - DISABLED: 禁用，不允许执行
  */
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 object ToolPolicyManager {
     private val logger = LoggerFactory.getLogger(ToolPolicyManager::class.java)
     

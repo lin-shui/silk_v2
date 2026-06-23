@@ -15,6 +15,7 @@ import java.time.format.DateTimeFormatter
  * 
  * 简化版本：直接调用后台模型，让模型自动使用其 tool 能力（搜索文件、浏览器等）
  */
+@Suppress("TooGenericExceptionCaught")
 class SilkAgent {
     companion object {
         const val AGENT_ID = "silk_ai_agent"

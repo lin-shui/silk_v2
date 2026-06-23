@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit
  *
  * 微信 OAuth 文档：https://developers.weixin.qq.com/doc/oplatform/Mobile_App/WeChat_Login/Development_Guide.html
  */
+@Suppress("TooGenericExceptionCaught")
 object WechatAuthService {
     private val logger = LoggerFactory.getLogger(WechatAuthService::class.java)
 

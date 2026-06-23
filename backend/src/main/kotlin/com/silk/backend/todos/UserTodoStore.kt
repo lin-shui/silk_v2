@@ -21,6 +21,7 @@ private data class UserTodoFilePayload(
 /**
  * 按用户持久化待办（chat_history/user_todos/{userId}.json）
  */
+@Suppress("TooGenericExceptionCaught")
 object UserTodoStore {
     private val json = Json {
         ignoreUnknownKeys = true

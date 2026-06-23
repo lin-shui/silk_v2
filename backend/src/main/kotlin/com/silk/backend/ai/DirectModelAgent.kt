@@ -19,6 +19,7 @@ import java.io.File
  * 3. 调用 claude -p（流式）
  * 4. 流式返回回复
  */
+@Suppress("TooGenericExceptionCaught")
 class DirectModelAgent(
     private val sessionId: String = "default"
 ) {

@@ -12,6 +12,7 @@ import java.time.LocalDateTime
 /**
  * 用户设置数据访问层
  */
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 object UserSettingsRepository {
 
     private val secureRandom = SecureRandom()

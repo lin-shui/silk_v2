@@ -23,6 +23,7 @@ import java.util.concurrent.atomic.AtomicLong
  * ACP (Zed Agent Client Protocol) JSON-RPC 2.0 client。
  * 与具体 agent 类型无关，只负责消息收发与请求/响应配对。
  */
+@Suppress("TooGenericExceptionCaught")
 class AcpClient(
     private val transport: AcpTransport,
     scope: CoroutineScope,

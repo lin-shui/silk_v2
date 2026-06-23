@@ -96,6 +96,7 @@ data class PendingImageState(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+@Suppress("TooGenericExceptionCaught")
 class ChatServer(
     private val sessionName: String = "default_room",
     private val isSilkChatWorkflow: Boolean = false
@@ -155,7 +156,7 @@ class ChatServer(
                         timestamp = entry.timestamp,
                         type = try {
                             MessageType.valueOf(entry.messageType)
-                        } catch (e: Exception) {
+                        } catch (@Suppress("SwallowedException") e: Exception) {
                             MessageType.TEXT
                         },
                         references = entry.references,
@@ -678,9 +679,9 @@ class ChatServer(
                         try {
                             handleVisionImageAndText(savedFile, base64Data, userText.trim(), downloadUrl, message.userId)
                         } catch (e: CancellationException) {
-                            logger.info("🛑 Vision 生成已被取消")
+                            logger.info("🛑 Vision 生成已被取消: {}", e.message)
                         } catch (e: Exception) {
-                            logger.error("❌ Vision 处理异常: {}", e.message)
+                            logger.error("❌ Vision 处理异常: {}", e.message, e)
                         } finally {
                             activeAiJob = null
                         }
@@ -745,7 +746,7 @@ class ChatServer(
                             sendAgentStatus("🎭 角色已设置")
                             generateIntelligentResponse("请简短地自我介绍（1-2句话）", message.userId)
                         } catch (e: CancellationException) {
-                            logger.info("🛑 角色确认生成已被取消")
+                            logger.info("🛑 角色确认生成已被取消: {}", e.message)
                         } finally {
                             activeAiJob = null
                         }
@@ -764,9 +765,9 @@ class ChatServer(
                                 sendMessageToAllSessions(buildSilkTextMessage("正在搜索历史会话...", isTransient = true))
                                 generateHistoryRecallResponse(recallQuery, message.userId)
                             } catch (e: CancellationException) {
-                                logger.info("[/recall] 已被用户取消")
+                                logger.info("[/recall] 已被用户取消: {}", e.message)
                             } catch (e: Exception) {
-                                logger.error("[/recall] 异常: {}", e.message)
+                                logger.error("[/recall] 异常: {}", e.message, e)
                                 sendAgentStatus("历史查询失败: ${e.message}")
                             } finally {
                                 activeAiJob = null
@@ -797,9 +798,9 @@ class ChatServer(
                                 sendAgentStatus("🤖 正在结合图片分析您的问题...")
                                 handleCombinedVisionAndText(pendingImg, silkContent, message.userId)
                             } catch (e: CancellationException) {
-                                logger.info("🛑 Vision+文字生成已被用户取消")
+                                logger.info("🛑 Vision+文字生成已被用户取消: {}", e.message)
                             } catch (e: Exception) {
-                                logger.error("❌ Vision+文字生成异常: {}", e.message)
+                                logger.error("❌ Vision+文字生成异常: {}", e.message, e)
                                 e.printStackTrace()
                             } finally {
                                 activeAiJob = null
@@ -811,9 +812,9 @@ class ChatServer(
                             try {
                                 generateIntelligentResponse(silkContent, message.userId)
                             } catch (e: CancellationException) {
-                                logger.info("🛑 AI 生成已被用户取消")
+                                logger.info("🛑 AI 生成已被用户取消: {}", e.message)
                             } catch (e: Exception) {
-                                logger.error("❌ 生成AI回答异常: {}", e.message)
+                                logger.error("❌ 生成AI回答异常: {}", e.message, e)
                                 e.printStackTrace()
                             } finally {
                                 activeAiJob = null

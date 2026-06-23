@@ -43,6 +43,7 @@ fun agentTriggerName(agentType: String): String {
     }
 }
 
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 object CcConnectRegistry {
 
     private val logger = LoggerFactory.getLogger(CcConnectRegistry::class.java)

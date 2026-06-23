@@ -22,6 +22,7 @@ import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.Instant
 
+@Suppress("TooGenericExceptionCaught")
 fun main() {
     // 优先加载 .env（避免用 gradlew 直接启动时读不到配置）
     EnvLoader.load()
@@ -74,6 +75,7 @@ fun main() {
  * 使用游标文件（.weaviate_cursor）记录每个会话最后索引的消息 ID，
  * 避免重复索引已处理过的消息。
  */
+@Suppress("TooGenericExceptionCaught")
 private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger) {
     val weaviate = WeaviateClient.getInstance()
     if (!runBlocking { weaviate.isReady() }) {
@@ -195,6 +197,7 @@ private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger) {
 /**
  * 同步所有 SQL 群组到 Weaviate SilkSession（在 deploy 或重启后恢复上下文关联）
  */
+@Suppress("TooGenericExceptionCaught")
 private fun syncGroupsToWeaviate(logger: org.slf4j.Logger) {
     val weaviate = WeaviateClient.getInstance()
     if (!runBlocking { weaviate.isReady() }) {

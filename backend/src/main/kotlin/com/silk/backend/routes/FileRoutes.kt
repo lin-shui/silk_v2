@@ -111,6 +111,7 @@ data class AppVersionResponse(
 /**
  * 文件上传/下载路由
  */
+@Suppress("TooGenericExceptionCaught")
 fun Route.fileRoutes() {
 
     route("/api/files") {

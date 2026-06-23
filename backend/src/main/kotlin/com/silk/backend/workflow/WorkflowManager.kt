@@ -15,6 +15,7 @@ data class WorkflowStore(
     val workflows: MutableList<Workflow> = mutableListOf()
 )
 
+@Suppress("TooGenericExceptionCaught")
 class WorkflowManager(
     private val baseDir: String =
         System.getProperty("silk.workflowDir")?.trim()?.takeIf { it.isNotEmpty() }

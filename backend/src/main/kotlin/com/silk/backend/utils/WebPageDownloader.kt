@@ -30,6 +30,7 @@ import org.slf4j.LoggerFactory
  * 1. Playwright 无头浏览器（支持 JavaScript 渲染，可绕过部分反爬虫）
  * 2. 简单 HTTP 请求（作为降级方案）
  */
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 object WebPageDownloader {
     
     private val logger = LoggerFactory.getLogger(WebPageDownloader::class.java)

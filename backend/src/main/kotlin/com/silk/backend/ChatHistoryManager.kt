@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
  * 2. 损坏文件备份：解析失败时自动备份损坏文件，防止数据丢失
  * 3. 不自动覆盖：加载失败时不创建新会话，避免覆盖历史数据
  */
+@Suppress("TooGenericExceptionCaught")
 class ChatHistoryManager(
     private val baseDir: String =
         System.getProperty("silk.chatHistoryDir")

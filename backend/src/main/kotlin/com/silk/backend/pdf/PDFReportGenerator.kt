@@ -28,6 +28,7 @@ import java.time.format.DateTimeFormatter
  * 使用 iText 库生成格式化的诊断报告 PDF
  * 支持中文字体
  */
+@Suppress("TooGenericExceptionCaught", "TooGenericExceptionThrown", "SwallowedException")
 class PDFReportGenerator {
 
     private val logger = LoggerFactory.getLogger(PDFReportGenerator::class.java)

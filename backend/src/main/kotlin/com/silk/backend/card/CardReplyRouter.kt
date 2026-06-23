@@ -12,6 +12,7 @@ interface CardReplyHandler {
     )
 }
 
+@Suppress("TooGenericExceptionCaught")
 object CardReplyRouter {
 
     private val logger = LoggerFactory.getLogger(CardReplyRouter::class.java)

@@ -13,6 +13,7 @@ import java.util.UUID
 /**
  * 用户数据访问层
  */
+@Suppress("TooGenericExceptionCaught")
 object UserRepository {
     private val logger = LoggerFactory.getLogger(UserRepository::class.java)
     

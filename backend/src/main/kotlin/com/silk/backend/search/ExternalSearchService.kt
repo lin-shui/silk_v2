@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory
  * 2. SerpAPI (Google 结果，需付费)
  * 3. DuckDuckGo (免费但国内可能不通)
  */
+@Suppress("TooGenericExceptionCaught")
 class ExternalSearchService {
     private val logger = LoggerFactory.getLogger(ExternalSearchService::class.java)
     

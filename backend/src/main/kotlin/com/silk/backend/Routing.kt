@@ -259,6 +259,7 @@ suspend fun broadcastFileMessage(
     }
 }
 
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 fun Application.configureRouting() {
     // AgentRuntime 持久化 wiring：cdSync 成功 / prompt 完成时把 workingDir + cliSessionId 写回
     // workflow_store.json，让重启后能 seed 恢复对话。复用 Workflow.sessionId 字段存 cliSessionId。

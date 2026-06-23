@@ -20,6 +20,7 @@ data class TrustedDirRecord(
     val trustedAt: Long,
 )
 
+@Suppress("TooGenericExceptionCaught")
 class TrustedDirManager(
     private val baseDir: String =
         System.getProperty("silk.workflowDir")?.trim()?.takeIf { it.isNotEmpty() }

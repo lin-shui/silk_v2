@@ -13,6 +13,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
+@Suppress("TooGenericExceptionThrown")
 class AcpClientTest {
 
     private val json = Json { ignoreUnknownKeys = true }

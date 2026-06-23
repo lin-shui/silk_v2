@@ -21,13 +21,13 @@
     <ID>CyclomaticComplexMethod:AnthropicClient.kt$AnthropicClient$@Suppress("UnusedParameter") private suspend fun handleEvent( data: String, fullText: StringBuilder, pendingToolUses: MutableMap&lt;Int, PendingToolUse&gt;, completedToolCalls: MutableList&lt;ToolCall&gt;, collectedCitations: MutableList&lt;Citation&gt;, streamingBlocks: MutableMap&lt;Int, ContentBlock&gt;, currentThinkingIndexRef: () -&gt; Int, setCurrentThinkingIndex: (Int) -&gt; Unit, onBlockChanged: suspend () -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:AnthropicClient.kt$AnthropicClient$private fun convertMessage(msg: Message): JsonElement</ID>
     <ID>CyclomaticComplexMethod:AnthropicClient.kt$AnthropicClient$private fun generateToolDescription(name: String, argumentsJson: String): String</ID>
-    <ID>CyclomaticComplexMethod:Application.kt$private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger)</ID>
+    <ID>CyclomaticComplexMethod:Application.kt$@Suppress("TooGenericExceptionCaught") private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger)</ID>
     <ID>CyclomaticComplexMethod:ClaudeProcessClient.kt$ClaudeProcessClient$suspend fun streamCompletion( fullPrompt: String, callback: suspend (stepType: String, content: String, isComplete: Boolean) -&gt; Unit, ): String</ID>
     <ID>CyclomaticComplexMethod:CommandRouter.kt$CommandRouter$fun route( text: String, userId: String, groupId: String, currentAgentType: String?, ): RouteResult</ID>
     <ID>CyclomaticComplexMethod:DirectModelAgent.kt$DirectModelAgent$private fun finalizeAgentResponse(content: String): FinalCitationResult</ID>
     <ID>CyclomaticComplexMethod:DirectModelAgent.kt$DirectModelAgent$private fun normalizeCitedReferences(content: String): FinalCitationResult</ID>
     <ID>CyclomaticComplexMethod:ExternalSearchService.kt$ExternalSearchService$suspend fun search(query: String, limit: Int = MAX_RESULTS): ExternalSearchResults</ID>
-    <ID>CyclomaticComplexMethod:FileRoutes.kt$fun Route.fileRoutes()</ID>
+    <ID>CyclomaticComplexMethod:FileRoutes.kt$@Suppress("TooGenericExceptionCaught") fun Route.fileRoutes()</ID>
     <ID>CyclomaticComplexMethod:FileRoutes.kt$private fun detectImageContentTypeFromMagicBytes(file: File): String?</ID>
     <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun dedupeDrafts(list: List&lt;ExtractedTodoDraft&gt;): List&lt;ExtractedTodoDraft&gt;</ID>
     <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun extractRecurringTemplateDrafts(slices: List&lt;GroupSlice&gt;): Pair&lt;List&lt;ExtractedTodoDraft&gt;, List&lt;String&gt;&gt;</ID>
@@ -37,7 +37,7 @@
     <ID>CyclomaticComplexMethod:GroupTodoExtractionService.kt$GroupTodoExtractionService$suspend fun refreshTodosForUser(userId: String)</ID>
     <ID>CyclomaticComplexMethod:HuaweiTokenVerifier.kt$HuaweiTokenVerifier$fun exchangeCodeForUserInfo( code: String, clientId: String, clientSecret: String, redirectUri: String ): HuaweiUserInfo?</ID>
     <ID>CyclomaticComplexMethod:PDFReportGenerator.kt$PDFReportGenerator$private fun extractDiagnosisSummary(diagnosisResult: AIStepwiseAgent.DiagnosisResult): String</ID>
-    <ID>CyclomaticComplexMethod:Routing.kt$fun Application.configureRouting()</ID>
+    <ID>CyclomaticComplexMethod:Routing.kt$@Suppress("TooGenericExceptionCaught", "SwallowedException") fun Application.configureRouting()</ID>
     <ID>CyclomaticComplexMethod:SearchDrivenAgent.kt$SearchDrivenAgent$private fun analyzeIntentOffline(userInput: String): IntentAnalysis</ID>
     <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$@Suppress("UnusedParameter") private fun normalizeActionDetailForKey(actionType: String?, detail: String?): String?</ID>
     <ID>CyclomaticComplexMethod:UserTodoStore.kt$UserTodoStore$fun updateItem( userId: String, itemId: String, done: Boolean? = null, title: String? = null, actionType: String? = null, actionDetail: String? = null, executedAt: Long? = null, reminderId: Long? = null, clearReminderId: Boolean = false, taskKind: String? = null, repeatRule: String? = null, repeatAnchor: String? = null, activeFrom: Long? = null, activeTo: Long? = null, templateId: String? = null, lifecycleState: String? = null, closedAt: Long? = null, lastEvidenceAt: Long? = null, explicitIntent: Boolean? = null, dateBucket: String? = null, reopenCount: Int? = null ): Boolean</ID>
@@ -82,7 +82,7 @@
     <ID>MayBeConst:ExternalSearchService.kt$ExternalSearchService.Companion$val WIKIPEDIA_EN_API_URL: String = "https://en.wikipedia.org/w/api.php"</ID>
     <ID>NestedBlockDepth:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun generateQuickResponse( prompt: String, callback: suspend (content: String, isComplete: Boolean) -&gt; Unit )</ID>
     <ID>NestedBlockDepth:AnthropicClient.kt$AnthropicClient$@Suppress("UnusedParameter") private suspend fun handleEvent( data: String, fullText: StringBuilder, pendingToolUses: MutableMap&lt;Int, PendingToolUse&gt;, completedToolCalls: MutableList&lt;ToolCall&gt;, collectedCitations: MutableList&lt;Citation&gt;, streamingBlocks: MutableMap&lt;Int, ContentBlock&gt;, currentThinkingIndexRef: () -&gt; Int, setCurrentThinkingIndex: (Int) -&gt; Unit, onBlockChanged: suspend () -&gt; Unit )</ID>
-    <ID>NestedBlockDepth:Application.kt$private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger)</ID>
+    <ID>NestedBlockDepth:Application.kt$@Suppress("TooGenericExceptionCaught") private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger)</ID>
     <ID>NestedBlockDepth:ExternalSearchService.kt$ExternalSearchService$suspend fun search(query: String, limit: Int = MAX_RESULTS): ExternalSearchResults</ID>
     <ID>NestedBlockDepth:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun buildTranscriptString(slices: List&lt;GroupSlice&gt;): String</ID>
     <ID>NestedBlockDepth:GroupTodoExtractionService.kt$GroupTodoExtractionService$private fun extractRecurringTemplateDrafts(slices: List&lt;GroupSlice&gt;): Pair&lt;List&lt;ExtractedTodoDraft&gt;, List&lt;String&gt;&gt;</ID>
@@ -97,70 +97,7 @@
     <ID>PrintStackTrace:ChatHistoryBackupManager.kt$ChatHistoryBackupManager$e</ID>
     <ID>PrintStackTrace:WeaviateClient.kt$WeaviateClient$e</ID>
     <ID>PrintStackTrace:WebSocketConfig.kt$ChatServer$e</ID>
-    <ID>SwallowedException:AIStepwiseAgent.kt$AIStepwiseAgent$e: Exception</ID>
-    <ID>SwallowedException:AsrRoutes.kt$e: IllegalArgumentException</ID>
-    <ID>SwallowedException:CcConnectRegistry.kt$CcConnectRegistry$e: ClosedSendChannelException</ID>
-    <ID>SwallowedException:ChatHistoryBackupManager.kt$ChatHistoryBackupManager$e: Exception</ID>
-    <ID>SwallowedException:ImagePipeline.kt$ImagePipeline$e: Exception</ID>
-    <ID>SwallowedException:PDFReportGenerator.kt$PDFReportGenerator$e: Exception</ID>
-    <ID>SwallowedException:PdfPipeline.kt$PdfPipeline$e: Exception</ID>
-    <ID>SwallowedException:Routing.kt$e: Exception</ID>
-    <ID>SwallowedException:Routing.kt$e: kotlinx.coroutines.CancellationException</ID>
-    <ID>SwallowedException:SearchDrivenAgent.kt$SearchDrivenAgent$e: Exception</ID>
-    <ID>SwallowedException:ToolPolicyManager.kt$ToolPolicyManager$e: Exception</ID>
-    <ID>SwallowedException:UserSettingsRepository.kt$UserSettingsRepository$e: Exception</ID>
-    <ID>SwallowedException:WebPageDownloader.kt$WebPageDownloader$e: Exception</ID>
-    <ID>SwallowedException:WebSocketConfig.kt$ChatServer$e: CancellationException</ID>
-    <ID>SwallowedException:WebSocketConfig.kt$ChatServer$e: Exception</ID>
     <ID>ThrowsCount:AIStepwiseAgent.kt$AIStepwiseAgent$private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
-    <ID>TooGenericExceptionCaught:AIStepwiseAgent.kt$AIStepwiseAgent$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:AcpClient.kt$AcpClient$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:AgentRuntime.kt$AgentRuntime$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:AgentRuntime.kt$AgentRuntime.&lt;no name provided&gt;$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:AnthropicClient.kt$AnthropicClient$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:Application.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:AsrRoutes.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:CardReplyRouter.kt$CardReplyRouter$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:CcConnectRegistry.kt$CcConnectRegistry$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:ChatHistoryBackupManager.kt$ChatHistoryBackupManager$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:ChatHistoryManager.kt$ChatHistoryManager$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:ClaudeProcessClient.kt$ClaudeProcessClient$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:ContactRepository.kt$ContactRepository$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:DirectModelAgent.kt$DirectModelAgent$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:EnvLoader.kt$EnvLoader$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:ExternalSearchService.kt$ExternalSearchService$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:FilePreprocessor.kt$FilePreprocessor$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:FileRegistry.kt$FileRegistry$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:FileRoutes.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:GroupRepository.kt$GroupRepository$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:GroupTodoExtractionService.kt$GroupTodoExtractionService$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:HuaweiTokenVerifier.kt$HuaweiTokenVerifier$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:HuaweiTokenVerifier.kt$HuaweiTokenVerifier$ex: Exception</ID>
-    <ID>TooGenericExceptionCaught:ImagePipeline.kt$ImagePipeline$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:PDFReportGenerator.kt$PDFReportGenerator$closeEx: Exception</ID>
-    <ID>TooGenericExceptionCaught:PDFReportGenerator.kt$PDFReportGenerator$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:PdfPipeline.kt$PdfPipeline$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:Routing.kt$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:SearchDrivenAgent.kt$SearchDrivenAgent$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:SilkAgent.kt$SilkAgent$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:ToolPolicyManager.kt$ToolPolicyManager$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:TrustedDirManager.kt$TrustedDirManager$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:UserRepository.kt$UserRepository$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:UserSettingsRepository.kt$UserSettingsRepository$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:UserTodoRefreshAsyncManager.kt$UserTodoRefreshAsyncManager$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:UserTodoStore.kt$UserTodoStore$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:WeaviateClient.kt$WeaviateClient$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:WebPageDownloader.kt$WebPageDownloader$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:WebSocketConfig.kt$ChatServer$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:WebSocketConfig.kt$ChatServer$ex: Exception</ID>
-    <ID>TooGenericExceptionCaught:WechatAuthService.kt$WechatAuthService$e: Exception</ID>
-    <ID>TooGenericExceptionCaught:WorkflowManager.kt$WorkflowManager$e: Exception</ID>
-    <ID>TooGenericExceptionThrown:AIStepwiseAgent.kt$AIStepwiseAgent$throw Exception("API 调用失败：${response.statusCode()} - ${response.body()}")</ID>
-    <ID>TooGenericExceptionThrown:AIStepwiseAgent.kt$AIStepwiseAgent$throw Exception("API 调用失败：${response.statusCode()}")</ID>
-    <ID>TooGenericExceptionThrown:AcpClientTest.kt$AcpClientTest$throw RuntimeException("boom")</ID>
-    <ID>TooGenericExceptionThrown:AnthropicClient.kt$AnthropicClient$throw Exception("Anthropic API 调用失败: ${response.statusCode()}")</ID>
-    <ID>TooGenericExceptionThrown:PDFReportGenerator.kt$PDFReportGenerator$throw RuntimeException("PDF 生成失败：${e.message}", e)</ID>
-    <ID>TooGenericExceptionThrown:SearchDrivenAgent.kt$SearchDrivenAgent$throw Exception("API 调用失败：${response.statusCode()}")</ID>
     <ID>UseCheckOrError:AIConfig.kt$AIConfig$throw IllegalStateException("请在项目根目录 .env 中配置 ANTHROPIC_API_BASE_URL")</ID>
     <ID>UseCheckOrError:AIConfig.kt$AIConfig$throw IllegalStateException("请在项目根目录 .env 中配置 API_BASE_URL")</ID>
     <ID>UseCheckOrError:AIConfig.kt$AIConfig$throw IllegalStateException("请在项目根目录 .env 中配置 WEAVIATE_URL")</ID>

@@ -20,6 +20,7 @@ data class PreprocessConfig(
     val enabled: Boolean = AIConfig.FILE_PREPROCESS_ENABLED
 )
 
+@Suppress("TooGenericExceptionCaught")
 object FilePreprocessor {
 
     private val logger = LoggerFactory.getLogger(FilePreprocessor::class.java)

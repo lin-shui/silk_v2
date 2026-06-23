@@ -45,6 +45,7 @@ data class PreprocessingState(
     val error: String? = null
 )
 
+@Suppress("TooGenericExceptionCaught")
 object FileRegistry {
 
     private const val REGISTRY_FILE = "file_registry.json"

@@ -52,6 +52,7 @@ import org.slf4j.LoggerFactory
  * )
  * ```
  */
+@Suppress("TooGenericExceptionCaught")
 class WeaviateClient(
     private val baseUrl: String = AIConfig.requireWeaviateUrl()
 ) {

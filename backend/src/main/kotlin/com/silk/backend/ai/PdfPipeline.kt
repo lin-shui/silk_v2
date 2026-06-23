@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory
 import java.io.File
 import javax.imageio.ImageIO
 
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 object PdfPipeline {
 
     private val logger = LoggerFactory.getLogger(PdfPipeline::class.java)

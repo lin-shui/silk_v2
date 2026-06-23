@@ -33,6 +33,7 @@ import kotlin.coroutines.coroutineContext
  * 输入/输出复用 DirectModelAgent 内部的 Message / ToolCall / Tool 格式，
  * 由本类在边界处做格式转换，上游无需感知 Anthropic 协议细节。
  */
+@Suppress("TooGenericExceptionCaught", "TooGenericExceptionThrown")
 class AnthropicClient(
     private val apiKey: String = AIConfig.ANTHROPIC_API_KEY,
     private val model: String = AIConfig.ANTHROPIC_MODEL,

@@ -25,6 +25,7 @@ import java.time.Duration
 import java.util.Base64
 import javax.imageio.ImageIO
 
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 object ImagePipeline {
 
     private val logger = LoggerFactory.getLogger(ImagePipeline::class.java)

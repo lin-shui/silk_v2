@@ -21,6 +21,7 @@ import kotlinx.serialization.json.jsonPrimitive
  * pty_chat.py 使用 claude -p --include-partial-messages，
  * 让 claude 逐 token 写入 PTY，实现真正的实时流式。
  */
+@Suppress("TooGenericExceptionCaught")
 class ClaudeProcessClient(
     /** 群组标识（如 group_<uuid>），用于日志/workspace 路径 */
     private val groupId: String,

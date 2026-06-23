@@ -31,6 +31,7 @@ object EnvLoader {
 
     fun get(key: String): String? = env[key]?.trim()?.takeIf { it.isNotBlank() }
 
+    @Suppress("TooGenericExceptionCaught")
     private fun parseEnvFile(path: java.nio.file.Path): Map<String, String> {
         val map = mutableMapOf<String, String>()
         try {

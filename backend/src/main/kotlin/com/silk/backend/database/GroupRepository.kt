@@ -20,6 +20,7 @@ import kotlin.random.Random
 /**
  * 群组数据访问层
  */
+@Suppress("TooGenericExceptionCaught")
 object GroupRepository {
     private val logger = LoggerFactory.getLogger(GroupRepository::class.java)
 

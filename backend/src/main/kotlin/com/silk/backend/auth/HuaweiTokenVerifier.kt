@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit
  * 1. 通过 code 换取 access_token 后调 userinfo 端点（Web OAuth 流程）
  * 2. 直接验证 ID Token JWT 签名（Harmony/Android 原生流程）
  */
+@Suppress("TooGenericExceptionCaught")
 object HuaweiTokenVerifier {
     private val logger = LoggerFactory.getLogger(HuaweiTokenVerifier::class.java)
 

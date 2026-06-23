@@ -22,6 +22,7 @@ import org.slf4j.LoggerFactory
  * 
  * 备份存储在 chat_history_backup/ 目录下，按日期和类型分类
  */
+@Suppress("TooGenericExceptionCaught")
 object ChatHistoryBackupManager {
     
     private val json = Json {
@@ -177,7 +178,7 @@ object ChatHistoryBackupManager {
                         val metadata = json.decodeFromString<BackupMetadata>(metadataFile.readText())
                         backups.add(metadata)
                     } catch (e: Exception) {
-                        logger.warn("⚠️ 解析备份元数据失败: {}", metadataFile.path)
+                        logger.warn("⚠️ 解析备份元数据失败: {}: {}", metadataFile.path, e.message)
                     }
                 }
         }
@@ -248,7 +249,7 @@ object ChatHistoryBackupManager {
                         deletedCount++
                         logger.info("🗑️ 已删除过期备份: {}", dateDir.path)
                     } catch (e: Exception) {
-                        logger.warn("⚠️ 删除过期备份失败: {}", dateDir.path)
+                        logger.warn("⚠️ 删除过期备份失败: {}: {}", dateDir.path, e.message)
                     }
                 }
             }
