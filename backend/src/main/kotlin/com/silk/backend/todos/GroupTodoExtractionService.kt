@@ -674,33 +674,44 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
         return out
     }
 
+    /**
+     * Wraps a Chinese-numeral parse attempt to distinguish two different null states:
+     * - outer null  → regex did NOT match; caller may fall through to next parser
+     * - outer non-null, inner null → regex matched but numeral was unparseable; caller must stop
+     * - outer non-null, inner non-null → matched and successfully parsed
+     */
+    private data class ChineseHourResult(val value: Pair<Int, Int>?)
+
     /** 本地时间提取：支持中文数字（七点、十点半）和阿拉伯数字（07:30） */
     private fun extractRoughHourMinute(text: String): Pair<Int, Int>? {
         val t = text.trim()
         val pm = t.contains("下午") || t.contains("晚上") || t.contains("傍晚")
-        parseChineseHalfHour(t, pm)?.let { return it }
-        parseChineseExactHour(t, pm)?.let { return it }
+        // Chinese numeral branches: once regex matches, commit — return result or null (no fall-through)
+        parseChineseHalfHour(t, pm)?.let { return it.value }
+        parseChineseExactHour(t, pm)?.let { return it.value }
         parseArabicHourMinute(t)?.let { return it }
         parseArabicHour(t, pm)?.let { return it }
         return null
     }
 
     // Chinese numeral + 点半
-    private fun parseChineseHalfHour(text: String, pm: Boolean): Pair<Int, Int>? {
+    // Returns null if regex did not match; returns ChineseHourResult (with possibly-null value) if matched.
+    private fun parseChineseHalfHour(text: String, pm: Boolean): ChineseHourResult? {
         val cnHalf = Regex("([一二三四五六七八九十两零]+点半)").find(text) ?: return null
         val cn = cnHalf.groupValues[1].replace("点半", "")
-        val h = parseCnHourSimple(cn) ?: return null
+        val h = parseCnHourSimple(cn) ?: return ChineseHourResult(null)
         val hour = if (pm && h in 1..11) h + 12 else h
-        return if (hour in 0..23) hour to 30 else null
+        return ChineseHourResult(if (hour in 0..23) hour to 30 else null)
     }
 
     // Chinese numeral + 点
-    private fun parseChineseExactHour(text: String, pm: Boolean): Pair<Int, Int>? {
+    // Returns null if regex did not match; returns ChineseHourResult (with possibly-null value) if matched.
+    private fun parseChineseExactHour(text: String, pm: Boolean): ChineseHourResult? {
         val cnExact = Regex("([一二三四五六七八九十两零]+点)").find(text) ?: return null
         val cn = cnExact.groupValues[1].replace("点", "")
-        val h = parseCnHourSimple(cn) ?: return null
+        val h = parseCnHourSimple(cn) ?: return ChineseHourResult(null)
         val hour = if (pm && h in 1..11) h + 12 else h
-        return if (hour in 0..23) hour to 0 else null
+        return ChineseHourResult(if (hour in 0..23) hour to 0 else null)
     }
 
     // Arabic HH:mm
