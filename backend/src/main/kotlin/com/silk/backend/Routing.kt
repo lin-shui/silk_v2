@@ -3113,7 +3113,7 @@ private fun Route.registerApiKbCapturesPostRoute() {
         } ?: emptyList()
         val source = parseKbEntrySource(req)
 
-        if (userId.isNullOrBlank() || topicId.isNullOrBlank() || title.isNullOrBlank() || content.isNullOrBlank()) {
+        if (isMissingKbCaptureFields(userId, topicId, title, content)) {
             call.respondText("""{"success":false,"message":"Missing required capture fields"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@post
         }
@@ -3121,13 +3121,17 @@ private fun Route.registerApiKbCapturesPostRoute() {
             call.respondText("""{"success":false,"message":"Invalid capture source"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@post
         }
+        val validUserId = userId!!
+        val validTopicId = topicId!!
+        val validTitle = title!!
+        val validContent = content!!
 
         val entry = knowledgeBaseManager.createEntry(
-            topicId = topicId,
-            title = title,
-            content = content,
+            topicId = validTopicId,
+            title = validTitle,
+            content = validContent,
             tags = tags,
-            userId = userId,
+            userId = validUserId,
             status = KBEntryStatus.CANDIDATE,
             source = source,
         )
@@ -3142,6 +3146,18 @@ private fun Route.registerApiKbCapturesPostRoute() {
             HttpStatusCode.Created,
         )
     }
+}
+
+private fun isMissingKbCaptureFields(
+    userId: String?,
+    topicId: String?,
+    title: String?,
+    content: String?,
+): Boolean {
+    return userId.isNullOrBlank() ||
+        topicId.isNullOrBlank() ||
+        title.isNullOrBlank() ||
+        content.isNullOrBlank()
 }
 
 private fun Route.registerApiKbEntriesEntryIdPutRoute() {

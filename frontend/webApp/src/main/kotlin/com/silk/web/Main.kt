@@ -1306,7 +1306,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             onContentChange = { kbCaptureContent = it },
             onDismiss = resetKnowledgeCaptureDialog,
             onConfirm = {
-                if (kbCaptureSaving || kbCaptureSelectedTopicId.isBlank() || kbCaptureTitle.isBlank() || kbCaptureContent.isBlank()) {
+                if (!canSubmitKnowledgeCapture(kbCaptureSaving, kbCaptureSelectedTopicId, kbCaptureTitle, kbCaptureContent)) {
                     return@KnowledgeBaseCaptureDialog
                 }
                 scope.launch {
@@ -2432,6 +2432,7 @@ internal fun toggleExcludedKnowledgeBaseEntry(
 }
 
 @Composable
+@Suppress("CyclomaticComplexMethod")
 private fun KnowledgeBaseContextTray(
     statusMessages: List<Message>,
     selection: KnowledgeBaseContextSelection,

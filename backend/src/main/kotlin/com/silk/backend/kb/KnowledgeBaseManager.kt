@@ -87,11 +87,11 @@ class KnowledgeBaseManager(
         val store = load()
         val normalizedSpaceType = normalizeSpaceType(spaceType, groupId)
         val normalizedGroupId = normalizeGroupId(normalizedSpaceType, groupId)
-        if (normalizedSpaceType == KnowledgeSpaceType.TEAM && normalizedGroupId == null) {
-            throw IllegalArgumentException("Team knowledge base topics require a groupId")
+        require(!(normalizedSpaceType == KnowledgeSpaceType.TEAM && normalizedGroupId == null)) {
+            "Team knowledge base topics require a groupId"
         }
-        if (normalizedGroupId != null && !GroupRepository.isUserInGroup(normalizedGroupId, userId)) {
-            throw IllegalArgumentException("User $userId is not a member of group $normalizedGroupId")
+        require(normalizedGroupId == null || GroupRepository.isUserInGroup(normalizedGroupId, userId)) {
+            "User $userId is not a member of group $normalizedGroupId"
         }
         val now = System.currentTimeMillis()
         val topic = KBTopic(

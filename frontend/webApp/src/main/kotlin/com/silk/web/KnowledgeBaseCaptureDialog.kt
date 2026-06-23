@@ -83,7 +83,31 @@ internal fun defaultKnowledgeCaptureTopicId(
     spaceId: String,
 ): String? = filterTopicsForSpace(topics, spaceId).firstOrNull()?.id
 
+internal fun canSubmitKnowledgeCapture(
+    isSaving: Boolean,
+    selectedTopicId: String,
+    title: String,
+    content: String,
+): Boolean {
+    return !isSaving &&
+        selectedTopicId.isNotBlank() &&
+        title.isNotBlank() &&
+        content.isNotBlank()
+}
+
+private fun knowledgeCaptureSourceLabel(sourceType: KBSourceType): String {
+    return when (sourceType) {
+        KBSourceType.WORKFLOW -> "工作流沉淀"
+        KBSourceType.CHAT -> "聊天沉淀"
+        KBSourceType.MANUAL -> "手动创建"
+        KBSourceType.MEETING -> "会议沉淀"
+        KBSourceType.FILE -> "文件导入"
+        KBSourceType.URL -> "URL 导入"
+    }
+}
+
 @Composable
+@Suppress("CyclomaticComplexMethod")
 internal fun KnowledgeBaseCaptureDialog(
     draft: KnowledgeCaptureDraft,
     spaceOptions: List<KnowledgeSpaceOption>,
@@ -102,6 +126,7 @@ internal fun KnowledgeBaseCaptureDialog(
     onConfirm: () -> Unit,
 ) {
     val visibleTopics = remember(topics, selectedSpaceId) { filterTopicsForSpace(topics, selectedSpaceId) }
+    val canSubmit = canSubmitKnowledgeCapture(isSaving, selectedTopicId, title, content)
 
     Div({
         style {
@@ -245,17 +270,7 @@ internal fun KnowledgeBaseCaptureDialog(
                 }
             }) {
                 CaptureBadge("candidate", SilkColors.primaryDark)
-                CaptureBadge(
-                    when (draft.sourceType) {
-                        KBSourceType.WORKFLOW -> "工作流沉淀"
-                        KBSourceType.CHAT -> "聊天沉淀"
-                        KBSourceType.MANUAL -> "手动创建"
-                        KBSourceType.MEETING -> "会议沉淀"
-                        KBSourceType.FILE -> "文件导入"
-                        KBSourceType.URL -> "URL 导入"
-                    },
-                    SilkColors.primary,
-                )
+                CaptureBadge(knowledgeCaptureSourceLabel(draft.sourceType), SilkColors.primary)
             }
 
             resultMessage?.takeIf { it.isNotBlank() }?.let { message ->
@@ -288,13 +303,7 @@ internal fun KnowledgeBaseCaptureDialog(
                 Button({
                     style {
                         backgroundColor(
-                            Color(
-                                if (!isSaving && selectedTopicId.isNotBlank() && title.isNotBlank() && content.isNotBlank()) {
-                                    SilkColors.primary
-                                } else {
-                                    SilkColors.border
-                                }
-                            )
+                            Color(if (canSubmit) SilkColors.primary else SilkColors.border)
                         )
                         color(Color.white)
                         border(0.px)
@@ -302,7 +311,7 @@ internal fun KnowledgeBaseCaptureDialog(
                         padding(8.px, 16.px)
                         property("cursor", if (!isSaving) "pointer" else "not-allowed")
                     }
-                    if (isSaving || selectedTopicId.isBlank() || title.isBlank() || content.isBlank()) {
+                    if (!canSubmit) {
                         attr("disabled", "true")
                     }
                     onClick { onConfirm() }

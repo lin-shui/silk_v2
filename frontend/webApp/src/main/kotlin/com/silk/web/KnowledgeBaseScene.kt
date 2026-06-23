@@ -1346,6 +1346,7 @@ private suspend fun createKnowledgeEntry(
 }
 
 @Composable
+@Suppress("CyclomaticComplexMethod")
 fun KnowledgeBaseScene(appState: WebAppState) {
     val user = appState.currentUser ?: return
     val scope = rememberCoroutineScope()

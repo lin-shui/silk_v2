@@ -316,6 +316,7 @@ private fun buildCreateWorkflowPayload(
     }.toString()
 }
 
+@Suppress("LargeClass")
 object ApiClient {
     private val BASE_URL: String
         get() {

@@ -228,7 +228,7 @@ fun WorkflowScene(appState: WebAppState) {
             onContentChange = { kbCaptureContent = it },
             onDismiss = resetKnowledgeCaptureDialog,
             onConfirm = {
-                if (kbCaptureSaving || kbCaptureSelectedTopicId.isBlank() || kbCaptureTitle.isBlank() || kbCaptureContent.isBlank()) {
+                if (!canSubmitKnowledgeCapture(kbCaptureSaving, kbCaptureSelectedTopicId, kbCaptureTitle, kbCaptureContent)) {
                     return@KnowledgeBaseCaptureDialog
                 }
                 scope.launch {
