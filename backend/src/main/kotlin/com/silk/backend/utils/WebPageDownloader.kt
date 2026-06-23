@@ -350,16 +350,16 @@ object WebPageDownloader {
             
             // 配置SSL（允许所有证书，用于开发环境）
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) {}
+                override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) { /* intentionally empty: trust all */ }
+                override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) { /* intentionally empty: trust all */ }
                 override fun getAcceptedIssuers(): Array<X509Certificate>? = null
             })
-            
+
             val sslContext = SSLContext.getInstance("TLS")
             sslContext.init(null, trustAllCerts, java.security.SecureRandom())
             HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.socketFactory)
             HttpsURLConnection.setDefaultHostnameVerifier { _, _ -> true }
-            
+
             val connection = URL(url).openConnection() as HttpURLConnection
             connection.apply {
                 requestMethod = "GET"
@@ -449,8 +449,8 @@ object WebPageDownloader {
             
             // 配置SSL
             val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-                override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) {}
-                override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) {}
+                override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) { /* intentionally empty: trust all */ }
+                override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) { /* intentionally empty: trust all */ }
                 override fun getAcceptedIssuers(): Array<X509Certificate>? = null
             })
             

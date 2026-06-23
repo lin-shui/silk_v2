@@ -55,15 +55,15 @@ class ExternalSearchService {
         private val BING_API_KEY: String get() = AIConfig.BING_API_KEY
         private val SERPAPI_KEY: String get() = AIConfig.SERPAPI_KEY
         private val SEARXNG_URL: String get() = AIConfig.SEARXNG_URL
-        val BING_SEARCH_URL: String = "https://api.bing.microsoft.com/v7.0/search"
-        val SERPAPI_URL: String = "https://serpapi.com/search"
-        
+        const val BING_SEARCH_URL: String = "https://api.bing.microsoft.com/v7.0/search"
+        const val SERPAPI_URL: String = "https://serpapi.com/search"
+
         // Wikipedia API（完全免费，国内可访问）
-        val WIKIPEDIA_API_URL: String = "https://zh.wikipedia.org/w/api.php"
-        val WIKIPEDIA_EN_API_URL: String = "https://en.wikipedia.org/w/api.php"
-        
+        const val WIKIPEDIA_API_URL: String = "https://zh.wikipedia.org/w/api.php"
+        const val WIKIPEDIA_EN_API_URL: String = "https://en.wikipedia.org/w/api.php"
+
         // DuckDuckGo Instant Answer API（无需 API Key，但国内可能不通）
-        val DUCKDUCKGO_URL: String = "https://api.duckduckgo.com/"
+        const val DUCKDUCKGO_URL: String = "https://api.duckduckgo.com/"
         
         // 搜索超时 - SearXNG 聚合多个引擎可能需要更长时间
         const val SEARCH_TIMEOUT_MS = 15000L  // 15秒超时，SearXNG 聚合多引擎需等待
@@ -497,11 +497,10 @@ class ExternalSearchService {
     
     /**
      * 检查服务是否可用
+     * DuckDuckGo 总是可用的（免费 API）
      */
-    fun isAvailable(): Boolean {
-        // DuckDuckGo 总是可用的（免费 API）
-        return true
-    }
+    @Suppress("FunctionOnlyReturningConstant")
+    fun isAvailable(): Boolean = true
     
     fun close() {
         client.close()

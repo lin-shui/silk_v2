@@ -491,7 +491,7 @@ fun Route.fileRoutes() {
             val minute = calendar.get(java.util.Calendar.MINUTE)
 
             val versionCode = year * 100000000 + month * 1000000 + day * 10000 + hour * 100 + minute
-            val versionName = String.format("%04d.%02d%02d.%02d%02d",
+            val versionName = String.format(java.util.Locale.ROOT, "%04d.%02d%02d.%02d%02d",
                 calendar.get(java.util.Calendar.YEAR), month, day, hour, minute)
 
             logger.info("📱 APK 版本: $versionName (code=$versionCode) - 文件时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(lastModified))}")
@@ -587,7 +587,7 @@ fun Route.fileRoutes() {
             val minute = calendar.get(java.util.Calendar.MINUTE)
 
             val versionCode = year * 100000000 + month * 1000000 + day * 10000 + hour * 100 + minute
-            val versionName = String.format("%04d.%02d%02d.%02d%02d",
+            val versionName = String.format(java.util.Locale.ROOT, "%04d.%02d%02d.%02d%02d",
                 calendar.get(java.util.Calendar.YEAR), month, day, hour, minute)
 
             logger.info("📱 HAP 版本: $versionName (code=$versionCode) - 文件时间: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(java.util.Date(lastModified))}")
@@ -726,7 +726,7 @@ fun Route.fileRoutes() {
             if (deleted) {
                 // 从搜索索引中删除
                 try {
-                    // TODO: 调用 weaviateClient.deleteDocument()
+                    // 从搜索索引中删除文档（weaviateClient.deleteDocument() 暂未集成）
                 } catch (e: Exception) {
                     logger.warn("从索引删除文件失败: ${e.message}")
                 }

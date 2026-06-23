@@ -12,8 +12,8 @@
     <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$!isSilkPrivateChat &amp;&amp; message.type == MessageType.TEXT &amp;&amp; !message.isTransient &amp;&amp; !AgentRuntime.isAgentMessage(message)</ID>
     <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId) &amp;&amp; message.type == MessageType.TEXT &amp;&amp; !message.isTransient &amp;&amp; message.userId != "cc-connect" &amp;&amp; message.userId != "system"</ID>
     <ID>ComplexCondition:WebSocketConfig.kt$ChatServer$message.type == MessageType.TEXT &amp;&amp; message.userId != "cc-connect" &amp;&amp; message.userId != "system" &amp;&amp; com.silk.backend.ccconnect.CcConnectRegistry.isConnected(sessionName.removePrefix("group_")) &amp;&amp; com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(sessionName.removePrefix("group_"))</ID>
+    <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$@Suppress("ThrowsCount") private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
     <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$private fun generateFallbackReport( stepResults: Map&lt;String, StepResult&gt;, allSuccess: Boolean ): String</ID>
-    <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
     <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun generateQuickResponse( prompt: String, callback: suspend (content: String, isComplete: Boolean) -&gt; Unit )</ID>
     <ID>CyclomaticComplexMethod:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun processDoctorDiagnosisUpdate( chatHistory: List&lt;ChatHistoryEntry&gt;, doctorMessage: String, callback: suspend (stepType: String, message: String, currentStep: Int?, totalSteps: Int?) -&gt; Unit, userName: String = "用户", groupDisplayName: String? = null )</ID>
     <ID>CyclomaticComplexMethod:AgentRuntime.kt$AgentRuntime$private fun setupAcpHandlers( acp: AcpClient, acpSessionId: String, session: AgentSession, descriptor: AgentDescriptor, broadcastFn: suspend (Message) -&gt; Unit, accumulated: StringBuilder, scope: CoroutineScope, ctx: GroupAgentContext? = null, )</ID>
@@ -51,13 +51,6 @@
     <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "")</ID>
     <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$private suspend fun handleCombinedVisionAndText( pendingImg: PendingImageState, userText: String, userId: String )</ID>
     <ID>CyclomaticComplexMethod:WebSocketConfig.kt$ChatServer$suspend fun broadcast(message: Message)</ID>
-    <ID>EmptyFunctionBlock:WebPageDownloader.kt$WebPageDownloader.&lt;no name provided&gt;${}</ID>
-    <ID>ForbiddenComment:FileRoutes.kt$// TODO: 调用 weaviateClient.deleteDocument()</ID>
-    <ID>FunctionOnlyReturningConstant:ExternalSearchService.kt$ExternalSearchService$fun isAvailable(): Boolean</ID>
-    <ID>ImplicitDefaultLocale:FilePreprocessor.kt$FilePreprocessor$String.format("%.1f", size / gb)</ID>
-    <ID>ImplicitDefaultLocale:FilePreprocessor.kt$FilePreprocessor$String.format("%.1f", size / kb)</ID>
-    <ID>ImplicitDefaultLocale:FilePreprocessor.kt$FilePreprocessor$String.format("%.1f", size / mb)</ID>
-    <ID>ImplicitDefaultLocale:FileRoutes.kt$String.format("%04d.%02d%02d.%02d%02d", calendar.get(java.util.Calendar.YEAR), month, day, hour, minute)</ID>
     <ID>LargeClass:AIStepwiseAgent.kt$AIStepwiseAgent</ID>
     <ID>LargeClass:AgentRuntime.kt$AgentRuntime</ID>
     <ID>LargeClass:BackendWebSocketContractTest.kt$BackendWebSocketContractTest</ID>
@@ -75,11 +68,6 @@
     <ID>LoopWithTooManyJumpStatements:PdfPipeline.kt$PdfPipeline$for</ID>
     <ID>LoopWithTooManyJumpStatements:Routing.kt$for</ID>
     <ID>LoopWithTooManyJumpStatements:UserTodoStore.kt$UserTodoStore$for</ID>
-    <ID>MayBeConst:ExternalSearchService.kt$ExternalSearchService.Companion$// DuckDuckGo Instant Answer API（无需 API Key，但国内可能不通） val DUCKDUCKGO_URL: String = "https://api.duckduckgo.com/"</ID>
-    <ID>MayBeConst:ExternalSearchService.kt$ExternalSearchService.Companion$// Wikipedia API（完全免费，国内可访问） val WIKIPEDIA_API_URL: String = "https://zh.wikipedia.org/w/api.php"</ID>
-    <ID>MayBeConst:ExternalSearchService.kt$ExternalSearchService.Companion$val BING_SEARCH_URL: String = "https://api.bing.microsoft.com/v7.0/search"</ID>
-    <ID>MayBeConst:ExternalSearchService.kt$ExternalSearchService.Companion$val SERPAPI_URL: String = "https://serpapi.com/search"</ID>
-    <ID>MayBeConst:ExternalSearchService.kt$ExternalSearchService.Companion$val WIKIPEDIA_EN_API_URL: String = "https://en.wikipedia.org/w/api.php"</ID>
     <ID>NestedBlockDepth:AIStepwiseAgent.kt$AIStepwiseAgent$suspend fun generateQuickResponse( prompt: String, callback: suspend (content: String, isComplete: Boolean) -&gt; Unit )</ID>
     <ID>NestedBlockDepth:AnthropicClient.kt$AnthropicClient$@Suppress("UnusedParameter") private suspend fun handleEvent( data: String, fullText: StringBuilder, pendingToolUses: MutableMap&lt;Int, PendingToolUse&gt;, completedToolCalls: MutableList&lt;ToolCall&gt;, collectedCitations: MutableList&lt;Citation&gt;, streamingBlocks: MutableMap&lt;Int, ContentBlock&gt;, currentThinkingIndexRef: () -&gt; Int, setCurrentThinkingIndex: (Int) -&gt; Unit, onBlockChanged: suspend () -&gt; Unit )</ID>
     <ID>NestedBlockDepth:Application.kt$@Suppress("TooGenericExceptionCaught") private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger)</ID>
@@ -94,16 +82,5 @@
     <ID>NestedBlockDepth:WebPageDownloader.kt$WebPageDownloader$private fun downloadWithPlaywright(url: String): WebPageContent?</ID>
     <ID>NestedBlockDepth:WebSocketConfig.kt$ChatServer$private suspend fun processUrlsInMessage(message: Message)</ID>
     <ID>NestedBlockDepth:WebSocketConfig.kt$ChatServer$suspend fun broadcast(message: Message)</ID>
-    <ID>PrintStackTrace:ChatHistoryBackupManager.kt$ChatHistoryBackupManager$e</ID>
-    <ID>PrintStackTrace:WeaviateClient.kt$WeaviateClient$e</ID>
-    <ID>PrintStackTrace:WebSocketConfig.kt$ChatServer$e</ID>
-    <ID>ThrowsCount:AIStepwiseAgent.kt$AIStepwiseAgent$private suspend fun callAIApiStreaming( prompt: String, onChunk: suspend (String) -&gt; Unit ): String</ID>
-    <ID>UseCheckOrError:AIConfig.kt$AIConfig$throw IllegalStateException("请在项目根目录 .env 中配置 ANTHROPIC_API_BASE_URL")</ID>
-    <ID>UseCheckOrError:AIConfig.kt$AIConfig$throw IllegalStateException("请在项目根目录 .env 中配置 API_BASE_URL")</ID>
-    <ID>UseCheckOrError:AIConfig.kt$AIConfig$throw IllegalStateException("请在项目根目录 .env 中配置 WEAVIATE_URL")</ID>
-    <ID>UseCheckOrError:AcpWebSocketTransport.kt$AcpWebSocketTransport$throw IllegalStateException("transport closed")</ID>
-    <ID>UseCheckOrError:GroupTodoExtractionService.kt$GroupTodoExtractionService$throw IllegalStateException("HTTP ${resp.statusCode()}: ${resp.body().take(200)}")</ID>
-    <ID>UseCheckOrError:SilkAgent.kt$SilkAgent$throw IllegalStateException("Agent not initialized")</ID>
-    <ID>UseRequire:AnthropicClient.kt$AnthropicClient$throw IllegalArgumentException( "ANTHROPIC_API_KEY 未配置。请在 .env 中设置 ANTHROPIC_API_KEY=your_key" )</ID>
   </CurrentIssues>
 </SmellBaseline>

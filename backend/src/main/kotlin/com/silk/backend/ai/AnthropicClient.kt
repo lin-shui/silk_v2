@@ -82,10 +82,8 @@ class AnthropicClient(
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): AnthropicStreamResult {
         // 0. 前置校验
-        if (apiKey.isBlank()) {
-            throw IllegalArgumentException(
-                "ANTHROPIC_API_KEY 未配置。请在 .env 中设置 ANTHROPIC_API_KEY=your_key"
-            )
+        require(!apiKey.isBlank()) {
+            "ANTHROPIC_API_KEY 未配置。请在 .env 中设置 ANTHROPIC_API_KEY=your_key"
         }
 
         // 1. 转换 system prompt + messages → Anthropic 格式

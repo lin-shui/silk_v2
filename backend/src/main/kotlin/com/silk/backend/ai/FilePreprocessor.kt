@@ -178,9 +178,9 @@ object FilePreprocessor {
         val gb = mb * 1024
         return when {
             size < 1024 -> "$size B"
-            size < mb -> "${String.format("%.1f", size / kb)} KB"
-            size < gb -> "${String.format("%.1f", size / mb)} MB"
-            else -> "${String.format("%.1f", size / gb)} GB"
+            size < mb -> "${String.format(java.util.Locale.ROOT, "%.1f", size / kb)} KB"
+            size < gb -> "${String.format(java.util.Locale.ROOT, "%.1f", size / mb)} MB"
+            else -> "${String.format(java.util.Locale.ROOT, "%.1f", size / gb)} GB"
         }
     }
 }

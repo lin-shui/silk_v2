@@ -1808,9 +1808,8 @@ class ChatServer(
             logger.info("🛑 [generateIntelligentResponse-{}] 生成被取消", callId)
             throw e
         } catch (e: Exception) {
-            logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败: {}", callId, e.message)
-            e.printStackTrace()
-            
+            logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败: {}", callId, e.message, e)
+
             // 发送错误消息
             val errorMessage = Message(
                 id = generateId(),
@@ -1946,8 +1945,7 @@ class ChatServer(
                 groupDisplayName = groupDisplayName
             )
         } catch (e: Exception) {
-            logger.error("❌ 医生诊断更新失败: {}", e.message)
-            e.printStackTrace()
+            logger.error("❌ 医生诊断更新失败: {}", e.message, e)
         }
     }
     
@@ -1990,8 +1988,7 @@ class ChatServer(
                     null
                 }
             } catch (e: Exception) {
-                logger.warn("⚠️ 查询群组名称失败: {}", e.message)
-                e.printStackTrace()
+                logger.warn("⚠️ 查询群组名称失败: {}", e.message, e)
                 null
             }
         } else {

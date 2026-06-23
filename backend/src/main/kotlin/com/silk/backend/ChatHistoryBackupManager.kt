@@ -89,8 +89,7 @@ object ChatHistoryBackupManager {
             logger.info("   原因: {} - {}", backupType.name, reason)
             true
         } catch (e: Exception) {
-            logger.error("❌ 备份群组历史失败: {} - {}", groupId, e.message)
-            e.printStackTrace()
+            logger.error("❌ 备份群组历史失败: {} - {}", groupId, e.message, e)
             false
         }
     }
@@ -225,8 +224,7 @@ object ChatHistoryBackupManager {
             logger.info("✅ 已从备份恢复: {} <- {}", groupId, backupDir.absolutePath)
             true
         } catch (e: Exception) {
-            logger.error("❌ 恢复备份失败: {}", e.message)
-            e.printStackTrace()
+            logger.error("❌ 恢复备份失败: {}", e.message, e)
             false
         }
     }

@@ -561,6 +561,7 @@ $conclusion
      * @param onChunk 每接收到一个文本块时的回调函数（用于实时显示）
      * @return 完整的响应文本
      */
+    @Suppress("ThrowsCount")
     private suspend fun callAIApiStreaming(
         prompt: String,
         onChunk: suspend (String) -> Unit

@@ -828,8 +828,7 @@ class WeaviateClient(
                 searchType = searchType
             )
         } catch (e: Exception) {
-            logger.error("❌ [Weaviate] 搜索失败 ({}): {}", searchType, e.message)
-            e.printStackTrace()
+            logger.error("❌ [Weaviate] 搜索失败 ({}): {}", searchType, e.message, e)
             return SearchResults(
                 documents = emptyList(),
                 totalCount = 0,
@@ -927,8 +926,7 @@ class WeaviateClient(
                 searchType = searchType
             )
         } catch (e: Exception) {
-            logger.error("❌ [Weaviate] BM25 搜索失败: {}", e.message)
-            e.printStackTrace()
+            logger.error("❌ [Weaviate] BM25 搜索失败: {}", e.message, e)
             return SearchResults(
                 documents = emptyList(),
                 totalCount = 0,
