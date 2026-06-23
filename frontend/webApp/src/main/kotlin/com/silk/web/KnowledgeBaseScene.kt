@@ -165,6 +165,63 @@ internal fun knowledgeStatusAction(entry: KBEntryItem): Pair<String, KBEntryStat
     }
 }
 
+internal fun toggleKnowledgeEntrySelection(selectedEntryIds: Set<String>, entryId: String): Set<String> {
+    return if (entryId in selectedEntryIds) {
+        selectedEntryIds - entryId
+    } else {
+        selectedEntryIds + entryId
+    }
+}
+
+internal fun mergeKnowledgeEntryContent(
+    targetContent: String,
+    candidateTitle: String,
+    candidateContent: String,
+): String {
+    val trimmedTarget = targetContent.trim()
+    val trimmedCandidate = candidateContent.trim()
+    if (trimmedTarget.isBlank()) return trimmedCandidate
+    if (trimmedCandidate.isBlank()) return trimmedTarget
+    return buildString {
+        append(trimmedTarget)
+        append("\n\n---\n\n")
+        append("## 合并自：")
+        append(candidateTitle.ifBlank { "候选条目" })
+        append("\n\n")
+        append(trimmedCandidate)
+    }
+}
+
+internal fun mergeKnowledgeEntryTags(targetTags: List<String>, candidateTags: List<String>): List<String> {
+    return (targetTags + candidateTags)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+}
+
+internal fun mergeKnowledgeEntriesContent(
+    targetContent: String,
+    candidateEntries: List<KBEntryItem>,
+): String {
+    return candidateEntries.fold(targetContent) { merged, candidate ->
+        mergeKnowledgeEntryContent(
+            targetContent = merged,
+            candidateTitle = candidate.title,
+            candidateContent = candidate.content,
+        )
+    }
+}
+
+internal fun mergeKnowledgeEntriesTags(
+    targetTags: List<String>,
+    candidateEntries: List<KBEntryItem>,
+): List<String> {
+    return mergeKnowledgeEntryTags(
+        targetTags = targetTags,
+        candidateTags = candidateEntries.flatMap { it.tags },
+    )
+}
+
 @Composable
 private fun TopicSidebar(
     spaceOptions: List<KnowledgeSpaceOption>,
@@ -328,8 +385,16 @@ private fun EntrySidebar(
     selectedEntry: KBEntryItem?,
     selectedFilter: KnowledgeEntryFilter,
     canCreateEntry: Boolean,
+    selectedCandidateEntryIds: Set<String>,
+    canBatchMergeCandidates: Boolean,
     onFilterChange: (KnowledgeEntryFilter) -> Unit,
     onCreateEntry: () -> Unit,
+    onMeetingCapture: () -> Unit,
+    onToggleSelectAllCandidates: () -> Unit,
+    onBatchMergeCandidates: () -> Unit,
+    onBatchPublishCandidates: () -> Unit,
+    onBatchArchiveCandidates: () -> Unit,
+    onToggleCandidateSelection: (String) -> Unit,
     onEntrySelect: (KBEntryItem) -> Unit,
 ) {
     Div({
@@ -351,11 +416,24 @@ private fun EntrySidebar(
         EntryFilterTabs(
             selectedFilter = selectedFilter,
             onFilterChange = onFilterChange,
+            showMeetingCaptureAction = selectedTopic != null,
+            onMeetingCapture = onMeetingCapture,
+            selectedCandidateCount = selectedCandidateEntryIds.size,
+            showCandidateInboxActions = selectedTopic != null && canCreateEntry && entries.isNotEmpty() && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
+            allCandidatesSelected = entries.isNotEmpty() && entries.all { it.id in selectedCandidateEntryIds },
+            onToggleSelectAllCandidates = onToggleSelectAllCandidates,
+            canBatchMergeCandidates = canBatchMergeCandidates,
+            onBatchMergeCandidates = onBatchMergeCandidates,
+            onBatchPublishCandidates = onBatchPublishCandidates,
+            onBatchArchiveCandidates = onBatchArchiveCandidates,
         )
         EntrySidebarContent(
             selectedTopic = selectedTopic,
             entries = entries,
             selectedEntry = selectedEntry,
+            selectedCandidateEntryIds = selectedCandidateEntryIds,
+            showCandidateSelection = canCreateEntry && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
+            onToggleCandidateSelection = onToggleCandidateSelection,
             onEntrySelect = onEntrySelect,
         )
     }
@@ -365,22 +443,106 @@ private fun EntrySidebar(
 private fun EntryFilterTabs(
     selectedFilter: KnowledgeEntryFilter,
     onFilterChange: (KnowledgeEntryFilter) -> Unit,
+    showMeetingCaptureAction: Boolean,
+    onMeetingCapture: () -> Unit,
+    selectedCandidateCount: Int,
+    showCandidateInboxActions: Boolean,
+    allCandidatesSelected: Boolean,
+    onToggleSelectAllCandidates: () -> Unit,
+    canBatchMergeCandidates: Boolean,
+    onBatchMergeCandidates: () -> Unit,
+    onBatchPublishCandidates: () -> Unit,
+    onBatchArchiveCandidates: () -> Unit,
 ) {
     Div({
         style {
             padding(10.px, 12.px)
             property("border-bottom", "1px solid ${SilkColors.border}")
             display(DisplayStyle.Flex)
-            property("gap", "6px")
-            property("flex-wrap", "wrap")
+            property("gap", "8px")
+            flexDirection(FlexDirection.Column)
         }
     }) {
-        KnowledgeEntryFilter.entries.forEach { filter ->
-            KnowledgeToggleButton(
-                label = filter.label,
-                selected = selectedFilter == filter,
-                onClick = { onFilterChange(filter) },
-            )
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
+                alignItems(AlignItems.Center)
+                property("gap", "8px")
+                property("flex-wrap", "wrap")
+            }
+        }) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    property("gap", "6px")
+                    property("flex-wrap", "wrap")
+                }
+            }) {
+                KnowledgeEntryFilter.entries.forEach { filter ->
+                    KnowledgeToggleButton(
+                        label = filter.label,
+                        selected = selectedFilter == filter,
+                        onClick = { onFilterChange(filter) },
+                    )
+                }
+            }
+            if (showMeetingCaptureAction) {
+                KnowledgeToolbarButton(
+                    label = "会议入库",
+                    background = SilkColors.info,
+                    onClick = onMeetingCapture,
+                )
+            }
+        }
+        if (showCandidateInboxActions) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "8px")
+                }
+            }) {
+                Div({
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                    }
+                }) {
+                    Text("候选收件箱：已选 $selectedCandidateCount 条")
+                }
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        property("gap", "6px")
+                        property("flex-wrap", "wrap")
+                    }
+                }) {
+                    KnowledgeToolbarButton(
+                        label = if (allCandidatesSelected) "取消全选" else "全选",
+                        background = SilkColors.textSecondary,
+                        onClick = onToggleSelectAllCandidates,
+                    )
+                    KnowledgeToolbarButton(
+                        label = "批量并入",
+                        background = SilkColors.info,
+                        enabled = canBatchMergeCandidates,
+                        onClick = onBatchMergeCandidates,
+                    )
+                    KnowledgeToolbarButton(
+                        label = "批量发布",
+                        background = SilkColors.success,
+                        enabled = selectedCandidateCount > 0,
+                        onClick = onBatchPublishCandidates,
+                    )
+                    KnowledgeToolbarButton(
+                        label = "批量归档",
+                        background = SilkColors.warning,
+                        enabled = selectedCandidateCount > 0,
+                        onClick = onBatchArchiveCandidates,
+                    )
+                }
+            }
         }
     }
 }
@@ -390,6 +552,9 @@ private fun EntrySidebarContent(
     selectedTopic: KBTopicItem?,
     entries: List<KBEntryItem>,
     selectedEntry: KBEntryItem?,
+    selectedCandidateEntryIds: Set<String>,
+    showCandidateSelection: Boolean,
+    onToggleCandidateSelection: (String) -> Unit,
     onEntrySelect: (KBEntryItem) -> Unit,
 ) {
     Div({ style { property("flex", "1"); property("overflow-y", "auto") } }) {
@@ -400,6 +565,9 @@ private fun EntrySidebarContent(
                 EntryRow(
                     entry = entry,
                     isSelected = selectedEntry?.id == entry.id,
+                    isCandidateSelected = entry.id in selectedCandidateEntryIds,
+                    showCandidateSelection = showCandidateSelection,
+                    onToggleCandidateSelection = { onToggleCandidateSelection(entry.id) },
                     onClick = { onEntrySelect(entry) },
                 )
             }
@@ -408,7 +576,14 @@ private fun EntrySidebarContent(
 }
 
 @Composable
-private fun EntryRow(entry: KBEntryItem, isSelected: Boolean, onClick: () -> Unit) {
+private fun EntryRow(
+    entry: KBEntryItem,
+    isSelected: Boolean,
+    isCandidateSelected: Boolean,
+    showCandidateSelection: Boolean,
+    onToggleCandidateSelection: () -> Unit,
+    onClick: () -> Unit,
+) {
     Div({
         style {
             padding(10.px, 14.px)
@@ -420,11 +595,39 @@ private fun EntryRow(entry: KBEntryItem, isSelected: Boolean, onClick: () -> Uni
     }) {
         Div({
             style {
-                fontSize(13.px)
-                color(Color(SilkColors.textPrimary))
-                fontWeight(if (isSelected) "600" else "400")
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                property("gap", "8px")
             }
-        }) { Text(entry.title) }
+        }) {
+            if (showCandidateSelection) {
+                Button({
+                    style {
+                        backgroundColor(Color(if (isCandidateSelected) SilkColors.primaryDark else "#FFFFFF"))
+                        color(Color(if (isCandidateSelected) "#FFFFFF" else SilkColors.textSecondary))
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(999.px)
+                        padding(2.px, 8.px)
+                        fontSize(11.px)
+                        property("cursor", "pointer")
+                        property("flex-shrink", "0")
+                    }
+                    onClick {
+                        it.stopPropagation()
+                        onToggleCandidateSelection()
+                    }
+                }) {
+                    Text(if (isCandidateSelected) "已选" else "选择")
+                }
+            }
+            Div({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textPrimary))
+                    fontWeight(if (isSelected) "600" else "400")
+                }
+            }) { Text(entry.title) }
+        }
         Div({
             style {
                 display(DisplayStyle.Flex)
@@ -465,6 +668,7 @@ private fun KnowledgeEditorPane(
     onSave: () -> Unit,
     onStatusAction: (() -> Unit)?,
     statusActionLabel: String?,
+    onMergeCandidate: (() -> Unit)?,
     onExport: () -> Unit,
     onCopyReference: () -> Unit,
 ) {
@@ -491,6 +695,7 @@ private fun KnowledgeEditorPane(
                 onSave = onSave,
                 onStatusAction = onStatusAction,
                 statusActionLabel = statusActionLabel,
+                onMergeCandidate = onMergeCandidate,
                 onExport = onExport,
                 onCopyReference = onCopyReference,
             )
@@ -698,6 +903,7 @@ private fun KnowledgeEditorToolbar(
     onSave: () -> Unit,
     onStatusAction: (() -> Unit)?,
     statusActionLabel: String?,
+    onMergeCandidate: (() -> Unit)?,
     onExport: () -> Unit,
     onCopyReference: () -> Unit,
 ) {
@@ -742,6 +948,14 @@ private fun KnowledgeEditorToolbar(
                 enabled = canEdit && !isSaving,
                 onClick = onSave,
             )
+            if (onMergeCandidate != null) {
+                KnowledgeToolbarButton(
+                    label = "并入其他文档",
+                    background = SilkColors.warning,
+                    enabled = canEdit && !isSaving,
+                    onClick = onMergeCandidate,
+                )
+            }
             if (statusActionLabel != null && onStatusAction != null) {
                 KnowledgeToolbarButton(
                     label = statusActionLabel,
@@ -1261,6 +1475,178 @@ private suspend fun updateKnowledgeEntryStatus(
     onSavingChange(false)
 }
 
+private suspend fun bulkUpdateKnowledgeEntryStatus(
+    entryIds: Set<String>,
+    topic: KBTopicItem?,
+    userId: String,
+    status: KBEntryStatus,
+    currentSelectedEntryId: String?,
+    onSavingChange: (Boolean) -> Unit,
+    onSaveMessageChange: (String) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+    onEntryFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onSelectedCandidateEntryIdsChange: (Set<String>) -> Unit,
+) {
+    if (topic == null || entryIds.isEmpty()) return
+    onSavingChange(true)
+    onSaveMessageChange("")
+    var successCount = 0
+    entryIds.forEach { entryId ->
+        val updated = ApiClient.updateKBEntry(
+            entryId = entryId,
+            title = null,
+            content = null,
+            tags = null,
+            userId = userId,
+            status = status,
+        )
+        if (updated != null) {
+            successCount += 1
+        }
+    }
+    val refreshedEntries = ApiClient.getKBEntries(topic.id, userId)
+    onEntriesChange(refreshedEntries)
+    val refreshedSelectedEntry = currentSelectedEntryId?.let { selectedId ->
+        refreshedEntries.find { it.id == selectedId }
+    }
+    onSelectedEntryChange(refreshedSelectedEntry)
+    onEditorContentChange(refreshedSelectedEntry?.content.orEmpty())
+    onSelectedCandidateEntryIdsChange(emptySet())
+    if (successCount > 0) {
+        onEntryFilterChange(knowledgeFilterForStatus(status))
+        onSaveMessageChange(
+            when (status) {
+                KBEntryStatus.PUBLISHED -> "已批量发布 $successCount 条候选"
+                KBEntryStatus.ARCHIVED -> "已批量归档 $successCount 条候选"
+                KBEntryStatus.CANDIDATE -> "已批量转回候选 $successCount 条"
+                KBEntryStatus.DELETED -> "已批量更新 $successCount 条"
+            }
+        )
+    }
+    onSavingChange(false)
+}
+
+private suspend fun mergeCandidateIntoKnowledgeEntry(
+    candidateEntry: KBEntryItem?,
+    targetEntryId: String,
+    topic: KBTopicItem?,
+    entries: List<KBEntryItem>,
+    userId: String,
+    onSavingChange: (Boolean) -> Unit,
+    onSaveMessageChange: (String) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+    onEntryFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onDialogVisibilityChange: (Boolean) -> Unit,
+) {
+    if (topic == null || candidateEntry == null || candidateEntry.status != KBEntryStatus.CANDIDATE) return
+    val targetEntry = entries.find { it.id == targetEntryId } ?: return
+    onSavingChange(true)
+    onSaveMessageChange("")
+    val mergedTarget = ApiClient.updateKBEntry(
+        entryId = targetEntry.id,
+        title = null,
+        content = mergeKnowledgeEntryContent(
+            targetContent = targetEntry.content,
+            candidateTitle = candidateEntry.title,
+            candidateContent = candidateEntry.content,
+        ),
+        tags = mergeKnowledgeEntryTags(targetEntry.tags, candidateEntry.tags),
+        userId = userId,
+    )
+    if (mergedTarget == null) {
+        onSavingChange(false)
+        return
+    }
+    val archivedCandidate = ApiClient.updateKBEntry(
+        entryId = candidateEntry.id,
+        title = null,
+        content = null,
+        tags = null,
+        userId = userId,
+        status = KBEntryStatus.ARCHIVED,
+    )
+    if (archivedCandidate == null) {
+        onSavingChange(false)
+        return
+    }
+    val refreshedEntries = ApiClient.getKBEntries(topic.id, userId)
+    val refreshedTarget = refreshedEntries.find { it.id == targetEntry.id } ?: mergedTarget
+    onEntriesChange(refreshedEntries)
+    onSelectedEntryChange(refreshedTarget)
+    onEditorContentChange(refreshedTarget.content)
+    onEntryFilterChange(knowledgeFilterForStatus(refreshedTarget.status))
+    onSaveMessageChange("已并入目标文档，原候选已归档")
+    onSavingChange(false)
+    onDialogVisibilityChange(false)
+}
+
+private suspend fun bulkMergeCandidatesIntoKnowledgeEntry(
+    selectedCandidateEntryIds: Set<String>,
+    targetEntryId: String,
+    topic: KBTopicItem?,
+    entries: List<KBEntryItem>,
+    userId: String,
+    onSavingChange: (Boolean) -> Unit,
+    onSaveMessageChange: (String) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+    onEntryFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onSelectedCandidateEntryIdsChange: (Set<String>) -> Unit,
+    onDialogVisibilityChange: (Boolean) -> Unit,
+) {
+    if (topic == null || selectedCandidateEntryIds.isEmpty()) return
+    val targetEntry = entries.find { it.id == targetEntryId } ?: return
+    val candidateEntries = entries.filter { it.id in selectedCandidateEntryIds && it.id != targetEntryId && it.status == KBEntryStatus.CANDIDATE }
+    if (candidateEntries.isEmpty()) return
+    onSavingChange(true)
+    onSaveMessageChange("")
+    val mergedTarget = ApiClient.updateKBEntry(
+        entryId = targetEntry.id,
+        title = null,
+        content = mergeKnowledgeEntriesContent(
+            targetContent = targetEntry.content,
+            candidateEntries = candidateEntries,
+        ),
+        tags = mergeKnowledgeEntriesTags(targetTags = targetEntry.tags, candidateEntries = candidateEntries),
+        userId = userId,
+    )
+    if (mergedTarget == null) {
+        onSavingChange(false)
+        return
+    }
+    var archivedCount = 0
+    candidateEntries.forEach { candidate ->
+        val archived = ApiClient.updateKBEntry(
+            entryId = candidate.id,
+            title = null,
+            content = null,
+            tags = null,
+            userId = userId,
+            status = KBEntryStatus.ARCHIVED,
+        )
+        if (archived != null) {
+            archivedCount += 1
+        }
+    }
+    val refreshedEntries = ApiClient.getKBEntries(topic.id, userId)
+    val refreshedTarget = refreshedEntries.find { it.id == targetEntry.id } ?: mergedTarget
+    onEntriesChange(refreshedEntries)
+    onSelectedEntryChange(refreshedTarget)
+    onEditorContentChange(refreshedTarget.content)
+    onEntryFilterChange(knowledgeFilterForStatus(refreshedTarget.status))
+    onSelectedCandidateEntryIdsChange(emptySet())
+    if (archivedCount > 0) {
+        onSaveMessageChange("已并入 $archivedCount 条候选，目标文档已更新")
+    }
+    onSavingChange(false)
+    onDialogVisibilityChange(false)
+}
+
 private suspend fun exportKnowledgeEntry(
     entry: KBEntryItem?,
     topic: KBTopicItem?,
@@ -1345,6 +1731,71 @@ private suspend fun createKnowledgeEntry(
     resetEntryDialog(onVisibilityChange, onTitleChange)
 }
 
+private fun defaultKnowledgeSpaceIdForTopic(topic: KBTopicItem?): String {
+    return when (topic?.spaceType) {
+        KnowledgeSpaceType.TEAM -> topic.groupId ?: PERSONAL_SPACE_ID
+        else -> PERSONAL_SPACE_ID
+    }
+}
+
+private suspend fun submitMeetingKnowledgeCapture(
+    userId: String,
+    topics: List<KBTopicItem>,
+    selectedSpaceId: String,
+    selectedTopicId: String,
+    title: String,
+    content: String,
+    tagsText: String,
+    status: KBEntryStatus,
+    confidenceText: String,
+    onSavingChange: (Boolean) -> Unit,
+    onResultMessageChange: (String?) -> Unit,
+    onSelectedSpaceIdChange: (String) -> Unit,
+    onSelectedTopicChange: (KBTopicItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+    onEntryFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onSaveMessageChange: (String) -> Unit,
+    onVisibilityChange: (Boolean) -> Unit,
+) {
+    val topic = topics.find { it.id == selectedTopicId } ?: run {
+        onResultMessageChange("请选择目标主题")
+        return
+    }
+    onSavingChange(true)
+    onResultMessageChange(null)
+    val created = ApiClient.captureKBEntry(
+        topicId = topic.id,
+        title = title.trim(),
+        content = content.trim(),
+        tags = parseKnowledgeCaptureTags(tagsText),
+        userId = userId,
+        source = buildMeetingCaptureSource(topic, confidenceText),
+        status = status,
+    )
+    if (created == null) {
+        onSavingChange(false)
+        onResultMessageChange("会议纪要入库失败")
+        return
+    }
+
+    val refreshedEntries = ApiClient.getKBEntries(topic.id, userId)
+    val selectedEntry = refreshedEntries.find { it.id == created.id } ?: created
+    onSelectedSpaceIdChange(defaultKnowledgeSpaceIdForTopic(topic).ifBlank { selectedSpaceId })
+    onSelectedTopicChange(topic)
+    onEntriesChange(refreshedEntries)
+    onSelectedEntryChange(selectedEntry)
+    onEditorContentChange(selectedEntry.content)
+    onEntryFilterChange(knowledgeFilterForStatus(selectedEntry.status))
+    onSaveMessageChange(
+        if (selectedEntry.status == KBEntryStatus.PUBLISHED) "会议纪要已发布到知识库"
+        else "会议纪要已作为候选入库"
+    )
+    onSavingChange(false)
+    onVisibilityChange(false)
+}
+
 @Composable
 @Suppress("CyclomaticComplexMethod")
 fun KnowledgeBaseScene(appState: WebAppState) {
@@ -1366,6 +1817,23 @@ fun KnowledgeBaseScene(appState: WebAppState) {
 
     var showCreateEntryDialog by remember { mutableStateOf(false) }
     var newEntryTitle by remember { mutableStateOf("") }
+    var showMeetingCaptureDialog by remember { mutableStateOf(false) }
+    var meetingCaptureSpaceId by remember { mutableStateOf(PERSONAL_SPACE_ID) }
+    var meetingCaptureTopicId by remember { mutableStateOf("") }
+    var meetingCaptureTitle by remember { mutableStateOf("") }
+    var meetingCaptureContent by remember { mutableStateOf("") }
+    var meetingCaptureTagsText by remember { mutableStateOf("meeting, minutes") }
+    var meetingCaptureStatus by remember { mutableStateOf(KBEntryStatus.CANDIDATE) }
+    var meetingCaptureConfidenceText by remember { mutableStateOf("0.90") }
+    var isMeetingCaptureSaving by remember { mutableStateOf(false) }
+    var meetingCaptureResultMessage by remember { mutableStateOf<String?>(null) }
+    var selectedCandidateEntryIds by remember(selectedTopic?.id) { mutableStateOf<Set<String>>(emptySet()) }
+    var showMergeCandidateDialog by remember { mutableStateOf(false) }
+    var mergeTargetEntryId by remember { mutableStateOf("") }
+    var isMergeCandidateSaving by remember { mutableStateOf(false) }
+    var showBatchMergeCandidatesDialog by remember { mutableStateOf(false) }
+    var batchMergeTargetEntryId by remember { mutableStateOf("") }
+    var isBatchMergeSaving by remember { mutableStateOf(false) }
     var showTopicAccessDialog by remember { mutableStateOf(false) }
     var editableTopicName by remember { mutableStateOf("") }
     var editableTopicProject by remember { mutableStateOf("") }
@@ -1397,6 +1865,19 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     val selectedTopicSpaceLabel = selectedTopic?.let { topicSpaceLabel(it, userGroups) }
     val selectedTopicPermissionLabel = selectedTopic?.let { topicPermissionLabel(it, user.id, userGroups) }
     val selectedEntryStatusAction = selectedEntry?.let(::knowledgeStatusAction)
+    val mergeTargetOptions = remember(entries, selectedEntry?.id) {
+        entries.filter { entry ->
+            entry.id != selectedEntry?.id && entry.status != KBEntryStatus.DELETED
+        }
+    }
+    val batchMergeCandidateEntries = remember(entries, selectedCandidateEntryIds) {
+        entries.filter { it.id in selectedCandidateEntryIds && it.status == KBEntryStatus.CANDIDATE }
+    }
+    val batchMergeTargetOptions = remember(entries, selectedCandidateEntryIds) {
+        entries.filter { entry ->
+            entry.id !in selectedCandidateEntryIds && entry.status != KBEntryStatus.DELETED
+        }
+    }
 
     LaunchedEffect(selectedSpaceId, topics) {
         if (selectedTopic != null && filteredTopics.none { it.id == selectedTopic?.id }) {
@@ -1404,6 +1885,23 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             selectedEntry = null
             entries = emptyList()
             editorContent = ""
+        }
+    }
+
+    LaunchedEffect(entries, entryFilter, selectedTopic?.id) {
+        val validCandidateIds = entries
+            .filter { it.status == KBEntryStatus.CANDIDATE }
+            .map { it.id }
+            .toSet()
+        selectedCandidateEntryIds = selectedCandidateEntryIds.intersect(validCandidateIds)
+        if (entryFilter != KnowledgeEntryFilter.CANDIDATE && selectedCandidateEntryIds.isNotEmpty()) {
+            selectedCandidateEntryIds = emptySet()
+        }
+        if (showMergeCandidateDialog && mergeTargetOptions.none { it.id == mergeTargetEntryId }) {
+            mergeTargetEntryId = mergeTargetOptions.firstOrNull()?.id.orEmpty()
+        }
+        if (showBatchMergeCandidatesDialog && batchMergeTargetOptions.none { it.id == batchMergeTargetEntryId }) {
+            batchMergeTargetEntryId = batchMergeTargetOptions.firstOrNull()?.id.orEmpty()
         }
     }
 
@@ -1476,8 +1974,72 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             selectedEntry = selectedEntry,
             selectedFilter = entryFilter,
             canCreateEntry = canEditSelectedTopic,
+            selectedCandidateEntryIds = selectedCandidateEntryIds,
+            canBatchMergeCandidates = selectedCandidateEntryIds.isNotEmpty() && batchMergeTargetOptions.isNotEmpty(),
             onFilterChange = { entryFilter = it },
             onCreateEntry = { showCreateEntryDialog = true },
+            onMeetingCapture = {
+                val topic = selectedTopic ?: return@EntrySidebar
+                meetingCaptureSpaceId = defaultKnowledgeSpaceIdForTopic(topic)
+                meetingCaptureTopicId = topic.id
+                meetingCaptureTitle = buildDefaultMeetingCaptureTitle(topic)
+                meetingCaptureContent = ""
+                meetingCaptureTagsText = "meeting, minutes"
+                meetingCaptureStatus = KBEntryStatus.CANDIDATE
+                meetingCaptureConfidenceText = "0.90"
+                meetingCaptureResultMessage = null
+                showMeetingCaptureDialog = true
+            },
+            onToggleSelectAllCandidates = {
+                selectedCandidateEntryIds =
+                    if (selectedCandidateEntryIds.size == filteredEntries.size) emptySet()
+                    else filteredEntries.map { it.id }.toSet()
+            },
+            onBatchMergeCandidates = {
+                if (batchMergeTargetOptions.isNotEmpty()) {
+                    batchMergeTargetEntryId = batchMergeTargetOptions.firstOrNull()?.id.orEmpty()
+                    showBatchMergeCandidatesDialog = true
+                }
+            },
+            onBatchPublishCandidates = {
+                scope.launch {
+                    bulkUpdateKnowledgeEntryStatus(
+                        entryIds = selectedCandidateEntryIds,
+                        topic = selectedTopic,
+                        userId = user.id,
+                        status = KBEntryStatus.PUBLISHED,
+                        currentSelectedEntryId = selectedEntry?.id,
+                        onSavingChange = { isSaving = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEntriesChange = { entries = it },
+                        onEditorContentChange = { editorContent = it },
+                        onEntryFilterChange = { entryFilter = it },
+                        onSelectedCandidateEntryIdsChange = { selectedCandidateEntryIds = it },
+                    )
+                }
+            },
+            onBatchArchiveCandidates = {
+                scope.launch {
+                    bulkUpdateKnowledgeEntryStatus(
+                        entryIds = selectedCandidateEntryIds,
+                        topic = selectedTopic,
+                        userId = user.id,
+                        status = KBEntryStatus.ARCHIVED,
+                        currentSelectedEntryId = selectedEntry?.id,
+                        onSavingChange = { isSaving = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEntriesChange = { entries = it },
+                        onEditorContentChange = { editorContent = it },
+                        onEntryFilterChange = { entryFilter = it },
+                        onSelectedCandidateEntryIdsChange = { selectedCandidateEntryIds = it },
+                    )
+                }
+            },
+            onToggleCandidateSelection = { entryId ->
+                selectedCandidateEntryIds = toggleKnowledgeEntrySelection(selectedCandidateEntryIds, entryId)
+            },
             onEntrySelect = { entry ->
                 loadKnowledgeEntry(
                     entry = entry,
@@ -1547,6 +2109,14 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 }
             },
             statusActionLabel = selectedEntryStatusAction?.first,
+            onMergeCandidate = selectedEntry
+                ?.takeIf { it.status == KBEntryStatus.CANDIDATE && canEditSelectedTopic && mergeTargetOptions.isNotEmpty() }
+                ?.let {
+                    {
+                        mergeTargetEntryId = mergeTargetOptions.firstOrNull()?.id.orEmpty()
+                        showMergeCandidateDialog = true
+                    }
+                },
             onExport = {
                 scope.launch {
                     exportKnowledgeEntry(
@@ -1695,6 +2265,130 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             },
         )
     }
+
+    if (showMeetingCaptureDialog) {
+        KnowledgeBaseMeetingCaptureDialog(
+            spaceOptions = spaceOptions,
+            topics = topics.filter { canWriteKnowledgeTopic(it, user.id, userGroups) },
+            selectedSpaceId = meetingCaptureSpaceId,
+            selectedTopicId = meetingCaptureTopicId,
+            title = meetingCaptureTitle,
+            content = meetingCaptureContent,
+            tagsText = meetingCaptureTagsText,
+            status = meetingCaptureStatus,
+            confidenceText = meetingCaptureConfidenceText,
+            isSaving = isMeetingCaptureSaving,
+            resultMessage = meetingCaptureResultMessage,
+            onSelectedSpaceIdChange = { meetingCaptureSpaceId = it },
+            onSelectedTopicIdChange = { meetingCaptureTopicId = it },
+            onTitleChange = { meetingCaptureTitle = it },
+            onContentChange = { meetingCaptureContent = it },
+            onTagsTextChange = { meetingCaptureTagsText = it },
+            onStatusChange = { meetingCaptureStatus = it },
+            onConfidenceTextChange = { meetingCaptureConfidenceText = it },
+            onDismiss = {
+                if (!isMeetingCaptureSaving) {
+                    showMeetingCaptureDialog = false
+                    meetingCaptureResultMessage = null
+                }
+            },
+            onConfirm = {
+                scope.launch {
+                    submitMeetingKnowledgeCapture(
+                        userId = user.id,
+                        topics = topics.filter { canWriteKnowledgeTopic(it, user.id, userGroups) },
+                        selectedSpaceId = meetingCaptureSpaceId,
+                        selectedTopicId = meetingCaptureTopicId,
+                        title = meetingCaptureTitle,
+                        content = meetingCaptureContent,
+                        tagsText = meetingCaptureTagsText,
+                        status = meetingCaptureStatus,
+                        confidenceText = meetingCaptureConfidenceText,
+                        onSavingChange = { isMeetingCaptureSaving = it },
+                        onResultMessageChange = { meetingCaptureResultMessage = it },
+                        onSelectedSpaceIdChange = { selectedSpaceId = it },
+                        onSelectedTopicChange = { selectedTopic = it },
+                        onEntriesChange = { entries = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEditorContentChange = { editorContent = it },
+                        onEntryFilterChange = { entryFilter = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onVisibilityChange = { showMeetingCaptureDialog = it },
+                    )
+                }
+            },
+        )
+    }
+
+    val mergeCandidateEntry = selectedEntry?.takeIf { it.status == KBEntryStatus.CANDIDATE }
+    if (showMergeCandidateDialog && mergeCandidateEntry != null) {
+        MergeKnowledgeEntryDialog(
+            title = "并入已有文档",
+            description = "将候选“${mergeCandidateEntry.title}”并入目标文档后，原候选会自动归档。",
+            targetEntries = mergeTargetOptions,
+            selectedTargetEntryId = mergeTargetEntryId,
+            isSaving = isMergeCandidateSaving,
+            onSelectedTargetEntryIdChange = { mergeTargetEntryId = it },
+            onDismiss = {
+                if (!isMergeCandidateSaving) {
+                    showMergeCandidateDialog = false
+                }
+            },
+            onConfirm = {
+                scope.launch {
+                    mergeCandidateIntoKnowledgeEntry(
+                        candidateEntry = mergeCandidateEntry,
+                        targetEntryId = mergeTargetEntryId,
+                        topic = selectedTopic,
+                        entries = entries,
+                        userId = user.id,
+                        onSavingChange = { isMergeCandidateSaving = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEntriesChange = { entries = it },
+                        onEditorContentChange = { editorContent = it },
+                        onEntryFilterChange = { entryFilter = it },
+                        onDialogVisibilityChange = { showMergeCandidateDialog = it },
+                    )
+                }
+            },
+        )
+    }
+
+    if (showBatchMergeCandidatesDialog && batchMergeCandidateEntries.isNotEmpty()) {
+        MergeKnowledgeEntryDialog(
+            title = "批量并入已有文档",
+            description = "将选中的 ${batchMergeCandidateEntries.size} 条候选并入目标文档后，这些候选会自动归档。",
+            targetEntries = batchMergeTargetOptions,
+            selectedTargetEntryId = batchMergeTargetEntryId,
+            isSaving = isBatchMergeSaving,
+            onSelectedTargetEntryIdChange = { batchMergeTargetEntryId = it },
+            onDismiss = {
+                if (!isBatchMergeSaving) {
+                    showBatchMergeCandidatesDialog = false
+                }
+            },
+            onConfirm = {
+                scope.launch {
+                    bulkMergeCandidatesIntoKnowledgeEntry(
+                        selectedCandidateEntryIds = selectedCandidateEntryIds,
+                        targetEntryId = batchMergeTargetEntryId,
+                        topic = selectedTopic,
+                        entries = entries,
+                        userId = user.id,
+                        onSavingChange = { isBatchMergeSaving = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEntriesChange = { entries = it },
+                        onEditorContentChange = { editorContent = it },
+                        onEntryFilterChange = { entryFilter = it },
+                        onSelectedCandidateEntryIdsChange = { selectedCandidateEntryIds = it },
+                        onDialogVisibilityChange = { showBatchMergeCandidatesDialog = it },
+                    )
+                }
+            },
+        )
+    }
 }
 
 // ---- Shared dialog helpers ----
@@ -1749,7 +2443,77 @@ fun LabeledInput(placeholder: String, currentValue: String, onValueChange: (Stri
 }
 
 @Composable
-fun DialogActions(onCancel: () -> Unit, onConfirm: () -> Unit, confirmLabel: String = "确定") {
+private fun MergeKnowledgeEntryDialog(
+    title: String,
+    description: String,
+    targetEntries: List<KBEntryItem>,
+    selectedTargetEntryId: String,
+    isSaving: Boolean,
+    onSelectedTargetEntryIdChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    ModalDialog(title = title, onDismiss = onDismiss) {
+        Div({
+            style {
+                fontSize(13.px)
+                color(Color(SilkColors.textSecondary))
+                marginBottom(12.px)
+            }
+        }) {
+            Text(description)
+        }
+        Div({
+            style {
+                marginBottom(12.px)
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("gap", "8px")
+            }
+        }) {
+            Span({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    fontWeight("600")
+                }
+            }) { Text("目标文档") }
+            org.jetbrains.compose.web.dom.Select({
+                style {
+                    width(100.percent)
+                    height(40.px)
+                    borderRadius(8.px)
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    padding(0.px, 10.px)
+                    backgroundColor(Color.white)
+                    color(Color(SilkColors.textPrimary))
+                }
+                attr("value", selectedTargetEntryId)
+                onChange { onSelectedTargetEntryIdChange(it.value ?: "") }
+            }) {
+                targetEntries.forEach { entry ->
+                    org.jetbrains.compose.web.dom.Option(value = entry.id) {
+                        Text("${entry.title} · ${entry.status.name.lowercase()}")
+                    }
+                }
+            }
+        }
+        DialogActions(
+            onCancel = onDismiss,
+            onConfirm = onConfirm,
+            confirmLabel = if (isSaving) "合并中..." else "确认合并",
+            confirmEnabled = !isSaving && selectedTargetEntryId.isNotBlank(),
+        )
+    }
+}
+
+@Composable
+fun DialogActions(
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+    confirmLabel: String = "确定",
+    confirmEnabled: Boolean = true,
+) {
     Div({
         style {
             display(DisplayStyle.Flex)
@@ -1771,14 +2535,21 @@ fun DialogActions(onCancel: () -> Unit, onConfirm: () -> Unit, confirmLabel: Str
         }) { Text("取消") }
         Button({
             style {
-                backgroundColor(Color(SilkColors.primary))
+                backgroundColor(Color(if (confirmEnabled) SilkColors.primary else SilkColors.border))
                 color(Color.white)
                 border(0.px)
                 borderRadius(6.px)
                 padding(8.px, 16.px)
-                property("cursor", "pointer")
+                property("cursor", if (confirmEnabled) "pointer" else "not-allowed")
             }
-            onClick { onConfirm() }
+            if (!confirmEnabled) {
+                attr("disabled", "true")
+            }
+            onClick {
+                if (confirmEnabled) {
+                    onConfirm()
+                }
+            }
         }) { Text(confirmLabel) }
     }
 }

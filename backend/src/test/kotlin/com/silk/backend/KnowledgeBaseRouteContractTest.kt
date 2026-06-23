@@ -9,6 +9,7 @@ import com.silk.backend.models.KBSourceType
 import com.silk.backend.models.KBTopic
 import com.silk.backend.models.KnowledgeSpaceType
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
@@ -27,6 +28,7 @@ import kotlin.test.assertFalse
 
 class KnowledgeBaseRouteContractTest {
     private val json = Json { ignoreUnknownKeys = true }
+    private val authenticatedUserHeader = "X-Silk-Authenticated-User-Id"
 
     @Test
     fun `export route requires caller access to the entry`() {
@@ -55,6 +57,29 @@ class KnowledgeBaseRouteContractTest {
                 val owner = client.get("/api/kb/entries/${entry.id}/export?userId=owner")
                 assertEquals(HttpStatusCode.OK, owner.status)
                 assertTrue(owner.bodyAsText().contains("Private Entry"))
+            }
+        }
+    }
+
+    @Test
+    fun `kb routes accept authenticated user header without query userId`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val topic = manager.createTopic(name = "Header Topic", project = "", userId = "owner")
+
+            testApplication {
+                application { module() }
+
+                val response = client.get("/api/kb/topics") {
+                    header(authenticatedUserHeader, "owner")
+                }
+
+                assertEquals(HttpStatusCode.OK, response.status)
+                val topics = json.decodeFromString(
+                    ListSerializer(KBTopic.serializer()),
+                    response.bodyAsText(),
+                )
+                assertEquals(listOf(topic.id), topics.map { it.id })
             }
         }
     }
@@ -214,6 +239,122 @@ class KnowledgeBaseRouteContractTest {
                 val stored = manager.getEntry(created.id, "owner")
                 assertNotNull(stored)
                 assertEquals(KBEntryStatus.CANDIDATE, stored.status)
+            }
+        }
+    }
+
+    @Test
+    fun `capture route keeps chat and workflow captures as candidate even when published is requested`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val topic = manager.createTopic(name = "Capture Policy Topic", project = "", userId = "owner")
+
+            testApplication {
+                application { module() }
+
+                val response = client.post("/api/kb/captures") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """
+                        {
+                          "userId":"owner",
+                          "topicId":"${topic.id}",
+                          "title":"聊天纪要",
+                          "content":"这条聊天沉淀不应直接发布。",
+                          "status":"PUBLISHED",
+                          "source":{
+                            "sourceType":"CHAT",
+                            "sourceGroupId":"group-1",
+                            "messageIds":["msg-1"]
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                }
+
+                assertEquals(HttpStatusCode.Created, response.status)
+                val created = json.decodeFromString(KBEntry.serializer(), response.bodyAsText())
+                assertEquals(KBSourceType.CHAT, created.source.sourceType)
+                assertEquals(KBEntryStatus.CANDIDATE, created.status)
+            }
+        }
+    }
+
+    @Test
+    fun `capture route allows meeting captures to opt into published status`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val group = assertNotNull(GroupRepository.createGroup("KB Meeting Route Group", hostId = "host"))
+            assertTrue(GroupRepository.addUserToGroup(group.id, "owner"))
+            val topic = manager.createTopic(
+                name = "Meeting Topic",
+                project = "silk",
+                userId = "owner",
+                spaceType = KnowledgeSpaceType.TEAM,
+                groupId = group.id,
+            )
+
+            testApplication {
+                application { module() }
+
+                val response = client.post("/api/kb/captures") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """
+                        {
+                          "userId":"owner",
+                          "topicId":"${topic.id}",
+                          "title":"例会纪要",
+                          "content":"会议决定下周启用 KB candidate inbox 批处理。",
+                          "status":"PUBLISHED",
+                          "tags":["meeting","minutes"],
+                          "source":{
+                            "sourceType":"MEETING",
+                            "sourceGroupId":"${group.id}",
+                            "confidence":0.94
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                }
+
+                assertEquals(HttpStatusCode.Created, response.status)
+                val created = json.decodeFromString(KBEntry.serializer(), response.bodyAsText())
+                assertEquals(KBSourceType.MEETING, created.source.sourceType)
+                assertEquals(KBEntryStatus.PUBLISHED, created.status)
+                assertEquals(group.id, created.source.sourceGroupId)
+            }
+        }
+    }
+
+    @Test
+    fun `kb routes reject mismatched authenticated user and payload userId`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val topic = manager.createTopic(name = "Mismatch Topic", project = "", userId = "owner")
+
+            testApplication {
+                application { module() }
+
+                val response = client.post("/api/kb/captures") {
+                    header(authenticatedUserHeader, "owner")
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """
+                        {
+                          "userId":"other",
+                          "topicId":"${topic.id}",
+                          "title":"例会纪要",
+                          "content":"认证用户和 payload 用户必须一致。",
+                          "source":{
+                            "sourceType":"MEETING"
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                }
+
+                assertEquals(HttpStatusCode.Forbidden, response.status)
             }
         }
     }

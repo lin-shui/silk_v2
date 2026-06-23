@@ -1074,6 +1074,7 @@ object ApiClient {
         tags: List<String>,
         userId: String,
         source: KBEntrySource,
+        status: KBEntryStatus? = null,
     ): KBEntryItem? {
         return recoverApiCall(
             logMessage = "保存知识库候选失败:",
@@ -1092,6 +1093,9 @@ object ApiClient {
                     "source",
                     jsonParser.encodeToJsonElement(KBEntrySource.serializer(), source)
                 )
+                status?.let {
+                    put("status", kotlinx.serialization.json.JsonPrimitive(it.name))
+                }
             }.toString()
             val response = post("/api/kb/captures", body)
             jsonParser.decodeFromString(response)

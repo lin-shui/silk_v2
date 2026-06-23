@@ -20,6 +20,7 @@ import org.jetbrains.compose.web.css.height
 import org.jetbrains.compose.web.css.left
 import org.jetbrains.compose.web.css.marginBottom
 import org.jetbrains.compose.web.css.marginTop
+import org.jetbrains.compose.web.css.maxWidth
 import org.jetbrains.compose.web.css.padding
 import org.jetbrains.compose.web.css.percent
 import org.jetbrains.compose.web.css.position
@@ -34,94 +35,56 @@ import org.jetbrains.compose.web.dom.H3
 import org.jetbrains.compose.web.dom.Input
 import org.jetbrains.compose.web.dom.Option
 import org.jetbrains.compose.web.dom.Select
-import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
 import org.jetbrains.compose.web.dom.TextArea
 
-internal data class KnowledgeCaptureDraft(
-    val message: com.silk.shared.models.Message,
-    val sourceType: KBSourceType,
-    val sourceGroupId: String? = null,
-    val workflowId: String? = null,
-    val preferredSpaceId: String = PERSONAL_SPACE_ID,
-)
-
-internal data class KnowledgeCaptureContext(
-    val groups: List<Group>,
-    val topics: List<KBTopicItem>,
-)
-
-internal suspend fun loadKnowledgeCaptureContext(userId: String): KnowledgeCaptureContext {
-    val groups = (ApiClient.getUserGroups(userId).groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
-    val topics = ApiClient.getKBTopics(userId)
-    return KnowledgeCaptureContext(groups = groups, topics = topics)
+internal fun buildDefaultMeetingCaptureTitle(topic: KBTopicItem?): String {
+    return topic?.name?.takeIf { it.isNotBlank() }?.let { "$it 会议纪要" } ?: "会议纪要"
 }
 
-internal fun buildDefaultKnowledgeCaptureTitle(content: String): String {
-    val compact = content
-        .lineSequence()
+internal fun parseKnowledgeCaptureTags(raw: String): List<String> {
+    return raw.split(',', '，')
         .map { it.trim() }
-        .firstOrNull { it.isNotEmpty() }
-        ?.replace(Regex("\\s+"), " ")
-        .orEmpty()
-    if (compact.isBlank()) return "未命名知识候选"
-    return if (compact.length <= 40) compact else compact.take(40) + "..."
+        .filter { it.isNotEmpty() }
+        .distinct()
 }
 
-internal fun preferredKnowledgeCaptureSpaceId(
-    preferredGroupId: String?,
-    topics: List<KBTopicItem>,
-): String {
-    if (!preferredGroupId.isNullOrBlank() && topics.any { it.spaceType == KnowledgeSpaceType.TEAM && it.groupId == preferredGroupId }) {
-        return preferredGroupId
-    }
-    return PERSONAL_SPACE_ID
+internal fun parseKnowledgeCaptureConfidence(raw: String): Double? {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return null
+    val value = trimmed.toDoubleOrNull() ?: return null
+    return value.coerceIn(0.0, 1.0)
 }
 
-internal fun defaultKnowledgeCaptureTopicId(
-    topics: List<KBTopicItem>,
-    spaceId: String,
-): String? = filterTopicsForSpace(topics, spaceId).firstOrNull()?.id
-
-internal fun canSubmitKnowledgeCapture(
-    isSaving: Boolean,
-    selectedTopicId: String,
-    title: String,
-    content: String,
-): Boolean {
-    return !isSaving &&
-        selectedTopicId.isNotBlank() &&
-        title.isNotBlank() &&
-        content.isNotBlank()
-}
-
-private fun knowledgeCaptureSourceLabel(sourceType: KBSourceType): String {
-    return when (sourceType) {
-        KBSourceType.WORKFLOW -> "工作流沉淀"
-        KBSourceType.CHAT -> "聊天沉淀"
-        KBSourceType.MANUAL -> "手动创建"
-        KBSourceType.MEETING -> "会议沉淀"
-        KBSourceType.FILE -> "文件导入"
-        KBSourceType.URL -> "URL 导入"
-    }
+internal fun buildMeetingCaptureSource(topic: KBTopicItem?, confidenceText: String): KBEntrySource {
+    return KBEntrySource(
+        sourceType = KBSourceType.MEETING,
+        sourceGroupId = topic?.takeIf { it.spaceType == KnowledgeSpaceType.TEAM }?.groupId,
+        confidence = parseKnowledgeCaptureConfidence(confidenceText),
+    )
 }
 
 @Composable
-@Suppress("CyclomaticComplexMethod")
-internal fun KnowledgeBaseCaptureDialog(
-    draft: KnowledgeCaptureDraft,
+@Suppress("CyclomaticComplexMethod", "LongParameterList")
+internal fun KnowledgeBaseMeetingCaptureDialog(
     spaceOptions: List<KnowledgeSpaceOption>,
     topics: List<KBTopicItem>,
     selectedSpaceId: String,
     selectedTopicId: String,
     title: String,
     content: String,
+    tagsText: String,
+    status: KBEntryStatus,
+    confidenceText: String,
     isSaving: Boolean,
     resultMessage: String?,
     onSelectedSpaceIdChange: (String) -> Unit,
     onSelectedTopicIdChange: (String) -> Unit,
     onTitleChange: (String) -> Unit,
     onContentChange: (String) -> Unit,
+    onTagsTextChange: (String) -> Unit,
+    onStatusChange: (KBEntryStatus) -> Unit,
+    onConfidenceTextChange: (String) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
@@ -147,7 +110,7 @@ internal fun KnowledgeBaseCaptureDialog(
     }) {
         Div({
             style {
-                width(560.px)
+                width(620.px)
                 property("max-width", "100%")
                 backgroundColor(Color(SilkColors.surfaceElevated))
                 borderRadius(16.px)
@@ -165,7 +128,7 @@ internal fun KnowledgeBaseCaptureDialog(
                     marginBottom(0.px)
                     color(Color(SilkColors.textPrimary))
                 }
-            }) { Text("保存到知识库候选") }
+            }) { Text("会议纪要入库") }
 
             Div({
                 style {
@@ -173,12 +136,7 @@ internal fun KnowledgeBaseCaptureDialog(
                     color(Color(SilkColors.textSecondary))
                 }
             }) {
-                Text(
-                    when (draft.sourceType) {
-                        KBSourceType.WORKFLOW -> "当前工作流消息将以 candidate 进入知识库，后续可在 KB 页面整理后发布。"
-                        else -> "当前聊天消息将以 candidate 进入知识库，后续可在 KB 页面整理后发布。"
-                    }
-                )
+                Text("为会议纪要走一遍统一 KB capture 契约，可直接存成候选，或显式发布到目标空间。")
             }
 
             KnowledgeCaptureField("目标空间") {
@@ -250,7 +208,7 @@ internal fun KnowledgeBaseCaptureDialog(
                     onInput { onContentChange(it.value) }
                     style {
                         width(100.percent)
-                        height(180.px)
+                        height(200.px)
                         borderRadius(10.px)
                         border(1.px, LineStyle.Solid, Color(SilkColors.border))
                         padding(10.px)
@@ -265,12 +223,76 @@ internal fun KnowledgeBaseCaptureDialog(
             Div({
                 style {
                     display(DisplayStyle.Flex)
+                    property("gap", "12px")
+                    property("flex-wrap", "wrap")
+                }
+            }) {
+                KnowledgeCaptureField("标签") {
+                    Input(InputType.Text) {
+                        value(tagsText)
+                        onInput { onTagsTextChange(it.value) }
+                        attr("placeholder", "meeting, minutes")
+                        style {
+                            width(280.px)
+                            maxWidth(100.percent)
+                            height(40.px)
+                            borderRadius(8.px)
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            padding(0.px, 10.px)
+                            property("box-sizing", "border-box")
+                        }
+                    }
+                }
+
+                KnowledgeCaptureField("状态") {
+                    Select({
+                        style {
+                            width(160.px)
+                            height(40.px)
+                            borderRadius(8.px)
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            padding(0.px, 10.px)
+                            backgroundColor(Color.white)
+                            color(Color(SilkColors.textPrimary))
+                        }
+                        attr("value", status.name)
+                        onChange { event ->
+                            val next = event.value?.let { runCatching { KBEntryStatus.valueOf(it) }.getOrNull() } ?: return@onChange
+                            onStatusChange(next)
+                        }
+                    }) {
+                        Option(value = KBEntryStatus.CANDIDATE.name) { Text("候选") }
+                        Option(value = KBEntryStatus.PUBLISHED.name) { Text("已发布") }
+                    }
+                }
+
+                KnowledgeCaptureField("置信度") {
+                    Input(InputType.Text) {
+                        value(confidenceText)
+                        onInput { onConfidenceTextChange(it.value) }
+                        attr("inputmode", "decimal")
+                        attr("placeholder", "0.90")
+                        style {
+                            width(120.px)
+                            height(40.px)
+                            borderRadius(8.px)
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            padding(0.px, 10.px)
+                            property("box-sizing", "border-box")
+                        }
+                    }
+                }
+            }
+
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
                     property("gap", "8px")
                     property("flex-wrap", "wrap")
                 }
             }) {
-                CaptureBadge("candidate", SilkColors.primaryDark)
-                CaptureBadge(knowledgeCaptureSourceLabel(draft.sourceType), SilkColors.primary)
+                CaptureBadge(status.name.lowercase(), if (status == KBEntryStatus.PUBLISHED) SilkColors.success else SilkColors.primaryDark)
+                CaptureBadge("会议沉淀", SilkColors.primary)
             }
 
             resultMessage?.takeIf { it.isNotBlank() }?.let { message ->
@@ -302,9 +324,7 @@ internal fun KnowledgeBaseCaptureDialog(
                 }) { Text("取消") }
                 Button({
                     style {
-                        backgroundColor(
-                            Color(if (canSubmit) SilkColors.primary else SilkColors.border)
-                        )
+                        backgroundColor(Color(if (canSubmit) SilkColors.primary else SilkColors.border))
                         color(Color.white)
                         border(0.px)
                         borderRadius(8.px)
@@ -315,47 +335,8 @@ internal fun KnowledgeBaseCaptureDialog(
                         attr("disabled", "true")
                     }
                     onClick { onConfirm() }
-                }) { Text(if (isSaving) "保存中..." else "存入候选") }
+                }) { Text(if (isSaving) "保存中..." else if (status == KBEntryStatus.PUBLISHED) "发布纪要" else "存入候选") }
             }
         }
     }
-}
-
-@Composable
-internal fun KnowledgeCaptureField(
-    label: String,
-    content: @Composable () -> Unit,
-) {
-    Div({
-        style {
-            display(DisplayStyle.Flex)
-            flexDirection(FlexDirection.Column)
-            property("gap", "6px")
-        }
-    }) {
-        Span({
-            style {
-                fontSize(12.px)
-                color(Color(SilkColors.textSecondary))
-                fontWeight("600")
-            }
-        }) { Text(label) }
-        content()
-    }
-}
-
-@Composable
-internal fun CaptureBadge(label: String, background: String) {
-    Span({
-        style {
-            backgroundColor(Color(background))
-            color(Color.white)
-            borderRadius(999.px)
-            padding(4.px, 10.px)
-            fontSize(11.px)
-            fontWeight("600")
-            property("display", "inline-flex")
-            property("align-items", "center")
-        }
-    }) { Text(label) }
 }

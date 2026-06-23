@@ -12,6 +12,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
+import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.DirEntry
 import com.silk.shared.models.DirListingResponse
 import com.silk.shared.models.Message
@@ -1432,6 +1433,7 @@ private fun WorkflowChatPanel(
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
     var messageText by remember(groupId) { mutableStateOf("") }
+    var kbContextSelection by remember(groupId) { mutableStateOf(KnowledgeBaseContextSelection()) }
     var workingDir by remember(groupId) { mutableStateOf("") }
     var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
     var permissionMode by remember(groupId) { mutableStateOf("") }
@@ -1530,6 +1532,8 @@ private fun WorkflowChatPanel(
         onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
     )
     WorkflowChatComposer(
+        statusMessages = statusMessages,
+        kbContextSelection = kbContextSelection,
         permissionMode = permissionMode,
         activeAgentDisplay = activeAgentDisplay,
         availableAgents = availableAgents,
@@ -1572,6 +1576,7 @@ private fun WorkflowChatPanel(
         },
         onClearSwitchError = { switchError = null },
         onMessageTextChange = { messageText = it },
+        onKnowledgeBaseContextSelectionChange = { kbContextSelection = it },
         onStartNewSession = { startWorkflowNewSession(scope, chatClient, userId, userName) },
         onSendMessage = {
             submitWorkflowMessage(
@@ -1580,6 +1585,7 @@ private fun WorkflowChatPanel(
                 userId = userId,
                 userName = userName,
                 messageText = messageText,
+                kbContextSelection = kbContextSelection,
                 onMessageTextChange = { messageText = it },
             )
         },
@@ -1794,7 +1800,8 @@ private fun WorkflowMessagesArea(
 
 @Composable
 private fun WorkflowStatusMessages(statusMessages: List<Message>) {
-    if (statusMessages.isEmpty()) {
+    val visibleStatusMessages = filterNonKnowledgeBaseContextStatusMessages(statusMessages)
+    if (visibleStatusMessages.isEmpty()) {
         return
     }
 
@@ -1807,7 +1814,7 @@ private fun WorkflowStatusMessages(statusMessages: List<Message>) {
             property("border-left", "3px solid #9E9E9E")
         }
     }) {
-        statusMessages.forEach { status ->
+        visibleStatusMessages.forEach { status ->
             Div({
                 style {
                     color(Color("#757575"))
@@ -1850,6 +1857,8 @@ private fun WorkflowTransientMessage(
 
 @Composable
 private fun WorkflowChatComposer(
+    statusMessages: List<Message>,
+    kbContextSelection: KnowledgeBaseContextSelection,
     permissionMode: String,
     activeAgentDisplay: String,
     availableAgents: List<AgentInfo>,
@@ -1864,6 +1873,7 @@ private fun WorkflowChatComposer(
     onSelectAgent: (AgentInfo) -> Unit,
     onClearSwitchError: () -> Unit,
     onMessageTextChange: (String) -> Unit,
+    onKnowledgeBaseContextSelectionChange: (KnowledgeBaseContextSelection) -> Unit,
     onStartNewSession: () -> Unit,
     onSendMessage: () -> Unit,
     onStopGeneration: () -> Unit,
@@ -1876,9 +1886,14 @@ private fun WorkflowChatComposer(
             backgroundColor(Color(SilkColors.surfaceElevated))
             display(DisplayStyle.Flex)
             flexDirection(FlexDirection.Column)
-            property("gap", "6px")
+            property("gap", "8px")
         }
     }) {
+        KnowledgeBaseContextTray(
+            statusMessages = statusMessages,
+            selection = kbContextSelection,
+            onSelectionChange = onKnowledgeBaseContextSelectionChange,
+        )
         WorkflowChatBadgeRow(
             permissionMode = permissionMode,
             activeAgentDisplay = activeAgentDisplay,
@@ -2325,6 +2340,7 @@ private fun submitWorkflowMessage(
     userId: String,
     userName: String,
     messageText: String,
+    kbContextSelection: KnowledgeBaseContextSelection,
     onMessageTextChange: (String) -> Unit,
 ) {
     val text = messageText.trim()
@@ -2334,7 +2350,12 @@ private fun submitWorkflowMessage(
 
     onMessageTextChange("")
     scope.launch {
-        chatClient.sendMessage(userId, userName, text)
+        chatClient.sendMessage(
+            userId,
+            userName,
+            text,
+            kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+        )
     }
 }
 
