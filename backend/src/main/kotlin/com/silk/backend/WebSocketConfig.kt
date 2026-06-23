@@ -1,8 +1,14 @@
 package com.silk.backend
 
-import io.ktor.server.application.*
-import io.ktor.server.websocket.*
-import io.ktor.websocket.*
+import io.ktor.server.application.Application
+import io.ktor.server.application.install
+import io.ktor.server.websocket.WebSockets
+import io.ktor.server.websocket.pingPeriod
+import io.ktor.server.websocket.timeout
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.WebSocketSession
+import io.ktor.websocket.close
 import java.time.Duration
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.launch
@@ -12,7 +18,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -947,6 +961,7 @@ class ChatServer(
     /**
      * 广播系统状态消息（灰色显示）- 公开方法，供其他模块调用
      */
+    @Suppress("UnusedParameter")
     suspend fun broadcastExtractedContent(content: String, label: String, downloadUrl: String = "") {
         logger.debug("📄 [提取内容广播] {} ({} 字符)", label, content.length)
         // 文件消息已有图片预览，提取内容不再重复加图片
@@ -1106,6 +1121,7 @@ class ChatServer(
         logger.info("📸 [broadcastUserMessage] 已广播用户消息: {} 字符", previewContent.length)
     }
     
+    @Suppress("UnusedParameter")
     suspend fun broadcastCombinedVisionResult(
         pendingImg: PendingImageState,
         text: String,
@@ -1213,6 +1229,7 @@ class ChatServer(
         }
     }
 
+    @Suppress("UnusedParameter")
     suspend fun handleVisionImageAndText(
         imageFile: java.io.File,
         base64Data: String,
@@ -1859,238 +1876,6 @@ class ChatServer(
         historyManager.addMessage(sessionName, finalMsg)
     }
 
-    /**
-     * 执行智能诊断（根据历史决定完整诊断或快速更新）
-     */
-    private suspend fun executeSmartDiagnosis() {
-        // 检查是否有之前的诊断结果
-        val hasPreviousDiagnosis = checkPreviousDiagnosis()
-        
-        if (hasPreviousDiagnosis) {
-            logger.debug("📋 发现历史诊断，执行快速更新流程")
-            // 执行快速诊断更新
-            executeQuickDiagnosisUpdate()
-        } else {
-            logger.debug("📋 无历史诊断，执行完整11步诊断")
-            // 执行完整诊断
-            executeStepwiseAITask()
-        }
-    }
-    
-    /**
-     * 检查是否有之前的诊断结果
-     */
-    private fun checkPreviousDiagnosis(): Boolean {
-        return try {
-            logger.debug("🔍 检查历史诊断文件:")
-            logger.debug("   sessionName: {}", sessionName)
-            
-            // 尝试多个可能的路径（因为工作目录可能不同）
-            val possiblePaths = listOf(
-                "chat_history/$sessionName/last_diagnosis.json",
-                "backend/chat_history/$sessionName/last_diagnosis.json",
-                "/Users/mac/Documents/Silk/backend/chat_history/$sessionName/last_diagnosis.json"
-            )
-            
-            possiblePaths.forEachIndexed { index, path ->
-                val testFile = java.io.File(path)
-                logger.debug("   路径{}: {}", index + 1, testFile.absolutePath)
-                logger.debug("     存在: {}", testFile.exists())
-                if (testFile.exists()) {
-                    logger.debug("     大小: {} bytes", testFile.length())
-                }
-            }
-            
-            val file = possiblePaths
-                .map { java.io.File(it) }
-                .firstOrNull { it.exists() && it.length() > 0 }
-            
-            if (file != null) {
-                logger.info("✅ 找到历史诊断文件: {}", file.absolutePath)
-                logger.debug("   文件大小: {} bytes", file.length())
-                logger.debug("   将执行快速更新")
-                true
-            } else {
-                logger.debug("ℹ️ 无历史诊断文件")
-                logger.debug("   将执行完整11步诊断")
-                false
-            }
-        } catch (e: Exception) {
-            logger.warn("⚠️ 检查历史诊断失败: {}", e.message)
-            e.printStackTrace()
-            false
-        }
-    }
-    
-    /**
-     * 执行快速诊断更新（基于之前的诊断）
-     */
-    private suspend fun executeQuickDiagnosisUpdate() {
-        val chatHistory = historyManager.loadChatHistory(sessionName)
-        val historyEntries = chatHistory?.messages ?: emptyList()
-        
-        val latestUserName = historyEntries
-            .filter { !AgentRuntime.isAgentUserId(it.senderId) }
-            .lastOrNull()?.senderName ?: "用户"
-        
-        val groupDisplayName = getGroupDisplayName(sessionName)
-        
-        // 定义回调
-        val callback: suspend (String, String, Int?, Int?) -> Unit = { stepType, content, currentStep, totalSteps ->
-            val agentMessage = Message(
-                id = generateId(),
-                userId = SilkAgent.AGENT_ID,
-                userName = SilkAgent.AGENT_NAME,
-                content = content,
-                timestamp = System.currentTimeMillis(),
-                type = MessageType.TEXT,
-                isTransient = stepType != "PDF报告",
-                currentStep = currentStep,
-                totalSteps = totalSteps,
-                isIncremental = stepType == "streaming_incremental"
-            )
-            
-            if (!agentMessage.isTransient) {
-                messageHistory.add(agentMessage)
-                historyManager.addMessage(sessionName, agentMessage)
-            }
-            
-            val messageJson = Json.encodeToString(agentMessage)
-            allSessions().forEach { session ->
-                try {
-                    session.send(Frame.Text(messageJson))
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-            
-            kotlinx.coroutines.delay(300)
-        }
-        
-        // 执行快速诊断更新
-        val message = historyEntries
-            .filter { !AgentRuntime.isAgentUserId(it.senderId) }
-            .lastOrNull()?.content ?: ""
-        
-        silkAgent.executeDoctorDiagnosisUpdate(
-            chatHistory = historyEntries,
-            doctorMessage = message,
-            callback = callback,
-            userName = latestUserName,
-            groupDisplayName = groupDisplayName
-        )
-    }
-    
-    /**
-     * 执行多步骤 AI 任务
-     * 类似于 MoxiTreat 的 stepwise_diagnosis
-     */
-    private suspend fun executeStepwiseAITask() {
-        // 从持久化的历史中加载聊天记录
-        val chatHistory = historyManager.loadChatHistory(sessionName)
-        val historyEntries = chatHistory?.messages ?: emptyList()
-        
-        // 提取最新的用户名（用于 PDF 文件命名）
-        val latestUserName = historyEntries
-            .filter { !AgentRuntime.isAgentUserId(it.senderId) }
-            .lastOrNull()?.senderName ?: "用户"
-        
-        // 获取群组显示名称（用于PDF标题和文件名）
-        val groupDisplayName = getGroupDisplayName(sessionName)
-        
-        // 获取Host用户ID（用于区分医生和病人）
-        val hostId = getGroupHostId(sessionName)
-        
-        // ✅ 新的消息策略：
-        // - TODO list和步骤结果作为独立消息保留（isTransient=false）
-        // - streaming过程使用临时消息实时显示（isTransient=true）
-        // - 通过category区分显示亮度
-        val callback: suspend (String, String, Int?, Int?) -> Unit = { stepType, content, currentStep, totalSteps ->
-            
-            // ✅ 判断是否为临时消息
-            val isTransient = when (stepType) {
-                "todo_list" -> false          // TODO列表保留
-                "step_complete" -> false      // ✅ 步骤完成结果保留
-                "总结报告" -> false            // 总结报告保留
-                "PDF报告" -> false             // PDF报告保留
-                "streaming_incremental" -> true  // ✅ 流式输出是临时的（实时显示）
-                else -> true                  // 其他都是临时的
-            }
-            
-            // ✅ 根据stepType设置消息类别
-            val category = when (stepType) {
-                "todo_list" -> MessageCategory.TODO_LIST          // TODO列表（低亮度）
-                "step_complete" -> MessageCategory.STEP_PROCESS   // 步骤结果（低亮度，可转发）
-                "streaming_incremental" -> MessageCategory.STEP_PROCESS  // 流式输出（低亮度）
-                "总结报告" -> MessageCategory.FINAL_REPORT        // 最终报告（高亮度）
-                "PDF报告" -> MessageCategory.FINAL_REPORT         // PDF报告（高亮度）
-                else -> MessageCategory.STEP_PROCESS              // 其他（低亮度）
-            }
-            
-            // ✅ 判断是否为增量消息
-            val isIncremental = stepType == "streaming_incremental"
-            
-            val agentMessage = Message(
-                id = generateId(),
-                userId = SilkAgent.AGENT_ID,
-                userName = SilkAgent.AGENT_NAME,
-                content = content,
-                timestamp = System.currentTimeMillis(),
-                type = MessageType.TEXT,
-                isTransient = isTransient,
-                currentStep = currentStep,
-                totalSteps = totalSteps,
-                isIncremental = isIncremental,
-                category = category
-            )
-            
-            // 所有非临时消息都保存到历史
-            if (!isTransient) {
-                messageHistory.add(agentMessage)
-                historyManager.addMessage(sessionName, agentMessage)
-            }
-            
-            // 直接发送给所有连接的客户端（临时和普通消息都发送）
-            val messageJson = Json.encodeToString(agentMessage)
-            allSessions().forEach { session ->
-                try {
-                    session.send(Frame.Text(messageJson))
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-            
-            // 短暂延迟，让消息按顺序显示
-            kotlinx.coroutines.delay(300)
-        }
-        
-        // 执行多步骤任务（传递hostId以区分医生和病人）
-        try {
-            silkAgent.executeStepwiseTask(historyEntries, callback, latestUserName, groupDisplayName, hostId)
-        } catch (e: Exception) {
-            val errorMessage = Message(
-                id = generateId(),
-                userId = SilkAgent.AGENT_ID,
-                userName = SilkAgent.AGENT_NAME,
-                content = "❌ AI Agent 执行出错：${e.message}",
-                timestamp = System.currentTimeMillis(),
-                type = MessageType.SYSTEM
-            )
-            
-            messageHistory.add(errorMessage)
-            historyManager.addMessage(sessionName, errorMessage)
-            
-            val messageJson = Json.encodeToString(errorMessage)
-            allSessions().forEach { session ->
-                try {
-                    session.send(Frame.Text(messageJson))
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }
-    }
-    
     fun getOnlineUsers(): List<User> {
         return connections.keys.map { userId ->
             User(id = userId, name = "User_$userId")
@@ -2100,28 +1885,6 @@ class ChatServer(
     /** 获取所有活跃的 WebSocket 会话（展平多连接） */
     private fun allSessions(): List<WebSocketSession> =
         connections.values.flatMap { it }
-    
-    /**
-     * 检查用户是否是群组的Host（医生角色）
-     */
-    private fun checkIfUserIsHost(sessionName: String, userId: String): Boolean {
-        return if (sessionName.startsWith("group_")) {
-            val groupId = sessionName.removePrefix("group_")
-            try {
-                val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
-                val isHost = group?.hostId == userId
-                if (isHost) {
-                    logger.debug("🩺 确认用户是Host（医生）: {}", userId)
-                }
-                isHost
-            } catch (e: Exception) {
-                logger.warn("⚠️ 检查Host角色失败: {}", e.message)
-                false
-            }
-        } else {
-            false
-        }
-    }
     
     /**
      * 执行医生诊断更新（Host的消息）

@@ -1,7 +1,9 @@
 package com.silk.backend.auth
 
 import com.silk.backend.EnvLoader
-import com.silk.backend.database.*
+import com.silk.backend.database.User
+import com.silk.backend.database.UserRepository
+import com.silk.backend.database.WechatAccountRepository
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient

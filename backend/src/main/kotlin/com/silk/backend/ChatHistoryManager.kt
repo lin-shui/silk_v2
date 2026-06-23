@@ -1,7 +1,10 @@
 package com.silk.backend
 
 import com.silk.backend.agents.core.AgentRuntime
-import com.silk.backend.models.*
+import com.silk.backend.models.ChatHistory
+import com.silk.backend.models.ChatHistoryEntry
+import com.silk.backend.models.SessionData
+import com.silk.backend.models.SessionMember
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
@@ -61,14 +64,6 @@ class ChatHistoryManager(
         return "$baseDir/$normalizedSessionName"
     }
     
-    /**
-     * 获取会话目录路径（不进行标准化，用于查找旧格式目录）
-     */
-    private fun getSessionDirLegacy(sessionName: String): String {
-        val safeName = sessionName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        return "$baseDir/$safeName"
-    }
-
     private fun getSessionFile(sessionName: String): File {
         return File("${getSessionDir(sessionName)}/session.json")
     }
@@ -512,8 +507,7 @@ class ChatHistoryManager(
         if (userMessageIndex == -1) return emptyList()
         
         val userMessage = chatHistory.messages[userMessageIndex]
-        val userTimestamp = userMessage.timestamp
-        
+
         val isAgent = { id: String -> AgentRuntime.isAgentUserId(id) }
 
         // 查找用户消息之后、连续的AI回复消息

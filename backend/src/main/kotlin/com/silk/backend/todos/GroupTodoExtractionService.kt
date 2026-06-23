@@ -66,6 +66,7 @@ object GroupTodoExtractionService {
     @Serializable
     private data class SimpleMsg(val role: String, val content: String)
 
+    @Suppress("ConstructorParameterNaming")
     @Serializable
     private data class SimpleChatRequest(
         val model: String,

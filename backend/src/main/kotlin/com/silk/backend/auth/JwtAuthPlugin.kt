@@ -1,9 +1,11 @@
 package com.silk.backend.auth
 
-import io.ktor.http.*
-import io.ktor.server.application.*
-import io.ktor.server.auth.*
-import io.ktor.util.*
+import io.ktor.server.application.Application
+import io.ktor.server.application.install
+import io.ktor.server.auth.Authentication
+import io.ktor.server.auth.UserIdPrincipal
+import io.ktor.server.auth.bearer
+import io.ktor.util.AttributeKey
 
 /**
  * JWT 用户标识，存储在 call.attributes 中供后续路由使用

@@ -6,7 +6,20 @@ import com.silk.backend.pdf.PDFReportGenerator
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import org.slf4j.LoggerFactory
 import java.net.URI
 import java.net.http.HttpClient
@@ -425,7 +438,6 @@ $taskPrompt
             }
             
             // ✅ 移除日志输出以提升性能
-            val finalLength = fullTextBuffer.length
             // if (finalLength > 0) {
             //     val avgCharsPerSend = if (sendCount > 0) finalLength / sendCount else 0
             //     logger.info("✅ [$taskName] 流式输出完成: $finalLength 字符, 发送 $sendCount 次, 平均 $avgCharsPerSend 字符/次")
@@ -483,6 +495,7 @@ $conclusion
     /**
      * 从完整结果中提取关键结论
      */
+    @Suppress("UnusedParameter")
     private fun extractConclusion(taskName: String, fullResult: String): String {
         // 如果结果太长，截取关键部分
         return if (fullResult.length > 300) {
@@ -883,29 +896,6 @@ $rawReport
     }
     
     /**
-     * 提取关键摘要
-     */
-    private fun extractKeySummary(fullText: String): String {
-        // 提取前3个要点或前150字
-        val lines = fullText.split("\n").filter { it.trim().isNotEmpty() }
-        val keyLines = lines.filter { line ->
-            line.trim().matches(Regex("^[0-9]+\\..*")) || // 数字列表
-            line.contains("需求") ||
-            line.contains("问题") ||
-            line.contains("建议") ||
-            line.contains("结论")
-        }
-        
-        return if (keyLines.isNotEmpty()) {
-            keyLines.take(3).joinToString("\n   ")
-        } else if (fullText.length > 150) {
-            fullText.take(150) + "..."
-        } else {
-            fullText
-        }
-    }
-    
-    /**
      * 离线模式结果（当没有 API Key 时）
      * 基于 MoxiTreat 的 11 步流程提供示例结果
      */
@@ -1087,75 +1077,6 @@ $rawReport
         }
         
         return symptoms
-    }
-    
-    // 辅助方法：从上下文中提取最后的用户输入
-    private fun extractLastUserInput(context: String): String {
-        val userMessagePattern = Regex("\\[用户\\][^:]+: (.+)")
-        val matches = userMessagePattern.findAll(context).toList()
-        return matches.lastOrNull()?.groupValues?.get(1)?.take(50) ?: "（暂无）"
-    }
-    
-    // 分析用户意图
-    private fun analyzeUserIntent(input: String): String {
-        return when {
-            input.contains("学习") || input.contains("了解") -> "学习知识或技能"
-            input.contains("问题") || input.contains("错误") -> "解决问题"
-            input.contains("你好") || input.contains("hello") -> "建立对话"
-            input.contains("帮助") || input.contains("help") -> "寻求帮助"
-            else -> "进行对话交流"
-        }
-    }
-    
-    // 识别主要问题
-    private fun identifyMainIssue(input: String): String {
-        return when {
-            input.contains("如何") || input.contains("怎么") -> "寻求方法指导"
-            input.contains("为什么") -> "理解原理或原因"
-            input.contains("什么") -> "获取信息和知识"
-            input.isEmpty() -> "尚未明确"
-            else -> "需要进一步沟通了解"
-        }
-    }
-    
-    // 提取讨论主题
-    private fun extractTopics(context: String): String {
-        return when {
-            context.contains("编程") || context.contains("代码") -> "编程和技术"
-            context.contains("学习") -> "学习和教育"
-            context.contains("Kotlin") -> "Kotlin 编程语言"
-            context.contains("项目") -> "项目开发"
-            else -> "日常对话"
-        }
-    }
-    
-    // 分析用户情绪
-    private fun analyzeUserSentiment(context: String): String {
-        return when {
-            context.contains("谢谢") || context.contains("感谢") -> "积极感激"
-            context.contains("困难") || context.contains("问题") -> "遇到挑战，需要帮助"
-            context.contains("好") || context.contains("棒") -> "积极正面"
-            else -> "中性，开放沟通"
-        }
-    }
-    
-    // 识别未解决的问题
-    private fun identifyOpenQuestions(input: String): String {
-        return when {
-            input.contains("？") || input.contains("?") -> "存在明确的疑问"
-            input.contains("如何") || input.contains("怎么") -> "需要具体的方法指导"
-            else -> "待用户进一步表达"
-        }
-    }
-    
-    // 生成建议
-    private fun generateRecommendations(input: String): String {
-        return when {
-            input.contains("学习") -> "提供学习资源和循序渐进的学习路径"
-            input.contains("问题") -> "定位问题根源，提供解决方案"
-            input.contains("Kotlin") -> "推荐 Kotlin 官方文档和实践项目"
-            else -> "根据用户具体需求提供个性化建议"
-        }
     }
     
     /**
@@ -1593,6 +1514,7 @@ $doctorMessage
 /**
  * API 请求模型
  */
+@Suppress("ConstructorParameterNaming")
 @Serializable
 data class ApiRequest(
     val model: String,
@@ -1634,6 +1556,7 @@ data class StreamResponse(
     val choices: List<StreamChoice>
 )
 
+@Suppress("ConstructorParameterNaming")
 @Serializable
 data class StreamChoice(
     val delta: StreamDelta,

@@ -568,6 +568,7 @@ object UserTodoStore {
     }
 
 
+    @Suppress("UnusedParameter")
     private fun normalizeActionDetailForKey(actionType: String?, detail: String?): String? {
         if (detail == null) return null
         val t = detail.trim().lowercase(Locale.getDefault()).ifBlank { return null }

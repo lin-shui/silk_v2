@@ -1,7 +1,10 @@
 package com.silk.backend.auth
 
 import com.silk.backend.EnvLoader
-import com.silk.backend.database.*
+import com.silk.backend.database.HuaweiAccountRepository
+import com.silk.backend.database.HuaweiUserInfo
+import com.silk.backend.database.User
+import com.silk.backend.database.UserRepository
 import org.slf4j.LoggerFactory
 import java.util.UUID
 

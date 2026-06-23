@@ -1,21 +1,34 @@
 package com.silk.backend.search
 
 import com.silk.backend.ai.AIConfig
-import io.ktor.client.*
-import io.ktor.client.call.*
-import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.request.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
-import io.ktor.serialization.kotlinx.json.*
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.DefaultRequest
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.http.contentType
+import io.ktor.client.request.delete
+import io.ktor.client.request.get
+import io.ktor.client.request.headers
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.isSuccess
+import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.slf4j.LoggerFactory
 
 /**
@@ -230,6 +243,7 @@ class WeaviateClient(
      * 基于 sessionId 过滤，同一 session 的所有用户都能搜索到该 session 的文件和消息
      * （文件属于 session，不属于个人）
      */
+    @Suppress("UnusedParameter")
     suspend fun foregroundSearch(
         query: String,
         userId: String,
@@ -300,6 +314,7 @@ class WeaviateClient(
      * 重要：由于 Weaviate BM25 + NotEqual 组合有 bug，
      * 这里先执行不带 session 过滤的搜索，然后在应用层过滤
      */
+    @Suppress("UnusedParameter")
     suspend fun backgroundSearch(
         query: String,
         userId: String,
@@ -687,6 +702,7 @@ class WeaviateClient(
 
     // ==================== 辅助方法 ====================
     
+    @Suppress("UnusedParameter")
     private suspend fun executeHybridSearch(
         query: String,
         whereFilter: String,
@@ -827,6 +843,7 @@ class WeaviateClient(
      * 使用 BM25 搜索，不带 where 过滤（用于 background 搜索）
      * 因为 Weaviate BM25 + NotEqual 组合有 bug
      */
+    @Suppress("UnusedParameter")
     private suspend fun executeHybridSearchNoFilter(
         query: String,
         limit: Int,

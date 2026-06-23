@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonObject
  * 提取为独立文件，避免交叉依赖。
  */
 
+@Suppress("ConstructorParameterNaming")
 @Serializable
 data class Message(
     val role: String,

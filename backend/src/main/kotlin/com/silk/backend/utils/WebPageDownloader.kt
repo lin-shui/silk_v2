@@ -17,8 +17,10 @@ import org.jsoup.Jsoup
 import org.jsoup.safety.Safelist
 import org.apache.pdfbox.pdmodel.PDDocument
 import org.apache.pdfbox.text.PDFTextStripper
-import com.microsoft.playwright.*
-import kotlinx.coroutines.*
+import com.microsoft.playwright.Browser
+import com.microsoft.playwright.BrowserType
+import com.microsoft.playwright.Page
+import com.microsoft.playwright.Playwright
 import org.slf4j.LoggerFactory
 
 /**
@@ -43,11 +45,6 @@ object WebPageDownloader {
     private val URL_PATTERN = Pattern.compile(
         """https?://[^\s<>"']+""",
         Pattern.CASE_INSENSITIVE
-    )
-    
-    // 常见的网页文件扩展名
-    private val WEB_PAGE_EXTENSIONS = setOf(
-        "", "html", "htm", "php", "asp", "aspx", "jsp", "shtml"
     )
     
     // 支持的文档类型（可以提取文本）
@@ -578,6 +575,7 @@ object WebPageDownloader {
     /**
      * 生成保存的文件名
      */
+    @Suppress("UnusedParameter")
     private fun generateFileName(url: String, title: String, extension: String = "html"): String {
         val timestamp = System.currentTimeMillis()
         val safeName = title

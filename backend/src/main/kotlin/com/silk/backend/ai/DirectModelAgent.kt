@@ -2,7 +2,10 @@ package com.silk.backend.ai
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.io.File
 
@@ -133,6 +136,7 @@ class DirectModelAgent(
      * @param callback 流式输出回调
      * @return 最终回复
      */
+    @Suppress("UnusedParameter")
     suspend fun processInput(
         userInput: String,
         systemPrompt: String? = null,

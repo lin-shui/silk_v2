@@ -85,7 +85,7 @@ import io.ktor.client.call.body
 import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
 import io.ktor.client.request.get as httpGet
-import io.ktor.client.statement.*
+import io.ktor.client.statement.HttpResponse
 import io.ktor.http.contentType
 import io.ktor.http.ContentDisposition
 import io.ktor.http.ContentType

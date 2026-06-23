@@ -99,6 +99,7 @@ object PdfPipeline {
         return images
     }
 
+    @Suppress("UnusedParameter")
     private fun buildMarkdown(
         fileName: String,
         sizeStr: String,
