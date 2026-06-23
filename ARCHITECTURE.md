@@ -35,7 +35,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - 用户 Todo：`chat_history/user_todos/<user>.json`
 - Workflow：`~/.silk-data/workflows/workflow_store.json`（可用 `SILK_WORKFLOW_DIR` 或 `-Dsilk.workflowDir=...` 覆盖）
 - TrustedDir：`~/.silk-data/workflows/trusted_dirs.json`（与 Workflow 目录同源）
-- Knowledge Base：`knowledge_base/kb_store.json`
+- Knowledge Base：`knowledge_base/kb_store.json`（Topic / Entry CRUD + `[[kb:...]]` 内联引用解析）
 - Web 静态产物/APK/HAP 分发：`backend/static/`
 
 ## Code Surfaces By Responsibility
@@ -49,7 +49,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | AI/tools/search | `ai/`（AnthropicClient + DirectModelAgent）, `utils/WebPageDownloader.kt` | Anthropic Messages API + 原生 web_search 工具 + 后端 grep 搜索 |
 | Auth/data | `auth/`, `database/`, `models/` | SQLite + Exposed |
 | Card system | `card/CardBuilder.kt`, `card/CardReplyRouter.kt`, `card/CardModels.kt` | 交互卡片构造、JSON schema、回复路由 |
-| Domain modules | `todos/`, `workflow/`, `trust/`, `kb/`, `export/`, `pdf/` | Todo/Workflow/TrustedDir/KB 混合文件存储 |
+| Domain modules | `todos/`, `workflow/`, `trust/`, `kb/`, `export/`, `pdf/` | Todo/Workflow/TrustedDir/KB（含 `[[kb:...]]` 内联引用）混合文件存储 |
 | Shared client contract | `frontend/shared/` | 三端消息/文件/Audio Duplex 合同面 |
 | Web | `frontend/webApp/` | 当前最完整的桌面浏览器 UI |
 | Android | `frontend/androidApp/` | 四 Tab + 移动端流程 |
