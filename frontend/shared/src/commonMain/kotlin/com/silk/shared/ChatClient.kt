@@ -3,6 +3,7 @@ package com.silk.shared
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageCategory
 import com.silk.shared.models.MessageType
+import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.isAgentUserId
 import kotlinx.datetime.Clock
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -364,7 +365,12 @@ class ChatClient(
         _pendingQuestionId.value = null
     }
     
-    suspend fun sendMessage(userId: String, userName: String, content: String) {
+    suspend fun sendMessage(
+        userId: String,
+        userName: String,
+        content: String,
+        kbContextSelection: KnowledgeBaseContextSelection? = null,
+    ) {
         suppressTransient = false
         
         val message = Message(
@@ -373,7 +379,8 @@ class ChatClient(
             userName = userName,
             content = content,
             timestamp = Clock.System.now().toEpochMilliseconds(),
-            type = MessageType.TEXT
+            type = MessageType.TEXT,
+            kbContextSelection = kbContextSelection,
         )
         
         _messages.value = _messages.value + message

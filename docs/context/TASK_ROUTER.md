@@ -24,7 +24,9 @@
 
 - 先读：`../skills/local-change-submit/SKILL.md`
 - 再看：`git status --short --branch`、目标 base、当前分支是否属于已有 PR
-- 默认验证：按实际改动运行最窄验证，并跑 `git diff --check`
+- 默认验证：先跑 `git diff --check`
+- 若提交包含 Kotlin / Gradle / shell 入口改动：补跑 `./gradlew silkLint`
+- 再按实际改动运行 `quality/TEST_MATRIX.md` 里的最窄验证
 - 规则：只提交本轮相关路径；push/PR 前确认文档同步门禁、命名规范与 PR body 信息齐全
 
 ## Backend HTTP / Route
@@ -125,3 +127,4 @@
 - 若改 `silk.sh` / 装配 smoke：再读 `quality/CI_SCRIPT_SMOKE_SCOPE.md`
 - 再看代码：`.github/workflows/ci-fast-validation.yml`、`backend/src/test/.../README_TESTS.md`
 - 默认验证：优先复用 CI 中已有的窄检查，不凭空创造一套新的重流程
+- 提交前若改到 Kotlin / Gradle / shell 入口，默认先本地跑一次 `./gradlew silkLint`，避免把 detekt / `bash -n` 问题留给 CI

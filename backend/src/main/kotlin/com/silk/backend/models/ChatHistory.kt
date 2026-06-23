@@ -40,6 +40,12 @@ data class MessageReference(
     val reason: String? = null,
 )
 
+@Serializable
+data class KnowledgeBaseContextSelection(
+    val pinnedEntryIds: List<String> = emptyList(),
+    val excludedEntryIds: List<String> = emptyList(),
+)
+
 /**
  * 聊天历史条目 - 保存在 chat_history.json
  */
@@ -51,7 +57,8 @@ data class ChatHistoryEntry(
     val content: String,
     val timestamp: Long,
     val messageType: String, // TEXT, JOIN, LEAVE, SYSTEM
-    val references: List<MessageReference> = emptyList()
+    val references: List<MessageReference> = emptyList(),
+    val kbContextSelection: KnowledgeBaseContextSelection? = null,
 )
 
 /**

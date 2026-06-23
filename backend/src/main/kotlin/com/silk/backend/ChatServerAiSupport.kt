@@ -4,6 +4,7 @@ import com.silk.backend.ai.AIConfig
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.kb.resolveKnowledgeBasePromptContext
+import com.silk.backend.models.KnowledgeBaseContextSelection
 import com.silk.backend.models.MessageReference
 import com.silk.backend.todos.GroupTodoExtractionService
 import kotlinx.coroutines.CancellationException
@@ -65,6 +66,7 @@ internal suspend fun ChatServer.handleStopGenerationSupport(userId: String) {
 internal suspend fun ChatServer.generateIntelligentResponseSupport(
     userMessage: String,
     userId: String = "",
+    kbContextSelection: KnowledgeBaseContextSelection? = null,
 ) {
     val callId = System.currentTimeMillis()
     logger.info("🤖 [Agent-{}] 开始直接调用模型 (userId={})", callId, userId)
@@ -77,6 +79,7 @@ internal suspend fun ChatServer.generateIntelligentResponseSupport(
         userId = userId,
         knowledgeBaseManager = knowledgeBaseManager,
         preferredGroupId = currentSessionName.removePrefix("group_").takeIf { currentSessionName.startsWith("group_") },
+        selection = kbContextSelection ?: KnowledgeBaseContextSelection(),
     )
     if (kbContext.availableReferences.isNotEmpty()) {
         logger.info(
@@ -295,14 +298,18 @@ private fun ChatServer.refreshSilkPrivateChatTodosIfNeeded(userId: String) {
 private fun buildKnowledgeBaseContextStatus(kbContext: com.silk.backend.kb.KnowledgeBasePromptContext): String {
     val total = kbContext.availableReferences.size
     val manual = kbContext.diagnostics.manualReferenceCount
+    val pinned = kbContext.diagnostics.pinnedReferenceCount
     val auto = kbContext.diagnostics.autoCandidateCount
+    val excluded = kbContext.diagnostics.excludedReferenceCount
     return buildString {
         append("📚 本轮知识库上下文已准备")
         append("（共 $total 条")
-        if (manual > 0 || auto > 0) {
+        if (manual > 0 || pinned > 0 || auto > 0) {
             append("：手动 $manual")
+            if (pinned > 0) append("，固定 $pinned")
             if (auto > 0) append("，自动 $auto")
         }
+        if (excluded > 0) append("；排除 $excluded")
         append("）")
     }
 }

@@ -334,7 +334,8 @@ class ChatHistoryManager(
             content = message.content,
             timestamp = message.timestamp,
             messageType = message.type.name,
-            references = message.references
+            references = message.references,
+            kbContextSelection = message.kbContextSelection,
         )
         
         chatHistory.messages.add(entry)
@@ -358,6 +359,7 @@ class ChatHistoryManager(
             timestamp = message.timestamp,
             messageType = message.type.name,
             references = message.references,
+            kbContextSelection = message.kbContextSelection,
         )
 
         val index = chatHistory.messages.indexOfFirst { it.messageId == message.id }

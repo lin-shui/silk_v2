@@ -87,7 +87,7 @@ class KnowledgeBaseManager(
         val store = load()
         val normalizedSpaceType = normalizeSpaceType(spaceType, groupId)
         val normalizedGroupId = normalizeGroupId(normalizedSpaceType, groupId)
-        require(normalizedSpaceType != KnowledgeSpaceType.TEAM || normalizedGroupId != null) {
+        require(!(normalizedSpaceType == KnowledgeSpaceType.TEAM && normalizedGroupId == null)) {
             "Team knowledge base topics require a groupId"
         }
         require(normalizedGroupId == null || GroupRepository.isUserInGroup(normalizedGroupId, userId)) {
@@ -202,7 +202,14 @@ class KnowledgeBaseManager(
         return entry
     }
 
-    fun updateEntry(entryId: String, title: String?, content: String?, tags: List<String>?, userId: String): KBEntry? {
+    fun updateEntry(
+        entryId: String,
+        title: String?,
+        content: String?,
+        tags: List<String>?,
+        status: KBEntryStatus?,
+        userId: String,
+    ): KBEntry? {
         val store = load()
         val idx = store.entries.indexOfFirst { it.id == entryId }
         if (idx == -1) return null
@@ -213,6 +220,7 @@ class KnowledgeBaseManager(
             title = title ?: old.title,
             content = content ?: old.content,
             tags = tags ?: old.tags,
+            status = status ?: old.status,
             updatedBy = userId,
             updatedAt = System.currentTimeMillis(),
         )

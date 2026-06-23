@@ -3,6 +3,7 @@ package com.silk.backend.kb
 import com.silk.backend.TestWorkspace
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.models.KBEntryStatus
+import com.silk.backend.models.KnowledgeBaseContextSelection
 import com.silk.backend.models.KnowledgeSpaceType
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
@@ -140,6 +141,61 @@ class KnowledgeBaseReferenceResolverTest {
             assertTrue(context.promptBlock.orEmpty().contains(autoEntry.title))
             assertTrue(!context.promptBlock.orEmpty().contains("候选草稿"))
             assertTrue(!context.promptBlock.orEmpty().contains("私有工作流说明"))
+        }
+    }
+
+    @Test
+    fun `resolver honors pinned and excluded context selections`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val group = assertNotNull(GroupRepository.createGroup("KB Pin Team", hostId = "host"))
+            assertTrue(GroupRepository.addUserToGroup(group.id, "owner"))
+            assertTrue(GroupRepository.addUserToGroup(group.id, "member"))
+
+            val teamTopic = manager.createTopic(
+                name = "Workflow Team",
+                project = "workflow",
+                userId = "owner",
+                spaceType = KnowledgeSpaceType.TEAM,
+                groupId = group.id,
+            )
+            val pinnedEntry = assertNotNull(
+                manager.createEntry(
+                    topicId = teamTopic.id,
+                    title = "固定文档",
+                    content = "固定内容",
+                    tags = listOf("workflow"),
+                    userId = "owner",
+                )
+            )
+            val excludedEntry = assertNotNull(
+                manager.createEntry(
+                    topicId = teamTopic.id,
+                    title = "自动候选文档",
+                    content = "工作流自动召回内容",
+                    tags = listOf("workflow"),
+                    userId = "owner",
+                )
+            )
+
+            val context = resolveKnowledgeBasePromptContext(
+                rawInput = "请总结 workflow 自动召回策略",
+                userId = "member",
+                knowledgeBaseManager = manager,
+                preferredGroupId = group.id,
+                selection = KnowledgeBaseContextSelection(
+                    pinnedEntryIds = listOf(pinnedEntry.id),
+                    excludedEntryIds = listOf(excludedEntry.id),
+                ),
+            )
+
+            assertEquals(1, context.diagnostics.pinnedReferenceCount)
+            assertEquals(1, context.diagnostics.excludedReferenceCount)
+            assertEquals(1, context.availableReferences.size)
+            assertEquals("pin", context.availableReferences.single().origin)
+            assertEquals("kb://${teamTopic.id}/${pinnedEntry.id}", context.availableReferences.single().path)
+            assertContains(context.promptBlock.orEmpty(), "### 用户固定上下文")
+            assertTrue(!context.promptBlock.orEmpty().contains(excludedEntry.title))
         }
     }
 }

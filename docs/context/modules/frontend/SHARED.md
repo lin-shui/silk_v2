@@ -32,6 +32,7 @@
   - 后端 `WebSocketConfig.kt`
   - `frontend/shared/models/Message.kt`
   - 三端 UI 解析
+  - 若新增类似 `kbContextSelection` 这样的可选字段，默认值必须兼容旧历史与旧客户端
 - 改文件消息 payload：
   - Web / Android / Desktop `FileContractsTest`
   - 后端文件相关合同测试
