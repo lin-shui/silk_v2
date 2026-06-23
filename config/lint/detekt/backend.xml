@@ -2,7 +2,6 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
-    <ID>CyclomaticComplexMethod:Routing.kt$@Suppress("TooGenericExceptionCaught", "SwallowedException") fun Application.configureRouting()</ID>
     <ID>LargeClass:AIStepwiseAgent.kt$AIStepwiseAgent</ID>
     <ID>LargeClass:AgentRuntime.kt$AgentRuntime</ID>
     <ID>LargeClass:BackendWebSocketContractTest.kt$BackendWebSocketContractTest</ID>

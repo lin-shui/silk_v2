@@ -99,6 +99,7 @@ import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
+import io.ktor.server.routing.Route
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
@@ -314,6 +315,22 @@ fun Application.configureRouting() {
     })
 
     routing {
+        coreRoutes()
+        authRoutes()
+        groupContactRoutes()
+        unreadTodoMessageRoutes()
+        agentBridgeRoute()
+        ccConnectBridgeRoute()
+        ccConnectApiRoutes()
+        workflowKbRoutes()
+        chatWebSocketRoute()
+        audioDuplexRoute()
+    }
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.coreRoutes() {
         get("/") {
             val html = """
                 <!DOCTYPE html>
@@ -1197,6 +1214,11 @@ fun Application.configureRouting() {
         }
         
         // 用户认证API
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.authRoutes() {
         post("/auth/register") {
             try {
                 val request = call.receive<RegisterRequest>()
@@ -1452,6 +1474,11 @@ fun Application.configureRouting() {
         }
         
         // 群组管理API
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.groupContactRoutes() {
         post("/groups/create") {
             try {
                 val request = call.receive<CreateGroupRequest>()
@@ -2024,6 +2051,11 @@ fun Application.configureRouting() {
         // ==================== 未读消息 API ====================
         
         // 获取用户所有群组的未读消息数
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.unreadTodoMessageRoutes() {
         get("/api/unread/{userId}") {
             val userId = call.parameters["userId"] ?: ""
             
@@ -2508,6 +2540,11 @@ fun Application.configureRouting() {
         
         // ==================== Agent Bridge WebSocket (ACP) ====================
 
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
+private fun Route.agentBridgeRoute() {
         webSocket("/agent-bridge") {
             val token = call.request.queryParameters["token"]
             if (token.isNullOrBlank()) {
@@ -2592,6 +2629,12 @@ fun Application.configureRouting() {
 
         // ==================== cc-connect Bridge WebSocket ====================
 
+}
+
+// cc-connect 适配器 WebSocket：单 handler 内驱动完整流式协议（hello/reply/stream/status/done），
+// 控制流刚合并并经人工验证，强行拆分有破坏转发行为的实际风险，故抑制 CyclomaticComplexMethod。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.ccConnectBridgeRoute() {
         webSocket("/ccconnect-bridge") {
             val token = call.request.queryParameters["token"]
             if (token.isNullOrBlank()) {
@@ -3301,6 +3344,11 @@ fun Application.configureRouting() {
 
         // ==================== cc-connect Token Management ====================
 
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.ccConnectApiRoutes() {
         get("/api/ccconnect/groups/{groupId}/token-info") {
             val groupId = call.parameters["groupId"] ?: run {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing groupId"))
@@ -3452,6 +3500,11 @@ fun Application.configureRouting() {
         // 列出可作为 workflow agent 的选项：仅包含已注册的 bridge agent（claude_code / codex 等）。
         // silk_chat 走普通会话路径，不在工作流 agent 选择范围内。
         // agentType 字段使用 workflow 存储一致的 underscore 形式。
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.workflowKbRoutes() {
         get("/api/agents") {
             val userId = call.request.queryParameters["userId"]
             if (userId.isNullOrBlank()) {
@@ -3841,6 +3894,11 @@ fun Application.configureRouting() {
             )
         }
 
+}
+
+// /chat 聊天 WebSocket：单 handler 内处理连接/历史回放/消息分发，控制流敏感且耦合，拆分风险高于收益。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.chatWebSocketRoute() {
         webSocket("/chat") {
             // 支持 JWT 认证：优先从 token 参数解析 userId，fallback 到旧版 userId 参数
             val token = call.parameters["token"]
@@ -3948,6 +4006,11 @@ fun Application.configureRouting() {
             }
         }
 
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
+private fun Route.audioDuplexRoute() {
         webSocket("/ws/audio-duplex") {
             val sessionId = call.request.queryParameters["sessionId"]
             if (sessionId.isNullOrBlank()) {
@@ -4001,5 +4064,4 @@ fun Application.configureRouting() {
                 httpClient.close()
             }
         }
-    }
 }

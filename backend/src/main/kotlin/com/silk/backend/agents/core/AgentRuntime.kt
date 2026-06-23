@@ -278,34 +278,38 @@ object AgentRuntime {
 
     /** Bridge 断线时由 Routing.kt 调用 */
     fun handleAgentDisconnect(userId: String, agentType: String) {
-        @Suppress("LoopWithTooManyJumpStatements")
         for ((_, ctx) in contexts) {
-            if (ctx.userId != userId) continue
-            val session = ctx.sessions[agentType] ?: continue
-
-            // Clean up handlers before nulling acpSessionId
-            cleanupSessionHandlers(session)
-
-            // Clean up any pending card reply handler to prevent memory leak
-            val pending = session.pendingQuestion
-            if (pending != null) {
-                CardReplyRouter.unregister("agent_question_${pending.requestId}")
-                session.pendingQuestion = null
-            }
-
-            if (session.running) {
-                session.promptJob?.cancel()
-                session.promptJob = null
-                session.running = false
-                session.cancelled = false
-                session.pendingQuestion = null
-                logger.info(
-                    "[AgentRuntime] Bridge 断线，agent 任务已终止: userId={}, groupId={}, agentType={}",
-                    userId, ctx.groupId, agentType
-                )
-            }
-            session.acpSessionId = null
+            disconnectAgentInContext(ctx, userId, agentType)
         }
+    }
+
+    /** 在单个 context 中处理某 agent 的断线清理；不匹配的 context 直接返回。 */
+    private fun disconnectAgentInContext(ctx: GroupAgentContext, userId: String, agentType: String) {
+        if (ctx.userId != userId) return
+        val session = ctx.sessions[agentType] ?: return
+
+        // Clean up handlers before nulling acpSessionId
+        cleanupSessionHandlers(session)
+
+        // Clean up any pending card reply handler to prevent memory leak
+        val pending = session.pendingQuestion
+        if (pending != null) {
+            CardReplyRouter.unregister("agent_question_${pending.requestId}")
+            session.pendingQuestion = null
+        }
+
+        if (session.running) {
+            session.promptJob?.cancel()
+            session.promptJob = null
+            session.running = false
+            session.cancelled = false
+            session.pendingQuestion = null
+            logger.info(
+                "[AgentRuntime] Bridge 断线，agent 任务已终止: userId={}, groupId={}, agentType={}",
+                userId, ctx.groupId, agentType
+            )
+        }
+        session.acpSessionId = null
     }
 
     // ========== 内部方法 ==========
@@ -422,226 +426,319 @@ object AgentRuntime {
         }
     }
 
-    @Suppress("CyclomaticComplexMethod")
+    /** 当前激活 agent 的命令目标（agentType + descriptor + session）。 */
+    private data class CommandTarget(
+        val agentType: String,
+        val descriptor: AgentDescriptor,
+        val session: AgentSession,
+    )
+
+    /** 解析当前激活 agent 的命令目标；无激活 agent 或未注册时返回 null。 */
+    private fun resolveActiveCommandTarget(ctx: GroupAgentContext): CommandTarget? {
+        val agentType = ctx.currentAgentType ?: return null
+        val descriptor = AgentRegistry.getByType(agentType) ?: return null
+        val session = ctx.getOrCreateSession(agentType)
+        return CommandTarget(agentType, descriptor, session)
+    }
+
     private suspend fun handleCommand(
         ctx: GroupAgentContext,
         cmd: SilkCommand,
         broadcastFn: suspend (Message) -> Unit,
     ) {
-        val agentType = ctx.currentAgentType ?: return
-        val descriptor = AgentRegistry.getByType(agentType) ?: return
-        val session = ctx.getOrCreateSession(agentType)
+        val resolved = resolveActiveCommandTarget(ctx) ?: return
+        val (agentType, descriptor, session) = resolved
 
         when (cmd) {
-            is SilkCommand.Exit -> {
-                // Clean up handlers before removing session
-                cleanupSessionHandlers(session)
-                ctx.removeSession(agentType)
-                if (ctx.sessions.isEmpty()) {
-                    ctx.currentAgentType = null
+            is SilkCommand.Exit -> handleExitCommand(ctx, agentType, descriptor, session, broadcastFn)
+            is SilkCommand.Cancel -> handleCancel(session, broadcastFn)
+            is SilkCommand.New -> handleNewCommand(ctx, agentType, descriptor, session, broadcastFn)
+            is SilkCommand.Cd -> handleCdCommand(ctx, cmd, descriptor, broadcastFn)
+            is SilkCommand.Status -> handleStatusCommand(ctx, descriptor, session, broadcastFn)
+            is SilkCommand.Queue -> handleQueueCommand(cmd, descriptor, session, broadcastFn)
+            is SilkCommand.Help -> handleHelpCommand(descriptor, broadcastFn)
+            is SilkCommand.Compact -> handleCompactCommand(agentType, descriptor, session, broadcastFn)
+            is SilkCommand.SessionList -> handleSessionListCommand(ctx, agentType, descriptor, session, broadcastFn)
+            is SilkCommand.SessionLoad -> handleSessionLoadCommand(ctx, cmd, agentType, descriptor, session, broadcastFn)
+            is SilkCommand.Unknown -> handleUnknownCommand(cmd, descriptor, broadcastFn)
+            else -> handleAdapterCommand(cmd, agentType, descriptor, session, broadcastFn)
+        }
+    }
+
+    private suspend fun handleCdCommand(
+        ctx: GroupAgentContext,
+        cmd: SilkCommand.Cd,
+        descriptor: AgentDescriptor,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        ctx.workingDir = cmd.path
+        broadcastFn(AgentMessages.system(
+            "工作目录已切换: ${cmd.path}",
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleUnknownCommand(
+        cmd: SilkCommand.Unknown,
+        descriptor: AgentDescriptor,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        broadcastFn(AgentMessages.system(
+            "未知命令: ${cmd.raw}",
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleExitCommand(
+        ctx: GroupAgentContext,
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        // Clean up handlers before removing session
+        cleanupSessionHandlers(session)
+        ctx.removeSession(agentType)
+        if (ctx.sessions.isEmpty()) {
+            ctx.currentAgentType = null
+        }
+        broadcastFn(AgentMessages.system(
+            "已退出 ${descriptor.displayName} 模式",
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleNewCommand(
+        ctx: GroupAgentContext,
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        cleanupSessionHandlers(session)
+        session.acpSessionId = null
+        session.cliSessionId = null
+        session.running = false
+        session.cancelled = false
+        session.messageQueue.clear()
+        // 清除已持久化的 cliSessionId，让重启后不会盲目 resume 一个废 session（与 cdSync 行为一致）
+        persistCliSessionAsync(ctx.groupId, agentType, "", false)
+        broadcastFn(AgentMessages.system(
+            "已开启新会话",
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleStatusCommand(
+        ctx: GroupAgentContext,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        val status = buildString {
+            appendLine("Agent: ${descriptor.displayName}")
+            appendLine("运行中: ${session.running}")
+            appendLine("队列: ${session.messageQueue.size} 条")
+            appendLine("工作目录: ${ctx.workingDir}")
+            appendLine("权限模式: ${session.permissionMode}")
+            append("ACP Session: ${session.acpSessionId ?: "未创建"}")
+        }
+        broadcastFn(AgentMessages.status(
+            status,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleQueueCommand(
+        cmd: SilkCommand.Queue,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        if (cmd.clear) {
+            session.messageQueue.clear()
+            broadcastFn(AgentMessages.system(
+                "队列已清空",
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+        } else {
+            val items = session.messageQueue.mapIndexed { i, q ->
+                "${i + 1}. ${q.text.take(40)}${if (q.text.length > 40) "..." else ""}"
+            }.joinToString("\n")
+            val msg = if (items.isEmpty()) "队列为空" else "队列 (${session.messageQueue.size} 条):\n$items"
+            broadcastFn(AgentMessages.status(
+                msg,
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+        }
+    }
+
+    private suspend fun handleHelpCommand(
+        descriptor: AgentDescriptor,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        val help = buildString {
+            appendLine("${descriptor.displayName} 命令:")
+            appendLine("/exit — 退出当前 agent")
+            appendLine("/cancel — 取消当前任务")
+            appendLine("/new — 开启新会话")
+            appendLine("/cd <path> — 切换工作目录")
+            appendLine("/session — 列出本地会话")
+            appendLine("/session <id> — 恢复会话")
+            appendLine("/status — 查看状态")
+            appendLine("/queue — 查看队列")
+            appendLine("/queue clear — 清空队列")
+            appendLine("/compact — 压缩当前会话")
+            appendLine("/help — 显示此帮助")
+            appendLine("@<agent> <text> — 向指定 agent 发送消息（不改当前 agent）")
+        }
+        broadcastFn(AgentMessages.system(
+            help,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleCompactCommand(
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        val acp = getAcpClient(agentType, session.userId)
+        if (acp != null && session.acpSessionId != null) {
+            try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.silk.backend.agents.core.AcpExtensions.compact(acp, session.acpSessionId!!)
                 }
                 broadcastFn(AgentMessages.system(
-                    "已退出 ${descriptor.displayName} 模式",
+                    "会话已压缩",
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
-            }
-            is SilkCommand.Cancel -> handleCancel(session, broadcastFn)
-            is SilkCommand.New -> {
-                cleanupSessionHandlers(session)
-                session.acpSessionId = null
-                session.cliSessionId = null
-                session.running = false
-                session.cancelled = false
-                session.messageQueue.clear()
-                // 清除已持久化的 cliSessionId，让重启后不会盲目 resume 一个废 session（与 cdSync 行为一致）
-                persistCliSessionAsync(ctx.groupId, agentType, "", false)
+            } catch (e: Exception) {
                 broadcastFn(AgentMessages.system(
-                    "已开启新会话",
+                    "压缩失败: ${e.message}",
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
             }
-            is SilkCommand.Cd -> {
-                ctx.workingDir = cmd.path
-                broadcastFn(AgentMessages.system(
-                    "工作目录已切换: ${cmd.path}",
-                    agentUserId = descriptor.agentUserId,
-                    agentName = descriptor.displayName,
-                ))
-            }
-            is SilkCommand.Status -> {
-                val status = buildString {
-                    appendLine("Agent: ${descriptor.displayName}")
-                    appendLine("运行中: ${session.running}")
-                    appendLine("队列: ${session.messageQueue.size} 条")
-                    appendLine("工作目录: ${ctx.workingDir}")
-                    appendLine("权限模式: ${session.permissionMode}")
-                    append("ACP Session: ${session.acpSessionId ?: "未创建"}")
+        } else {
+            broadcastFn(AgentMessages.system(
+                "compact 需要 bridge 连接",
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+        }
+    }
+
+    private suspend fun handleSessionListCommand(
+        ctx: GroupAgentContext,
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        val acp = getAcpClient(agentType, session.userId)
+        if (acp != null) {
+            try {
+                val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.silk.backend.agents.core.AcpExtensions.listLocalSessions(acp, ctx.workingDir)
                 }
                 broadcastFn(AgentMessages.status(
-                    status,
+                    com.silk.backend.agents.core.AcpExtensions.formatLocalSessionsForDisplay(result),
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
+                ))
+            } catch (e: Exception) {
+                broadcastFn(AgentMessages.status(
+                    "获取会话列表失败: ${e.message}",
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
             }
-            is SilkCommand.Queue -> {
-                if (cmd.clear) {
-                    session.messageQueue.clear()
-                    broadcastFn(AgentMessages.system(
-                        "队列已清空",
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
-                } else {
-                    val items = session.messageQueue.mapIndexed { i, q ->
-                        "${i + 1}. ${q.text.take(40)}${if (q.text.length > 40) "..." else ""}"
-                    }.joinToString("\n")
-                    val msg = if (items.isEmpty()) "队列为空" else "队列 (${session.messageQueue.size} 条):\n$items"
-                    broadcastFn(AgentMessages.status(
-                        msg,
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
+        } else {
+            broadcastFn(AgentMessages.status(
+                "本地会话列表（待 bridge 连接后拉取）",
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+        }
+    }
+
+    private suspend fun handleSessionLoadCommand(
+        ctx: GroupAgentContext,
+        cmd: SilkCommand.SessionLoad,
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        val acp = getAcpClient(agentType, session.userId)
+        if (acp == null) {
+            broadcastFn(AgentMessages.system(
+                "${descriptor.displayName} 未连接，无法加载会话",
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+        } else {
+            // Clean up handlers for the old ACP session before overwriting
+            cleanupSessionHandlers(session)
+            try {
+                val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    acp.sessionLoad(cmd.sessionIdPrefix, ctx.workingDir)
                 }
-            }
-            is SilkCommand.Help -> {
-                val help = buildString {
-                    appendLine("${descriptor.displayName} 命令:")
-                    appendLine("/exit — 退出当前 agent")
-                    appendLine("/cancel — 取消当前任务")
-                    appendLine("/new — 开启新会话")
-                    appendLine("/cd <path> — 切换工作目录")
-                    appendLine("/session — 列出本地会话")
-                    appendLine("/session <id> — 恢复会话")
-                    appendLine("/status — 查看状态")
-                    appendLine("/queue — 查看队列")
-                    appendLine("/queue clear — 清空队列")
-                    appendLine("/compact — 压缩当前会话")
-                    appendLine("/help — 显示此帮助")
-                    appendLine("@<agent> <text> — 向指定 agent 发送消息（不改当前 agent）")
-                }
+                // adapter 返回的 ACP UUID 是后端用来发 session/prompt 的句柄；
+                // 用户输入的本地 session id（codex thread_id / claude session_id）走 cliSessionId
+                // 槽位，下次 prompt 时 adapter 会用它真正 resume 历史会话。
+                session.acpSessionId = result.sessionId
+                session.cliSessionId = cmd.sessionIdPrefix
                 broadcastFn(AgentMessages.system(
-                    help,
+                    "已加载会话: ${cmd.sessionIdPrefix.take(8)}...",
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
-            }
-            is SilkCommand.Compact -> {
-                val acp = getAcpClient(agentType, session.userId)
-                if (acp != null && session.acpSessionId != null) {
-                    try {
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            com.silk.backend.agents.core.AcpExtensions.compact(acp, session.acpSessionId!!)
-                        }
-                        broadcastFn(AgentMessages.system(
-                            "会话已压缩",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    } catch (e: Exception) {
-                        broadcastFn(AgentMessages.system(
-                            "压缩失败: ${e.message}",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    }
-                } else {
-                    broadcastFn(AgentMessages.system(
-                        "compact 需要 bridge 连接",
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
-                }
-            }
-            is SilkCommand.SessionList -> {
-                val acp = getAcpClient(agentType, session.userId)
-                if (acp != null) {
-                    try {
-                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            com.silk.backend.agents.core.AcpExtensions.listLocalSessions(acp, ctx.workingDir)
-                        }
-                        broadcastFn(AgentMessages.status(
-                            com.silk.backend.agents.core.AcpExtensions.formatLocalSessionsForDisplay(result),
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    } catch (e: Exception) {
-                        broadcastFn(AgentMessages.status(
-                            "获取会话列表失败: ${e.message}",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    }
-                } else {
-                    broadcastFn(AgentMessages.status(
-                        "本地会话列表（待 bridge 连接后拉取）",
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
-                }
-            }
-            is SilkCommand.SessionLoad -> {
-                val acp = getAcpClient(agentType, session.userId)
-                if (acp == null) {
-                    broadcastFn(AgentMessages.system(
-                        "${descriptor.displayName} 未连接，无法加载会话",
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
-                } else {
-                    // Clean up handlers for the old ACP session before overwriting
-                    cleanupSessionHandlers(session)
-                    try {
-                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            acp.sessionLoad(cmd.sessionIdPrefix, ctx.workingDir)
-                        }
-                        // adapter 返回的 ACP UUID 是后端用来发 session/prompt 的句柄；
-                        // 用户输入的本地 session id（codex thread_id / claude session_id）走 cliSessionId
-                        // 槽位，下次 prompt 时 adapter 会用它真正 resume 历史会话。
-                        session.acpSessionId = result.sessionId
-                        session.cliSessionId = cmd.sessionIdPrefix
-                        broadcastFn(AgentMessages.system(
-                            "已加载会话: ${cmd.sessionIdPrefix.take(8)}...",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    } catch (e: com.silk.backend.agents.acp.AcpRpcException) {
-                        broadcastFn(AgentMessages.system(
-                            "加载会话失败: ${e.rpcError.message}",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    } catch (e: Exception) {
-                        logger.warn("[AgentRuntime] sessionLoad 异常: {}", e.message)
-                        broadcastFn(AgentMessages.system(
-                            "加载会话异常: ${e.message}",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    }
-                }
-            }
-            is SilkCommand.Unknown -> {
+            } catch (e: com.silk.backend.agents.acp.AcpRpcException) {
                 broadcastFn(AgentMessages.system(
-                    "未知命令: ${cmd.raw}",
+                    "加载会话失败: ${e.rpcError.message}",
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
+                ))
+            } catch (e: Exception) {
+                logger.warn("[AgentRuntime] sessionLoad 异常: {}", e.message)
+                broadcastFn(AgentMessages.system(
+                    "加载会话异常: ${e.message}",
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
             }
-            else -> {
-                // 尝试让 adapter 处理
-                val acp = getAcpClient(agentType, userId = session.userId) ?: return
-                val result = descriptor.handleSilkCommand(cmd, session, acp)
-                when (result) {
-                    is SilkCommandResult.Error -> broadcastFn(AgentMessages.system(
-                        result.message,
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
-                    else -> { /* Handled or Fallback, nothing to do */ }
-                }
-            }
+        }
+    }
+
+    private suspend fun handleAdapterCommand(
+        cmd: SilkCommand,
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        // 尝试让 adapter 处理
+        val acp = getAcpClient(agentType, userId = session.userId) ?: return
+        val result = descriptor.handleSilkCommand(cmd, session, acp)
+        when (result) {
+            is SilkCommandResult.Error -> broadcastFn(AgentMessages.system(
+                result.message,
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+            else -> { /* Handled or Fallback, nothing to do */ }
         }
     }
 
@@ -987,7 +1084,6 @@ object AgentRuntime {
         }
     }
 
-    @Suppress("CyclomaticComplexMethod")
     private fun setupAcpHandlers(
         acp: AcpClient,
         acpSessionId: String,
@@ -1008,77 +1104,7 @@ object AgentRuntime {
                 return@onSessionUpdate
             }
             if (kind == "ask_user_question") {
-                val requestId = notif.update["requestId"]?.let {
-                    (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-                }
-                val rawQuestions = notif.update["questions"]?.jsonArray
-
-                // Parse structured questions (same logic as AcpUpdateMapper)
-                val structuredQuestions = rawQuestions?.mapNotNull { el ->
-                    when {
-                        el is kotlinx.serialization.json.JsonObject -> {
-                            val q = el["question"]?.jsonPrimitive?.contentOrNull ?: ""
-                            val header = el["header"]?.jsonPrimitive?.contentOrNull ?: ""
-                            val options = el["options"]?.jsonArray?.mapNotNull { optEl ->
-                                (optEl as? kotlinx.serialization.json.JsonObject)?.let { obj ->
-                                    QuestionOption(
-                                        label = obj["label"]?.jsonPrimitive?.contentOrNull ?: "",
-                                        description = obj["description"]?.jsonPrimitive?.contentOrNull ?: "",
-                                    )
-                                }
-                            } ?: emptyList()
-                            StructuredQuestion(question = q, header = header, options = options)
-                        }
-                        el is kotlinx.serialization.json.JsonPrimitive -> {
-                            el.contentOrNull?.let { text -> StructuredQuestion(question = text) }
-                        }
-                        else -> null
-                    }
-                }
-
-                if (requestId != null && !structuredQuestions.isNullOrEmpty()) {
-                    session.pendingQuestion = PendingQuestion(requestId, structuredQuestions)
-                    logger.info(
-                        "[AgentRuntime] pendingQuestion set: requestId={}, questionCount={}",
-                        requestId.take(8), structuredQuestions.size,
-                    )
-                    // 注册卡片回复 handler
-                    val cardId = "agent_question_$requestId"
-                    CardReplyRouter.register(cardId, object : CardReplyHandler {
-                        override suspend fun onCardReply(
-                            reply: CardReplyPayload,
-                            sessionName: String,
-                            broadcastFn: suspend (com.silk.backend.Message) -> Unit,
-                        ) {
-                            val pending = session.pendingQuestion
-                            if (pending == null || pending.requestId != requestId) return
-
-                            // Parse button value to extract question index and answer
-                            val action = reply.action
-                            val (questionIndex, answerText) = when {
-                                action.startsWith("__opt__") -> {
-                                    // Format: __opt__{qi}__{answerDisplay}
-                                    val parts = action.removePrefix("__opt__").split("__", limit = 2)
-                                    val qi = parts.getOrNull(0)?.toIntOrNull() ?: 0
-                                    val answer = parts.getOrNull(1) ?: action
-                                    qi to answer
-                                }
-                                action.startsWith("__custom__") -> {
-                                    val qi = action.removePrefix("__custom__").toIntOrNull() ?: 0
-                                    val answer = reply.inputs["custom_answer_$qi"] ?: ""
-                                    qi to answer
-                                }
-                                else -> {
-                                    // Legacy fallback: treat as answer to current question
-                                    val currentIdx = (0 until pending.questions.size)
-                                        .firstOrNull { it !in pending.answers } ?: 0
-                                    currentIdx to action
-                                }
-                            }
-                            handleQuestionReply(session, pending, questionIndex, answerText, broadcastFn)
-                        }
-                    })
-                }
+                handleAskUserQuestionUpdate(notif, session)
             }
 
             val msg = AcpUpdateMapper.map(
@@ -1102,6 +1128,106 @@ object AgentRuntime {
                     put("optionId", "approve")
                 }
             )
+        }
+    }
+
+    /**
+     * 处理 ask_user_question session update：解析结构化问题、设置 pendingQuestion 并注册卡片回复 handler。
+     */
+    private fun handleAskUserQuestionUpdate(
+        notif: com.silk.backend.agents.acp.SessionUpdateNotification,
+        session: AgentSession,
+    ) {
+        val requestId = notif.update["requestId"]?.let {
+            (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+        }
+        val rawQuestions = notif.update["questions"]?.jsonArray
+
+        // Parse structured questions (same logic as AcpUpdateMapper)
+        val structuredQuestions = parseStructuredQuestions(rawQuestions)
+
+        if (requestId != null && !structuredQuestions.isNullOrEmpty()) {
+            session.pendingQuestion = PendingQuestion(requestId, structuredQuestions)
+            logger.info(
+                "[AgentRuntime] pendingQuestion set: requestId={}, questionCount={}",
+                requestId.take(8), structuredQuestions.size,
+            )
+            // 注册卡片回复 handler
+            val cardId = "agent_question_$requestId"
+            CardReplyRouter.register(cardId, object : CardReplyHandler {
+                override suspend fun onCardReply(
+                    reply: CardReplyPayload,
+                    sessionName: String,
+                    broadcastFn: suspend (com.silk.backend.Message) -> Unit,
+                ) {
+                    val pending = session.pendingQuestion
+                    if (pending == null || pending.requestId != requestId) return
+
+                    // Parse button value to extract question index and answer
+                    val (questionIndex, answerText) = parseQuestionReplyAction(reply, pending)
+                    handleQuestionReply(session, pending, questionIndex, answerText, broadcastFn)
+                }
+            })
+        }
+    }
+
+    /**
+     * 解析 ACP ask_user_question 的 questions 数组为结构化问题（与 AcpUpdateMapper 同逻辑）。
+     */
+    private fun parseStructuredQuestions(
+        rawQuestions: kotlinx.serialization.json.JsonArray?,
+    ): List<StructuredQuestion>? {
+        return rawQuestions?.mapNotNull { el ->
+            when {
+                el is kotlinx.serialization.json.JsonObject -> {
+                    val q = el["question"]?.jsonPrimitive?.contentOrNull ?: ""
+                    val header = el["header"]?.jsonPrimitive?.contentOrNull ?: ""
+                    val options = el["options"]?.jsonArray?.mapNotNull { optEl ->
+                        (optEl as? kotlinx.serialization.json.JsonObject)?.let { obj ->
+                            QuestionOption(
+                                label = obj["label"]?.jsonPrimitive?.contentOrNull ?: "",
+                                description = obj["description"]?.jsonPrimitive?.contentOrNull ?: "",
+                            )
+                        }
+                    } ?: emptyList()
+                    StructuredQuestion(question = q, header = header, options = options)
+                }
+                el is kotlinx.serialization.json.JsonPrimitive -> {
+                    el.contentOrNull?.let { text -> StructuredQuestion(question = text) }
+                }
+                else -> null
+            }
+        }
+    }
+
+    /**
+     * 从卡片回复按钮值解析出 (问题下标, 答案文本)。
+     * 支持 __opt__{qi}__{answer} / __custom__{qi} 两种格式，其它视为对当前问题的回答。
+     */
+    private fun parseQuestionReplyAction(
+        reply: CardReplyPayload,
+        pending: PendingQuestion,
+    ): Pair<Int, String> {
+        val action = reply.action
+        return when {
+            action.startsWith("__opt__") -> {
+                // Format: __opt__{qi}__{answerDisplay}
+                val parts = action.removePrefix("__opt__").split("__", limit = 2)
+                val qi = parts.getOrNull(0)?.toIntOrNull() ?: 0
+                val answer = parts.getOrNull(1) ?: action
+                qi to answer
+            }
+            action.startsWith("__custom__") -> {
+                val qi = action.removePrefix("__custom__").toIntOrNull() ?: 0
+                val answer = reply.inputs["custom_answer_$qi"] ?: ""
+                qi to answer
+            }
+            else -> {
+                // Legacy fallback: treat as answer to current question
+                val currentIdx = (0 until pending.questions.size)
+                    .firstOrNull { it !in pending.answers } ?: 0
+                currentIdx to action
+            }
         }
     }
 
