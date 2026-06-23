@@ -38,10 +38,14 @@
   - 切目录走 HTTP `cdCcDir`（不发聊天 `/cd` 气泡）；FolderPicker 内部用 `loadJob` 取消旧请求避免 stale 覆盖
   - 共用 `ModalOverlay` composable；后端 `DirListingResponse.separator` 字段决定路径拼接，前端不猜 Unix vs Windows
 - 知识库面板支持复制 `[[kb:entryId|标题]]` 引用；聊天/工作流消息中的该格式和 AI 返回的 KB `available` 引用都可点击并切到对应知识库文档
-- 聊天输入区上方会显示 KB Context Tray：当后端为本轮问题准备了知识库上下文时，前端用状态消息里的 `references(kind=available, path=kb://...)` 渲染卡片，展示手动/自动来源、加入原因与摘要，并可点回原文档
+- 聊天输入区上方会显示 KB Context Tray：当后端为本轮问题准备了知识库上下文时，前端用状态消息里的 `references(kind=available, path=kb://...)` 渲染卡片，展示手动 / 固定 / 自动来源、加入原因与摘要，并可点回原文档
+- Context Tray 支持“固定下轮 / 排除下轮”最小控制闭环：Web 会把用户选择写进消息合同里的 `kbContextSelection(pinnedEntryIds, excludedEntryIds)`，后端按该选择重建下一轮 KB context
+- 聊天与 Workflow 的文本消息操作栏支持“📚入库”：选择目标 topic 后会把消息保存成 `candidate` 知识条目，并带上 `CHAT` / `WORKFLOW` 来源元数据，保存成功后直接跳到对应 KB 文档
+- 知识库条目侧栏提供最小 candidate inbox 过滤：可按“全部 / 候选 / 已发布 / 已归档”切换；候选条目可在编辑区直接发布，已发布条目可归档，归档条目可重新发布
 - 知识库面板已接上 M2 骨架：
   - 左侧按“个人 + 我所在群组”切换空间，前端对可访问 topic 做 personal/team 过滤
   - topic / entry 编辑器展示空间 badge、读写 badge、条目状态与来源
+  - entry 列表行会直接展示状态与来源 badge，便于快速区分 candidate / published 和聊天 / 工作流沉淀来源
   - topic 无写权限时，条目创建按钮与 Markdown 保存入口禁用，编辑区切只读态
   - 新建 topic 可直接指定 personal 或某个 team(group) 空间，默认 team topic 打开 `teamMembersCanWrite`
   - owner / team host / topic manager 可在编辑器工具栏打开“权限”面板，修改 topic 名称、项目、`read/write/manage` grants、`writeLocked`、`teamMembersCanWrite`

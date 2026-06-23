@@ -7,12 +7,12 @@ import com.silk.backend.models.KnowledgeSpaceType
 import java.io.File
 import kotlin.io.path.createTempDirectory
 import kotlin.test.Test
-import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.assertContentEquals
 
 class KnowledgeBaseManagerAccessControlTest {
     @Test
@@ -96,6 +96,7 @@ class KnowledgeBaseManagerAccessControlTest {
                     title = null,
                     content = "member edit",
                     tags = null,
+                    status = null,
                     userId = "member",
                 )
             )

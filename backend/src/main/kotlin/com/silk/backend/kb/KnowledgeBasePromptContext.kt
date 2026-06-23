@@ -2,7 +2,9 @@ package com.silk.backend.kb
 
 import com.silk.backend.ai.DirectModelAgent
 import com.silk.backend.models.KBEntry
+import com.silk.backend.models.KBEntryStatus
 import com.silk.backend.models.KBTopic
+import com.silk.backend.models.KnowledgeBaseContextSelection
 
 data class KnowledgeBasePromptContext(
     val resolvedUserInput: String,
@@ -13,7 +15,9 @@ data class KnowledgeBasePromptContext(
 
 data class KnowledgeBaseContextDiagnostics(
     val manualReferenceCount: Int = 0,
+    val pinnedReferenceCount: Int = 0,
     val autoCandidateCount: Int = 0,
+    val excludedReferenceCount: Int = 0,
 )
 
 private data class KnowledgeBaseReferenceToken(
@@ -42,6 +46,7 @@ fun resolveKnowledgeBasePromptContext(
     knowledgeBaseManager: KnowledgeBaseManager,
     preferredGroupId: String? = null,
     autoCandidateLimit: Int = 3,
+    selection: KnowledgeBaseContextSelection = KnowledgeBaseContextSelection(),
 ): KnowledgeBasePromptContext {
     val tokens = kbReferenceRegex.findAll(rawInput).map { match ->
         KnowledgeBaseReferenceToken(
@@ -67,12 +72,35 @@ fun resolveKnowledgeBasePromptContext(
         acc.replace(token.fullMatch, "《$label》")
     }
 
+    val manualEntryIds = resolvedByEntryId.keys.toSet()
+    val excludedEntryIds = selection.excludedEntryIds.asSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .filterNot { it in manualEntryIds }
+        .toSet()
+    val pinnedReferences = selection.pinnedEntryIds.asSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .distinct()
+        .filterNot { it in manualEntryIds || it in excludedEntryIds }
+        .mapNotNull { entryId ->
+            val entry = knowledgeBaseManager.getEntry(entryId, userId) ?: return@mapNotNull null
+            if (entry.status != KBEntryStatus.PUBLISHED) return@mapNotNull null
+            val topic = knowledgeBaseManager.getTopic(entry.topicId, userId) ?: return@mapNotNull null
+            ResolvedKnowledgeBaseReference(
+                entry = entry,
+                topic = topic,
+                label = entry.title,
+            )
+        }
+        .toList()
+
     val autoReferences = knowledgeBaseManager.searchEntriesForContext(
         userId = userId,
         query = resolvedUserInput,
         preferredGroupId = preferredGroupId,
         limit = autoCandidateLimit,
-        excludedEntryIds = resolvedByEntryId.keys,
+        excludedEntryIds = manualEntryIds + pinnedReferences.map { it.entry.id } + excludedEntryIds,
     ).map { hit ->
         AutoKnowledgeBaseReference(
             entry = hit.entry,
@@ -81,7 +109,7 @@ fun resolveKnowledgeBasePromptContext(
         )
     }
 
-    if (resolvedByEntryId.isEmpty() && autoReferences.isEmpty()) {
+    if (resolvedByEntryId.isEmpty() && pinnedReferences.isEmpty() && autoReferences.isEmpty()) {
         return KnowledgeBasePromptContext(resolvedUserInput = resolvedUserInput)
     }
 
@@ -92,6 +120,14 @@ fun resolveKnowledgeBasePromptContext(
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
             origin = "manual",
             reason = "用户手动引用",
+        )
+    } + pinnedReferences.map { resolved ->
+        DirectModelAgent.AvailableReferenceSeed(
+            title = "${resolved.topic.name} / ${resolved.entry.title}",
+            snippet = buildKnowledgeBaseSnippet(resolved.entry),
+            path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
+            origin = "pin",
+            reason = "用户固定到本轮上下文",
         )
     } + autoReferences.map { resolved ->
         DirectModelAgent.AvailableReferenceSeed(
@@ -104,6 +140,7 @@ fun resolveKnowledgeBasePromptContext(
     }
     val promptBlock = buildKnowledgeBasePromptBlock(
         manualReferences = resolvedByEntryId.values.toList(),
+        pinnedReferences = pinnedReferences,
         autoReferences = autoReferences,
     )
     return KnowledgeBasePromptContext(
@@ -112,7 +149,9 @@ fun resolveKnowledgeBasePromptContext(
         availableReferences = references,
         diagnostics = KnowledgeBaseContextDiagnostics(
             manualReferenceCount = resolvedByEntryId.size,
+            pinnedReferenceCount = pinnedReferences.size,
             autoCandidateCount = autoReferences.size,
+            excludedReferenceCount = excludedEntryIds.size,
         ),
     )
 }
@@ -122,6 +161,7 @@ internal fun buildKnowledgeBasePath(topicId: String, entryId: String): String =
 
 private fun buildKnowledgeBasePromptBlock(
     manualReferences: List<ResolvedKnowledgeBaseReference>,
+    pinnedReferences: List<ResolvedKnowledgeBaseReference>,
     autoReferences: List<AutoKnowledgeBaseReference>,
 ): String = buildString {
     appendLine("## 知识库上下文")
@@ -139,6 +179,19 @@ private fun buildKnowledgeBasePromptBlock(
                 topic = resolved.topic,
                 entry = resolved.entry,
                 reasons = listOf("用户手动引用"),
+            )
+        }
+    }
+
+    if (pinnedReferences.isNotEmpty()) {
+        appendLine("### 用户固定上下文")
+        pinnedReferences.forEach { resolved ->
+            val marker = "[available:${nextIndex++}]"
+            appendReferenceBlock(
+                marker = marker,
+                topic = resolved.topic,
+                entry = resolved.entry,
+                reasons = listOf("用户固定到本轮上下文"),
             )
         }
     }

@@ -316,7 +316,6 @@ private fun buildCreateWorkflowPayload(
     }.toString()
 }
 
-@Suppress("LargeClass")
 object ApiClient {
     private val BASE_URL: String
         get() {
@@ -1067,7 +1066,45 @@ object ApiClient {
         }
     }
 
-    suspend fun updateKBEntry(entryId: String, title: String?, content: String?, tags: List<String>?, userId: String): KBEntryItem? {
+    suspend fun captureKBEntry(
+        topicId: String,
+        title: String,
+        content: String,
+        tags: List<String>,
+        userId: String,
+        source: KBEntrySource,
+    ): KBEntryItem? {
+        return recoverApiCall(
+            logMessage = "保存知识库候选失败:",
+            fallback = { null },
+        ) {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("topicId", kotlinx.serialization.json.JsonPrimitive(topicId))
+                put("title", kotlinx.serialization.json.JsonPrimitive(title))
+                put("content", kotlinx.serialization.json.JsonPrimitive(content))
+                put(
+                    "tags",
+                    kotlinx.serialization.json.JsonArray(tags.map { kotlinx.serialization.json.JsonPrimitive(it) })
+                )
+                put(
+                    "source",
+                    jsonParser.encodeToJsonElement(KBEntrySource.serializer(), source)
+                )
+            }.toString()
+            val response = post("/api/kb/captures", body)
+            jsonParser.decodeFromString(response)
+        }
+    }
+
+    suspend fun updateKBEntry(
+        entryId: String,
+        title: String?,
+        content: String?,
+        tags: List<String>?,
+        userId: String,
+        status: KBEntryStatus? = null,
+    ): KBEntryItem? {
         return recoverApiCall(
             logMessage = "更新知识库条目失败:",
             fallback = { null },
@@ -1079,6 +1116,7 @@ object ApiClient {
                 fields.add("\"content\":\"$escaped\"")
             }
             if (tags != null) fields.add("\"tags\":[${tags.joinToString(",") { "\"$it\"" }}]")
+            if (status != null) fields.add("\"status\":\"${status.name}\"")
             val body = "{${fields.joinToString(",")}}"
             val response = put("/api/kb/entries/$entryId", body)
             jsonParser.decodeFromString(response)

@@ -1,6 +1,7 @@
 package com.silk.backend
 
 import com.silk.backend.models.MessageReference
+import com.silk.backend.models.KnowledgeBaseContextSelection
 import io.ktor.server.application.Application
 import io.ktor.server.application.install
 import io.ktor.server.websocket.WebSockets
@@ -48,6 +49,7 @@ data class Message(
     val isIncremental: Boolean = false, // true = 增量消息（前端需拼接），false = 完整消息（前端直接替换）
     val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度区分）
     val references: List<MessageReference> = emptyList(),
+    val kbContextSelection: KnowledgeBaseContextSelection? = null,
     val action: String? = null  // null = 新消息(默认), "edit" = 覆盖同ID消息
 )
 
@@ -144,7 +146,8 @@ class ChatServer(
                         content = entry.content,
                         timestamp = entry.timestamp,
                         type = parseStoredMessageType(entry.messageType),
-                        references = entry.references
+                        references = entry.references,
+                        kbContextSelection = entry.kbContextSelection,
                     )
                     messageHistory.add(msg)
                 }
@@ -500,7 +503,7 @@ class ChatServer(
             isRolePromptMessage(silkContent) -> handleSilkRolePrompt(message.userId, silkContent)
             silkContent.startsWith("/recall ") || silkContent.startsWith("/recall\n") ->
                 handleRecallCommand(message.userId, silkContent, isSilkPrivateChat)
-            else -> handleSilkQuestion(message.userId, silkContent, isSilkPrivateChat)
+            else -> handleSilkQuestion(message.userId, silkContent, isSilkPrivateChat, message.kbContextSelection)
         }
     }
 
@@ -572,7 +575,12 @@ class ChatServer(
         }
     }
 
-    private fun handleSilkQuestion(userId: String, silkContent: String, isSilkPrivateChat: Boolean) {
+    private fun handleSilkQuestion(
+        userId: String,
+        silkContent: String,
+        isSilkPrivateChat: Boolean,
+        kbContextSelection: KnowledgeBaseContextSelection?,
+    ) {
         val logPrefix = if (isSilkPrivateChat) "[Silk私聊]" else "[@silk]"
         logger.debug("💬 [broadcast] {} 问题: {}...", logPrefix, silkContent.take(50))
         launchActiveAiJob(
@@ -581,7 +589,7 @@ class ChatServer(
                 logger.error("❌ 生成AI回答异常", e)
             }
         ) {
-            generateIntelligentResponse(silkContent, userId)
+            generateIntelligentResponse(silkContent, userId, kbContextSelection)
         }
     }
 
@@ -738,8 +746,11 @@ class ChatServer(
         )
     }
 
-    private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "") =
-        generateIntelligentResponseSupport(userMessage, userId)
+    private suspend fun generateIntelligentResponse(
+        userMessage: String,
+        userId: String = "",
+        kbContextSelection: KnowledgeBaseContextSelection? = null,
+    ) = generateIntelligentResponseSupport(userMessage, userId, kbContextSelection)
 
     private suspend fun generateHistoryRecallResponse(query: String, userId: String) =
         generateHistoryRecallResponseSupport(query, userId)

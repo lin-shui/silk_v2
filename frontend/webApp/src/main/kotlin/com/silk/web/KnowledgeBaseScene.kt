@@ -56,6 +56,13 @@ private enum class KnowledgeEditorMode(val label: String) {
     SPLIT("分栏"),
 }
 
+internal enum class KnowledgeEntryFilter(val label: String) {
+    ALL("全部"),
+    CANDIDATE("候选"),
+    PUBLISHED("已发布"),
+    ARCHIVED("已归档"),
+}
+
 internal const val PERSONAL_SPACE_ID = "__personal__"
 
 internal data class KnowledgeSpaceOption(
@@ -129,6 +136,33 @@ internal fun topicSpaceLabel(topic: KBTopicItem, groups: List<Group>): String {
 
 internal fun topicPermissionLabel(topic: KBTopicItem, userId: String, groups: List<Group>): String {
     return if (canWriteKnowledgeTopic(topic, userId, groups)) "可编辑" else "只读"
+}
+
+internal fun filterKnowledgeEntries(entries: List<KBEntryItem>, filter: KnowledgeEntryFilter): List<KBEntryItem> {
+    return when (filter) {
+        KnowledgeEntryFilter.ALL -> entries
+        KnowledgeEntryFilter.CANDIDATE -> entries.filter { it.status == KBEntryStatus.CANDIDATE }
+        KnowledgeEntryFilter.PUBLISHED -> entries.filter { it.status == KBEntryStatus.PUBLISHED }
+        KnowledgeEntryFilter.ARCHIVED -> entries.filter { it.status == KBEntryStatus.ARCHIVED }
+    }
+}
+
+internal fun knowledgeFilterForStatus(status: KBEntryStatus): KnowledgeEntryFilter {
+    return when (status) {
+        KBEntryStatus.CANDIDATE -> KnowledgeEntryFilter.CANDIDATE
+        KBEntryStatus.PUBLISHED -> KnowledgeEntryFilter.PUBLISHED
+        KBEntryStatus.ARCHIVED -> KnowledgeEntryFilter.ARCHIVED
+        KBEntryStatus.DELETED -> KnowledgeEntryFilter.ALL
+    }
+}
+
+internal fun knowledgeStatusAction(entry: KBEntryItem): Pair<String, KBEntryStatus>? {
+    return when (entry.status) {
+        KBEntryStatus.CANDIDATE -> "发布" to KBEntryStatus.PUBLISHED
+        KBEntryStatus.PUBLISHED -> "归档" to KBEntryStatus.ARCHIVED
+        KBEntryStatus.ARCHIVED -> "重新发布" to KBEntryStatus.PUBLISHED
+        KBEntryStatus.DELETED -> null
+    }
 }
 
 @Composable
@@ -292,7 +326,9 @@ private fun EntrySidebar(
     selectedTopic: KBTopicItem?,
     entries: List<KBEntryItem>,
     selectedEntry: KBEntryItem?,
+    selectedFilter: KnowledgeEntryFilter,
     canCreateEntry: Boolean,
+    onFilterChange: (KnowledgeEntryFilter) -> Unit,
     onCreateEntry: () -> Unit,
     onEntrySelect: (KBEntryItem) -> Unit,
 ) {
@@ -312,12 +348,40 @@ private fun EntrySidebar(
             actionEnabled = canCreateEntry,
             onAction = onCreateEntry,
         )
+        EntryFilterTabs(
+            selectedFilter = selectedFilter,
+            onFilterChange = onFilterChange,
+        )
         EntrySidebarContent(
             selectedTopic = selectedTopic,
             entries = entries,
             selectedEntry = selectedEntry,
             onEntrySelect = onEntrySelect,
         )
+    }
+}
+
+@Composable
+private fun EntryFilterTabs(
+    selectedFilter: KnowledgeEntryFilter,
+    onFilterChange: (KnowledgeEntryFilter) -> Unit,
+) {
+    Div({
+        style {
+            padding(10.px, 12.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            property("gap", "6px")
+            property("flex-wrap", "wrap")
+        }
+    }) {
+        KnowledgeEntryFilter.entries.forEach { filter ->
+            KnowledgeToggleButton(
+                label = filter.label,
+                selected = selectedFilter == filter,
+                onClick = { onFilterChange(filter) },
+            )
+        }
     }
 }
 
@@ -361,6 +425,25 @@ private fun EntryRow(entry: KBEntryItem, isSelected: Boolean, onClick: () -> Uni
                 fontWeight(if (isSelected) "600" else "400")
             }
         }) { Text(entry.title) }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                property("gap", "6px")
+                marginTop(6.px)
+                property("flex-wrap", "wrap")
+            }
+        }) {
+            KnowledgeBadge(entry.status.name.lowercase(), SilkColors.primaryDark)
+            val sourceLabel = when (entry.source.sourceType) {
+                KBSourceType.MANUAL -> "手动"
+                KBSourceType.CHAT -> "聊天"
+                KBSourceType.WORKFLOW -> "工作流"
+                KBSourceType.MEETING -> "会议"
+                KBSourceType.FILE -> "文件"
+                KBSourceType.URL -> "URL"
+            }
+            KnowledgeBadge(sourceLabel, SilkColors.primary)
+        }
     }
 }
 
@@ -380,6 +463,8 @@ private fun KnowledgeEditorPane(
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onManageTopic: () -> Unit,
     onSave: () -> Unit,
+    onStatusAction: (() -> Unit)?,
+    statusActionLabel: String?,
     onExport: () -> Unit,
     onCopyReference: () -> Unit,
 ) {
@@ -404,6 +489,8 @@ private fun KnowledgeEditorPane(
                 onEditorModeChange = onEditorModeChange,
                 onManageTopic = onManageTopic,
                 onSave = onSave,
+                onStatusAction = onStatusAction,
+                statusActionLabel = statusActionLabel,
                 onExport = onExport,
                 onCopyReference = onCopyReference,
             )
@@ -609,6 +696,8 @@ private fun KnowledgeEditorToolbar(
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onManageTopic: () -> Unit,
     onSave: () -> Unit,
+    onStatusAction: (() -> Unit)?,
+    statusActionLabel: String?,
     onExport: () -> Unit,
     onCopyReference: () -> Unit,
 ) {
@@ -653,6 +742,14 @@ private fun KnowledgeEditorToolbar(
                 enabled = canEdit && !isSaving,
                 onClick = onSave,
             )
+            if (statusActionLabel != null && onStatusAction != null) {
+                KnowledgeToolbarButton(
+                    label = statusActionLabel,
+                    background = SilkColors.success,
+                    enabled = canEdit && !isSaving,
+                    onClick = onStatusAction,
+                )
+            }
             KnowledgeToolbarButton(
                 label = "导出 Obsidian",
                 background = SilkColors.info,
@@ -1128,6 +1225,42 @@ private suspend fun saveKnowledgeEntry(
     onSavingChange(false)
 }
 
+private suspend fun updateKnowledgeEntryStatus(
+    entry: KBEntryItem?,
+    topic: KBTopicItem?,
+    userId: String,
+    status: KBEntryStatus,
+    onSavingChange: (Boolean) -> Unit,
+    onSaveMessageChange: (String) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+) {
+    if (entry == null || topic == null) return
+    onSavingChange(true)
+    onSaveMessageChange("")
+    val updated = ApiClient.updateKBEntry(
+        entryId = entry.id,
+        title = null,
+        content = null,
+        tags = null,
+        userId = userId,
+        status = status,
+    )
+    if (updated != null) {
+        onSelectedEntryChange(updated)
+        onEntriesChange(ApiClient.getKBEntries(topic.id, userId))
+        onSaveMessageChange(
+            when (status) {
+                KBEntryStatus.PUBLISHED -> "已发布"
+                KBEntryStatus.ARCHIVED -> "已归档"
+                KBEntryStatus.CANDIDATE -> "已转为候选"
+                KBEntryStatus.DELETED -> "状态已更新"
+            }
+        )
+    }
+    onSavingChange(false)
+}
+
 private suspend fun exportKnowledgeEntry(
     entry: KBEntryItem?,
     topic: KBTopicItem?,
@@ -1212,7 +1345,6 @@ private suspend fun createKnowledgeEntry(
     resetEntryDialog(onVisibilityChange, onTitleChange)
 }
 
-@Suppress("CyclomaticComplexMethod")
 @Composable
 fun KnowledgeBaseScene(appState: WebAppState) {
     val user = appState.currentUser ?: return
@@ -1246,6 +1378,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var isSaving by remember { mutableStateOf(false) }
     var saveMessage by remember { mutableStateOf("") }
     var editorMode by remember { mutableStateOf(KnowledgeEditorMode.SPLIT) }
+    var entryFilter by remember { mutableStateOf(KnowledgeEntryFilter.ALL) }
 
     LaunchedEffect(user.id) {
         isLoading = true
@@ -1257,10 +1390,12 @@ fun KnowledgeBaseScene(appState: WebAppState) {
 
     val spaceOptions = remember(userGroups) { buildKnowledgeSpaceOptions(userGroups) }
     val filteredTopics = remember(topics, selectedSpaceId) { filterTopicsForSpace(topics, selectedSpaceId) }
+    val filteredEntries = remember(entries, entryFilter) { filterKnowledgeEntries(entries, entryFilter) }
     val canEditSelectedTopic = selectedTopic?.let { canWriteKnowledgeTopic(it, user.id, userGroups) } ?: false
     val canManageSelectedTopic = selectedTopic?.let { canManageKnowledgeTopic(it, user.id, userGroups) } ?: false
     val selectedTopicSpaceLabel = selectedTopic?.let { topicSpaceLabel(it, userGroups) }
     val selectedTopicPermissionLabel = selectedTopic?.let { topicPermissionLabel(it, user.id, userGroups) }
+    val selectedEntryStatusAction = selectedEntry?.let(::knowledgeStatusAction)
 
     LaunchedEffect(selectedSpaceId, topics) {
         if (selectedTopic != null && filteredTopics.none { it.id == selectedTopic?.id }) {
@@ -1336,9 +1471,11 @@ fun KnowledgeBaseScene(appState: WebAppState) {
         )
         EntrySidebar(
             selectedTopic = selectedTopic,
-            entries = entries,
+            entries = filteredEntries,
             selectedEntry = selectedEntry,
+            selectedFilter = entryFilter,
             canCreateEntry = canEditSelectedTopic,
+            onFilterChange = { entryFilter = it },
             onCreateEntry = { showCreateEntryDialog = true },
             onEntrySelect = { entry ->
                 loadKnowledgeEntry(
@@ -1391,6 +1528,24 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                     )
                 }
             },
+            onStatusAction = selectedEntryStatusAction?.let { (_, targetStatus) ->
+                {
+                    entryFilter = knowledgeFilterForStatus(targetStatus)
+                    scope.launch {
+                        updateKnowledgeEntryStatus(
+                            entry = selectedEntry,
+                            topic = selectedTopic,
+                            userId = user.id,
+                            status = targetStatus,
+                            onSavingChange = { isSaving = it },
+                            onSaveMessageChange = { saveMessage = it },
+                            onSelectedEntryChange = { selectedEntry = it },
+                            onEntriesChange = { entries = it },
+                        )
+                    }
+                }
+            },
+            statusActionLabel = selectedEntryStatusAction?.first,
             onExport = {
                 scope.launch {
                     exportKnowledgeEntry(

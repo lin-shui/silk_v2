@@ -98,6 +98,15 @@ fun WorkflowScene(appState: WebAppState) {
     var showTrustConfirm by remember { mutableStateOf(false) }
     var trustConfirmPath by remember { mutableStateOf("") }
     var trustConfirmBridgeId by remember { mutableStateOf<String?>(null) }
+    var kbCaptureDraft by remember { mutableStateOf<KnowledgeCaptureDraft?>(null) }
+    var kbCaptureTopics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
+    var kbCaptureGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
+    var kbCaptureSelectedSpaceId by remember { mutableStateOf(PERSONAL_SPACE_ID) }
+    var kbCaptureSelectedTopicId by remember { mutableStateOf("") }
+    var kbCaptureTitle by remember { mutableStateOf("") }
+    var kbCaptureContent by remember { mutableStateOf("") }
+    var kbCaptureSaving by remember { mutableStateOf(false) }
+    var kbCaptureResult by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(user.id) {
         isLoading = true
@@ -113,6 +122,17 @@ fun WorkflowScene(appState: WebAppState) {
         selectedPermissionMode = ""
         dirWarning = null
     }
+    val resetKnowledgeCaptureDialog = {
+        kbCaptureDraft = null
+        kbCaptureTopics = emptyList()
+        kbCaptureGroups = emptyList()
+        kbCaptureSelectedSpaceId = PERSONAL_SPACE_ID
+        kbCaptureSelectedTopicId = ""
+        kbCaptureTitle = ""
+        kbCaptureContent = ""
+        kbCaptureSaving = false
+        kbCaptureResult = null
+    }
 
     WorkflowSceneLayout(
         workflows = workflows,
@@ -120,6 +140,27 @@ fun WorkflowScene(appState: WebAppState) {
         selectedWorkflow = selectedWorkflow,
         userId = user.id,
         userName = user.fullName,
+        onCaptureToKnowledgeBase = { workflow, message ->
+            scope.launch {
+                val context = loadKnowledgeCaptureContext(user.id)
+                val preferredSpaceId = preferredKnowledgeCaptureSpaceId(workflow.groupId, context.topics)
+                kbCaptureDraft = KnowledgeCaptureDraft(
+                    message = message,
+                    sourceType = KBSourceType.WORKFLOW,
+                    sourceGroupId = workflow.groupId,
+                    workflowId = workflow.id,
+                    preferredSpaceId = preferredSpaceId,
+                )
+                kbCaptureTopics = context.topics
+                kbCaptureGroups = context.groups
+                kbCaptureSelectedSpaceId = preferredSpaceId
+                kbCaptureSelectedTopicId = defaultKnowledgeCaptureTopicId(context.topics, preferredSpaceId).orEmpty()
+                kbCaptureTitle = buildDefaultKnowledgeCaptureTitle(message.content)
+                kbCaptureContent = message.content
+                kbCaptureSaving = false
+                kbCaptureResult = if (context.topics.isEmpty()) "还没有可用主题，请先去知识库创建主题。" else null
+            }
+        },
         onOpenCreateDialog = { showCreateDialog = true },
         onSelectWorkflow = { selectedWorkflow = it },
         onToggleMenuWorkflow = { wf -> menuWorkflow = toggleWorkflowMenu(menuWorkflow, wf) },
@@ -169,6 +210,53 @@ fun WorkflowScene(appState: WebAppState) {
         onSelectedWorkflowChange = { selectedWorkflow = it },
         onWorkflowsChange = { workflows = it },
     )
+
+    kbCaptureDraft?.let { draft ->
+        KnowledgeBaseCaptureDialog(
+            draft = draft,
+            spaceOptions = buildKnowledgeSpaceOptions(kbCaptureGroups),
+            topics = kbCaptureTopics,
+            selectedSpaceId = kbCaptureSelectedSpaceId,
+            selectedTopicId = kbCaptureSelectedTopicId,
+            title = kbCaptureTitle,
+            content = kbCaptureContent,
+            isSaving = kbCaptureSaving,
+            resultMessage = kbCaptureResult,
+            onSelectedSpaceIdChange = { kbCaptureSelectedSpaceId = it },
+            onSelectedTopicIdChange = { kbCaptureSelectedTopicId = it },
+            onTitleChange = { kbCaptureTitle = it },
+            onContentChange = { kbCaptureContent = it },
+            onDismiss = resetKnowledgeCaptureDialog,
+            onConfirm = {
+                if (kbCaptureSaving || kbCaptureSelectedTopicId.isBlank() || kbCaptureTitle.isBlank() || kbCaptureContent.isBlank()) {
+                    return@KnowledgeBaseCaptureDialog
+                }
+                scope.launch {
+                    kbCaptureSaving = true
+                    val created = ApiClient.captureKBEntry(
+                        topicId = kbCaptureSelectedTopicId,
+                        title = kbCaptureTitle.trim(),
+                        content = kbCaptureContent,
+                        tags = emptyList(),
+                        userId = user.id,
+                        source = KBEntrySource(
+                            sourceType = draft.sourceType,
+                            sourceGroupId = draft.sourceGroupId,
+                            workflowId = draft.workflowId,
+                            messageIds = listOf(draft.message.id),
+                        ),
+                    )
+                    kbCaptureSaving = false
+                    if (created == null) {
+                        kbCaptureResult = "保存失败，请确认目标主题仍可写。"
+                    } else {
+                        resetKnowledgeCaptureDialog()
+                        appState.openKnowledgeBaseEntry(created.id, created.topicId)
+                    }
+                }
+            },
+        )
+    }
 }
 
 private fun toggleWorkflowMenu(
@@ -183,6 +271,7 @@ private fun WorkflowSceneLayout(
     selectedWorkflow: WorkflowItem?,
     userId: String,
     userName: String,
+    onCaptureToKnowledgeBase: (WorkflowItem, Message) -> Unit,
     onOpenCreateDialog: () -> Unit,
     onSelectWorkflow: (WorkflowItem) -> Unit,
     onToggleMenuWorkflow: (WorkflowItem) -> Unit,
@@ -208,6 +297,7 @@ private fun WorkflowSceneLayout(
             selectedWorkflow = selectedWorkflow,
             userId = userId,
             userName = userName,
+            onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
         )
     }
 }
@@ -380,6 +470,7 @@ private fun WorkflowMainPanel(
     selectedWorkflow: WorkflowItem?,
     userId: String,
     userName: String,
+    onCaptureToKnowledgeBase: (WorkflowItem, Message) -> Unit,
 ) {
     Div({
         style {
@@ -400,6 +491,7 @@ private fun WorkflowMainPanel(
                     userName = userName,
                     groupId = workflow.groupId,
                     workflowName = workflow.name,
+                    onCaptureToKnowledgeBase = { message -> onCaptureToKnowledgeBase(workflow, message) },
                 )
             }
         }
@@ -1329,6 +1421,7 @@ private fun WorkflowChatPanel(
     userName: String,
     groupId: String,
     workflowName: String,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val wsUrl = remember { backendWsOrigin() }
@@ -1434,6 +1527,7 @@ private fun WorkflowChatPanel(
         userId = userId,
         userName = userName,
         chatClient = chatClient,
+        onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
     )
     WorkflowChatComposer(
         permissionMode = permissionMode,
@@ -1661,6 +1755,7 @@ private fun WorkflowMessagesArea(
     userId: String,
     userName: String,
     chatClient: ChatClient,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
 ) {
     Div({
         id("wf-messages")
@@ -1682,6 +1777,7 @@ private fun WorkflowMessagesArea(
                     currentUserName = userName,
                     chatClient = chatClient,
                     onCopy = { content -> copyTextToClipboard(content) },
+                    onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                 )
             }
         }
@@ -1691,6 +1787,7 @@ private fun WorkflowMessagesArea(
             userId = userId,
             userName = userName,
             chatClient = chatClient,
+            onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
         )
     }
 }
@@ -1733,6 +1830,7 @@ private fun WorkflowTransientMessage(
     userId: String,
     userName: String,
     chatClient: ChatClient,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
 ) {
     val message = transientMessage ?: return
     if (shouldRenderInlineTransientMessage(message)) {
@@ -1743,6 +1841,7 @@ private fun WorkflowTransientMessage(
             currentUserName = userName,
             chatClient = chatClient,
             onCopy = { content -> copyTextToClipboard(content) },
+            onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
         )
         return
     }

@@ -13,6 +13,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
+import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
@@ -76,6 +77,8 @@ import org.jetbrains.compose.web.dom.Button
 import org.jetbrains.compose.web.dom.Div
 import org.jetbrains.compose.web.dom.H3
 import org.jetbrains.compose.web.dom.Input
+import org.jetbrains.compose.web.dom.Option
+import org.jetbrains.compose.web.dom.Select
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
 import org.jetbrains.compose.web.dom.TextArea
@@ -1060,6 +1063,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
     
     var messageText by remember { mutableStateOf("") }
+    var kbContextSelection by remember(group.id) { mutableStateOf(KnowledgeBaseContextSelection()) }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
     var isExportingMarkdown by remember { mutableStateOf(false) }
@@ -1105,6 +1109,15 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var userGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
     var isLoadingGroups by remember { mutableStateOf(false) }
     var forwardResult by remember { mutableStateOf<String?>(null) }
+    var kbCaptureDraft by remember { mutableStateOf<KnowledgeCaptureDraft?>(null) }
+    var kbCaptureTopics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
+    var kbCaptureGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
+    var kbCaptureSelectedSpaceId by remember { mutableStateOf(PERSONAL_SPACE_ID) }
+    var kbCaptureSelectedTopicId by remember { mutableStateOf("") }
+    var kbCaptureTitle by remember { mutableStateOf("") }
+    var kbCaptureContent by remember { mutableStateOf("") }
+    var kbCaptureSaving by remember { mutableStateOf(false) }
+    var kbCaptureResult by remember { mutableStateOf<String?>(null) }
     
     // 从群组成员列表和消息历史中提取用户列表（去重）
     // 优先使用 groupMembers（包含所有成员），然后补充消息历史中的成员
@@ -1125,6 +1138,18 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             }
         }
         users.toList()
+    }
+
+    val resetKnowledgeCaptureDialog = {
+        kbCaptureDraft = null
+        kbCaptureTopics = emptyList()
+        kbCaptureGroups = emptyList()
+        kbCaptureSelectedSpaceId = PERSONAL_SPACE_ID
+        kbCaptureSelectedTopicId = ""
+        kbCaptureTitle = ""
+        kbCaptureContent = ""
+        kbCaptureSaving = false
+        kbCaptureResult = null
     }
 
     ChatAppEffects(
@@ -1205,6 +1230,26 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             onForwardDialogVisibilityChanged = { showForwardDialog = it },
             onSelectionModeChanged = { isSelectionMode = it },
             onSelectedMessageIdsChanged = { selectedMessageIds = it },
+            onCaptureToKnowledgeBase = { message ->
+                scope.launch {
+                    val context = loadKnowledgeCaptureContext(user.id)
+                    val preferredSpaceId = preferredKnowledgeCaptureSpaceId(group.id, context.topics)
+                    kbCaptureDraft = KnowledgeCaptureDraft(
+                        message = message,
+                        sourceType = KBSourceType.CHAT,
+                        sourceGroupId = group.id,
+                        preferredSpaceId = preferredSpaceId,
+                    )
+                    kbCaptureTopics = context.topics
+                    kbCaptureGroups = context.groups
+                    kbCaptureSelectedSpaceId = preferredSpaceId
+                    kbCaptureSelectedTopicId = defaultKnowledgeCaptureTopicId(context.topics, preferredSpaceId).orEmpty()
+                    kbCaptureTitle = buildDefaultKnowledgeCaptureTitle(message.content)
+                    kbCaptureContent = message.content
+                    kbCaptureSaving = false
+                    kbCaptureResult = if (context.topics.isEmpty()) "还没有可用主题，请先去知识库创建主题。" else null
+                }
+            },
         )
 
         ChatAppDragAndDropEffect(group = group, user = user)
@@ -1226,6 +1271,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             mediaRecorderJs = mediaRecorderJs,
             audioChunksJs = audioChunksJs,
             messageText = messageText,
+            kbContextSelection = kbContextSelection,
             showMentionMenu = showMentionMenu,
             mentionSearchText = mentionSearchText,
             mentionStartIndex = mentionStartIndex,
@@ -1235,10 +1281,58 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             onVoiceRecordingChanged = { isVoiceRecording = it },
             onTranscribingChanged = { isTranscribing = it },
             onMessageTextChanged = { messageText = it },
+            onKnowledgeBaseContextSelectionChanged = { kbContextSelection = it },
             onShowMentionMenuChanged = { showMentionMenu = it },
             onMentionSearchTextChanged = { mentionSearchText = it },
             onMentionStartIndexChanged = { mentionStartIndex = it },
             onMentionMenuPositionChanged = { mentionMenuPosition = it },
+        )
+    }
+
+    kbCaptureDraft?.let { draft ->
+        KnowledgeBaseCaptureDialog(
+            draft = draft,
+            spaceOptions = buildKnowledgeSpaceOptions(kbCaptureGroups),
+            topics = kbCaptureTopics,
+            selectedSpaceId = kbCaptureSelectedSpaceId,
+            selectedTopicId = kbCaptureSelectedTopicId,
+            title = kbCaptureTitle,
+            content = kbCaptureContent,
+            isSaving = kbCaptureSaving,
+            resultMessage = kbCaptureResult,
+            onSelectedSpaceIdChange = { kbCaptureSelectedSpaceId = it },
+            onSelectedTopicIdChange = { kbCaptureSelectedTopicId = it },
+            onTitleChange = { kbCaptureTitle = it },
+            onContentChange = { kbCaptureContent = it },
+            onDismiss = resetKnowledgeCaptureDialog,
+            onConfirm = {
+                if (kbCaptureSaving || kbCaptureSelectedTopicId.isBlank() || kbCaptureTitle.isBlank() || kbCaptureContent.isBlank()) {
+                    return@KnowledgeBaseCaptureDialog
+                }
+                scope.launch {
+                    kbCaptureSaving = true
+                    val created = ApiClient.captureKBEntry(
+                        topicId = kbCaptureSelectedTopicId,
+                        title = kbCaptureTitle.trim(),
+                        content = kbCaptureContent,
+                        tags = emptyList(),
+                        userId = user.id,
+                        source = KBEntrySource(
+                            sourceType = draft.sourceType,
+                            sourceGroupId = draft.sourceGroupId,
+                            workflowId = draft.workflowId,
+                            messageIds = listOf(draft.message.id),
+                        ),
+                    )
+                    kbCaptureSaving = false
+                    if (created == null) {
+                        kbCaptureResult = "保存失败，请确认目标主题仍可写。"
+                    } else {
+                        resetKnowledgeCaptureDialog()
+                        appState.openKnowledgeBaseEntry(created.id, created.topicId)
+                    }
+                }
+            },
         )
     }
     
@@ -1868,6 +1962,7 @@ private fun ChatAppMessagePane(
     onForwardDialogVisibilityChanged: (Boolean) -> Unit,
     onSelectionModeChanged: (Boolean) -> Unit,
     onSelectedMessageIdsChanged: (Set<String>) -> Unit,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
 ) {
     val contextTrayStatus = statusMessages.lastOrNull(::isKnowledgeBaseContextStatusMessage)
     val visibleStatusMessages = statusMessages.filterNot { it.id == contextTrayStatus?.id }
@@ -1950,6 +2045,7 @@ private fun ChatAppMessagePane(
                     copyTextToClipboard(content)
                     console.log("✅ 消息已复制到剪贴板")
                 },
+                onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                 onForward = { msg ->
                     onMessageToForwardChanged(msg)
                     scope.launch {
@@ -2005,6 +2101,7 @@ private fun ChatAppMessagePane(
                         copyTextToClipboard(content)
                         console.log("✅ 消息已复制到剪贴板")
                     },
+                    onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                     onForward = { msg ->
                         onMessageToForwardChanged(msg)
                         scope.launch {
@@ -2201,6 +2298,7 @@ private fun ChatAppInputSection(
     mediaRecorderJs: dynamic,
     audioChunksJs: dynamic,
     messageText: String,
+    kbContextSelection: KnowledgeBaseContextSelection,
     showMentionMenu: Boolean,
     mentionSearchText: String,
     mentionStartIndex: Int,
@@ -2210,6 +2308,7 @@ private fun ChatAppInputSection(
     onVoiceRecordingChanged: (Boolean) -> Unit,
     onTranscribingChanged: (Boolean) -> Unit,
     onMessageTextChanged: (String) -> Unit,
+    onKnowledgeBaseContextSelectionChanged: (KnowledgeBaseContextSelection) -> Unit,
     onShowMentionMenuChanged: (Boolean) -> Unit,
     onMentionSearchTextChanged: (String) -> Unit,
     onMentionStartIndexChanged: (Int) -> Unit,
@@ -2224,7 +2323,12 @@ private fun ChatAppInputSection(
             val msg = messageText
             onMessageTextChanged("")
             scope.launch {
-                chatClient.sendMessage(user.id, user.fullName, msg)
+                chatClient.sendMessage(
+                    user.id,
+                    user.fullName,
+                    msg,
+                    kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+                )
             }
         }
     }
@@ -2237,7 +2341,11 @@ private fun ChatAppInputSection(
             property("gap", "12px")
         }
     }) {
-        KnowledgeBaseContextTray(statusMessages)
+        KnowledgeBaseContextTray(
+            statusMessages = statusMessages,
+            selection = kbContextSelection,
+            onSelectionChange = onKnowledgeBaseContextSelectionChanged,
+        )
         ChatAppSilkShortcut(group = group, messageText = messageText, onMessageTextChanged = onMessageTextChanged)
         ChatAppTextInput(
             group = group,
@@ -2283,11 +2391,57 @@ private fun isKnowledgeBaseContextStatusMessage(message: Message): Boolean {
         message.references.any { it.kind == "available" && parseKnowledgeBaseDeepLink(it.path) != null }
 }
 
+internal fun hasKnowledgeBaseContextSelection(selection: KnowledgeBaseContextSelection): Boolean {
+    return selection.pinnedEntryIds.isNotEmpty() || selection.excludedEntryIds.isNotEmpty()
+}
+
+internal fun togglePinnedKnowledgeBaseEntry(
+    selection: KnowledgeBaseContextSelection,
+    entryId: String,
+): KnowledgeBaseContextSelection {
+    val pinned = selection.pinnedEntryIds.toMutableList()
+    val excluded = selection.excludedEntryIds.toMutableList()
+    if (entryId in pinned) {
+        pinned.removeAll { it == entryId }
+    } else {
+        pinned += entryId
+        excluded.removeAll { it == entryId }
+    }
+    return KnowledgeBaseContextSelection(
+        pinnedEntryIds = pinned.distinct(),
+        excludedEntryIds = excluded.distinct(),
+    )
+}
+
+internal fun toggleExcludedKnowledgeBaseEntry(
+    selection: KnowledgeBaseContextSelection,
+    entryId: String,
+): KnowledgeBaseContextSelection {
+    val pinned = selection.pinnedEntryIds.toMutableList()
+    val excluded = selection.excludedEntryIds.toMutableList()
+    if (entryId in excluded) {
+        excluded.removeAll { it == entryId }
+    } else {
+        excluded += entryId
+        pinned.removeAll { it == entryId }
+    }
+    return KnowledgeBaseContextSelection(
+        pinnedEntryIds = pinned.distinct(),
+        excludedEntryIds = excluded.distinct(),
+    )
+}
+
 @Composable
-private fun KnowledgeBaseContextTray(statusMessages: List<Message>) {
+private fun KnowledgeBaseContextTray(
+    statusMessages: List<Message>,
+    selection: KnowledgeBaseContextSelection,
+    onSelectionChange: (KnowledgeBaseContextSelection) -> Unit,
+) {
     val status = statusMessages.lastOrNull(::isKnowledgeBaseContextStatusMessage) ?: return
     val references = status.references.filter { it.kind == "available" && parseKnowledgeBaseDeepLink(it.path) != null }
     if (references.isEmpty()) return
+    val pinnedCount = selection.pinnedEntryIds.size
+    val excludedCount = selection.excludedEntryIds.size
 
     Div({
         style {
@@ -2323,6 +2477,17 @@ private fun KnowledgeBaseContextTray(statusMessages: List<Message>) {
                         marginTop(4.px)
                     }
                 }) { Text(status.content) }
+                if (pinnedCount > 0 || excludedCount > 0) {
+                    Div({
+                        style {
+                            fontSize(12.px)
+                            color(Color(SilkColors.textSecondary))
+                            marginTop(4.px)
+                        }
+                    }) {
+                        Text("下轮偏好：固定 $pinnedCount，排除 $excludedCount")
+                    }
+                }
             }
             ContextTrayBadge("KB ${references.size}", SilkColors.primary)
         }
@@ -2336,6 +2501,9 @@ private fun KnowledgeBaseContextTray(statusMessages: List<Message>) {
         }) {
             references.forEach { ref ->
                 val kbLink = parseKnowledgeBaseDeepLink(ref.path)
+                val entryId = kbLink?.entryId
+                val isPinned = entryId != null && entryId in selection.pinnedEntryIds
+                val isExcluded = entryId != null && entryId in selection.excludedEntryIds
                 Button({
                     style {
                         backgroundColor(Color("#FFFFFF"))
@@ -2369,8 +2537,16 @@ private fun KnowledgeBaseContextTray(statusMessages: List<Message>) {
                             }
                         }) { Text("[available:${ref.index}] ${ref.title}") }
                         ContextTrayBadge(
-                            label = if (ref.origin == "manual") "手动" else "自动",
-                            accent = if (ref.origin == "manual") SilkColors.success else SilkColors.info,
+                            label = when (ref.origin) {
+                                "manual" -> "手动"
+                                "pin" -> "固定"
+                                else -> "自动"
+                            },
+                            accent = when (ref.origin) {
+                                "manual" -> SilkColors.success
+                                "pin" -> SilkColors.primaryDark
+                                else -> SilkColors.info
+                            },
                         )
                     }
                     ref.reason?.takeIf { it.isNotBlank() }?.let { reason ->
@@ -2396,6 +2572,31 @@ private fun KnowledgeBaseContextTray(statusMessages: List<Message>) {
                             }
                         }) { Text(snippet) }
                     }
+                    entryId?.let { resolvedEntryId ->
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                property("flex-wrap", "wrap")
+                                property("gap", "8px")
+                                marginTop(8.px)
+                            }
+                        }) {
+                            ContextTrayActionButton(
+                                label = if (isPinned) "取消固定" else "固定下轮",
+                                accent = SilkColors.primaryDark,
+                            ) {
+                                onSelectionChange(togglePinnedKnowledgeBaseEntry(selection, resolvedEntryId))
+                            }
+                            if (ref.origin != "manual") {
+                                ContextTrayActionButton(
+                                    label = if (isExcluded) "恢复自动" else "排除下轮",
+                                    accent = if (isExcluded) SilkColors.info else SilkColors.textSecondary,
+                                ) {
+                                    onSelectionChange(toggleExcludedKnowledgeBaseEntry(selection, resolvedEntryId))
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2413,6 +2614,30 @@ private fun ContextTrayBadge(label: String, accent: String) {
             fontSize(11.px)
             fontWeight("600")
             property("white-space", "nowrap")
+        }
+    }) { Text(label) }
+}
+
+@Composable
+private fun ContextTrayActionButton(
+    label: String,
+    accent: String,
+    onClick: () -> Unit,
+) {
+    Button({
+        style {
+            backgroundColor(Color("#FFFDF8"))
+            color(Color(accent))
+            property("border", "1px solid rgba(201, 168, 108, 0.28)")
+            borderRadius(999.px)
+            padding(4.px, 10.px)
+            fontSize(11.px)
+            fontWeight("600")
+            property("cursor", "pointer")
+        }
+        onClick {
+            it.stopPropagation()
+            onClick()
         }
     }) { Text(label) }
 }
@@ -5145,6 +5370,7 @@ private fun AIMessageBottomCollapseButton(messageId: String) {
 private fun AIMessageActions(
     message: Message,
     onCopy: (String) -> Unit,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
     onForward: (Message) -> Unit,
     onDelete: (String) -> Unit,
     onEnterSelectionMode: (String) -> Unit
@@ -5160,6 +5386,7 @@ private fun AIMessageActions(
         }
     }) {
         AIMessageAction("📋", "复制") { onCopy(message.content) }
+        AIMessageAction("📚", "入库") { onCaptureToKnowledgeBase(message) }
         AIMessageAction("↗", "转发") { onForward(message) }
         AIMessageAction("🗑", "删除", color = "#E57373") {
             if (window.confirm("确定要删除这条消息吗？")) onDelete(message.id)
@@ -5215,6 +5442,7 @@ fun AIMessageCard(
     isTransient: Boolean = false,
     isLastMessage: Boolean = false,
     onCopy: (String) -> Unit = {},
+    onCaptureToKnowledgeBase: (Message) -> Unit = {},
     onForward: (Message) -> Unit = {},
     onDelete: (String) -> Unit = {},
     isSelectionMode: Boolean = false,
@@ -5248,7 +5476,7 @@ fun AIMessageCard(
             AIMessageHeader(message, timeString, showToggle = isLongContent && !isTransient)
             AIMessageBody(message, isLongContent, isTransient, isLastMessage)
             if (!isTransient && !isSelectionMode) {
-                AIMessageActions(message, onCopy, onForward, onDelete, onEnterSelectionMode)
+                AIMessageActions(message, onCopy, onCaptureToKnowledgeBase, onForward, onDelete, onEnterSelectionMode)
             }
             if (isTransient) AITransientStatus()
         }
@@ -5305,6 +5533,7 @@ fun MessageItem(
     chatClient: com.silk.shared.ChatClient? = null,
     onRecall: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
+    onCaptureToKnowledgeBase: (Message) -> Unit = {},
     onForward: (Message) -> Unit = {},
     onDelete: (String) -> Unit = {},
     isSelectionMode: Boolean = false,
@@ -5326,6 +5555,7 @@ fun MessageItem(
                 isTransient = isTransient,
                 isLastMessage = isLastMessage,
                 onCopy = onCopy,
+                onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                 onForward = onForward,
                 onDelete = onDelete,
                 isSelectionMode = isSelectionMode,
@@ -5348,6 +5578,7 @@ fun MessageItem(
                 isTransient = isTransient,
                 isRecalling = isRecalling,
                 onRecall = onRecall,
+                onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                 onForward = onForward,
                 onDelete = onDelete,
                 isSelectionMode = isSelectionMode,
@@ -5444,6 +5675,7 @@ private fun UserTextMessageCard(
     isTransient: Boolean,
     isRecalling: Boolean,
     onRecall: (String) -> Unit,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
     onForward: (Message) -> Unit,
     onDelete: (String) -> Unit,
     isSelectionMode: Boolean,
@@ -5476,6 +5708,7 @@ private fun UserTextMessageCard(
                 canRecall = canRecall,
                 isRecalling = isRecalling,
                 onRecall = onRecall,
+                onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                 onForward = onForward,
                 onDelete = onDelete,
                 onEnterSelectionMode = onEnterSelectionMode
@@ -5759,12 +5992,14 @@ private fun TextMessageActions(
     canRecall: Boolean,
     isRecalling: Boolean,
     onRecall: (String) -> Unit,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
     onForward: (Message) -> Unit,
     onDelete: (String) -> Unit,
     onEnterSelectionMode: (String) -> Unit,
 ) {
     MessageActionRow {
         MessageAction("📋复制") { copyTextToClipboard(message.content) }
+        MessageAction("📚入库") { onCaptureToKnowledgeBase(message) }
         MessageAction("↗转发") { onForward(message) }
         if (canRecall && !isRecalling) {
             MessageAction("↩撤回") {
