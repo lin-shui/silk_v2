@@ -36,7 +36,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - 用户 Todo：`chat_history/user_todos/<user>.json`
 - Workflow：`~/.silk-data/workflows/workflow_store.json`（可用 `SILK_WORKFLOW_DIR` 或 `-Dsilk.workflowDir=...` 覆盖）
 - TrustedDir：`~/.silk-data/workflows/trusted_dirs.json`（与 Workflow 目录同源）
-- Knowledge Base：`knowledge_base/kb_store.json`（Topic / Entry CRUD + `[[kb:...]]` 内联引用解析）
+- Knowledge Base：`knowledge_base/kb_store.json`（Topic / Entry CRUD；个人/团队空间 + 访问控制 `KBAccessPolicy`；条目状态/来源；`[[kb:...]]` 内联引用 + 固定/排除/自动检索的上下文选择 `kbContextSelection`，由 `resolveKnowledgeBasePromptContext` 注入 AI 上下文）
 - Web 静态产物/APK/HAP 分发：`backend/static/`
 
 ## Code Surfaces By Responsibility

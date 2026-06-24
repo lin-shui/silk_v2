@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 
 class KnowledgeBaseReferenceTest {
     @Test
@@ -36,5 +37,15 @@ class KnowledgeBaseReferenceTest {
             "<p><a href=\"#\" class=\"silk-kb-link\" data-kb-entry-id=\"entry_1\">[[协议]]</a></p>",
             html,
         )
+    }
+
+    @Test
+    fun captureTitleUsesFirstMeaningfulLineAndTruncates() {
+        val title = buildDefaultKnowledgeCaptureTitle(
+            "\n\n  这是第一行总结，它会被作为默认标题，而且长度会被适度截断用于候选文档展示，并继续追加更多字符保证超长。\n第二行是正文。"
+        )
+
+        assertTrue(title.startsWith("这是第一行总结"))
+        assertTrue(title.endsWith("..."))
     }
 }

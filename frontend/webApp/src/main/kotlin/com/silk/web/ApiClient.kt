@@ -224,11 +224,58 @@ data class AgentInfo(
 // ==================== Knowledge Base models ====================
 
 @Serializable
+enum class KnowledgeSpaceType {
+    PERSONAL,
+    TEAM,
+}
+
+@Serializable
+data class KBAccessPolicy(
+    val readUserIds: List<String> = emptyList(),
+    val writeUserIds: List<String> = emptyList(),
+    val manageUserIds: List<String> = emptyList(),
+    val writeLocked: Boolean = false,
+    val teamMembersCanWrite: Boolean = true,
+)
+
+@Serializable
+enum class KBEntryStatus {
+    CANDIDATE,
+    PUBLISHED,
+    ARCHIVED,
+    DELETED,
+}
+
+@Serializable
+enum class KBSourceType {
+    MANUAL,
+    CHAT,
+    WORKFLOW,
+    MEETING,
+    FILE,
+    URL,
+}
+
+@Serializable
+data class KBEntrySource(
+    val sourceType: KBSourceType = KBSourceType.MANUAL,
+    val sourceGroupId: String? = null,
+    val workflowId: String? = null,
+    val messageIds: List<String> = emptyList(),
+    val confidence: Double? = null,
+)
+
+@Serializable
 data class KBTopicItem(
     val id: String,
     val name: String,
     val project: String = "",
     val ownerId: String = "",
+    val spaceType: KnowledgeSpaceType = KnowledgeSpaceType.PERSONAL,
+    val groupId: String? = null,
+    val accessPolicy: KBAccessPolicy = KBAccessPolicy(),
+    val createdBy: String = "",
+    val updatedBy: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0
 )
@@ -241,6 +288,10 @@ data class KBEntryItem(
     val content: String = "",
     val tags: List<String> = emptyList(),
     val ownerId: String = "",
+    val status: KBEntryStatus = KBEntryStatus.PUBLISHED,
+    val source: KBEntrySource = KBEntrySource(),
+    val createdBy: String = "",
+    val updatedBy: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0
 )
@@ -1189,13 +1240,59 @@ object ApiClient {
         }
     }
 
-    suspend fun createKBTopic(name: String, project: String, userId: String): KBTopicItem? {
+    suspend fun createKBTopic(
+        name: String,
+        project: String,
+        userId: String,
+        spaceType: KnowledgeSpaceType = KnowledgeSpaceType.PERSONAL,
+        groupId: String? = null,
+        accessPolicy: KBAccessPolicy = KBAccessPolicy(),
+    ): KBTopicItem? {
         return try {
-            val body = """{"userId":"$userId","name":"$name","project":"$project"}"""
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("name", kotlinx.serialization.json.JsonPrimitive(name))
+                put("project", kotlinx.serialization.json.JsonPrimitive(project))
+                put("spaceType", kotlinx.serialization.json.JsonPrimitive(spaceType.name))
+                groupId?.takeIf { it.isNotBlank() }?.let {
+                    put("groupId", kotlinx.serialization.json.JsonPrimitive(it))
+                }
+                put(
+                    "accessPolicy",
+                    jsonParser.encodeToJsonElement(KBAccessPolicy.serializer(), accessPolicy)
+                )
+            }.toString()
             val response = post("/api/kb/topics", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("创建知识库主题失败:", e)
+            null
+        }
+    }
+
+    suspend fun updateKBTopic(
+        topicId: String,
+        userId: String,
+        name: String? = null,
+        project: String? = null,
+        accessPolicy: KBAccessPolicy? = null,
+    ): KBTopicItem? {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                name?.let { put("name", kotlinx.serialization.json.JsonPrimitive(it)) }
+                project?.let { put("project", kotlinx.serialization.json.JsonPrimitive(it)) }
+                accessPolicy?.let {
+                    put(
+                        "accessPolicy",
+                        jsonParser.encodeToJsonElement(KBAccessPolicy.serializer(), it)
+                    )
+                }
+            }.toString()
+            val response = put("/api/kb/topics/$topicId", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("更新知识库主题失败:", e)
             null
         }
     }
@@ -1233,7 +1330,49 @@ object ApiClient {
         }
     }
 
-    suspend fun updateKBEntry(entryId: String, title: String?, content: String?, tags: List<String>?, userId: String): KBEntryItem? {
+    suspend fun captureKBEntry(
+        topicId: String,
+        title: String,
+        content: String,
+        tags: List<String>,
+        userId: String,
+        source: KBEntrySource,
+        status: KBEntryStatus? = null,
+    ): KBEntryItem? {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("topicId", kotlinx.serialization.json.JsonPrimitive(topicId))
+                put("title", kotlinx.serialization.json.JsonPrimitive(title))
+                put("content", kotlinx.serialization.json.JsonPrimitive(content))
+                put(
+                    "tags",
+                    kotlinx.serialization.json.JsonArray(tags.map { kotlinx.serialization.json.JsonPrimitive(it) })
+                )
+                put(
+                    "source",
+                    jsonParser.encodeToJsonElement(KBEntrySource.serializer(), source)
+                )
+                status?.let {
+                    put("status", kotlinx.serialization.json.JsonPrimitive(it.name))
+                }
+            }.toString()
+            val response = post("/api/kb/captures", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("保存知识库候选失败:", e)
+            null
+        }
+    }
+
+    suspend fun updateKBEntry(
+        entryId: String,
+        title: String?,
+        content: String?,
+        tags: List<String>?,
+        userId: String,
+        status: KBEntryStatus? = null,
+    ): KBEntryItem? {
         return try {
             val fields = mutableListOf("\"userId\":\"$userId\"")
             if (title != null) fields.add("\"title\":\"${title.replace("\"", "\\\"")}\"")
@@ -1242,6 +1381,7 @@ object ApiClient {
                 fields.add("\"content\":\"$escaped\"")
             }
             if (tags != null) fields.add("\"tags\":[${tags.joinToString(",") { "\"$it\"" }}]")
+            if (status != null) fields.add("\"status\":\"${status.name}\"")
             val body = "{${fields.joinToString(",")}}"
             val response = put("/api/kb/entries/$entryId", body)
             jsonParser.decodeFromString(response)
@@ -1251,9 +1391,9 @@ object ApiClient {
         }
     }
 
-    suspend fun exportKBEntry(entryId: String): ExportKBResponse? {
+    suspend fun exportKBEntry(entryId: String, userId: String): ExportKBResponse? {
         return try {
-            val response = get("/api/kb/entries/$entryId/export")
+            val response = get("/api/kb/entries/$entryId/export?userId=$userId")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("导出知识库条目失败:", e)

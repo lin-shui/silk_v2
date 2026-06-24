@@ -23,6 +23,7 @@
 - transient / incremental AI 消息拼接
 - 停止生成消息发送
 - 跨端消息模型与基础 API response 模型
+- 知识库上下文合同：`Message.kbContextSelection`(`KnowledgeBaseContextSelection`：`pinnedEntryIds`/`excludedEntryIds`) + `MessageReference.origin/reason`；`ChatClient.sendMessage(..., kbContextSelection)` 把本轮选择带给后端，后端据此重建 KB prompt 上下文并回广播 `references`
 - CC 模块前后端共享 DTO（避免双份维护）
 - Audio Duplex 基础状态模型
 

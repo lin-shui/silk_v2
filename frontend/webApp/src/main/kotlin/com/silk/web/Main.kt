@@ -13,6 +13,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
+import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
@@ -1568,6 +1569,47 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
     
     var messageText by remember { mutableStateOf("") }
+    var kbContextSelection by remember(group.id) { mutableStateOf(KnowledgeBaseContextSelection()) }
+    var kbCaptureDraft by remember { mutableStateOf<KnowledgeCaptureDraft?>(null) }
+    var kbCaptureTopics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
+    var kbCaptureGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
+    var kbCaptureSelectedSpaceId by remember { mutableStateOf(PERSONAL_SPACE_ID) }
+    var kbCaptureSelectedTopicId by remember { mutableStateOf("") }
+    var kbCaptureTitle by remember { mutableStateOf("") }
+    var kbCaptureContent by remember { mutableStateOf("") }
+    var kbCaptureSaving by remember { mutableStateOf(false) }
+    var kbCaptureResult by remember { mutableStateOf<String?>(null) }
+    val resetKnowledgeCaptureDialog: () -> Unit = {
+        kbCaptureDraft = null
+        kbCaptureTopics = emptyList()
+        kbCaptureGroups = emptyList()
+        kbCaptureSelectedSpaceId = PERSONAL_SPACE_ID
+        kbCaptureSelectedTopicId = ""
+        kbCaptureTitle = ""
+        kbCaptureContent = ""
+        kbCaptureSaving = false
+        kbCaptureResult = null
+    }
+    val onCaptureToKnowledgeBase: (Message) -> Unit = { message ->
+        scope.launch {
+            val context = loadKnowledgeCaptureContext(user.id)
+            val preferredSpaceId = preferredKnowledgeCaptureSpaceId(group.id, context.topics)
+            kbCaptureDraft = KnowledgeCaptureDraft(
+                message = message,
+                sourceType = KBSourceType.CHAT,
+                sourceGroupId = group.id,
+                preferredSpaceId = preferredSpaceId,
+            )
+            kbCaptureTopics = context.topics
+            kbCaptureGroups = context.groups
+            kbCaptureSelectedSpaceId = preferredSpaceId
+            kbCaptureSelectedTopicId = defaultKnowledgeCaptureTopicId(context.topics, preferredSpaceId).orEmpty()
+            kbCaptureTitle = buildDefaultKnowledgeCaptureTitle(message.content)
+            kbCaptureContent = message.content
+            kbCaptureSaving = false
+            kbCaptureResult = if (context.topics.isEmpty()) "还没有可用主题，请先去知识库创建主题。" else null
+        }
+    }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
     var pendingPasteImage by remember { mutableStateOf<dynamic?>(null) }
@@ -2282,8 +2324,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
             }) {}
 
-            // 显示系统状态消息（灰色）
-            if (statusMessages.isNotEmpty()) {
+            // 显示系统状态消息（灰色）；KB 上下文状态条改由输入区上方的 KnowledgeBaseContextTray 展示
+            val visibleStatusMessages = statusMessages.filterNot(::isKnowledgeBaseContextStatusMessage)
+            if (visibleStatusMessages.isNotEmpty()) {
                 Div({
                     style {
                         backgroundColor(Color("#F5F5F5"))
@@ -2293,7 +2336,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         property("border-left", "3px solid #9E9E9E")
                     }
                 }) {
-                    statusMessages.forEach { status ->
+                    visibleStatusMessages.forEach { status ->
                         Div({
                             style {
                                 color(Color("#757575"))
@@ -2344,6 +2387,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         copyTextToClipboard(content)
                         console.log("✅ 消息已复制到剪贴板")
                     },
+                    onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                     onForward = { msg ->
                         messageToForward = msg
                         scope.launch {
@@ -2399,6 +2443,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             copyTextToClipboard(content)
                             console.log("✅ 消息已复制到剪贴板")
                         },
+                        onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                         onForward = { msg ->
                             messageToForward = msg
                             scope.launch {
@@ -2919,7 +2964,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                         if (pendingImg == null && text.isNotBlank()) {
                             scope.launch {
-                                chatClient.sendMessage(user.id, user.fullName, text)
+                                chatClient.sendMessage(
+                                    user.id,
+                                    user.fullName,
+                                    text,
+                                    kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+                                )
                             }
                         }
                         if (pendingImg != null) {
@@ -3001,6 +3051,11 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }
 
+                KnowledgeBaseContextTray(
+                    statusMessages = statusMessages,
+                    selection = kbContextSelection,
+                    onSelectionChange = { kbContextSelection = it },
+                )
 // 输入框容器（用于定位 mention 菜单）
                 Div({
                     style {
@@ -3485,6 +3540,54 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
+    // 知识库入库对话框
+    kbCaptureDraft?.let { draft ->
+        KnowledgeBaseCaptureDialog(
+            draft = draft,
+            spaceOptions = buildKnowledgeSpaceOptions(kbCaptureGroups),
+            topics = kbCaptureTopics,
+            selectedSpaceId = kbCaptureSelectedSpaceId,
+            selectedTopicId = kbCaptureSelectedTopicId,
+            title = kbCaptureTitle,
+            content = kbCaptureContent,
+            isSaving = kbCaptureSaving,
+            resultMessage = kbCaptureResult,
+            onSelectedSpaceIdChange = { kbCaptureSelectedSpaceId = it },
+            onSelectedTopicIdChange = { kbCaptureSelectedTopicId = it },
+            onTitleChange = { kbCaptureTitle = it },
+            onContentChange = { kbCaptureContent = it },
+            onDismiss = resetKnowledgeCaptureDialog,
+            onConfirm = {
+                if (!canSubmitKnowledgeCapture(kbCaptureSaving, kbCaptureSelectedTopicId, kbCaptureTitle, kbCaptureContent)) {
+                    return@KnowledgeBaseCaptureDialog
+                }
+                scope.launch {
+                    kbCaptureSaving = true
+                    val created = ApiClient.captureKBEntry(
+                        topicId = kbCaptureSelectedTopicId,
+                        title = kbCaptureTitle.trim(),
+                        content = kbCaptureContent,
+                        tags = emptyList(),
+                        userId = user.id,
+                        source = KBEntrySource(
+                            sourceType = draft.sourceType,
+                            sourceGroupId = draft.sourceGroupId,
+                            workflowId = draft.workflowId,
+                            messageIds = listOf(draft.message.id),
+                        ),
+                    )
+                    kbCaptureSaving = false
+                    if (created == null) {
+                        kbCaptureResult = "保存失败，请确认目标主题仍可写。"
+                    } else {
+                        resetKnowledgeCaptureDialog()
+                        appState.openKnowledgeBaseEntry(created.id, created.topicId)
+                    }
+                }
+            },
+        )
+    }
+
     // 转发对话框
     if (showForwardDialog && messageToForward != null) {
         Div({
@@ -5316,6 +5419,7 @@ fun AIMessageCard(
     isTransient: Boolean = false,
     isLastMessage: Boolean = false,
     onCopy: (String) -> Unit = {},
+    onCaptureToKnowledgeBase: (Message) -> Unit = {},
     onForward: (Message) -> Unit = {},
     onDelete: (String) -> Unit = {},
     isSelectionMode: Boolean = false,
@@ -5581,7 +5685,12 @@ Div({
                     Text("📋")
                     Text("复制")
                 }
-                
+
+                Span({
+                    classes("silk-ai-action")
+                    onClick { onCaptureToKnowledgeBase(message) }
+                }) { Text("📚 入库") }
+
                 Span({
                     classes("silk-ai-action")
                     onClick { onForward(message) }
@@ -5650,6 +5759,7 @@ fun MessageItem(
     chatClient: com.silk.shared.ChatClient? = null,
     onRecall: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
+    onCaptureToKnowledgeBase: (Message) -> Unit = {},
     onForward: (Message) -> Unit = {},
     onDelete: (String) -> Unit = {},
     isSelectionMode: Boolean = false,
@@ -5675,6 +5785,7 @@ fun MessageItem(
             isTransient = isTransient,
             isLastMessage = isLastMessage,
             onCopy = onCopy,
+            onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
             onForward = onForward,
             onDelete = onDelete,
             isSelectionMode = isSelectionMode,
@@ -5954,7 +6065,19 @@ fun MessageItem(
                             }
                             onClick { copyTextToClipboard(message.content) }
                         }) { Text("📋复制") }
-                        
+
+                        Span({
+                            style {
+                                fontSize(11.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("cursor", "pointer")
+                                property("padding", "2px 6px")
+                                property("border-radius", "4px")
+                                property("transition", "all 0.2s")
+                            }
+                            onClick { onCaptureToKnowledgeBase(message) }
+                        }) { Text("📚入库") }
+
                         Span({
                             style {
                                 fontSize(11.px)

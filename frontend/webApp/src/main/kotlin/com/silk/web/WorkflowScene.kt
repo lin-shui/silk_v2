@@ -12,6 +12,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
+import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.DirEntry
 import com.silk.shared.models.DirListingResponse
 import com.silk.shared.models.Message
@@ -292,9 +293,11 @@ fun WorkflowScene(appState: WebAppState) {
                 // 避免共用同一个 ChatClient 导致旧会话的流式消息泄漏到新会话 UI
                 key(wf.groupId) {
                     WorkflowChatPanel(
+                        appState = appState,
                         userId = user.id,
                         userName = user.fullName,
                         groupId = wf.groupId,
+                        workflowId = wf.id,
                         workflowName = wf.name,
                     )
                 }
@@ -878,9 +881,11 @@ fun WorkflowScene(appState: WebAppState) {
 @Suppress("CyclomaticComplexMethod")
 @Composable
 private fun WorkflowChatPanel(
+    appState: WebAppState,
     userId: String,
     userName: String,
     groupId: String,
+    workflowId: String,
     workflowName: String,
 ) {
     val scope = rememberCoroutineScope()
@@ -903,6 +908,48 @@ private fun WorkflowChatPanel(
     var showPermModeDropdown by remember(groupId) { mutableStateOf(false) }
     var showAgentDropdown by remember(groupId) { mutableStateOf(false) }
     var switchError by remember(groupId) { mutableStateOf<String?>(null) }
+    var kbContextSelection by remember(groupId) { mutableStateOf(KnowledgeBaseContextSelection()) }
+    var kbCaptureDraft by remember(groupId) { mutableStateOf<KnowledgeCaptureDraft?>(null) }
+    var kbCaptureTopics by remember(groupId) { mutableStateOf<List<KBTopicItem>>(emptyList()) }
+    var kbCaptureGroups by remember(groupId) { mutableStateOf<List<Group>>(emptyList()) }
+    var kbCaptureSelectedSpaceId by remember(groupId) { mutableStateOf(PERSONAL_SPACE_ID) }
+    var kbCaptureSelectedTopicId by remember(groupId) { mutableStateOf("") }
+    var kbCaptureTitle by remember(groupId) { mutableStateOf("") }
+    var kbCaptureContent by remember(groupId) { mutableStateOf("") }
+    var kbCaptureSaving by remember(groupId) { mutableStateOf(false) }
+    var kbCaptureResult by remember(groupId) { mutableStateOf<String?>(null) }
+    val resetKnowledgeCaptureDialog: () -> Unit = {
+        kbCaptureDraft = null
+        kbCaptureTopics = emptyList()
+        kbCaptureGroups = emptyList()
+        kbCaptureSelectedSpaceId = PERSONAL_SPACE_ID
+        kbCaptureSelectedTopicId = ""
+        kbCaptureTitle = ""
+        kbCaptureContent = ""
+        kbCaptureSaving = false
+        kbCaptureResult = null
+    }
+    val onCaptureToKnowledgeBase: (Message) -> Unit = { message ->
+        scope.launch {
+            val context = loadKnowledgeCaptureContext(userId)
+            val preferredSpaceId = preferredKnowledgeCaptureSpaceId(groupId, context.topics)
+            kbCaptureDraft = KnowledgeCaptureDraft(
+                message = message,
+                sourceType = KBSourceType.WORKFLOW,
+                sourceGroupId = groupId,
+                workflowId = workflowId,
+                preferredSpaceId = preferredSpaceId,
+            )
+            kbCaptureTopics = context.topics
+            kbCaptureGroups = context.groups
+            kbCaptureSelectedSpaceId = preferredSpaceId
+            kbCaptureSelectedTopicId = defaultKnowledgeCaptureTopicId(context.topics, preferredSpaceId).orEmpty()
+            kbCaptureTitle = buildDefaultKnowledgeCaptureTitle(message.content)
+            kbCaptureContent = message.content
+            kbCaptureSaving = false
+            kbCaptureResult = if (context.topics.isEmpty()) "还没有可用主题，请先去知识库创建主题。" else null
+        }
+    }
 
     // 拉取当前 CC 工作目录：
     // - groupId 变化时（切换工作流）
@@ -1094,13 +1141,15 @@ private fun WorkflowChatPanel(
                     currentUserName = userName,
                     groupId = groupId,
                     chatClient = chatClient,
-                    onCopy = { content -> copyTextToClipboard(content) }
+                    onCopy = { content -> copyTextToClipboard(content) },
+                    onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                 )
             }
         }
 
-        // Status messages
-        if (statusMessages.isNotEmpty()) {
+        // Status messages（KB 上下文状态条改由输入区上方的 KnowledgeBaseContextTray 展示）
+        val visibleStatusMessages = statusMessages.filterNot(::isKnowledgeBaseContextStatusMessage)
+        if (visibleStatusMessages.isNotEmpty()) {
             Div({
                 style {
                     backgroundColor(Color("#F5F5F5"))
@@ -1110,7 +1159,7 @@ private fun WorkflowChatPanel(
                     property("border-left", "3px solid #9E9E9E")
                 }
             }) {
-                statusMessages.forEach { status ->
+                visibleStatusMessages.forEach { status ->
                     Div({
                         style {
                             color(Color("#757575"))
@@ -1141,7 +1190,8 @@ private fun WorkflowChatPanel(
                     currentUserName = userName,
                     groupId = groupId,
                     chatClient = chatClient,
-                    onCopy = { content -> copyTextToClipboard(content) }
+                    onCopy = { content -> copyTextToClipboard(content) },
+                    onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                 )
             } else {
                 TransientMessageItem(message)
@@ -1161,6 +1211,11 @@ private fun WorkflowChatPanel(
             property("gap", "6px")
         }
     }) {
+        KnowledgeBaseContextTray(
+            statusMessages = statusMessages,
+            selection = kbContextSelection,
+            onSelectionChange = { kbContextSelection = it },
+        )
         // Badge row: new session + permission mode + agent quick-switch
         Div({
             style {
@@ -1391,7 +1446,12 @@ private fun WorkflowChatPanel(
                     val text = messageText.trim()
                     messageText = ""
                     scope.launch {
-                        chatClient.sendMessage(userId, userName, text)
+                        chatClient.sendMessage(
+                            userId,
+                            userName,
+                            text,
+                            kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+                        )
                     }
                 }
             }
@@ -1446,13 +1506,66 @@ private fun WorkflowChatPanel(
                         val text = messageText.trim()
                         messageText = ""
                         scope.launch {
-                            chatClient.sendMessage(userId, userName, text)
+                            chatClient.sendMessage(
+                                userId,
+                                userName,
+                                text,
+                                kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+                            )
                         }
                     }
                 }
             }) { Text("发送") }
         }
         } // close input row Div
+    }
+
+    // 知识库入库对话框
+    kbCaptureDraft?.let { draft ->
+        KnowledgeBaseCaptureDialog(
+            draft = draft,
+            spaceOptions = buildKnowledgeSpaceOptions(kbCaptureGroups),
+            topics = kbCaptureTopics,
+            selectedSpaceId = kbCaptureSelectedSpaceId,
+            selectedTopicId = kbCaptureSelectedTopicId,
+            title = kbCaptureTitle,
+            content = kbCaptureContent,
+            isSaving = kbCaptureSaving,
+            resultMessage = kbCaptureResult,
+            onSelectedSpaceIdChange = { kbCaptureSelectedSpaceId = it },
+            onSelectedTopicIdChange = { kbCaptureSelectedTopicId = it },
+            onTitleChange = { kbCaptureTitle = it },
+            onContentChange = { kbCaptureContent = it },
+            onDismiss = resetKnowledgeCaptureDialog,
+            onConfirm = {
+                if (!canSubmitKnowledgeCapture(kbCaptureSaving, kbCaptureSelectedTopicId, kbCaptureTitle, kbCaptureContent)) {
+                    return@KnowledgeBaseCaptureDialog
+                }
+                scope.launch {
+                    kbCaptureSaving = true
+                    val created = ApiClient.captureKBEntry(
+                        topicId = kbCaptureSelectedTopicId,
+                        title = kbCaptureTitle.trim(),
+                        content = kbCaptureContent,
+                        tags = emptyList(),
+                        userId = userId,
+                        source = KBEntrySource(
+                            sourceType = draft.sourceType,
+                            sourceGroupId = draft.sourceGroupId,
+                            workflowId = draft.workflowId,
+                            messageIds = listOf(draft.message.id),
+                        ),
+                    )
+                    kbCaptureSaving = false
+                    if (created == null) {
+                        kbCaptureResult = "保存失败，请确认目标主题仍可写。"
+                    } else {
+                        resetKnowledgeCaptureDialog()
+                        appState.openKnowledgeBaseEntry(created.id, created.topicId)
+                    }
+                }
+            },
+        )
     }
 
     // Folder picker dialog (direct, no settings wrapper)
