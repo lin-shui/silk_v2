@@ -3824,7 +3824,9 @@ private fun Route.workflowKbRoutes() {
                     tagsEl.jsonArray.map { it.jsonPrimitive.content }
                 }
             } catch (_: Exception) { null }
-            val updated = knowledgeBaseManager.updateEntry(entryId, title, content, tags, userId)
+            val status = req["status"]?.jsonPrimitive?.content
+                ?.let { runCatching { com.silk.backend.models.KBEntryStatus.valueOf(it.uppercase()) }.getOrNull() }
+            val updated = knowledgeBaseManager.updateEntry(entryId, title, content, tags, status, userId)
             if (updated == null) {
                 call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
             } else {

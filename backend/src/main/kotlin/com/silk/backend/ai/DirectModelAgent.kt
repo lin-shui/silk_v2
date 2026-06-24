@@ -27,6 +27,8 @@ class DirectModelAgent(
         val title: String,
         val snippet: String? = null,
         val path: String? = null,
+        val origin: String? = null,
+        val reason: String? = null,
     )
 
     private val logger = LoggerFactory.getLogger(DirectModelAgent::class.java)
@@ -152,7 +154,7 @@ class DirectModelAgent(
 
         // 注册用户提供的本地知识库引用（用于 [available:N] 引用解析）
         availableReferences.forEach { ref ->
-            registerReference(kind = "available", title = ref.title, snippet = ref.snippet, path = ref.path)
+            registerReference(kind = "available", title = ref.title, snippet = ref.snippet, path = ref.path, origin = ref.origin, reason = ref.reason)
         }
 
         val now = java.time.LocalDateTime.now()
@@ -246,7 +248,9 @@ class DirectModelAgent(
         title: String,
         url: String? = null,
         snippet: String? = null,
-        path: String? = null
+        path: String? = null,
+        origin: String? = null,
+        reason: String? = null,
     ): Int {
         val index = currentResponseReferences.count { it.kind == kind } + 1
         currentResponseReferences.add(
@@ -256,7 +260,9 @@ class DirectModelAgent(
                 title = title,
                 url = url,
                 snippet = snippet,
-                path = path
+                path = path,
+                origin = origin,
+                reason = reason,
             )
         )
         return index
