@@ -53,6 +53,7 @@ data class Message(
     val isIncremental: Boolean = false, // true = 增量消息（前端需拼接），false = 完整消息（前端直接替换）
     val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度区分）
     val references: List<com.silk.backend.models.MessageReference> = emptyList(),
+    val kbContextSelection: com.silk.backend.models.KnowledgeBaseContextSelection? = null,  // 本轮知识库上下文选择（手动/固定/排除）
     val contentBlocks: List<com.silk.backend.ai.ContentBlock>? = null,  // 结构化 content block（流式 / 持久化回放）
     val interactiveOptions: List<InteractiveOption>? = null,  // 交互式按钮选项（用于 cc-connect 提问）
     val action: String? = null  // null = 新消息(默认), "edit" = 覆盖同ID消息（CARD 编辑）
@@ -160,6 +161,7 @@ class ChatServer(
                             MessageType.TEXT
                         },
                         references = entry.references,
+                        kbContextSelection = entry.kbContextSelection,
                         contentBlocks = entry.contentBlocksJson?.let {
                             try {
                                 historyJson.decodeFromString<List<com.silk.backend.ai.ContentBlock>>(it)
@@ -948,7 +950,7 @@ class ChatServer(
             activeAiJob?.cancel()
             activeAiJob = CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    generateIntelligentResponse(silkContent, message.userId)
+                    generateIntelligentResponse(silkContent, message.userId, message.kbContextSelection)
                 } catch (e: CancellationException) {
                     logger.info("🛑 AI 生成已被用户取消: {}", e.message)
                 } catch (e: Exception) {
@@ -1122,7 +1124,10 @@ class ChatServer(
         broadcast(msg)
     }
 
-    suspend fun broadcastSystemStatus(status: String) {
+    suspend fun broadcastSystemStatus(
+        status: String,
+        references: List<com.silk.backend.models.MessageReference> = emptyList(),
+    ) {
         logger.debug("📢 [状态广播] {} (连接数: {})", status, allSessions().size)
 
         val statusMessage = Message(
@@ -1133,7 +1138,8 @@ class ChatServer(
             timestamp = System.currentTimeMillis(),
             type = MessageType.SYSTEM,
             isTransient = true,
-            category = MessageCategory.AGENT_STATUS
+            category = MessageCategory.AGENT_STATUS,
+            references = references,
         )
 
         val messageJson = Json.encodeToString(statusMessage)
@@ -1684,7 +1690,11 @@ class ChatServer(
         return httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
     }
 
-    private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "") {
+    private suspend fun generateIntelligentResponse(
+        userMessage: String,
+        userId: String = "",
+        kbContextSelection: com.silk.backend.models.KnowledgeBaseContextSelection? = null,
+    ) {
         val callId = System.currentTimeMillis()
         logger.info("🤖 [Agent-{}] 开始直接调用模型 (userId={})", callId, userId)
         
@@ -1721,13 +1731,35 @@ class ChatServer(
         directModelAgent.initClaudeClient(workspaceDir)
 
         val streamState = IntelligentResponseState()
-        val kbContext = com.silk.backend.kb.KnowledgeBaseReferenceResolver.resolvePromptContext(
+        val kbContext = com.silk.backend.kb.resolveKnowledgeBasePromptContext(
             rawInput = userMessage,
             userId = userId,
             knowledgeBaseManager = knowledgeBaseManager,
+            preferredGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") },
+            selection = kbContextSelection ?: com.silk.backend.models.KnowledgeBaseContextSelection(),
         )
         if (kbContext.availableReferences.isNotEmpty()) {
-            logger.info("📚 [Agent] 注入 {} 条知识库引用到本轮上下文", kbContext.availableReferences.size)
+            logger.info(
+                "📚 [Agent-{}] 注入 {} 条知识库上下文（手动={}, 自动={}）",
+                callId,
+                kbContext.availableReferences.size,
+                kbContext.diagnostics.manualReferenceCount,
+                kbContext.diagnostics.autoCandidateCount,
+            )
+            broadcastSystemStatus(
+                status = buildKnowledgeBaseContextStatus(kbContext),
+                references = kbContext.availableReferences.mapIndexed { index, reference ->
+                    com.silk.backend.models.MessageReference(
+                        kind = "available",
+                        index = index + 1,
+                        title = reference.title,
+                        snippet = reference.snippet,
+                        path = reference.path,
+                        origin = reference.origin,
+                        reason = reference.reason,
+                    )
+                },
+            )
         }
         try {
             val response = directModelAgent.processInput(
@@ -1782,6 +1814,30 @@ class ChatServer(
                     ex.printStackTrace()
                 }
             }
+        }
+    }
+
+    /**
+     * 构建知识库上下文状态文案（系统状态条），汇总本轮注入的手动/固定/自动/排除数量。
+     */
+    private fun buildKnowledgeBaseContextStatus(
+        kbContext: com.silk.backend.kb.KnowledgeBasePromptContext,
+    ): String {
+        val total = kbContext.availableReferences.size
+        val manual = kbContext.diagnostics.manualReferenceCount
+        val pinned = kbContext.diagnostics.pinnedReferenceCount
+        val auto = kbContext.diagnostics.autoCandidateCount
+        val excluded = kbContext.diagnostics.excludedReferenceCount
+        return buildString {
+            append("📚 本轮知识库上下文已准备")
+            append("（共 $total 条")
+            if (manual > 0 || pinned > 0 || auto > 0) {
+                append("：手动 $manual")
+                if (pinned > 0) append("，固定 $pinned")
+                if (auto > 0) append("，自动 $auto")
+            }
+            if (excluded > 0) append("；排除 $excluded")
+            append("）")
         }
     }
 

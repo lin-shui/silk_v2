@@ -301,6 +301,7 @@ class ChatHistoryManager(
             timestamp = message.timestamp,
             messageType = message.type.name,
             references = message.references,
+            kbContextSelection = message.kbContextSelection,
             contentBlocksJson = message.contentBlocks?.let { json.encodeToString(it) },
             interactiveOptionsJson = message.interactiveOptions?.let { json.encodeToString(it) },
         )
@@ -326,6 +327,7 @@ class ChatHistoryManager(
             timestamp = message.timestamp,
             messageType = message.type.name,
             references = message.references,
+            kbContextSelection = message.kbContextSelection,
         )
 
         val index = chatHistory.messages.indexOfFirst { it.messageId == message.id }
