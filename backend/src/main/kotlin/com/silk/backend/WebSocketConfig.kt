@@ -351,9 +351,16 @@ class ChatServer(
             return
         }
 
+        // 🕐 归一化时间戳（嫁接 fe6faba）：新消息统一用服务端时钟，避免客户端/浏览器时钟偏移影响持久化、广播与未读排序
+        val normalizedMessage = if (!message.isTransient && message.action != "edit") {
+            message.copy(timestamp = System.currentTimeMillis())
+        } else {
+            message
+        }
+
         // 只有非临时消息才添加到内存历史和持久化
-        if (!message.isTransient) {
-            persistAndIndexMessage(message)
+        if (!normalizedMessage.isTransient) {
+            persistAndIndexMessage(normalizedMessage)
         }
         // ✅ 优化：移除临时消息不保存的日志打印，减少日志量
         // else {
@@ -362,7 +369,7 @@ class ChatServer(
 
         // ⛔ cc-connect 等待回答时，用户 TEXT 消息由下方 cc-connect 路由直接转发给引擎，
         // 不必在此广播——否则按钮值（如 "perm:allow"）会作为用户消息展示给所有人。
-        broadcastToSessionsUnlessCcWaiting(message)
+        broadcastToSessionsUnlessCcWaiting(normalizedMessage)
 
         val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
 
