@@ -551,9 +551,9 @@ suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
         val result = ApiClient.wechatLogin(code)
         val wechatLoginOk = result.success && result.user != null && result.accessToken != null && result.refreshToken != null
         if (wechatLoginOk) {
-            console.log("✅ 微信登录成功:", result.user.fullName, "isNewUser=", result.isNewUser)
+            console.log("✅ 微信登录成功:", result.user!!.fullName, "isNewUser=", result.isNewUser)
             window.history.replaceState(null, "", redirectUri)
-            appState.setSession(result.user, result.accessToken!!, result.refreshToken!!, result.isNewUser)
+            appState.setSession(result.user!!, result.accessToken!!, result.refreshToken!!, result.isNewUser)
             return true
         } else {
             console.error("❌ 微信登录失败:", result.message)
@@ -586,9 +586,9 @@ suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
             val result = ApiClient.huaweiWebLogin(code, redirectUri)
             val huaweiLoginOk = result.success && result.user != null && result.accessToken != null && result.refreshToken != null
             if (huaweiLoginOk) {
-                console.log("✅ 华为登录成功:", result.user.fullName, "isNewUser=", result.isNewUser)
+                console.log("✅ 华为登录成功:", result.user!!.fullName, "isNewUser=", result.isNewUser)
                 window.history.replaceState(null, "", redirectUri)
-                appState.setSession(result.user, result.accessToken!!, result.refreshToken!!, result.isNewUser)
+                appState.setSession(result.user!!, result.accessToken!!, result.refreshToken!!, result.isNewUser)
                 return true
             } else {
                 console.error("❌ 华为登录失败:", result.message)

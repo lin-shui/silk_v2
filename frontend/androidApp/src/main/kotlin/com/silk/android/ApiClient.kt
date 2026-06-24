@@ -5,8 +5,6 @@ package com.silk.android
 import com.silk.shared.models.CcSettingsResponse
 import com.silk.shared.models.CcStateResponse
 import com.silk.shared.models.DirListingResponse
-import com.silk.shared.models.KBEntryItem
-import com.silk.shared.models.KBTopicItem
 import com.silk.shared.models.Language
 import com.silk.shared.models.LeaveGroupResponse
 import com.silk.shared.models.SimpleResponse

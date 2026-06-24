@@ -1,11 +1,9 @@
 package com.silk.desktop
 
-import com.silk.shared.models.Group
 import com.silk.shared.models.Language
 import com.silk.shared.models.LeaveGroupResponse
 import com.silk.shared.models.SimpleResponse
 import com.silk.shared.models.UpdateUserSettingsRequest
-import com.silk.shared.models.User
 import com.silk.shared.models.UserSettingsResponse
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json

@@ -202,7 +202,7 @@ class AppState(
         if (hasSavedCredentials) {
             println("🔄 检测到保存的用户数据，用户未明确退出登录，自动恢复到群组列表")
             // 恢复用户数据
-            currentUser = User(savedUserId, savedLoginName, savedFullName, savedPhoneNumber)
+            currentUser = User(savedUserId!!, savedLoginName!!, savedFullName!!, savedPhoneNumber!!)
             // 直接跳转到群组列表
             currentScene = Scene.GROUP_LIST
             sceneHistory.clear()
@@ -261,7 +261,7 @@ class AppState(
         
         val hasStoredUser = userId != null && loginName != null && fullName != null && phoneNumber != null
         if (hasStoredUser) {
-            currentUser = User(userId, loginName, fullName, phoneNumber)
+            currentUser = User(userId!!, loginName!!, fullName!!, phoneNumber!!)
             
             // 启动时重新验证用户，但即使验证失败（网络问题）也保持登录状态
             scope.launch {
