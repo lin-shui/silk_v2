@@ -5,6 +5,7 @@ import com.silk.shared.models.MessageCategory
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.ContentBlock
 import com.silk.shared.models.InteractiveOption
+import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.isAgentUserId
 import kotlinx.datetime.Clock
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -401,7 +402,12 @@ class ChatClient(
         _interactiveOptions.value = emptyList()
     }
 
-    suspend fun sendMessage(userId: String, userName: String, content: String) {
+    suspend fun sendMessage(
+        userId: String,
+        userName: String,
+        content: String,
+        kbContextSelection: KnowledgeBaseContextSelection? = null,
+    ) {
         suppressTransient = false
         // 用户发送新文本消息时清除等待中的交互按钮（cc-connect 场景）
         if (_interactiveOptions.value.isNotEmpty()) {
@@ -415,7 +421,8 @@ class ChatClient(
             userName = userName,
             content = content,
             timestamp = Clock.System.now().toEpochMilliseconds(),
-            type = MessageType.TEXT
+            type = MessageType.TEXT,
+            kbContextSelection = kbContextSelection,
         )
         
         _messages.value = _messages.value + message

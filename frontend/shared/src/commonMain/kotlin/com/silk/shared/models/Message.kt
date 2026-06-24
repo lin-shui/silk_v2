@@ -16,6 +16,7 @@ data class Message(
     val isIncremental: Boolean = false, // true = 增量消息（需拼接），false = 完整消息（直接替换）
     val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度）
     val references: List<MessageReference> = emptyList(),
+    val kbContextSelection: KnowledgeBaseContextSelection? = null,  // KB 上下文选择（pinned/excluded 条目）
     val contentBlocks: List<ContentBlock>? = null,  // 结构化 content block（流式 / 持久化回放）
     val interactiveOptions: List<InteractiveOption>? = null,  // 交互式按钮选项（用于 cc-connect 提问）
     val action: String? = null  // null = 新消息(默认), "edit" = 覆盖同ID消息（CARD 编辑）
@@ -50,7 +51,15 @@ data class MessageReference(
     val title: String,
     val url: String? = null,
     val snippet: String? = null,
-    val path: String? = null
+    val path: String? = null,
+    val origin: String? = null,
+    val reason: String? = null
+)
+
+@Serializable
+data class KnowledgeBaseContextSelection(
+    val pinnedEntryIds: List<String> = emptyList(),
+    val excludedEntryIds: List<String> = emptyList(),
 )
 
 /** 结构化 content block，对应 Anthropic Messages API 的 content block 概念。 */

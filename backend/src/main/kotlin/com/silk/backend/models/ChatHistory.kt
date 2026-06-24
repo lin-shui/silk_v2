@@ -35,7 +35,9 @@ data class MessageReference(
     val title: String,
     val url: String? = null,
     val snippet: String? = null,
-    val path: String? = null
+    val path: String? = null,
+    val origin: String? = null,
+    val reason: String? = null
 )
 
 /**
@@ -53,6 +55,13 @@ data class ChatHistoryEntry(
     // JSON-encoded structured content (avoids cross-package type dependencies)
     val contentBlocksJson: String? = null,
     val interactiveOptionsJson: String? = null,
+    val kbContextSelection: KnowledgeBaseContextSelection? = null,
+)
+
+@Serializable
+data class KnowledgeBaseContextSelection(
+    val pinnedEntryIds: List<String> = emptyList(),
+    val excludedEntryIds: List<String> = emptyList(),
 )
 
 /**
