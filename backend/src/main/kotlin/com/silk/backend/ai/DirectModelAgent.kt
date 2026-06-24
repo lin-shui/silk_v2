@@ -195,7 +195,7 @@ class DirectModelAgent(
                 callback(stepType, content, isComplete)
             }
         }
-        val rawResponse = chat(wrappedCallback)
+        val rawResponse = chat(wrappedCallback, accessibleSessionIds)
         if (lastAgentResponse == null) {
             val finalized = finalizeAgentResponse(rawResponse)
             lastAgentResponse = AgentResponse(content = finalized.content, references = finalized.references)
@@ -267,7 +267,8 @@ class DirectModelAgent(
      * 将 conversationHistory 格式化为文本 prompt，包含 system + 对话轮次 + 当前消息。
      */
     private suspend fun chat(
-        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+        accessibleSessionIds: List<String> = listOf(sessionId)
     ): String {
         if (!::claudeProcessClient.isInitialized) {
             val fallback = "backend/chat_workspaces/$sessionId"
@@ -279,6 +280,9 @@ class DirectModelAgent(
         }
 
         callback("thinking", "🤔 思考中...", false)
+
+        // 如果是 Silk 专属对话（有多个 accessibleSession），写入其他群的历史供 AI 参考
+        writeOtherGroupsHistories(accessibleSessionIds)
 
         // 将对话历史写入 chat_history.md，供 Claude 的 Grep/Read 工具搜索
         val historyFile = java.io.File(workspaceDir, "chat_history.md")
@@ -301,6 +305,8 @@ class DirectModelAgent(
         syncExtractedFilesToWorkspace()
 
         // 构建工具/工作区上下文（两种路径共用）
+        val otherGroupsDir = java.io.File(workspaceDir, "other_groups")
+        val hasOtherGroups = otherGroupsDir.exists() && otherGroupsDir.listFiles()?.isNotEmpty() == true
         val toolContext = buildString {
             appendLine("## 可用工具")
             appendLine("你有以下工具可用：")
@@ -310,6 +316,14 @@ class DirectModelAgent(
             appendLine("- **glob**: 查找工作区文件")
             appendLine()
             appendLine("群聊历史已保存到 `chat_history.md`，你可以用 Grep 搜索历史消息。")
+
+            if (hasOtherGroups) {
+                appendLine()
+                appendLine("## 跨群聊访问权限")
+                appendLine("当前是 **Silk 专属对话**，你有权访问该用户**所有群聊**的历史记录。")
+                appendLine("其他群聊的聊天记录已分别保存到 `other_groups/` 目录下，文件名格式为 `chat_history_<群名>.md`。")
+                appendLine("你可以使用 `Grep` 或 `Read` 工具搜索或读取这些文件来获取其他群聊中的信息。")
+            }
 
             val manifestFile = java.io.File(workspaceDir, "files_manifest.md")
             if (manifestFile.exists()) {
@@ -350,6 +364,55 @@ class DirectModelAgent(
         conversationHistory.add(Message(role = "assistant", content = response))
         callback("complete", response, true)
         return response
+    }
+
+    /**
+     * 将用户其他群聊的聊天历史写入工作区，供 AI 搜索参考。
+     * 每次调用都会重新写入，确保包含最新的消息。
+     */
+    private fun writeOtherGroupsHistories(accessibleSessionIds: List<String>) {
+        if (accessibleSessionIds.size <= 1) return // 仅当前会话，无需额外写入
+        if (workspaceDir.isBlank()) return
+        logger.info("📋 写入其他群聊历史: sessionId={}, accessibleCount={}, ids={}",
+            sessionId, accessibleSessionIds.size, accessibleSessionIds)
+        val otherGroupsDir = java.io.File(workspaceDir, "other_groups")
+        val chatHistoryBaseDir = System.getProperty("silk.chatHistoryDir")?.trim()?.takeIf { it.isNotEmpty() } ?: "chat_history"
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        for (sessionName in accessibleSessionIds) {
+            if (sessionName == sessionId) continue // 跳过当前群
+            val groupId = sessionName.removePrefix("group_")
+            val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
+            val groupDisplayName = group?.name ?: groupId
+            // 中文等 Unicode 字符直接保留在文件名中，仅过滤 Windows 不安全字符
+            val safeFileName = groupDisplayName.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80)
+            val targetFile = java.io.File(otherGroupsDir, "chat_history_${safeFileName}.md")
+            // 读取 chat_history.json
+            val historyFile = java.io.File(java.io.File(chatHistoryBaseDir, sessionName), "chat_history.json")
+            if (!historyFile.exists()) continue
+            try {
+                val content = historyFile.readText()
+                if (content.isBlank()) continue
+                val chatHistory = json.decodeFromString<com.silk.backend.models.ChatHistory>(content)
+                if (chatHistory.messages.isEmpty()) continue
+                // 每次都重新写入，确保包含最新消息
+                targetFile.parentFile.mkdirs()
+                targetFile.writeText(buildString {
+                    appendLine("# 群聊记录：$groupDisplayName")
+                    appendLine()
+                    for (msg in chatHistory.messages.takeLast(50)) {
+                        if (msg.messageType != "TEXT") continue
+                        val ts = java.time.Instant.ofEpochMilli(msg.timestamp)
+                            .atZone(java.time.ZoneId.systemDefault())
+                            .toLocalDateTime()
+                            .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+                        appendLine("- **${msg.senderName}** ($ts): ${msg.content.replace('\n', ' ').take(500)}")
+                    }
+                })
+                logger.debug("已刷新其他群聊历史: {} ({} 条消息)", groupDisplayName, chatHistory.messages.size)
+            } catch (e: Exception) {
+                logger.warn("⚠️ 读取群聊历史失败 [{}]: {}", sessionName, e.message)
+            }
+        }
     }
 
     private fun syncExtractedFilesToWorkspace() {
