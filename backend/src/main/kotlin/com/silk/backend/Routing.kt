@@ -63,8 +63,13 @@ import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.export.ChatObsidianExporter
 import com.silk.backend.kb.KBObsidianExporter
 import com.silk.backend.kb.KnowledgeBaseManager
+import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
+import com.silk.backend.models.KBEntrySource
+import com.silk.backend.models.KBEntryStatus
+import com.silk.backend.models.KBSourceType
 import com.silk.backend.models.KBTopic
+import com.silk.backend.models.KnowledgeSpaceType
 import com.silk.backend.models.Workflow
 import com.silk.backend.workflow.WorkflowManager
 import com.silk.backend.routes.asrRoutes
@@ -92,6 +97,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveText
@@ -145,7 +151,7 @@ private val groupChatServers = ConcurrentHashMap<String, ChatServer>()
 private val logger = LoggerFactory.getLogger("Routing")
 private val workflowManager = WorkflowManager()
 private val trustedDirManager = TrustedDirManager()
-private val knowledgeBaseManager = KnowledgeBaseManager()
+private val knowledgeBaseManager: KnowledgeBaseManager get() = KnowledgeBaseManager()
 
 private fun sanitizeFileName(input: String): String =
     input.replace(Regex("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]"), "_").take(100)
@@ -3717,184 +3723,17 @@ private fun Route.workflowKbRoutes() {
 
         // ==================== Knowledge Base API ====================
 
-        get("/api/kb/topics") {
-            val userId = call.request.queryParameters["userId"]
-            if (userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@get
-            }
-            val list = knowledgeBaseManager.listTopics(userId)
-            call.respondText(
-                Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBTopic.serializer()), list),
-                ContentType.Application.Json
-            )
-        }
-
-        post("/api/kb/topics") {
-            val body = call.receiveText()
-            val json = Json { ignoreUnknownKeys = true }
-            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
-            val userId = req["userId"]?.jsonPrimitive?.content
-            val name = req["name"]?.jsonPrimitive?.content
-            if (userId.isNullOrBlank() || name.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId or name"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@post
-            }
-            val project = req["project"]?.jsonPrimitive?.content ?: ""
-            val topic = knowledgeBaseManager.createTopic(name, project, userId)
-            call.respondText(
-                Json.encodeToString(KBTopic.serializer(), topic),
-                ContentType.Application.Json,
-                HttpStatusCode.Created
-            )
-        }
-
-        delete("/api/kb/topics/{topicId}") {
-            val topicId = call.parameters["topicId"] ?: ""
-            val userId = call.request.queryParameters["userId"]
-            if (userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@delete
-            }
-            val ok = knowledgeBaseManager.deleteTopic(topicId, userId)
-            call.respondText(
-                """{"success":$ok}""",
-                ContentType.Application.Json,
-                if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
-            )
-        }
-
-        get("/api/kb/entries") {
-            val topicId = call.request.queryParameters["topicId"]
-            val userId = call.request.queryParameters["userId"]
-            if (topicId.isNullOrBlank() || userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing topicId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@get
-            }
-            val list = knowledgeBaseManager.listEntries(topicId, userId)
-            call.respondText(
-                Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBEntry.serializer()), list),
-                ContentType.Application.Json
-            )
-        }
-
-        post("/api/kb/entries") {
-            val body = call.receiveText()
-            val json = Json { ignoreUnknownKeys = true }
-            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
-            val userId = req["userId"]?.jsonPrimitive?.content
-            val topicId = req["topicId"]?.jsonPrimitive?.content
-            val title = req["title"]?.jsonPrimitive?.content
-            if (userId.isNullOrBlank() || topicId.isNullOrBlank() || title.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing required fields"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@post
-            }
-            val content = req["content"]?.jsonPrimitive?.content ?: ""
-            val tags = try {
-                req["tags"]?.let { tagsEl ->
-                    tagsEl.jsonArray.map { it.jsonPrimitive.content }
-                }
-            } catch (_: Exception) { null } ?: emptyList()
-            val entry = knowledgeBaseManager.createEntry(topicId, title, content, tags, userId)
-            if (entry == null) {
-                call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
-            } else {
-                call.respondText(
-                    Json.encodeToString(KBEntry.serializer(), entry),
-                    ContentType.Application.Json,
-                    HttpStatusCode.Created
-                )
-            }
-        }
-
-        put("/api/kb/entries/{entryId}") {
-            val entryId = call.parameters["entryId"] ?: ""
-            val body = call.receiveText()
-            val json = Json { ignoreUnknownKeys = true }
-            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
-            val userId = req["userId"]?.jsonPrimitive?.content
-            if (userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@put
-            }
-            val title = req["title"]?.jsonPrimitive?.content
-            val content = req["content"]?.jsonPrimitive?.content
-            val tags = try {
-                req["tags"]?.let { tagsEl ->
-                    tagsEl.jsonArray.map { it.jsonPrimitive.content }
-                }
-            } catch (_: Exception) { null }
-            val status = req["status"]?.jsonPrimitive?.content
-                ?.let { runCatching { com.silk.backend.models.KBEntryStatus.valueOf(it.uppercase()) }.getOrNull() }
-            val updated = knowledgeBaseManager.updateEntry(entryId, title, content, tags, status, userId)
-            if (updated == null) {
-                call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
-            } else {
-                call.respondText(
-                    Json.encodeToString(KBEntry.serializer(), updated),
-                    ContentType.Application.Json
-                )
-            }
-        }
-
-        delete("/api/kb/entries/{entryId}") {
-            val entryId = call.parameters["entryId"] ?: ""
-            val userId = call.request.queryParameters["userId"]
-            if (userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@delete
-            }
-            val ok = knowledgeBaseManager.deleteEntry(entryId, userId)
-            call.respondText(
-                """{"success":$ok}""",
-                ContentType.Application.Json,
-                if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
-            )
-        }
-
-        // KB 内联引用：按 entryId 取单条 entry（前端 [[kb:entryId|标题]] 预览/解析用）
-        get("/api/kb/entries/{entryId}") {
-            val entryId = call.parameters["entryId"] ?: ""
-            val userId = call.request.queryParameters["userId"]
-            if (entryId.isBlank() || userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing entryId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@get
-            }
-            val entry = knowledgeBaseManager.getEntry(entryId, userId)
-            if (entry == null) {
-                call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
-                return@get
-            }
-            call.respondText(
-                Json.encodeToString(KBEntry.serializer(), entry),
-                ContentType.Application.Json
-            )
-        }
-
-        get("/api/kb/entries/{entryId}/export") {
-            val entryId = call.parameters["entryId"] ?: ""
-            val entry = knowledgeBaseManager.getEntry(entryId)
-            if (entry == null) {
-                call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
-                return@get
-            }
-            val topic = knowledgeBaseManager.getTopic(entry.topicId)
-            if (topic == null) {
-                call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
-                return@get
-            }
-            val markdown = KBObsidianExporter.toMarkdown(topic, entry)
-            val vaultPath = KBObsidianExporter.suggestVaultPath(topic, entry)
-            call.respondText(
-                buildJsonObject {
-                    put("success", true)
-                    put("markdown", markdown)
-                    put("vaultPath", vaultPath)
-                    put("fileName", "${sanitizeFileName(entry.title)}.md")
-                }.toString(),
-                ContentType.Application.Json
-            )
-        }
+        registerApiKbTopicsGetRoute()
+        registerApiKbTopicsPostRoute()
+        registerApiKbTopicsTopicIdPutRoute()
+        registerApiKbTopicsTopicIdDeleteRoute()
+        registerApiKbEntriesGetRoute()
+        registerApiKbEntriesEntryIdGetRoute()
+        registerApiKbEntriesPostRoute()
+        registerApiKbCapturesPostRoute()
+        registerApiKbEntriesEntryIdPutRoute()
+        registerApiKbEntriesEntryIdDeleteRoute()
+        registerApiKbEntriesEntryIdExportGetRoute()
 
 }
 
@@ -4066,4 +3905,406 @@ private fun Route.audioDuplexRoute() {
                 httpClient.close()
             }
         }
+}
+
+// ==================== KB access-control routes (KB layer 4, grafted from chore 245c71c/44e5c0e/b3fe1b0/8fe4e75) ====================
+private val kbRouteJson = Json { ignoreUnknownKeys = true }
+
+private const val KB_AUTHENTICATED_USER_ID_HEADER = "X-Silk-Authenticated-User-Id"
+
+private data class KbCallerResolution(
+    val userId: String?,
+    val mismatch: Boolean = false,
+)
+
+
+private fun resolveKbCallerUserId(call: ApplicationCall, fallbackUserId: String?): KbCallerResolution {
+    val authenticatedUserId = call.request.headers[KB_AUTHENTICATED_USER_ID_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
+    val requestUserId = fallbackUserId?.trim()?.takeIf { it.isNotEmpty() }
+    return when {
+        authenticatedUserId != null && requestUserId != null && authenticatedUserId != requestUserId ->
+            KbCallerResolution(userId = authenticatedUserId, mismatch = true)
+        authenticatedUserId != null -> KbCallerResolution(userId = authenticatedUserId)
+        else -> KbCallerResolution(userId = requestUserId)
+    }
+}
+
+private suspend fun resolveKbCallerUserIdOrRespond(
+    call: ApplicationCall,
+    fallbackUserId: String?,
+): String? {
+    val resolution = resolveKbCallerUserId(call, fallbackUserId)
+    if (resolution.mismatch) {
+        call.respondText(
+            """{"success":false,"message":"Authenticated user mismatch"}""",
+            ContentType.Application.Json,
+            HttpStatusCode.Forbidden,
+        )
+        return null
+    }
+    return resolution.userId
+}
+
+private fun Route.registerApiKbTopicsGetRoute() {
+
+    // ==================== Knowledge Base API ====================
+
+    get("/api/kb/topics") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val list = knowledgeBaseManager.listTopics(userId)
+        call.respondText(
+            Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBTopic.serializer()), list),
+            ContentType.Application.Json
+        )
+    }
+}
+
+private fun Route.registerApiKbTopicsPostRoute() {
+
+    post("/api/kb/topics") {
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
+        val name = req["name"]?.jsonPrimitive?.content
+        if (userId.isNullOrBlank() || name.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId or name"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val project = req["project"]?.jsonPrimitive?.content ?: ""
+        val spaceType = parseKnowledgeSpaceType(req["spaceType"]?.jsonPrimitive?.contentOrNull)
+        if (spaceType == null && req["spaceType"] != null) {
+            call.respondText("""{"success":false,"message":"Invalid spaceType"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val accessPolicy = parseKbAccessPolicy(req)
+        if (accessPolicy == null && req["accessPolicy"] != null) {
+            call.respondText("""{"success":false,"message":"Invalid accessPolicy"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val topic = try {
+            knowledgeBaseManager.createTopic(
+                name = name,
+                project = project,
+                userId = userId,
+                spaceType = spaceType ?: KnowledgeSpaceType.PERSONAL,
+                groupId = req["groupId"]?.jsonPrimitive?.contentOrNull,
+                accessPolicy = accessPolicy ?: KBAccessPolicy(),
+            )
+        } catch (e: IllegalArgumentException) {
+            call.respondText(
+                """{"success":false,"message":"${e.message ?: "Invalid topic request"}"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest
+            )
+            return@post
+        }
+        call.respondText(
+            Json.encodeToString(KBTopic.serializer(), topic),
+            ContentType.Application.Json,
+            HttpStatusCode.Created
+        )
+    }
+}
+
+private fun Route.registerApiKbTopicsTopicIdPutRoute() {
+
+    put("/api/kb/topics/{topicId}") {
+        val topicId = call.parameters["topicId"] ?: ""
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@put
+        }
+        val accessPolicy = parseKbAccessPolicy(req)
+        if (accessPolicy == null && req["accessPolicy"] != null) {
+            call.respondText("""{"success":false,"message":"Invalid accessPolicy"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@put
+        }
+        val updated = knowledgeBaseManager.updateTopic(
+            topicId = topicId,
+            userId = userId,
+            name = req["name"]?.jsonPrimitive?.contentOrNull,
+            project = req["project"]?.jsonPrimitive?.contentOrNull,
+            accessPolicy = accessPolicy,
+        )
+        if (updated == null) {
+            call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+        } else {
+            call.respondText(
+                Json.encodeToString(KBTopic.serializer(), updated),
+                ContentType.Application.Json
+            )
+        }
+    }
+}
+
+private fun Route.registerApiKbTopicsTopicIdDeleteRoute() {
+
+    delete("/api/kb/topics/{topicId}") {
+        val topicId = call.parameters["topicId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@delete
+        }
+        val ok = knowledgeBaseManager.deleteTopic(topicId, userId)
+        call.respondText(
+            """{"success":$ok}""",
+            ContentType.Application.Json,
+            if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
+        )
+    }
+}
+
+private fun Route.registerApiKbEntriesGetRoute() {
+
+    get("/api/kb/entries") {
+        val topicId = call.request.queryParameters["topicId"]
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (topicId.isNullOrBlank() || userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing topicId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val list = knowledgeBaseManager.listEntries(topicId, userId)
+        call.respondText(
+            Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBEntry.serializer()), list),
+            ContentType.Application.Json
+        )
+    }
+}
+
+private fun Route.registerApiKbEntriesEntryIdGetRoute() {
+
+    get("/api/kb/entries/{entryId}") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (entryId.isBlank() || userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing entryId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val entry = knowledgeBaseManager.getEntry(entryId, userId)
+        if (entry == null) {
+            call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@get
+        }
+        call.respondText(
+            Json.encodeToString(KBEntry.serializer(), entry),
+            ContentType.Application.Json
+        )
+    }
+}
+
+private fun Route.registerApiKbEntriesPostRoute() {
+
+    post("/api/kb/entries") {
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
+        val topicId = req["topicId"]?.jsonPrimitive?.content
+        val title = req["title"]?.jsonPrimitive?.content
+        if (userId.isNullOrBlank() || topicId.isNullOrBlank() || title.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing required fields"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val content = req["content"]?.jsonPrimitive?.content ?: ""
+        val tags = req["tags"]?.let { tagsEl ->
+            runCatching {
+                tagsEl.jsonArray.map { it.jsonPrimitive.content }
+            }.getOrNull()
+        } ?: emptyList()
+        val entry = knowledgeBaseManager.createEntry(topicId, title, content, tags, userId)
+        if (entry == null) {
+            call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+        } else {
+            call.respondText(
+                Json.encodeToString(KBEntry.serializer(), entry),
+                ContentType.Application.Json,
+                HttpStatusCode.Created
+            )
+        }
+    }
+}
+
+private fun Route.registerApiKbCapturesPostRoute() {
+
+    post("/api/kb/captures") {
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.contentOrNull)
+        val topicId = req["topicId"]?.jsonPrimitive?.contentOrNull
+        val title = req["title"]?.jsonPrimitive?.contentOrNull?.trim()
+        val content = req["content"]?.jsonPrimitive?.contentOrNull
+        val tags = req["tags"]?.let { tagsEl ->
+            runCatching { tagsEl.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull } }.getOrNull()
+        } ?: emptyList()
+        val source = parseKbEntrySource(req)
+        val requestedStatus = parseKbEntryStatus(req)
+
+        if (isMissingKbCaptureFields(userId, topicId, title, content)) {
+            call.respondText("""{"success":false,"message":"Missing required capture fields"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        if (source == null || source.sourceType == KBSourceType.MANUAL) {
+            call.respondText("""{"success":false,"message":"Invalid capture source"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        if (req["status"] != null && requestedStatus == null) {
+            call.respondText("""{"success":false,"message":"Invalid capture status"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val validUserId = userId!!
+        val validTopicId = topicId!!
+        val validTitle = title!!
+        val validContent = content!!
+        val status = when (source.sourceType) {
+            KBSourceType.CHAT, KBSourceType.WORKFLOW -> KBEntryStatus.CANDIDATE
+            else -> requestedStatus ?: KBEntryStatus.CANDIDATE
+        }
+
+        val entry = knowledgeBaseManager.createEntry(
+            topicId = validTopicId,
+            title = validTitle,
+            content = validContent,
+            tags = tags,
+            userId = validUserId,
+            status = status,
+            source = source,
+        )
+        if (entry == null) {
+            call.respondText("""{"success":false,"message":"Topic not found or write denied"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@post
+        }
+
+        call.respondText(
+            Json.encodeToString(KBEntry.serializer(), entry),
+            ContentType.Application.Json,
+            HttpStatusCode.Created,
+        )
+    }
+}
+
+private fun isMissingKbCaptureFields(
+    userId: String?,
+    topicId: String?,
+    title: String?,
+    content: String?,
+): Boolean {
+    return userId.isNullOrBlank() ||
+        topicId.isNullOrBlank() ||
+        title.isNullOrBlank() ||
+        content.isNullOrBlank()
+}
+
+private fun Route.registerApiKbEntriesEntryIdPutRoute() {
+
+    put("/api/kb/entries/{entryId}") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@put
+        }
+        val title = req["title"]?.jsonPrimitive?.content
+        val content = req["content"]?.jsonPrimitive?.content
+        val tags = req["tags"]?.let { tagsEl ->
+            runCatching {
+                tagsEl.jsonArray.map { it.jsonPrimitive.content }
+            }.getOrNull()
+        }
+        val status = req["status"]?.jsonPrimitive?.contentOrNull?.let {
+            runCatching { KBEntryStatus.valueOf(it) }.getOrNull()
+        }
+        if (req["status"] != null && status == null) {
+            call.respondText("""{"success":false,"message":"Invalid status"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@put
+        }
+        val updated = knowledgeBaseManager.updateEntry(entryId, title, content, tags, status, userId)
+        if (updated == null) {
+            call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+        } else {
+            call.respondText(
+                Json.encodeToString(KBEntry.serializer(), updated),
+                ContentType.Application.Json
+            )
+        }
+    }
+}
+
+private fun Route.registerApiKbEntriesEntryIdDeleteRoute() {
+
+    delete("/api/kb/entries/{entryId}") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@delete
+        }
+        val ok = knowledgeBaseManager.deleteEntry(entryId, userId)
+        call.respondText(
+            """{"success":$ok}""",
+            ContentType.Application.Json,
+            if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
+        )
+    }
+}
+
+private fun Route.registerApiKbEntriesEntryIdExportGetRoute() {
+
+    get("/api/kb/entries/{entryId}/export") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val entry = knowledgeBaseManager.getEntry(entryId, userId)
+        if (entry == null) {
+            call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@get
+        }
+        val topic = knowledgeBaseManager.getTopic(entry.topicId, userId)
+        if (topic == null) {
+            call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@get
+        }
+        val markdown = KBObsidianExporter.toMarkdown(topic, entry)
+        val vaultPath = KBObsidianExporter.suggestVaultPath(topic, entry)
+        call.respondText(
+            buildJsonObject {
+                put("success", true)
+                put("markdown", markdown)
+                put("vaultPath", vaultPath)
+                put("fileName", "${sanitizeFileName(entry.title)}.md")
+            }.toString(),
+            ContentType.Application.Json
+        )
+    }
+}
+
+private fun parseKnowledgeSpaceType(raw: String?): KnowledgeSpaceType? {
+    if (raw.isNullOrBlank()) return null
+    return runCatching { KnowledgeSpaceType.valueOf(raw.trim().uppercase()) }.getOrNull()
+}
+
+private fun parseKbAccessPolicy(req: JsonObject): KBAccessPolicy? {
+    val accessPolicy = req["accessPolicy"] ?: return null
+    return runCatching { kbRouteJson.decodeFromJsonElement(KBAccessPolicy.serializer(), accessPolicy) }.getOrNull()
+}
+
+private fun parseKbEntrySource(req: JsonObject): KBEntrySource? {
+    val source = req["source"] ?: return null
+    return runCatching { kbRouteJson.decodeFromJsonElement(KBEntrySource.serializer(), source) }.getOrNull()
+}
+
+private fun parseKbEntryStatus(req: JsonObject): KBEntryStatus? {
+    val raw = req["status"]?.jsonPrimitive?.contentOrNull ?: return null
+    return runCatching { KBEntryStatus.valueOf(raw.trim().uppercase()) }.getOrNull()
 }
