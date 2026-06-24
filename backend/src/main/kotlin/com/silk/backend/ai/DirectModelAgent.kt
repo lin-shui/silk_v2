@@ -386,38 +386,51 @@ class DirectModelAgent(
         val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
         for (sessionName in accessibleSessionIds) {
             if (sessionName == sessionId) continue // 跳过当前群
-            val groupId = sessionName.removePrefix("group_")
-            val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
-            val groupDisplayName = group?.name ?: groupId
-            // 中文等 Unicode 字符直接保留在文件名中，仅过滤 Windows 不安全字符
-            val safeFileName = groupDisplayName.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80)
-            val targetFile = java.io.File(otherGroupsDir, "chat_history_${safeFileName}.md")
-            // 读取 chat_history.json
-            val historyFile = java.io.File(java.io.File(chatHistoryBaseDir, sessionName), "chat_history.json")
-            if (!historyFile.exists()) continue
-            try {
-                val content = historyFile.readText()
-                if (content.isBlank()) continue
-                val chatHistory = json.decodeFromString<com.silk.backend.models.ChatHistory>(content)
-                if (chatHistory.messages.isEmpty()) continue
-                // 每次都重新写入，确保包含最新消息
-                targetFile.parentFile.mkdirs()
-                targetFile.writeText(buildString {
-                    appendLine("# 群聊记录：$groupDisplayName")
-                    appendLine()
-                    for (msg in chatHistory.messages.takeLast(50)) {
-                        if (msg.messageType != "TEXT") continue
-                        val ts = java.time.Instant.ofEpochMilli(msg.timestamp)
-                            .atZone(java.time.ZoneId.systemDefault())
-                            .toLocalDateTime()
-                            .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
-                        appendLine("- **${msg.senderName}** ($ts): ${msg.content.replace('\n', ' ').take(500)}")
-                    }
-                })
-                logger.debug("已刷新其他群聊历史: {} ({} 条消息)", groupDisplayName, chatHistory.messages.size)
-            } catch (e: Exception) {
-                logger.warn("⚠️ 读取群聊历史失败 [{}]: {}", sessionName, e.message)
-            }
+            writeSingleGroupHistory(sessionName, otherGroupsDir, chatHistoryBaseDir, json)
+        }
+    }
+
+    /**
+     * 写入单个其他群聊的历史到工作区（每群一个 .md 文件）。
+     * 不可读 / 空历史等情况直接 return（原 for 循环内的 continue 分支抽取至此，行为不变）。
+     */
+    private fun writeSingleGroupHistory(
+        sessionName: String,
+        otherGroupsDir: java.io.File,
+        chatHistoryBaseDir: String,
+        json: kotlinx.serialization.json.Json,
+    ) {
+        val groupId = sessionName.removePrefix("group_")
+        val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
+        val groupDisplayName = group?.name ?: groupId
+        // 中文等 Unicode 字符直接保留在文件名中，仅过滤 Windows 不安全字符
+        val safeFileName = groupDisplayName.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80)
+        val targetFile = java.io.File(otherGroupsDir, "chat_history_${safeFileName}.md")
+        // 读取 chat_history.json
+        val historyFile = java.io.File(java.io.File(chatHistoryBaseDir, sessionName), "chat_history.json")
+        if (!historyFile.exists()) return
+        try {
+            val content = historyFile.readText()
+            if (content.isBlank()) return
+            val chatHistory = json.decodeFromString<com.silk.backend.models.ChatHistory>(content)
+            if (chatHistory.messages.isEmpty()) return
+            // 每次都重新写入，确保包含最新消息
+            targetFile.parentFile.mkdirs()
+            targetFile.writeText(buildString {
+                appendLine("# 群聊记录：$groupDisplayName")
+                appendLine()
+                for (msg in chatHistory.messages.takeLast(50)) {
+                    if (msg.messageType != "TEXT") continue
+                    val ts = java.time.Instant.ofEpochMilli(msg.timestamp)
+                        .atZone(java.time.ZoneId.systemDefault())
+                        .toLocalDateTime()
+                        .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+                    appendLine("- **${msg.senderName}** ($ts): ${msg.content.replace('\n', ' ').take(500)}")
+                }
+            })
+            logger.debug("已刷新其他群聊历史: {} ({} 条消息)", groupDisplayName, chatHistory.messages.size)
+        } catch (e: Exception) {
+            logger.warn("⚠️ 读取群聊历史失败 [{}]: {}", sessionName, e.message)
         }
     }
 

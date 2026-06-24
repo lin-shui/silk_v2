@@ -331,6 +331,14 @@ class ChatServer(
         return connections.keys.toList().ifEmpty { listOf(userId) }
     }
 
+    /** 普通可持久化的新消息：非临时且非 edit 覆盖（用于去重与时间戳归一判定）。 */
+    private fun isPersistableNewMessage(message: Message): Boolean =
+        !message.isTransient && message.action != "edit"
+
+    /** 是否为已在历史中的重复消息（edit 消息除外）。 */
+    private fun isDuplicateIncomingMessage(message: Message): Boolean =
+        isPersistableNewMessage(message) && messageHistory.any { it.id == message.id }
+
     suspend fun broadcast(message: Message) {
         // 🛑 停止生成：立即取消活跃的 AI 任务并通知客户端
         if (message.type == MessageType.STOP_GENERATE) {
@@ -348,13 +356,13 @@ class ChatServer(
         logger.debug("📨 [broadcast] 收到消息: ID={}, User={}, IsTransient={}, Content={}...", message.id, message.userName, message.isTransient, message.content.take(30))
         
         // ✅ 防止重复处理：检查消息是否已经在历史中（edit 消息除外）
-        if (!message.isTransient && message.action != "edit" && messageHistory.any { it.id == message.id }) {
+        if (isDuplicateIncomingMessage(message)) {
             logger.warn("⚠️ [broadcast] 忽略重复消息: {} from {}", message.id, message.userName)
             return
         }
 
         // 🕐 归一化时间戳（嫁接 fe6faba）：新消息统一用服务端时钟，避免客户端/浏览器时钟偏移影响持久化、广播与未读排序
-        val normalizedMessage = if (!message.isTransient && message.action != "edit") {
+        val normalizedMessage = if (isPersistableNewMessage(message)) {
             message.copy(timestamp = System.currentTimeMillis())
         } else {
             message
