@@ -1454,6 +1454,8 @@ class ChatServer(
             val now = java.time.LocalDateTime.now()
             val chineseFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
             val isoFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            logger.info("🤖 [generateIntelligentResponse] 注入系统时间: {} (epochMs={})",
+                now.format(isoFmt), java.time.Instant.now().toEpochMilli())
             appendLine("## 当前日期和时间（系统精确注入，以此为准）")
             appendLine("当前日期：${now.format(chineseFmt)}")
             appendLine("ISO 格式：${now.format(isoFmt)}")

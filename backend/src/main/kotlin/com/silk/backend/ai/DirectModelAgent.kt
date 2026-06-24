@@ -118,6 +118,10 @@ class DirectModelAgent(
         val now = java.time.LocalDateTime.now()
         val chineseFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
         val isoFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        
+        // 调试日志：每次调用均记录注入的时间，排查"时间停留"问题
+        logger.info("[processInput] 注入系统时间: {} (epochMs={})",
+            now.format(isoFormatter), java.time.Instant.now().toEpochMilli())
 
         val effectiveSystemPrompt = buildString {
             appendLine("## 当前日期和时间（系统精确注入）")
