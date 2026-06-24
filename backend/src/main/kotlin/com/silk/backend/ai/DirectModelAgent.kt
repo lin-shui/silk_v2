@@ -128,6 +128,7 @@ class DirectModelAgent(
             appendLine("当前日期：${now.format(chineseFormatter)}")
             appendLine("ISO 格式：${now.format(isoFormatter)}")
             appendLine("⚠️ 你必须使用上述精确时间回答所有时间/日期相关问题，不得自行推理、猜测或根据训练数据推断。如果用户问\"今天\"、\"现在\"、\"星期几\"等，必须以上述注入的时间为准。")
+            appendLine("⚠️ 注意：对话历史中你之前的回答可能包含旧的过期时间，那些时间已失效。每次都要以本系统提示开头的注入时间为准，不要引用自己之前回答中的时间。")
             appendLine()
             appendLine(withCitationGuidelines(systemPrompt ?: "你是 Silk，一个智能助手。"))
         }
