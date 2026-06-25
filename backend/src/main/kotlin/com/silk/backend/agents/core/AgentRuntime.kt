@@ -5,6 +5,7 @@ import com.silk.backend.Message
 import com.silk.backend.MessageType
 import com.silk.backend.SilkAgent
 import com.silk.backend.agents.acp.AcpClient
+import kotlinx.coroutines.sync.withLock
 import com.silk.backend.card.CardReplyRouter
 import com.silk.backend.card.CardReplyHandler
 import com.silk.backend.card.CardReplyPayload
@@ -1417,6 +1418,54 @@ object AgentRuntime {
             permissionMode = session?.permissionMode?.name ?: "",
         )
     }
+
+    /**
+     * 解析某 (user, group) 当前活动 agent 的 ACP 客户端与 sessionId，供只读 git 查询使用。
+     * agent 上下文按 sessionName "group_{groupId}" 建键（WebSocketConfig 传 groupId = sessionName），
+     * 前端可能传 raw 或已带前缀，两种 candidate 都试（对齐 /users/{userId}/cc-state/{groupId} 的 candidateIds）。
+     *
+     * 进入工作流即已设 currentAgentType/workingDir，但 acpSessionId 要到首个 prompt 才建；
+     * 这里在 bridge 已连时按需 sessionNew（bridge 端只登记 cwd、不启动 CLI），
+     * 让用户进入工作流后无需先发消息即可代码审查。
+     */
+    suspend fun ensureActiveAcpSession(userId: String, groupId: String): ActiveAcpSession? {
+        val candidates = listOf(
+            if (groupId.startsWith("group_")) groupId else "group_$groupId",
+            groupId,
+        ).distinct()
+        return candidates.firstNotNullOfOrNull { gid -> resolveOrCreateAcpSession(userId, gid) }
+    }
+
+    private suspend fun resolveOrCreateAcpSession(userId: String, groupId: String): ActiveAcpSession? {
+        val ctx = contexts[key(userId, groupId)] ?: return null
+        val agentType = ctx.currentAgentType ?: return null
+        val session = ctx.sessions[agentType] ?: return null
+        val client = AcpRegistry.get(userId, agentType) ?: return null
+        val sessionId = ensureAcpSessionId(session, client, ctx) ?: return null
+        return ActiveAcpSession(client, sessionId, ctx.workingDir, agentType)
+    }
+
+    /** 取（必要时按需创建）该 session 的 acpSessionId。加锁双检，避免并发重复 sessionNew。 */
+    private suspend fun ensureAcpSessionId(session: AgentSession, acp: AcpClient, ctx: GroupAgentContext): String? {
+        session.acpSessionId?.let { return it }
+        return session.acpSessionLock.withLock {
+            session.acpSessionId ?: try {
+                val result = acp.sessionNew(cwd = ctx.workingDir, cliSessionId = session.cliSessionId)
+                session.acpSessionId = result.sessionId
+                result.sessionId
+            } catch (e: Exception) {
+                logger.warn("[AgentRuntime] ensureAcpSessionId sessionNew 失败: {}", e.message)
+                null
+            }
+        }
+    }
+
+    data class ActiveAcpSession(
+        val client: AcpClient,
+        val sessionId: String,
+        val workingDir: String,
+        val agentType: String,
+    )
 
     // ========== API-driven settings ==========
 

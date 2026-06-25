@@ -76,6 +76,21 @@ object AcpExtensions {
         })
     }
 
+    /** Source Control：工作树 vs HEAD 的文件状态 */
+    suspend fun gitStatus(acp: AcpClient, sessionId: String): JsonElement {
+        return acp.callExtension("_silk/git_status", buildJsonObject {
+            put("sessionId", sessionId)
+        })
+    }
+
+    /** Source Control：单文件 unified diff */
+    suspend fun gitDiff(acp: AcpClient, sessionId: String, path: String): JsonElement {
+        return acp.callExtension("_silk/git_diff", buildJsonObject {
+            put("sessionId", sessionId)
+            put("path", path)
+        })
+    }
+
     /** 把 `_silk/list_local_sessions` 的 JSON 结果转成适合 Agent 状态框展示的多行文本。 */
     fun formatLocalSessionsForDisplay(result: JsonElement): String {
         val sessions = runCatching {
