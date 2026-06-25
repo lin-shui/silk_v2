@@ -414,6 +414,12 @@ class DirectModelAgent(
                 }
             }
             appendLine()
+            // 钉入当前时间：放在对话尾部 Assistant 前，确保 Claude 无论如何都看到
+            val tsNow = java.time.LocalDateTime.now()
+            val tsFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            appendLine("## 当前时间（尾部再次注入，必须以此为准）")
+            appendLine("现在时刻：${tsNow.format(tsFmt)}")
+            appendLine()
             appendLine(toolContext)
             appendLine()
             appendLine("Assistant:")
