@@ -3,6 +3,8 @@ package com.silk.web
 import com.silk.shared.models.CcSettingsResponse
 import com.silk.shared.models.CcStateResponse
 import com.silk.shared.models.DirListingResponse
+import com.silk.shared.models.GitChangesResponse
+import com.silk.shared.models.GitFileDiffResponse
 import com.silk.shared.models.Language
 import com.silk.shared.models.TrustedDirCheckResponse
 import com.silk.shared.models.UpdateUserSettingsRequest
@@ -1084,6 +1086,29 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("获取工作流失败:", e)
             emptyList()
+        }
+    }
+
+    // ==================== Source Control (代码审查) API ====================
+
+    suspend fun getGitChanges(userId: String, groupId: String): GitChangesResponse {
+        return try {
+            val response = get("/api/agent/changes?userId=$userId&groupId=$groupId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取代码改动失败:", e)
+            GitChangesResponse(success = false, message = "网络错误")
+        }
+    }
+
+    suspend fun getGitFileDiff(userId: String, groupId: String, path: String): GitFileDiffResponse {
+        return try {
+            val encoded = js("encodeURIComponent")(path) as String
+            val response = get("/api/agent/changes/file?userId=$userId&groupId=$groupId&path=$encoded")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取文件 diff 失败:", e)
+            GitFileDiffResponse(success = false, message = "网络错误")
         }
     }
 

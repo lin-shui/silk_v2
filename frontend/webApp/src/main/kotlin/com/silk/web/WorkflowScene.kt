@@ -86,6 +86,9 @@ fun WorkflowScene(appState: WebAppState) {
     var selectedPermissionMode by remember { mutableStateOf("") }
     var showCreatePicker by remember { mutableStateOf(false) }
     var selectedWorkflow by remember { mutableStateOf<WorkflowItem?>(null) }
+    var listWidth by remember { mutableStateOf(LayoutPrefs.getInt("silk_wf_list_w", 320)) }
+    var listCollapsed by remember { mutableStateOf(LayoutPrefs.getBool("silk_wf_list_collapsed", false)) }
+    ensureLayoutStylesInjected()
     // 操作菜单状态
     var menuWorkflow by remember { mutableStateOf<WorkflowItem?>(null) }
     var renameTarget by remember { mutableStateOf<WorkflowItem?>(null) }
@@ -141,10 +144,16 @@ fun WorkflowScene(appState: WebAppState) {
             property("background", SilkColors.backgroundGradient)
         }
     }) {
+        if (listCollapsed) {
+            ReopenBar(onExpand = {
+                listCollapsed = false
+                LayoutPrefs.setBool("silk_wf_list_collapsed", false)
+            })
+        } else {
         // Left: workflow list
         Div({
             style {
-                width(320.px)
+                width(listWidth.px)
                 property("flex-shrink", "0")
                 property("border-right", "1px solid ${SilkColors.border}")
                 display(DisplayStyle.Flex)
@@ -169,17 +178,34 @@ fun WorkflowScene(appState: WebAppState) {
                         color(Color(SilkColors.textPrimary))
                     }
                 }) { Text("工作流") }
-                Button({
-                    style {
-                        backgroundColor(Color(SilkColors.primary))
-                        color(Color.white)
-                        border(0.px)
-                        borderRadius(6.px)
-                        padding(6.px, 12.px)
-                        property("cursor", "pointer")
-                    }
-                    onClick { showCreateDialog = true }
-                }) { Text("+ 创建") }
+                Div({ style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); property("gap", "8px") } }) {
+                    Button({
+                        attr("title", "收起列表")
+                        style {
+                            backgroundColor(Color(SilkColors.surfaceElevated))
+                            color(Color(SilkColors.textSecondary))
+                            property("border", "1px solid ${SilkColors.border}")
+                            borderRadius(6.px)
+                            padding(6.px, 10.px)
+                            property("cursor", "pointer")
+                        }
+                        onClick {
+                            listCollapsed = true
+                            LayoutPrefs.setBool("silk_wf_list_collapsed", true)
+                        }
+                    }) { Text("«") }
+                    Button({
+                        style {
+                            backgroundColor(Color(SilkColors.primary))
+                            color(Color.white)
+                            border(0.px)
+                            borderRadius(6.px)
+                            padding(6.px, 12.px)
+                            property("cursor", "pointer")
+                        }
+                        onClick { showCreateDialog = true }
+                    }) { Text("+ 创建") }
+                }
             }
 
             // List
@@ -256,6 +282,15 @@ fun WorkflowScene(appState: WebAppState) {
                 }
             }
         }
+        ColumnResizer(
+            isLeftPanel = true,
+            minWidth = 220,
+            maxWidth = 520,
+            currentWidth = { listWidth },
+            onResize = { listWidth = it },
+            onCommit = { LayoutPrefs.setInt("silk_wf_list_w", listWidth) },
+        )
+        } // close 列表非折叠分支
 
         // Right: chat area or placeholder
         Div({
@@ -908,6 +943,9 @@ private fun WorkflowChatPanel(
     var showPermModeDropdown by remember(groupId) { mutableStateOf(false) }
     var showAgentDropdown by remember(groupId) { mutableStateOf(false) }
     var switchError by remember(groupId) { mutableStateOf<String?>(null) }
+    var sourcePanelOpen by remember(groupId) { mutableStateOf(false) }
+    var diffRefreshSignal by remember(groupId) { mutableStateOf(0) }
+    var sourcePanelWidth by remember { mutableStateOf(LayoutPrefs.getInt("silk_wf_scpanel_w", 420)) }
     var kbContextSelection by remember(groupId) { mutableStateOf(KnowledgeBaseContextSelection()) }
     var kbCaptureDraft by remember(groupId) { mutableStateOf<KnowledgeCaptureDraft?>(null) }
     var kbCaptureTopics by remember(groupId) { mutableStateOf<List<KBTopicItem>>(emptyList()) }
@@ -1023,6 +1061,35 @@ private fun WorkflowChatPanel(
         """)
     }
 
+    // 代理回合结束（isGenerating → false）后去抖 ~0.5s bump 刷新信号，让源代码管理面板自动重拉状态
+    LaunchedEffect(isGenerating) {
+        if (!isGenerating && sourcePanelOpen) {
+            kotlinx.coroutines.delay(500)
+            diffRefreshSignal += 1
+        }
+    }
+
+    // 横向布局（D5）：左聊天列 + 右"源代码管理"面板。对话框/选择器是 fixed 叠层，留在本 Row 之后
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Row)
+            property("flex", "1")
+            property("min-height", "0")
+            width(100.percent)
+            property("overflow", "hidden")
+        }
+    }) {
+    // 聊天列（保留原有 header/messages/input 纵向布局）
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("flex", "1")
+            property("min-width", "0")
+            height(100.percent)
+        }
+    }) {
     // Header
     Div({
         style {
@@ -1117,6 +1184,11 @@ private fun WorkflowChatPanel(
                 )
             }
         }
+        // 源代码管理面板开关（D5）：打开时立即触发一次刷新
+        Button({
+            onClick { sourcePanelOpen = !sourcePanelOpen; if (sourcePanelOpen) diffRefreshSignal += 1 }
+            style { property("cursor", "pointer"); property("margin-left", "auto") }
+        }) { Text(if (sourcePanelOpen) "✕ 审查" else "⌥ 审查") }
     }
 
     // Messages area
@@ -1519,6 +1591,24 @@ private fun WorkflowChatPanel(
         }
         } // close input row Div
     }
+    } // close 聊天列 Div
+        if (sourcePanelOpen) {
+            ColumnResizer(
+                isLeftPanel = false,
+                minWidth = 300,
+                maxWidth = 800,
+                currentWidth = { sourcePanelWidth },
+                onResize = { sourcePanelWidth = it },
+                onCommit = { LayoutPrefs.setInt("silk_wf_scpanel_w", sourcePanelWidth) },
+            )
+            SourceControlPanel(
+                userId = userId,
+                groupId = groupId,
+                refreshSignal = diffRefreshSignal,
+                widthPx = sourcePanelWidth,
+            )
+        }
+    } // close 横向布局 Div
 
     // 知识库入库对话框
     kbCaptureDraft?.let { draft ->
