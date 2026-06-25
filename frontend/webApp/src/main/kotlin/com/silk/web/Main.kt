@@ -2249,7 +2249,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             } // close else (non-selection mode)
         }
         
-        // Auto-reconnect logic: on disconnect, retry with exponential backoff; on failure, redirect to login
+        // Auto-reconnect logic: on disconnect, refresh token then retry with exponential backoff
         var reconnectCount by remember { mutableStateOf(0) }
         LaunchedEffect(connectionState) {
             if (connectionState == ConnectionState.DISCONNECTED) {
@@ -2260,9 +2260,24 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     reconnectCount++
                     console.log("🔄 [AutoReconnect] 尝试 $reconnectCount/$maxRetries ...")
                     try {
-                        val jwt = JwtManager.getAccessToken()
-                        if (jwt.isNullOrBlank()) {
-                            console.log("🔒 [AutoReconnect] JWT 缺失，停止重连")
+                        // 每次重连前尝试刷新 JWT（静默刷新，token 未过期也安全）
+                        var jwt = JwtManager.getAccessToken()
+                        if (!jwt.isNullOrBlank()) {
+                            val refreshResult = ApiClient.refreshAccessToken()
+                            if (refreshResult.success && refreshResult.accessToken != null) {
+                                jwt = refreshResult.accessToken
+                                JwtManager.setAccessToken(jwt)
+                                if (refreshResult.refreshToken != null) {
+                                    JwtManager.setRefreshToken(refreshResult.refreshToken)
+                                }
+                            } else {
+                                // 刷新成功但无 token → refresh token 可能也过期了
+                                console.log("🔒 [AutoReconnect] Token 刷新失败，停止重连")
+                                break
+                            }
+                        } else {
+                            // 没有 stored token → 无法继续
+                            console.log("🔒 [AutoReconnect] 无存储的 Token，停止重连")
                             break
                         }
                         chatClient.connect(user.id, user.fullName, group.id, token = jwt)
