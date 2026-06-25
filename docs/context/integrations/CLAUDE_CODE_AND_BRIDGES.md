@@ -9,7 +9,7 @@
 - `backend/agents/core/GroupAgentContext.kt` — per-(userId, groupId) 上下文，含 workingDir、currentAgentType、sessions
 - `backend/agents/core/AgentSession.kt` — per-agent 会话状态（running、queue、acpSessionId、cliSessionId）
 - `backend/agents/core/AgentRegistry.kt` — agent 类型注册表
-- `backend/agents/core/AcpExtensions.kt` — Silk 私有扩展调用（`_silk/compact`、`_silk/list_local_sessions`、`_silk/set_cwd`、`_silk/list_dir`）
+- `backend/agents/core/AcpExtensions.kt` — Silk 私有扩展调用（`_silk/compact`、`_silk/list_local_sessions`、`_silk/set_cwd`、`_silk/list_dir`、`_silk/git_status`、`_silk/git_diff`）
 - `backend/agents/adapters/claudecode/ClaudeCodeDescriptor.kt` — CC adapter 描述符
 - `backend/agents/adapters/codex/CodexDescriptor.kt` — Codex adapter 描述符
 - `backend/agents/acp/` — ACP 协议层（`AcpClient`、`AcpTransport`、`AcpRegistry`、JSON-RPC 消息类型）
@@ -35,6 +35,7 @@ ACP 不可用时直接报"未连接"，无 fallback。
   - HTTP `POST /users/{userId}/cc-fs/cd`（UI"更改"按钮 + 创建工作流时的 initialDir）→ 先经 `TrustedDirManager.isTrusted()` 验证目录信任状态，未信任则返回 `400 DIRECTORY_NOT_TRUSTED`；通过后再调 `AgentRuntime.cdSync()` 走 ACP `_silk/set_cwd` 完成，原子更新 state，返回 `CdResult.Ok | CdResult.Err`
   - 历史的聊天 `/cd` 命令已废弃，`routeMessage` 命中后只回一条引导提示
 - 目录浏览：HTTP `GET /users/{userId}/cc-fs/list?path=&showHidden=` → `listDirectory()` 通过 RPC 让 bridge 跑 `handle_list_dir`
+- 代码审查（Source Control，只读）：HTTP `GET /api/agent/changes` / `GET /api/agent/changes/file`（`routes/AgentChangesRoutes.kt`）→ `AgentRuntime.getActiveAcpSession()` 取活动 agent 的 `(AcpClient, acpSessionId)` → `AcpExtensions.gitStatus/gitDiff` → ACP `_silk/git_status` / `_silk/git_diff` → adapter 在 `sess.cwd` 跑 `git_ops.py`（`git -c core.quotePath=false`、`LANG=C`，工作树 vs HEAD）。降级：无 session 且 `CcConnectRegistry.isConnected` 命中 → `reason="ccconnect"` 专属空态；旧 bridge 未广播扩展（`AcpRpcException`）→ `supported=false`。仅 Web 端有面板（`frontend/webApp` `SourceControlPanel` + diff2html，懒加载：列表便宜、单文件 diff 展开时才取）
 - RPC 通用机制：`pendingRpc: Map<requestId, CompletableDeferred>`，bridge 响应在 `handleBridgeMessage` 顶部优先 complete Deferred；超时 5s（withTimeout）
 - 工作流持久化（"无感重启"）：`Workflow` 数据类带 `workingDir` / `activeAgent` / `agentSessions[agentType]`，并保留旧 `sessionId` / `sessionStarted` 兼容字段。
   - `WorkflowPersistence` 接口由 `Routing.kt#configureRouting` 启动时注入；callback 委托给 `WorkflowManager` 的 `updateWorkingDir` / `updateSessionState`
@@ -46,10 +47,11 @@ ACP 不可用时直接报"未连接"，无 fallback。
 
 主要文件：
 
-- `acp_adapter.py` — ACP server 连接 `/agent-bridge` 端点，注册到 `AcpRegistry`，复用 `Executor` 执行 Claude CLI，支持 `_silk/*` 扩展（`compact` / `list_local_sessions` / `set_cwd` / `list_dir` / `resolve_question`）
+- `acp_adapter.py` — ACP server 连接 `/agent-bridge` 端点，注册到 `AcpRegistry`，复用 `Executor` 执行 Claude CLI，支持 `_silk/*` 扩展（`compact` / `list_local_sessions` / `set_cwd` / `list_dir` / `resolve_question` / `git_status` / `git_diff`）
 - `executor.py` — 实际调用 Claude CLI 的执行器（`--input-format stream-json --permission-prompt-tool stdio`，通过 stdin/stdout JSON 双向通信，权限请求通过 control_request/control_response 处理）
 - `session_manager.py` — 本地会话管理（`~/.silk/cc_sessions.json`）
 - `fs_listing.py` — 目录列表工具（被 `_silk/list_dir` 使用）
+- `git_ops.py` — 工作树 vs HEAD 的 git status/diff（被 `_silk/git_status` / `_silk/git_diff` 使用；`git -c core.quotePath=false` + `LANG=C`，未跟踪文件计为新增，二进制/超大 patch 截断）
 - `bridge.sh` — 启动/停止管理脚本
 
 关键职责：
@@ -69,6 +71,7 @@ ACP 不可用时直接报"未连接"，无 fallback。
 - `codex_executor.py` — 实际调用 `codex exec --json`，解析 tool/function/turn.failed 等 JSONL 事件，并受 `CODEX_TIMEOUT` 看门狗保护
 - `codex_session_index.py` — 扫描 `~/.codex/sessions/**/rollout-*.jsonl`，用于 `_silk/list_local_sessions` 与 `session/load`
 - `fs_listing.py` — 目录列表工具（与 Claude Code adapter 保持同类响应）
+- `git_ops.py` — 与 `cc_bridge/git_ops.py` 同源拷贝，支持 `_silk/git_status` / `_silk/git_diff`
 - `bridge.sh` — 启动/停止管理脚本
 
 关键职责：
