@@ -2249,6 +2249,38 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             } // close else (non-selection mode)
         }
         
+        // Auto-reconnect logic: on disconnect, retry with exponential backoff; on failure, redirect to login
+        var reconnectCount by remember { mutableStateOf(0) }
+        LaunchedEffect(connectionState) {
+            if (connectionState == ConnectionState.DISCONNECTED) {
+                val maxRetries = 5
+                while (reconnectCount < maxRetries) {
+                    val delayMs = 2000L * (1L shl reconnectCount.coerceAtMost(4)) // 2,4,8,16,32s
+                    kotlinx.coroutines.delay(delayMs)
+                    reconnectCount++
+                    console.log("🔄 [AutoReconnect] 尝试 $reconnectCount/$maxRetries ...")
+                    try {
+                        val jwt = JwtManager.getAccessToken()
+                        if (jwt.isNullOrBlank()) {
+                            console.log("🔒 [AutoReconnect] JWT 缺失，停止重连")
+                            break
+                        }
+                        chatClient.connect(user.id, user.fullName, group.id, token = jwt)
+                        kotlinx.coroutines.delay(500)
+                        if (connectionState == ConnectionState.CONNECTED) {
+                            console.log("✅ [AutoReconnect] 重连成功")
+                            reconnectCount = 0
+                            return@LaunchedEffect
+                        }
+                    } catch (e: Exception) {
+                        console.log("⚠️ [AutoReconnect] 异常: ${e.message}")
+                    }
+                }
+                console.log("🔒 [AutoReconnect] 全部重连失败，跳转登录页")
+                appState.logout()
+            }
+        }
+        
         // Status Bar - only show when not connected
         if (connectionState != ConnectionState.CONNECTED) {
             Div({ 
@@ -2265,27 +2297,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 Span {
                     Text(when (connectionState) {
                         ConnectionState.CONNECTING -> "⟳ ${strings.connecting}"
-                        ConnectionState.DISCONNECTED -> "✗ ${strings.disconnected}"
+                        ConnectionState.DISCONNECTED -> "✗ ${strings.disconnected} · 自动重连中..."
                         else -> ""
                     })
-                }
-                
-                if (connectionState == ConnectionState.DISCONNECTED) {
-                    Button({
-                        classes(SilkStylesheet.button)
-                        style { 
-                            padding(8.px, 16.px)
-                            fontSize(12.px)
-                        }
-                        onClick {
-                            scope.launch {
-                                val jwt = JwtManager.getAccessToken()
-                                chatClient.connect(user.id, user.fullName, group.id, token = jwt)
-                            }
-                        }
-                    }) {
-                        Text(strings.reconnecting)
-                    }
                 }
             }
         }
