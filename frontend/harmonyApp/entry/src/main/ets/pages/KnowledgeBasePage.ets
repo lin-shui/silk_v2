@@ -3,15 +3,20 @@ import { apiClient as globalApiClient, KBTopicApiItem, KBEntryApiItem } from '..
 import { appStore as globalAppStore } from '../stores/AppStore';
 import promptAction from '@ohos.promptAction';
 
+const PERSONAL_SPACE_ID = '__personal__';
+
 @Component
 export struct KnowledgeBasePage {
   @State topics: KBTopicApiItem[] = [];
+  @State groups = this.appStore.groups;
   @State selectedTopic: KBTopicApiItem | null = null;
   @State entries: KBEntryApiItem[] = [];
   @State selectedEntry: KBEntryApiItem | null = null;
   @State editorContent: string = '';
   @State isLoading: boolean = false;
   @State isSaving: boolean = false;
+  @State selectedSpaceId: string = PERSONAL_SPACE_ID;
+  @State entryFilter: 'ALL' | 'CANDIDATE' | 'PUBLISHED' | 'ARCHIVED' = 'ALL';
 
   @State subPage: string = 'topics';
 
@@ -26,6 +31,8 @@ export struct KnowledgeBasePage {
   private readonly apiClient = globalApiClient;
 
   async aboutToAppear(): Promise<void> {
+    await this.appStore.loadGroups();
+    this.groups = this.appStore.groups.filter((group) => !group.name.startsWith('wf_'));
     await this.loadTopics();
   }
 
@@ -47,6 +54,7 @@ export struct KnowledgeBasePage {
     this.selectedTopic = topic;
     this.selectedEntry = null;
     this.editorContent = '';
+    this.entryFilter = 'ALL';
     const userId = this.getUserId();
     if (!userId) return;
     try {
@@ -78,12 +86,46 @@ export struct KnowledgeBasePage {
     }
   }
 
+  async updateEntryStatus(status: 'CANDIDATE' | 'PUBLISHED' | 'ARCHIVED' | 'DELETED'): Promise<void> {
+    const userId = this.getUserId();
+    if (!userId || !this.selectedEntry) return;
+    try {
+      const updated = await this.apiClient.updateKBEntry(
+        this.selectedEntry.id,
+        this.selectedEntry.title,
+        this.editorContent,
+        this.selectedEntry.tags,
+        userId,
+        status
+      );
+      if (!updated) {
+        this.showToast('状态更新失败');
+        return;
+      }
+      this.selectedEntry = updated;
+      if (this.selectedTopic) {
+        this.entries = await this.apiClient.getKBEntries(this.selectedTopic.id, userId);
+      }
+      this.entryFilter = status === 'DELETED' ? 'ALL' : status;
+      this.showToast('条目状态已更新');
+    } catch (_) {
+      this.showToast('状态更新失败');
+    }
+  }
+
   async createTopic(): Promise<void> {
     const userId = this.getUserId();
     const name = this.newTopicName.trim();
     if (!userId || !name) return;
+    const selectedSpace = this.selectedSpaceOption();
     try {
-      await this.apiClient.createKBTopic(name, this.newTopicProject.trim(), userId);
+      await this.apiClient.createKBTopic(
+        name,
+        this.newTopicProject.trim(),
+        userId,
+        selectedSpace.type,
+        selectedSpace.groupId
+      );
       this.showCreateTopicSheet = false;
       this.newTopicName = '';
       this.newTopicProject = '';
@@ -102,6 +144,7 @@ export struct KnowledgeBasePage {
       this.showCreateEntrySheet = false;
       this.newEntryTitle = '';
       this.entries = await this.apiClient.getKBEntries(this.selectedTopic.id, userId);
+      this.entryFilter = 'ALL';
       this.onSelectEntry(entry);
     } catch (_) {
       this.showToast('创建失败');
@@ -147,8 +190,151 @@ export struct KnowledgeBasePage {
     })
   }
 
+  private selectedSpaceOption(): { id: string; label: string; type: 'PERSONAL' | 'TEAM'; groupId?: string } {
+    if (this.selectedSpaceId === PERSONAL_SPACE_ID) {
+      return { id: PERSONAL_SPACE_ID, label: '个人', type: 'PERSONAL' };
+    }
+    const group = this.groups.find((item) => item.id === this.selectedSpaceId);
+    if (group) {
+      return { id: group.id, label: group.name, type: 'TEAM', groupId: group.id };
+    }
+    return { id: PERSONAL_SPACE_ID, label: '个人', type: 'PERSONAL' };
+  }
+
+  private topicSpaceLabel(topic: KBTopicApiItem): string {
+    if (topic.spaceType === 'TEAM') {
+      const group = this.groups.find((item) => item.id === topic.groupId);
+      return group ? group.name : '团队';
+    }
+    return '个人';
+  }
+
+  private canWriteTopic(topic: KBTopicApiItem | null): boolean {
+    if (!topic) return false;
+    const userId = this.getUserId();
+    if (!userId) return false;
+    if (topic.ownerId === userId) return true;
+    const policy = topic.accessPolicy;
+    if (!policy) return false;
+    if ((policy.manageUserIds ?? []).includes(userId)) return true;
+    if (policy.writeLocked === true) return false;
+    if ((policy.writeUserIds ?? []).includes(userId)) return true;
+    return topic.spaceType === 'TEAM' && policy.teamMembersCanWrite !== false;
+  }
+
+  private topicPermissionLabel(topic: KBTopicApiItem): string {
+    return this.canWriteTopic(topic) ? '可编辑' : '只读';
+  }
+
+  private entryStatusLabel(entry: KBEntryApiItem): string {
+    switch (entry.status) {
+      case 'CANDIDATE': return '候选';
+      case 'ARCHIVED': return '已归档';
+      case 'DELETED': return '已删除';
+      default: return '已发布';
+    }
+  }
+
+  private entrySourceLabel(entry: KBEntryApiItem): string {
+    switch (entry.source?.sourceType) {
+      case 'CHAT': return '聊天';
+      case 'AI_RESPONSE': return 'AI';
+      case 'WORKFLOW': return '工作流';
+      case 'MEETING': return '会议';
+      case 'FILE': return '文件';
+      case 'URL': return 'URL';
+      default: return '手动';
+    }
+  }
+
+  private entrySourceDetails(entry: KBEntryApiItem): Array<{ label: string; value: string }> {
+    const details: Array<{ label: string; value: string }> = [];
+    const sourceGroupId = entry.source?.sourceGroupId;
+    if (sourceGroupId) {
+      const group = this.groups.find((item) => item.id === sourceGroupId);
+      details.push({
+        label: '来源群组',
+        value: group ? `${group.name} (${sourceGroupId})` : sourceGroupId
+      });
+    }
+    if (entry.source?.workflowId) {
+      details.push({ label: '工作流', value: entry.source.workflowId });
+    }
+    const messageIds = entry.source?.messageIds ?? [];
+    if (messageIds.length > 0) {
+      const preview = messageIds.slice(0, 3).join(', ');
+      details.push({
+        label: '消息',
+        value: messageIds.length > 3 ? `${preview} 等 ${messageIds.length} 条` : preview
+      });
+    }
+    if (entry.source?.confidence !== undefined && entry.source?.confidence !== null) {
+      details.push({
+        label: '置信度',
+        value: `${Math.round(entry.source.confidence * 100)}%`
+      });
+    }
+    if (entry.createdBy) {
+      details.push({ label: '创建人', value: entry.createdBy });
+    }
+    if (entry.updatedBy && entry.updatedBy !== entry.createdBy) {
+      details.push({ label: '更新人', value: entry.updatedBy });
+    }
+    return details;
+  }
+
+  private filteredTopics(): KBTopicApiItem[] {
+    return this.topics.filter((topic) => {
+      if (this.selectedSpaceId === PERSONAL_SPACE_ID) {
+        return (topic.spaceType ?? 'PERSONAL') === 'PERSONAL';
+      }
+      return (topic.spaceType ?? 'PERSONAL') === 'TEAM' && topic.groupId === this.selectedSpaceId;
+    });
+  }
+
+  private filteredEntries(): KBEntryApiItem[] {
+    switch (this.entryFilter) {
+      case 'CANDIDATE':
+        return this.entries.filter((entry) => entry.status === 'CANDIDATE');
+      case 'PUBLISHED':
+        return this.entries.filter((entry) => (entry.status ?? 'PUBLISHED') === 'PUBLISHED');
+      case 'ARCHIVED':
+        return this.entries.filter((entry) => entry.status === 'ARCHIVED');
+      default:
+        return this.entries;
+    }
+  }
+
+  private entryStatusAction(entry: KBEntryApiItem | null): { label: string; status: 'PUBLISHED' | 'ARCHIVED' } | null {
+    if (!entry) return null;
+    switch (entry.status) {
+      case 'CANDIDATE':
+        return { label: '发布', status: 'PUBLISHED' };
+      case 'ARCHIVED':
+        return { label: '重新发布', status: 'PUBLISHED' };
+      case 'PUBLISHED':
+      default:
+        return { label: '归档', status: 'ARCHIVED' };
+    }
+  }
+
+  @Builder
+  private buildBadge(text: string, backgroundColor: string, textColor: string = SilkColors.textPrimary) {
+    Text(text)
+      .fontSize(11)
+      .fontColor(textColor)
+      .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+      .backgroundColor(backgroundColor)
+      .borderRadius(999)
+  }
+
   @Builder
   buildTopicsView() {
+    const spaceOptions = [
+      { id: PERSONAL_SPACE_ID, label: '个人' },
+      ...this.groups.map((group) => ({ id: group.id, label: group.name }))
+    ];
+    const filteredTopics = this.filteredTopics();
     Column() {
       Row() {
         Text('知识库')
@@ -166,6 +352,24 @@ export struct KnowledgeBasePage {
       .width('100%')
       .padding(16)
 
+      Scroll() {
+        Row() {
+          ForEach(spaceOptions, (space: { id: string; label: string }) => {
+            Button(space.label)
+              .height(32)
+              .fontSize(13)
+              .backgroundColor(this.selectedSpaceId === space.id ? SilkColors.primary : SilkColors.surfaceVariant)
+              .fontColor(this.selectedSpaceId === space.id ? Color.White : SilkColors.textPrimary)
+              .margin({ right: 8 })
+              .onClick(() => { this.selectedSpaceId = space.id; })
+          }, (space: { id: string; label: string }) => space.id)
+        }
+        .padding({ left: 16, right: 16, bottom: 12 })
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .width('100%')
+
       Divider().color(SilkColors.border)
 
       if (this.isLoading) {
@@ -176,15 +380,15 @@ export struct KnowledgeBasePage {
         .width('100%')
         .justifyContent(FlexAlign.Center)
         .alignItems(HorizontalAlign.Center)
-      } else if (this.topics.length === 0) {
+      } else if (filteredTopics.length === 0) {
         Column() {
           Text('📚')
             .fontSize(48)
             .margin({ bottom: 16 })
-          Text('暂无主题')
+          Text('当前空间暂无主题')
             .fontSize(18)
             .fontColor(SilkColors.textSecondary)
-          Text('点击右上角 + 创建第一个主题')
+          Text(`点击右上角 + 在${this.selectedSpaceOption().label}空间创建主题`)
             .fontSize(14)
             .fontColor(SilkColors.textLight)
             .margin({ top: 8 })
@@ -195,13 +399,22 @@ export struct KnowledgeBasePage {
         .alignItems(HorizontalAlign.Center)
       } else {
         List({ space: 8 }) {
-          ForEach(this.topics, (topic: KBTopicApiItem) => {
+          ForEach(filteredTopics, (topic: KBTopicApiItem) => {
             ListItem() {
               Column() {
-                Text(topic.name)
-                  .fontSize(15)
-                  .fontColor(SilkColors.textPrimary)
-                  .fontWeight(FontWeight.Medium)
+                Row() {
+                  Text(topic.name)
+                    .fontSize(15)
+                    .fontColor(SilkColors.textPrimary)
+                    .fontWeight(FontWeight.Medium)
+                    .layoutWeight(1)
+                  this.buildBadge(this.topicPermissionLabel(topic), SilkColors.background)
+                }
+                .width('100%')
+                Row() {
+                  this.buildBadge(this.topicSpaceLabel(topic), SilkColors.surface)
+                }
+                .margin({ top: 8 })
                 if (topic.project) {
                   Text(topic.project)
                     .fontSize(12)
@@ -229,6 +442,14 @@ export struct KnowledgeBasePage {
 
   @Builder
   buildEntriesView() {
+    const filteredEntries = this.filteredEntries();
+    const filters: ('ALL' | 'CANDIDATE' | 'PUBLISHED' | 'ARCHIVED')[] = ['ALL', 'CANDIDATE', 'PUBLISHED', 'ARCHIVED'];
+    const filterLabels = {
+      ALL: '全部',
+      CANDIDATE: '候选',
+      PUBLISHED: '已发布',
+      ARCHIVED: '已归档'
+    };
     Column() {
       Row() {
         Text('←')
@@ -244,24 +465,56 @@ export struct KnowledgeBasePage {
         Button('+ 创建')
           .height(32)
           .fontSize(13)
-          .backgroundColor(SilkColors.primary)
+          .backgroundColor(this.canWriteTopic(this.selectedTopic) ? SilkColors.primary : SilkColors.surfaceVariant)
           .fontColor(Color.White)
+          .enabled(this.canWriteTopic(this.selectedTopic))
           .onClick(() => { this.showCreateEntrySheet = true; })
       }
       .width('100%')
       .padding(16)
 
+      if (this.selectedTopic) {
+        Row() {
+          this.buildBadge(this.topicSpaceLabel(this.selectedTopic), SilkColors.surface)
+          this.buildBadge(this.topicPermissionLabel(this.selectedTopic), SilkColors.background)
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, bottom: 8 })
+      }
+
+      Scroll() {
+        Row() {
+          ForEach(filters, (filter: 'ALL' | 'CANDIDATE' | 'PUBLISHED' | 'ARCHIVED') => {
+            Button(filterLabels[filter])
+              .height(32)
+              .fontSize(13)
+              .backgroundColor(this.entryFilter === filter ? SilkColors.primary : SilkColors.surfaceVariant)
+              .fontColor(this.entryFilter === filter ? Color.White : SilkColors.textPrimary)
+              .margin({ right: 8 })
+              .onClick(() => { this.entryFilter = filter; })
+          }, (filter: 'ALL' | 'CANDIDATE' | 'PUBLISHED' | 'ARCHIVED') => filter)
+        }
+        .padding({ left: 16, right: 16, bottom: 8 })
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .width('100%')
+
       Divider().color(SilkColors.border)
 
-      if (this.entries.length === 0) {
+      if (filteredEntries.length === 0) {
         Column() {
           Text('📝')
             .fontSize(48)
             .margin({ bottom: 16 })
-          Text('暂无条目')
+          Text(this.entryFilter === 'ALL' ? '暂无条目' : '当前筛选下暂无条目')
             .fontSize(18)
             .fontColor(SilkColors.textSecondary)
-          Text('点击右上角 + 创建条目')
+          Text(
+            this.entryFilter !== 'ALL'
+              ? '切换筛选查看其它状态的条目'
+              : (this.canWriteTopic(this.selectedTopic) ? '点击右上角 + 创建条目' : '当前主题为只读，仅支持浏览已有条目')
+          )
             .fontSize(14)
             .fontColor(SilkColors.textLight)
             .margin({ top: 8 })
@@ -272,16 +525,25 @@ export struct KnowledgeBasePage {
         .alignItems(HorizontalAlign.Center)
       } else {
         List({ space: 8 }) {
-          ForEach(this.entries, (entry: KBEntryApiItem) => {
+          ForEach(filteredEntries, (entry: KBEntryApiItem) => {
             ListItem() {
-              Text(entry.title)
-                .fontSize(15)
-                .fontColor(SilkColors.textPrimary)
-                .width('100%')
-                .padding(16)
-                .backgroundColor(SilkColors.surfaceVariant)
-                .borderRadius(12)
-                .onClick(() => { this.onSelectEntry(entry); })
+              Column() {
+                Text(entry.title)
+                  .fontSize(15)
+                  .fontColor(SilkColors.textPrimary)
+                  .fontWeight(FontWeight.Medium)
+                Row() {
+                  this.buildBadge(this.entryStatusLabel(entry), SilkColors.surface)
+                  this.buildBadge(this.entrySourceLabel(entry), SilkColors.background)
+                }
+                .margin({ top: 8 })
+              }
+              .width('100%')
+              .padding(16)
+              .backgroundColor(SilkColors.surfaceVariant)
+              .borderRadius(12)
+              .alignItems(HorizontalAlign.Start)
+              .onClick(() => { this.onSelectEntry(entry); })
             }
           }, (entry: KBEntryApiItem) => entry.id)
         }
@@ -296,6 +558,7 @@ export struct KnowledgeBasePage {
 
   @Builder
   buildEditorView() {
+    const statusAction = this.entryStatusAction(this.selectedEntry);
     Column() {
       Row() {
         Text('←')
@@ -308,12 +571,12 @@ export struct KnowledgeBasePage {
           .fontWeight(FontWeight.Bold)
           .fontColor(SilkColors.textPrimary)
           .layoutWeight(1)
-        Button(this.isSaving ? '保存中...' : '保存')
+        Button(this.canWriteTopic(this.selectedTopic) ? (this.isSaving ? '保存中...' : '保存') : '只读')
           .height(32)
           .fontSize(13)
-          .backgroundColor(SilkColors.primary)
+          .backgroundColor(this.canWriteTopic(this.selectedTopic) ? SilkColors.primary : SilkColors.surfaceVariant)
           .fontColor(Color.White)
-          .enabled(!this.isSaving)
+          .enabled(this.canWriteTopic(this.selectedTopic) && !this.isSaving)
           .onClick(() => { void this.saveEntry(); })
       }
       .width('100%')
@@ -321,12 +584,71 @@ export struct KnowledgeBasePage {
 
       Divider().color(SilkColors.border)
 
+      if (this.selectedTopic) {
+        Column() {
+          Row() {
+            this.buildBadge(this.topicSpaceLabel(this.selectedTopic), SilkColors.surface)
+            this.buildBadge(this.topicPermissionLabel(this.selectedTopic), SilkColors.background)
+            if (this.selectedEntry) {
+              this.buildBadge(this.entryStatusLabel(this.selectedEntry), SilkColors.surfaceVariant)
+              this.buildBadge(this.entrySourceLabel(this.selectedEntry), SilkColors.background)
+            }
+          }
+          .width('100%')
+
+          if (this.selectedTopic.project) {
+            Text(`项目：${this.selectedTopic.project}`)
+              .fontSize(12)
+              .fontColor(SilkColors.textSecondary)
+              .margin({ top: 8 })
+          }
+
+          if (this.selectedEntry) {
+            ForEach(this.entrySourceDetails(this.selectedEntry), (detail: { label: string; value: string }) => {
+              Row() {
+                Text(`${detail.label}：`)
+                  .fontSize(12)
+                  .fontColor(SilkColors.textLight)
+                Text(detail.value)
+                  .fontSize(12)
+                  .fontColor(SilkColors.textSecondary)
+                  .layoutWeight(1)
+                  .maxLines(2)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+              }
+              .width('100%')
+              .margin({ top: 8 })
+            }, (detail: { label: string; value: string }) => `${detail.label}-${detail.value}`)
+          }
+
+          if (this.canWriteTopic(this.selectedTopic) && statusAction) {
+            Button(statusAction.label)
+              .height(32)
+              .fontSize(13)
+              .backgroundColor(SilkColors.primary)
+              .fontColor(Color.White)
+              .margin({ top: 8 })
+              .onClick(() => { void this.updateEntryStatus(statusAction.status); })
+          }
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+      }
+
+      if (!this.canWriteTopic(this.selectedTopic)) {
+        Text('当前主题为只读，你可以浏览内容，但不能新建或保存修改。')
+          .fontSize(12)
+          .fontColor(SilkColors.textSecondary)
+          .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+      }
+
       TextArea({ text: $$this.editorContent, placeholder: '在这里输入 Markdown 内容...' })
         .width('100%')
         .layoutWeight(1)
         .fontSize(14)
         .padding(12)
         .backgroundColor(SilkColors.background)
+        .enabled(this.canWriteTopic(this.selectedTopic))
         .onChange((value: string) => { this.editorContent = value; })
     }
     .width('100%')
@@ -338,6 +660,10 @@ export struct KnowledgeBasePage {
     Column() {
       Text('创建主题')
         .fontSize(18).fontWeight(FontWeight.Bold).fontColor(SilkColors.textPrimary).margin({ bottom: 16 })
+      Text(`当前空间：${this.selectedSpaceOption().label}`)
+        .fontSize(12)
+        .fontColor(SilkColors.textSecondary)
+        .margin({ bottom: 12 })
       TextInput({ placeholder: '主题名称', text: $$this.newTopicName })
         .width('100%').height(48).backgroundColor(SilkColors.background)
         .onChange((value: string) => this.newTopicName = value)
@@ -359,6 +685,10 @@ export struct KnowledgeBasePage {
     Column() {
       Text('创建条目')
         .fontSize(18).fontWeight(FontWeight.Bold).fontColor(SilkColors.textPrimary).margin({ bottom: 16 })
+      Text(`条目会创建在「${this.selectedTopic?.name ?? ''}」主题下`)
+        .fontSize(12)
+        .fontColor(SilkColors.textSecondary)
+        .margin({ bottom: 12 })
       TextInput({ placeholder: '条目标题', text: $$this.newEntryTitle })
         .width('100%').height(48).backgroundColor(SilkColors.background)
         .onChange((value: string) => this.newEntryTitle = value)

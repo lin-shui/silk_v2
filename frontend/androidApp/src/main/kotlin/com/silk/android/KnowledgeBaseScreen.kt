@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -27,6 +28,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -34,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -50,10 +53,54 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+
+@Serializable
+enum class KnowledgeSpaceType {
+    PERSONAL,
+    TEAM,
+}
+
+@Serializable
+data class KBAccessPolicy(
+    val readUserIds: List<String> = emptyList(),
+    val writeUserIds: List<String> = emptyList(),
+    val manageUserIds: List<String> = emptyList(),
+    val writeLocked: Boolean = false,
+    val teamMembersCanWrite: Boolean = true,
+)
+
+@Serializable
+enum class KBEntryStatus {
+    CANDIDATE,
+    PUBLISHED,
+    ARCHIVED,
+    DELETED,
+}
+
+@Serializable
+enum class KBSourceType {
+    MANUAL,
+    CHAT,
+    AI_RESPONSE,
+    WORKFLOW,
+    MEETING,
+    FILE,
+    URL,
+}
+
+@Serializable
+data class KBEntrySource(
+    val sourceType: KBSourceType = KBSourceType.MANUAL,
+    val sourceGroupId: String? = null,
+    val workflowId: String? = null,
+    val messageIds: List<String> = emptyList(),
+    val confidence: Double? = null,
+)
 
 @Serializable
 data class KBTopicItem(
@@ -61,6 +108,11 @@ data class KBTopicItem(
     val name: String,
     val project: String = "",
     val ownerId: String = "",
+    val spaceType: KnowledgeSpaceType = KnowledgeSpaceType.PERSONAL,
+    val groupId: String? = null,
+    val accessPolicy: KBAccessPolicy = KBAccessPolicy(),
+    val createdBy: String = "",
+    val updatedBy: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
 )
@@ -73,11 +125,247 @@ data class KBEntryItem(
     val content: String = "",
     val tags: List<String> = emptyList(),
     val ownerId: String = "",
+    val status: KBEntryStatus = KBEntryStatus.PUBLISHED,
+    val source: KBEntrySource = KBEntrySource(),
+    val createdBy: String = "",
+    val updatedBy: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
 )
 
 private enum class KBSubPage { TOPICS, ENTRIES, EDITOR }
+
+private enum class KnowledgeEntryFilter(val label: String) {
+    ALL("全部"),
+    CANDIDATE("候选"),
+    PUBLISHED("已发布"),
+    ARCHIVED("已归档"),
+}
+
+private const val PERSONAL_SPACE_ID = "__personal__"
+
+private data class KnowledgeSpaceOption(
+    val id: String,
+    val label: String,
+    val type: KnowledgeSpaceType,
+    val groupId: String? = null,
+)
+
+private fun buildKnowledgeSpaceOptions(groups: List<Group>): List<KnowledgeSpaceOption> {
+    val teamSpaces = groups
+        .filterNot { it.name.startsWith("wf_") }
+        .sortedBy { it.name.lowercase() }
+        .map { group ->
+            KnowledgeSpaceOption(
+                id = group.id,
+                label = group.name,
+                type = KnowledgeSpaceType.TEAM,
+                groupId = group.id,
+            )
+        }
+    return listOf(KnowledgeSpaceOption(PERSONAL_SPACE_ID, "个人", KnowledgeSpaceType.PERSONAL)) + teamSpaces
+}
+
+private fun filterTopicsForSpace(topics: List<KBTopicItem>, selectedSpaceId: String): List<KBTopicItem> =
+    topics.filter { topic ->
+        when (selectedSpaceId) {
+            PERSONAL_SPACE_ID -> topic.spaceType == KnowledgeSpaceType.PERSONAL
+            else -> topic.spaceType == KnowledgeSpaceType.TEAM && topic.groupId == selectedSpaceId
+        }
+    }
+
+private fun canWriteKnowledgeTopic(topic: KBTopicItem?, userId: String): Boolean {
+    if (topic == null) return false
+    if (topic.ownerId == userId) return true
+    if (userId in topic.accessPolicy.manageUserIds) return true
+    if (topic.accessPolicy.writeLocked) return false
+    if (userId in topic.accessPolicy.writeUserIds) return true
+    return topic.spaceType == KnowledgeSpaceType.TEAM && topic.accessPolicy.teamMembersCanWrite
+}
+
+private fun topicSpaceLabel(topic: KBTopicItem, groups: List<Group>): String =
+    when (topic.spaceType) {
+        KnowledgeSpaceType.PERSONAL -> "个人"
+        KnowledgeSpaceType.TEAM -> groups.find { it.id == topic.groupId }?.name ?: "团队"
+    }
+
+private fun topicPermissionLabel(topic: KBTopicItem, userId: String): String =
+    if (canWriteKnowledgeTopic(topic, userId)) "可编辑" else "只读"
+
+private fun entryStatusLabel(status: KBEntryStatus): String =
+    when (status) {
+        KBEntryStatus.CANDIDATE -> "候选"
+        KBEntryStatus.PUBLISHED -> "已发布"
+        KBEntryStatus.ARCHIVED -> "已归档"
+        KBEntryStatus.DELETED -> "已删除"
+    }
+
+private fun entrySourceLabel(sourceType: KBSourceType): String =
+    when (sourceType) {
+        KBSourceType.MANUAL -> "手动"
+        KBSourceType.CHAT -> "聊天"
+        KBSourceType.AI_RESPONSE -> "AI"
+        KBSourceType.WORKFLOW -> "工作流"
+        KBSourceType.MEETING -> "会议"
+        KBSourceType.FILE -> "文件"
+        KBSourceType.URL -> "URL"
+    }
+
+private fun entrySourceDetails(entry: KBEntryItem, groups: List<Group>): List<Pair<String, String>> {
+    val details = mutableListOf<Pair<String, String>>()
+    entry.source.sourceGroupId?.takeIf { it.isNotBlank() }?.let { groupId ->
+        val groupName = groups.find { it.id == groupId }?.name
+        details += "来源群组" to if (groupName.isNullOrBlank()) groupId else "$groupName ($groupId)"
+    }
+    entry.source.workflowId?.takeIf { it.isNotBlank() }?.let { workflowId ->
+        details += "工作流" to workflowId
+    }
+    if (entry.source.messageIds.isNotEmpty()) {
+        val preview = entry.source.messageIds.take(3).joinToString(", ")
+        val messageLabel = if (entry.source.messageIds.size > 3) "$preview 等 ${entry.source.messageIds.size} 条" else preview
+        details += "消息" to messageLabel
+    }
+    entry.source.confidence?.let { confidence ->
+        details += "置信度" to "${(confidence * 100).toInt()}%"
+    }
+    entry.createdBy.takeIf { it.isNotBlank() }?.let { createdBy ->
+        details += "创建人" to createdBy
+    }
+    if (entry.updatedBy.isNotBlank() && entry.updatedBy != entry.createdBy) {
+        details += "更新人" to entry.updatedBy
+    }
+    return details
+}
+
+private fun filterKnowledgeEntries(entries: List<KBEntryItem>, filter: KnowledgeEntryFilter): List<KBEntryItem> =
+    when (filter) {
+        KnowledgeEntryFilter.ALL -> entries
+        KnowledgeEntryFilter.CANDIDATE -> entries.filter { it.status == KBEntryStatus.CANDIDATE }
+        KnowledgeEntryFilter.PUBLISHED -> entries.filter { it.status == KBEntryStatus.PUBLISHED }
+        KnowledgeEntryFilter.ARCHIVED -> entries.filter { it.status == KBEntryStatus.ARCHIVED }
+    }
+
+private fun knowledgeStatusAction(entry: KBEntryItem): Pair<String, KBEntryStatus>? =
+    when (entry.status) {
+        KBEntryStatus.CANDIDATE -> "发布" to KBEntryStatus.PUBLISHED
+        KBEntryStatus.PUBLISHED -> "归档" to KBEntryStatus.ARCHIVED
+        KBEntryStatus.ARCHIVED -> "重新发布" to KBEntryStatus.PUBLISHED
+        KBEntryStatus.DELETED -> null
+    }
+
+private fun filterForStatus(status: KBEntryStatus): KnowledgeEntryFilter =
+    when (status) {
+        KBEntryStatus.CANDIDATE -> KnowledgeEntryFilter.CANDIDATE
+        KBEntryStatus.PUBLISHED -> KnowledgeEntryFilter.PUBLISHED
+        KBEntryStatus.ARCHIVED -> KnowledgeEntryFilter.ARCHIVED
+        KBEntryStatus.DELETED -> KnowledgeEntryFilter.ALL
+    }
+
+@Composable
+private fun HandleKnowledgeBaseBackNavigation(
+    subPage: KBSubPage,
+    onBackToTopics: () -> Unit,
+    onBackToEntries: () -> Unit,
+) {
+    BackHandler(enabled = subPage != KBSubPage.TOPICS) {
+        when (subPage) {
+            KBSubPage.EDITOR -> onBackToEntries()
+            KBSubPage.ENTRIES -> onBackToTopics()
+            KBSubPage.TOPICS -> Unit
+        }
+    }
+}
+
+private suspend fun saveKnowledgeEntry(
+    entry: KBEntryItem,
+    topic: KBTopicItem,
+    editorContent: String,
+    userId: String,
+    onSavingChange: (Boolean) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onSaved: () -> Unit,
+) {
+    onSavingChange(true)
+    try {
+        ApiClient.updateKBEntry(entry.id, null, editorContent, null, userId)
+        onEntriesChange(ApiClient.getKBEntries(topic.id, userId))
+        onSaved()
+    } finally {
+        onSavingChange(false)
+    }
+}
+
+private suspend fun updateKnowledgeEntryStatus(
+    entry: KBEntryItem,
+    topic: KBTopicItem,
+    editorContent: String,
+    userId: String,
+    status: KBEntryStatus,
+    onEntryUpdated: (KBEntryItem) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onResult: (Boolean) -> Unit,
+) {
+    val updated = ApiClient.updateKBEntry(
+        entryId = entry.id,
+        title = entry.title,
+        content = editorContent,
+        tags = entry.tags,
+        userId = userId,
+        status = status,
+    )
+    if (updated != null) {
+        onEntryUpdated(updated)
+        onEntriesChange(ApiClient.getKBEntries(topic.id, userId))
+        onFilterChange(filterForStatus(status))
+        onResult(true)
+    } else {
+        onResult(false)
+    }
+}
+
+private suspend fun createKnowledgeTopic(
+    name: String,
+    project: String,
+    userId: String,
+    selectedSpace: KnowledgeSpaceOption,
+    onTopicsChange: (List<KBTopicItem>) -> Unit,
+    onFinished: () -> Unit,
+) {
+    ApiClient.createKBTopic(
+        name = name.trim(),
+        project = project.trim(),
+        userId = userId,
+        spaceType = selectedSpace.type,
+        groupId = selectedSpace.groupId,
+    )
+    onTopicsChange(ApiClient.getKBTopics(userId))
+    onFinished()
+}
+
+private suspend fun createKnowledgeEntry(
+    topic: KBTopicItem,
+    title: String,
+    userId: String,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onEntryCreated: (KBEntryItem) -> Unit,
+    onFinished: () -> Unit,
+) {
+    val entry = ApiClient.createKBEntry(
+        topic.id,
+        title.trim(),
+        "",
+        emptyList(),
+        userId,
+    )
+    if (entry != null) {
+        onEntriesChange(ApiClient.getKBEntries(topic.id, userId))
+        onFilterChange(KnowledgeEntryFilter.ALL)
+        onEntryCreated(entry)
+    }
+    onFinished()
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,10 +375,13 @@ fun KnowledgeBaseScreen(appState: AppState) {
     val context = LocalContext.current
 
     var subPage by remember { mutableStateOf(KBSubPage.TOPICS) }
+    var groups by remember { mutableStateOf<List<Group>>(emptyList()) }
+    var selectedSpaceId by remember { mutableStateOf(PERSONAL_SPACE_ID) }
     var topics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
     var selectedTopic by remember { mutableStateOf<KBTopicItem?>(null) }
     var entries by remember { mutableStateOf<List<KBEntryItem>>(emptyList()) }
     var selectedEntry by remember { mutableStateOf<KBEntryItem?>(null) }
+    var entryFilter by remember { mutableStateOf(KnowledgeEntryFilter.ALL) }
     var isLoading by remember { mutableStateOf(true) }
 
     var showCreateTopicDialog by remember { mutableStateOf(false) }
@@ -103,67 +394,108 @@ fun KnowledgeBaseScreen(appState: AppState) {
 
     LaunchedEffect(user.id) {
         isLoading = true
+        groups = ApiClient.getUserGroups(user.id).groups.orEmpty().filterNot { it.name.startsWith("wf_") }
         topics = ApiClient.getKBTopics(user.id)
         isLoading = false
     }
 
-    BackHandler(enabled = subPage != KBSubPage.TOPICS) {
-        when (subPage) {
-            KBSubPage.EDITOR -> {
-                subPage = KBSubPage.ENTRIES
-                selectedEntry = null
-                editorContent = ""
-            }
-            KBSubPage.ENTRIES -> {
-                subPage = KBSubPage.TOPICS
-                selectedTopic = null
-                entries = emptyList()
-            }
-            KBSubPage.TOPICS -> Unit
-        }
+    val spaceOptions = remember(groups) { buildKnowledgeSpaceOptions(groups) }
+    val selectedSpace = remember(spaceOptions, selectedSpaceId) {
+        spaceOptions.find { it.id == selectedSpaceId } ?: spaceOptions.first()
     }
+    val filteredTopics = remember(topics, selectedSpaceId) {
+        filterTopicsForSpace(topics, selectedSpaceId)
+    }
+    val canWriteSelectedTopic = remember(selectedTopic, user.id) {
+        canWriteKnowledgeTopic(selectedTopic, user.id)
+    }
+    val filteredEntries = remember(entries, entryFilter) {
+        filterKnowledgeEntries(entries, entryFilter)
+    }
+
+    val backToTopics = {
+        subPage = KBSubPage.TOPICS
+        selectedTopic = null
+        entries = emptyList()
+    }
+    val backToEntries = {
+        subPage = KBSubPage.ENTRIES
+        selectedEntry = null
+        editorContent = ""
+    }
+
+    HandleKnowledgeBaseBackNavigation(
+        subPage = subPage,
+        onBackToTopics = backToTopics,
+        onBackToEntries = backToEntries,
+    )
 
     KnowledgeBasePageHost(
         subPage = subPage,
-        topics = topics,
+        userId = user.id,
+        groups = groups,
+        selectedSpace = selectedSpace,
+        spaceOptions = spaceOptions,
+        filteredTopics = filteredTopics,
         selectedTopic = selectedTopic,
-        entries = entries,
+        entries = filteredEntries,
         selectedEntry = selectedEntry,
         isLoading = isLoading,
         editorContent = editorContent,
         isSaving = isSaving,
+        selectedEntryFilter = entryFilter,
+        canWriteSelectedTopic = canWriteSelectedTopic,
+        onSpaceSelected = { selectedSpaceId = it },
+        onEntryFilterChange = { entryFilter = it },
         onShowCreateTopic = { showCreateTopicDialog = true },
         onTopicSelected = { topic ->
             selectedTopic = topic
+            entryFilter = KnowledgeEntryFilter.ALL
             scope.launch { entries = ApiClient.getKBEntries(topic.id, user.id) }
             subPage = KBSubPage.ENTRIES
         },
-        onBackToTopics = {
-            subPage = KBSubPage.TOPICS
-            selectedTopic = null
-            entries = emptyList()
-        },
+        onBackToTopics = backToTopics,
         onShowCreateEntry = { showCreateEntryDialog = true },
         onEntrySelected = { entry ->
             selectedEntry = entry
             editorContent = entry.content
             subPage = KBSubPage.EDITOR
         },
-        onBackToEntries = {
-            subPage = KBSubPage.ENTRIES
-            selectedEntry = null
-            editorContent = ""
-        },
+        onBackToEntries = backToEntries,
         onEditorContentChange = { editorContent = it },
         onSaveEntry = {
             val currentEntry = selectedEntry ?: return@KnowledgeBasePageHost
             val currentTopic = selectedTopic ?: return@KnowledgeBasePageHost
             scope.launch {
-                isSaving = true
-                ApiClient.updateKBEntry(currentEntry.id, null, editorContent, null, user.id)
-                entries = ApiClient.getKBEntries(currentTopic.id, user.id)
-                Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
-                isSaving = false
+                saveKnowledgeEntry(
+                    entry = currentEntry,
+                    topic = currentTopic,
+                    editorContent = editorContent,
+                    userId = user.id,
+                    onSavingChange = { isSaving = it },
+                    onEntriesChange = { entries = it },
+                    onSaved = { Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show() },
+                )
+            }
+        },
+        onStatusAction = { status ->
+            val currentEntry = selectedEntry ?: return@KnowledgeBasePageHost
+            val currentTopic = selectedTopic ?: return@KnowledgeBasePageHost
+            scope.launch {
+                updateKnowledgeEntryStatus(
+                    entry = currentEntry,
+                    topic = currentTopic,
+                    editorContent = editorContent,
+                    userId = user.id,
+                    status = status,
+                    onEntryUpdated = { selectedEntry = it },
+                    onEntriesChange = { entries = it },
+                    onFilterChange = { entryFilter = it },
+                    onResult = { success ->
+                        val message = if (success) "条目状态已更新" else "状态更新失败"
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    },
+                )
             }
         },
     )
@@ -172,6 +504,7 @@ fun KnowledgeBaseScreen(appState: AppState) {
         showCreateTopicDialog = showCreateTopicDialog,
         newTopicName = newTopicName,
         newTopicProject = newTopicProject,
+        selectedSpaceLabel = selectedSpace.label,
         onTopicNameChange = { newTopicName = it },
         onTopicProjectChange = { newTopicProject = it },
         onDismissCreateTopic = {
@@ -182,11 +515,18 @@ fun KnowledgeBaseScreen(appState: AppState) {
         onConfirmCreateTopic = {
             if (newTopicName.isNotBlank()) {
                 scope.launch {
-                    ApiClient.createKBTopic(newTopicName.trim(), newTopicProject.trim(), user.id)
-                    topics = ApiClient.getKBTopics(user.id)
-                    showCreateTopicDialog = false
-                    newTopicName = ""
-                    newTopicProject = ""
+                    createKnowledgeTopic(
+                        name = newTopicName,
+                        project = newTopicProject,
+                        userId = user.id,
+                        selectedSpace = selectedSpace,
+                        onTopicsChange = { topics = it },
+                        onFinished = {
+                            showCreateTopicDialog = false
+                            newTopicName = ""
+                            newTopicProject = ""
+                        },
+                    )
                 }
             }
         },
@@ -202,21 +542,22 @@ fun KnowledgeBaseScreen(appState: AppState) {
             val currentTopic = selectedTopic ?: return@KnowledgeBaseDialogs
             if (newEntryTitle.isNotBlank()) {
                 scope.launch {
-                    val entry = ApiClient.createKBEntry(
-                        currentTopic.id,
-                        newEntryTitle.trim(),
-                        "",
-                        emptyList(),
+                    createKnowledgeEntry(
+                        topic = currentTopic,
+                        title = newEntryTitle,
                         user.id,
+                        onEntriesChange = { entries = it },
+                        onFilterChange = { entryFilter = it },
+                        onEntryCreated = { entry ->
+                            selectedEntry = entry
+                            editorContent = entry.content
+                            subPage = KBSubPage.EDITOR
+                        },
+                        onFinished = {
+                            showCreateEntryDialog = false
+                            newEntryTitle = ""
+                        },
                     )
-                    if (entry != null) {
-                        entries = ApiClient.getKBEntries(currentTopic.id, user.id)
-                        selectedEntry = entry
-                        editorContent = entry.content
-                        subPage = KBSubPage.EDITOR
-                    }
-                    showCreateEntryDialog = false
-                    newEntryTitle = ""
                 }
             }
         },
@@ -226,13 +567,21 @@ fun KnowledgeBaseScreen(appState: AppState) {
 @Composable
 private fun KnowledgeBasePageHost(
     subPage: KBSubPage,
-    topics: List<KBTopicItem>,
+    userId: String,
+    groups: List<Group>,
+    selectedSpace: KnowledgeSpaceOption,
+    spaceOptions: List<KnowledgeSpaceOption>,
+    filteredTopics: List<KBTopicItem>,
     selectedTopic: KBTopicItem?,
     entries: List<KBEntryItem>,
     selectedEntry: KBEntryItem?,
     isLoading: Boolean,
     editorContent: String,
     isSaving: Boolean,
+    selectedEntryFilter: KnowledgeEntryFilter,
+    canWriteSelectedTopic: Boolean,
+    onSpaceSelected: (String) -> Unit,
+    onEntryFilterChange: (KnowledgeEntryFilter) -> Unit,
     onShowCreateTopic: () -> Unit,
     onTopicSelected: (KBTopicItem) -> Unit,
     onBackToTopics: () -> Unit,
@@ -241,36 +590,58 @@ private fun KnowledgeBasePageHost(
     onBackToEntries: () -> Unit,
     onEditorContentChange: (String) -> Unit,
     onSaveEntry: () -> Unit,
+    onStatusAction: (KBEntryStatus) -> Unit,
 ) {
     when (subPage) {
         KBSubPage.TOPICS -> KnowledgeBaseTopicsPage(
-            topics = topics,
+            topics = filteredTopics,
+            groups = groups,
+            userId = userId,
             isLoading = isLoading,
+            selectedSpace = selectedSpace,
+            spaceOptions = spaceOptions,
+            onSpaceSelected = onSpaceSelected,
             onShowCreateTopic = onShowCreateTopic,
             onTopicSelected = onTopicSelected,
         )
         KBSubPage.ENTRIES -> KnowledgeBaseEntriesPage(
+            userId = userId,
+            groups = groups,
             selectedTopic = selectedTopic,
             entries = entries,
+            selectedFilter = selectedEntryFilter,
+            canWriteSelectedTopic = canWriteSelectedTopic,
+            onFilterChange = onEntryFilterChange,
             onBack = onBackToTopics,
             onShowCreateEntry = onShowCreateEntry,
             onEntrySelected = onEntrySelected,
         )
         KBSubPage.EDITOR -> KnowledgeBaseEditorPage(
+            userId = userId,
+            groups = groups,
+            selectedTopic = selectedTopic,
             selectedEntry = selectedEntry,
             editorContent = editorContent,
             isSaving = isSaving,
+            canWriteSelectedTopic = canWriteSelectedTopic,
             onBack = onBackToEntries,
             onEditorContentChange = onEditorContentChange,
             onSave = onSaveEntry,
+            onStatusAction = onStatusAction,
         )
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun KnowledgeBaseTopicsPage(
     topics: List<KBTopicItem>,
+    groups: List<Group>,
+    userId: String,
     isLoading: Boolean,
+    selectedSpace: KnowledgeSpaceOption,
+    spaceOptions: List<KnowledgeSpaceOption>,
+    onSpaceSelected: (String) -> Unit,
     onShowCreateTopic: () -> Unit,
     onTopicSelected: (KBTopicItem) -> Unit,
 ) {
@@ -292,6 +663,19 @@ private fun KnowledgeBaseTopicsPage(
             ) {
                 Text("知识库", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
             }
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(spaceOptions) { space ->
+                    FilterChip(
+                        selected = selectedSpace.id == space.id,
+                        onClick = { onSpaceSelected(space.id) },
+                        label = { Text(space.label) },
+                    )
+                }
+            }
             Divider(color = SilkColors.divider)
             when {
                 isLoading -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -299,8 +683,8 @@ private fun KnowledgeBaseTopicsPage(
                 }
                 topics.isEmpty() -> KnowledgeBaseEmptyState(
                     icon = "📚",
-                    title = "暂无主题",
-                    subtitle = "点击右下角 + 创建第一个主题",
+                    title = "当前空间暂无主题",
+                    subtitle = "点击右下角 + 在${selectedSpace.label}空间创建主题",
                 )
                 else -> LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -313,13 +697,32 @@ private fun KnowledgeBaseTopicsPage(
                             colors = CardDefaults.cardColors(containerColor = SilkColors.cardBackground),
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text(
-                                    topic.name,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.Medium,
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        topic.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    KnowledgeBadge(
+                                        text = topicPermissionLabel(topic, userId),
+                                        backgroundColor = SilkColors.surface,
+                                    )
+                                }
+                                Spacer(Modifier.height(8.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    KnowledgeBadge(
+                                        text = topicSpaceLabel(topic, groups),
+                                        backgroundColor = SilkColors.background,
+                                    )
+                                }
                                 if (topic.project.isNotBlank()) {
-                                    Spacer(Modifier.height(4.dp))
+                                    Spacer(Modifier.height(8.dp))
                                     Text(
                                         topic.project,
                                         style = MaterialTheme.typography.bodySmall,
@@ -338,8 +741,13 @@ private fun KnowledgeBaseTopicsPage(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun KnowledgeBaseEntriesPage(
+    userId: String,
+    groups: List<Group>,
     selectedTopic: KBTopicItem?,
     entries: List<KBEntryItem>,
+    selectedFilter: KnowledgeEntryFilter,
+    canWriteSelectedTopic: Boolean,
+    onFilterChange: (KnowledgeEntryFilter) -> Unit,
     onBack: () -> Unit,
     onShowCreateEntry: () -> Unit,
     onEntrySelected: (KBEntryItem) -> Unit,
@@ -361,38 +769,88 @@ private fun KnowledgeBaseEntriesPage(
         },
         floatingActionButton = {
             FloatingActionButton(
-                onClick = onShowCreateEntry,
-                containerColor = SilkColors.primary,
+                onClick = {
+                    if (canWriteSelectedTopic) {
+                        onShowCreateEntry()
+                    }
+                },
+                containerColor = if (canWriteSelectedTopic) SilkColors.primary else SilkColors.surface,
                 contentColor = Color.White,
             ) {
                 Icon(Icons.Default.Add, contentDescription = "创建条目")
             }
         },
     ) { padding ->
-        if (entries.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                KnowledgeBaseEmptyState(
-                    icon = "📝",
-                    title = "暂无条目",
-                    subtitle = "点击右下角 + 创建条目",
-                )
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            selectedTopic?.let { topic ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    KnowledgeBadge(
+                        text = topicSpaceLabel(topic, groups),
+                        backgroundColor = SilkColors.background,
+                    )
+                    KnowledgeBadge(
+                        text = topicPermissionLabel(topic, userId),
+                        backgroundColor = SilkColors.surface,
+                    )
+                }
             }
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(padding),
-                contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+            LazyRow(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(entries) { entry ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth().clickable { onEntrySelected(entry) },
-                        colors = CardDefaults.cardColors(containerColor = SilkColors.cardBackground),
-                    ) {
-                        Text(
-                            entry.title,
-                            modifier = Modifier.padding(16.dp),
-                            style = MaterialTheme.typography.bodyLarge,
-                        )
+                items(KnowledgeEntryFilter.entries.toList()) { filter ->
+                    FilterChip(
+                        selected = selectedFilter == filter,
+                        onClick = { onFilterChange(filter) },
+                        label = { Text(filter.label) },
+                    )
+                }
+            }
+            if (entries.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    KnowledgeBaseEmptyState(
+                        icon = "📝",
+                        title = if (selectedFilter == KnowledgeEntryFilter.ALL) "暂无条目" else "当前筛选下暂无条目",
+                        subtitle = when {
+                            selectedFilter != KnowledgeEntryFilter.ALL -> "切换筛选查看其它状态的条目"
+                            canWriteSelectedTopic -> "点击右下角 + 创建条目"
+                            else -> "当前主题为只读，仅支持浏览已有条目"
+                        },
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(entries) { entry ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().clickable { onEntrySelected(entry) },
+                            colors = CardDefaults.cardColors(containerColor = SilkColors.cardBackground),
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    entry.title,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    KnowledgeBadge(
+                                        text = entryStatusLabel(entry.status),
+                                        backgroundColor = SilkColors.surface,
+                                    )
+                                    KnowledgeBadge(
+                                        text = entrySourceLabel(entry.source.sourceType),
+                                        backgroundColor = SilkColors.background,
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -403,13 +861,24 @@ private fun KnowledgeBaseEntriesPage(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun KnowledgeBaseEditorPage(
+    userId: String,
+    groups: List<Group>,
+    selectedTopic: KBTopicItem?,
     selectedEntry: KBEntryItem?,
     editorContent: String,
     isSaving: Boolean,
+    canWriteSelectedTopic: Boolean,
     onBack: () -> Unit,
     onEditorContentChange: (String) -> Unit,
     onSave: () -> Unit,
+    onStatusAction: (KBEntryStatus) -> Unit,
 ) {
+    val sourceDetails = remember(selectedEntry, groups) {
+        selectedEntry?.let { entrySourceDetails(it, groups) }.orEmpty()
+    }
+    val statusAction = remember(selectedEntry) {
+        selectedEntry?.let(::knowledgeStatusAction)
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -420,11 +889,11 @@ private fun KnowledgeBaseEditorPage(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onSave, enabled = !isSaving) {
+                    IconButton(onClick = onSave, enabled = canWriteSelectedTopic && !isSaving) {
                         Icon(
                             Icons.Default.Save,
                             contentDescription = "保存",
-                            tint = if (isSaving) SilkColors.textLight else SilkColors.primary,
+                            tint = if (canWriteSelectedTopic && !isSaving) SilkColors.primary else SilkColors.textLight,
                         )
                     }
                 },
@@ -435,16 +904,72 @@ private fun KnowledgeBaseEditorPage(
             )
         }
     ) { padding ->
-        OutlinedTextField(
-            value = editorContent,
-            onValueChange = onEditorContentChange,
-            modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 8.dp),
-            placeholder = { Text("在这里输入 Markdown 内容...") },
-            colors = OutlinedTextFieldDefaults.colors(
-                unfocusedBorderColor = Color.Transparent,
-                focusedBorderColor = Color.Transparent,
-            ),
-        )
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            selectedTopic?.let { topic ->
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        KnowledgeBadge(
+                            text = topicSpaceLabel(topic, groups),
+                            backgroundColor = SilkColors.background,
+                        )
+                        KnowledgeBadge(
+                            text = topicPermissionLabel(topic, userId),
+                            backgroundColor = SilkColors.surface,
+                        )
+                        selectedEntry?.let { entry ->
+                            KnowledgeBadge(
+                                text = entryStatusLabel(entry.status),
+                                backgroundColor = SilkColors.surface,
+                            )
+                            KnowledgeBadge(
+                                text = entrySourceLabel(entry.source.sourceType),
+                                backgroundColor = SilkColors.background,
+                            )
+                        }
+                    }
+                    if (topic.project.isNotBlank()) {
+                        Text(
+                            "项目：${topic.project}",
+                            color = SilkColors.textSecondary,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    sourceDetails.forEach { (label, value) ->
+                        KnowledgeDetailRow(label = label, value = value)
+                    }
+                    if (canWriteSelectedTopic && statusAction != null) {
+                        Button(
+                            onClick = { onStatusAction(statusAction.second) },
+                            colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+                        ) {
+                            Text(statusAction.first)
+                        }
+                    }
+                }
+            }
+            if (!canWriteSelectedTopic) {
+                Text(
+                    "当前主题为只读，你可以浏览内容，但不能保存修改。",
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    color = SilkColors.textSecondary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            OutlinedTextField(
+                value = editorContent,
+                onValueChange = onEditorContentChange,
+                enabled = canWriteSelectedTopic,
+                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+                placeholder = { Text("在这里输入 Markdown 内容...") },
+                colors = OutlinedTextFieldDefaults.colors(
+                    unfocusedBorderColor = Color.Transparent,
+                    focusedBorderColor = Color.Transparent,
+                ),
+            )
+        }
     }
 }
 
@@ -464,10 +989,47 @@ private fun KnowledgeBaseEmptyState(
 }
 
 @Composable
+private fun KnowledgeBadge(
+    text: String,
+    backgroundColor: Color,
+    contentColor: Color = SilkColors.textPrimary,
+) {
+    Surface(color = backgroundColor, contentColor = contentColor) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+        )
+    }
+}
+
+@Composable
+private fun KnowledgeDetailRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "$label：",
+            color = SilkColors.textLight,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            text = value,
+            color = SilkColors.textSecondary,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
 private fun KnowledgeBaseDialogs(
     showCreateTopicDialog: Boolean,
     newTopicName: String,
     newTopicProject: String,
+    selectedSpaceLabel: String,
     onTopicNameChange: (String) -> Unit,
     onTopicProjectChange: (String) -> Unit,
     onDismissCreateTopic: () -> Unit,
@@ -485,6 +1047,11 @@ private fun KnowledgeBaseDialogs(
             title = { Text("创建主题") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "当前空间：$selectedSpaceLabel",
+                        color = SilkColors.textSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                     OutlinedTextField(
                         value = newTopicName,
                         onValueChange = onTopicNameChange,
@@ -520,12 +1087,19 @@ private fun KnowledgeBaseDialogs(
             onDismissRequest = onDismissCreateEntry,
             title = { Text("创建条目") },
             text = {
-                OutlinedTextField(
-                    value = newEntryTitle,
-                    onValueChange = onEntryTitleChange,
-                    label = { Text("条目标题") },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "条目会创建在「${selectedTopic.name}」主题下",
+                        color = SilkColors.textSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedTextField(
+                        value = newEntryTitle,
+                        onValueChange = onEntryTitleChange,
+                        label = { Text("条目标题") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             },
             confirmButton = {
                 Button(
