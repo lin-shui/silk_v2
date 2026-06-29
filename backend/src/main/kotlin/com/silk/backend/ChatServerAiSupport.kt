@@ -3,6 +3,7 @@ package com.silk.backend
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.database.GroupRepository
+import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
 import com.silk.backend.kb.resolveKnowledgeBasePromptContext
 import com.silk.backend.models.KnowledgeBaseContextSelection
 import com.silk.backend.models.MessageReference
@@ -13,6 +14,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+
+private val knowledgeBaseContextPreferenceStore: KnowledgeBaseContextPreferenceStore
+    get() = KnowledgeBaseContextPreferenceStore()
 
 internal fun ChatServer.isRolePromptMessageSupport(content: String): Boolean {
     val roleKeywords = listOf(
@@ -74,12 +78,16 @@ internal suspend fun ChatServer.generateIntelligentResponseSupport(
     val systemPrompt = buildDirectModelSystemPrompt(historyManager.getRolePrompt(currentSessionName))
     prepareDirectModelAgentContext()
     initializeDirectModelWorkspace()
+    val persistentSelection = buildPersistentKnowledgeBaseContextSelection(userId)
     val kbContext = resolveKnowledgeBasePromptContext(
         rawInput = userMessage,
         userId = userId,
         knowledgeBaseManager = knowledgeBaseManager,
         preferredGroupId = currentSessionName.removePrefix("group_").takeIf { currentSessionName.startsWith("group_") },
-        selection = kbContextSelection ?: KnowledgeBaseContextSelection(),
+        selection = mergeKnowledgeBaseContextSelection(
+            persistentSelection,
+            kbContextSelection ?: KnowledgeBaseContextSelection(),
+        ),
     )
     if (kbContext.availableReferences.isNotEmpty()) {
         logger.info(
@@ -100,6 +108,8 @@ internal suspend fun ChatServer.generateIntelligentResponseSupport(
                     path = reference.path,
                     origin = reference.origin,
                     reason = reference.reason,
+                    spaceId = reference.spaceId,
+                    spaceLabel = reference.spaceLabel,
                 )
             },
         )
@@ -136,6 +146,23 @@ internal suspend fun ChatServer.generateIntelligentResponseSupport(
         state.agentReferences.size,
     )
     refreshSilkPrivateChatTodosIfNeeded(userId)
+}
+
+private fun buildPersistentKnowledgeBaseContextSelection(userId: String): KnowledgeBaseContextSelection {
+    if (userId.isBlank()) return KnowledgeBaseContextSelection()
+    val preferences = knowledgeBaseContextPreferenceStore.get(userId)
+    return KnowledgeBaseContextSelection(excludedSpaceIds = preferences.excludedSpaceIds)
+}
+
+private fun mergeKnowledgeBaseContextSelection(
+    persistent: KnowledgeBaseContextSelection,
+    requestSelection: KnowledgeBaseContextSelection,
+): KnowledgeBaseContextSelection {
+    return KnowledgeBaseContextSelection(
+        pinnedEntryIds = requestSelection.pinnedEntryIds.distinct(),
+        excludedEntryIds = requestSelection.excludedEntryIds.distinct(),
+        excludedSpaceIds = (persistent.excludedSpaceIds + requestSelection.excludedSpaceIds).distinct(),
+    )
 }
 
 internal suspend fun ChatServer.generateHistoryRecallResponseSupport(query: String, userId: String) {

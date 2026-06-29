@@ -1058,12 +1058,15 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
+    val isHistoryLoading by chatClient.isLoadingHistory.collectAsState()
     val pendingQuestionId by chatClient.pendingQuestionId.collectAsState()
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
     
     var messageText by remember { mutableStateOf("") }
     var kbContextSelection by remember(group.id) { mutableStateOf(KnowledgeBaseContextSelection()) }
+    var persistentKbExcludedSpaceIds by remember(group.id) { mutableStateOf<List<String>?>(null) }
+    var restoredKbContextSelection by remember(group.id) { mutableStateOf(false) }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
     var isExportingMarkdown by remember { mutableStateOf(false) }
@@ -1170,6 +1173,22 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         onGroupMembersLoaded = { groupMembers = it },
     )
 
+    LaunchedEffect(group.id) {
+        persistentKbExcludedSpaceIds = ApiClient.getKBContextPreferences(user.id).excludedSpaceIds
+    }
+
+    LaunchedEffect(group.id, isHistoryLoading, messages, persistentKbExcludedSpaceIds) {
+        val persistentExcludedSpaceIds = persistentKbExcludedSpaceIds
+        if (restoredKbContextSelection || isHistoryLoading || persistentExcludedSpaceIds == null) {
+            return@LaunchedEffect
+        }
+        kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+            restoredSelection = latestKnowledgeBaseContextSelection(messages, user.id),
+            persistentExcludedSpaceIds = persistentExcludedSpaceIds,
+        )
+        restoredKbContextSelection = true
+    }
+
     Div({ classes(SilkStylesheet.container) }) {
         ChatAppHeader(
             scope = scope,
@@ -1236,7 +1255,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     val preferredSpaceId = preferredKnowledgeCaptureSpaceId(group.id, context.topics)
                     kbCaptureDraft = KnowledgeCaptureDraft(
                         message = message,
-                        sourceType = KBSourceType.CHAT,
+                        sourceType = messageKnowledgeCaptureSourceType(message, KBSourceType.CHAT),
                         sourceGroupId = group.id,
                         preferredSpaceId = preferredSpaceId,
                     )
@@ -1281,7 +1300,15 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             onVoiceRecordingChanged = { isVoiceRecording = it },
             onTranscribingChanged = { isTranscribing = it },
             onMessageTextChanged = { messageText = it },
-            onKnowledgeBaseContextSelectionChanged = { kbContextSelection = it },
+            onKnowledgeBaseContextSelectionChanged = { nextSelection ->
+                kbContextSelection = nextSelection
+                if (persistentKbExcludedSpaceIds != nextSelection.excludedSpaceIds) {
+                    scope.launch {
+                        val updated = ApiClient.updateKBContextPreferences(user.id, nextSelection.excludedSpaceIds)
+                        persistentKbExcludedSpaceIds = updated.excludedSpaceIds
+                    }
+                }
+            },
             onShowMentionMenuChanged = { showMentionMenu = it },
             onMentionSearchTextChanged = { mentionSearchText = it },
             onMentionStartIndexChanged = { mentionStartIndex = it },
@@ -2327,7 +2354,7 @@ private fun ChatAppInputSection(
                     user.id,
                     user.fullName,
                     msg,
-                    kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+                    kbContextSelection,
                 )
             }
         }

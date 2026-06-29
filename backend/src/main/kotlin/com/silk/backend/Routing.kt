@@ -48,6 +48,7 @@ import com.silk.backend.database.UserTodoRefreshStatusResponse
 import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.export.ChatObsidianExporter
 import com.silk.backend.kb.KBObsidianExporter
+import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
 import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
@@ -136,6 +137,8 @@ private val workflowManager = WorkflowManager()
 private val trustedDirManager = TrustedDirManager()
 private val knowledgeBaseManager: KnowledgeBaseManager
     get() = KnowledgeBaseManager()
+private val knowledgeBaseContextPreferenceStore: KnowledgeBaseContextPreferenceStore
+    get() = KnowledgeBaseContextPreferenceStore()
 private val kbRouteJson = Json { ignoreUnknownKeys = true }
 private const val KB_AUTHENTICATED_USER_ID_HEADER = "X-Silk-Authenticated-User-Id"
 
@@ -604,6 +607,7 @@ fun Application.configureRouting() {
         registerApiWorkflowsWorkflowIdPutRoute()
         registerApiWorkflowsByGroupGroupIdGetRoute()
         registerApiKbTopicsGetRoute()
+        registerApiKbContextPreferencesRoute()
         registerApiKbTopicsPostRoute()
         registerApiKbTopicsTopicIdPutRoute()
         registerApiKbTopicsTopicIdDeleteRoute()
@@ -2946,6 +2950,40 @@ private fun Route.registerApiWorkflowsByGroupGroupIdGetRoute() {
     }
 }
 
+private fun Route.registerApiKbContextPreferencesRoute() {
+
+    get("/api/kb/context-preferences") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val preferences = knowledgeBaseContextPreferenceStore.get(userId)
+        call.respondText(
+            Json.encodeToString(com.silk.backend.kb.KnowledgeBaseContextPreferences.serializer(), preferences),
+            ContentType.Application.Json,
+        )
+    }
+
+    put("/api/kb/context-preferences") {
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.contentOrNull)
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@put
+        }
+        val excludedSpaceIds = req["excludedSpaceIds"]?.let { element ->
+            runCatching { element.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull } }.getOrNull()
+        } ?: emptyList()
+        val updated = knowledgeBaseContextPreferenceStore.updateExcludedSpaces(userId, excludedSpaceIds)
+        call.respondText(
+            Json.encodeToString(com.silk.backend.kb.KnowledgeBaseContextPreferences.serializer(), updated),
+            ContentType.Application.Json,
+        )
+    }
+}
+
 private fun Route.registerApiKbTopicsGetRoute() {
 
     // ==================== Knowledge Base API ====================
@@ -3164,7 +3202,7 @@ private fun Route.registerApiKbCapturesPostRoute() {
         val validTitle = title!!
         val validContent = content!!
         val status = when (source.sourceType) {
-            KBSourceType.CHAT, KBSourceType.WORKFLOW -> KBEntryStatus.CANDIDATE
+            KBSourceType.CHAT, KBSourceType.AI_RESPONSE, KBSourceType.WORKFLOW -> KBEntryStatus.CANDIDATE
             else -> requestedStatus ?: KBEntryStatus.CANDIDATE
         }
 

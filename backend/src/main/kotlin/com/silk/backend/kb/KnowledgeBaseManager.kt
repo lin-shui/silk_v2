@@ -30,6 +30,8 @@ data class KBContextSearchHit(
     val reasons: List<String>,
 )
 
+internal const val PERSONAL_KB_SPACE_ID = "__personal__"
+
 class KnowledgeBaseManager(
     private val baseDir: String =
         System.getProperty("silk.kbDir")?.trim()?.takeIf { it.isNotEmpty() } ?: "knowledge_base"
@@ -250,6 +252,7 @@ class KnowledgeBaseManager(
         preferredGroupId: String? = null,
         limit: Int = 3,
         excludedEntryIds: Set<String> = emptySet(),
+        excludedSpaceIds: Set<String> = emptySet(),
     ): List<KBContextSearchHit> {
         val terms = extractSearchTerms(query)
         if (terms.isEmpty() || limit <= 0) return emptyList()
@@ -262,6 +265,7 @@ class KnowledgeBaseManager(
             .mapNotNull { entry ->
                 val topic = topicById[entry.topicId] ?: return@mapNotNull null
                 if (!canReadTopic(topic, userId)) return@mapNotNull null
+                if (topic.spacePreferenceId() in excludedSpaceIds) return@mapNotNull null
                 scoreContextCandidate(
                     topic = topic,
                     entry = entry,
@@ -353,6 +357,13 @@ class KnowledgeBaseManager(
             accessPolicy.copy(teamMembersCanWrite = false)
         } else {
             accessPolicy
+        }
+    }
+
+    internal fun KBTopic.spacePreferenceId(): String {
+        return when (spaceType) {
+            KnowledgeSpaceType.TEAM -> groupId?.takeIf { it.isNotBlank() } ?: PERSONAL_KB_SPACE_ID
+            KnowledgeSpaceType.PERSONAL -> PERSONAL_KB_SPACE_ID
         }
     }
 

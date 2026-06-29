@@ -1,6 +1,7 @@
 package com.silk.backend
 
 import com.silk.backend.database.GroupRepository
+import com.silk.backend.kb.KnowledgeBaseContextPreferences
 import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
@@ -281,6 +282,43 @@ class KnowledgeBaseRouteContractTest {
     }
 
     @Test
+    fun `capture route keeps ai response captures as candidate even when published is requested`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val topic = manager.createTopic(name = "AI Capture Policy Topic", project = "", userId = "owner")
+
+            testApplication {
+                application { module() }
+
+                val response = client.post("/api/kb/captures") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """
+                        {
+                          "userId":"owner",
+                          "topicId":"${topic.id}",
+                          "title":"AI 总结",
+                          "content":"这条 AI 回答沉淀也不应直接发布。",
+                          "status":"PUBLISHED",
+                          "source":{
+                            "sourceType":"AI_RESPONSE",
+                            "sourceGroupId":"group-1",
+                            "messageIds":["msg-ai-1"]
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                }
+
+                assertEquals(HttpStatusCode.Created, response.status)
+                val created = json.decodeFromString(KBEntry.serializer(), response.bodyAsText())
+                assertEquals(KBSourceType.AI_RESPONSE, created.source.sourceType)
+                assertEquals(KBEntryStatus.CANDIDATE, created.status)
+            }
+        }
+    }
+
+    @Test
     fun `capture route allows meeting captures to opt into published status`() {
         TestWorkspace().use { workspace ->
             val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
@@ -390,6 +428,38 @@ class KnowledgeBaseRouteContractTest {
 
                 val stored = assertNotNull(manager.getEntry(entry.id, "owner"))
                 assertEquals(KBEntryStatus.PUBLISHED, stored.status)
+            }
+        }
+    }
+
+    @Test
+    fun `context preferences route persists excluded spaces per user`() {
+        TestWorkspace().use {
+            testApplication {
+                application { module() }
+
+                val updatedResponse = client.put("/api/kb/context-preferences") {
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"userId":"owner","excludedSpaceIds":["group-1","group-1","  ","group-2"]}""")
+                }
+
+                assertEquals(HttpStatusCode.OK, updatedResponse.status)
+                val updated = json.decodeFromString(KnowledgeBaseContextPreferences.serializer(), updatedResponse.bodyAsText())
+                assertEquals("owner", updated.userId)
+                assertEquals(listOf("group-1", "group-2"), updated.excludedSpaceIds)
+
+                val fetched = client.get("/api/kb/context-preferences?userId=owner")
+                assertEquals(HttpStatusCode.OK, fetched.status)
+                val fetchedPreferences = json.decodeFromString(KnowledgeBaseContextPreferences.serializer(), fetched.bodyAsText())
+                assertEquals(listOf("group-1", "group-2"), fetchedPreferences.excludedSpaceIds)
+
+                val cleared = client.put("/api/kb/context-preferences") {
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"userId":"owner","excludedSpaceIds":[]}""")
+                }
+                assertEquals(HttpStatusCode.OK, cleared.status)
+                val clearedPreferences = json.decodeFromString(KnowledgeBaseContextPreferences.serializer(), cleared.bodyAsText())
+                assertTrue(clearedPreferences.excludedSpaceIds.isEmpty())
             }
         }
     }

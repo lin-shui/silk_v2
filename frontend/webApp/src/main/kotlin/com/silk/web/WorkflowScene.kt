@@ -147,7 +147,7 @@ fun WorkflowScene(appState: WebAppState) {
                 val preferredSpaceId = preferredKnowledgeCaptureSpaceId(workflow.groupId, context.topics)
                 kbCaptureDraft = KnowledgeCaptureDraft(
                     message = message,
-                    sourceType = KBSourceType.WORKFLOW,
+                    sourceType = messageKnowledgeCaptureSourceType(message, KBSourceType.WORKFLOW),
                     sourceGroupId = workflow.groupId,
                     workflowId = workflow.id,
                     preferredSpaceId = preferredSpaceId,
@@ -1432,8 +1432,11 @@ private fun WorkflowChatPanel(
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
+    val isHistoryLoading by chatClient.isLoadingHistory.collectAsState()
     var messageText by remember(groupId) { mutableStateOf("") }
     var kbContextSelection by remember(groupId) { mutableStateOf(KnowledgeBaseContextSelection()) }
+    var persistentKbExcludedSpaceIds by remember(groupId) { mutableStateOf<List<String>?>(null) }
+    var restoredKbContextSelection by remember(groupId) { mutableStateOf(false) }
     var workingDir by remember(groupId) { mutableStateOf("") }
     var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
     var permissionMode by remember(groupId) { mutableStateOf("") }
@@ -1506,6 +1509,22 @@ private fun WorkflowChatPanel(
         }
     }
 
+    LaunchedEffect(groupId) {
+        persistentKbExcludedSpaceIds = ApiClient.getKBContextPreferences(userId).excludedSpaceIds
+    }
+
+    LaunchedEffect(groupId, isHistoryLoading, messages, persistentKbExcludedSpaceIds) {
+        val persistentExcludedSpaceIds = persistentKbExcludedSpaceIds
+        if (restoredKbContextSelection || isHistoryLoading || persistentExcludedSpaceIds == null) {
+            return@LaunchedEffect
+        }
+        kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+            restoredSelection = latestKnowledgeBaseContextSelection(messages, userId),
+            persistentExcludedSpaceIds = persistentExcludedSpaceIds,
+        )
+        restoredKbContextSelection = true
+    }
+
     // Auto-scroll
     LaunchedEffect(messages.size, transientMessage, statusMessages.size) {
         js("""
@@ -1576,7 +1595,15 @@ private fun WorkflowChatPanel(
         },
         onClearSwitchError = { switchError = null },
         onMessageTextChange = { messageText = it },
-        onKnowledgeBaseContextSelectionChange = { kbContextSelection = it },
+        onKnowledgeBaseContextSelectionChange = { nextSelection ->
+            kbContextSelection = nextSelection
+            if (persistentKbExcludedSpaceIds != nextSelection.excludedSpaceIds) {
+                scope.launch {
+                    val updated = ApiClient.updateKBContextPreferences(userId, nextSelection.excludedSpaceIds)
+                    persistentKbExcludedSpaceIds = updated.excludedSpaceIds
+                }
+            }
+        },
         onStartNewSession = { startWorkflowNewSession(scope, chatClient, userId, userName) },
         onSendMessage = {
             submitWorkflowMessage(
@@ -2354,7 +2381,7 @@ private fun submitWorkflowMessage(
             userId,
             userName,
             text,
-            kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+            kbContextSelection,
         )
     }
 }

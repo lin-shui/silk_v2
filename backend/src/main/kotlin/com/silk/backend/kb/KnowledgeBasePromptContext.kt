@@ -5,6 +5,8 @@ import com.silk.backend.models.KBEntry
 import com.silk.backend.models.KBEntryStatus
 import com.silk.backend.models.KBTopic
 import com.silk.backend.models.KnowledgeBaseContextSelection
+import com.silk.backend.models.KnowledgeSpaceType
+import com.silk.backend.database.GroupRepository
 
 data class KnowledgeBasePromptContext(
     val resolvedUserInput: String,
@@ -18,6 +20,7 @@ data class KnowledgeBaseContextDiagnostics(
     val pinnedReferenceCount: Int = 0,
     val autoCandidateCount: Int = 0,
     val excludedReferenceCount: Int = 0,
+    val excludedSpaceCount: Int = 0,
 )
 
 private data class KnowledgeBaseReferenceToken(
@@ -56,6 +59,7 @@ fun resolveKnowledgeBasePromptContext(
     }
     val manualEntryIds = resolvedByEntryId.keys.toSet()
     val excludedEntryIds = normalizeExcludedEntryIds(selection, manualEntryIds)
+    val excludedSpaceIds = normalizeExcludedSpaceIds(selection)
     val pinnedReferences = resolvePinnedKnowledgeBaseReferences(
         selection = selection,
         manualEntryIds = manualEntryIds,
@@ -70,6 +74,7 @@ fun resolveKnowledgeBasePromptContext(
         query = resolvedUserInput,
         autoCandidateLimit = autoCandidateLimit,
         excludedEntryIds = manualEntryIds + pinnedReferences.map { it.entry.id } + excludedEntryIds,
+        excludedSpaceIds = excludedSpaceIds,
     )
     if (resolvedByEntryId.isEmpty() && pinnedReferences.isEmpty() && autoReferences.isEmpty()) {
         return KnowledgeBasePromptContext(resolvedUserInput = resolvedUserInput)
@@ -93,6 +98,7 @@ fun resolveKnowledgeBasePromptContext(
             pinnedReferenceCount = pinnedReferences.size,
             autoCandidateCount = autoReferences.size,
             excludedReferenceCount = excludedEntryIds.size,
+            excludedSpaceCount = excludedSpaceIds.size,
         ),
     )
 }
@@ -137,6 +143,15 @@ private fun normalizeExcludedEntryIds(
         .toSet()
 }
 
+private fun normalizeExcludedSpaceIds(
+    selection: KnowledgeBaseContextSelection,
+): Set<String> {
+    return selection.excludedSpaceIds.asSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .toSet()
+}
+
 private fun resolvePinnedKnowledgeBaseReferences(
     selection: KnowledgeBaseContextSelection,
     manualEntryIds: Set<String>,
@@ -169,6 +184,7 @@ private fun resolveAutoKnowledgeBaseReferences(
     query: String,
     autoCandidateLimit: Int,
     excludedEntryIds: Set<String>,
+    excludedSpaceIds: Set<String>,
 ): List<AutoKnowledgeBaseReference> {
     return knowledgeBaseManager.searchEntriesForContext(
         userId = userId,
@@ -176,6 +192,7 @@ private fun resolveAutoKnowledgeBaseReferences(
         preferredGroupId = preferredGroupId,
         limit = autoCandidateLimit,
         excludedEntryIds = excludedEntryIds,
+        excludedSpaceIds = excludedSpaceIds,
     ).map { hit ->
         AutoKnowledgeBaseReference(
             entry = hit.entry,
@@ -197,6 +214,8 @@ private fun buildKnowledgeBaseReferenceSeeds(
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
             origin = "manual",
             reason = "用户手动引用",
+            spaceId = knowledgeBaseSpaceId(resolved.topic),
+            spaceLabel = knowledgeBaseSpaceLabel(resolved.topic),
         )
     } + pinnedReferences.map { resolved ->
         DirectModelAgent.AvailableReferenceSeed(
@@ -205,6 +224,8 @@ private fun buildKnowledgeBaseReferenceSeeds(
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
             origin = "pin",
             reason = "用户固定到本轮上下文",
+            spaceId = knowledgeBaseSpaceId(resolved.topic),
+            spaceLabel = knowledgeBaseSpaceLabel(resolved.topic),
         )
     } + autoReferences.map { resolved ->
         DirectModelAgent.AvailableReferenceSeed(
@@ -213,12 +234,31 @@ private fun buildKnowledgeBaseReferenceSeeds(
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
             origin = "auto",
             reason = resolved.reasons.joinToString("、"),
+            spaceId = knowledgeBaseSpaceId(resolved.topic),
+            spaceLabel = knowledgeBaseSpaceLabel(resolved.topic),
         )
     }
 }
 
 internal fun buildKnowledgeBasePath(topicId: String, entryId: String): String =
     "kb://$topicId/$entryId"
+
+private fun knowledgeBaseSpaceId(topic: KBTopic): String {
+    return when (topic.spaceType) {
+        KnowledgeSpaceType.TEAM -> topic.groupId?.takeIf { it.isNotBlank() } ?: PERSONAL_KB_SPACE_ID
+        KnowledgeSpaceType.PERSONAL -> PERSONAL_KB_SPACE_ID
+    }
+}
+
+private fun knowledgeBaseSpaceLabel(topic: KBTopic): String {
+    return when (topic.spaceType) {
+        KnowledgeSpaceType.PERSONAL -> "个人空间"
+        KnowledgeSpaceType.TEAM -> {
+            val groupName = topic.groupId?.let { GroupRepository.findGroupById(it)?.name }
+            groupName?.takeIf { it.isNotBlank() } ?: "团队空间"
+        }
+    }
+}
 
 private fun buildKnowledgeBasePromptBlock(
     manualReferences: List<ResolvedKnowledgeBaseReference>,

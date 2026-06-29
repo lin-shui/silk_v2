@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageCategory
+import com.silk.shared.models.MessageType
 import org.jetbrains.compose.web.css.AlignItems
 import org.jetbrains.compose.web.css.Color
 import org.jetbrains.compose.web.css.DisplayStyle
@@ -32,7 +33,9 @@ internal fun isKnowledgeBaseContextStatusMessage(message: Message): Boolean {
 }
 
 internal fun hasKnowledgeBaseContextSelection(selection: KnowledgeBaseContextSelection): Boolean {
-    return selection.pinnedEntryIds.isNotEmpty() || selection.excludedEntryIds.isNotEmpty()
+    return selection.pinnedEntryIds.isNotEmpty() ||
+        selection.excludedEntryIds.isNotEmpty() ||
+        selection.excludedSpaceIds.isNotEmpty()
 }
 
 internal fun togglePinnedKnowledgeBaseEntry(
@@ -50,6 +53,7 @@ internal fun togglePinnedKnowledgeBaseEntry(
     return KnowledgeBaseContextSelection(
         pinnedEntryIds = pinned.distinct(),
         excludedEntryIds = excluded.distinct(),
+        excludedSpaceIds = selection.excludedSpaceIds.distinct(),
     )
 }
 
@@ -68,11 +72,52 @@ internal fun toggleExcludedKnowledgeBaseEntry(
     return KnowledgeBaseContextSelection(
         pinnedEntryIds = pinned.distinct(),
         excludedEntryIds = excluded.distinct(),
+        excludedSpaceIds = selection.excludedSpaceIds.distinct(),
+    )
+}
+
+internal fun toggleExcludedKnowledgeBaseSpace(
+    selection: KnowledgeBaseContextSelection,
+    spaceId: String,
+): KnowledgeBaseContextSelection {
+    val excludedSpaces = selection.excludedSpaceIds.toMutableList()
+    if (spaceId in excludedSpaces) {
+        excludedSpaces.removeAll { it == spaceId }
+    } else {
+        excludedSpaces += spaceId
+    }
+    return KnowledgeBaseContextSelection(
+        pinnedEntryIds = selection.pinnedEntryIds.distinct(),
+        excludedEntryIds = selection.excludedEntryIds.distinct(),
+        excludedSpaceIds = excludedSpaces.distinct(),
     )
 }
 
 internal fun filterNonKnowledgeBaseContextStatusMessages(messages: List<Message>): List<Message> {
     return messages.filterNot(::isKnowledgeBaseContextStatusMessage)
+}
+
+internal fun latestKnowledgeBaseContextSelection(
+    messages: List<Message>,
+    userId: String,
+): KnowledgeBaseContextSelection? {
+    return messages.asReversed().firstOrNull { message ->
+        message.userId == userId &&
+            message.type == MessageType.TEXT &&
+            message.kbContextSelection != null
+    }?.kbContextSelection
+}
+
+internal fun mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+    restoredSelection: KnowledgeBaseContextSelection?,
+    persistentExcludedSpaceIds: List<String>,
+): KnowledgeBaseContextSelection {
+    val base = restoredSelection ?: KnowledgeBaseContextSelection()
+    return KnowledgeBaseContextSelection(
+        pinnedEntryIds = base.pinnedEntryIds.distinct(),
+        excludedEntryIds = base.excludedEntryIds.distinct(),
+        excludedSpaceIds = (persistentExcludedSpaceIds + base.excludedSpaceIds).distinct(),
+    )
 }
 
 @Composable
@@ -87,6 +132,7 @@ internal fun KnowledgeBaseContextTray(
     if (references.isEmpty()) return
     val pinnedCount = selection.pinnedEntryIds.size
     val excludedCount = selection.excludedEntryIds.size
+    val excludedSpaceCount = selection.excludedSpaceIds.size
 
     Div({
         style {
@@ -122,7 +168,7 @@ internal fun KnowledgeBaseContextTray(
                         marginTop(4.px)
                     }
                 }) { Text(status.content) }
-                if (pinnedCount > 0 || excludedCount > 0) {
+                if (pinnedCount > 0 || excludedCount > 0 || excludedSpaceCount > 0) {
                     Div({
                         style {
                             fontSize(12.px)
@@ -130,7 +176,7 @@ internal fun KnowledgeBaseContextTray(
                             marginTop(4.px)
                         }
                     }) {
-                        Text("下轮偏好：固定 $pinnedCount，排除 $excludedCount")
+                        Text("下轮偏好：固定 $pinnedCount，排除条目 $excludedCount，关闭空间 $excludedSpaceCount")
                     }
                 }
             }
@@ -149,6 +195,8 @@ internal fun KnowledgeBaseContextTray(
                 val entryId = kbLink?.entryId
                 val isPinned = entryId != null && entryId in selection.pinnedEntryIds
                 val isExcluded = entryId != null && entryId in selection.excludedEntryIds
+                val spaceId = ref.spaceId
+                val isSpaceExcluded = spaceId != null && spaceId in selection.excludedSpaceIds
                 Button({
                     style {
                         backgroundColor(Color("#FFFFFF"))
@@ -238,6 +286,18 @@ internal fun KnowledgeBaseContextTray(
                                     accent = if (isExcluded) SilkColors.info else SilkColors.textSecondary,
                                 ) {
                                     onSelectionChange(toggleExcludedKnowledgeBaseEntry(selection, resolvedEntryId))
+                                }
+                            }
+                            if (spaceId != null) {
+                                ContextTrayActionButton(
+                                    label = if (isSpaceExcluded) {
+                                        "恢复${ref.spaceLabel ?: "此空间"}自动推荐"
+                                    } else {
+                                        "关闭${ref.spaceLabel ?: "此空间"}自动推荐"
+                                    },
+                                    accent = if (isSpaceExcluded) SilkColors.info else SilkColors.warning,
+                                ) {
+                                    onSelectionChange(toggleExcludedKnowledgeBaseSpace(selection, spaceId))
                                 }
                             }
                         }

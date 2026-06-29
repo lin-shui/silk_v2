@@ -46,12 +46,15 @@ data class MessageReference(
     val path: String? = null,
     val origin: String? = null,
     val reason: String? = null,
+    val spaceId: String? = null,
+    val spaceLabel: String? = null,
 )
 
 @Serializable
 data class KnowledgeBaseContextSelection(
     val pinnedEntryIds: List<String> = emptyList(),
     val excludedEntryIds: List<String> = emptyList(),
+    val excludedSpaceIds: List<String> = emptyList(),
 )
 
 @Serializable
