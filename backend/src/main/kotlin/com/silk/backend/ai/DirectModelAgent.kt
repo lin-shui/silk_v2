@@ -28,6 +28,8 @@ class DirectModelAgent(
         val path: String? = null,
         val origin: String? = null,
         val reason: String? = null,
+        val spaceId: String? = null,
+        val spaceLabel: String? = null,
     )
 
     private val logger = LoggerFactory.getLogger(DirectModelAgent::class.java)

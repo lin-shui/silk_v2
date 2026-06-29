@@ -95,10 +95,16 @@ internal fun canSubmitKnowledgeCapture(
         content.isNotBlank()
 }
 
+internal fun messageKnowledgeCaptureSourceType(
+    message: com.silk.shared.models.Message,
+    defaultSourceType: KBSourceType,
+): KBSourceType = if (com.silk.shared.models.isAgentUserId(message.userId)) KBSourceType.AI_RESPONSE else defaultSourceType
+
 private fun knowledgeCaptureSourceLabel(sourceType: KBSourceType): String {
     return when (sourceType) {
         KBSourceType.WORKFLOW -> "工作流沉淀"
         KBSourceType.CHAT -> "聊天沉淀"
+        KBSourceType.AI_RESPONSE -> "AI 回答"
         KBSourceType.MANUAL -> "手动创建"
         KBSourceType.MEETING -> "会议沉淀"
         KBSourceType.FILE -> "文件导入"
@@ -175,6 +181,7 @@ internal fun KnowledgeBaseCaptureDialog(
             }) {
                 Text(
                     when (draft.sourceType) {
+                        KBSourceType.AI_RESPONSE -> "当前 AI 回答将以 candidate 进入知识库，后续可在 KB 页面整理后发布。"
                         KBSourceType.WORKFLOW -> "当前工作流消息将以 candidate 进入知识库，后续可在 KB 页面整理后发布。"
                         else -> "当前聊天消息将以 candidate 进入知识库，后续可在 KB 页面整理后发布。"
                     }

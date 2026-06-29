@@ -38,6 +38,8 @@ class KnowledgeBaseReferenceResolverTest {
         assertEquals("kb://${topic.id}/${entry.id}", context.availableReferences.single().path)
         assertEquals("manual", context.availableReferences.single().origin)
         assertEquals("用户手动引用", context.availableReferences.single().reason)
+        assertEquals(PERSONAL_KB_SPACE_ID, context.availableReferences.single().spaceId)
+        assertEquals("个人空间", context.availableReferences.single().spaceLabel)
         assertContains(context.promptBlock.orEmpty(), "[available:1] ${topic.name} / ${entry.title}")
         assertContains(context.promptBlock.orEmpty(), "知识库引用格式为 [[kb:id|标题]]")
     }
@@ -132,6 +134,8 @@ class KnowledgeBaseReferenceResolverTest {
             assertEquals("auto", context.availableReferences[1].origin)
             assertEquals("用户手动引用", context.availableReferences[0].reason)
             assertTrue(context.availableReferences[1].reason.orEmpty().contains("当前团队空间"))
+            assertEquals(PERSONAL_KB_SPACE_ID, context.availableReferences[0].spaceId)
+            assertEquals(group.id, context.availableReferences[1].spaceId)
             assertEquals(1, context.diagnostics.manualReferenceCount)
             assertEquals(1, context.diagnostics.autoCandidateCount)
             assertContains(context.promptBlock.orEmpty(), "### 用户显式引用")
@@ -196,6 +200,59 @@ class KnowledgeBaseReferenceResolverTest {
             assertEquals("kb://${teamTopic.id}/${pinnedEntry.id}", context.availableReferences.single().path)
             assertContains(context.promptBlock.orEmpty(), "### 用户固定上下文")
             assertTrue(!context.promptBlock.orEmpty().contains(excludedEntry.title))
+        }
+    }
+
+    @Test
+    fun `resolver skips auto candidates from excluded spaces but keeps explicit pins`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val group = assertNotNull(GroupRepository.createGroup("KB Space Toggle Team", hostId = "host"))
+            assertTrue(GroupRepository.addUserToGroup(group.id, "owner"))
+            assertTrue(GroupRepository.addUserToGroup(group.id, "member"))
+
+            val teamTopic = manager.createTopic(
+                name = "Shared Space",
+                project = "workflow",
+                userId = "owner",
+                spaceType = KnowledgeSpaceType.TEAM,
+                groupId = group.id,
+            )
+            val pinnedEntry = assertNotNull(
+                manager.createEntry(
+                    topicId = teamTopic.id,
+                    title = "固定空间文档",
+                    content = "固定文档仍应出现。",
+                    tags = listOf("workflow"),
+                    userId = "owner",
+                )
+            )
+            manager.createEntry(
+                topicId = teamTopic.id,
+                title = "自动空间文档",
+                content = "这条自动召回应被空间级排除。",
+                tags = listOf("workflow"),
+                userId = "owner",
+            )
+
+            val context = resolveKnowledgeBasePromptContext(
+                rawInput = "请总结 workflow 资料",
+                userId = "member",
+                knowledgeBaseManager = manager,
+                preferredGroupId = group.id,
+                selection = KnowledgeBaseContextSelection(
+                    pinnedEntryIds = listOf(pinnedEntry.id),
+                    excludedSpaceIds = listOf(group.id),
+                ),
+            )
+
+            assertEquals(1, context.diagnostics.pinnedReferenceCount)
+            assertEquals(1, context.diagnostics.excludedSpaceCount)
+            assertEquals(1, context.availableReferences.size)
+            assertEquals("pin", context.availableReferences.single().origin)
+            assertEquals(group.id, context.availableReferences.single().spaceId)
+            assertContains(context.promptBlock.orEmpty(), "### 用户固定上下文")
+            assertTrue(!context.promptBlock.orEmpty().contains("自动空间文档"))
         }
     }
 }

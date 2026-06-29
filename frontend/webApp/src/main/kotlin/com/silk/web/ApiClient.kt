@@ -213,6 +213,7 @@ enum class KBEntryStatus {
 enum class KBSourceType {
     MANUAL,
     CHAT,
+    AI_RESPONSE,
     WORKFLOW,
     MEETING,
     FILE,
@@ -265,6 +266,13 @@ data class ExportKBResponse(
     val markdown: String = "",
     val vaultPath: String = "",
     val fileName: String = ""
+)
+
+@Serializable
+data class KBContextPreferences(
+    val userId: String,
+    val excludedSpaceIds: List<String> = emptyList(),
+    val updatedAt: Long = 0L,
 )
 
 /** 创建工作流的结果。Ok 携带后端落库后的 workflow；Err 携带可展示给用户的错误消息。 */
@@ -967,6 +975,38 @@ object ApiClient {
     }
 
     // ==================== Knowledge Base API ====================
+
+    suspend fun getKBContextPreferences(userId: String): KBContextPreferences {
+        return recoverApiCall(
+            logMessage = "获取知识库上下文偏好失败:",
+            fallback = { KBContextPreferences(userId = userId) },
+        ) {
+            val response = get("/api/kb/context-preferences?userId=$userId")
+            jsonParser.decodeFromString(response)
+        }
+    }
+
+    suspend fun updateKBContextPreferences(
+        userId: String,
+        excludedSpaceIds: List<String>,
+    ): KBContextPreferences {
+        return recoverApiCall(
+            logMessage = "更新知识库上下文偏好失败:",
+            fallback = { KBContextPreferences(userId = userId, excludedSpaceIds = excludedSpaceIds.distinct()) },
+        ) {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put(
+                    "excludedSpaceIds",
+                    kotlinx.serialization.json.JsonArray(
+                        excludedSpaceIds.distinct().map { kotlinx.serialization.json.JsonPrimitive(it) }
+                    )
+                )
+            }.toString()
+            val response = put("/api/kb/context-preferences", body)
+            jsonParser.decodeFromString(response)
+        }
+    }
 
     suspend fun getKBTopics(userId: String): List<KBTopicItem> {
         return recoverApiCall(

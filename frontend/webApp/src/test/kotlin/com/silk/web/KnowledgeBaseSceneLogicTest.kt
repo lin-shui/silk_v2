@@ -4,6 +4,8 @@ import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageCategory
 import com.silk.shared.models.MessageReference
+import com.silk.shared.models.MessageType
+import com.silk.shared.models.SILK_AGENT_USER_ID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -181,18 +183,172 @@ class KnowledgeBaseSceneLogicTest {
     }
 
     @Test
+    fun captureSourceTypeTreatsAgentMessagesAsAiResponses() {
+        val aiMessage = Message(
+            id = "msg-ai",
+            userId = SILK_AGENT_USER_ID,
+            userName = "Silk",
+            content = "这是 AI 回答",
+            timestamp = 1L,
+        )
+        val userMessage = aiMessage.copy(id = "msg-user", userId = "user-1", userName = "Alice")
+
+        assertEquals(KBSourceType.AI_RESPONSE, messageKnowledgeCaptureSourceType(aiMessage, KBSourceType.CHAT))
+        assertEquals(KBSourceType.AI_RESPONSE, messageKnowledgeCaptureSourceType(aiMessage, KBSourceType.WORKFLOW))
+        assertEquals(KBSourceType.CHAT, messageKnowledgeCaptureSourceType(userMessage, KBSourceType.CHAT))
+        assertEquals(KBSourceType.WORKFLOW, messageKnowledgeCaptureSourceType(userMessage, KBSourceType.WORKFLOW))
+    }
+
+    @Test
+    fun provenanceHelpersExposeReadableSourceLabelsAndDetails() {
+        val groups = listOf(
+            Group(id = "group-1", name = "架构组", invitationCode = "", hostId = "host"),
+        )
+        val entry = KBEntryItem(
+            id = "entry-1",
+            title = "AI 总结",
+            source = KBEntrySource(
+                sourceType = KBSourceType.AI_RESPONSE,
+                sourceGroupId = "group-1",
+                workflowId = "wf-7",
+                messageIds = listOf("msg-1", "msg-2", "msg-3", "msg-4"),
+                confidence = 0.83,
+            ),
+            createdBy = "owner",
+            updatedBy = "editor",
+        )
+
+        assertEquals("AI 回答", knowledgeSourceLabel(KBSourceType.AI_RESPONSE))
+        assertEquals("AI", knowledgeSourceShortLabel(KBSourceType.AI_RESPONSE))
+        assertEquals(
+            listOf(
+                "来源群组" to "架构组 (group-1)",
+                "工作流" to "wf-7",
+                "消息" to "msg-1, msg-2, msg-3 等 4 条",
+                "置信度" to "83%",
+                "创建人" to "owner",
+                "更新人" to "editor",
+            ),
+            knowledgeSourceDetails(entry, groups),
+        )
+    }
+
+    @Test
     fun knowledgeContextSelectionTogglesStayMutuallyExclusive() {
-        val pinned = togglePinnedKnowledgeBaseEntry(KnowledgeBaseContextSelection(), "entry-1")
+        val pinned = togglePinnedKnowledgeBaseEntry(
+            KnowledgeBaseContextSelection(excludedSpaceIds = listOf("group-1")),
+            "entry-1",
+        )
         assertEquals(listOf("entry-1"), pinned.pinnedEntryIds)
         assertTrue(pinned.excludedEntryIds.isEmpty())
+        assertEquals(listOf("group-1"), pinned.excludedSpaceIds)
         assertTrue(hasKnowledgeBaseContextSelection(pinned))
 
         val excluded = toggleExcludedKnowledgeBaseEntry(pinned, "entry-1")
         assertTrue(excluded.pinnedEntryIds.isEmpty())
         assertEquals(listOf("entry-1"), excluded.excludedEntryIds)
+        assertEquals(listOf("group-1"), excluded.excludedSpaceIds)
 
         val cleared = toggleExcludedKnowledgeBaseEntry(excluded, "entry-1")
-        assertFalse(hasKnowledgeBaseContextSelection(cleared))
+        assertTrue(hasKnowledgeBaseContextSelection(cleared))
+    }
+
+    @Test
+    fun knowledgeContextSelectionCanExcludeWholeSpaceForNextTurn() {
+        val excluded = toggleExcludedKnowledgeBaseSpace(KnowledgeBaseContextSelection(), "group-1")
+
+        assertEquals(listOf("group-1"), excluded.excludedSpaceIds)
+        assertTrue(hasKnowledgeBaseContextSelection(excluded))
+
+        val restored = toggleExcludedKnowledgeBaseSpace(excluded, "group-1")
+        assertEquals(KnowledgeBaseContextSelection(), restored)
+    }
+
+    @Test
+    fun latestKnowledgeBaseContextSelectionRestoresLastExplicitUserPreference() {
+        val messages = listOf(
+            Message(
+                id = "m1",
+                userId = "user-1",
+                userName = "Alice",
+                content = "first",
+                timestamp = 1L,
+                kbContextSelection = KnowledgeBaseContextSelection(pinnedEntryIds = listOf("entry-1")),
+            ),
+            Message(
+                id = "m2",
+                userId = SILK_AGENT_USER_ID,
+                userName = "Silk",
+                content = "ignored",
+                timestamp = 2L,
+                kbContextSelection = KnowledgeBaseContextSelection(excludedEntryIds = listOf("ignored")),
+            ),
+            Message(
+                id = "m3",
+                userId = "user-1",
+                userName = "Alice",
+                content = "second",
+                timestamp = 3L,
+                kbContextSelection = KnowledgeBaseContextSelection(excludedEntryIds = listOf("entry-2")),
+            ),
+        )
+
+        assertEquals(
+            KnowledgeBaseContextSelection(excludedEntryIds = listOf("entry-2")),
+            latestKnowledgeBaseContextSelection(messages, "user-1"),
+        )
+    }
+
+    @Test
+    fun latestKnowledgeBaseContextSelectionKeepsExplicitClearState() {
+        val messages = listOf(
+            Message(
+                id = "m1",
+                userId = "user-1",
+                userName = "Alice",
+                content = "pin",
+                timestamp = 1L,
+                kbContextSelection = KnowledgeBaseContextSelection(pinnedEntryIds = listOf("entry-1")),
+            ),
+            Message(
+                id = "m2",
+                userId = "user-1",
+                userName = "Alice",
+                content = "clear",
+                timestamp = 2L,
+                type = MessageType.TEXT,
+                kbContextSelection = KnowledgeBaseContextSelection(),
+            ),
+        )
+
+        assertEquals(KnowledgeBaseContextSelection(), latestKnowledgeBaseContextSelection(messages, "user-1"))
+    }
+
+    @Test
+    fun persistentExcludedSpacesMergeIntoRestoredKnowledgeContextSelection() {
+        assertEquals(
+            KnowledgeBaseContextSelection(excludedSpaceIds = listOf("group-1")),
+            mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+                restoredSelection = null,
+                persistentExcludedSpaceIds = listOf("group-1"),
+            ),
+        )
+
+        assertEquals(
+            KnowledgeBaseContextSelection(
+                pinnedEntryIds = listOf("entry-1"),
+                excludedEntryIds = listOf("entry-2"),
+                excludedSpaceIds = listOf("group-1", "group-2"),
+            ),
+            mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+                restoredSelection = KnowledgeBaseContextSelection(
+                    pinnedEntryIds = listOf("entry-1"),
+                    excludedEntryIds = listOf("entry-2"),
+                    excludedSpaceIds = listOf("group-2"),
+                ),
+                persistentExcludedSpaceIds = listOf("group-1"),
+            ),
+        )
     }
 
     @Test

@@ -138,6 +138,56 @@ internal fun topicPermissionLabel(topic: KBTopicItem, userId: String, groups: Li
     return if (canWriteKnowledgeTopic(topic, userId, groups)) "可编辑" else "只读"
 }
 
+internal fun knowledgeSourceLabel(sourceType: KBSourceType): String {
+    return when (sourceType) {
+        KBSourceType.MANUAL -> "手动创建"
+        KBSourceType.CHAT -> "聊天沉淀"
+        KBSourceType.AI_RESPONSE -> "AI 回答"
+        KBSourceType.WORKFLOW -> "工作流沉淀"
+        KBSourceType.MEETING -> "会议沉淀"
+        KBSourceType.FILE -> "文件导入"
+        KBSourceType.URL -> "URL 导入"
+    }
+}
+
+internal fun knowledgeSourceShortLabel(sourceType: KBSourceType): String {
+    return when (sourceType) {
+        KBSourceType.MANUAL -> "手动"
+        KBSourceType.CHAT -> "聊天"
+        KBSourceType.AI_RESPONSE -> "AI"
+        KBSourceType.WORKFLOW -> "工作流"
+        KBSourceType.MEETING -> "会议"
+        KBSourceType.FILE -> "文件"
+        KBSourceType.URL -> "URL"
+    }
+}
+
+internal fun knowledgeSourceDetails(entry: KBEntryItem, groups: List<Group>): List<Pair<String, String>> {
+    val details = mutableListOf<Pair<String, String>>()
+    entry.source.sourceGroupId?.takeIf { it.isNotBlank() }?.let { groupId ->
+        val groupName = groups.find { it.id == groupId }?.name
+        details += "来源群组" to if (groupName.isNullOrBlank()) groupId else "$groupName ($groupId)"
+    }
+    entry.source.workflowId?.takeIf { it.isNotBlank() }?.let { workflowId ->
+        details += "工作流" to workflowId
+    }
+    if (entry.source.messageIds.isNotEmpty()) {
+        val preview = entry.source.messageIds.take(3).joinToString(", ")
+        val messageLabel = if (entry.source.messageIds.size > 3) "$preview 等 ${entry.source.messageIds.size} 条" else preview
+        details += "消息" to messageLabel
+    }
+    entry.source.confidence?.let { confidence ->
+        details += "置信度" to "${(confidence * 100).toInt()}%"
+    }
+    entry.createdBy.takeIf { it.isNotBlank() }?.let { createdBy ->
+        details += "创建人" to createdBy
+    }
+    if (entry.updatedBy.isNotBlank() && entry.updatedBy != entry.createdBy) {
+        details += "更新人" to entry.updatedBy
+    }
+    return details
+}
+
 internal fun filterKnowledgeEntries(entries: List<KBEntryItem>, filter: KnowledgeEntryFilter): List<KBEntryItem> {
     return when (filter) {
         KnowledgeEntryFilter.ALL -> entries
@@ -637,15 +687,7 @@ private fun EntryRow(
             }
         }) {
             KnowledgeBadge(entry.status.name.lowercase(), SilkColors.primaryDark)
-            val sourceLabel = when (entry.source.sourceType) {
-                KBSourceType.MANUAL -> "手动"
-                KBSourceType.CHAT -> "聊天"
-                KBSourceType.WORKFLOW -> "工作流"
-                KBSourceType.MEETING -> "会议"
-                KBSourceType.FILE -> "文件"
-                KBSourceType.URL -> "URL"
-            }
-            KnowledgeBadge(sourceLabel, SilkColors.primary)
+            KnowledgeBadge(knowledgeSourceShortLabel(entry.source.sourceType), SilkColors.primary)
         }
     }
 }
@@ -662,6 +704,7 @@ private fun KnowledgeEditorPane(
     canManageTopic: Boolean,
     spaceLabel: String?,
     permissionLabel: String?,
+    groups: List<Group>,
     onContentChange: (String) -> Unit,
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onManageTopic: () -> Unit,
@@ -704,6 +747,7 @@ private fun KnowledgeEditorPane(
                 entry = selectedEntry,
                 spaceLabel = spaceLabel,
                 permissionLabel = permissionLabel,
+                groups = groups,
             )
             KnowledgeMarkdownWorkspace(
                 content = editorContent,
@@ -979,6 +1023,7 @@ private fun KnowledgeEntryMetaBar(
     entry: KBEntryItem,
     spaceLabel: String?,
     permissionLabel: String?,
+    groups: List<Group>,
 ) {
     Div({
         style {
@@ -986,27 +1031,62 @@ private fun KnowledgeEntryMetaBar(
             property("border-bottom", "1px solid ${SilkColors.border}")
             display(DisplayStyle.Flex)
             property("gap", "8px")
-            property("flex-wrap", "wrap")
+            flexDirection(FlexDirection.Column)
             backgroundColor(Color(SilkColors.surface))
         }
     }) {
-        spaceLabel?.let { KnowledgeBadge(it, SilkColors.info) }
-        permissionLabel?.let {
-            KnowledgeBadge(it, if (it == "可编辑") SilkColors.success else SilkColors.warning)
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                property("gap", "8px")
+                property("flex-wrap", "wrap")
+            }
+        }) {
+            spaceLabel?.let { KnowledgeBadge(it, SilkColors.info) }
+            permissionLabel?.let {
+                KnowledgeBadge(it, if (it == "可编辑") SilkColors.success else SilkColors.warning)
+            }
+            KnowledgeBadge(entry.status.name.lowercase(), SilkColors.primaryDark)
+            topic?.project?.takeIf { it.isNotBlank() }?.let { project ->
+                KnowledgeBadge(project, SilkColors.textSecondary)
+            }
+            KnowledgeBadge(knowledgeSourceLabel(entry.source.sourceType), SilkColors.primary)
         }
-        KnowledgeBadge(entry.status.name.lowercase(), SilkColors.primaryDark)
-        topic?.project?.takeIf { it.isNotBlank() }?.let { project ->
-            KnowledgeBadge(project, SilkColors.textSecondary)
+        val sourceDetails = knowledgeSourceDetails(entry, groups)
+        if (sourceDetails.isNotEmpty()) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    property("gap", "8px")
+                    property("flex-wrap", "wrap")
+                }
+            }) {
+                sourceDetails.forEach { (label, value) ->
+                    Div({
+                        style {
+                            backgroundColor(Color("#FFFFFF"))
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            borderRadius(8.px)
+                            padding(6.px, 10.px)
+                            property("display", "inline-flex")
+                            property("gap", "6px")
+                            alignItems(AlignItems.Center)
+                            fontSize(12.px)
+                        }
+                    }) {
+                        Span({
+                            style {
+                                color(Color(SilkColors.textSecondary))
+                                fontWeight("600")
+                            }
+                        }) { Text("$label:") }
+                        Span({
+                            style { color(Color(SilkColors.textPrimary)) }
+                        }) { Text(value) }
+                    }
+                }
+            }
         }
-        val sourceLabel = when (entry.source.sourceType) {
-            KBSourceType.MANUAL -> "手动创建"
-            KBSourceType.CHAT -> "聊天沉淀"
-            KBSourceType.WORKFLOW -> "工作流沉淀"
-            KBSourceType.MEETING -> "会议沉淀"
-            KBSourceType.FILE -> "文件导入"
-            KBSourceType.URL -> "URL 导入"
-        }
-        KnowledgeBadge(sourceLabel, SilkColors.primary)
     }
 }
 
@@ -2059,6 +2139,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             canManageTopic = canManageSelectedTopic,
             spaceLabel = selectedTopicSpaceLabel,
             permissionLabel = selectedTopicPermissionLabel,
+            groups = userGroups,
             onContentChange = {
                 editorContent = it
                 if (saveMessage.isNotEmpty()) {

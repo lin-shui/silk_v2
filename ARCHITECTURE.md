@@ -18,7 +18,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
    - 消息持久化
    - 未读计数
    - URL/PDF 下载提取
-   - 知识库上下文构建（手动 `[[kb:entryId|标题]]` 引用优先，支持消息级固定/排除选择，再叠加当前可访问 KB 的自动 lexical 候选 → 本轮 AI 上下文 + `[available:N]`）
+  - 知识库上下文构建（手动 `[[kb:entryId|标题]]` 引用优先，支持消息级固定/排除条目与空间级自动召回开关，再叠加当前可访问 KB 的自动 lexical 候选 → 本轮 AI 上下文 + `[available:N]`）
    - Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
    - Silk AI / `DirectModelAgent` 响应
 5. Claude Code / Codex 通过 ACP 协议（JSON-RPC 2.0 over WebSocket）连接 `/agent-bridge` 端点；外部 `cc_bridge/acp_adapter.py` 和 `codex_bridge/codex_adapter.py` adapter 跑各自 CLI 并流式回传。
@@ -36,7 +36,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - 用户 Todo：`chat_history/user_todos/<user>.json`
 - Workflow：`~/.silk-data/workflows/workflow_store.json`（可用 `SILK_WORKFLOW_DIR` 或 `-Dsilk.workflowDir=...` 覆盖）
 - TrustedDir：`~/.silk-data/workflows/trusted_dirs.json`（与 Workflow 目录同源）
-- Knowledge Base：`knowledge_base/kb_store.json`
+- Knowledge Base：`knowledge_base/kb_store.json`、`knowledge_base/context_preferences.json`
 - Web 静态产物/APK/HAP 分发：`backend/static/`
 
 ## Code Surfaces By Responsibility

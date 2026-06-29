@@ -29,6 +29,7 @@ enum class KBEntryStatus {
 enum class KBSourceType {
     MANUAL,
     CHAT,
+    AI_RESPONSE,
     WORKFLOW,
     MEETING,
     FILE,
