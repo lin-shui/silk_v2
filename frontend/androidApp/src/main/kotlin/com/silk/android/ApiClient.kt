@@ -770,11 +770,23 @@ object ApiClient {
             jsonParser.decodeFromString(response)
     }
 
-    suspend fun createKBTopic(name: String, project: String, userId: String): KBTopicItem? = recoverApiCall(
+    suspend fun createKBTopic(
+        name: String,
+        project: String,
+        userId: String,
+        spaceType: KnowledgeSpaceType = KnowledgeSpaceType.PERSONAL,
+        groupId: String? = null,
+    ): KBTopicItem? = recoverApiCall(
         logMessage = "创建知识库主题失败:",
         fallback = { null },
     ) {
-            val body = """{"userId":"$userId","name":"$name","project":"$project"}"""
+            val body = buildJsonObject {
+                put("userId", JsonPrimitive(userId))
+                put("name", JsonPrimitive(name))
+                put("project", JsonPrimitive(project))
+                put("spaceType", JsonPrimitive(spaceType.name))
+                groupId?.let { put("groupId", JsonPrimitive(it)) }
+            }.toString()
             val response = post("/api/kb/topics", body)
             jsonParser.decodeFromString(response)
     }
@@ -797,18 +809,26 @@ object ApiClient {
             jsonParser.decodeFromString(response)
     }
 
-    suspend fun updateKBEntry(entryId: String, title: String?, content: String?, tags: List<String>?, userId: String): KBEntryItem? = recoverApiCall(
+    suspend fun updateKBEntry(
+        entryId: String,
+        title: String?,
+        content: String?,
+        tags: List<String>?,
+        userId: String,
+        status: KBEntryStatus? = null,
+    ): KBEntryItem? = recoverApiCall(
         logMessage = "更新知识库条目失败:",
         fallback = { null },
     ) {
-            val fields = mutableListOf("\"userId\":\"$userId\"")
-            if (title != null) fields.add("\"title\":\"${title.replace("\"", "\\\"")}\"")
-            if (content != null) {
-                val escaped = content.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
-                fields.add("\"content\":\"$escaped\"")
-            }
-            if (tags != null) fields.add("\"tags\":[${tags.joinToString(",") { "\"$it\"" }}]")
-            val body = "{${fields.joinToString(",")}}"
+            val body = buildJsonObject {
+                put("userId", JsonPrimitive(userId))
+                title?.let { put("title", JsonPrimitive(it)) }
+                content?.let { put("content", JsonPrimitive(it)) }
+                tags?.let { value ->
+                    put("tags", jsonParser.parseToJsonElement(jsonParser.encodeToString(value)))
+                }
+                status?.let { put("status", JsonPrimitive(it.name)) }
+            }.toString()
             val response = put("/api/kb/entries/$entryId", body)
             jsonParser.decodeFromString(response)
     }

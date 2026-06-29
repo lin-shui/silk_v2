@@ -133,6 +133,11 @@ export interface KBTopicApiItem {
   name: string;
   project: string;
   ownerId: string;
+  spaceType?: 'PERSONAL' | 'TEAM';
+  groupId?: string;
+  accessPolicy?: KBAccessPolicy;
+  createdBy?: string;
+  updatedBy?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -144,8 +149,28 @@ export interface KBEntryApiItem {
   content: string;
   tags: string[];
   ownerId: string;
+  status?: 'CANDIDATE' | 'PUBLISHED' | 'ARCHIVED' | 'DELETED';
+  source?: KBEntrySource;
+  createdBy?: string;
+  updatedBy?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface KBAccessPolicy {
+  readUserIds?: string[];
+  writeUserIds?: string[];
+  manageUserIds?: string[];
+  writeLocked?: boolean;
+  teamMembersCanWrite?: boolean;
+}
+
+export interface KBEntrySource {
+  sourceType?: 'MANUAL' | 'CHAT' | 'AI_RESPONSE' | 'WORKFLOW' | 'MEETING' | 'FILE' | 'URL';
+  sourceGroupId?: string;
+  workflowId?: string;
+  messageIds?: string[];
+  confidence?: number;
 }
 
 // ==================== CC/Bridge workflow interfaces ====================
@@ -1440,9 +1465,15 @@ export class ApiClient {
     } catch (_) { return []; }
   }
 
-  async createKBTopic(name: string, project: string, userId: string): Promise<KBTopicApiItem | undefined> {
+  async createKBTopic(
+    name: string,
+    project: string,
+    userId: string,
+    spaceType: 'PERSONAL' | 'TEAM' = 'PERSONAL',
+    groupId?: string
+  ): Promise<KBTopicApiItem | undefined> {
     try {
-      const body = JSON.stringify({ userId, name, project });
+      const body = JSON.stringify({ userId, name, project, spaceType, groupId });
       const result = await this.postRaw('/api/kb/topics', body);
       return JSON.parse(result) as KBTopicApiItem;
     } catch (_) { return undefined; }
@@ -1461,21 +1492,16 @@ export class ApiClient {
     return JSON.parse(result) as KBEntryApiItem;
   }
 
-  async updateKBEntry(entryId: string, title: string | undefined, content: string | undefined, tags: string[] | undefined, userId: string): Promise<KBEntryApiItem | undefined> {
+  async updateKBEntry(
+    entryId: string,
+    title: string | undefined,
+    content: string | undefined,
+    tags: string[] | undefined,
+    userId: string,
+    status?: 'CANDIDATE' | 'PUBLISHED' | 'ARCHIVED' | 'DELETED'
+  ): Promise<KBEntryApiItem | undefined> {
     try {
-      const parts: string[] = [`"userId":"${userId}"`];
-      if (title !== undefined) {
-        parts.push(`"title":"${title.replace(/"/g, '\\"')}"`);
-      }
-      if (content !== undefined) {
-        const escaped = content.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-        parts.push(`"content":"${escaped}"`);
-      }
-      if (tags !== undefined) {
-        const tagsJson = tags.map((t: string) => `"${t}"`).join(',');
-        parts.push(`"tags":[${tagsJson}]`);
-      }
-      const body = `{${parts.join(',')}}`;
+      const body = JSON.stringify({ userId, title, content, tags, status });
       const result = await this.putRaw(`/api/kb/entries/${entryId}`, body);
       return JSON.parse(result) as KBEntryApiItem;
     } catch (_) { return undefined; }
