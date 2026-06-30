@@ -3,10 +3,11 @@
  * 用于在聊天界面显示单条消息
  * 严格对标 Android 端 ChatScreen.kt 的 MessageItem 逻辑
  */
-import { Message, MessageType, MessageCategory, Reference, isAgentUserId } from '../models/Message';
+import { Message, MessageType, MessageCategory, Reference, ContentBlock, isAgentUserId } from '../models/Message';
 import { Theme, SilkColors } from '../common/Theme';
 import { MarkdownLite } from './MarkdownLite';
 import { ReferenceList } from './ReferenceList';
+import { ThinkingPanel } from './ThinkingPanel';
 import { MetaServiceIntent, LaunchResult } from '../models/MetaServiceDef';
 import { MetaServiceLauncher } from '../common/MetaServiceLauncher';
 import { MetaServiceConfig } from '../common/MetaServiceConfig';
@@ -32,12 +33,18 @@ export struct MessageBubble {
   onRetry?: (message: Message) => void;
   /** 长文本/转发全文从展开收起到折叠后，由列表滚回本条，避免高度突变导致视口跑偏 */
   onLongContentCollapsed?: () => void;
+  /** 长文本展开后滚动到本条头部 */
+  onLongContentExpanded?: () => void;
   @Prop suggestedAction: MetaServiceIntent | null = null;
   @Prop isLastMessage: boolean = false;
   @State private isAIExpanded: boolean = false;
   @State private isForwardExpanded: boolean = false;
   @State private metaParamPickup: string = '';
   @State private metaParamDestination: string = '';
+
+  aboutToAppear() {
+    this.isAIExpanded = this.isLastMessage;
+  }
 
   private notifyLongContentCollapsed(): void {
     if (this.onLongContentCollapsed) {
@@ -331,6 +338,8 @@ export struct MessageBubble {
                 this.isAIExpanded = !this.isAIExpanded;
                 if (wasExpanded) {
                   this.notifyLongContentCollapsed();
+                } else if (this.onLongContentExpanded) {
+                  this.onLongContentExpanded();
                 }
               })
           }
@@ -386,64 +395,293 @@ export struct MessageBubble {
 
         Blank().height(10)
 
-        if (!this.isLongAIContent() || this.isLastMessage) {
-          MarkdownLite({
-            content: this.getSafeAIContent()
-          })
-          ReferenceList({
-            references: this.message.references ? this.message.references : []
-          })
-        } else if (!this.isAIExpanded) {
-          Column() {
-            Text(this.getAIPreview())
-              .fontSize(14)
-              .fontColor(Theme.colors.textPrimary)
-              .maxLines(8)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%')
+        // ── 优先使用结构化 contentBlocks 渲染（与 Web/Android 一致）──
+        if (this.message.contentBlocks && this.message.contentBlocks.length > 0) {
+          // 思考过程（带计时器）
+          ForEach(this.message.contentBlocks.filter((b: ContentBlock) => b.type === 'thinking'),
+            (block: ContentBlock) => {
+              ThinkingPanel({ thinking: block.content, isComplete: block.isComplete })
+            })
 
-            Row() {
-              Text('查看全文')
-                .fontSize(13)
-                .fontColor(SilkColors.primary)
-                .fontWeight(FontWeight.Medium)
-              Text('  ▼')
-                .fontSize(12)
-                .fontColor(SilkColors.primary)
-            }
-            .margin({ top: 10 })
-            .width('100%')
-            .justifyContent(FlexAlign.Center)
-            .padding({ top: 6, bottom: 6 })
-            .onClick(() => {
-              this.isAIExpanded = true;
+          // 工具调用
+          ForEach(this.message.contentBlocks.filter((b: ContentBlock) => b.type === 'tool_use'),
+            (block: ContentBlock) => {
+              Column() {
+                Row() {
+                  Text('🔧 ' + (block.toolName ? block.toolName : '工具调用'))
+                    .fontSize(12)
+                    .fontColor('#666666')
+                    .fontWeight(FontWeight.Medium)
+                }
+                .width('100%')
+                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                .backgroundColor('#F5F5F5')
+                .borderRadius(4)
+                .margin({ bottom: 4 })
+
+                Text(block.content)
+                  .fontSize(11)
+                  .fontColor('#555555')
+                  .maxLines(20)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+              }
+              .width('100%')
+              .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+              .backgroundColor('#FAFAFA')
+              .borderRadius(8)
+              .margin({ bottom: 6 })
             })
-          }
-          .width('100%')
+
+          // 正文
+          ForEach(this.message.contentBlocks.filter((b: ContentBlock) => b.type === 'text'),
+            (block: ContentBlock) => {
+              MarkdownLite({ content: block.content })
+            })
         } else {
-          Column() {
-            MarkdownLite({
-              content: this.getSafeAIContent()
-            })
-            ReferenceList({
-              references: this.message.references ? this.message.references : []
-            })
-            Row() {
-              Text('收起')
+          // ── 回退：无 contentBlocks 时解析标记并分区显示（与 Android 端一致）──
+          // 支持两种标记格式：
+          // 1. Claude PTY: <!--THINKING_END--> (单标记) + <!--TOOLS_END-->
+          // 2. Claude Native: <!--THINKING-->...<!--END_THINKING--> + <!--TOOL name="..."-->...<!--END_TOOL-->
+          const ccClean = this.getSafeAIContent()
+            .replace('<!--CC_TURN-->\n', '')
+            .replace('<!--CC_TURN-->', '');
+
+          const hasPairedThinking = ccClean.includes('<!--THINKING-->') || ccClean.includes('<!--END_THINKING-->');
+          const hasPairedTools = ccClean.includes('<!--TOOL ') || ccClean.includes('<!--END_TOOL-->');
+
+          let thinkingText = '';
+          let toolsText = '';
+          let bodyText = '';
+
+          if (hasPairedThinking || hasPairedTools) {
+            // Claude Native format: extract thinking blocks, tool blocks, and body text
+            const thinkingBlocks: string[] = [];
+            const toolBlocks: string[] = [];
+            let remaining = ccClean;
+
+            while (remaining.length > 0) {
+              const ti = remaining.indexOf('<!--THINKING-->');
+              const te = remaining.indexOf('<!--TOOL ');
+              const et = remaining.indexOf('<!--END_THINKING-->');
+              const eto = remaining.indexOf('<!--END_TOOL-->');
+
+              if (ti < 0 && te < 0 && et < 0 && eto < 0) {
+                const trimmed = remaining.trim();
+                if (trimmed.length > 0) {
+                  if (toolBlocks.length > 0 && thinkingBlocks.length === 0) {
+                    toolBlocks[toolBlocks.length - 1] = toolBlocks[toolBlocks.length - 1] + '\n\n' + trimmed;
+                  } else {
+                    bodyText = trimmed;
+                  }
+                }
+                break;
+              }
+
+              const candidates: [number, string][] = [];
+              if (ti >= 0) candidates.push([ti, 'THINKING_OPEN']);
+              if (te >= 0) candidates.push([te, 'TOOL_OPEN']);
+              if (et >= 0) candidates.push([et, 'THINKING_CLOSE']);
+              if (eto >= 0) candidates.push([eto, 'TOOL_CLOSE']);
+              candidates.sort((a, b) => a[0] - b[0]);
+
+              const [pos, marker] = candidates[0];
+
+              if (marker === 'THINKING_OPEN') {
+                const endPos = remaining.indexOf('<!--END_THINKING-->', pos);
+                if (endPos >= 0) {
+                  const content = remaining.substring(pos + '<!--THINKING-->'.length, endPos).trim();
+                  if (content.length > 0) thinkingBlocks.push(content);
+                  remaining = remaining.substring(endPos + '<!--END_THINKING-->'.length);
+                } else {
+                  remaining = remaining.substring(pos + '<!--THINKING-->'.length);
+                }
+              } else if (marker === 'THINKING_CLOSE') {
+                const content = remaining.substring(0, pos).trim();
+                if (content.length > 0) thinkingBlocks.push(content);
+                remaining = remaining.substring(pos + '<!--END_THINKING-->'.length);
+              } else if (marker === 'TOOL_OPEN') {
+                const closeTag = '-->';
+                const closeIdx = remaining.indexOf(closeTag, pos + '<!--TOOL'.length);
+                if (closeIdx >= 0) {
+                  const endTool = remaining.indexOf('<!--END_TOOL-->', closeIdx);
+                  if (endTool >= 0) {
+                    let content = remaining.substring(closeIdx + closeTag.length, endTool).trim();
+                    const tsRegex = /<!--TOOL_SUMMARY\s*:\s*([^>]+)-->/;
+                    const tsMatch = tsRegex.exec(content);
+                    if (tsMatch) content = content.replace(tsRegex, '').trim();
+                    if (content.length > 0) toolBlocks.push(content);
+                    remaining = remaining.substring(endTool + '<!--END_TOOL-->'.length);
+                  } else {
+                    remaining = remaining.substring(closeIdx + closeTag.length);
+                  }
+                } else {
+                  remaining = remaining.substring(pos + '<!--TOOL'.length);
+                }
+              } else {
+                remaining = remaining.substring(pos + '<!--END_TOOL-->'.length);
+              }
+            }
+
+            thinkingText = thinkingBlocks.join('\n\n');
+            toolsText = toolBlocks.join('\n\n');
+            if (bodyText.length === 0 && thinkingText.length === 0 && toolsText.length === 0) {
+              bodyText = ccClean.trim();
+            }
+          } else {
+            // Claude PTY / cc-connect format: single marker per section
+            const thinkingMarker = '<!--THINKING_END-->';
+            const hasThinking = ccClean.includes(thinkingMarker);
+            thinkingText = hasThinking ? ccClean.substringBefore(thinkingMarker).trim() : '';
+
+            const afterThinking = hasThinking ? ccClean.substringAfter(thinkingMarker).trim() : ccClean;
+
+            const toolsMarker = '<!--TOOLS_END-->';
+            const hasTools = afterThinking.includes(toolsMarker);
+            let rawToolsText = hasTools ? afterThinking.substringBefore(toolsMarker).trim() : '';
+            bodyText = hasTools ? afterThinking.substringAfter(toolsMarker).trim() : afterThinking;
+
+            const toolsSep = '\n\n---\n\n';
+            if (hasTools && rawToolsText.length > 0 && bodyText.length === 0 && rawToolsText.includes(toolsSep)) {
+              toolsText = rawToolsText.substringBefore(toolsSep).trim();
+              bodyText = rawToolsText.substringAfter(toolsSep).trim();
+            } else {
+              toolsText = rawToolsText;
+            }
+          }
+
+          const hasThinking = thinkingText.length > 0;
+          const hasTools = toolsText.length > 0;
+
+          // 思考过程（折叠区）
+          if (hasThinking && thinkingText.length > 0) {
+            Column() {
+              Row() {
+                Text('💭 思考过程')
+                  .fontSize(12)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor('#8B7355')
+              }
+              .width('100%')
+              .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+              .backgroundColor('#FAF8F4')
+              .border({ width: 1, color: '#E8E0D4', style: BorderStyle.Solid })
+              .borderRadius({ topLeft: 8, topRight: 8 })
+
+              Text(thinkingText)
                 .fontSize(12)
-                .fontColor(SilkColors.textSecondary)
-              Text('  ▲')
-                .fontSize(11)
-                .fontColor(SilkColors.textSecondary)
+                .fontColor('#8B7355')
+                .lineHeight(18)
+                .width('100%')
+                .padding(12)
+                .backgroundColor('#FAF8F4')
+                .border({ width: { left: 1, right: 1, bottom: 1 }, color: '#E8E0D4', style: BorderStyle.Solid })
+                .borderRadius({ bottomLeft: 8, bottomRight: 8 })
+                .margin({ bottom: 8 })
             }
             .width('100%')
-            .justifyContent(FlexAlign.Center)
-            .margin({ top: 10 })
-            .padding({ top: 4, bottom: 4 })
-            .onClick(() => {
-              this.isAIExpanded = false;
-              this.notifyLongContentCollapsed();
-            })
+          }
+
+          // 工具调用过程（折叠区）
+          if (hasTools && toolsText.length > 0) {
+            Column() {
+              Row() {
+                Text('🔧 工具调用过程')
+                  .fontSize(12)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor('#666666')
+              }
+              .width('100%')
+              .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+              .backgroundColor('#F5F5F5')
+              .border({ width: 1, color: '#E0E0E0', style: BorderStyle.Solid })
+              .borderRadius({ topLeft: 8, topRight: 8 })
+
+              MarkdownLite({ content: toolsText })
+                .width('100%')
+                .padding(12)
+                .backgroundColor('#F5F5F5')
+                .border({ width: { left: 1, right: 1, bottom: 1 }, color: '#E0E0E0', style: BorderStyle.Solid })
+                .borderRadius({ bottomLeft: 8, bottomRight: 8 })
+                .margin({ bottom: 8 })
+            }
+            .width('100%')
+          }
+
+          // 正文
+          if (bodyText.length > 0) {
+            const bodyIsLong = bodyText.length > 500;
+            const bodyPreview = bodyText.length > 220 ? bodyText.substring(0, 220) + '...' : bodyText;
+
+            if (!bodyIsLong || this.isAIExpanded) {
+              MarkdownLite({ content: bodyText })
+              ReferenceList({
+                references: this.message.references ? this.message.references : []
+              })
+            } else if (!this.isAIExpanded) {
+              Column() {
+                Text(bodyPreview)
+                  .fontSize(14)
+                  .fontColor(Theme.colors.textPrimary)
+                  .maxLines(8)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .width('100%')
+
+                Row() {
+                  Text('查看全文')
+                    .fontSize(13)
+                    .fontColor(SilkColors.primary)
+                    .fontWeight(FontWeight.Medium)
+                  Text('  ▼')
+                    .fontSize(12)
+                    .fontColor(SilkColors.primary)
+                }
+                .margin({ top: 10 })
+                .width('100%')
+                .justifyContent(FlexAlign.Center)
+                .padding({ top: 6, bottom: 6 })
+                .onClick(() => {
+                  this.isAIExpanded = true;
+                  if (this.onLongContentExpanded) {
+                    this.onLongContentExpanded();
+                  }
+                })
+              }
+              .width('100%')
+            } else {
+              Column() {
+                MarkdownLite({ content: bodyText })
+                ReferenceList({
+                  references: this.message.references ? this.message.references : []
+                })
+                Row() {
+                  Text('收起')
+                    .fontSize(12)
+                    .fontColor(SilkColors.textSecondary)
+                  Text('  ▲')
+                    .fontSize(11)
+                    .fontColor(SilkColors.textSecondary)
+                }
+                .width('100%')
+                .justifyContent(FlexAlign.Center)
+                .margin({ top: 10 })
+                .padding({ top: 4, bottom: 4 })
+                .onClick(() => {
+                  this.isAIExpanded = false;
+                  this.notifyLongContentCollapsed();
+                })
+              }
+              .width('100%')
+            }
+          }
+        }
+
+        // CC metadata footer（耗时/轮次）
+        if (this.message.footerContent) {
+          Blank().height(8)
+          Row() {
+            Text(this.message.footerContent)
+              .fontSize(12)
+              .fontColor(Theme.colors.textSecondary)
           }
           .width('100%')
         }

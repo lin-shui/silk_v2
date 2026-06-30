@@ -10,7 +10,12 @@ import { HapUpdater } from '../api/HapUpdater';
 
 @Component
 export struct MainPage {
-  @State currentTab: number = 0;
+  @State currentTab: number = this.restoreTab();
+
+  private restoreTab(): number {
+    const saved = AppStorage.get<number>('lastMainTab');
+    return (saved !== undefined && saved >= 0 && saved <= 3) ? saved : 0;
+  }
 
   aboutToAppear() {
     this.delayedUpdateCheck();
@@ -101,6 +106,7 @@ export struct MainPage {
     .barMode(BarMode.Fixed)
     .onChange((index: number) => {
       this.currentTab = index;
+      AppStorage.set<number>('lastMainTab', index);
     })
   }
 

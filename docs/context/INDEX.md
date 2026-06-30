@@ -14,7 +14,7 @@
 - `generated/`: 仓库地图与检索入口
 - `project/`: 构建、运行、存储、定期清查、已知偏差
 - `modules/`: backend / frontend 深挖
-- `integrations/`: Claude Code、Weaviate、飞书等辅助子系统
+- `integrations/`: Claude Code、Anthropic API、飞书等辅助子系统
 - `quality/`: 测试面、快检、验证映射
 - `planning/`: Todo 治理与执行计划入口
 - `../skills/`: 仓库内 agent workflow skill；按 `TASK_ROUTER.md` 指向按需加载

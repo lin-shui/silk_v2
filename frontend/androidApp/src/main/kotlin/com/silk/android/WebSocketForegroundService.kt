@@ -10,7 +10,10 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 
 /**
  * WebSocket 前台服务
@@ -164,6 +167,7 @@ class WebSocketForegroundService : Service() {
             .build()
     }
     
+    @Suppress("UnusedParameter")
     private fun updateNotification(status: String) {
         val notification = createNotification()
         notificationManager?.notify(NOTIFICATION_ID, notification)

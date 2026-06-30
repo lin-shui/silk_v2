@@ -12,7 +12,7 @@
 
 不把它做成全量发布流水线；慢、重、依赖专用环境的项放到后续专用 CI。
 
-## 当前基线（2026-05-06 清查）
+## 当前基线（2026-05-09 lint 接入后）
 
 工作流文件：`.github/workflows/ci-fast-validation.yml`
 
@@ -21,6 +21,7 @@
 工程与构建：
 
 - [x] Gradle 根工程可配置
+- [x] `./gradlew silkLint`（Kotlin 源码 detekt + `bash -n silk.sh`，detekt 带 baseline）
 - [x] `:backend:test`
 - [x] `:backend:shadowJar`
 - [x] `:frontend:webApp:nodeTest`
@@ -78,7 +79,7 @@ frontend 轻量快检：
 - 删除了几组只校验字符串/JSON 形状的占位测试，改为真实后端合同测试。
 - 把消息撤回从 JSON 形状占位校验改成真实路由合同测试，并修正了测试环境的 `chat_history` 隔离。
 - 测试现在使用临时 SQLite 和临时 `chat_history` 目录，避免把测试产物写回仓库根目录。
-- 文件路由改为尊重 `silk.chatHistoryDir`，并在未配置 Weaviate 时直接跳过索引，避免快检被外部配置缺失拖垮。
+- 文件路由改为尊重 `silk.chatHistoryDir`，并在未配置外部索引时直接跳过索引，避免快检被外部配置缺失拖垮。
 - 新增文件路由合同测试，覆盖上传、重名处理、列表、下载、删除，以及 `processed_urls.txt` 本地路径分支。
 - 新增上传文件 `FILE` 消息合同测试，锁定 `fileName` / `fileSize` / `downloadUrl` payload、实时广播和后加入成员历史回放。
 - 新增 `FILE` 消息特殊字符文件名合同测试，覆盖空格、`#`、`?`、引号场景，锁定 JSON 转义、URL 编码、实时广播、历史回放和文件列表 `downloadUrl` 输出。
@@ -94,6 +95,7 @@ frontend 轻量快检：
 - 新增 TrustedDirManager 测试，覆盖 per-user/per-bridge 信任隔离、子目录继承、幂等和持久化 round-trip。
 - Claude Code 已切到 Bridge Agent 架构后，移除了失效的旧 session store / stream parser JVM 单测，保留当前后端仍承担的元信息格式化测试。
 - 把 `silk.sh` 的基础语法校验和只读 `status` smoke 接进了快检。
+- 新增仓库级 `silkLint`，用 detekt 检查 Gradle 主工程 Kotlin 源码，并用 `config/lint/detekt/` baseline 固化既有静态分析问题，避免首轮引入时全仓重排。
 - 把 `:backend:shadowJar` 和产物 artifact 上传接进快检，补上交付装配层拦截。
 - Android 文件夹浏览改为按 JSON 解析文件列表并直接使用后端返回的 `downloadUrl`，避免正则解析和手拼 URL 在特殊字符文件名下失真。
 - Web 文件列表加载改为显式 JSON 解析，直接锁定后端返回的 `fileName` / `downloadUrl` / `processedUrls` 合同，不再靠动态对象读字段。
@@ -110,8 +112,8 @@ frontend 轻量快检：
 ### 明确未覆盖
 
 - [ ] WebSocket AI/Claude Code 触发链路、断线重连恢复、异常网络行为
-- [ ] AI 工具完整端到端 tool-calling（真实模型响应、外部搜索、Weaviate）
-- [ ] 外部真实站点 URL/PDF 抓取、异常响应处理，以及 Weaviate 索引链路
+- [ ] AI 工具完整端到端 tool-calling（真实模型响应）
+- [ ] 外部真实站点 URL/PDF 抓取与异常响应处理
 - [ ] Harmony HAP 构建
 - [ ] `silk.sh deploy` 真实 Web/Android 构建 + 真实 backend + 真实 Weaviate 全链路一次性跑通（`build` / `build-apk` / `build-all` / `start` / `deploy` 编排 smoke 已拆到 `ci-script-smoke.yml`）
 
@@ -120,7 +122,7 @@ frontend 轻量快检：
 - Android job 会显式安装 SDK 并生成 `local.properties`，避免 runner 环境差异导致评估期直接失败。
 - Gradle wrapper 在 GitHub-hosted runner 上会临时改回 `services.gradle.org`，避免镜像可达性造成非业务失败。
 - 目前 `:backend:test` 已经是有意义的快检入口；后续新增 backend 能力时，优先往这里补真实测试，不要再加占位测试。
-- 文件相关快检默认不依赖外部 Weaviate；未配置时只验证本地路径和 HTTP 合同，不把外部索引可用性混进基础快检。
+- 文件相关快检默认不依赖外部索引服务；未配置时只验证本地路径和 HTTP 合同，不把外部索引可用性混进基础快检。
 - `WebPageDownloader` smoke 在测试里显式关闭 Playwright，固定走本地 HTTP 路径，避免浏览器运行时差异把基础快检变成环境问题。
 - WebSocket URL 入口 smoke 同样固定走本地 HTTP 路径，并使用进程内 HTTP server 提供 HTML/PDF，避免外网和浏览器环境波动影响快检稳定性。
 - WebSocket URL 失败分支也走同一套本地 fixture，确保失败行为校验的是业务分支，不是外部网络抖动。
@@ -132,10 +134,12 @@ frontend 轻量快检：
 - `silk.sh build` / `build-apk` / `build-all` 编排已拆到独立 `.github/workflows/ci-script-smoke.yml`；快检继续只保留 `bash -n` 与只读 `status`，避免把装配层耗时塞回基础拦截。
 - `silk.sh start` / `stop` 运行态 smoke 也放在 `.github/workflows/ci-script-smoke.yml`，使用本地 Weaviate mock 与临时端口验证后端 `/health` 和前端静态服务；基础快检仍不承担后台进程生命周期。
 - `silk.sh deploy` 编排 smoke 同样放在 `.github/workflows/ci-script-smoke.yml`，使用 Gradle/backend stub 和本地 Weaviate mock 验证端口清理、调用顺序、产物复制和最终端口就绪；基础快检仍不承担部署生命周期。
+- `silkLint` 是新增问题拦截入口；CI 不写代码也不刷新 baseline。
 
 ## 下一步建议
 
 1. Desktop/Android/Web 的文件下载动作还没做真正 UI 自动化；如果后续文件交互继续增量，建议单独补一层组件级 smoke。
 2. AI 端到端另起一层可选 smoke，专门验证模型 tool-calling 回路，不阻塞基础快检。
 3. Harmony HAP 另起独立 workflow，放到自托管或预置 DevEco/hvigor 环境的 runner。
-4. `silk.sh deploy` 的真实构建 + 真实 backend + 真实 Weaviate 全链路可另起可选或定时 smoke，避免拖慢普通 PR。
+4. `silk.sh start/deploy` 另起运行态 smoke，补端口清理、服务启动和服务协同，而不是只验只读 `status`。
+5. `silk.sh deploy` 的真实构建 + 真实 backend +（若仍启用）真实 Weaviate 全链路可另起可选或定时 smoke，避免拖慢普通 PR。

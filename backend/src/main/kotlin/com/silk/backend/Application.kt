@@ -1,24 +1,28 @@
 package com.silk.backend
 
+import com.silk.backend.auth.configureJwtAuth
 import com.silk.backend.database.DatabaseFactory
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.search.WeaviateClient
 import com.silk.backend.utils.WebPageDownloader
-import io.ktor.server.application.*
-import io.ktor.server.engine.*
-import io.ktor.server.netty.*
-import io.ktor.server.plugins.callloging.*
-import io.ktor.server.plugins.compression.*
-import io.ktor.server.plugins.contentnegotiation.*
-import io.ktor.server.plugins.cors.routing.*
-import io.ktor.serialization.kotlinx.json.*
-import io.ktor.http.*
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
+import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.application.Application
+import io.ktor.server.application.install
+import io.ktor.server.engine.embeddedServer
+import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.callloging.CallLogging
+import io.ktor.server.plugins.compression.Compression
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.server.plugins.cors.routing.CORS
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.Instant
 
+@Suppress("TooGenericExceptionCaught")
 fun main() {
     // 优先加载 .env（避免用 gradlew 直接启动时读不到配置）
     EnvLoader.load()
@@ -71,6 +75,7 @@ fun main() {
  * 使用游标文件（.weaviate_cursor）记录每个会话最后索引的消息 ID，
  * 避免重复索引已处理过的消息。
  */
+@Suppress("TooGenericExceptionCaught")
 private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger) {
     val weaviate = WeaviateClient.getInstance()
     if (!runBlocking { weaviate.isReady() }) {
@@ -103,95 +108,130 @@ private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger) {
     var totalFailed = 0
 
     for (sessionDir in sessionDirs) {
-        val sessionName = sessionDir.name
-        val historyFile = File(sessionDir, "chat_history.json")
-        if (!historyFile.exists()) continue
-
-        try {
-            val content = historyFile.readText()
-            if (content.isBlank()) continue
-
-            val chatHistory = json.decodeFromString<com.silk.backend.models.ChatHistory>(content)
-            val messages = chatHistory.messages
-            if (messages.isEmpty()) continue
-
-            // 读取游标文件（记录最后索引的消息ID）
-            val cursorFile = File(sessionDir, ".weaviate_cursor")
-            val lastIndexedId = if (cursorFile.exists()) cursorFile.readText().trim() else ""
-
-            // 找出尚未索引的消息
-            val toIndex = if (lastIndexedId.isEmpty()) {
-                messages
-            } else {
-                val lastIndex = messages.indexOfLast { it.messageId == lastIndexedId }
-                if (lastIndex >= 0 && lastIndex < messages.size - 1) {
-                    messages.subList(lastIndex + 1, messages.size)
-                } else {
-                    emptyList()
-                }
-            }
-
-            if (toIndex.isEmpty()) {
-                totalSkipped += messages.size
-                logger.debug("⏭️ 会话 {} 已全部索引 ({} 条)", sessionName, messages.size)
-                continue
-            }
-
-            // 获取参与者列表
-            val groupId = sessionName.removePrefix("group_")
-            val members = try {
-                GroupRepository.getGroupMembers(groupId)
-            } catch (_: Exception) {
-                emptyList()
-            }
-            val participantIds = members.map { it.userId }.distinct()
-
-            // 转换为 Weaviate.ChatMessage 格式
-            val chatMessages = toIndex.map { msg ->
-                com.silk.backend.search.ChatMessage(
-                    userId = msg.senderId,
-                    userName = msg.senderName ?: "未知用户",
-                    content = msg.content,
-                    timestamp = Instant.ofEpochMilli(msg.timestamp).toString(),
-                    isImportant = false,
-                    messageId = msg.messageId
-                )
-            }
-
-            // 分批索引（每批 50 条，避免单次请求过大）
-            val batchSize = 50
-            var batchIndexed = 0
-            for (i in chatMessages.indices step batchSize) {
-                val batch = chatMessages.subList(i, minOf(i + batchSize, chatMessages.size))
-                val count = runBlocking {
-                    weaviate.indexChatMessages(
-                        sessionId = "group_$groupId",
-                        participants = participantIds,
-                        messages = batch
-                    )
-                }
-                batchIndexed += count
-            }
-
-            // 更新游标文件
-            val lastMsg = toIndex.last()
-            cursorFile.writeText(lastMsg.messageId)
-
-            totalIndexed += batchIndexed
-            logger.info("✅ 已索引会话 {}: {} 条新消息 (共 {} 条)", sessionName, batchIndexed, messages.size)
-        } catch (e: Exception) {
-            totalFailed++
-            logger.warn("⚠️ 索引会话 {} 失败: {}", sessionName, e.message)
-        }
+        val result = indexSessionDirToWeaviate(sessionDir, weaviate, json, logger)
+        totalIndexed += result.indexed
+        totalSkipped += result.skipped
+        totalFailed += result.failed
     }
 
     logger.info("✅ 历史聊天记录批量索引完成: 新索引 {} 条, 跳过 {} 条, 失败 {} 个会话",
         totalIndexed, totalSkipped, totalFailed)
 }
 
+/** 单个会话目录的批量索引结果。 */
+private data class SessionIndexResult(val indexed: Int, val skipped: Int, val failed: Int)
+
+/**
+ * 索引单个会话目录的历史消息到 Weaviate。
+ * 行为与原内联循环体等价：缺失/空文件、空消息、已全部索引等情况直接返回相应计数；
+ * 异常被捕获并记为一次失败。
+ */
+@Suppress("TooGenericExceptionCaught")
+private fun indexSessionDirToWeaviate(
+    sessionDir: File,
+    weaviate: WeaviateClient,
+    json: Json,
+    logger: org.slf4j.Logger,
+): SessionIndexResult {
+    val sessionName = sessionDir.name
+    val historyFile = File(sessionDir, "chat_history.json")
+    if (!historyFile.exists()) return SessionIndexResult(0, 0, 0)
+
+    return try {
+        val content = historyFile.readText()
+        if (content.isBlank()) return SessionIndexResult(0, 0, 0)
+
+        val chatHistory = json.decodeFromString<com.silk.backend.models.ChatHistory>(content)
+        val messages = chatHistory.messages
+        if (messages.isEmpty()) return SessionIndexResult(0, 0, 0)
+
+        // 读取游标文件（记录最后索引的消息ID）
+        val cursorFile = File(sessionDir, ".weaviate_cursor")
+        val lastIndexedId = if (cursorFile.exists()) cursorFile.readText().trim() else ""
+
+        // 找出尚未索引的消息
+        val toIndex = messagesToIndex(messages, lastIndexedId)
+
+        if (toIndex.isEmpty()) {
+            logger.debug("⏭️ 会话 {} 已全部索引 ({} 条)", sessionName, messages.size)
+            return SessionIndexResult(0, messages.size, 0)
+        }
+
+        // 获取参与者列表
+        val groupId = sessionName.removePrefix("group_")
+        val members = try {
+            GroupRepository.getGroupMembers(groupId)
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val participantIds = members.map { it.userId }.distinct()
+
+        // 转换为 Weaviate.ChatMessage 格式
+        val chatMessages = toIndex.map { msg ->
+            com.silk.backend.search.ChatMessage(
+                userId = msg.senderId,
+                userName = msg.senderName ?: "未知用户",
+                content = msg.content,
+                timestamp = Instant.ofEpochMilli(msg.timestamp).toString(),
+                isImportant = false,
+                messageId = msg.messageId
+            )
+        }
+
+        val batchIndexed = indexChatMessagesInBatches(weaviate, groupId, participantIds, chatMessages)
+
+        // 更新游标文件
+        cursorFile.writeText(toIndex.last().messageId)
+
+        logger.info("✅ 已索引会话 {}: {} 条新消息 (共 {} 条)", sessionName, batchIndexed, messages.size)
+        SessionIndexResult(batchIndexed, 0, 0)
+    } catch (e: Exception) {
+        logger.warn("⚠️ 索引会话 {} 失败: {}", sessionName, e.message)
+        SessionIndexResult(0, 0, 1)
+    }
+}
+
+/** 根据游标返回尚未索引的消息子列表（与原内联逻辑等价）。 */
+private fun messagesToIndex(
+    messages: List<com.silk.backend.models.ChatHistoryEntry>,
+    lastIndexedId: String,
+): List<com.silk.backend.models.ChatHistoryEntry> {
+    if (lastIndexedId.isEmpty()) return messages
+    val lastIndex = messages.indexOfLast { it.messageId == lastIndexedId }
+    return if (lastIndex >= 0 && lastIndex < messages.size - 1) {
+        messages.subList(lastIndex + 1, messages.size)
+    } else {
+        emptyList()
+    }
+}
+
+/** 分批（每批 50 条）索引消息到 Weaviate，返回成功索引的总条数。 */
+private fun indexChatMessagesInBatches(
+    weaviate: WeaviateClient,
+    groupId: String,
+    participantIds: List<String>,
+    chatMessages: List<com.silk.backend.search.ChatMessage>,
+): Int {
+    val batchSize = 50
+    var batchIndexed = 0
+    for (i in chatMessages.indices step batchSize) {
+        val batch = chatMessages.subList(i, minOf(i + batchSize, chatMessages.size))
+        val count = runBlocking {
+            weaviate.indexChatMessages(
+                sessionId = "group_$groupId",
+                participants = participantIds,
+                messages = batch
+            )
+        }
+        batchIndexed += count
+    }
+    return batchIndexed
+}
+
 /**
  * 同步所有 SQL 群组到 Weaviate SilkSession（在 deploy 或重启后恢复上下文关联）
  */
+@Suppress("TooGenericExceptionCaught")
 private fun syncGroupsToWeaviate(logger: org.slf4j.Logger) {
     val weaviate = WeaviateClient.getInstance()
     if (!runBlocking { weaviate.isReady() }) {
@@ -278,6 +318,7 @@ fun Application.module() {
         maxAgeInSeconds = 86400
     }
 
+    configureJwtAuth()
     configureWebSockets()
 
     // 触发 AgentRuntime 单例初始化（注册 ClaudeCodeDescriptor 等）

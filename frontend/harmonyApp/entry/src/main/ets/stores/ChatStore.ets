@@ -2,7 +2,7 @@
  * ChatStore - 聊天状态管理
  * 管理消息列表、连接状态、当前群组等
  */
-import { Message, MessageType, MessageCategory, parseMessage, isAgentUserId } from '../models/Message';
+import { Message, MessageType, MessageCategory, ContentBlock, InteractiveOption, parseMessage, isAgentUserId } from '../models/Message';
 import { Group } from '../models/Group';
 import { WebSocketClient, ConnectionState } from '../api/WebSocketClient';
 import { Constants } from '../common/Constants';
@@ -68,6 +68,18 @@ export class ChatStore {
     return this._isGenerating;
   }
 
+  // cc-connect 结构化内容块（与 Web/Android 一致，用于流式渲染 thinking/tool_use/text）
+  private _transientContentBlocks: ContentBlock[] = [];
+  get transientContentBlocks(): ContentBlock[] {
+    return this._transientContentBlocks;
+  }
+
+  // cc-connect 交互式按钮选项
+  private _interactiveOptions: InteractiveOption[] = [];
+  get interactiveOptions(): InteractiveOption[] {
+    return this._interactiveOptions;
+  }
+
   // 停止后抑制残余流式消息
   private _suppressTransient: boolean = false;
 
@@ -92,6 +104,7 @@ export class ChatStore {
   public onHistoryLoaded: (() => void) | null = null;
   public onConnectionStateChanged: (() => void) | null = null;
   public onError: ((error: string) => void) | null = null;
+  public onCcMetadataChanged: ((json: string) => void) | null = null;
 
   /**
    * 连接到聊天服务器
@@ -252,6 +265,31 @@ export class ChatStore {
     return this.wsClient.send(message);
   }
 
+  /**
+   * 发送 cc-connect 交互式回答（与 ChatClient.sendCcAnswer 一致）
+   */
+  sendCcAnswer(content: string): void {
+    if (!this.wsClient || this._connectionState !== ConnectionState.CONNECTED) {
+      return;
+    }
+    const message: Message = {
+      id: this.generateId(),
+      userId: this.currentUserId,
+      userName: this.currentUserName,
+      content: content,
+      timestamp: Date.now(),
+      type: MessageType.TEXT,
+      isTransient: false,
+      isIncremental: false,
+      category: MessageCategory.NORMAL
+    };
+    this.wsClient.send(message);
+    // 清除交互式选项（按钮已点击）
+    this._interactiveOptions = [];
+    this._transientContentBlocks = [];
+    this.onMessagesChanged?.();
+  }
+
   private flushHistoryBuffer(): void {
     if (this._historyTimeoutId !== -1) {
       clearTimeout(this._historyTimeoutId);
@@ -313,10 +351,33 @@ export class ChatStore {
         return;
       }
 
+      // cc-connect 结构化 contentBlocks（流式替换完整 block 列表），同时可能携带交互式选项
+      if (message.isTransient && message.contentBlocks && message.contentBlocks.length > 0) {
+        this._transientMessage = null;
+        this._transientContentBlocks = message.contentBlocks;
+        if (message.interactiveOptions && message.interactiveOptions.length > 0) {
+          this._interactiveOptions = message.interactiveOptions;
+        }
+        if (isSilkAi) {
+          this._isGenerating = true;
+        }
+        this.onMessagesChanged?.();
+        return;
+      }
+
+      // cc-connect 交互式按钮选项（无 contentBlocks 的场景）
+      if (message.interactiveOptions && message.interactiveOptions.length > 0) {
+        this._interactiveOptions = message.interactiveOptions;
+        this.onMessagesChanged?.();
+        return;
+      }
+
       // Agent 状态消息
       if (message.category === MessageCategory.AGENT_STATUS) {
         if (message.content.startsWith('CLEAR_STATUS')) {
           this._statusMessages = [];
+          this._transientContentBlocks = [];
+          this._interactiveOptions = [];
         } else {
           if (isSilkAi) {
             this._isGenerating = true;
@@ -343,6 +404,8 @@ export class ChatStore {
         if (isSilkAi) {
           this._isGenerating = true;
         }
+        // Clear structured blocks — raw text is being streamed instead
+        this._transientContentBlocks = [];
         const existing = this._transientMessage;
         if (existing && existing.userId === message.userId && existing.type === message.type) {
           const mergedMessage: Message = {
@@ -368,6 +431,8 @@ export class ChatStore {
 
       // 完整临时消息
       if (message.isTransient) {
+        // Clear structured blocks — raw text is being shown instead
+        this._transientContentBlocks = [];
         this._transientMessage = message;
         this.onMessagesChanged?.();
         return;
@@ -382,6 +447,8 @@ export class ChatStore {
       this._statusMessages = [];
       this._isGenerating = false;
       this._suppressTransient = false;
+      this._transientContentBlocks = [];
+      // 不清除 _interactiveOptions：cc-connect 的交互按钮独立于普通消息生命周期
       this.onMessagesChanged?.();
 
     } catch (e) {
@@ -397,6 +464,12 @@ export class ChatStore {
    * 处理 WebSocket 原始数据（用于批量历史等场景）
    */
   handleRawData(data: string): void {
+    // cc_metadata 事件：CC 连接状态/模式/模型更新
+    if (data.includes('"type":"cc_metadata"')) {
+      this.onCcMetadataChanged?.(data);
+      return;
+    }
+
     // 批量历史帧：不依赖 _isHistoryLoading 状态，防止超时后历史消息被丢弃
     if (data.startsWith('[')) {
       try {

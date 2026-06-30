@@ -1,10 +1,25 @@
 package com.silk.shared
 
-import io.ktor.client.*
-import io.ktor.client.engine.okhttp.*
-import io.ktor.client.plugins.websocket.*
-import io.ktor.websocket.*
-import kotlinx.coroutines.*
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
+import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
+import io.ktor.websocket.send
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.concurrent.atomic.AtomicBoolean
@@ -52,20 +67,23 @@ actual class PlatformWebSocket actual constructor(
     private val isConnecting = AtomicBoolean(false)
     private val isExplicitlyDisconnected = AtomicBoolean(false)
     
-    // 自动重连配置
+    // 自动重连配置（无限重试 + 指数退避）
     private var reconnectAttempts = 0
-    private val maxReconnectAttempts = 5
-    private val baseReconnectDelay = 1000L  // 1秒基础延迟
+    private val minReconnectDelay = 1000L    // 1秒初始
+    private val maxReconnectDelay = 30_000L  // 最多30秒间隔
     
     private fun log(message: String) {
         println(message)
         onLog?.invoke(message)
     }
+
+    private fun rethrowCancellation(error: CancellationException): Nothing = throw error
     
     actual val isConnected: Boolean
         get() = session != null && !isExplicitlyDisconnected.get()
     
-    actual fun connect(userId: String, userName: String, groupId: String) {
+    @Suppress("CyclomaticComplexMethod")
+    actual fun connect(token: String?, userId: String, userName: String, groupId: String) {
         // 切群场景：先清理旧连接，不做重复连接判断
         val wasConnecting = isConnecting.getAndSet(true)
         if (wasConnecting || session != null) {
@@ -115,8 +133,14 @@ actual class PlatformWebSocket actual constructor(
                         }
                     } catch (e: CancellationException) {
                         log("⏹️ [WebSocket] 连接被取消（正常断开）")
-                        throw e
-                    } catch (e: Exception) {
+                        rethrowCancellation(e)
+                    } catch (e: IOException) {
+                        log("❌ [WebSocket] 接收错误: ${e.message}")
+                        // 非正常断开，尝试重连
+                        if (!isExplicitlyDisconnected.get()) {
+                            attemptReconnect(userId, userName, groupId)
+                        }
+                    } catch (e: IllegalStateException) {
                         log("❌ [WebSocket] 接收错误: ${e.message}")
                         // 非正常断开，尝试重连
                         if (!isExplicitlyDisconnected.get()) {
@@ -124,7 +148,17 @@ actual class PlatformWebSocket actual constructor(
                         }
                     }
                 }
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                rethrowCancellation(e)
+            } catch (e: IOException) {
+                isConnecting.set(false)
+                if (!isExplicitlyDisconnected.get()) {
+                    log("❌ [WebSocket] 连接失败: ${e.message}")
+                    withContext(Dispatchers.Main) { onError(e.message ?: "Unknown error") }
+                    // 尝试重连
+                    attemptReconnect(userId, userName, groupId)
+                }
+            } catch (e: IllegalStateException) {
                 isConnecting.set(false)
                 if (!isExplicitlyDisconnected.get()) {
                     log("❌ [WebSocket] 连接失败: ${e.message}")
@@ -155,12 +189,21 @@ actual class PlatformWebSocket actual constructor(
                 val now = System.currentTimeMillis()
                 if (now - lastKeepAlive > 60_000) {
                     // 超过60秒没有任何活动，发送心跳
+                    var keepAliveSent = true
                     try {
                         session?.send(Frame.Text("❤️"))
                         log("💓 [WebSocket] 发送保活心跳")
                         lastKeepAlive = now
-                    } catch (e: Exception) {
+                    } catch (e: CancellationException) {
+                        rethrowCancellation(e)
+                    } catch (e: IOException) {
                         log("⚠️ [WebSocket] 发送心跳失败: ${e.message}")
+                        keepAliveSent = false
+                    } catch (e: IllegalStateException) {
+                        log("⚠️ [WebSocket] 发送心跳失败: ${e.message}")
+                        keepAliveSent = false
+                    }
+                    if (!keepAliveSent) {
                         break
                     }
                 }
@@ -169,27 +212,28 @@ actual class PlatformWebSocket actual constructor(
     }
     
     /**
-     * 尝试自动重连
+     * 尝试自动重连（无限重试，指数退避 + 随机抖动）
      */
     private suspend fun attemptReconnect(userId: String, userName: String, groupId: String) {
         if (isExplicitlyDisconnected.get()) {
             log("⏹️ [WebSocket] 已明确断开，不重连")
             return
         }
-        
+
         reconnectAttempts++
-        if (reconnectAttempts > maxReconnectAttempts) {
-            log("❌ [WebSocket] 重连次数超限 (${maxReconnectAttempts}次)")
-            withContext(Dispatchers.Main) { onError("Connection lost after $maxReconnectAttempts reconnect attempts") }
-            return
-        }
-        
-        val delay = baseReconnectDelay * reconnectAttempts  // 指数退避
-        log("🔄 [WebSocket] 尝试重连 (${reconnectAttempts}/${maxReconnectAttempts})，延迟 ${delay}ms...")
-        delay(delay)
-        
+
+        // 指数退避：2^(n-1) 秒，上限 maxReconnectDelay
+        val exponential = minReconnectDelay * (1L shl (reconnectAttempts - 1).coerceAtMost(5))
+        val delayMs = exponential.coerceIn(minReconnectDelay, maxReconnectDelay)
+        // 随机 ±1s 抖动，避免多客户端同时重连
+        val jitter = (kotlin.random.Random.nextLong(2001) - 1000)
+        val actualDelay = (delayMs + jitter).coerceIn(minReconnectDelay, maxReconnectDelay)
+
+        log("🔄 [WebSocket] 尝试重连 #${reconnectAttempts}，延迟 ${actualDelay}ms...")
+        delay(actualDelay)
+
         isConnecting.set(false)
-        connect(userId, userName, groupId)
+        connect(null, userId, userName, groupId)
     }
     
     actual fun send(message: String) {
@@ -201,7 +245,15 @@ actual class PlatformWebSocket actual constructor(
         scope.launch {
             try {
                 session?.send(Frame.Text(message))
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                rethrowCancellation(e)
+            } catch (e: IOException) {
+                log("❌ [WebSocket] 发送失败: ${e.message}")
+                // 发送失败可能意味着连接断了
+                if (!isExplicitlyDisconnected.get()) {
+                    withContext(Dispatchers.Main) { onError("Send failed: ${e.message}") }
+                }
+            } catch (e: IllegalStateException) {
                 log("❌ [WebSocket] 发送失败: ${e.message}")
                 // 发送失败可能意味着连接断了
                 if (!isExplicitlyDisconnected.get()) {
@@ -219,12 +271,17 @@ actual class PlatformWebSocket actual constructor(
             try {
                 keepAliveJob?.cancel()
                 session?.close(CloseReason(CloseReason.Codes.NORMAL, "Client disconnecting"))
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                rethrowCancellation(e)
+            } catch (e: IOException) {
                 log("⚠️ [WebSocket] 关闭异常: ${e.message}")
+            } catch (e: IllegalStateException) {
+                log("⚠️ [WebSocket] 关闭异常: ${e.message}")
+            } finally {
+                job?.cancel()
+                session = null
+                isConnecting.set(false)
             }
-            job?.cancel()
-            session = null
-            isConnecting.set(false)
         }
     }
     

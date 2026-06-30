@@ -2,16 +2,18 @@
  * ChatPage - 聊天页面
  * 使用 ChatStore + WebSocket 进行实时聊天
  */
-import { Message, MessageType, isAgentUserId } from '../models/Message';
+import { Message, MessageType, ContentBlock, InteractiveOption, isAgentUserId } from '../models/Message';
 import { UserTodoItem } from '../models/UserTodoItem';
 import { Group } from '../models/Group';
 import { MessageBubble } from '../components';
+import { ThinkingPanel } from '../components/ThinkingPanel';
+import { MarkdownLite } from '../components/MarkdownLite';
 import { chatStore as globalChatStore, ConnectionState } from '../stores/ChatStore';
 import { appStore as globalAppStore } from '../stores/AppStore';
 import { SilkColors } from '../common/Theme';
 import { parseForwardedMessageContent, ForwardedMessageParts } from '../common/ForwardedMessageParse';
 import { router as appRouter } from '../common/Router';
-import { apiClient as globalApiClient, UserTodoPatch, GroupMemberProfile, WorkflowApiItem } from '../api/ApiClient';
+import { apiClient as globalApiClient, UserTodoPatch, GroupMemberProfile, WorkflowApiItem, CcConnectTokenInfo, CcModeOption, CcModelOption } from '../api/ApiClient';
 import pasteboard from '@ohos.pasteboard';
 import promptAction from '@ohos.promptAction';
 import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl';
@@ -96,6 +98,21 @@ export struct ChatPage {
   @State private isVoiceRecording: boolean = false;
   @State private isTranscribing: boolean = false;
   @State private isHistoryLoading: boolean = true;
+  @State private ccConnectInfo: CcConnectTokenInfo | null = null;
+  @State private showModeSheet: boolean = false;
+  @State private showModelSheet: boolean = false;
+
+  // cc-connect 结构化内容块和交互式按钮（与 Web/Android 一致）
+  @State private transientContentBlocks: ContentBlock[] = [];
+  @State private interactiveOptions: InteractiveOption[] = [];
+
+  private get availableModes(): CcModeOption[] {
+    return this.ccConnectInfo?.availableModes || [];
+  }
+
+  private get availableModels(): CcModelOption[] {
+    return this.ccConnectInfo?.availableModels || [];
+  }
 
   private groupId: string = 'default_room';
   private userId: string = '';
@@ -137,6 +154,7 @@ export struct ChatPage {
     globalChatStore.onHistoryLoaded = null;
     globalChatStore.onConnectionStateChanged = null;
     globalChatStore.onError = null;
+    globalChatStore.onCcMetadataChanged = null;
     globalChatStore.disconnect();
     this.isInitialized = false;
   }
@@ -214,6 +232,40 @@ export struct ChatPage {
         }
       }
     }).catch(() => {});
+
+    // 加载 cc-connect 连接信息
+    this.apiClient.getCcConnectTokenInfo(this.groupId, this.userId).then((info: CcConnectTokenInfo | null) => {
+      if (info !== null && info.success) {
+        this.ccConnectInfo = info;
+      }
+    }).catch(() => {});
+
+    // 注册 cc_metadata WebSocket 回调
+    globalChatStore.onCcMetadataChanged = (json: string): void => {
+      try {
+        const parsed: Record<string, Object> = JSON.parse(json) as Record<string, Object>;
+        const defaultInfo: CcConnectTokenInfo = {
+          success: true,
+          connected: false
+        };
+        const current = this.ccConnectInfo ? this.ccConnectInfo : defaultInfo;
+        const next: CcConnectTokenInfo = {
+          success: current.success,
+          connected: parsed['connected'] !== undefined ? (parsed['connected'] as boolean) : current.connected,
+          mode: (parsed['mode'] as string) || current.mode || '',
+          model: (parsed['model'] as string) || current.model || '',
+          agentType: (parsed['agentType'] as string) || current.agentType || '',
+          availableModes: (parsed['availableModes'] as CcModeOption[]) || current.availableModes || [],
+          availableModels: (parsed['availableModels'] as CcModelOption[]) || current.availableModels || [],
+          cwd: current.cwd,
+          project: current.project,
+          token: current.token
+        };
+        this.ccConnectInfo = next;
+      } catch (_e) {
+        // 解析失败时静默忽略
+      }
+    };
   }
 
   private syncMessages(): void {
@@ -239,10 +291,26 @@ export struct ChatPage {
       result.push(transient);
     }
 
+    // 将 CC 执行完成元信息（⏱ 耗时/轮次）合并到前一条 AI 消息底部，不占独立条目
+    const merged: Message[] = [];
+    for (let i = 0; i < result.length; i++) {
+      const msg = result[i];
+      if (i > 0 && msg.type === MessageType.SYSTEM && msg.userId === 'silk_ai_agent' && /^⏱/.test(msg.content)) {
+        const prev = merged[merged.length - 1];
+        if (prev.userId === 'silk_ai_agent' && prev.type !== MessageType.SYSTEM) {
+          prev.footerContent = msg.content;
+          continue;
+        }
+      }
+      merged.push(msg);
+    }
+
     const prevCount = this.lastSyncedMessageCount;
-    this.messages = result;
-    this.messageDataSource.setData(result);
+    this.messages = merged;
+    this.messageDataSource.setData(merged);
     this.isAiGenerating = globalChatStore.isGenerating;
+    this.transientContentBlocks = globalChatStore.transientContentBlocks;
+    this.interactiveOptions = globalChatStore.interactiveOptions;
     this.markMessagesAsSent(confirmedOwnIds);
     const newCount = result.length;
     const shouldScrollToEnd = newCount > 0 && (!this.didInitialScroll || newCount > prevCount);
@@ -952,6 +1020,27 @@ export struct ChatPage {
   /** 与 Android ChatScreen 一致：群组名为 [Silk] 开头表示与 Silk 的专属私聊，无需再点 @ */
   private isSilkPrivateChat(): boolean {
     return this.groupName.startsWith('[Silk]');
+  }
+
+  private getCcAgentName(): string {
+    const raw = (this.ccConnectInfo?.agentType || '').toLowerCase().trim();
+    if (raw.startsWith('claude')) return 'claude';
+    if (raw.startsWith('cursor')) return 'cursor';
+    if (raw.startsWith('gemini')) return 'gemini';
+    if (raw.startsWith('codex')) return 'codex';
+    if (raw.startsWith('copilot')) return 'copilot';
+    return raw.length > 0 ? raw : 'agent';
+  }
+
+  private getCcModelShortName(): string {
+    const model = this.ccConnectInfo?.model || '';
+    // 从完整模型 ID 中提取短名，如 "claude-sonnet-4-20250514" → "Sonnet"
+    const parts: string[] = model.split('-');
+    if (parts.length >= 2) {
+      const candidate = parts[1];
+      return candidate.charAt(0).toUpperCase() + candidate.slice(1);
+    }
+    return model.length > 10 ? model.substring(0, 10) + '...' : model;
   }
 
   private async quietRefreshTodos(): Promise<void> {
@@ -1679,6 +1768,18 @@ export struct ChatPage {
     }
   }
 
+  private sendCcCommand(command: string): void {
+    globalChatStore.sendMessage(command);
+    // 发送后延迟刷新 cc-connect 状态
+    setTimeout((): void => {
+      this.apiClient.getCcConnectTokenInfo(this.groupId, this.userId).then((info: CcConnectTokenInfo | null) => {
+        if (info !== null && info.success) {
+          this.ccConnectInfo = info;
+        }
+      }).catch(() => {});
+    }, 500);
+  }
+
   private getMessageInputPlaceholder(): string {
     if (this.isSilkPrivateChat() || this.workflowTaskFocus.length > 0) {
       return '直接输入消息与 Silk 对话...';
@@ -1850,7 +1951,8 @@ export struct ChatPage {
                     onForward: (msg: Message): void => this.handleForward(msg),
                     onRetry: (msg: Message): void => this.retryMessage(msg),
                     onOpenActions: (msg: Message): void => this.openMessageActions(msg),
-                    onLongContentCollapsed: (): void => this.scrollListToMessageId(message.id)
+                    onLongContentCollapsed: (): void => this.scrollListToMessageId(message.id),
+                    onLongContentExpanded: (): void => this.scrollListToMessageId(message.id)
                   })
                 }
                 .width('100%')
@@ -1873,6 +1975,79 @@ export struct ChatPage {
         .width('100%')
         .layoutWeight(1)
         .padding({ top: 8, bottom: 8 })
+      }
+
+      // cc-connect 结构化内容块（thinking / tool_use / text，与 Web/Android 一致）
+      if (this.transientContentBlocks.length > 0) {
+        Column() {
+          ForEach(this.transientContentBlocks.filter((b: ContentBlock) => b.type === 'thinking'),
+            (block: ContentBlock) => {
+              ThinkingPanel({ thinking: block.content, isComplete: block.isComplete })
+            })
+
+          ForEach(this.transientContentBlocks.filter((b: ContentBlock) => b.type === 'tool_use'),
+            (block: ContentBlock) => {
+              Column() {
+                Row() {
+                  Text('🔧 ' + (block.toolName ? block.toolName : '工具调用'))
+                    .fontSize(12)
+                    .fontColor('#666666')
+                    .fontWeight(FontWeight.Medium)
+                }
+                .width('100%')
+                .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+                .backgroundColor('#F5F5F5')
+                .borderRadius(4)
+                .margin({ bottom: 4 })
+
+                Text(block.content)
+                  .fontSize(11)
+                  .fontColor('#555555')
+                  .maxLines(20)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+              }
+              .width('100%')
+              .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+              .backgroundColor('#FAFAFA')
+              .borderRadius(8)
+              .margin({ bottom: 6 })
+            })
+
+          ForEach(this.transientContentBlocks.filter((b: ContentBlock) => b.type === 'text'),
+            (block: ContentBlock) => {
+              MarkdownLite({ content: block.content })
+            })
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 4, bottom: 4 })
+      }
+
+      // cc-connect 交互式按钮（与 Web/Android 一致）
+      if (this.interactiveOptions.length > 0) {
+        Row() {
+          Scroll() {
+            Row() {
+              ForEach(this.interactiveOptions, (opt: InteractiveOption) => {
+                Button(opt.label)
+                  .fontSize(14)
+                  .fontColor('#333333')
+                  .backgroundColor('#FFFFFF')
+                  .border({ width: 1, color: '#D0D0D0', style: BorderStyle.Solid })
+                  .borderRadius(8)
+                  .padding({ left: 20, right: 20, top: 8, bottom: 8 })
+                  .margin({ right: 8 })
+                  .onClick(() => {
+                    globalChatStore.sendCcAnswer(opt.value);
+                  })
+              })
+            }
+            .padding({ left: 4, right: 4 })
+          }
+          .scrollable(ScrollDirection.Horizontal)
+          .scrollBar(BarState.Off)
+        }
+        .width('100%')
+        .padding({ left: 16, right: 16, top: 8, bottom: 4 })
       }
 
       // 输入区域 - compact single-row with inline @Silk chip
@@ -1921,11 +2096,51 @@ export struct ChatPage {
           .justifyContent(FlexAlign.Center)
         } else {
           Row() {
-            if (!this.isSilkPrivateChat() && !this.isSelectionMode && !this.isCcWorkflow && this.workflowTaskFocus.length === 0) {
-              Text('')
-                .fontSize(0)
-                .width(0)
-                .height(0)
+            // CC-Connect 控件：agent 名称、模式/模型选择
+            if (!this.isSelectionMode && !this.isCcWorkflow) {
+              if (this.ccConnectInfo !== null) {
+                // @agent 名称标签
+                Text(`@${this.getCcAgentName()}`)
+                  .fontSize(12)
+                  .fontColor(this.ccConnectInfo.connected === true ? '#2E7D32' : '#E65100')
+                  .backgroundColor(this.ccConnectInfo.connected === true ? '#E8F5E9' : '#FFF3E0')
+                  .borderRadius(4)
+                  .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                  .margin({ right: 6 })
+
+                // 模式选择（仅在线时显示）
+                if (this.ccConnectInfo.connected === true && this.ccConnectInfo.mode) {
+                  Text(this.ccConnectInfo.mode)
+                    .fontSize(12)
+                    .fontColor(SilkColors.primary)
+                    .backgroundColor('#E8E0D4')
+                    .borderRadius(4)
+                    .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                    .margin({ right: 6 })
+                    .onClick((): void => {
+                      this.showModeSheet = true;
+                    })
+                }
+
+                // 模型选择（仅在线时显示）
+                if (this.ccConnectInfo.connected === true && this.ccConnectInfo.model) {
+                  Text(this.getCcModelShortName())
+                    .fontSize(12)
+                    .fontColor(SilkColors.primary)
+                    .backgroundColor('#E8E0D4')
+                    .borderRadius(4)
+                    .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+                    .margin({ right: 6 })
+                    .onClick((): void => {
+                      this.showModelSheet = true;
+                    })
+                }
+              } else if (!this.isSilkPrivateChat() && this.workflowTaskFocus.length === 0) {
+                Text('')
+                  .fontSize(0)
+                  .width(0)
+                  .height(0)
+              }
             }
 
             TextInput({ placeholder: this.getMessageInputPlaceholder(), text: $$this.messageInput })
@@ -2033,6 +2248,14 @@ export struct ChatPage {
     .backgroundColor(SilkColors.background)
     .bindSheet($$this.showBottomSheet, this.buildBottomSheet(), {
       height: this.getBottomSheetHeight(),
+      backgroundColor: SilkColors.surface
+    })
+    .bindSheet($$this.showModeSheet, this.buildModeSheet(), {
+      height: 320,
+      backgroundColor: SilkColors.surface
+    })
+    .bindSheet($$this.showModelSheet, this.buildModelSheet(), {
+      height: 360,
       backgroundColor: SilkColors.surface
     })
   }
@@ -2755,6 +2978,140 @@ export struct ChatPage {
         .margin({ top: 8 })
         .onClick(() => {
           this.showBottomSheet = false;
+        })
+    }
+    .width('100%')
+    .height('100%')
+    .padding(16)
+  }
+
+  @Builder
+  private buildModeSheet() {
+    Column() {
+      Text('选择模式')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(SilkColors.textPrimary)
+        .margin({ bottom: 16 })
+
+      if (this.availableModes.length > 0) {
+        List({ space: 8 }) {
+          ForEach(this.availableModes, (mode: CcModeOption) => {
+            ListItem() {
+              Row() {
+                Text(mode.name || mode.key)
+                  .fontSize(15)
+                  .fontColor(SilkColors.textPrimary)
+                  .layoutWeight(1)
+
+                if (this.ccConnectInfo?.mode === mode.key) {
+                  Text('✓')
+                    .fontSize(16)
+                    .fontColor(SilkColors.primary)
+                    .margin({ left: 8 })
+                }
+              }
+              .width('100%')
+              .padding(14)
+              .backgroundColor(SilkColors.background)
+              .borderRadius(8)
+              .onClick((): void => {
+                if (this.ccConnectInfo?.mode !== mode.key) {
+                  this.sendCcCommand(`/mode ${mode.key}`);
+                }
+                this.showModeSheet = false;
+              })
+            }
+          }, (mode: CcModeOption) => mode.key)
+        }
+        .width('100%')
+        .layoutWeight(1)
+      } else {
+        Text('暂无可用模式')
+          .fontSize(14)
+          .fontColor(SilkColors.textSecondary)
+      }
+
+      Button('取消')
+        .width('100%')
+        .height(40)
+        .backgroundColor(SilkColors.surfaceVariant)
+        .fontColor(SilkColors.textSecondary)
+        .margin({ top: 12 })
+        .onClick(() => {
+          this.showModeSheet = false;
+        })
+    }
+    .width('100%')
+    .height('100%')
+    .padding(16)
+  }
+
+  @Builder
+  private buildModelSheet() {
+    Column() {
+      Text('选择模型')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(SilkColors.textPrimary)
+        .margin({ bottom: 16 })
+
+      if (this.availableModels.length > 0) {
+        List({ space: 8 }) {
+          ForEach(this.availableModels, (model: CcModelOption) => {
+            ListItem() {
+              Column() {
+                Row() {
+                  Text(model.name)
+                    .fontSize(15)
+                    .fontColor(SilkColors.textPrimary)
+                    .layoutWeight(1)
+
+                  if (this.ccConnectInfo?.model === model.name) {
+                    Text('✓')
+                      .fontSize(16)
+                      .fontColor(SilkColors.primary)
+                      .margin({ left: 8 })
+                  }
+                }
+                .width('100%')
+
+                if (model.desc && model.desc.length > 0) {
+                  Text(model.desc)
+                    .fontSize(11)
+                    .fontColor(SilkColors.textLight)
+                    .margin({ top: 4 })
+                }
+              }
+              .width('100%')
+              .padding(14)
+              .backgroundColor(SilkColors.background)
+              .borderRadius(8)
+              .onClick((): void => {
+                if (this.ccConnectInfo?.model !== model.name) {
+                  this.sendCcCommand(`/model switch ${model.name}`);
+                }
+                this.showModelSheet = false;
+              })
+            }
+          }, (model: CcModelOption) => model.name)
+        }
+        .width('100%')
+        .layoutWeight(1)
+      } else {
+        Text('暂无可用模型')
+          .fontSize(14)
+          .fontColor(SilkColors.textSecondary)
+      }
+
+      Button('取消')
+        .width('100%')
+        .height(40)
+        .backgroundColor(SilkColors.surfaceVariant)
+        .fontColor(SilkColors.textSecondary)
+        .margin({ top: 12 })
+        .onClick(() => {
+          this.showModelSheet = false;
         })
     }
     .width('100%')

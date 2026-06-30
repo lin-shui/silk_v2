@@ -34,6 +34,7 @@ object ApkDownloader {
     /**
      * 下载 APK 文件
      */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
     suspend fun downloadApk(
         context: Context,
         onProgress: (DownloadState) -> Unit
@@ -91,6 +92,7 @@ object ApkDownloader {
             apkFile
             
         } catch (e: Exception) {
+            @Suppress("PrintStackTrace")
             e.printStackTrace()
             onProgress(DownloadState.Error("下载失败: ${e.message}"))
             null
@@ -100,6 +102,7 @@ object ApkDownloader {
     /**
      * 安装 APK
      */
+    @Suppress("TooGenericExceptionCaught", "TooGenericExceptionThrown", "SwallowedException")
     fun installApk(context: Context, apkFile: File) {
         try {
             val intent = Intent(Intent.ACTION_VIEW)
@@ -121,6 +124,7 @@ object ApkDownloader {
             context.startActivity(intent)
             
         } catch (e: Exception) {
+            @Suppress("PrintStackTrace")
             e.printStackTrace()
             throw RuntimeException("启动安装失败: ${e.message}")
         }
@@ -133,7 +137,7 @@ object ApkDownloader {
         return when {
             size < 1024 -> "$size B"
             size < 1024 * 1024 -> "${size / 1024} KB"
-            else -> String.format("%.1f MB", size / (1024.0 * 1024.0))
+            else -> String.format(java.util.Locale.ROOT, "%.1f MB", size / (1024.0 * 1024.0))
         }
     }
 }

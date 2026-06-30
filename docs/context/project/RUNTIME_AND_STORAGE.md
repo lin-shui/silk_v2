@@ -5,7 +5,7 @@
 - Backend：Ktor Netty，入口 `backend/.../Application.kt`
 - Web 前端：Kotlin/JS dev server 或 backend 静态资源
 - Android / Desktop / Harmony：各自原生客户端
-- Weaviate：由 `silk.sh` 或 `search/` 脚本管理
+- Weaviate（主线不再需要 — 已由 Claude 原生 web_search + 后端 grep 替代；遗留脚本仍可由 `silk.sh` 或 `search/` 管理）
 - Audio Duplex Worker：后端 `/ws/audio-duplex` 代理到 `AUDIO_DUPLEX_URL`（默认 `http://localhost:22700`）
 - Claude Code ACP Adapter：`cc_bridge/acp_adapter.py`（外部进程，连 backend `/agent-bridge` 端点）
 - Codex ACP Adapter：`codex_bridge/codex_adapter.py`（外部进程，连 backend `/agent-bridge` 端点）
@@ -20,6 +20,8 @@
 | Session history | `chat_history/<session>/session.json`, `chat_history.json` | WebSocket 历史回放 |
 | Uploaded files | `chat_history/<session>/uploads/` | 文件消息、下载 |
 | URL dedupe | `chat_history/<session>/uploads/processed_urls.txt` | URL/PDF 下载去重 |
+| User history workspace views | `user_workspace_views/user_<user>/` | `UserWorkspaceManager` 为 `/recall` 创建 hardlink 视图，映射该用户可访问的 `chat_history/group_<group>/` |
+| AI cross-group workspace | `backend/chat_workspaces/<session>/other_groups/` | `DirectModelAgent.writeOtherGroupsHistories()`：Silk 专属对话写入其他群最近历史，供 AI Grep/Read 跨群检索 |
 | User todos | `chat_history/user_todos/*.json` or `-Dsilk.userTodoBaseDir=...` | `UserTodoStore`（兼容旧 `backend/chat_history/user_todos` / `../chat_history/user_todos` 查找） |
 | Workflow store | `~/.silk-data/workflows/workflow_store.json`, `SILK_WORKFLOW_DIR`, or `-Dsilk.workflowDir=...` | `WorkflowManager` |
 | Trusted directories | `~/.silk-data/workflows/trusted_dirs.json` (co-located with workflow store) | `TrustedDirManager` |
@@ -37,9 +39,10 @@
 
 ## Search / Indexing
 
-- 上传文件后，后端异步广播文件消息并尝试索引到 Weaviate
-- 聊天文本消息也会尝试索引到 Weaviate
+- 上传文件后，PDF 文本经 PDFBox 提取保存为 `_text.txt` 供 AI grep 搜索
+- 聊天文本消息持久化到 `session.json`
 - URL/PDF 链接经 `WebPageDownloader` 下载提取后可生成文件消息并持久化
+- AI 搜索由 `DirectModelAgent.searchContext()` 通过 grep 检索 `_text.txt` 和 `session.json`，受 accessibleSessionIds 隔离
 
 ## Cross-Client Contract Surface
 

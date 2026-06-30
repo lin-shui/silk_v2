@@ -45,6 +45,10 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 
+# Local tunnel scripts (not for version control)
+silk-tunnel.sh
+config/com.silk.tunnel.plist
+
 # Logs and runtime PID
 *.log
 *.pid
@@ -63,6 +67,14 @@ backend_test.log
 
 # Workflow runtime persistence (per-user data, should not be tracked)
 backend/workflows/
+
+# User history workspace views (hardlinked runtime data)
+user_workspace_views/
+backend/user_workspace_views/
+
+# Claude CLI agent workspaces (runtime data)
+chat_workspaces/
+backend/chat_workspaces/
 
 # Large binary files (download separately)
 search/weaviate
@@ -118,6 +130,26 @@ tmp/
 __pycache__/
 *.pyc
 
+# cc_bridge runtime data (port files, hook logs)
+cc_bridge/data/
+
 # HarmonyApp local config (auto-generated from .env)
 frontend/harmonyApp/entry/src/main/ets/common/EnvConfig.ets
 docs/superpowers/
+
+# Nginx (environment-specific; use nginx_silk.conf.example as template)
+nginx_silk.conf
+nginx_silk_36795_36796.conf
+
+# Cursor IDE session artifacts
+.cursor/
+
+# Backend generated output
+backend/backend/
+
+# Knowledge base runtime data
+backend/knowledge_base/
+
+# Python virtual environments
+cc_bridge/.venv/
+search/.venv/

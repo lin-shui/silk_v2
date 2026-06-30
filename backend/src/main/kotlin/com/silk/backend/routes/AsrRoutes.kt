@@ -1,17 +1,29 @@
 package com.silk.backend.routes
 
 import com.silk.backend.ai.AIConfig
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
-import io.ktor.client.request.forms.*
-import io.ktor.client.statement.*
-import io.ktor.http.*
-import io.ktor.http.content.*
-import io.ktor.server.application.*
-import io.ktor.server.request.*
-import io.ktor.server.response.*
-import io.ktor.server.routing.*
-import kotlinx.serialization.json.*
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.engine.cio.endpoint
+import io.ktor.client.request.forms.formData
+import io.ktor.client.request.forms.submitFormWithBinaryData
+import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.Headers
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.call
+import io.ktor.server.request.receiveText
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.Route
+import io.ktor.server.routing.post
+import io.ktor.server.routing.route
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 import java.nio.file.Files
 import java.util.Base64
@@ -31,6 +43,7 @@ private val httpClient = HttpClient(CIO) {
 
 private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 fun Route.asrRoutes() {
     route("/api/asr") {
 
@@ -146,6 +159,7 @@ fun Route.asrRoutes() {
 /**
  * 使用 ffmpeg 将任意常见录音格式转为 16kHz 单声道 PCM WAV，供 mlx_audio/miniaudio 解码。
  */
+@Suppress("TooGenericExceptionCaught")
 private fun transcodeToWavWithFfmpeg(input: ByteArray, format: String): ByteArray? {
     val ext = when (format.lowercase()) {
         "webm", "m4a", "mp3", "mp4", "ogg", "flac", "aac", "wav" -> format.lowercase()

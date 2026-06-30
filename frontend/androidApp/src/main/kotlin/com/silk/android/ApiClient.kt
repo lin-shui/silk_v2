@@ -1,6 +1,16 @@
+@file:Suppress("TooGenericExceptionCaught", "SwallowedException", "InstanceOfCheckForException")
+
 package com.silk.android
 
-import com.silk.shared.models.*
+import com.silk.shared.models.CcSettingsResponse
+import com.silk.shared.models.CcStateResponse
+import com.silk.shared.models.DirListingResponse
+import com.silk.shared.models.Language
+import com.silk.shared.models.LeaveGroupResponse
+import com.silk.shared.models.SimpleResponse
+import com.silk.shared.models.UpdateUserSettingsRequest
+import com.silk.shared.models.UserSettings
+import com.silk.shared.models.UserSettingsResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -46,7 +56,19 @@ data class UnreadCountResponse(
 data class AuthResponse(
     val success: Boolean,
     val message: String,
-    val user: User? = null
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null
+)
+
+@Serializable
+data class HuaweiAuthResponse(
+    val success: Boolean,
+    val message: String,
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val isNewUser: Boolean = false
 )
 
 @Serializable
@@ -54,7 +76,39 @@ data class GroupResponse(
     val success: Boolean,
     val message: String,
     val group: Group? = null,
-    val groups: List<Group>? = null
+    val groups: List<Group>? = null,
+    val ccConnectToken: String? = null,
+)
+
+// ==================== cc-connect 数据模型 ====================
+
+@Serializable
+data class CcModeOption(val key: String, val name: String)
+
+@Serializable
+data class CcModelOption(val name: String, val desc: String = "")
+
+@Serializable
+data class CcMetadataEvent(
+    val type: String = "cc_metadata",
+    val mode: String? = null,
+    val model: String? = null,
+    val availableModes: List<CcModeOption>? = null,
+    val availableModels: List<CcModelOption>? = null,
+)
+
+@Serializable
+data class CcConnectTokenInfo(
+    val success: Boolean = false,
+    val token: String? = null,
+    val connected: Boolean = false,
+    val agentType: String? = null,
+    val project: String? = null,
+    val cwd: String? = null,
+    val mode: String? = null,
+    val model: String? = null,
+    val availableModes: List<CcModeOption>? = null,
+    val availableModels: List<CcModelOption>? = null,
 )
 
 // ==================== 联系人相关数据模型 ====================
@@ -116,7 +170,8 @@ data class PrivateChatResponse(
 data class GroupMember(
     val id: String,
     val fullName: String,
-    val phone: String = ""
+    val phone: String = "",
+    val role: String = "GUEST"
 )
 
 @Serializable
@@ -140,6 +195,13 @@ data class AppVersionInfo(
     val lastModified: Long = 0,
     val fileSize: Long = 0,
     val downloadUrl: String = ""
+)
+
+@Serializable
+data class AgentInfo(
+    val agentType: String,
+    val displayName: String,
+    val connected: Boolean,
 )
 
 // ==================== Workflow API ====================
@@ -171,9 +233,13 @@ sealed class TrustCheckResult {
     data class Error(val message: String) : TrustCheckResult()
 }
 
+@Suppress("LargeClass")
 object ApiClient {
     private val baseUrl: String get() = BackendUrlHolder.getBaseUrl()
     private val jsonParser = Json { ignoreUnknownKeys = true }
+    
+    /** 密码登录后保存的 JWT token，供后续需鉴权的 API 使用 */
+    var accessToken: String? = null
     
     suspend fun register(
         loginName: String,
@@ -199,6 +265,52 @@ object ApiClient {
         } catch (e: Exception) {
             println("登录失败: $e")
             AuthResponse(false, "网络错误")
+        }
+    }
+    
+    suspend fun huaweiLogin(idToken: String): HuaweiAuthResponse = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"idToken":"$idToken"}"""
+            val response = post("/auth/huawei/login", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("华为登录失败: $e")
+            HuaweiAuthResponse(false, "网络错误: ${e.message}")
+        }
+    }
+    
+    suspend fun huaweiWebLogin(code: String, redirectUri: String): HuaweiAuthResponse = withContext(Dispatchers.IO) {
+        try {
+            val escapedUri = redirectUri.replace("\\", "\\\\").replace("\"", "\\\"")
+            val body = """{"code":"$code","redirectUri":"$escapedUri"}"""
+            val response = post("/auth/huawei/web-login", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("华为Web登录失败: $e")
+            HuaweiAuthResponse(false, "网络错误: ${e.message}")
+        }
+    }
+
+    suspend fun huaweiBind(code: String, redirectUri: String): HuaweiAuthResponse = withContext(Dispatchers.IO) {
+        try {
+            val escapedUri = redirectUri.replace("\\", "\\\\").replace("\"", "\\\"")
+            val body = """{"code":"$code","redirectUri":"$escapedUri"}"""
+            val response = post("/api/account/bind-huawei", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("华为账号绑定失败: $e")
+            HuaweiAuthResponse(false, "网络错误: ${e.message}")
+        }
+    }
+    
+    suspend fun updateUserProfile(userId: String, fullName: String): SimpleResponse = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"fullName":"$fullName"}"""
+            val response = put("/users/$userId/profile", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("更新用户资料失败: $e")
+            SimpleResponse(false, "网络错误")
         }
     }
     
@@ -248,9 +360,13 @@ object ApiClient {
         }
     }
     
-    suspend fun createGroup(userId: String, groupName: String): GroupResponse = withContext(Dispatchers.IO) {
+    suspend fun createGroup(userId: String, groupName: String, type: String? = null): GroupResponse = withContext(Dispatchers.IO) {
         try {
-            val body = """{"userId":"$userId","groupName":"$groupName"}"""
+            val body = if (type != null) {
+                """{"userId":"$userId","groupName":"$groupName","type":"$type"}"""
+            } else {
+                """{"userId":"$userId","groupName":"$groupName"}"""
+            }
             val response = post("/groups/create", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
@@ -471,6 +587,30 @@ object ApiClient {
         }
     }
 
+    // ==================== cc-connect Token / Status API ====================
+
+    suspend fun getCcConnectTokenInfo(groupId: String, userId: String): CcConnectTokenInfo? = withContext(Dispatchers.IO) {
+        try {
+            val response = get("/api/ccconnect/groups/$groupId/token-info?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("获取 cc-connect token 信息失败: $e")
+            null
+        }
+    }
+
+    suspend fun regenerateCcConnectToken(groupId: String, userId: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"groupId":"$groupId","userId":"$userId"}"""
+            val response = post("/api/ccconnect/regenerate-token", body)
+            val info = jsonParser.decodeFromString<CcConnectTokenInfo>(response)
+            info.token
+        } catch (e: Exception) {
+            println("重新生成 cc-connect token 失败: $e")
+            null
+        }
+    }
+
     // ==================== 消息发送 API ====================
     
     /**
@@ -542,7 +682,35 @@ object ApiClient {
      * 获取 APK 下载 URL
      */
     fun getApkDownloadUrl(): String = "$baseUrl/api/files/download-apk"
-    
+
+    /**
+     * 注销账号（删除用户及其所有数据）
+     */
+    suspend fun deleteAccount(userId: String): SimpleResponse = withContext(Dispatchers.IO) {
+        try {
+            val response = delete("/users/$userId/account")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            println("注销账号失败: $e")
+            SimpleResponse(false, "网络错误")
+        }
+    }
+
+    /**
+     * 登出
+     */
+    suspend fun logout(): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val body = """{"refreshToken":""}"""
+            post("/auth/logout", body)
+            true
+        } catch (e: Exception) {
+            println("登出请求失败: $e")
+            true // 即使失败也清除本地状态
+        }
+    }
+
+    @Suppress("NestedBlockDepth", "TooGenericExceptionCaught", "SwallowedException")
     private fun post(endpoint: String, jsonBody: String): String {
         val url = URL("$baseUrl$endpoint")
         val connection = AndroidHttpCompat.openConnection(url)
@@ -555,12 +723,27 @@ object ApiClient {
                 connectTimeout = 10000
                 readTimeout = 10000
             }
+            // 添加 JWT Bearer Token（如已保存）
+            if (!accessToken.isNullOrBlank()) {
+                connection.setRequestProperty("Authorization", "Bearer $accessToken")
+            }
             
             connection.outputStream.use { os ->
                 os.write(jsonBody.toByteArray())
             }
             
-            connection.inputStream.bufferedReader().use { it.readText() }
+            val responseCode = connection.responseCode
+            if (responseCode in 200..299) {
+                connection.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                val errorBody = try {
+                    val stream = connection.errorStream
+                    if (stream != null) stream.bufferedReader().use { it.readText() } else ""
+                } catch (e: Exception) {
+                    try { connection.inputStream.bufferedReader().use { it.readText() } } catch (e2: Exception) { "" }
+                }
+                throw java.io.IOException("HTTP $responseCode: $errorBody")
+            }
         } finally {
             connection.disconnect()
         }
@@ -631,11 +814,14 @@ object ApiClient {
         }
     }
 
+    @Suppress("TooGenericExceptionCaught", "InstanceOfCheckForException")
     suspend fun createWorkflow(
         name: String,
         description: String,
         userId: String,
         initialDir: String,
+        agentType: String = "claude_code",
+        permissionMode: String = "",
     ): CreateWorkflowResult = withContext(Dispatchers.IO) {
         try {
             val body = buildJsonObject {
@@ -643,6 +829,12 @@ object ApiClient {
                 put("name", JsonPrimitive(name))
                 put("description", JsonPrimitive(description))
                 put("initialDir", JsonPrimitive(initialDir))
+                if (agentType.isNotBlank()) {
+                    put("agentType", JsonPrimitive(agentType))
+                }
+                if (permissionMode.isNotBlank()) {
+                    put("permissionMode", JsonPrimitive(permissionMode))
+                }
             }.toString()
             val response = post("/api/workflows", body)
             val obj = jsonParser.parseToJsonElement(response).jsonObject
@@ -665,6 +857,21 @@ object ApiClient {
         } catch (e: Exception) {
             println("删除工作流失败: $e")
             false
+        }
+    }
+
+    suspend fun renameWorkflow(workflowId: String, userId: String, newName: String): WorkflowItem? = withContext(Dispatchers.IO) {
+        try {
+            val body = buildJsonObject {
+                put("userId", JsonPrimitive(userId))
+                put("name", JsonPrimitive(newName))
+            }.toString()
+            val response = put("/api/workflows/$workflowId", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("重命名工作流失败: $e")
+            null
         }
     }
 
@@ -711,6 +918,45 @@ object ApiClient {
         } catch (e: Exception) {
             if (e is CancellationException) throw e
             println("切换目录失败: $e")
+            CcStateResponse(success = false, error = e.message)
+        }
+    }
+
+    /** 列出可用的 agent 选项。 */
+    suspend fun listAgents(userId: String): List<AgentInfo> = withContext(Dispatchers.IO) {
+        try {
+            val encoded = java.net.URLEncoder.encode(userId, "UTF-8")
+            val response = get("/api/agents?userId=$encoded")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("列出 agent 失败: $e")
+            emptyList()
+        }
+    }
+
+    /** 更新工作流会话设置（agent / permissionMode）。 */
+    suspend fun updateCcSettings(
+        userId: String,
+        groupId: String,
+        activeAgent: String? = null,
+        permissionMode: String? = null,
+    ): CcStateResponse = withContext(Dispatchers.IO) {
+        try {
+            val body = buildJsonObject {
+                put("groupId", JsonPrimitive(groupId))
+                if (!activeAgent.isNullOrBlank()) {
+                    put("activeAgent", JsonPrimitive(activeAgent))
+                }
+                if (!permissionMode.isNullOrBlank()) {
+                    put("permissionMode", JsonPrimitive(permissionMode))
+                }
+            }.toString()
+            val response = post("/users/$userId/cc-settings/update", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("更新会话设置失败: $e")
             CcStateResponse(success = false, error = e.message)
         }
     }
@@ -814,6 +1060,7 @@ object ApiClient {
 
     // ==================== ASR 语音识别 API ====================
 
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
     suspend fun transcribeAudio(audioBase64: String, format: String = "m4a"): AsrResult = withContext(Dispatchers.IO) {
         try {
             val body = """{"audio":"$audioBase64","format":"$format"}"""

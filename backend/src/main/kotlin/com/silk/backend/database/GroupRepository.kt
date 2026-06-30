@@ -4,8 +4,13 @@ import com.silk.backend.ChatHistoryBackupManager
 import com.silk.backend.search.SessionInfo
 import com.silk.backend.search.WeaviateClient
 import kotlinx.coroutines.runBlocking
-import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.deleteWhere
+import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.select
+import org.jetbrains.exposed.sql.selectAll
+import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
 import java.io.File
@@ -15,6 +20,7 @@ import kotlin.random.Random
 /**
  * 群组数据访问层
  */
+@Suppress("TooGenericExceptionCaught")
 object GroupRepository {
     private val logger = LoggerFactory.getLogger(GroupRepository::class.java)
 
@@ -221,6 +227,31 @@ object GroupRepository {
             GroupMembers.select { 
                 (GroupMembers.groupId eq groupId) and (GroupMembers.userId eq userId)
             }.count() > 0
+        }
+    }
+
+    fun getMemberRole(groupId: String, userId: String): MemberRole? {
+        return transaction {
+            GroupMembers.select {
+                (GroupMembers.groupId eq groupId) and (GroupMembers.userId eq userId)
+            }.singleOrNull()?.let {
+                try { MemberRole.valueOf(it[GroupMembers.role]) } catch (_: Exception) { null }
+            }
+        }
+    }
+
+    fun updateMemberRole(groupId: String, userId: String, role: MemberRole): Boolean {
+        return try {
+            transaction {
+                GroupMembers.update({
+                    (GroupMembers.groupId eq groupId) and (GroupMembers.userId eq userId)
+                }) {
+                    it[GroupMembers.role] = role.name
+                }
+            } > 0
+        } catch (e: Exception) {
+            logger.error("❌ 更新成员角色失败: groupId={}, userId={}, err={}", groupId, userId, e.message)
+            false
         }
     }
     

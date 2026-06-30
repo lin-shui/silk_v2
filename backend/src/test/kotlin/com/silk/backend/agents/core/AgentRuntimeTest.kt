@@ -188,6 +188,11 @@ class AgentRuntimeTest {
     }
 
     @Test
+    fun `isAgentUserId returns true for cc-connect`() {
+        assertTrue(AgentRuntime.isAgentUserId(AgentRuntime.CC_CONNECT_USER_ID))
+    }
+
+    @Test
     fun `isAgentUserId returns false for regular user`() {
         assertFalse(AgentRuntime.isAgentUserId("550e8400-e29b-41d4-a716-446655440000"))
     }

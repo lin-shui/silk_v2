@@ -106,6 +106,8 @@ SILK_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # 加载 .env（API Key、BACKEND_HOST 等，构建 APK 时会用到）
 if [ -f "$SILK_DIR/.env" ]; then
+    # 保留预先设置的环境变量（优先级高于 .env）
+    _PRE_SET_BACKEND_BASE_URL="${BACKEND_BASE_URL:-}"
     # 转换 CRLF 为 LF 并加载
     TMP_ENV=$(mktemp)
     tr -d '\r' < "$SILK_DIR/.env" > "$TMP_ENV"
@@ -113,6 +115,11 @@ if [ -f "$SILK_DIR/.env" ]; then
     source "$TMP_ENV"
     set +a
     rm -f "$TMP_ENV"
+    # 如果调用前已设置环境变量，恢复它（覆盖 .env）
+    if [ -n "$_PRE_SET_BACKEND_BASE_URL" ]; then
+        BACKEND_BASE_URL="$_PRE_SET_BACKEND_BASE_URL"
+    fi
+    unset _PRE_SET_BACKEND_BASE_URL
 fi
 
 # Weaviate Schema 初始化用 Python
@@ -134,6 +141,9 @@ fi
 BACKEND_HTTP_PORT=${BACKEND_HTTP_PORT:-8003}
 BACKEND_PORT=${BACKEND_INTERNAL_PORT:-${BACKEND_PORT:-$BACKEND_HTTP_PORT}}
 FRONTEND_HTTP_PORT=${FRONTEND_HTTP_PORT:-${FRONTEND_PORT:-8005}}
+# 兼容旧部署：支持前端内部监听端口与公网端口分离（如 Nginx/Caddy 做 HTTPS 反向代理）
+# - FRONTEND_PORT / FRONTEND_INTERNAL_PORT: 前端进程实际监听口（默认跟随 FRONTEND_HTTP_PORT）
+# - FRONTEND_HTTP_PORT / FRONTEND_PUBLIC_PORT: 对外访问口（可为 HTTPS 终止后的公网端口）
 FRONTEND_PORT=${FRONTEND_INTERNAL_PORT:-${FRONTEND_PORT:-$FRONTEND_HTTP_PORT}}
 WEAVIATE_HTTP_PORT=${WEAVIATE_HTTP_PORT:-8008}
 WEAVIATE_GRPC_PORT=${WEAVIATE_GRPC_PORT:-50051}
@@ -155,12 +165,17 @@ if [ -n "$WEAVIATE_API_KEY" ]; then
     CURL_WEAVIATE_AUTH=(-H "Authorization: Bearer $WEAVIATE_API_KEY")
 fi
 
-# Weaviate URL 处理：优先使用 .env 中的 WEAVIATE_URL，否则使用本地
-WEAVIATE_CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
 # 判断是否使用远程 Weaviate
 WEAVIATE_IS_REMOTE=false
 if [ -n "$WEAVIATE_URL" ] && [[ ! "$WEAVIATE_URL" =~ localhost|127\.0\.0\.1 ]]; then
     WEAVIATE_IS_REMOTE=true
+fi
+# 本地 Weaviate：以 WEAVIATE_HTTP_PORT 为准（与 silk 启动的原生/Docker 一致），
+# 避免 .env 里 WEAVIATE_URL 与 WEAVIATE_HTTP_PORT 端口不同步时 Schema/健康检查连错
+if [ "$WEAVIATE_IS_REMOTE" = true ]; then
+    WEAVIATE_CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
+else
+    WEAVIATE_CHECK_URL="http://localhost:$WEAVIATE_HTTP_PORT"
 fi
 # APK 输出目录
 APK_OUTPUT_DIR="$SILK_DIR/backend/static"
@@ -354,6 +369,35 @@ kill_all_ports() {
     
     # 永不清理 Weaviate 端口：若 8008 已有 Weaviate 在跑则直接复用，不停止、不杀进程
     echo -e "  ${GREEN}✓ 跳过 Weaviate 端口 ($WEAVIATE_HTTP_PORT/$WEAVIATE_GRPC_PORT)，保持已有实例${NC}"
+}
+
+# ============================================================
+# Nginx 保活
+# ============================================================
+
+ensure_nginx() {
+    # 如果内网端口等于公网端口，说明服务直接监听公网端口，不需要 nginx
+    if [ "$BACKEND_PORT" = "$BACKEND_HTTP_PORT" ] && [ "${FRONTEND_PORT:-$FRONTEND_HTTP_PORT}" = "$FRONTEND_HTTP_PORT" ]; then
+        echo -e "  ${GREEN}✓ 服务直接监听公网端口，跳过 nginx${NC}"
+        return 0
+    fi
+    echo -e "${BLUE}检查 Nginx 反向代理...${NC}"
+    if command -v nginx >/dev/null 2>&1; then
+        if pgrep -x nginx > /dev/null; then
+            echo -e "  ${GREEN}✓ Nginx 已在运行${NC}"
+        else
+            echo -e "  ${YELLOW}⚠ Nginx 未运行，正在启动...${NC}"
+            nginx -t > /dev/null 2>&1 && nginx
+            if [ $? -eq 0 ]; then
+                echo -e "  ${GREEN}✓ Nginx 已启动${NC}"
+            else
+                echo -e "  ${RED}❌ Nginx 启动失败，请检查 nginx -t${NC}"
+                return 1
+            fi
+        fi
+    else
+        echo -e "  ${YELLOW}⚠ 未安装 nginx，跳过反向代理检查${NC}"
+    fi
 }
 
 # ============================================================
@@ -603,8 +647,8 @@ weaviate_stop() {
 weaviate_schema() {
     echo -e "${BLUE}初始化 Weaviate Schema...${NC}"
     
-    # 确定要检查的 Weaviate URL
-    local CHECK_URL="${WEAVIATE_URL:-http://localhost:$WEAVIATE_HTTP_PORT}"
+    # 与 WEAVIATE_CHECK_URL 一致（本地以 HTTP 端口为准）
+    local CHECK_URL="$WEAVIATE_CHECK_URL"
     
     # 检查是否已就绪
     local READY=$(curl -s "${CURL_WEAVIATE_AUTH[@]}" -o /dev/null -w "%{http_code}" "$CHECK_URL/v1/.well-known/ready" 2>/dev/null)
@@ -718,6 +762,35 @@ check_status() {
         echo -e "  ${YELLOW}○ 未找到 APK 文件${NC}"
         echo -e "  运行 './silk.sh build-apk' 构建"
     fi
+
+    # Nginx 状态
+    echo ""
+    if [ "$BACKEND_PORT" = "$BACKEND_HTTP_PORT" ] && [ "${FRONTEND_PORT:-$FRONTEND_HTTP_PORT}" = "$FRONTEND_HTTP_PORT" ]; then
+        echo -e "${BLUE}【Nginx 反向代理】${NC}"
+        echo -e "  状态: ${YELLOW}○ 未使用（服务直接监听公网端口）${NC}"
+    else
+    echo -e "${BLUE}【Nginx 反向代理】${NC}"
+    if command -v nginx >/dev/null 2>&1; then
+        if pgrep -x nginx > /dev/null; then
+            local NGINX_COUNT=$(pgrep -c nginx)
+            echo -e "  状态: ${GREEN}● 运行中${NC} ($NGINX_COUNT 进程)"
+            if check_port $FRONTEND_PUBLIC_PORT; then
+                echo -e "  前端公网端口 $FRONTEND_PUBLIC_PORT: ${GREEN}✓ 监听中${NC}"
+            else
+                echo -e "  前端公网端口 $FRONTEND_PUBLIC_PORT: ${RED}✗ 未监听${NC}"
+            fi
+            if check_port $BACKEND_HTTP_PORT; then
+                echo -e "  后端公网端口 $BACKEND_HTTP_PORT: ${GREEN}✓ 监听中${NC}"
+            else
+                echo -e "  后端公网端口 $BACKEND_HTTP_PORT: ${RED}✗ 未监听${NC}"
+            fi
+        else
+            echo -e "  状态: ${RED}○ 未运行${NC}"
+        fi
+    else
+        echo -e "  ${YELLOW}⚠ nginx 未安装${NC}"
+    fi
+    fi
     
     echo ""
 }
@@ -742,8 +815,11 @@ build_frontend() {
         # 复制到 backend/static 目录
         echo ""
         echo -e "${BLUE}复制到 backend/static 目录...${NC}"
-        cp -r $SILK_DIR/frontend/webApp/build/dist/js/productionExecutable/* $SILK_DIR/backend/static/
-        echo -e "${GREEN}✅ 已更新 backend/static${NC}"
+        cp -r "$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"/* "$SILK_DIR/backend/static/"
+        # 替换 index.html 中的时间戳占位符，每次构建不同的 ?v= 以清除浏览器缓存
+        BUILD_TS=$(date +%Y%m%d%H%M%S)
+        sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$SILK_DIR/backend/static/index.html" && rm -f "$SILK_DIR/backend/static/index.html.bak"
+        echo -e "${GREEN}✅ 已更新 backend/static (build=$BUILD_TS)${NC}"
     else
         echo ""
         echo -e "${RED}❌ 前端构建失败${NC}"
@@ -1210,6 +1286,10 @@ deploy() {
     echo ""
     echo -e "${BLUE}[5/5] 启动后端和前端...${NC}"
     start_services_internal
+
+    # 6. Nginx（如果内网端口等于公网端口则跳过）
+    echo ""
+    ensure_nginx
 }
 
 # ============================================================
@@ -1223,7 +1303,7 @@ start_services_internal() {
     echo -e "${BLUE}启动 Silk 后端...${NC}"
     cd "$SILK_DIR"
     clean_gradle_kotlin_snapshots
-    nohup env JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
+    nohup env LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=Asia/Shanghai JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR -Duser.timezone=Asia/Shanghai" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
     echo -e "  ${GREEN}后端启动命令已执行${NC}"
     echo -e "  日志: /tmp/silk_backend.log"
     
@@ -1236,7 +1316,11 @@ start_services_internal() {
         echo -e "  ${YELLOW}前端文件不存在，请先运行: ./silk.sh build${NC}"
         return 1
     fi
-    
+
+    # 替换 index.html 中的构建时间戳占位符，确保浏览器缓存每次构建后失效
+    BUILD_TS=$(date +%Y%m%d%H%M%S)
+    sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$STATIC_DIR/index.html" && rm -f "$STATIC_DIR/index.html.bak"
+
     cd "$STATIC_DIR"
     nohup python3 -m http.server $FRONTEND_PORT --bind 0.0.0.0 > /tmp/silk_frontend.log 2>&1 &
     echo -e "  ${GREEN}前端静态服务器已启动${NC}"
@@ -1310,7 +1394,7 @@ start_services() {
         cd "$SILK_DIR"
         clean_gradle_kotlin_snapshots
         mkdir -p "$SILK_WORKFLOW_DIR"
-        nohup env JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
+        nohup env LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=Asia/Shanghai JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR -Duser.timezone=Asia/Shanghai" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
         echo -e "  ${GREEN}后端启动命令已执行${NC}"
         echo -e "  日志: /tmp/silk_backend.log"
     fi
@@ -1324,11 +1408,11 @@ start_services() {
         cd "$SILK_DIR"
         STATIC_DIR="$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"
         
-        # 检查是否有预编译的文件
-        if [ -f "$STATIC_DIR/webApp.js" ]; then
+        # 检查是否有预编译的文件，且比源码新（防止 Gradle 缓存提供过期产物）
+        if [ -f "$STATIC_DIR/webApp.js" ] && [ "$STATIC_DIR/webApp.js" -nt "$SILK_DIR/frontend/webApp/src/main/kotlin/com/silk/web/Main.kt" ]; then
             echo -e "  ${GREEN}使用预编译的生产版本${NC}"
         else
-            echo -e "  ${YELLOW}预编译文件不存在，正在构建...${NC}"
+            echo -e "  ${YELLOW}预编译文件不存在或已过期，正在构建...${NC}"
             ./gradlew :frontend:webApp:browserProductionWebpack > /tmp/silk_frontend_build.log 2>&1
             if [ $? -ne 0 ]; then
                 echo -e "  ${RED}前端构建失败，请检查 /tmp/silk_frontend_build.log${NC}"
@@ -1336,6 +1420,9 @@ start_services() {
             fi
             echo -e "  ${GREEN}前端构建完成${NC}"
         fi
+        # 替换 index.html 中的构建时间戳占位符，确保浏览器缓存每次构建后失效
+        BUILD_TS=$(date +%Y%m%d%H%M%S)
+        sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$STATIC_DIR/index.html" && rm -f "$STATIC_DIR/index.html.bak"
         
         # 使用Python静态服务器提供服务
         cd "$STATIC_DIR"
@@ -1378,6 +1465,10 @@ start_services() {
     
     echo ""
     echo -e "${YELLOW}⚠ 部分服务可能仍在启动中，请运行 './silk.sh status' 检查${NC}"
+
+    # Nginx（如果内网端口等于公网端口则跳过）
+    echo ""
+    ensure_nginx
 }
 
 # ============================================================
@@ -1497,12 +1588,15 @@ quick_restart() {
     cd "$SILK_DIR"
     clean_gradle_kotlin_snapshots
     mkdir -p "$SILK_WORKFLOW_DIR"
-    nohup env JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
+    nohup env LANG=C.UTF-8 LC_ALL=C.UTF-8 TZ=Asia/Shanghai JAVA_TOOL_OPTIONS="-Dsilk.workflowDir=$SILK_WORKFLOW_DIR -Duser.timezone=Asia/Shanghai" ./gradlew :backend:run > /tmp/silk_backend.log 2>&1 &
     echo "  后端启动中..."
     
     # 启动前端 (使用预编译的生产版本)
     STATIC_DIR="$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"
     if [ -f "$STATIC_DIR/webApp.js" ]; then
+        # 替换 index.html 中的构建时间戳占位符，确保浏览器缓存每次构建后失效
+        BUILD_TS=$(date +%Y%m%d%H%M%S)
+        sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$STATIC_DIR/index.html" && rm -f "$STATIC_DIR/index.html.bak"
         cd "$STATIC_DIR"
         nohup python3 -m http.server $FRONTEND_PORT --bind 0.0.0.0 > /tmp/silk_frontend.log 2>&1 &
         echo "  前端启动中 (静态服务器)..."

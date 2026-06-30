@@ -17,6 +17,7 @@ Treat documentation sync as part of the same deliverable as the code change.
 - For docs-only changes, still check discoverability: update `AGENTS.md`, `ARCHITECTURE.md`, `docs/context/INDEX.md`, or `docs/context/TASK_ROUTER.md` when a new document should be routed to.
 - Do not auto-edit `docs/todo-roadmap.md` unless the user explicitly asks.
 - Run the narrowest relevant validation, following `docs/context/quality/TEST_MATRIX.md`.
+- If Kotlin, Gradle, or `silk.sh` changed, run `./gradlew silkLint` before commit/push/PR so detekt and script lint fail locally first.
 - For docs-only changes, `git diff --check` is usually sufficient.
 - In the PR body or final response, state docs sync result and validation commands.
 

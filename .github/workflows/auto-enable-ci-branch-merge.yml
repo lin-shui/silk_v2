@@ -1,0 +1,61 @@
+name: Auto Enable CI Branch Merge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  enable-auto-merge:
+    name: Enable auto-merge for CI branch PRs
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.base.ref == 'chore/ci-auto-merge'
+    steps:
+      - name: Enable auto-merge with merge commit
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            if (pr.draft) {
+              core.info(`PR #${pr.number} is draft, skip for now.`);
+              return;
+            }
+
+            const mutation = `mutation EnableAutoMerge($pullRequestId: ID!) {
+              enablePullRequestAutoMerge(
+                input: { pullRequestId: $pullRequestId, mergeMethod: MERGE }
+              ) {
+                clientMutationId
+              }
+            }`;
+
+            const maxAttempts = 4;
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+              try {
+                await github.graphql(mutation, { pullRequestId: pr.node_id });
+                core.info(`Enabled auto-merge (MERGE) for PR #${pr.number}.`);
+                return;
+              } catch (error) {
+                const message = (error && error.message) || "";
+                if (/already enabled/i.test(message)) {
+                  core.info(`Auto-merge already enabled for PR #${pr.number}.`);
+                  return;
+                }
+                if (/Resource not accessible by integration/i.test(message)) {
+                  core.notice(`Auto-merge could not be enabled by this workflow token for PR #${pr.number}; leaving the PR open.`);
+                  return;
+                }
+
+                const retriable =
+                  /Head branch was modified|INTERNAL|Something went wrong/i.test(message);
+                if (retriable && attempt < maxAttempts) {
+                  core.warning(`Attempt ${attempt} failed: ${message}`);
+                  await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
+                  continue;
+                }
+                throw error;
+              }
+            }

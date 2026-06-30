@@ -1,7 +1,10 @@
 package com.silk.backend
 
 import com.silk.backend.agents.core.AgentRuntime
-import com.silk.backend.models.*
+import com.silk.backend.models.ChatHistory
+import com.silk.backend.models.ChatHistoryEntry
+import com.silk.backend.models.SessionData
+import com.silk.backend.models.SessionMember
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
@@ -18,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
  * 2. 损坏文件备份：解析失败时自动备份损坏文件，防止数据丢失
  * 3. 不自动覆盖：加载失败时不创建新会话，避免覆盖历史数据
  */
+@Suppress("TooGenericExceptionCaught")
 class ChatHistoryManager(
     private val baseDir: String =
         System.getProperty("silk.chatHistoryDir")
@@ -61,14 +65,6 @@ class ChatHistoryManager(
         return "$baseDir/$normalizedSessionName"
     }
     
-    /**
-     * 获取会话目录路径（不进行标准化，用于查找旧格式目录）
-     */
-    private fun getSessionDirLegacy(sessionName: String): String {
-        val safeName = sessionName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        return "$baseDir/$safeName"
-    }
-
     private fun getSessionFile(sessionName: String): File {
         return File("${getSessionDir(sessionName)}/session.json")
     }
@@ -304,13 +300,48 @@ class ChatHistoryManager(
             content = message.content,
             timestamp = message.timestamp,
             messageType = message.type.name,
-            references = message.references
+            references = message.references,
+            kbContextSelection = message.kbContextSelection,
+            contentBlocksJson = message.contentBlocks?.let { json.encodeToString(it) },
+            interactiveOptionsJson = message.interactiveOptions?.let { json.encodeToString(it) },
         )
         
         chatHistory.messages.add(entry)
         saveChatHistory(sessionName, chatHistory)
     }
-    
+
+    /**
+     * 替换聊天历史中的已有消息（用于卡片更新等 action="edit" 场景）
+     */
+    fun editMessage(
+        sessionName: String,
+        message: Message,
+    ) {
+        val chatHistory = loadChatHistory(sessionName) ?: return
+
+        val entry = ChatHistoryEntry(
+            messageId = message.id,
+            senderId = message.userId,
+            senderName = message.userName,
+            content = message.content,
+            timestamp = message.timestamp,
+            messageType = message.type.name,
+            references = message.references,
+            kbContextSelection = message.kbContextSelection,
+        )
+
+        val index = chatHistory.messages.indexOfFirst { it.messageId == message.id }
+        if (index >= 0) {
+            chatHistory.messages[index] = entry
+            saveChatHistory(sessionName, chatHistory)
+            logger.debug("✏️ [editMessage] 替换历史消息: {} in {}", message.id, sessionName)
+        } else {
+            logger.warn("⚠️ [editMessage] 未找到原消息，改为追加: {} in {}", message.id, sessionName)
+            chatHistory.messages.add(entry)
+            saveChatHistory(sessionName, chatHistory)
+        }
+    }
+
     /**
      * 更新 session 的 AI 角色提示
      * @Silk 消息中的角色指令会被保存，用于后续 AI 回复
@@ -464,6 +495,27 @@ class ChatHistoryManager(
         return deletedCount
     }
     
+    /** 扫描连续AI回复时对单条消息的判定结果。 */
+    private enum class AgentReplyScan { STOP, SKIP, ADD }
+
+    /**
+     * 判定扫描到的一条消息应当：停止扫描(STOP)、跳过但继续(SKIP)、计入AI回复(ADD)。
+     * 与原内联逻辑等价：遇到其他用户的非AI消息停止；AI回复需与上一条间隔 < 5 分钟才计入，否则停止。
+     */
+    private fun classifyAgentReplyScan(
+        msg: com.silk.backend.models.ChatHistoryEntry,
+        userMessage: com.silk.backend.models.ChatHistoryEntry,
+        prevMsg: com.silk.backend.models.ChatHistoryEntry,
+        isAgent: (String) -> Boolean,
+    ): AgentReplyScan {
+        if (!isAgent(msg.senderId)) {
+            // 其他用户的消息：停止；同一用户的后续消息：跳过
+            return if (msg.senderId != userMessage.senderId) AgentReplyScan.STOP else AgentReplyScan.SKIP
+        }
+        // AI回复：仅当与上一条间隔在 5 分钟内才视为连续
+        return if (msg.timestamp - prevMsg.timestamp < 5 * 60 * 1000) AgentReplyScan.ADD else AgentReplyScan.STOP
+    }
+
     /**
      * 查找指定消息后的AI回复消息
      * 用于撤回 @silk 消息时，同时删除AI的回复
@@ -479,8 +531,7 @@ class ChatHistoryManager(
         if (userMessageIndex == -1) return emptyList()
         
         val userMessage = chatHistory.messages[userMessageIndex]
-        val userTimestamp = userMessage.timestamp
-        
+
         val isAgent = { id: String -> AgentRuntime.isAgentUserId(id) }
 
         // 查找用户消息之后、连续的AI回复消息
@@ -488,21 +539,12 @@ class ChatHistoryManager(
 
         for (i in (userMessageIndex + 1) until chatHistory.messages.size) {
             val msg = chatHistory.messages[i]
+            val prevMsg = if (agentReplies.isEmpty()) userMessage else chatHistory.messages[i - 1]
 
-            // 如果遇到其他用户的消息，停止查找
-            if (!isAgent(msg.senderId) && msg.senderId != userMessage.senderId) {
-                break
-            }
-
-            // 如果是AI的回复，添加到列表
-            if (isAgent(msg.senderId)) {
-                // 检查是否是连续的AI回复（时间间隔在5分钟内）
-                val prevMsg = if (agentReplies.isEmpty()) userMessage else chatHistory.messages[i - 1]
-                if (msg.timestamp - prevMsg.timestamp < 5 * 60 * 1000) {
-                    agentReplies.add(msg.messageId)
-                } else {
-                    break
-                }
+            when (classifyAgentReplyScan(msg, userMessage, prevMsg, isAgent)) {
+                AgentReplyScan.STOP -> break
+                AgentReplyScan.SKIP -> {} // 同一用户的后续非AI消息：跳过但继续扫描
+                AgentReplyScan.ADD -> agentReplies.add(msg.messageId)
             }
         }
         

@@ -1,8 +1,23 @@
 package com.silk.web
 
-import org.jetbrains.compose.web.dom.*
 import org.jetbrains.compose.web.renderComposable
-import org.jetbrains.compose.web.css.*
+import org.jetbrains.compose.web.css.Color
+import org.jetbrains.compose.web.css.backgroundColor
+import org.jetbrains.compose.web.css.border
+import org.jetbrains.compose.web.css.borderRadius
+import org.jetbrains.compose.web.css.color
+import org.jetbrains.compose.web.css.fontSize
+import org.jetbrains.compose.web.css.marginTop
+import org.jetbrains.compose.web.css.padding
+import org.jetbrains.compose.web.css.px
+import org.jetbrains.compose.web.css.style
+import org.jetbrains.compose.web.css.textAlign
+import org.jetbrains.compose.web.css.width
+import org.jetbrains.compose.web.dom.Button
+import org.jetbrains.compose.web.dom.Div
+import org.jetbrains.compose.web.dom.H1
+import org.jetbrains.compose.web.dom.P
+import org.jetbrains.compose.web.dom.Text
 
 // 最简单的测试版本
 fun mainTest() {
@@ -48,4 +63,3 @@ fun mainTest() {
     
     console.log("✅ 测试版本渲染完成")
 }
-

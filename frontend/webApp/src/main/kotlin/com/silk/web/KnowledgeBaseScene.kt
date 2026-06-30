@@ -1,51 +1,1934 @@
 package com.silk.web
 
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.web.attributes.InputType
-import org.jetbrains.compose.web.css.*
-import org.jetbrains.compose.web.dom.*
+import org.jetbrains.compose.web.css.AlignItems
+import org.jetbrains.compose.web.css.Color
+import org.jetbrains.compose.web.css.DisplayStyle
+import org.jetbrains.compose.web.css.FlexDirection
+import org.jetbrains.compose.web.css.JustifyContent
+import org.jetbrains.compose.web.css.LineStyle
+import org.jetbrains.compose.web.css.Position
+import org.jetbrains.compose.web.css.alignItems
+import org.jetbrains.compose.web.css.backgroundColor
+import org.jetbrains.compose.web.css.border
+import org.jetbrains.compose.web.css.borderRadius
+import org.jetbrains.compose.web.css.bottom
+import org.jetbrains.compose.web.css.color
+import org.jetbrains.compose.web.css.display
+import org.jetbrains.compose.web.css.flexDirection
+import org.jetbrains.compose.web.css.flexGrow
+import org.jetbrains.compose.web.css.fontFamily
+import org.jetbrains.compose.web.css.fontSize
+import org.jetbrains.compose.web.css.fontWeight
+import org.jetbrains.compose.web.css.height
+import org.jetbrains.compose.web.css.justifyContent
+import org.jetbrains.compose.web.css.left
+import org.jetbrains.compose.web.css.marginBottom
+import org.jetbrains.compose.web.css.marginTop
+import org.jetbrains.compose.web.css.minWidth
+import org.jetbrains.compose.web.css.padding
+import org.jetbrains.compose.web.css.percent
+import org.jetbrains.compose.web.css.position
+import org.jetbrains.compose.web.css.px
+import org.jetbrains.compose.web.css.right
+import org.jetbrains.compose.web.css.style
+import org.jetbrains.compose.web.css.top
+import org.jetbrains.compose.web.css.width
+import org.jetbrains.compose.web.dom.Button
+import org.jetbrains.compose.web.dom.Div
+import org.jetbrains.compose.web.dom.H3
+import org.jetbrains.compose.web.dom.Input
+import org.jetbrains.compose.web.dom.Span
+import org.jetbrains.compose.web.dom.Text
+import org.jetbrains.compose.web.dom.TextArea
+
+private enum class KnowledgeEditorMode(val label: String) {
+    EDIT("编辑"),
+    PREVIEW("预览"),
+    SPLIT("分栏"),
+}
+
+internal enum class KnowledgeEntryFilter(val label: String) {
+    ALL("全部"),
+    CANDIDATE("候选"),
+    PUBLISHED("已发布"),
+    ARCHIVED("已归档"),
+}
+
+internal const val PERSONAL_SPACE_ID = "__personal__"
+
+internal data class KnowledgeSpaceOption(
+    val id: String,
+    val label: String,
+    val type: KnowledgeSpaceType,
+    val group: Group? = null,
+)
+
+internal fun buildKnowledgeSpaceOptions(groups: List<Group>): List<KnowledgeSpaceOption> {
+    val teamOptions = groups
+        .filterNot { it.name.startsWith("wf_") }
+        .sortedBy { it.name.lowercase() }
+        .map { group ->
+            KnowledgeSpaceOption(
+                id = group.id,
+                label = group.name,
+                type = KnowledgeSpaceType.TEAM,
+                group = group,
+            )
+        }
+    return listOf(
+        KnowledgeSpaceOption(
+            id = PERSONAL_SPACE_ID,
+            label = "个人",
+            type = KnowledgeSpaceType.PERSONAL,
+        )
+    ) + teamOptions
+}
+
+internal fun filterTopicsForSpace(topics: List<KBTopicItem>, selectedSpaceId: String): List<KBTopicItem> {
+    return topics.filter { topic ->
+        when (selectedSpaceId) {
+            PERSONAL_SPACE_ID -> topic.spaceType == KnowledgeSpaceType.PERSONAL
+            else -> topic.spaceType == KnowledgeSpaceType.TEAM && topic.groupId == selectedSpaceId
+        }
+    }
+}
+
+internal fun canWriteKnowledgeTopic(topic: KBTopicItem, userId: String, groups: List<Group>): Boolean {
+    if (topic.ownerId == userId) return true
+    if (userId in topic.accessPolicy.manageUserIds) return true
+    if (topic.accessPolicy.writeLocked) return false
+    if (userId in topic.accessPolicy.writeUserIds) return true
+    if (topic.spaceType != KnowledgeSpaceType.TEAM || !topic.accessPolicy.teamMembersCanWrite) return false
+    return groups.any { it.id == topic.groupId }
+}
+
+internal fun canManageKnowledgeTopic(topic: KBTopicItem, userId: String, groups: List<Group>): Boolean {
+    if (topic.ownerId == userId) return true
+    if (userId in topic.accessPolicy.manageUserIds) return true
+    return topic.spaceType == KnowledgeSpaceType.TEAM &&
+        groups.any { it.id == topic.groupId && it.hostId == userId }
+}
+
+internal fun csvToKnowledgeUserIds(raw: String): List<String> {
+    return raw.split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+}
+
+internal fun knowledgeUserIdsToCsv(userIds: List<String>): String = userIds.joinToString(", ")
+
+internal fun topicSpaceLabel(topic: KBTopicItem, groups: List<Group>): String {
+    return when (topic.spaceType) {
+        KnowledgeSpaceType.PERSONAL -> "个人"
+        KnowledgeSpaceType.TEAM -> groups.find { it.id == topic.groupId }?.name ?: "团队"
+    }
+}
+
+internal fun topicPermissionLabel(topic: KBTopicItem, userId: String, groups: List<Group>): String {
+    return if (canWriteKnowledgeTopic(topic, userId, groups)) "可编辑" else "只读"
+}
+
+internal fun filterKnowledgeEntries(entries: List<KBEntryItem>, filter: KnowledgeEntryFilter): List<KBEntryItem> {
+    return when (filter) {
+        KnowledgeEntryFilter.ALL -> entries
+        KnowledgeEntryFilter.CANDIDATE -> entries.filter { it.status == KBEntryStatus.CANDIDATE }
+        KnowledgeEntryFilter.PUBLISHED -> entries.filter { it.status == KBEntryStatus.PUBLISHED }
+        KnowledgeEntryFilter.ARCHIVED -> entries.filter { it.status == KBEntryStatus.ARCHIVED }
+    }
+}
+
+internal fun knowledgeFilterForStatus(status: KBEntryStatus): KnowledgeEntryFilter {
+    return when (status) {
+        KBEntryStatus.CANDIDATE -> KnowledgeEntryFilter.CANDIDATE
+        KBEntryStatus.PUBLISHED -> KnowledgeEntryFilter.PUBLISHED
+        KBEntryStatus.ARCHIVED -> KnowledgeEntryFilter.ARCHIVED
+        KBEntryStatus.DELETED -> KnowledgeEntryFilter.ALL
+    }
+}
+
+internal fun knowledgeStatusAction(entry: KBEntryItem): Pair<String, KBEntryStatus>? {
+    return when (entry.status) {
+        KBEntryStatus.CANDIDATE -> "发布" to KBEntryStatus.PUBLISHED
+        KBEntryStatus.PUBLISHED -> "归档" to KBEntryStatus.ARCHIVED
+        KBEntryStatus.ARCHIVED -> "重新发布" to KBEntryStatus.PUBLISHED
+        KBEntryStatus.DELETED -> null
+    }
+}
+
+internal fun toggleKnowledgeEntrySelection(selectedEntryIds: Set<String>, entryId: String): Set<String> {
+    return if (entryId in selectedEntryIds) {
+        selectedEntryIds - entryId
+    } else {
+        selectedEntryIds + entryId
+    }
+}
+
+internal fun mergeKnowledgeEntryContent(
+    targetContent: String,
+    candidateTitle: String,
+    candidateContent: String,
+): String {
+    val trimmedTarget = targetContent.trim()
+    val trimmedCandidate = candidateContent.trim()
+    if (trimmedTarget.isBlank()) return trimmedCandidate
+    if (trimmedCandidate.isBlank()) return trimmedTarget
+    return buildString {
+        append(trimmedTarget)
+        append("\n\n---\n\n")
+        append("## 合并自：")
+        append(candidateTitle.ifBlank { "候选条目" })
+        append("\n\n")
+        append(trimmedCandidate)
+    }
+}
+
+internal fun mergeKnowledgeEntryTags(targetTags: List<String>, candidateTags: List<String>): List<String> {
+    return (targetTags + candidateTags)
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+}
+
+internal fun mergeKnowledgeEntriesContent(
+    targetContent: String,
+    candidateEntries: List<KBEntryItem>,
+): String {
+    return candidateEntries.fold(targetContent) { merged, candidate ->
+        mergeKnowledgeEntryContent(
+            targetContent = merged,
+            candidateTitle = candidate.title,
+            candidateContent = candidate.content,
+        )
+    }
+}
+
+internal fun mergeKnowledgeEntriesTags(
+    targetTags: List<String>,
+    candidateEntries: List<KBEntryItem>,
+): List<String> {
+    return mergeKnowledgeEntryTags(
+        targetTags = targetTags,
+        candidateTags = candidateEntries.flatMap { it.tags },
+    )
+}
 
 @Composable
+private fun TopicSidebar(
+    spaceOptions: List<KnowledgeSpaceOption>,
+    selectedSpaceId: String,
+    topics: List<KBTopicItem>,
+    isLoading: Boolean,
+    selectedTopic: KBTopicItem?,
+    userId: String,
+    groups: List<Group>,
+    onCreateTopic: () -> Unit,
+    onSpaceSelect: (KnowledgeSpaceOption) -> Unit,
+    onTopicSelect: (KBTopicItem) -> Unit,
+) {
+    Div({
+        style {
+            width(260.px)
+            property("flex-shrink", "0")
+            property("border-right", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            backgroundColor(Color(SilkColors.surface))
+        }
+    }) {
+        KnowledgeColumnHeader(
+            title = "知识空间",
+            actionLabel = "+",
+            onAction = onCreateTopic,
+        )
+        KnowledgeSpaceTabs(
+            options = spaceOptions,
+            selectedSpaceId = selectedSpaceId,
+            onSpaceSelect = onSpaceSelect,
+        )
+        TopicSidebarContent(
+            topics = topics,
+            isLoading = isLoading,
+            selectedTopic = selectedTopic,
+            userId = userId,
+            groups = groups,
+            onTopicSelect = onTopicSelect,
+        )
+    }
+}
+
+@Composable
+private fun TopicSidebarContent(
+    topics: List<KBTopicItem>,
+    isLoading: Boolean,
+    selectedTopic: KBTopicItem?,
+    userId: String,
+    groups: List<Group>,
+    onTopicSelect: (KBTopicItem) -> Unit,
+) {
+    Div({ style { property("flex", "1"); property("overflow-y", "auto") } }) {
+        if (isLoading) {
+            KnowledgeCenteredMessage("加载中...", SilkColors.textSecondary, 16.px)
+        } else if (topics.isEmpty()) {
+            KnowledgeCenteredMessage("当前空间还没有主题", SilkColors.textLight, 20.px)
+        } else {
+            topics.forEach { topic ->
+                TopicRow(
+                    topic = topic,
+                    isSelected = selectedTopic?.id == topic.id,
+                    spaceLabel = topicSpaceLabel(topic, groups),
+                    permissionLabel = topicPermissionLabel(topic, userId, groups),
+                    onClick = { onTopicSelect(topic) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeSpaceTabs(
+    options: List<KnowledgeSpaceOption>,
+    selectedSpaceId: String,
+    onSpaceSelect: (KnowledgeSpaceOption) -> Unit,
+) {
+    Div({
+        style {
+            padding(10.px, 12.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("gap", "8px")
+        }
+    }) {
+        options.forEach { option ->
+            Button({
+                style {
+                    backgroundColor(
+                        Color(
+                            if (selectedSpaceId == option.id) SilkColors.primary else SilkColors.surfaceElevated
+                        )
+                    )
+                    color(Color(if (selectedSpaceId == option.id) "#FFFFFF" else SilkColors.textSecondary))
+                    border(0.px)
+                    borderRadius(8.px)
+                    padding(8.px, 12.px)
+                    property("cursor", "pointer")
+                    property("text-align", "left")
+                    fontSize(13.px)
+                }
+                onClick { onSpaceSelect(option) }
+            }) { Text(option.label) }
+        }
+    }
+}
+
+@Composable
+private fun TopicRow(
+    topic: KBTopicItem,
+    isSelected: Boolean,
+    spaceLabel: String,
+    permissionLabel: String,
+    onClick: () -> Unit,
+) {
+    Div({
+        style {
+            padding(10.px, 14.px)
+            property("cursor", "pointer")
+            if (isSelected) backgroundColor(Color("rgba(201,168,108,0.15)"))
+            property("border-bottom", "1px solid ${SilkColors.border}")
+        }
+        onClick { onClick() }
+    }) {
+        Div({
+            style {
+                fontSize(14.px)
+                color(Color(SilkColors.textPrimary))
+                fontWeight(if (isSelected) "600" else "400")
+            }
+        }) { Text(topic.name) }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                property("gap", "6px")
+                marginTop(6.px)
+                property("flex-wrap", "wrap")
+            }
+        }) {
+            KnowledgeBadge(spaceLabel, SilkColors.info)
+            KnowledgeBadge(permissionLabel, if (permissionLabel == "可编辑") SilkColors.success else SilkColors.warning)
+        }
+        if (topic.project.isNotBlank()) {
+            Div({
+                style {
+                    fontSize(11.px)
+                    color(Color(SilkColors.textLight))
+                    marginTop(6.px)
+                }
+            }) { Text(topic.project) }
+        }
+    }
+}
+
+@Composable
+private fun EntrySidebar(
+    selectedTopic: KBTopicItem?,
+    entries: List<KBEntryItem>,
+    selectedEntry: KBEntryItem?,
+    selectedFilter: KnowledgeEntryFilter,
+    canCreateEntry: Boolean,
+    selectedCandidateEntryIds: Set<String>,
+    canBatchMergeCandidates: Boolean,
+    onFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onCreateEntry: () -> Unit,
+    onMeetingCapture: () -> Unit,
+    onToggleSelectAllCandidates: () -> Unit,
+    onBatchMergeCandidates: () -> Unit,
+    onBatchPublishCandidates: () -> Unit,
+    onBatchArchiveCandidates: () -> Unit,
+    onToggleCandidateSelection: (String) -> Unit,
+    onEntrySelect: (KBEntryItem) -> Unit,
+) {
+    Div({
+        style {
+            width(240.px)
+            property("flex-shrink", "0")
+            property("border-right", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            backgroundColor(Color(SilkColors.surfaceElevated))
+        }
+    }) {
+        KnowledgeColumnHeader(
+            title = selectedTopic?.name ?: "条目",
+            actionLabel = if (selectedTopic != null) "+" else null,
+            actionEnabled = canCreateEntry,
+            onAction = onCreateEntry,
+        )
+        EntryFilterTabs(
+            selectedFilter = selectedFilter,
+            onFilterChange = onFilterChange,
+            showMeetingCaptureAction = selectedTopic != null,
+            onMeetingCapture = onMeetingCapture,
+            selectedCandidateCount = selectedCandidateEntryIds.size,
+            showCandidateInboxActions = selectedTopic != null && canCreateEntry && entries.isNotEmpty() && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
+            allCandidatesSelected = entries.isNotEmpty() && entries.all { it.id in selectedCandidateEntryIds },
+            onToggleSelectAllCandidates = onToggleSelectAllCandidates,
+            canBatchMergeCandidates = canBatchMergeCandidates,
+            onBatchMergeCandidates = onBatchMergeCandidates,
+            onBatchPublishCandidates = onBatchPublishCandidates,
+            onBatchArchiveCandidates = onBatchArchiveCandidates,
+        )
+        EntrySidebarContent(
+            selectedTopic = selectedTopic,
+            entries = entries,
+            selectedEntry = selectedEntry,
+            selectedCandidateEntryIds = selectedCandidateEntryIds,
+            showCandidateSelection = canCreateEntry && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
+            onToggleCandidateSelection = onToggleCandidateSelection,
+            onEntrySelect = onEntrySelect,
+        )
+    }
+}
+
+@Composable
+private fun EntryFilterTabs(
+    selectedFilter: KnowledgeEntryFilter,
+    onFilterChange: (KnowledgeEntryFilter) -> Unit,
+    showMeetingCaptureAction: Boolean,
+    onMeetingCapture: () -> Unit,
+    selectedCandidateCount: Int,
+    showCandidateInboxActions: Boolean,
+    allCandidatesSelected: Boolean,
+    onToggleSelectAllCandidates: () -> Unit,
+    canBatchMergeCandidates: Boolean,
+    onBatchMergeCandidates: () -> Unit,
+    onBatchPublishCandidates: () -> Unit,
+    onBatchArchiveCandidates: () -> Unit,
+) {
+    Div({
+        style {
+            padding(10.px, 12.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            property("gap", "8px")
+            flexDirection(FlexDirection.Column)
+        }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
+                alignItems(AlignItems.Center)
+                property("gap", "8px")
+                property("flex-wrap", "wrap")
+            }
+        }) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    property("gap", "6px")
+                    property("flex-wrap", "wrap")
+                }
+            }) {
+                KnowledgeEntryFilter.entries.forEach { filter ->
+                    KnowledgeToggleButton(
+                        label = filter.label,
+                        selected = selectedFilter == filter,
+                        onClick = { onFilterChange(filter) },
+                    )
+                }
+            }
+            if (showMeetingCaptureAction) {
+                KnowledgeToolbarButton(
+                    label = "会议入库",
+                    background = SilkColors.info,
+                    onClick = onMeetingCapture,
+                )
+            }
+        }
+        if (showCandidateInboxActions) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "8px")
+                }
+            }) {
+                Div({
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                    }
+                }) {
+                    Text("候选收件箱：已选 $selectedCandidateCount 条")
+                }
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        property("gap", "6px")
+                        property("flex-wrap", "wrap")
+                    }
+                }) {
+                    KnowledgeToolbarButton(
+                        label = if (allCandidatesSelected) "取消全选" else "全选",
+                        background = SilkColors.textSecondary,
+                        onClick = onToggleSelectAllCandidates,
+                    )
+                    KnowledgeToolbarButton(
+                        label = "批量并入",
+                        background = SilkColors.info,
+                        enabled = canBatchMergeCandidates,
+                        onClick = onBatchMergeCandidates,
+                    )
+                    KnowledgeToolbarButton(
+                        label = "批量发布",
+                        background = SilkColors.success,
+                        enabled = selectedCandidateCount > 0,
+                        onClick = onBatchPublishCandidates,
+                    )
+                    KnowledgeToolbarButton(
+                        label = "批量归档",
+                        background = SilkColors.warning,
+                        enabled = selectedCandidateCount > 0,
+                        onClick = onBatchArchiveCandidates,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EntrySidebarContent(
+    selectedTopic: KBTopicItem?,
+    entries: List<KBEntryItem>,
+    selectedEntry: KBEntryItem?,
+    selectedCandidateEntryIds: Set<String>,
+    showCandidateSelection: Boolean,
+    onToggleCandidateSelection: (String) -> Unit,
+    onEntrySelect: (KBEntryItem) -> Unit,
+) {
+    Div({ style { property("flex", "1"); property("overflow-y", "auto") } }) {
+        when {
+            selectedTopic == null -> KnowledgeListEmptyState("请先选择主题")
+            entries.isEmpty() -> KnowledgeListEmptyState("暂无条目")
+            else -> entries.forEach { entry ->
+                EntryRow(
+                    entry = entry,
+                    isSelected = selectedEntry?.id == entry.id,
+                    isCandidateSelected = entry.id in selectedCandidateEntryIds,
+                    showCandidateSelection = showCandidateSelection,
+                    onToggleCandidateSelection = { onToggleCandidateSelection(entry.id) },
+                    onClick = { onEntrySelect(entry) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EntryRow(
+    entry: KBEntryItem,
+    isSelected: Boolean,
+    isCandidateSelected: Boolean,
+    showCandidateSelection: Boolean,
+    onToggleCandidateSelection: () -> Unit,
+    onClick: () -> Unit,
+) {
+    Div({
+        style {
+            padding(10.px, 14.px)
+            property("cursor", "pointer")
+            if (isSelected) backgroundColor(Color("rgba(201,168,108,0.1)"))
+            property("border-bottom", "1px solid ${SilkColors.border}")
+        }
+        onClick { onClick() }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                property("gap", "8px")
+            }
+        }) {
+            if (showCandidateSelection) {
+                Button({
+                    style {
+                        backgroundColor(Color(if (isCandidateSelected) SilkColors.primaryDark else "#FFFFFF"))
+                        color(Color(if (isCandidateSelected) "#FFFFFF" else SilkColors.textSecondary))
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(999.px)
+                        padding(2.px, 8.px)
+                        fontSize(11.px)
+                        property("cursor", "pointer")
+                        property("flex-shrink", "0")
+                    }
+                    onClick {
+                        it.stopPropagation()
+                        onToggleCandidateSelection()
+                    }
+                }) {
+                    Text(if (isCandidateSelected) "已选" else "选择")
+                }
+            }
+            Div({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textPrimary))
+                    fontWeight(if (isSelected) "600" else "400")
+                }
+            }) { Text(entry.title) }
+        }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                property("gap", "6px")
+                marginTop(6.px)
+                property("flex-wrap", "wrap")
+            }
+        }) {
+            KnowledgeBadge(entry.status.name.lowercase(), SilkColors.primaryDark)
+            val sourceLabel = when (entry.source.sourceType) {
+                KBSourceType.MANUAL -> "手动"
+                KBSourceType.CHAT -> "聊天"
+                KBSourceType.WORKFLOW -> "工作流"
+                KBSourceType.MEETING -> "会议"
+                KBSourceType.FILE -> "文件"
+                KBSourceType.URL -> "URL"
+            }
+            KnowledgeBadge(sourceLabel, SilkColors.primary)
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeEditorPane(
+    selectedTopic: KBTopicItem?,
+    selectedEntry: KBEntryItem?,
+    editorContent: String,
+    isSaving: Boolean,
+    saveMessage: String,
+    editorMode: KnowledgeEditorMode,
+    canEdit: Boolean,
+    canManageTopic: Boolean,
+    spaceLabel: String?,
+    permissionLabel: String?,
+    onContentChange: (String) -> Unit,
+    onEditorModeChange: (KnowledgeEditorMode) -> Unit,
+    onManageTopic: () -> Unit,
+    onSave: () -> Unit,
+    onStatusAction: (() -> Unit)?,
+    statusActionLabel: String?,
+    onMergeCandidate: (() -> Unit)?,
+    onExport: () -> Unit,
+    onCopyReference: () -> Unit,
+) {
+    Div({
+        style {
+            property("flex", "1")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            minWidth(0.px)
+        }
+    }) {
+        if (selectedEntry == null) {
+            EmptyEditorState()
+        } else {
+            KnowledgeEditorToolbar(
+                title = selectedEntry.title,
+                isSaving = isSaving,
+                saveMessage = saveMessage,
+                editorMode = editorMode,
+                canEdit = canEdit,
+                canManageTopic = canManageTopic,
+                onEditorModeChange = onEditorModeChange,
+                onManageTopic = onManageTopic,
+                onSave = onSave,
+                onStatusAction = onStatusAction,
+                statusActionLabel = statusActionLabel,
+                onMergeCandidate = onMergeCandidate,
+                onExport = onExport,
+                onCopyReference = onCopyReference,
+            )
+            KnowledgeEntryMetaBar(
+                topic = selectedTopic,
+                entry = selectedEntry,
+                spaceLabel = spaceLabel,
+                permissionLabel = permissionLabel,
+            )
+            KnowledgeMarkdownWorkspace(
+                content = editorContent,
+                onContentChange = onContentChange,
+                editorMode = editorMode,
+                readOnly = !canEdit,
+                onSave = onSave,
+            )
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeMarkdownWorkspace(
+    content: String,
+    onContentChange: (String) -> Unit,
+    editorMode: KnowledgeEditorMode,
+    readOnly: Boolean,
+    onSave: () -> Unit,
+) {
+    Div({
+        style {
+            property("flex", "1")
+            display(DisplayStyle.Flex)
+            flexDirection(if (editorMode == KnowledgeEditorMode.SPLIT) FlexDirection.Row else FlexDirection.Column)
+            backgroundColor(Color(SilkColors.background))
+            minWidth(0.px)
+            property("min-height", "0")
+        }
+    }) {
+        if (editorMode != KnowledgeEditorMode.PREVIEW) {
+            MarkdownSourcePane(
+                content = content,
+                onContentChange = onContentChange,
+                onSave = onSave,
+                readOnly = readOnly,
+                isSplit = editorMode == KnowledgeEditorMode.SPLIT,
+            )
+        }
+        if (editorMode != KnowledgeEditorMode.EDIT) {
+            MarkdownPreviewPane(
+                content = content,
+                isSplit = editorMode == KnowledgeEditorMode.SPLIT,
+            )
+        }
+    }
+}
+
+private fun shouldSaveKnowledgeEntry(event: org.jetbrains.compose.web.events.SyntheticKeyboardEvent): Boolean {
+    return (event.metaKey || event.ctrlKey) && event.key.equals("s", ignoreCase = true)
+}
+
+@Composable
+private fun MarkdownSourcePane(
+    content: String,
+    onContentChange: (String) -> Unit,
+    onSave: () -> Unit,
+    readOnly: Boolean,
+    isSplit: Boolean,
+) {
+    Div({
+        style {
+            flexGrow(1)
+            minWidth(0.px)
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("min-height", "0")
+            if (isSplit) {
+                property("border-right", "1px solid ${SilkColors.border}")
+            }
+        }
+    }) {
+        KnowledgePaneHeader(
+            title = "Markdown",
+            detail = "Cmd/Ctrl+S 保存",
+        )
+        TextArea {
+            value(content)
+            onInput {
+                if (!readOnly) {
+                    onContentChange(it.value)
+                }
+            }
+            onKeyDown { event ->
+                if (!readOnly && shouldSaveKnowledgeEntry(event)) {
+                    event.preventDefault()
+                    onSave()
+                }
+            }
+            attr("placeholder", "在这里输入 Markdown 内容...")
+            if (readOnly) {
+                attr("readonly", "true")
+            }
+            style {
+                flexGrow(1)
+                minWidth(0.px)
+                border(0.px)
+                borderRadius(0.px)
+                padding(16.px)
+                fontSize(14.px)
+                property("line-height", "1.7")
+                fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
+                backgroundColor(Color("#FFFDF8"))
+                color(Color(SilkColors.textPrimary))
+                property("box-sizing", "border-box")
+                property("resize", "none")
+                property("outline", "none")
+                if (readOnly) {
+                    property("cursor", "not-allowed")
+                }
+                property("white-space", "pre-wrap")
+                property("overflow-y", "auto")
+            }
+        }
+    }
+}
+
+@Composable
+private fun MarkdownPreviewPane(
+    content: String,
+    isSplit: Boolean,
+) {
+    Div({
+        style {
+            flexGrow(1)
+            minWidth(0.px)
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("min-height", "0")
+            backgroundColor(Color(SilkColors.surface))
+        }
+    }) {
+        KnowledgePaneHeader(
+            title = "预览",
+            detail = if (content.isBlank()) "支持公式、代码、表格" else null,
+        )
+        Div({
+            style {
+                flexGrow(1)
+                minWidth(0.px)
+                padding(16.px)
+                property("overflow-y", "auto")
+                if (!isSplit) {
+                    property("border-top", "1px solid ${SilkColors.border}")
+                }
+            }
+        }) {
+            if (content.isBlank()) {
+                KnowledgeCenteredMessage("输入 Markdown 后这里会实时渲染", SilkColors.textLight, 24.px)
+            } else {
+                MarkdownContent(content = content)
+            }
+        }
+    }
+}
+
+@Composable
+private fun KnowledgePaneHeader(title: String, detail: String?) {
+    Div({
+        style {
+            padding(10.px, 16.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.SpaceBetween)
+            alignItems(AlignItems.Center)
+            backgroundColor(Color(SilkColors.surfaceElevated))
+        }
+    }) {
+        Span({
+            style {
+                fontSize(12.px)
+                fontWeight("500")
+                color(Color(SilkColors.textSecondary))
+            }
+        }) { Text(title) }
+        if (!detail.isNullOrBlank()) {
+            Span({
+                style {
+                    fontSize(12.px)
+                    color(Color(SilkColors.textLight))
+                }
+            }) { Text(detail) }
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeEditorToolbar(
+    title: String,
+    isSaving: Boolean,
+    saveMessage: String,
+    editorMode: KnowledgeEditorMode,
+    canEdit: Boolean,
+    canManageTopic: Boolean,
+    onEditorModeChange: (KnowledgeEditorMode) -> Unit,
+    onManageTopic: () -> Unit,
+    onSave: () -> Unit,
+    onStatusAction: (() -> Unit)?,
+    statusActionLabel: String?,
+    onMergeCandidate: (() -> Unit)?,
+    onExport: () -> Unit,
+    onCopyReference: () -> Unit,
+) {
+    Div({
+        style {
+            padding(8.px, 16.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.SpaceBetween)
+            alignItems(AlignItems.Center)
+            backgroundColor(Color(SilkColors.surfaceElevated))
+        }
+    }) {
+        Span({
+            style { fontSize(16.px); fontWeight("600"); color(Color(SilkColors.textPrimary)) }
+        }) { Text(title) }
+        Div({
+            style { display(DisplayStyle.Flex); property("gap", "12px"); alignItems(AlignItems.Center) }
+        }) {
+            KnowledgeEditorModeSwitch(
+                selectedMode = editorMode,
+                onModeChange = onEditorModeChange,
+            )
+            if (saveMessage.isNotEmpty()) {
+                Span({ style { fontSize(12.px); color(Color(SilkColors.success)) } }) { Text(saveMessage) }
+            }
+            if (canManageTopic) {
+                KnowledgeToolbarButton(
+                    label = "权限",
+                    background = SilkColors.textSecondary,
+                    onClick = onManageTopic,
+                )
+            }
+            KnowledgeToolbarButton(
+                label = "复制引用",
+                background = SilkColors.primaryDark,
+                onClick = onCopyReference,
+            )
+            KnowledgeToolbarButton(
+                label = if (!canEdit) "只读" else if (isSaving) "保存中..." else "保存",
+                background = SilkColors.primary,
+                enabled = canEdit && !isSaving,
+                onClick = onSave,
+            )
+            if (onMergeCandidate != null) {
+                KnowledgeToolbarButton(
+                    label = "并入其他文档",
+                    background = SilkColors.warning,
+                    enabled = canEdit && !isSaving,
+                    onClick = onMergeCandidate,
+                )
+            }
+            if (statusActionLabel != null && onStatusAction != null) {
+                KnowledgeToolbarButton(
+                    label = statusActionLabel,
+                    background = SilkColors.success,
+                    enabled = canEdit && !isSaving,
+                    onClick = onStatusAction,
+                )
+            }
+            KnowledgeToolbarButton(
+                label = "导出 Obsidian",
+                background = SilkColors.info,
+                onClick = onExport,
+            )
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeEntryMetaBar(
+    topic: KBTopicItem?,
+    entry: KBEntryItem,
+    spaceLabel: String?,
+    permissionLabel: String?,
+) {
+    Div({
+        style {
+            padding(10.px, 16.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            property("gap", "8px")
+            property("flex-wrap", "wrap")
+            backgroundColor(Color(SilkColors.surface))
+        }
+    }) {
+        spaceLabel?.let { KnowledgeBadge(it, SilkColors.info) }
+        permissionLabel?.let {
+            KnowledgeBadge(it, if (it == "可编辑") SilkColors.success else SilkColors.warning)
+        }
+        KnowledgeBadge(entry.status.name.lowercase(), SilkColors.primaryDark)
+        topic?.project?.takeIf { it.isNotBlank() }?.let { project ->
+            KnowledgeBadge(project, SilkColors.textSecondary)
+        }
+        val sourceLabel = when (entry.source.sourceType) {
+            KBSourceType.MANUAL -> "手动创建"
+            KBSourceType.CHAT -> "聊天沉淀"
+            KBSourceType.WORKFLOW -> "工作流沉淀"
+            KBSourceType.MEETING -> "会议沉淀"
+            KBSourceType.FILE -> "文件导入"
+            KBSourceType.URL -> "URL 导入"
+        }
+        KnowledgeBadge(sourceLabel, SilkColors.primary)
+    }
+}
+
+@Composable
+private fun KnowledgeBadge(label: String, background: String) {
+    Span({
+        style {
+            backgroundColor(Color(background))
+            color(Color.white)
+            borderRadius(999.px)
+            padding(4.px, 10.px)
+            fontSize(11.px)
+            fontWeight("600")
+            property("display", "inline-flex")
+            property("align-items", "center")
+        }
+    }) { Text(label) }
+}
+
+@Composable
+private fun KnowledgeEditorModeSwitch(
+    selectedMode: KnowledgeEditorMode,
+    onModeChange: (KnowledgeEditorMode) -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("overflow", "hidden")
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            borderRadius(7.px)
+            backgroundColor(Color(SilkColors.surface))
+        }
+    }) {
+        KnowledgeEditorMode.entries.forEach { mode ->
+            Button({
+                style {
+                    backgroundColor(Color(if (selectedMode == mode) SilkColors.primary else SilkColors.surface))
+                    color(Color(if (selectedMode == mode) "#FFFFFF" else SilkColors.textSecondary))
+                    border(0.px)
+                    borderRadius(0.px)
+                    padding(6.px, 12.px)
+                    property("cursor", "pointer")
+                    fontSize(12.px)
+                    fontWeight(if (selectedMode == mode) "600" else "500")
+                    property("min-width", "52px")
+                }
+                onClick { onModeChange(mode) }
+            }) { Text(mode.label) }
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeToolbarButton(label: String, background: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Button({
+        style {
+            backgroundColor(Color(if (enabled) background else SilkColors.border))
+            color(Color.white)
+            border(0.px)
+            borderRadius(6.px)
+            padding(6.px, 14.px)
+            property("cursor", if (enabled) "pointer" else "not-allowed")
+            fontSize(13.px)
+        }
+        if (!enabled) {
+            attr("disabled", "true")
+        }
+        onClick {
+            if (enabled) {
+                onClick()
+            }
+        }
+    }) { Text(label) }
+}
+
+@Composable
+private fun EmptyEditorState() {
+    Div({
+        style {
+            property("flex", "1")
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            flexDirection(FlexDirection.Column)
+        }
+    }) {
+        Span({ style { fontSize(48.px); marginBottom(16.px) } }) { Text("\uD83D\uDCDA") }
+        Span({
+            style { fontSize(18.px); color(Color(SilkColors.textSecondary)) }
+        }) { Text("选择或创建条目开始编辑") }
+        Span({
+            style { fontSize(14.px); color(Color(SilkColors.textLight)); marginTop(8.px) }
+        }) { Text("内容将自动归类到 Obsidian 知识库") }
+    }
+}
+
+@Composable
+private fun CreateTopicDialog(
+    topicName: String,
+    topicProject: String,
+    spaceOptions: List<KnowledgeSpaceOption>,
+    selectedSpaceId: String,
+    onTopicNameChange: (String) -> Unit,
+    onTopicProjectChange: (String) -> Unit,
+    onSpaceChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    ModalDialog(title = "创建主题", onDismiss = onDismiss) {
+        LabeledInput("主题名称", topicName) { value -> onTopicNameChange(value) }
+        LabeledInput("所属项目（可选）", topicProject) { value -> onTopicProjectChange(value) }
+        Div({
+            style {
+                marginTop(12.px)
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("gap", "8px")
+            }
+        }) {
+            Span({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    fontWeight("600")
+                }
+            }) { Text("目标空间") }
+            KnowledgeSpaceTabs(
+                options = spaceOptions,
+                selectedSpaceId = selectedSpaceId,
+                onSpaceSelect = { onSpaceChange(it.id) },
+            )
+        }
+        DialogActions(
+            onCancel = onDismiss,
+            onConfirm = onConfirm,
+            confirmLabel = "创建",
+        )
+    }
+}
+
+@Composable
+private fun TopicAccessDialog(
+    topicName: String,
+    topicProject: String,
+    isTeamTopic: Boolean,
+    readUserIds: String,
+    writeUserIds: String,
+    manageUserIds: String,
+    writeLocked: Boolean,
+    teamMembersCanWrite: Boolean,
+    onTopicNameChange: (String) -> Unit,
+    onTopicProjectChange: (String) -> Unit,
+    onReadUserIdsChange: (String) -> Unit,
+    onWriteUserIdsChange: (String) -> Unit,
+    onManageUserIdsChange: (String) -> Unit,
+    onWriteLockedChange: (Boolean) -> Unit,
+    onTeamMembersCanWriteChange: (Boolean) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    ModalDialog(title = "主题权限", onDismiss = onDismiss) {
+        LabeledInput("主题名称", topicName, onTopicNameChange)
+        LabeledInput("所属项目（可选）", topicProject, onTopicProjectChange)
+        LabeledInput("只读用户，逗号分隔", readUserIds, onReadUserIdsChange)
+        LabeledInput("可写用户，逗号分隔", writeUserIds, onWriteUserIdsChange)
+        LabeledInput("可管理用户，逗号分隔", manageUserIds, onManageUserIdsChange)
+        KnowledgeBooleanSetting(
+            label = "锁定写入",
+            description = "开启后，普通团队成员不会继承写权限。",
+            value = writeLocked,
+            onChange = onWriteLockedChange,
+        )
+        if (isTeamTopic) {
+            KnowledgeBooleanSetting(
+                label = "团队成员可写",
+                description = "关闭后，只有显式写用户和 manager 可编辑。",
+                value = teamMembersCanWrite,
+                onChange = onTeamMembersCanWriteChange,
+            )
+        }
+        DialogActions(
+            onCancel = onDismiss,
+            onConfirm = onConfirm,
+            confirmLabel = "保存权限",
+        )
+    }
+}
+
+@Composable
+private fun KnowledgeBooleanSetting(
+    label: String,
+    description: String,
+    value: Boolean,
+    onChange: (Boolean) -> Unit,
+) {
+    Div({
+        style {
+            marginBottom(12.px)
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("gap", "8px")
+        }
+    }) {
+        Span({
+            style {
+                fontSize(13.px)
+                color(Color(SilkColors.textSecondary))
+                fontWeight("600")
+            }
+        }) { Text(label) }
+        Span({
+            style {
+                fontSize(12.px)
+                color(Color(SilkColors.textLight))
+            }
+        }) { Text(description) }
+        Div({ style { display(DisplayStyle.Flex); property("gap", "8px") } }) {
+            KnowledgeToggleButton(
+                label = "开启",
+                selected = value,
+                onClick = { onChange(true) },
+            )
+            KnowledgeToggleButton(
+                label = "关闭",
+                selected = !value,
+                onClick = { onChange(false) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeToggleButton(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Button({
+        style {
+            backgroundColor(Color(if (selected) SilkColors.primary else SilkColors.surface))
+            color(Color(if (selected) "#FFFFFF" else SilkColors.textSecondary))
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            borderRadius(6.px)
+            padding(6.px, 12.px)
+            property("cursor", "pointer")
+            fontSize(12.px)
+        }
+        onClick { onClick() }
+    }) { Text(label) }
+}
+
+@Composable
+private fun CreateEntryDialog(
+    entryTitle: String,
+    onEntryTitleChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    ModalDialog(title = "创建条目", onDismiss = onDismiss) {
+        LabeledInput("条目标题", entryTitle) { value -> onEntryTitleChange(value) }
+        DialogActions(
+            onCancel = onDismiss,
+            onConfirm = onConfirm,
+            confirmLabel = "创建",
+        )
+    }
+}
+
+@Composable
+private fun KnowledgeColumnHeader(title: String, actionLabel: String?, actionEnabled: Boolean = true, onAction: () -> Unit) {
+    Div({
+        style {
+            padding(12.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.SpaceBetween)
+            alignItems(AlignItems.Center)
+        }
+    }) {
+        Span({
+            style { fontSize(16.px); fontWeight("bold"); color(Color(SilkColors.textPrimary)) }
+        }) { Text(title) }
+        if (actionLabel != null) {
+            Button({
+                style {
+                    backgroundColor(Color(if (actionEnabled) SilkColors.primary else SilkColors.border))
+                    color(Color.white)
+                    border(0.px)
+                    borderRadius(6.px)
+                    padding(4.px, 10.px)
+                    property("cursor", if (actionEnabled) "pointer" else "not-allowed")
+                    fontSize(12.px)
+                }
+                if (!actionEnabled) {
+                    attr("disabled", "true")
+                }
+                onClick {
+                    if (actionEnabled) {
+                        onAction()
+                    }
+                }
+            }) { Text(actionLabel) }
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeListEmptyState(message: String) {
+    KnowledgeCenteredMessage(message, SilkColors.textLight, 20.px)
+}
+
+@Composable
+private fun KnowledgeCenteredMessage(message: String, color: String, paddingSize: org.jetbrains.compose.web.css.CSSNumeric) {
+    Div({
+        style {
+            padding(paddingSize)
+            property("text-align", "center")
+            this.color(Color(color))
+        }
+    }) { Text(message) }
+}
+
+private fun resetTopicDialog(
+    onVisibilityChange: (Boolean) -> Unit,
+    onNameChange: (String) -> Unit,
+    onProjectChange: (String) -> Unit,
+) {
+    onVisibilityChange(false)
+    onNameChange("")
+    onProjectChange("")
+}
+
+private fun resetTopicAccessDialog(
+    onVisibilityChange: (Boolean) -> Unit,
+    onTopicNameChange: (String) -> Unit,
+    onTopicProjectChange: (String) -> Unit,
+    onReadUserIdsChange: (String) -> Unit,
+    onWriteUserIdsChange: (String) -> Unit,
+    onManageUserIdsChange: (String) -> Unit,
+    onWriteLockedChange: (Boolean) -> Unit,
+    onTeamMembersCanWriteChange: (Boolean) -> Unit,
+) {
+    onVisibilityChange(false)
+    onTopicNameChange("")
+    onTopicProjectChange("")
+    onReadUserIdsChange("")
+    onWriteUserIdsChange("")
+    onManageUserIdsChange("")
+    onWriteLockedChange(false)
+    onTeamMembersCanWriteChange(true)
+}
+
+private fun resetEntryDialog(
+    onVisibilityChange: (Boolean) -> Unit,
+    onTitleChange: (String) -> Unit,
+) {
+    onVisibilityChange(false)
+    onTitleChange("")
+}
+
+private suspend fun loadKnowledgeEntries(
+    topic: KBTopicItem,
+    userId: String,
+    onSelectedTopicChange: (KBTopicItem?) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+) {
+    onSelectedTopicChange(topic)
+    onSelectedEntryChange(null)
+    onEditorContentChange("")
+    onEntriesChange(ApiClient.getKBEntries(topic.id, userId))
+}
+
+private suspend fun navigateToKnowledgeBaseTarget(
+    target: KnowledgeBaseNavigationTarget,
+    userId: String,
+    existingTopics: List<KBTopicItem>,
+    onTopicsChange: (List<KBTopicItem>) -> Unit,
+    onSelectedTopicChange: (KBTopicItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+): Boolean {
+    val entry = ApiClient.getKBEntry(target.entryId, userId) ?: return false
+    val topics = if (existingTopics.any { it.id == entry.topicId }) {
+        existingTopics
+    } else {
+        ApiClient.getKBTopics(userId).also(onTopicsChange)
+    }
+    val topic = topics.find { it.id == entry.topicId } ?: return false
+    val entries = ApiClient.getKBEntries(topic.id, userId)
+    onSelectedTopicChange(topic)
+    onEntriesChange(entries)
+    val selected = entries.find { it.id == entry.id } ?: entry
+    onSelectedEntryChange(selected)
+    onEditorContentChange(selected.content)
+    return true
+}
+
+private fun loadKnowledgeEntry(
+    entry: KBEntryItem,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+) {
+    onSelectedEntryChange(entry)
+    onEditorContentChange(entry.content)
+}
+
+private suspend fun saveKnowledgeEntry(
+    entry: KBEntryItem?,
+    topic: KBTopicItem?,
+    editorContent: String,
+    userId: String,
+    onSavingChange: (Boolean) -> Unit,
+    onSaveMessageChange: (String) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+) {
+    if (entry == null || topic == null) return
+    onSavingChange(true)
+    onSaveMessageChange("")
+    val updated = ApiClient.updateKBEntry(entry.id, null, editorContent, null, userId)
+    if (updated != null) {
+        onSelectedEntryChange(updated)
+        onEntriesChange(ApiClient.getKBEntries(topic.id, userId))
+        onSaveMessageChange("已保存")
+    }
+    onSavingChange(false)
+}
+
+private suspend fun updateKnowledgeEntryStatus(
+    entry: KBEntryItem?,
+    topic: KBTopicItem?,
+    userId: String,
+    status: KBEntryStatus,
+    onSavingChange: (Boolean) -> Unit,
+    onSaveMessageChange: (String) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+) {
+    if (entry == null || topic == null) return
+    onSavingChange(true)
+    onSaveMessageChange("")
+    val updated = ApiClient.updateKBEntry(
+        entryId = entry.id,
+        title = null,
+        content = null,
+        tags = null,
+        userId = userId,
+        status = status,
+    )
+    if (updated != null) {
+        onSelectedEntryChange(updated)
+        onEntriesChange(ApiClient.getKBEntries(topic.id, userId))
+        onSaveMessageChange(
+            when (status) {
+                KBEntryStatus.PUBLISHED -> "已发布"
+                KBEntryStatus.ARCHIVED -> "已归档"
+                KBEntryStatus.CANDIDATE -> "已转为候选"
+                KBEntryStatus.DELETED -> "状态已更新"
+            }
+        )
+    }
+    onSavingChange(false)
+}
+
+private suspend fun bulkUpdateKnowledgeEntryStatus(
+    entryIds: Set<String>,
+    topic: KBTopicItem?,
+    userId: String,
+    status: KBEntryStatus,
+    currentSelectedEntryId: String?,
+    onSavingChange: (Boolean) -> Unit,
+    onSaveMessageChange: (String) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+    onEntryFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onSelectedCandidateEntryIdsChange: (Set<String>) -> Unit,
+) {
+    if (topic == null || entryIds.isEmpty()) return
+    onSavingChange(true)
+    onSaveMessageChange("")
+    var successCount = 0
+    entryIds.forEach { entryId ->
+        val updated = ApiClient.updateKBEntry(
+            entryId = entryId,
+            title = null,
+            content = null,
+            tags = null,
+            userId = userId,
+            status = status,
+        )
+        if (updated != null) {
+            successCount += 1
+        }
+    }
+    val refreshedEntries = ApiClient.getKBEntries(topic.id, userId)
+    onEntriesChange(refreshedEntries)
+    val refreshedSelectedEntry = currentSelectedEntryId?.let { selectedId ->
+        refreshedEntries.find { it.id == selectedId }
+    }
+    onSelectedEntryChange(refreshedSelectedEntry)
+    onEditorContentChange(refreshedSelectedEntry?.content.orEmpty())
+    onSelectedCandidateEntryIdsChange(emptySet())
+    if (successCount > 0) {
+        onEntryFilterChange(knowledgeFilterForStatus(status))
+        onSaveMessageChange(
+            when (status) {
+                KBEntryStatus.PUBLISHED -> "已批量发布 $successCount 条候选"
+                KBEntryStatus.ARCHIVED -> "已批量归档 $successCount 条候选"
+                KBEntryStatus.CANDIDATE -> "已批量转回候选 $successCount 条"
+                KBEntryStatus.DELETED -> "已批量更新 $successCount 条"
+            }
+        )
+    }
+    onSavingChange(false)
+}
+
+private suspend fun mergeCandidateIntoKnowledgeEntry(
+    candidateEntry: KBEntryItem?,
+    targetEntryId: String,
+    topic: KBTopicItem?,
+    entries: List<KBEntryItem>,
+    userId: String,
+    onSavingChange: (Boolean) -> Unit,
+    onSaveMessageChange: (String) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+    onEntryFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onDialogVisibilityChange: (Boolean) -> Unit,
+) {
+    if (topic == null || candidateEntry == null || candidateEntry.status != KBEntryStatus.CANDIDATE) return
+    val targetEntry = entries.find { it.id == targetEntryId } ?: return
+    onSavingChange(true)
+    onSaveMessageChange("")
+    val mergedTarget = ApiClient.updateKBEntry(
+        entryId = targetEntry.id,
+        title = null,
+        content = mergeKnowledgeEntryContent(
+            targetContent = targetEntry.content,
+            candidateTitle = candidateEntry.title,
+            candidateContent = candidateEntry.content,
+        ),
+        tags = mergeKnowledgeEntryTags(targetEntry.tags, candidateEntry.tags),
+        userId = userId,
+    )
+    if (mergedTarget == null) {
+        onSavingChange(false)
+        return
+    }
+    val archivedCandidate = ApiClient.updateKBEntry(
+        entryId = candidateEntry.id,
+        title = null,
+        content = null,
+        tags = null,
+        userId = userId,
+        status = KBEntryStatus.ARCHIVED,
+    )
+    if (archivedCandidate == null) {
+        onSavingChange(false)
+        return
+    }
+    val refreshedEntries = ApiClient.getKBEntries(topic.id, userId)
+    val refreshedTarget = refreshedEntries.find { it.id == targetEntry.id } ?: mergedTarget
+    onEntriesChange(refreshedEntries)
+    onSelectedEntryChange(refreshedTarget)
+    onEditorContentChange(refreshedTarget.content)
+    onEntryFilterChange(knowledgeFilterForStatus(refreshedTarget.status))
+    onSaveMessageChange("已并入目标文档，原候选已归档")
+    onSavingChange(false)
+    onDialogVisibilityChange(false)
+}
+
+private suspend fun bulkMergeCandidatesIntoKnowledgeEntry(
+    selectedCandidateEntryIds: Set<String>,
+    targetEntryId: String,
+    topic: KBTopicItem?,
+    entries: List<KBEntryItem>,
+    userId: String,
+    onSavingChange: (Boolean) -> Unit,
+    onSaveMessageChange: (String) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+    onEntryFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onSelectedCandidateEntryIdsChange: (Set<String>) -> Unit,
+    onDialogVisibilityChange: (Boolean) -> Unit,
+) {
+    if (topic == null || selectedCandidateEntryIds.isEmpty()) return
+    val targetEntry = entries.find { it.id == targetEntryId } ?: return
+    val candidateEntries = entries.filter { it.id in selectedCandidateEntryIds && it.id != targetEntryId && it.status == KBEntryStatus.CANDIDATE }
+    if (candidateEntries.isEmpty()) return
+    onSavingChange(true)
+    onSaveMessageChange("")
+    val mergedTarget = ApiClient.updateKBEntry(
+        entryId = targetEntry.id,
+        title = null,
+        content = mergeKnowledgeEntriesContent(
+            targetContent = targetEntry.content,
+            candidateEntries = candidateEntries,
+        ),
+        tags = mergeKnowledgeEntriesTags(targetTags = targetEntry.tags, candidateEntries = candidateEntries),
+        userId = userId,
+    )
+    if (mergedTarget == null) {
+        onSavingChange(false)
+        return
+    }
+    var archivedCount = 0
+    candidateEntries.forEach { candidate ->
+        val archived = ApiClient.updateKBEntry(
+            entryId = candidate.id,
+            title = null,
+            content = null,
+            tags = null,
+            userId = userId,
+            status = KBEntryStatus.ARCHIVED,
+        )
+        if (archived != null) {
+            archivedCount += 1
+        }
+    }
+    val refreshedEntries = ApiClient.getKBEntries(topic.id, userId)
+    val refreshedTarget = refreshedEntries.find { it.id == targetEntry.id } ?: mergedTarget
+    onEntriesChange(refreshedEntries)
+    onSelectedEntryChange(refreshedTarget)
+    onEditorContentChange(refreshedTarget.content)
+    onEntryFilterChange(knowledgeFilterForStatus(refreshedTarget.status))
+    onSelectedCandidateEntryIdsChange(emptySet())
+    if (archivedCount > 0) {
+        onSaveMessageChange("已并入 $archivedCount 条候选，目标文档已更新")
+    }
+    onSavingChange(false)
+    onDialogVisibilityChange(false)
+}
+
+private suspend fun exportKnowledgeEntry(
+    entry: KBEntryItem?,
+    topic: KBTopicItem?,
+    userId: String,
+    onSaveMessageChange: (String) -> Unit,
+) {
+    if (entry == null) return
+    val exported = ApiClient.exportKBEntry(entry.id, userId) ?: return
+    if (ObsidianVaultManager.isSupported()) {
+        recoverSuspendNonCancellation(
+            block = {
+                val handle = ObsidianVaultManager.getCachedHandleIfValid()
+                    ?: ObsidianVaultManager.pickVaultDirectory()
+                ObsidianVaultManager.saveToVault(
+                    handle,
+                    topic?.name ?: "General",
+                    exported.markdown,
+                    exported.fileName,
+                )
+                onSaveMessageChange("已导出到 Obsidian")
+            },
+            recover = { error ->
+                console.error("Obsidian export failed:", error)
+                downloadAsFile(exported.markdown, exported.fileName)
+                onSaveMessageChange("已下载文件")
+            },
+        )
+    } else {
+        downloadAsFile(exported.markdown, exported.fileName)
+        onSaveMessageChange("已下载文件")
+    }
+}
+
+private suspend fun createKnowledgeTopic(
+    topicName: String,
+    topicProject: String,
+    userId: String,
+    spaceOptions: List<KnowledgeSpaceOption>,
+    selectedSpaceId: String,
+    onTopicsChange: (List<KBTopicItem>) -> Unit,
+    onVisibilityChange: (Boolean) -> Unit,
+    onNameChange: (String) -> Unit,
+    onProjectChange: (String) -> Unit,
+) {
+    if (topicName.isBlank()) return
+    val selectedSpace = spaceOptions.find { it.id == selectedSpaceId }
+        ?: KnowledgeSpaceOption(
+            id = PERSONAL_SPACE_ID,
+            label = "个人",
+            type = KnowledgeSpaceType.PERSONAL,
+        )
+    ApiClient.createKBTopic(
+        name = topicName.trim(),
+        project = topicProject.trim(),
+        userId = userId,
+        spaceType = selectedSpace.type,
+        groupId = selectedSpace.group?.id,
+        accessPolicy = KBAccessPolicy(
+            teamMembersCanWrite = selectedSpace.type == KnowledgeSpaceType.TEAM,
+        ),
+    )
+    onTopicsChange(ApiClient.getKBTopics(userId))
+    resetTopicDialog(onVisibilityChange, onNameChange, onProjectChange)
+}
+
+private suspend fun createKnowledgeEntry(
+    topic: KBTopicItem?,
+    entryTitle: String,
+    userId: String,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+    onVisibilityChange: (Boolean) -> Unit,
+    onTitleChange: (String) -> Unit,
+) {
+    if (topic == null || entryTitle.isBlank()) return
+    val entry = ApiClient.createKBEntry(topic.id, entryTitle.trim(), "", emptyList(), userId)
+    if (entry != null) {
+        onEntriesChange(ApiClient.getKBEntries(topic.id, userId))
+        loadKnowledgeEntry(entry, onSelectedEntryChange, onEditorContentChange)
+    }
+    resetEntryDialog(onVisibilityChange, onTitleChange)
+}
+
+private fun defaultKnowledgeSpaceIdForTopic(topic: KBTopicItem?): String {
+    return when (topic?.spaceType) {
+        KnowledgeSpaceType.TEAM -> topic.groupId ?: PERSONAL_SPACE_ID
+        else -> PERSONAL_SPACE_ID
+    }
+}
+
+private suspend fun submitMeetingKnowledgeCapture(
+    userId: String,
+    topics: List<KBTopicItem>,
+    selectedSpaceId: String,
+    selectedTopicId: String,
+    title: String,
+    content: String,
+    tagsText: String,
+    status: KBEntryStatus,
+    confidenceText: String,
+    onSavingChange: (Boolean) -> Unit,
+    onResultMessageChange: (String?) -> Unit,
+    onSelectedSpaceIdChange: (String) -> Unit,
+    onSelectedTopicChange: (KBTopicItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+    onEntryFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onSaveMessageChange: (String) -> Unit,
+    onVisibilityChange: (Boolean) -> Unit,
+) {
+    val topic = topics.find { it.id == selectedTopicId } ?: run {
+        onResultMessageChange("请选择目标主题")
+        return
+    }
+    onSavingChange(true)
+    onResultMessageChange(null)
+    val created = ApiClient.captureKBEntry(
+        topicId = topic.id,
+        title = title.trim(),
+        content = content.trim(),
+        tags = parseKnowledgeCaptureTags(tagsText),
+        userId = userId,
+        source = buildMeetingCaptureSource(topic, confidenceText),
+        status = status,
+    )
+    if (created == null) {
+        onSavingChange(false)
+        onResultMessageChange("会议纪要入库失败")
+        return
+    }
+
+    val refreshedEntries = ApiClient.getKBEntries(topic.id, userId)
+    val selectedEntry = refreshedEntries.find { it.id == created.id } ?: created
+    onSelectedSpaceIdChange(defaultKnowledgeSpaceIdForTopic(topic).ifBlank { selectedSpaceId })
+    onSelectedTopicChange(topic)
+    onEntriesChange(refreshedEntries)
+    onSelectedEntryChange(selectedEntry)
+    onEditorContentChange(selectedEntry.content)
+    onEntryFilterChange(knowledgeFilterForStatus(selectedEntry.status))
+    onSaveMessageChange(
+        if (selectedEntry.status == KBEntryStatus.PUBLISHED) "会议纪要已发布到知识库"
+        else "会议纪要已作为候选入库"
+    )
+    onSavingChange(false)
+    onVisibilityChange(false)
+}
+
+@Composable
+@Suppress("CyclomaticComplexMethod")
 fun KnowledgeBaseScene(appState: WebAppState) {
     val user = appState.currentUser ?: return
     val scope = rememberCoroutineScope()
 
+    var userGroups by remember(user.id) { mutableStateOf<List<Group>>(emptyList()) }
     var topics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
     var selectedTopic by remember { mutableStateOf<KBTopicItem?>(null) }
     var entries by remember { mutableStateOf<List<KBEntryItem>>(emptyList()) }
     var selectedEntry by remember { mutableStateOf<KBEntryItem?>(null) }
     var isLoading by remember { mutableStateOf(true) }
+    var selectedSpaceId by remember(user.id) { mutableStateOf(PERSONAL_SPACE_ID) }
 
     var showCreateTopicDialog by remember { mutableStateOf(false) }
     var newTopicName by remember { mutableStateOf("") }
     var newTopicProject by remember { mutableStateOf("") }
+    var newTopicSpaceId by remember { mutableStateOf(PERSONAL_SPACE_ID) }
 
     var showCreateEntryDialog by remember { mutableStateOf(false) }
     var newEntryTitle by remember { mutableStateOf("") }
+    var showMeetingCaptureDialog by remember { mutableStateOf(false) }
+    var meetingCaptureSpaceId by remember { mutableStateOf(PERSONAL_SPACE_ID) }
+    var meetingCaptureTopicId by remember { mutableStateOf("") }
+    var meetingCaptureTitle by remember { mutableStateOf("") }
+    var meetingCaptureContent by remember { mutableStateOf("") }
+    var meetingCaptureTagsText by remember { mutableStateOf("meeting, minutes") }
+    var meetingCaptureStatus by remember { mutableStateOf(KBEntryStatus.CANDIDATE) }
+    var meetingCaptureConfidenceText by remember { mutableStateOf("0.90") }
+    var isMeetingCaptureSaving by remember { mutableStateOf(false) }
+    var meetingCaptureResultMessage by remember { mutableStateOf<String?>(null) }
+    var selectedCandidateEntryIds by remember(selectedTopic?.id) { mutableStateOf<Set<String>>(emptySet()) }
+    var showMergeCandidateDialog by remember { mutableStateOf(false) }
+    var mergeTargetEntryId by remember { mutableStateOf("") }
+    var isMergeCandidateSaving by remember { mutableStateOf(false) }
+    var showBatchMergeCandidatesDialog by remember { mutableStateOf(false) }
+    var batchMergeTargetEntryId by remember { mutableStateOf("") }
+    var isBatchMergeSaving by remember { mutableStateOf(false) }
+    var showTopicAccessDialog by remember { mutableStateOf(false) }
+    var editableTopicName by remember { mutableStateOf("") }
+    var editableTopicProject by remember { mutableStateOf("") }
+    var editableReadUserIds by remember { mutableStateOf("") }
+    var editableWriteUserIds by remember { mutableStateOf("") }
+    var editableManageUserIds by remember { mutableStateOf("") }
+    var editableWriteLocked by remember { mutableStateOf(false) }
+    var editableTeamMembersCanWrite by remember { mutableStateOf(true) }
 
     var editorContent by remember { mutableStateOf("") }
     var isSaving by remember { mutableStateOf(false) }
     var saveMessage by remember { mutableStateOf("") }
+    var editorMode by remember { mutableStateOf(KnowledgeEditorMode.SPLIT) }
+    var entryFilter by remember { mutableStateOf(KnowledgeEntryFilter.ALL) }
 
     LaunchedEffect(user.id) {
         isLoading = true
+        val groupsResponse = ApiClient.getUserGroups(user.id)
+        userGroups = (groupsResponse.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
         topics = ApiClient.getKBTopics(user.id)
         isLoading = false
     }
 
-    fun loadEntries(topic: KBTopicItem) {
-        scope.launch {
-            selectedTopic = topic
-            selectedEntry = null
-            editorContent = ""
-            entries = ApiClient.getKBEntries(topic.id, user.id)
+    val spaceOptions = remember(userGroups) { buildKnowledgeSpaceOptions(userGroups) }
+    val filteredTopics = remember(topics, selectedSpaceId) { filterTopicsForSpace(topics, selectedSpaceId) }
+    val filteredEntries = remember(entries, entryFilter) { filterKnowledgeEntries(entries, entryFilter) }
+    val canEditSelectedTopic = selectedTopic?.let { canWriteKnowledgeTopic(it, user.id, userGroups) } ?: false
+    val canManageSelectedTopic = selectedTopic?.let { canManageKnowledgeTopic(it, user.id, userGroups) } ?: false
+    val selectedTopicSpaceLabel = selectedTopic?.let { topicSpaceLabel(it, userGroups) }
+    val selectedTopicPermissionLabel = selectedTopic?.let { topicPermissionLabel(it, user.id, userGroups) }
+    val selectedEntryStatusAction = selectedEntry?.let(::knowledgeStatusAction)
+    val mergeTargetOptions = remember(entries, selectedEntry?.id) {
+        entries.filter { entry ->
+            entry.id != selectedEntry?.id && entry.status != KBEntryStatus.DELETED
+        }
+    }
+    val batchMergeCandidateEntries = remember(entries, selectedCandidateEntryIds) {
+        entries.filter { it.id in selectedCandidateEntryIds && it.status == KBEntryStatus.CANDIDATE }
+    }
+    val batchMergeTargetOptions = remember(entries, selectedCandidateEntryIds) {
+        entries.filter { entry ->
+            entry.id !in selectedCandidateEntryIds && entry.status != KBEntryStatus.DELETED
         }
     }
 
-    fun loadEntry(entry: KBEntryItem) {
-        selectedEntry = entry
-        editorContent = entry.content
+    LaunchedEffect(selectedSpaceId, topics) {
+        if (selectedTopic != null && filteredTopics.none { it.id == selectedTopic?.id }) {
+            selectedTopic = null
+            selectedEntry = null
+            entries = emptyList()
+            editorContent = ""
+        }
+    }
+
+    LaunchedEffect(entries, entryFilter, selectedTopic?.id) {
+        val validCandidateIds = entries
+            .filter { it.status == KBEntryStatus.CANDIDATE }
+            .map { it.id }
+            .toSet()
+        selectedCandidateEntryIds = selectedCandidateEntryIds.intersect(validCandidateIds)
+        if (entryFilter != KnowledgeEntryFilter.CANDIDATE && selectedCandidateEntryIds.isNotEmpty()) {
+            selectedCandidateEntryIds = emptySet()
+        }
+        if (showMergeCandidateDialog && mergeTargetOptions.none { it.id == mergeTargetEntryId }) {
+            mergeTargetEntryId = mergeTargetOptions.firstOrNull()?.id.orEmpty()
+        }
+        if (showBatchMergeCandidatesDialog && batchMergeTargetOptions.none { it.id == batchMergeTargetEntryId }) {
+            batchMergeTargetEntryId = batchMergeTargetOptions.firstOrNull()?.id.orEmpty()
+        }
+    }
+
+    val kbNavigationTarget = appState.knowledgeBaseNavigationTarget
+    LaunchedEffect(user.id, kbNavigationTarget?.requestId) {
+        val target = kbNavigationTarget ?: return@LaunchedEffect
+        val handled = navigateToKnowledgeBaseTarget(
+            target = target,
+            userId = user.id,
+            existingTopics = topics,
+            onTopicsChange = { topics = it },
+            onSelectedTopicChange = { selectedTopic = it },
+            onEntriesChange = { entries = it },
+            onSelectedEntryChange = { selectedEntry = it },
+            onEditorContentChange = { editorContent = it },
+        )
+        if (handled) {
+            selectedTopic?.let { topic ->
+                selectedSpaceId = if (topic.spaceType == KnowledgeSpaceType.PERSONAL) {
+                    PERSONAL_SPACE_ID
+                } else {
+                    topic.groupId ?: PERSONAL_SPACE_ID
+                }
+            }
+            saveMessage = "已打开引用文档"
+        }
+        appState.consumeKnowledgeBaseNavigationTarget(target.requestId)
     }
 
     Div({
@@ -57,313 +1940,454 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             property("background", SilkColors.backgroundGradient)
         }
     }) {
-        // Left column: topics
-        Div({
-            style {
-                width(220.px)
-                property("flex-shrink", "0")
-                property("border-right", "1px solid ${SilkColors.border}")
-                display(DisplayStyle.Flex)
-                flexDirection(FlexDirection.Column)
-                backgroundColor(Color(SilkColors.surface))
-            }
-        }) {
-            Div({
-                style {
-                    padding(12.px)
-                    property("border-bottom", "1px solid ${SilkColors.border}")
-                    display(DisplayStyle.Flex)
-                    justifyContent(JustifyContent.SpaceBetween)
-                    alignItems(AlignItems.Center)
+        TopicSidebar(
+            spaceOptions = spaceOptions,
+            selectedSpaceId = selectedSpaceId,
+            topics = filteredTopics,
+            isLoading = isLoading,
+            selectedTopic = selectedTopic,
+            onCreateTopic = {
+                newTopicSpaceId = selectedSpaceId
+                showCreateTopicDialog = true
+            },
+            onSpaceSelect = { selectedSpace ->
+                selectedSpaceId = selectedSpace.id
+            },
+            userId = user.id,
+            groups = userGroups,
+            onTopicSelect = { topic ->
+                scope.launch {
+                    loadKnowledgeEntries(
+                        topic = topic,
+                        userId = user.id,
+                        onSelectedTopicChange = { selectedTopic = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEditorContentChange = { editorContent = it },
+                        onEntriesChange = { entries = it },
+                    )
                 }
-            }) {
-                Span({
-                    style { fontSize(16.px); fontWeight("bold"); color(Color(SilkColors.textPrimary)) }
-                }) { Text("主题") }
-                Button({
-                    style {
-                        backgroundColor(Color(SilkColors.primary)); color(Color.white)
-                        border(0.px); borderRadius(6.px); padding(4.px, 10.px)
-                        property("cursor", "pointer"); fontSize(12.px)
-                    }
-                    onClick { showCreateTopicDialog = true }
-                }) { Text("+") }
-            }
-
-            Div({ style { property("flex", "1"); property("overflow-y", "auto") } }) {
-                if (isLoading) {
-                    Div({ style { padding(16.px); property("text-align", "center"); color(Color(SilkColors.textSecondary)) } }) {
-                        Text("加载中...")
-                    }
-                } else {
-                    topics.forEach { topic ->
-                        Div({
-                            style {
-                                padding(10.px, 14.px)
-                                property("cursor", "pointer")
-                                if (selectedTopic?.id == topic.id) backgroundColor(Color("rgba(201,168,108,0.15)"))
-                                property("border-bottom", "1px solid ${SilkColors.border}")
-                            }
-                            onClick { loadEntries(topic) }
-                        }) {
-                            Div({
-                                style {
-                                    fontSize(14.px); color(Color(SilkColors.textPrimary))
-                                    fontWeight(if (selectedTopic?.id == topic.id) "600" else "400")
-                                }
-                            }) { Text(topic.name) }
-                            if (topic.project.isNotBlank()) {
-                                Div({
-                                    style { fontSize(11.px); color(Color(SilkColors.textLight)); marginTop(2.px) }
-                                }) { Text(topic.project) }
-                            }
-                        }
-                    }
+            },
+        )
+        EntrySidebar(
+            selectedTopic = selectedTopic,
+            entries = filteredEntries,
+            selectedEntry = selectedEntry,
+            selectedFilter = entryFilter,
+            canCreateEntry = canEditSelectedTopic,
+            selectedCandidateEntryIds = selectedCandidateEntryIds,
+            canBatchMergeCandidates = selectedCandidateEntryIds.isNotEmpty() && batchMergeTargetOptions.isNotEmpty(),
+            onFilterChange = { entryFilter = it },
+            onCreateEntry = { showCreateEntryDialog = true },
+            onMeetingCapture = {
+                val topic = selectedTopic ?: return@EntrySidebar
+                meetingCaptureSpaceId = defaultKnowledgeSpaceIdForTopic(topic)
+                meetingCaptureTopicId = topic.id
+                meetingCaptureTitle = buildDefaultMeetingCaptureTitle(topic)
+                meetingCaptureContent = ""
+                meetingCaptureTagsText = "meeting, minutes"
+                meetingCaptureStatus = KBEntryStatus.CANDIDATE
+                meetingCaptureConfidenceText = "0.90"
+                meetingCaptureResultMessage = null
+                showMeetingCaptureDialog = true
+            },
+            onToggleSelectAllCandidates = {
+                selectedCandidateEntryIds =
+                    if (selectedCandidateEntryIds.size == filteredEntries.size) emptySet()
+                    else filteredEntries.map { it.id }.toSet()
+            },
+            onBatchMergeCandidates = {
+                if (batchMergeTargetOptions.isNotEmpty()) {
+                    batchMergeTargetEntryId = batchMergeTargetOptions.firstOrNull()?.id.orEmpty()
+                    showBatchMergeCandidatesDialog = true
                 }
-            }
-        }
-
-        // Middle column: entries list
-        Div({
-            style {
-                width(240.px)
-                property("flex-shrink", "0")
-                property("border-right", "1px solid ${SilkColors.border}")
-                display(DisplayStyle.Flex)
-                flexDirection(FlexDirection.Column)
-                backgroundColor(Color(SilkColors.surfaceElevated))
-            }
-        }) {
-            Div({
-                style {
-                    padding(12.px)
-                    property("border-bottom", "1px solid ${SilkColors.border}")
-                    display(DisplayStyle.Flex)
-                    justifyContent(JustifyContent.SpaceBetween)
-                    alignItems(AlignItems.Center)
+            },
+            onBatchPublishCandidates = {
+                scope.launch {
+                    bulkUpdateKnowledgeEntryStatus(
+                        entryIds = selectedCandidateEntryIds,
+                        topic = selectedTopic,
+                        userId = user.id,
+                        status = KBEntryStatus.PUBLISHED,
+                        currentSelectedEntryId = selectedEntry?.id,
+                        onSavingChange = { isSaving = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEntriesChange = { entries = it },
+                        onEditorContentChange = { editorContent = it },
+                        onEntryFilterChange = { entryFilter = it },
+                        onSelectedCandidateEntryIdsChange = { selectedCandidateEntryIds = it },
+                    )
                 }
-            }) {
-                Span({
-                    style { fontSize(14.px); fontWeight("bold"); color(Color(SilkColors.textPrimary)) }
-                }) { Text(selectedTopic?.name ?: "条目") }
-                if (selectedTopic != null) {
-                    Button({
-                        style {
-                            backgroundColor(Color(SilkColors.primary)); color(Color.white)
-                            border(0.px); borderRadius(6.px); padding(4.px, 10.px)
-                            property("cursor", "pointer"); fontSize(12.px)
-                        }
-                        onClick { showCreateEntryDialog = true }
-                    }) { Text("+") }
+            },
+            onBatchArchiveCandidates = {
+                scope.launch {
+                    bulkUpdateKnowledgeEntryStatus(
+                        entryIds = selectedCandidateEntryIds,
+                        topic = selectedTopic,
+                        userId = user.id,
+                        status = KBEntryStatus.ARCHIVED,
+                        currentSelectedEntryId = selectedEntry?.id,
+                        onSavingChange = { isSaving = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEntriesChange = { entries = it },
+                        onEditorContentChange = { editorContent = it },
+                        onEntryFilterChange = { entryFilter = it },
+                        onSelectedCandidateEntryIdsChange = { selectedCandidateEntryIds = it },
+                    )
                 }
-            }
-
-            Div({ style { property("flex", "1"); property("overflow-y", "auto") } }) {
-                if (selectedTopic == null) {
-                    Div({
-                        style { padding(20.px); property("text-align", "center"); color(Color(SilkColors.textLight)) }
-                    }) { Text("请先选择主题") }
-                } else if (entries.isEmpty()) {
-                    Div({
-                        style { padding(20.px); property("text-align", "center"); color(Color(SilkColors.textLight)) }
-                    }) { Text("暂无条目") }
-                } else {
-                    entries.forEach { entry ->
-                        Div({
-                            style {
-                                padding(10.px, 14.px)
-                                property("cursor", "pointer")
-                                if (selectedEntry?.id == entry.id) backgroundColor(Color("rgba(201,168,108,0.1)"))
-                                property("border-bottom", "1px solid ${SilkColors.border}")
-                            }
-                            onClick { loadEntry(entry) }
-                        }) {
-                            Div({
-                                style {
-                                    fontSize(13.px); color(Color(SilkColors.textPrimary))
-                                    fontWeight(if (selectedEntry?.id == entry.id) "600" else "400")
-                                }
-                            }) { Text(entry.title) }
-                        }
-                    }
+            },
+            onToggleCandidateSelection = { entryId ->
+                selectedCandidateEntryIds = toggleKnowledgeEntrySelection(selectedCandidateEntryIds, entryId)
+            },
+            onEntrySelect = { entry ->
+                loadKnowledgeEntry(
+                    entry = entry,
+                    onSelectedEntryChange = { selectedEntry = it },
+                    onEditorContentChange = { editorContent = it },
+                )
+            },
+        )
+        KnowledgeEditorPane(
+            selectedTopic = selectedTopic,
+            selectedEntry = selectedEntry,
+            editorContent = editorContent,
+            isSaving = isSaving,
+            saveMessage = saveMessage,
+            editorMode = editorMode,
+            canEdit = canEditSelectedTopic,
+            canManageTopic = canManageSelectedTopic,
+            spaceLabel = selectedTopicSpaceLabel,
+            permissionLabel = selectedTopicPermissionLabel,
+            onContentChange = {
+                editorContent = it
+                if (saveMessage.isNotEmpty()) {
+                    saveMessage = ""
                 }
-            }
-        }
-
-        // Right: editor
-        Div({
-            style {
-                property("flex", "1")
-                display(DisplayStyle.Flex)
-                flexDirection(FlexDirection.Column)
-                minWidth(0.px)
-            }
-        }) {
-            if (selectedEntry != null) {
-                // Toolbar
-                Div({
-                    style {
-                        padding(8.px, 16.px)
-                        property("border-bottom", "1px solid ${SilkColors.border}")
-                        display(DisplayStyle.Flex)
-                        justifyContent(JustifyContent.SpaceBetween)
-                        alignItems(AlignItems.Center)
-                        backgroundColor(Color(SilkColors.surfaceElevated))
-                    }
-                }) {
-                    Span({
-                        style { fontSize(16.px); fontWeight("600"); color(Color(SilkColors.textPrimary)) }
-                    }) { Text(selectedEntry!!.title) }
-                    Div({
-                        style { display(DisplayStyle.Flex); property("gap", "8px"); alignItems(AlignItems.Center) }
-                    }) {
-                        if (saveMessage.isNotEmpty()) {
-                            Span({ style { fontSize(12.px); color(Color(SilkColors.success)) } }) { Text(saveMessage) }
-                        }
-                        Button({
-                            style {
-                                backgroundColor(Color(SilkColors.primary)); color(Color.white)
-                                border(0.px); borderRadius(6.px); padding(6.px, 14.px)
-                                property("cursor", "pointer"); fontSize(13.px)
-                            }
-                            onClick {
-                                scope.launch {
-                                    isSaving = true; saveMessage = ""
-                                    val updated = ApiClient.updateKBEntry(selectedEntry!!.id, null, editorContent, null, user.id)
-                                    if (updated != null) {
-                                        selectedEntry = updated
-                                        entries = ApiClient.getKBEntries(selectedTopic!!.id, user.id)
-                                        saveMessage = "已保存"
-                                    }
-                                    isSaving = false
-                                }
-                            }
-                        }) { Text(if (isSaving) "保存中..." else "保存") }
-                        Button({
-                            style {
-                                backgroundColor(Color(SilkColors.info)); color(Color.white)
-                                border(0.px); borderRadius(6.px); padding(6.px, 14.px)
-                                property("cursor", "pointer"); fontSize(13.px)
-                            }
-                            onClick {
-                                scope.launch {
-                                    val exported = ApiClient.exportKBEntry(selectedEntry!!.id)
-                                    if (exported != null) {
-                                        if (ObsidianVaultManager.isSupported()) {
-                                            try {
-                                                val handle = ObsidianVaultManager.getCachedHandleIfValid()
-                                                    ?: ObsidianVaultManager.pickVaultDirectory()
-                                                ObsidianVaultManager.saveToVault(
-                                                    handle,
-                                                    selectedTopic?.name ?: "General",
-                                                    exported.markdown,
-                                                    exported.fileName
-                                                )
-                                                saveMessage = "已导出到 Obsidian"
-                                            } catch (e: Exception) {
-                                                console.error("Obsidian export failed:", e)
-                                                downloadAsFile(exported.markdown, exported.fileName)
-                                                saveMessage = "已下载文件"
-                                            }
-                                        } else {
-                                            downloadAsFile(exported.markdown, exported.fileName)
-                                            saveMessage = "已下载文件"
-                                        }
-                                    }
-                                }
-                            }
-                        }) { Text("导出 Obsidian") }
+            },
+            onEditorModeChange = { editorMode = it },
+            onManageTopic = {
+                val topic = selectedTopic ?: return@KnowledgeEditorPane
+                editableTopicName = topic.name
+                editableTopicProject = topic.project
+                editableReadUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.readUserIds)
+                editableWriteUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.writeUserIds)
+                editableManageUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.manageUserIds)
+                editableWriteLocked = topic.accessPolicy.writeLocked
+                editableTeamMembersCanWrite = topic.accessPolicy.teamMembersCanWrite
+                showTopicAccessDialog = true
+            },
+            onSave = {
+                scope.launch {
+                    saveKnowledgeEntry(
+                        entry = selectedEntry,
+                        topic = selectedTopic,
+                        editorContent = editorContent,
+                        userId = user.id,
+                        onSavingChange = { isSaving = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEntriesChange = { entries = it },
+                    )
+                }
+            },
+            onStatusAction = selectedEntryStatusAction?.let { (_, targetStatus) ->
+                {
+                    entryFilter = knowledgeFilterForStatus(targetStatus)
+                    scope.launch {
+                        updateKnowledgeEntryStatus(
+                            entry = selectedEntry,
+                            topic = selectedTopic,
+                            userId = user.id,
+                            status = targetStatus,
+                            onSavingChange = { isSaving = it },
+                            onSaveMessageChange = { saveMessage = it },
+                            onSelectedEntryChange = { selectedEntry = it },
+                            onEntriesChange = { entries = it },
+                        )
                     }
                 }
-
-                // Editor textarea
-                TextArea {
-                    value(editorContent)
-                    onInput { event -> editorContent = event.value }
-                    attr("placeholder", "在这里输入 Markdown 内容...")
-                    style {
-                        property("flex", "1")
-                        width(100.percent)
-                        border(0.px)
-                        padding(16.px)
-                        fontSize(14.px)
-                        property("font-family", "monospace")
-                        property("resize", "none")
-                        property("outline", "none")
-                        backgroundColor(Color(SilkColors.background))
-                        color(Color(SilkColors.textPrimary))
+            },
+            statusActionLabel = selectedEntryStatusAction?.first,
+            onMergeCandidate = selectedEntry
+                ?.takeIf { it.status == KBEntryStatus.CANDIDATE && canEditSelectedTopic && mergeTargetOptions.isNotEmpty() }
+                ?.let {
+                    {
+                        mergeTargetEntryId = mergeTargetOptions.firstOrNull()?.id.orEmpty()
+                        showMergeCandidateDialog = true
                     }
+                },
+            onExport = {
+                scope.launch {
+                    exportKnowledgeEntry(
+                        entry = selectedEntry,
+                        topic = selectedTopic,
+                        userId = user.id,
+                        onSaveMessageChange = { saveMessage = it },
+                    )
                 }
-            } else {
-                Div({
-                    style {
-                        property("flex", "1")
-                        display(DisplayStyle.Flex)
-                        justifyContent(JustifyContent.Center)
-                        alignItems(AlignItems.Center)
-                        flexDirection(FlexDirection.Column)
-                    }
-                }) {
-                    Span({ style { fontSize(48.px); marginBottom(16.px) } }) { Text("\uD83D\uDCDA") }
-                    Span({
-                        style { fontSize(18.px); color(Color(SilkColors.textSecondary)) }
-                    }) { Text("选择或创建条目开始编辑") }
-                    Span({
-                        style { fontSize(14.px); color(Color(SilkColors.textLight)); marginTop(8.px) }
-                    }) { Text("内容将自动归类到 Obsidian 知识库") }
-                }
-            }
-        }
+            },
+            onCopyReference = {
+                val entry = selectedEntry ?: return@KnowledgeEditorPane
+                copyTextToClipboard(buildKnowledgeBaseReference(entry))
+                saveMessage = "引用已复制"
+            },
+        )
     }
 
-    // Create topic dialog
     if (showCreateTopicDialog) {
-        ModalDialog(
-            title = "创建主题",
-            onDismiss = { showCreateTopicDialog = false; newTopicName = ""; newTopicProject = "" }
-        ) {
-            LabeledInput("主题名称", newTopicName) { v -> newTopicName = v }
-            LabeledInput("所属项目（可选）", newTopicProject) { v -> newTopicProject = v }
-            DialogActions(
-                onCancel = { showCreateTopicDialog = false; newTopicName = ""; newTopicProject = "" },
-                onConfirm = {
-                    if (newTopicName.isNotBlank()) {
-                        scope.launch {
-                            ApiClient.createKBTopic(newTopicName.trim(), newTopicProject.trim(), user.id)
-                            topics = ApiClient.getKBTopics(user.id)
-                            showCreateTopicDialog = false; newTopicName = ""; newTopicProject = ""
-                        }
-                    }
-                },
-                confirmLabel = "创建"
-            )
-        }
+        CreateTopicDialog(
+            topicName = newTopicName,
+            topicProject = newTopicProject,
+            spaceOptions = spaceOptions,
+            selectedSpaceId = newTopicSpaceId,
+            onTopicNameChange = { newTopicName = it },
+            onTopicProjectChange = { newTopicProject = it },
+            onSpaceChange = { newTopicSpaceId = it },
+            onDismiss = {
+                resetTopicDialog(
+                    onVisibilityChange = { showCreateTopicDialog = it },
+                    onNameChange = { newTopicName = it },
+                    onProjectChange = { newTopicProject = it },
+                )
+            },
+            onConfirm = {
+                scope.launch {
+                    createKnowledgeTopic(
+                        topicName = newTopicName,
+                        topicProject = newTopicProject,
+                        userId = user.id,
+                        spaceOptions = spaceOptions,
+                        selectedSpaceId = newTopicSpaceId,
+                        onTopicsChange = { topics = it },
+                        onVisibilityChange = { showCreateTopicDialog = it },
+                        onNameChange = { newTopicName = it },
+                        onProjectChange = { newTopicProject = it },
+                    )
+                }
+            },
+        )
     }
 
-    // Create entry dialog
-    if (showCreateEntryDialog && selectedTopic != null) {
-        ModalDialog(
-            title = "创建条目",
-            onDismiss = { showCreateEntryDialog = false; newEntryTitle = "" }
-        ) {
-            LabeledInput("条目标题", newEntryTitle) { v -> newEntryTitle = v }
-            DialogActions(
-                onCancel = { showCreateEntryDialog = false; newEntryTitle = "" },
-                onConfirm = {
-                    if (newEntryTitle.isNotBlank()) {
-                        scope.launch {
-                            val entry = ApiClient.createKBEntry(selectedTopic!!.id, newEntryTitle.trim(), "", emptyList(), user.id)
-                            if (entry != null) {
-                                entries = ApiClient.getKBEntries(selectedTopic!!.id, user.id)
-                                loadEntry(entry)
-                            }
-                            showCreateEntryDialog = false; newEntryTitle = ""
-                        }
+    val accessDialogTopic = selectedTopic
+    if (showTopicAccessDialog && accessDialogTopic != null) {
+        TopicAccessDialog(
+            topicName = editableTopicName,
+            topicProject = editableTopicProject,
+            isTeamTopic = accessDialogTopic.spaceType == KnowledgeSpaceType.TEAM,
+            readUserIds = editableReadUserIds,
+            writeUserIds = editableWriteUserIds,
+            manageUserIds = editableManageUserIds,
+            writeLocked = editableWriteLocked,
+            teamMembersCanWrite = editableTeamMembersCanWrite,
+            onTopicNameChange = { editableTopicName = it },
+            onTopicProjectChange = { editableTopicProject = it },
+            onReadUserIdsChange = { editableReadUserIds = it },
+            onWriteUserIdsChange = { editableWriteUserIds = it },
+            onManageUserIdsChange = { editableManageUserIds = it },
+            onWriteLockedChange = { editableWriteLocked = it },
+            onTeamMembersCanWriteChange = { editableTeamMembersCanWrite = it },
+            onDismiss = {
+                resetTopicAccessDialog(
+                    onVisibilityChange = { showTopicAccessDialog = it },
+                    onTopicNameChange = { editableTopicName = it },
+                    onTopicProjectChange = { editableTopicProject = it },
+                    onReadUserIdsChange = { editableReadUserIds = it },
+                    onWriteUserIdsChange = { editableWriteUserIds = it },
+                    onManageUserIdsChange = { editableManageUserIds = it },
+                    onWriteLockedChange = { editableWriteLocked = it },
+                    onTeamMembersCanWriteChange = { editableTeamMembersCanWrite = it },
+                )
+            },
+            onConfirm = {
+                val topic = accessDialogTopic
+                scope.launch {
+                    val updated = ApiClient.updateKBTopic(
+                        topicId = topic.id,
+                        userId = user.id,
+                        name = editableTopicName.trim(),
+                        project = editableTopicProject.trim(),
+                        accessPolicy = KBAccessPolicy(
+                            readUserIds = csvToKnowledgeUserIds(editableReadUserIds),
+                            writeUserIds = csvToKnowledgeUserIds(editableWriteUserIds),
+                            manageUserIds = csvToKnowledgeUserIds(editableManageUserIds),
+                            writeLocked = editableWriteLocked,
+                            teamMembersCanWrite = if (topic.spaceType == KnowledgeSpaceType.TEAM) {
+                                editableTeamMembersCanWrite
+                            } else {
+                                false
+                            },
+                        ),
+                    )
+                    if (updated != null) {
+                        topics = ApiClient.getKBTopics(user.id)
+                        selectedTopic = updated
+                        saveMessage = "主题权限已更新"
                     }
-                },
-                confirmLabel = "创建"
-            )
-        }
+                    resetTopicAccessDialog(
+                        onVisibilityChange = { showTopicAccessDialog = it },
+                        onTopicNameChange = { editableTopicName = it },
+                        onTopicProjectChange = { editableTopicProject = it },
+                        onReadUserIdsChange = { editableReadUserIds = it },
+                        onWriteUserIdsChange = { editableWriteUserIds = it },
+                        onManageUserIdsChange = { editableManageUserIds = it },
+                        onWriteLockedChange = { editableWriteLocked = it },
+                        onTeamMembersCanWriteChange = { editableTeamMembersCanWrite = it },
+                    )
+                }
+            },
+        )
+    }
+
+    if (showCreateEntryDialog && selectedTopic != null) {
+        CreateEntryDialog(
+            entryTitle = newEntryTitle,
+            onEntryTitleChange = { newEntryTitle = it },
+            onDismiss = {
+                resetEntryDialog(
+                    onVisibilityChange = { showCreateEntryDialog = it },
+                    onTitleChange = { newEntryTitle = it },
+                )
+            },
+            onConfirm = {
+                scope.launch {
+                    createKnowledgeEntry(
+                        topic = selectedTopic,
+                        entryTitle = newEntryTitle,
+                        userId = user.id,
+                        onEntriesChange = { entries = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEditorContentChange = { editorContent = it },
+                        onVisibilityChange = { showCreateEntryDialog = it },
+                        onTitleChange = { newEntryTitle = it },
+                    )
+                }
+            },
+        )
+    }
+
+    if (showMeetingCaptureDialog) {
+        KnowledgeBaseMeetingCaptureDialog(
+            spaceOptions = spaceOptions,
+            topics = topics.filter { canWriteKnowledgeTopic(it, user.id, userGroups) },
+            selectedSpaceId = meetingCaptureSpaceId,
+            selectedTopicId = meetingCaptureTopicId,
+            title = meetingCaptureTitle,
+            content = meetingCaptureContent,
+            tagsText = meetingCaptureTagsText,
+            status = meetingCaptureStatus,
+            confidenceText = meetingCaptureConfidenceText,
+            isSaving = isMeetingCaptureSaving,
+            resultMessage = meetingCaptureResultMessage,
+            onSelectedSpaceIdChange = { meetingCaptureSpaceId = it },
+            onSelectedTopicIdChange = { meetingCaptureTopicId = it },
+            onTitleChange = { meetingCaptureTitle = it },
+            onContentChange = { meetingCaptureContent = it },
+            onTagsTextChange = { meetingCaptureTagsText = it },
+            onStatusChange = { meetingCaptureStatus = it },
+            onConfidenceTextChange = { meetingCaptureConfidenceText = it },
+            onDismiss = {
+                if (!isMeetingCaptureSaving) {
+                    showMeetingCaptureDialog = false
+                    meetingCaptureResultMessage = null
+                }
+            },
+            onConfirm = {
+                scope.launch {
+                    submitMeetingKnowledgeCapture(
+                        userId = user.id,
+                        topics = topics.filter { canWriteKnowledgeTopic(it, user.id, userGroups) },
+                        selectedSpaceId = meetingCaptureSpaceId,
+                        selectedTopicId = meetingCaptureTopicId,
+                        title = meetingCaptureTitle,
+                        content = meetingCaptureContent,
+                        tagsText = meetingCaptureTagsText,
+                        status = meetingCaptureStatus,
+                        confidenceText = meetingCaptureConfidenceText,
+                        onSavingChange = { isMeetingCaptureSaving = it },
+                        onResultMessageChange = { meetingCaptureResultMessage = it },
+                        onSelectedSpaceIdChange = { selectedSpaceId = it },
+                        onSelectedTopicChange = { selectedTopic = it },
+                        onEntriesChange = { entries = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEditorContentChange = { editorContent = it },
+                        onEntryFilterChange = { entryFilter = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onVisibilityChange = { showMeetingCaptureDialog = it },
+                    )
+                }
+            },
+        )
+    }
+
+    val mergeCandidateEntry = selectedEntry?.takeIf { it.status == KBEntryStatus.CANDIDATE }
+    if (showMergeCandidateDialog && mergeCandidateEntry != null) {
+        MergeKnowledgeEntryDialog(
+            title = "并入已有文档",
+            description = "将候选“${mergeCandidateEntry.title}”并入目标文档后，原候选会自动归档。",
+            targetEntries = mergeTargetOptions,
+            selectedTargetEntryId = mergeTargetEntryId,
+            isSaving = isMergeCandidateSaving,
+            onSelectedTargetEntryIdChange = { mergeTargetEntryId = it },
+            onDismiss = {
+                if (!isMergeCandidateSaving) {
+                    showMergeCandidateDialog = false
+                }
+            },
+            onConfirm = {
+                scope.launch {
+                    mergeCandidateIntoKnowledgeEntry(
+                        candidateEntry = mergeCandidateEntry,
+                        targetEntryId = mergeTargetEntryId,
+                        topic = selectedTopic,
+                        entries = entries,
+                        userId = user.id,
+                        onSavingChange = { isMergeCandidateSaving = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEntriesChange = { entries = it },
+                        onEditorContentChange = { editorContent = it },
+                        onEntryFilterChange = { entryFilter = it },
+                        onDialogVisibilityChange = { showMergeCandidateDialog = it },
+                    )
+                }
+            },
+        )
+    }
+
+    if (showBatchMergeCandidatesDialog && batchMergeCandidateEntries.isNotEmpty()) {
+        MergeKnowledgeEntryDialog(
+            title = "批量并入已有文档",
+            description = "将选中的 ${batchMergeCandidateEntries.size} 条候选并入目标文档后，这些候选会自动归档。",
+            targetEntries = batchMergeTargetOptions,
+            selectedTargetEntryId = batchMergeTargetEntryId,
+            isSaving = isBatchMergeSaving,
+            onSelectedTargetEntryIdChange = { batchMergeTargetEntryId = it },
+            onDismiss = {
+                if (!isBatchMergeSaving) {
+                    showBatchMergeCandidatesDialog = false
+                }
+            },
+            onConfirm = {
+                scope.launch {
+                    bulkMergeCandidatesIntoKnowledgeEntry(
+                        selectedCandidateEntryIds = selectedCandidateEntryIds,
+                        targetEntryId = batchMergeTargetEntryId,
+                        topic = selectedTopic,
+                        entries = entries,
+                        userId = user.id,
+                        onSavingChange = { isBatchMergeSaving = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEntriesChange = { entries = it },
+                        onEditorContentChange = { editorContent = it },
+                        onEntryFilterChange = { entryFilter = it },
+                        onSelectedCandidateEntryIdsChange = { selectedCandidateEntryIds = it },
+                        onDialogVisibilityChange = { showBatchMergeCandidatesDialog = it },
+                    )
+                }
+            },
+        )
     }
 }
 
@@ -419,7 +2443,77 @@ fun LabeledInput(placeholder: String, currentValue: String, onValueChange: (Stri
 }
 
 @Composable
-fun DialogActions(onCancel: () -> Unit, onConfirm: () -> Unit, confirmLabel: String = "确定") {
+private fun MergeKnowledgeEntryDialog(
+    title: String,
+    description: String,
+    targetEntries: List<KBEntryItem>,
+    selectedTargetEntryId: String,
+    isSaving: Boolean,
+    onSelectedTargetEntryIdChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    ModalDialog(title = title, onDismiss = onDismiss) {
+        Div({
+            style {
+                fontSize(13.px)
+                color(Color(SilkColors.textSecondary))
+                marginBottom(12.px)
+            }
+        }) {
+            Text(description)
+        }
+        Div({
+            style {
+                marginBottom(12.px)
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("gap", "8px")
+            }
+        }) {
+            Span({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    fontWeight("600")
+                }
+            }) { Text("目标文档") }
+            org.jetbrains.compose.web.dom.Select({
+                style {
+                    width(100.percent)
+                    height(40.px)
+                    borderRadius(8.px)
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    padding(0.px, 10.px)
+                    backgroundColor(Color.white)
+                    color(Color(SilkColors.textPrimary))
+                }
+                attr("value", selectedTargetEntryId)
+                onChange { onSelectedTargetEntryIdChange(it.value ?: "") }
+            }) {
+                targetEntries.forEach { entry ->
+                    org.jetbrains.compose.web.dom.Option(value = entry.id) {
+                        Text("${entry.title} · ${entry.status.name.lowercase()}")
+                    }
+                }
+            }
+        }
+        DialogActions(
+            onCancel = onDismiss,
+            onConfirm = onConfirm,
+            confirmLabel = if (isSaving) "合并中..." else "确认合并",
+            confirmEnabled = !isSaving && selectedTargetEntryId.isNotBlank(),
+        )
+    }
+}
+
+@Composable
+fun DialogActions(
+    onCancel: () -> Unit,
+    onConfirm: () -> Unit,
+    confirmLabel: String = "确定",
+    confirmEnabled: Boolean = true,
+) {
     Div({
         style {
             display(DisplayStyle.Flex)
@@ -441,14 +2535,21 @@ fun DialogActions(onCancel: () -> Unit, onConfirm: () -> Unit, confirmLabel: Str
         }) { Text("取消") }
         Button({
             style {
-                backgroundColor(Color(SilkColors.primary))
+                backgroundColor(Color(if (confirmEnabled) SilkColors.primary else SilkColors.border))
                 color(Color.white)
                 border(0.px)
                 borderRadius(6.px)
                 padding(8.px, 16.px)
-                property("cursor", "pointer")
+                property("cursor", if (confirmEnabled) "pointer" else "not-allowed")
             }
-            onClick { onConfirm() }
+            if (!confirmEnabled) {
+                attr("disabled", "true")
+            }
+            onClick {
+                if (confirmEnabled) {
+                    onConfirm()
+                }
+            }
         }) { Text(confirmLabel) }
     }
 }

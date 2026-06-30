@@ -20,6 +20,11 @@ export struct WorkflowPage {
   @State browserEntries: DirEntry[] = [];
   @State browserParent: string | null = null;
   @State browserLoading: boolean = false;
+  @State showWorkflowSheet: boolean = false;
+  @State selectedWorkflow: WorkflowApiItem | null = null;
+  @State showRenameDialog: boolean = false;
+  @State renameText: string = '';
+  @State showDeleteConfirm: boolean = false;
 
   private readonly appStore = globalAppStore;
   private readonly apiClient = globalApiClient;
@@ -170,6 +175,51 @@ export struct WorkflowPage {
     }
   }
 
+  private openWorkflowActions(wf: WorkflowApiItem): void {
+    this.selectedWorkflow = wf;
+    this.showWorkflowSheet = true;
+  }
+
+  private startRename(wf: WorkflowApiItem): void {
+    this.selectedWorkflow = wf;
+    this.renameText = wf.name;
+    this.showWorkflowSheet = false;
+    this.showRenameDialog = true;
+  }
+
+  private async confirmRename(): Promise<void> {
+    const wf = this.selectedWorkflow;
+    const trimmed = this.renameText.trim();
+    if (!wf || !trimmed) return;
+    try {
+      await this.apiClient.renameWorkflow(wf.id, wf.ownerId, trimmed);
+      this.showRenameDialog = false;
+      this.selectedWorkflow = null;
+      await this.loadWorkflows();
+    } catch (_) {
+      this.showToast('重命名失败');
+    }
+  }
+
+  private confirmDeleteWorkflow(wf: WorkflowApiItem): void {
+    this.selectedWorkflow = wf;
+    this.showWorkflowSheet = false;
+    this.showDeleteConfirm = true;
+  }
+
+  private async executeDelete(): Promise<void> {
+    const wf = this.selectedWorkflow;
+    if (!wf) return;
+    this.showDeleteConfirm = false;
+    try {
+      await this.apiClient.deleteWorkflow(wf.id, wf.ownerId);
+      this.selectedWorkflow = null;
+      await this.loadWorkflows();
+    } catch (_) {
+      this.showToast('删除失败');
+    }
+  }
+
   private enterChat(groupId: string, groupName: string, taskFocus: string, agentType?: string): void {
     AppStorage.setOrCreate<string>('currentGroupId', groupId);
     AppStorage.setOrCreate<string>('currentGroupName', groupName);
@@ -178,6 +228,7 @@ export struct WorkflowPage {
     AppStorage.setOrCreate<string>('currentWorkflowAgentType', agentType || '');
     AppStorage.setOrCreate<boolean>('currentIsCcWorkflow', agentType === 'claude_code');
     appRouter.workflowAgentType = agentType || '';
+    AppStorage.setOrCreate<number>('lastMainTab', 1);
     appRouter.goToChat(groupId, groupName);
   }
 
@@ -306,14 +357,7 @@ export struct WorkflowPage {
                       .onClick(() => {
                         this.enterChat(wf.groupId, wf.name, wf.taskFocus, wf.agentType);
                       })
-                      .margin({ right: 8 })
                   }
-                  Button('删除')
-                    .height(28)
-                    .fontSize(12)
-                    .fontColor(SilkColors.error)
-                    .backgroundColor('#2D2D2D')
-                    .onClick(() => { void this.deleteWorkflow(wf.id); })
                 }
                 .width('100%')
                 .margin({ top: 4 })
@@ -325,6 +369,12 @@ export struct WorkflowPage {
               .onClick(() => {
                 this.enterChat(wf.groupId, wf.name, wf.taskFocus, wf.agentType);
               })
+              .gesture(
+                LongPressGesture({ repeat: false })
+                  .onAction(() => {
+                    this.openWorkflowActions(wf);
+                  })
+              )
             }
           }, (wf: WorkflowApiItem) => wf.id)
         }
@@ -459,9 +509,164 @@ export struct WorkflowPage {
           .backgroundColor('#66000000')
         }
       }
+
+      // 重命名对话框
+      if (this.showRenameDialog) {
+        Column() {
+          Column()
+            .width('100%')
+            .layoutWeight(1)
+            .onClick(() => {
+              this.showRenameDialog = false;
+              this.selectedWorkflow = null;
+            })
+          Column() {
+            Text('重命名工作流')
+              .fontSize(18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(SilkColors.textPrimary)
+              .margin({ bottom: 16 })
+
+            TextInput({ placeholder: '工作流名称', text: $$this.renameText })
+              .width('100%')
+              .height(48)
+              .backgroundColor(SilkColors.background)
+              .margin({ bottom: 16 })
+
+            Row() {
+              Button('取消')
+                .width('45%')
+                .backgroundColor(SilkColors.surface)
+                .fontColor(SilkColors.textSecondary)
+                .onClick(() => {
+                  this.showRenameDialog = false;
+                  this.selectedWorkflow = null;
+                })
+              Button('确定')
+                .width('45%')
+                .backgroundColor(SilkColors.primary)
+                .fontColor(Color.White)
+                .enabled(this.renameText.trim().length > 0)
+                .onClick(() => { void this.confirmRename(); })
+            }
+            .width('100%')
+            .justifyContent(FlexAlign.SpaceBetween)
+            .margin({ top: 8 })
+          }
+          .width('100%')
+          .padding(24)
+          .backgroundColor(SilkColors.surface)
+          .borderRadius({ topLeft: 16, topRight: 16 })
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#66000000')
+      }
+
+      // 删除确认对话框
+      if (this.showDeleteConfirm) {
+        Column() {
+          Column()
+            .width('100%')
+            .layoutWeight(1)
+            .onClick(() => {
+              this.showDeleteConfirm = false;
+              this.selectedWorkflow = null;
+            })
+          Column() {
+            Text('确认删除')
+              .fontSize(18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor(SilkColors.textPrimary)
+              .margin({ bottom: 12 })
+
+            Text('确定要删除工作流 "' + (this.selectedWorkflow ? this.selectedWorkflow.name : '') + '" 吗？此操作不可撤销。')
+              .fontSize(14)
+              .fontColor(SilkColors.textSecondary)
+              .margin({ bottom: 20 })
+
+            Row() {
+              Button('取消')
+                .width('45%')
+                .backgroundColor(SilkColors.surface)
+                .fontColor(SilkColors.textSecondary)
+                .onClick(() => {
+                  this.showDeleteConfirm = false;
+                  this.selectedWorkflow = null;
+                })
+              Button('删除')
+                .width('45%')
+                .backgroundColor(SilkColors.error)
+                .fontColor(Color.White)
+                .onClick(() => { void this.executeDelete(); })
+            }
+            .width('100%')
+            .justifyContent(FlexAlign.SpaceBetween)
+          }
+          .width('100%')
+          .padding(24)
+          .backgroundColor(SilkColors.surface)
+          .borderRadius({ topLeft: 16, topRight: 16 })
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#66000000')
+      }
     }
     .width('100%')
     .height('100%')
+    .bindSheet($$this.showWorkflowSheet, this.buildWorkflowActionsSheet(), {
+      height: 240,
+      backgroundColor: SilkColors.surface
+    })
+  }
+
+  @Builder
+  buildWorkflowActionsSheet() {
+    Column() {
+      Text('操作')
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(SilkColors.textPrimary)
+        .margin({ bottom: 12 })
+
+      Button('重命名')
+        .width('100%')
+        .height(42)
+        .backgroundColor(SilkColors.surfaceVariant)
+        .fontColor(SilkColors.textPrimary)
+        .onClick(() => {
+          if (this.selectedWorkflow) {
+            this.startRename(this.selectedWorkflow);
+          }
+        })
+
+      Button('删除')
+        .width('100%')
+        .height(42)
+        .backgroundColor(SilkColors.surfaceVariant)
+        .fontColor(SilkColors.error)
+        .margin({ top: 8 })
+        .onClick(() => {
+          if (this.selectedWorkflow) {
+            this.confirmDeleteWorkflow(this.selectedWorkflow);
+          }
+        })
+
+      Button('取消')
+        .width('100%')
+        .height(42)
+        .backgroundColor(SilkColors.surfaceVariant)
+        .fontColor(SilkColors.textSecondary)
+        .margin({ top: 8 })
+        .onClick(() => {
+          this.showWorkflowSheet = false;
+          this.selectedWorkflow = null;
+        })
+    }
+    .width('100%')
+    .height('100%')
+    .padding(16)
   }
 
   @Builder

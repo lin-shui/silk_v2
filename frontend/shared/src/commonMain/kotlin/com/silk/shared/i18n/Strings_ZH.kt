@@ -3,6 +3,7 @@ package com.silk.shared.i18n
 /**
  * Chinese string resources
  */
+@Suppress("ClassNaming")
 object Strings_ZH : Strings {
     override val settingsTitle = "设置"
     override val languageLabel = "语言"

@@ -1,10 +1,22 @@
 package com.silk.shared
 
-import io.ktor.client.*
-import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.websocket.*
-import io.ktor.websocket.*
-import kotlinx.coroutines.*
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.cio.CIO
+import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
+import io.ktor.client.plugins.websocket.WebSockets
+import io.ktor.client.plugins.websocket.webSocket
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
+import io.ktor.websocket.send
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 
 actual class PlatformWebSocket actual constructor(
@@ -30,11 +42,14 @@ actual class PlatformWebSocket actual constructor(
         println(message)
         onLog?.invoke(message)
     }
+
+    private fun rethrowCancellation(error: CancellationException): Nothing = throw error
     
     actual val isConnected: Boolean
         get() = session != null
     
-    actual fun connect(userId: String, userName: String, groupId: String) {
+    @Suppress("CyclomaticComplexMethod")
+    actual fun connect(token: String?, userId: String, userName: String, groupId: String) {
         val connectToken = connectionGen.incrementAndGet()
 
         // 切群时先让旧连接失效，避免旧协程 finally 把新连接状态清空。
@@ -47,9 +62,11 @@ actual class PlatformWebSocket actual constructor(
             scope.launch {
                 try {
                     oldSession.close(CloseReason(CloseReason.Codes.NORMAL, "Switching group"))
-                } catch (_: CancellationException) {
-                    // Normal cancellation while replacing the socket.
-                } catch (e: Exception) {
+                } catch (e: CancellationException) {
+                    rethrowCancellation(e)
+                } catch (e: IOException) {
+                    log("⚠️ [WebSocket] 旧连接关闭异常: ${e.message}")
+                } catch (e: IllegalStateException) {
                     log("⚠️ [WebSocket] 旧连接关闭异常: ${e.message}")
                 }
             }
@@ -83,16 +100,25 @@ actual class PlatformWebSocket actual constructor(
                             }
                         }
                     } catch (e: CancellationException) {
-                        // Normal cancellation
-                    } catch (e: Exception) {
+                        rethrowCancellation(e)
+                    } catch (e: IOException) {
+                        if (connectionGen.get() == connectToken) {
+                            log("❌ [WebSocket] 接收错误: ${e.message}")
+                        }
+                    } catch (e: IllegalStateException) {
                         if (connectionGen.get() == connectToken) {
                             log("❌ [WebSocket] 接收错误: ${e.message}")
                         }
                     }
                 }
-            } catch (_: CancellationException) {
-                // Normal cancellation while reconnecting or disconnecting.
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                rethrowCancellation(e)
+            } catch (e: IOException) {
+                if (connectionGen.get() == connectToken) {
+                    log("❌ [WebSocket] 连接失败: ${e.message}")
+                    onError(e.message ?: "Unknown error")
+                }
+            } catch (e: IllegalStateException) {
                 if (connectionGen.get() == connectToken) {
                     log("❌ [WebSocket] 连接失败: ${e.message}")
                     onError(e.message ?: "Unknown error")
@@ -111,7 +137,11 @@ actual class PlatformWebSocket actual constructor(
         scope.launch {
             try {
                 session?.send(Frame.Text(message))
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                rethrowCancellation(e)
+            } catch (e: IOException) {
+                log("❌ [WebSocket] 发送失败: ${e.message}")
+            } catch (e: IllegalStateException) {
                 log("❌ [WebSocket] 发送失败: ${e.message}")
             }
         }
@@ -127,14 +157,17 @@ actual class PlatformWebSocket actual constructor(
         scope.launch {
             try {
                 currentSession?.close(CloseReason(CloseReason.Codes.NORMAL, "Client disconnecting"))
-            } catch (_: CancellationException) {
-                // Normal cancellation while disconnecting.
-            } catch (e: Exception) {
+            } catch (e: CancellationException) {
+                rethrowCancellation(e)
+            } catch (e: IOException) {
                 log("⚠️ [WebSocket] 关闭异常: ${e.message}")
-            }
-            currentJob?.cancel()
-            if (connectionGen.get() == disconnectToken) {
-                onDisconnected()
+            } catch (e: IllegalStateException) {
+                log("⚠️ [WebSocket] 关闭异常: ${e.message}")
+            } finally {
+                currentJob?.cancel()
+                if (connectionGen.get() == disconnectToken) {
+                    onDisconnected()
+                }
             }
         }
     }

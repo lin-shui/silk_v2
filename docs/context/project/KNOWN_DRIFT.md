@@ -16,7 +16,7 @@
   - Web / Android / Desktop Gradle 后端地址 fallback
 - Web 前端端口也不完全一致：
   - `silk.sh` 的 Python 静态服务器默认 `8005`
-  - `frontend/webApp` / `frontend/androidApp` 生成 `FRONTEND_PORT` 的 fallback 仍是 `8004`
+  - `frontend/webApp` / `frontend/androidApp` 生成 `FRONTEND_PORT` 的 fallback 已修复为优先读 `FRONTEND_HTTP_PORT`（见 `build.gradle.kts`），无配置时仍回 `8004`
   - `frontend/webApp` dev server `runTask` 端口是 `8005`
 - 实际运行和构建任务中优先读 `.env` / Gradle 属性；不要只抄 README 端口表。
 
@@ -42,10 +42,11 @@
 - `frontend/desktopApp` 当前主要是登录 / 群组 / 聊天 / 设置。
 - Workflow / Knowledge Base / Audio Duplex 的主壳当前在 Web、Android、Harmony，更不是 Desktop 的事实能力面。
 
-## `search/README.md` Is Not Silk Guidance
+## `search/` Is Legacy
 
+- `search/` 目录是 Weaviate 时代的遗留物。Weaviate 已由 Claude 原生 `web_search` + 后端 grep `searchContext()` 替代。
 - `search/README.md` 是 Weaviate 上游 README，不是本仓库的项目说明。
-- 阅读 `search/` 时优先看脚本与 Silk 调用点，不要把该 README 当成项目约束。
+- 阅读 `search/` 时注意其内容已不反映当前架构。
 
 ## Generated / Runtime Paths May Be Dirty
 
@@ -65,7 +66,7 @@ CC 模式已完全迁到通用 `AgentRuntime` 框架。旧 `ClaudeCodeManager` /
 - **入口面**：`WebSocketConfig.kt`、`ChatServer.broadcast()` 只调 `AgentRuntime.{handleIfActive, cancelIfActive, isAgentMessage}`
 - **聊天执行**：`acp_adapter.py` 通过 `/agent-bridge` 端点接收 ACP 请求，复用 `Executor` 跑 Claude CLI，流式推 `session/update` 通知
 - **文件系统操作走 ACP**：`/cc-fs/cd` → `_silk/set_cwd`；`/cc-fs/list` → `_silk/list_dir`
-- **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.ccSessionId` 写入 `Workflow.agentSessions[agentType]`（per-agent）；`autoActivateForWorkflow` 用 seed 续会话
+- **持久化**：`AgentRuntime.WorkflowPersistence` 接 `WorkflowManager`；prompt response 的 `meta.cliSessionId` 写入 `Workflow.agentSessions[agentType]`（per-agent）；`autoActivateForWorkflow` 用 seed 续会话
 - **Multi-agent UX（F1 M4）**：`/codex <text>` inline 文本一步切换+提问；`@codex <text>` 跨 agent 路由不再静默；`Workflow.activeAgent` 持久化，`/use` 切换落盘，下次进工作流自动恢复；前端工作流标题显示 active agent badge
 - **`/session <id>` 真正加载**：`AgentRuntime` 调 ACP `session/load`，cc_bridge 复用 `SessionManager.resume_session`，codex_bridge 新增 `codex_session_index.find_session_file`
 - **Token 重生踢连接**：`AcpRegistry.disconnect(userId)` 关闭老 ACP 连接
@@ -74,3 +75,18 @@ CC 模式已完全迁到通用 `AgentRuntime` 框架。旧 `ClaudeCodeManager` /
 - **无回退路径**：ACP 不可用时直接报"未连接"
 
 排查 agent 行为时只看 `AgentRuntime` + 对应 ACP adapter（Claude Code: `cc_bridge/acp_adapter.py`；Codex: `codex_bridge/codex_adapter.py`）。
+
+## `Cc` / `cc-` 命名残留：应为 Agent-Agnostic
+
+ACP 抽象完成后，以下 API 端点、数据类、函数名仍保留了 Claude Code 时代的 `Cc` / `cc-` 前缀，实际功能已与具体 agent type 无关。待迁移时统一重命名。
+
+| 类别 | 当前命名 | 建议命名 | 涉及文件 |
+|------|---------|---------|---------|
+| 数据类 | `CcStateResponse` | `AgentStateResponse` | `frontend/shared/.../UserSettings.kt`（定义）+ 后端 `Routing.kt` + 三端 `ApiClient` |
+| 路由端点 | `GET /users/{userId}/cc-state/{groupId}` | `/agent-state/` | `Routing.kt` |
+| 路由端点 | `GET /users/{userId}/cc-fs/list` | `/agent-fs/list` | `Routing.kt` |
+| 路由端点 | `POST /users/{userId}/cc-fs/cd` | `/agent-fs/cd` | `Routing.kt` |
+| ApiClient 函数 | `getCcState()` | `getAgentState()` | 三端 `ApiClient` |
+| ApiClient 函数 | `cdCcDir()` | `cdAgentDir()` | 三端 `ApiClient` |
+| 局部变量 | `ccGroupId` | `agentGroupId` | `Routing.kt` |
+| HarmonyOS 组件 | `CcWorkflowPanel.ets` / `loadCcState()` | `AgentWorkflowPanel.ets` / `loadAgentState()` | `harmonyApp/.../CcWorkflowPanel.ets` |

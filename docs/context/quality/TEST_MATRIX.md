@@ -77,6 +77,34 @@
   - `.github/workflows/ci-script-smoke.yml` 覆盖 `./silk.sh build`、`./silk.sh build-apk`、`./silk.sh build-all` 与 `./silk.sh deploy` 编排 smoke
   - `.github/workflows/ci-script-smoke.yml` 另覆盖 `./silk.sh start` / `./silk.sh stop` 运行态 smoke（本地 Weaviate mock、后端 `/health`、前端静态服务）
 
+## Kotlin / Script Lint
+
+- Command: `./gradlew silkLint`
+- Coverage:
+  - detekt checks Kotlin source across `backend` and Gradle frontends
+  - `silkScriptLint` checks `silk.sh` with `bash -n`
+- Use:
+  - before commit / push / PR when Kotlin, Gradle, or `silk.sh` changed
+  - before blaming CI for fast-validation lint failures, because the same `silkLint` entrypoint runs in CI
+- Maintenance:
+  - `./gradlew silkLintBaseline` regenerates `config/lint/detekt/` baselines for intentionally accepted existing findings
+
+## CC Bridge (Python)
+
+- Command: `python3 -m pytest cc_bridge/tests/ -v`
+- Primary tests:
+  - `cc_bridge/tests/test_cc_session_index.py`
+
+## Codex Bridge (Python)
+
+- Command: `python3 -m pytest codex_bridge/tests/ -v`
+- Primary tests:
+  - `codex_bridge/tests/test_codex_session_index.py`
+  - `codex_bridge/tests/test_codex_session_load.py`
+  - `codex_bridge/tests/test_codex_dispatcher.py`
+  - `codex_bridge/tests/test_codex_executor.py`
+  - `codex_bridge/tests/test_fs_listing.py`
+
 ## When Payloads Change
 
 同时触发：

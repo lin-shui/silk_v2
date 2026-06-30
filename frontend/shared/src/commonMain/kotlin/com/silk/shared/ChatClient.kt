@@ -1,14 +1,20 @@
 package com.silk.shared
 
 import com.silk.shared.models.Message
-import com.silk.shared.models.MessageType
 import com.silk.shared.models.MessageCategory
+import com.silk.shared.models.MessageType
+import com.silk.shared.models.ContentBlock
+import com.silk.shared.models.InteractiveOption
+import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.isAgentUserId
-import kotlinx.coroutines.flow.*
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
 import kotlinx.datetime.Clock
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 // 日志回调
 typealias LogCallback = (String) -> Unit
@@ -22,7 +28,14 @@ expect class PlatformWebSocket(
     onError: (String) -> Unit,
     onLog: LogCallback?
 ) {
-    fun connect(userId: String, userName: String, groupId: String)
+    /**
+     * 连接 WebSocket
+     * @param token JWT token（优先使用，代替 userId）
+     * @param userId 用户 ID（无 token 时的 fallback）
+     * @param userName 用户名
+     * @param groupId 群组 ID
+     */
+    fun connect(token: String?, userId: String, userName: String, groupId: String)
     fun send(message: String)
     fun disconnect()
     val isConnected: Boolean
@@ -52,17 +65,31 @@ class ChatClient(
     // 系统状态消息列表（用于显示搜索、索引等状态）
     private val _statusMessages = MutableStateFlow<List<Message>>(emptyList())
     val statusMessages: StateFlow<List<Message>> = _statusMessages.asStateFlow()
-    
+
+    // Agent 提问等待回答状态（AskUserQuestion requestId）
+    private val _pendingQuestionId = MutableStateFlow<String?>(null)
+    val pendingQuestionId: StateFlow<String?> = _pendingQuestionId.asStateFlow()
+
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
     
     private val _isGenerating = MutableStateFlow(false)
     val isGenerating: StateFlow<Boolean> = _isGenerating.asStateFlow()
-    
+
+    private val _transientContentBlocks = MutableStateFlow<List<ContentBlock>>(emptyList())
+    val transientContentBlocks: StateFlow<List<ContentBlock>> = _transientContentBlocks.asStateFlow()
+
+    /** cc-connect 交互式按钮选项（AskUserQuestion） */
+    private val _interactiveOptions = MutableStateFlow<List<InteractiveOption>>(emptyList())
+    val interactiveOptions: StateFlow<List<InteractiveOption>> = _interactiveOptions.asStateFlow()
+
     private val _isLoadingHistory = MutableStateFlow(false)
     val isLoadingHistory: StateFlow<Boolean> = _isLoadingHistory.asStateFlow()
     private val historyBuffer = mutableListOf<Message>()
     private var historyLoadStartMs: Long = 0
+
+    private val _ccMetadataJson = MutableStateFlow<String?>(null)
+    val ccMetadataJson: StateFlow<String?> = _ccMetadataJson.asStateFlow()
     
     private var suppressTransient: Boolean = false
     
@@ -70,18 +97,27 @@ class ChatClient(
     private var connectionGen: Int = 0
     private var currentUserId: String = ""
     private var currentUserName: String = ""
+    private var currentToken: String? = null
     
-    suspend fun connect(userId: String, userName: String, groupId: String = "default_room") {
+    /**
+     * 连接 WebSocket
+     * @param userId 用户 ID
+     * @param userName 用户名
+     * @param groupId 群组 ID
+     * @param token JWT token（可选，优先于 userId）
+     */
+    suspend fun connect(userId: String, userName: String, groupId: String = "default_room", token: String? = null) {
         log("🚀 [ChatClient] connect() 开始执行")
         currentUserId = userId
         currentUserName = userName
+        currentToken = token
 
         // 静默断开旧连接 —— 不触发 DISCONNECTED 状态，避免切群时红色"已断开"闪烁
         val oldWs = webSocket
         if (oldWs != null) {
             log("🔄 [ChatClient] 静默关闭旧连接")
             webSocket = null
-            try { oldWs.disconnect() } catch (_: Exception) {}
+            oldWs.disconnect()
         }
         
         historyBuffer.clear()
@@ -117,7 +153,7 @@ class ChatClient(
             onLog = onLog
         )
         
-        webSocket?.connect(userId, userName, groupId)
+        webSocket?.connect(currentToken, userId, userName, groupId)
     }
     
     private fun flushHistoryBuffer() {
@@ -129,6 +165,7 @@ class ChatClient(
         _isLoadingHistory.value = false
     }
 
+    @Suppress("CyclomaticComplexMethod", "NestedBlockDepth")
     private fun handleMessage(text: String) {
         // 批量历史帧：服务端将最多 50 条消息编码为 JSON 数组一次性发送
         // 不依赖 _isLoadingHistory 状态，防止超时后历史消息被丢弃
@@ -144,7 +181,7 @@ class ChatClient(
                     _messages.value = (_messages.value + batch).distinctBy { it.id }
                 }
                 return
-            } catch (_: Exception) {
+            } catch (_: SerializationException) {
                 log("⚠️ [ChatClient] 批量解析失败，回退单条解析")
             }
         }
@@ -159,6 +196,13 @@ class ChatClient(
                 return
             }
 
+            // cc-connect metadata 更新：不显示为聊天消息
+            if (message.isTransient && message.type == MessageType.SYSTEM && message.content.startsWith("{\"type\":\"cc_metadata\"")) {
+                log("🔧 [ChatClient] 收到 cc_metadata 更新")
+                _ccMetadataJson.value = message.content
+                return
+            }
+
             // 安全超时：超过 30 秒仍在缓冲则强制刷入
             if (_isLoadingHistory.value) {
                 val elapsed = Clock.System.now().toEpochMilliseconds() - historyLoadStartMs
@@ -169,7 +213,9 @@ class ChatClient(
             }
 
             // 历史加载期间：缓冲普通消息，不逐条更新 UI
-            if (_isLoadingHistory.value && !message.isTransient && message.category != MessageCategory.AGENT_STATUS && message.type != MessageType.RECALL) {
+            val shouldBufferDuringHistory = _isLoadingHistory.value && !message.isTransient &&
+                message.category != MessageCategory.AGENT_STATUS && message.type != MessageType.RECALL
+            if (shouldBufferDuringHistory) {
                 historyBuffer.add(message)
                 return
             }
@@ -181,6 +227,9 @@ class ChatClient(
                 if (message.category == MessageCategory.AGENT_STATUS &&
                     message.content.startsWith("CLEAR_STATUS")) {
                     _statusMessages.value = emptyList()
+                    _isGenerating.value = false
+                    suppressTransient = false
+                    _pendingQuestionId.value = null
                 }
                 return
             }
@@ -190,10 +239,24 @@ class ChatClient(
                 message.type == MessageType.RECALL -> {
                     log("🗑️ [ChatClient] 收到撤回消息: ${message.content}")
                     val messageIdsToRemove = message.content.split(",").map { it.trim() }
-                    _messages.value = _messages.value.filter { msg -> 
-                        msg.id !in messageIdsToRemove 
+                    _messages.value = _messages.value.filter { msg ->
+                        msg.id !in messageIdsToRemove
                     }
                     log("🗑️ [ChatClient] 已移除 ${messageIdsToRemove.size} 条消息")
+                }
+                // 结构化 content blocks（流式替换完整 block 列表），同时可能携带交互式选项
+                message.isTransient && message.contentBlocks != null -> {
+                    _transientMessage.value = null
+                    _transientContentBlocks.value = message.contentBlocks
+                    if (message.interactiveOptions != null) {
+                        log("🔘 [ChatClient] 设置 interactiveOptions: ${message.interactiveOptions.size} options: ${message.interactiveOptions.map { it.label }}")
+                        _interactiveOptions.value = message.interactiveOptions
+                    }
+                    if (isSilkAi) _isGenerating.value = true
+                }
+                // 交互式按钮选项（cc-connect 提问，无 contentBlocks 的场景）
+                message.interactiveOptions != null -> {
+                    _interactiveOptions.value = message.interactiveOptions
                 }
                 // Agent 状态消息：添加到状态消息列表（灰色显示）
                 message.category == MessageCategory.AGENT_STATUS -> {
@@ -202,6 +265,10 @@ class ChatClient(
                         _statusMessages.value = emptyList()
                         _isGenerating.value = false
                         suppressTransient = false
+                        _pendingQuestionId.value = null
+                        _transientContentBlocks.value = emptyList()  // 清除内容块
+                        log("🔘 [ChatClient] CLEAR_STATUS 清除 interactiveOptions")
+                        _interactiveOptions.value = emptyList()  // 清除交互式按钮
                     } else {
                         log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
                         if (isSilkAi) _isGenerating.value = true
@@ -217,6 +284,8 @@ class ChatClient(
                 // 增量临时消息：拼接到已有内容尾部
                 message.isTransient && message.isIncremental -> {
                     if (isSilkAi) _isGenerating.value = true
+                    // Clear structured blocks — raw text is being streamed instead
+                    _transientContentBlocks.value = emptyList()
                     val existing = _transientMessage.value
                     if (existing != null &&
                         existing.userId == message.userId &&
@@ -234,28 +303,63 @@ class ChatClient(
                         log("📝 [ChatClient] 增量首帧: ${message.content.length}字")
                     }
                 }
-                // 完整临时消息：直接替换
+                // 完整临时消息：直接替换（contentBlocks != null 的消息已在上面处理）
                 message.isTransient -> {
                     log("📝 [ChatClient] 完整临时消息")
                     if (isSilkAi) _isGenerating.value = true
+                    // Clear structured blocks — raw text is being shown instead
+                    _transientContentBlocks.value = emptyList()
                     _transientMessage.value = message
                 }
-                // 普通消息：添加到消息列表（如果不存在）
+                // 普通消息：添加到消息列表（如果不存在），或替换（如果 action="edit"）
                 else -> {
-                    val exists = _messages.value.any { it.id == message.id }
-                    if (!exists) {
-                        log("💬 [ChatClient] 普通消息，添加到列表")
-                        _messages.value = _messages.value + message
+                    if (message.action == "edit") {
+                        log("✏️ [ChatClient] 编辑消息: ${message.id}")
+                        _messages.value = _messages.value.map {
+                            if (it.id == message.id) message else it
+                        }
+                        // edit 只更新已有卡片内容，不影响状态（agent 可能仍在工作中）
                     } else {
-                        log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
+                        val exists = _messages.value.any { it.id == message.id }
+                        if (!exists) {
+                            log("💬 [ChatClient] 普通消息，添加到列表")
+                            _messages.value = _messages.value + message
+                        } else {
+                            // 消息已在本地列表（发送者预添加），用服务端广播回来的归一化时间戳覆盖（嫁接 fe6faba）
+                            log("📌 [ChatClient] 更新消息时间戳: serverTs=${message.timestamp}")
+                            _messages.value = _messages.value.map {
+                                if (it.id == message.id) it.copy(timestamp = message.timestamp) else it
+                            }
+                        }
+                        // 新消息到达时更新状态（edit 消息走上面分支，不进入此处，不影响状态）
+                        if (message.type == MessageType.CARD_REPLY) {
+                            // 卡片回复：agent 仍在工作中，保留状态消息
+                        } else if (message.category == MessageCategory.AGENT_QUESTION) {
+                            val reqId = message.id.removePrefix("agent_question_")
+                            _pendingQuestionId.value = reqId
+                            // 清 isGenerating 让发送按钮显示（而非停止按钮）
+                            _isGenerating.value = false
+                            _transientMessage.value = null
+                            _transientContentBlocks.value = emptyList()
+                            // 保留 statusMessages（agent 仍在工作中）；不清 cc-connect interactiveOptions
+                            suppressTransient = false
+                        } else if (message.category == MessageCategory.AGENT_PERMISSION) {
+                            // 权限卡片：agent 仍在工作中，保留状态消息
+                            _transientMessage.value = null
+                        } else {
+                            _transientMessage.value = null
+                            _statusMessages.value = emptyList()
+                            _isGenerating.value = false
+                            _transientContentBlocks.value = emptyList()
+                            // 不清除 _interactiveOptions：cc-connect 的交互按钮独立于普通消息生命周期，
+                            // 由 CLEAR_STATUS 或 sendCcAnswer 负责清除。普通消息到达不应取消等待中的按钮。
+                            suppressTransient = false
+                            _pendingQuestionId.value = null
+                        }
                     }
-                    _transientMessage.value = null
-                    _statusMessages.value = emptyList()
-                    _isGenerating.value = false
-                    suppressTransient = false
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
             log("❌ [ChatClient] 解析消息失败: ${e.message}")
         }
     }
@@ -285,7 +389,7 @@ class ChatClient(
         try {
             val jsonMessage = Json.encodeToString(stopMessage)
             webSocket?.send(jsonMessage)
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
             log("❌ [ChatClient] 发送停止信号失败: ${e.message}")
         }
         
@@ -293,18 +397,32 @@ class ChatClient(
         _isGenerating.value = false
         _transientMessage.value = null
         _statusMessages.value = emptyList()
+        _pendingQuestionId.value = null
+        _transientContentBlocks.value = emptyList()
+        _interactiveOptions.value = emptyList()
     }
-    
-    suspend fun sendMessage(userId: String, userName: String, content: String) {
+
+    suspend fun sendMessage(
+        userId: String,
+        userName: String,
+        content: String,
+        kbContextSelection: KnowledgeBaseContextSelection? = null,
+    ) {
         suppressTransient = false
-        
+        // 用户发送新文本消息时清除等待中的交互按钮（cc-connect 场景）
+        if (_interactiveOptions.value.isNotEmpty()) {
+            log("🔘 [ChatClient] sendMessage 清除 interactiveOptions")
+            _interactiveOptions.value = emptyList()
+        }
+
         val message = Message(
             id = generateId(),
             userId = userId,
             userName = userName,
             content = content,
             timestamp = Clock.System.now().toEpochMilliseconds(),
-            type = MessageType.TEXT
+            type = MessageType.TEXT,
+            kbContextSelection = kbContextSelection,
         )
         
         _messages.value = _messages.value + message
@@ -315,23 +433,92 @@ class ChatClient(
             log("📤 [ChatClient] 发送消息: ${content.take(50)}...")
             webSocket?.send(jsonMessage)
             log("✅ [ChatClient] 消息已发送到服务器")
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
             log("❌ [ChatClient] 发送消息失败: ${e.message}")
         }
     }
-    
-    suspend fun disconnect() {
+
+    fun sendCcCommand(userId: String, commandText: String) {
+        val message = Message(
+            id = generateId(),
+            userId = userId,
+            userName = "",
+            content = commandText,
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+            type = MessageType.CC_COMMAND,
+            isTransient = true,
+        )
         try {
-            webSocket?.disconnect()
-            webSocket = null
-            _connectionState.value = ConnectionState.DISCONNECTED
-            _isGenerating.value = false
-            suppressTransient = false
-            log("✅ [ChatClient] 已断开连接")
-        } catch (e: Exception) {
-            log("⚠️ [ChatClient] 断开连接: ${e.message}")
-            _connectionState.value = ConnectionState.DISCONNECTED
+            val jsonMessage = Json.encodeToString(message)
+            log("📤 [ChatClient] 发送 cc_command: $commandText")
+            webSocket?.send(jsonMessage)
+        } catch (e: SerializationException) {
+            log("❌ [ChatClient] 发送 cc_command 失败: ${e.message}")
         }
+    }
+
+    /**
+     * 发送交互式按钮的答案到 cc-connect 适配器。
+     * 不添加到本地消息列表（引擎会通过 reply/reply_stream 继续输出）。
+     * cmd: 前缀的按钮值是引擎命令（如 cmd:/mode），直接以 CC_COMMAND 类型发送，
+     * 让后端正确路由给引擎处理，不会落入 AI agent 导致权限拦截。
+     */
+    fun sendCcAnswer(content: String) {
+        log("🔘 [ChatClient] sendCcAnswer: content=${content.take(30)}, clearing interactiveOptions")
+        // cmd: 前缀 → 作为命令发送（引擎按钮值）
+        if (content.startsWith("cmd:")) {
+            sendCcCommand(currentUserId, content.substring(4))
+            _interactiveOptions.value = emptyList()
+            return
+        }
+        val message = Message(
+            id = generateId(),
+            userId = currentUserId,
+            userName = currentUserName,
+            content = content,
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+            type = MessageType.TEXT,
+        )
+        try {
+            val jsonMessage = Json.encodeToString(message)
+            log("📤 [ChatClient] 发送 cc-connect 交互式回答: ${content.take(30)}")
+            webSocket?.send(jsonMessage)
+            // 清除交互式选项（按钮已点击）
+            _interactiveOptions.value = emptyList()
+        } catch (e: SerializationException) {
+            log("❌ [ChatClient] 发送 cc-connect 交互式回答失败: ${e.message}")
+        }
+    }
+    
+    /**
+     * 发送指定类型的消息（用于 CARD_REPLY 等非 TEXT 消息）。
+     * 不添加到本地消息列表——卡片回复由服务器广播后通过 handleMessage 统一处理。
+     */
+    suspend fun sendMessage(userId: String, userName: String, content: String, type: MessageType) {
+        val message = Message(
+            id = generateId(),
+            userId = userId,
+            userName = userName,
+            content = content,
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+            type = type,
+        )
+        try {
+            val jsonMessage = Json.encodeToString(message)
+            log("📤 [ChatClient] 发送 ${type.name} 消息: ${content.take(50)}...")
+            webSocket?.send(jsonMessage)
+        } catch (e: SerializationException) {
+            log("❌ [ChatClient] 发送 ${type.name} 消息失败: ${e.message}")
+        }
+    }
+
+    suspend fun disconnect() {
+        webSocket?.disconnect()
+        webSocket = null
+        _connectionState.value = ConnectionState.DISCONNECTED
+        _isGenerating.value = false
+        suppressTransient = false
+        log("✅ [ChatClient] 已断开连接")
     }
     
     fun clearMessages() {
@@ -342,13 +529,22 @@ class ChatClient(
         _isLoadingHistory.value = false
         historyBuffer.clear()
         suppressTransient = false
+        _transientContentBlocks.value = emptyList()
+        _interactiveOptions.value = emptyList()
     }
-    
+
+    fun removeMessages(messageIds: Set<String>) {
+        _messages.value = _messages.value.filter { it.id !in messageIds }
+        log("🗑️ [ChatClient] 已移除 ${messageIds.size} 条消息: $messageIds")
+    }
+
     fun clearTransientOnly() {
         log("🗑️ [ChatClient] 只清空临时消息")
         _transientMessage.value = null
+        _transientContentBlocks.value = emptyList()
+        _interactiveOptions.value = emptyList()
     }
-    
+
     private fun generateId(): String {
         return "${Clock.System.now().toEpochMilliseconds()}_${(0..9999).random()}"
     }

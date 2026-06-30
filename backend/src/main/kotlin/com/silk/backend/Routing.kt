@@ -1,14 +1,75 @@
 package com.silk.backend
 
 import com.silk.backend.ai.AIConfig
+import com.silk.backend.ai.ContentBlock
 import com.silk.backend.auth.AuthService
 import com.silk.backend.auth.GroupService
-import com.silk.backend.database.*
+import com.silk.backend.database.AddMemberRequest
+import com.silk.backend.database.AuthResponse
+import com.silk.backend.database.CcSettingsResponse
+import com.silk.backend.database.ContactRepository
+import com.silk.backend.database.ContactResponse
+import com.silk.backend.database.CreateGroupRequest
+import com.silk.backend.database.DeleteGroupRequest
+import com.silk.backend.database.DeleteUserTodoRequest
+import com.silk.backend.database.Group
+import com.silk.backend.database.GroupMemberApi
+import com.silk.backend.database.GroupMembers
+import com.silk.backend.database.GroupMembersResponse
+import com.silk.backend.database.GroupRepository
+import com.silk.backend.database.GroupResponse
+import com.silk.backend.database.Groups
+import com.silk.backend.database.HandleContactRequestData
+import com.silk.backend.database.JoinGroupRequest
+import com.silk.backend.database.LeaveGroupRequest
+import com.silk.backend.database.LeaveGroupResponse
+import com.silk.backend.database.LoginRequest
+import com.silk.backend.database.MarkReadRequest
+import com.silk.backend.database.MemberRole
+import com.silk.backend.database.PrivateChatResponse
+import com.silk.backend.database.RecallMessageRequest
+import com.silk.backend.database.RefreshUserTodosRequest
+import com.silk.backend.database.RegisterRequest
+import com.silk.backend.database.SendContactRequestByIdData
+import com.silk.backend.auth.HuaweiAuthService
+import com.silk.backend.auth.JwtProvider
+import com.silk.backend.auth.isPublicPath
+import com.silk.backend.database.HuaweiWebLoginRequest
+import com.silk.backend.database.HuaweiLoginRequest
+import com.silk.backend.database.HuaweiBindRequest
+import com.silk.backend.database.RefreshTokenRequest
+import com.silk.backend.database.LogoutRequest
+import com.silk.backend.database.HuaweiAuthResponse
+import com.silk.backend.database.WechatLoginRequest
+import com.silk.backend.database.WechatAuthResponse
+import com.silk.backend.auth.WechatAuthService
+import com.silk.backend.database.TokenRefreshResponse
+import com.silk.backend.database.SendContactRequestData
+import com.silk.backend.database.SendMessageRequest
+import com.silk.backend.database.SimpleResponse
+import com.silk.backend.database.StartPrivateChatRequest
+import com.silk.backend.database.StartSilkPrivateChatRequest
+import com.silk.backend.database.UnreadCountResponse
+import com.silk.backend.database.UnreadRepository
+import com.silk.backend.database.UpdateUserSettingsRequest
+import com.silk.backend.database.UpdateUserTodoRequest
+import com.silk.backend.database.UserRepository
+import com.silk.backend.database.UserSearchResult
+import com.silk.backend.database.UserSettingsRepository
+import com.silk.backend.database.UserSettingsResponse
+import com.silk.backend.database.UserTodoExtractionDiagnosticsResponse
+import com.silk.backend.database.UserTodoRefreshStatusResponse
+import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.export.ChatObsidianExporter
 import com.silk.backend.kb.KBObsidianExporter
 import com.silk.backend.kb.KnowledgeBaseManager
+import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
+import com.silk.backend.models.KBEntrySource
+import com.silk.backend.models.KBEntryStatus
+import com.silk.backend.models.KBSourceType
 import com.silk.backend.models.KBTopic
+import com.silk.backend.models.KnowledgeSpaceType
 import com.silk.backend.models.Workflow
 import com.silk.backend.workflow.WorkflowManager
 import com.silk.backend.routes.asrRoutes
@@ -17,36 +78,71 @@ import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.core.AgentRegistry
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.trust.TrustedDirManager
+import com.silk.shared.models.AddTrustRequest
 import com.silk.shared.models.CcStateResponse
 import com.silk.shared.models.DirEntry
 import com.silk.shared.models.DirListingResponse
-import com.silk.shared.models.TrustedDirCheckResponse
-import com.silk.shared.models.AddTrustRequest
-import com.silk.shared.models.TrustedDirRecordDto
 import com.silk.shared.models.TrustedDirListResponse
-import io.ktor.server.application.*
-import io.ktor.server.request.*
-import io.ktor.server.response.*
-import io.ktor.server.routing.*
-import io.ktor.server.websocket.*
-import io.ktor.client.*
-import io.ktor.client.plugins.websocket.*
+import com.silk.shared.models.TrustedDirCheckResponse
+import com.silk.shared.models.TrustedDirRecordDto
+import io.ktor.client.HttpClient
+import io.ktor.client.call.body
+import io.ktor.client.plugins.websocket.webSocket
 import io.ktor.client.plugins.websocket.WebSockets as ClientWebSockets
-import io.ktor.websocket.*
-import io.ktor.http.*
-import kotlinx.coroutines.channels.consumeEach
+import io.ktor.client.request.get as httpGet
+import io.ktor.client.statement.HttpResponse
+import io.ktor.http.contentType
+import io.ktor.http.ContentDisposition
+import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.Application
+import io.ktor.server.application.ApplicationCall
+import io.ktor.server.application.call
+import io.ktor.server.request.receive
+import io.ktor.server.request.receiveText
+import io.ktor.server.response.header
+import io.ktor.server.response.respond
+import io.ktor.server.response.respondFile
+import io.ktor.server.response.respondText
+import io.ktor.server.routing.Route
+import io.ktor.server.routing.delete
+import io.ktor.server.routing.get
+import io.ktor.server.routing.post
+import io.ktor.server.routing.put
+import io.ktor.server.routing.routing
+import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
+import io.ktor.websocket.send
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.cancelAndJoin
 import io.ktor.client.engine.cio.CIO
-import kotlinx.serialization.json.*
-import org.jetbrains.exposed.sql.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import org.jetbrains.exposed.sql.and
+import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.io.File
 import java.time.LocalDate
-import java.util.*
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import org.slf4j.LoggerFactory
 
@@ -55,7 +151,7 @@ private val groupChatServers = ConcurrentHashMap<String, ChatServer>()
 private val logger = LoggerFactory.getLogger("Routing")
 private val workflowManager = WorkflowManager()
 private val trustedDirManager = TrustedDirManager()
-private val knowledgeBaseManager = KnowledgeBaseManager()
+private val knowledgeBaseManager: KnowledgeBaseManager get() = KnowledgeBaseManager()
 
 private fun sanitizeFileName(input: String): String =
     input.replace(Regex("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]"), "_").take(100)
@@ -100,7 +196,7 @@ private fun resolveActiveAgentType(userId: String): String? {
 /**
  * 获取或创建指定群组的ChatServer
  */
-private fun getGroupChatServer(groupId: String): ChatServer {
+internal fun getGroupChatServer(groupId: String): ChatServer {
     return groupChatServers.getOrPut(groupId) {
         val sessionName = "group_$groupId"
         val wf = workflowManager.getWorkflowByGroupId(groupId)
@@ -121,6 +217,19 @@ suspend fun broadcastSystemStatus(groupId: String, status: String) {
         chatServer.broadcastSystemStatus(status)
     } else {
         logger.warn("⚠️ [broadcastSystemStatus] 群组 {} 不存在", groupId)
+    }
+}
+
+/**
+ * 广播文件提取内容到指定群组 - 供 FileRoutes 使用
+ * 预处理完成后，将 OCR/Vision 提取结果发送到聊天中
+ */
+suspend fun broadcastExtractedContent(groupId: String, content: String, label: String, downloadUrl: String = "") {
+    val chatServer = groupChatServers[groupId]
+    if (chatServer != null) {
+        chatServer.broadcastExtractedContent(content, label, downloadUrl)
+    } else {
+        logger.warn("⚠️ [broadcastExtractedContent] 群组 {} 不存在", groupId)
     }
 }
 
@@ -157,55 +266,77 @@ suspend fun broadcastFileMessage(
     }
 }
 
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 fun Application.configureRouting() {
-    // AgentRuntime 持久化 wiring：cdSync 成功 / prompt 完成时把 workingDir + ccSessionId 写回
-    // workflow_store.json，让重启后能 seed 恢复对话。复用 Workflow.sessionId 字段存 ccSessionId。
+    // AgentRuntime 持久化 wiring：cdSync 成功 / prompt 完成时把 workingDir + cliSessionId 写回
+    // workflow_store.json，让重启后能 seed 恢复对话。复用 Workflow.sessionId 字段存 cliSessionId。
     AgentRuntime.setWorkflowPersistence(object : AgentRuntime.WorkflowPersistence {
         override fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean =
             workflowManager.updateWorkingDir(rawGroupId, workingDir)
 
-        override fun persistCcSession(rawGroupId: String, ccSessionId: String, sessionStarted: Boolean): Boolean =
-            workflowManager.updateSessionState(rawGroupId, ccSessionId, sessionStarted)
+        override fun persistCliSession(rawGroupId: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
+            workflowManager.updateSessionState(rawGroupId, cliSessionId, sessionStarted)
 
-        override fun persistCcSession(rawGroupId: String, agentType: String, ccSessionId: String, sessionStarted: Boolean): Boolean =
-            workflowManager.updateSessionState(rawGroupId, agentType, ccSessionId, sessionStarted)
+        override fun persistCliSession(rawGroupId: String, agentType: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
+            workflowManager.updateSessionState(rawGroupId, agentType, cliSessionId, sessionStarted)
 
         override fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean =
             workflowManager.updateActiveAgent(rawGroupId, agentType)
+
+        override fun persistPermissionMode(rawGroupId: String, permissionMode: String): Boolean =
+            workflowManager.updatePermissionMode(rawGroupId, permissionMode)
 
         override fun loadSeed(rawGroupId: String): AgentRuntime.WorkflowSeed? {
             val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
             if (wf.workingDir.isBlank() && wf.sessionId.isBlank()) return null
             return AgentRuntime.WorkflowSeed(
                 workingDir = wf.workingDir,
-                ccSessionId = wf.sessionId.takeIf { it.isNotBlank() },
+                cliSessionId = wf.sessionId.takeIf { it.isNotBlank() },
                 sessionStarted = wf.sessionStarted,
+                permissionMode = wf.permissionMode,
             )
         }
 
         override fun loadSeed(rawGroupId: String, agentType: String): AgentRuntime.WorkflowSeed? {
             val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
             // 优先取 per-agent state；缺失时仅当 agentType 等于 workflow 默认 agent 才回落到旧字段，
-            // 避免别的 agent 拿到不属于它的 ccSessionId 触发 resume 失败。
+            // 避免别的 agent 拿到不属于它的 cliSessionId 触发 resume 失败。
             val perAgent = wf.agentSessions[agentType]
             val defaultDash = when (wf.agentType) {
                 "claude_code" -> "claude-code"
                 else -> wf.agentType
             }
-            val ccSid = perAgent?.sessionId?.takeIf { it.isNotBlank() }
+            val cliSid = perAgent?.sessionId?.takeIf { it.isNotBlank() }
                 ?: wf.sessionId.takeIf { it.isNotBlank() && agentType == defaultDash }
             val sessionStarted = perAgent?.sessionStarted
                 ?: (wf.sessionStarted && agentType == defaultDash)
-            if (wf.workingDir.isBlank() && ccSid.isNullOrBlank()) return null
+            if (wf.workingDir.isBlank() && cliSid.isNullOrBlank()) return null
             return AgentRuntime.WorkflowSeed(
                 workingDir = wf.workingDir,
-                ccSessionId = ccSid,
+                cliSessionId = cliSid,
                 sessionStarted = sessionStarted,
+                permissionMode = wf.permissionMode,
             )
         }
     })
 
     routing {
+        coreRoutes()
+        authRoutes()
+        groupContactRoutes()
+        unreadTodoMessageRoutes()
+        agentBridgeRoute()
+        ccConnectBridgeRoute()
+        ccConnectApiRoutes()
+        workflowKbRoutes()
+        chatWebSocketRoute()
+        audioDuplexRoute()
+    }
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.coreRoutes() {
         get("/") {
             val html = """
                 <!DOCTYPE html>
@@ -498,6 +629,27 @@ fun Application.configureRouting() {
             """.trimIndent(), ContentType.Application.Json)
         }
         
+        // 图片代理：通过后端转发 HTTP 图片，解决 Mixed Content 问题
+        get("/api/image-proxy") {
+            val url = call.request.queryParameters["url"]
+            if (url.isNullOrBlank() || (!url.startsWith("http://") && !url.startsWith("https://"))) {
+                call.respond(HttpStatusCode.BadRequest, "Missing or invalid url parameter")
+                return@get
+            }
+            try {
+                val client = HttpClient { expectSuccess = false }
+                val resp = client.httpGet(url)
+                val bytes = resp.body<ByteArray>()
+                val contentType = resp.contentType()?.toString() ?: "image/png"
+                client.close()
+                call.response.header(HttpHeaders.ContentType, contentType)
+                call.response.header(HttpHeaders.CacheControl, "public, max-age=3600")
+                call.respond(bytes)
+            } catch (e: Exception) {
+                call.respond(HttpStatusCode.BadGateway, "Failed to fetch image")
+            }
+        }
+
         get("/health") {
             call.respondText(
                 """{"status":"ok","service":"silk","timestamp":${System.currentTimeMillis()}}""",
@@ -662,6 +814,7 @@ fun Application.configureRouting() {
                         bridgeConnected = bridgeConnected,
                         agentType = agentSnap.agentType ?: "",
                         agentDisplayName = descriptor?.displayName ?: "",
+                        permissionMode = agentSnap.permissionMode,
                     )
                 )
             } else {
@@ -787,10 +940,102 @@ fun Application.configureRouting() {
                             bridgeConnected = bridgeConnected,
                             agentType = snap?.agentType ?: "",
                             agentDisplayName = descriptor?.displayName ?: "",
+                            permissionMode = snap?.permissionMode ?: "",
                         )
                     )
                 }
             }
+        }
+
+        // API-driven 切换 agent / 权限模式（更改对话框用，不走聊天消息流）
+        post("/users/{userId}/cc-settings/update") {
+            val userId = call.parameters["userId"] ?: ""
+            val reqJson = try {
+                Json.parseToJsonElement(call.receiveText()).jsonObject
+            } catch (e: Exception) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    CcStateResponse(success = false, error = "请求体非法 JSON: ${e.message}")
+                )
+                return@post
+            }
+            val groupId = reqJson["groupId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (userId.isBlank() || groupId.isBlank()) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    CcStateResponse(success = false, error = "userId / groupId 不能为空")
+                )
+                return@post
+            }
+            val ccGroupId = if (groupId.startsWith("group_")) groupId else "group_$groupId"
+            val newAgent = reqJson["activeAgent"]?.jsonPrimitive?.contentOrNull
+            val newPermMode = reqJson["permissionMode"]?.jsonPrimitive?.contentOrNull
+
+            // 切换 agent
+            var agentSwitchMsg: String? = null
+            if (!newAgent.isNullOrBlank()) {
+                // 前端传 underscore form（claude_code），runtime 用 dash form（claude-code）
+                val dashType = newAgent.replace('_', '-')
+                val descriptor = AgentRuntime.switchAgent(userId, ccGroupId, dashType)
+                if (descriptor == null) {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        CcStateResponse(success = false, error = "未知 agent: $newAgent")
+                    )
+                    return@post
+                }
+                // 持久化到 workflow record（switchAgent 已持久化 runtime 侧）
+                workflowManager.updateActiveAgent(groupId, dashType)
+                agentSwitchMsg = "已切换到 ${descriptor.displayName}。"
+            }
+
+            // 切换权限模式
+            if (!newPermMode.isNullOrBlank()) {
+                val ok = AgentRuntime.setPermissionMode(userId, ccGroupId, newPermMode)
+                if (!ok) {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        CcStateResponse(success = false, error = "无效权限模式: $newPermMode（INTERACTIVE / ACCEPT_EDITS / BYPASS）")
+                    )
+                    return@post
+                }
+                workflowManager.updatePermissionMode(groupId, newPermMode)
+            }
+
+            // 广播系统消息通知前端
+            val rawGid = if (ccGroupId.startsWith("group_")) ccGroupId.removePrefix("group_") else ccGroupId
+            if (agentSwitchMsg != null) {
+                try {
+                    val snap = AgentRuntime.snapshotState(userId, ccGroupId)
+                    val desc = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
+                    getGroupChatServer(rawGid).broadcast(
+                        com.silk.backend.agents.core.AgentMessages.system(
+                            agentSwitchMsg,
+                            agentUserId = desc?.agentUserId ?: SilkAgent.AGENT_ID,
+                            agentName = desc?.displayName ?: SilkAgent.AGENT_NAME,
+                        )
+                    )
+                } catch (e: Exception) {
+                    logger.warn("广播 agent 切换提示失败: {}", e.message)
+                }
+            }
+
+            // 返回最新状态
+            val snap = AgentRuntime.snapshotState(userId, ccGroupId)
+            val bridgeConnected = isAnyBridgeConnected(userId)
+            val descriptor = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
+            call.respond(
+                CcStateResponse(
+                    success = true,
+                    active = snap?.active ?: false,
+                    running = snap?.running ?: false,
+                    workingDir = snap?.workingDir ?: "",
+                    bridgeConnected = bridgeConnected,
+                    agentType = snap?.agentType ?: "",
+                    agentDisplayName = descriptor?.displayName ?: "",
+                    permissionMode = snap?.permissionMode ?: "",
+                )
+            )
         }
 
         // ==================== Trusted Directory API ====================
@@ -975,6 +1220,11 @@ fun Application.configureRouting() {
         }
         
         // 用户认证API
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.authRoutes() {
         post("/auth/register") {
             try {
                 val request = call.receive<RegisterRequest>()
@@ -1009,24 +1259,250 @@ fun Application.configureRouting() {
             }
         }
         
+        // ==================== 华为账号认证 API ====================
+        
+        /**
+         * 华为 Web OAuth 登录
+         * 前端跳转华为 OAuth 页面 -> 回调 -> 前端发 code -> 后端交换 token
+         */
+        post("/auth/huawei/web-login") {
+            try {
+                val request = call.receive<HuaweiWebLoginRequest>()
+                val result = HuaweiAuthService.webLogin(request.code, request.redirectUri)
+                if (result.success) {
+                    call.respond(HuaweiAuthResponse(
+                        success = true,
+                        message = result.message,
+                        user = result.user,
+                        accessToken = result.accessToken,
+                        refreshToken = result.refreshToken,
+                        isNewUser = result.isNewUser
+                    ))
+                } else {
+                    call.respond(HttpStatusCode.Unauthorized, HuaweiAuthResponse(
+                        success = false,
+                        message = result.message
+                    ))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 华为 Web 登录失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, HuaweiAuthResponse(false, "请求格式错误"))
+            }
+        }
+        
+        /**
+         * 华为 ID Token 登录（Harmony/Android 原生端）
+         */
+        post("/auth/huawei/login") {
+            try {
+                val request = call.receive<HuaweiLoginRequest>()
+                val result = HuaweiAuthService.nativeLogin(request.idToken)
+                if (result.success) {
+                    call.respond(HuaweiAuthResponse(
+                        success = true,
+                        message = result.message,
+                        user = result.user,
+                        accessToken = result.accessToken,
+                        refreshToken = result.refreshToken,
+                        isNewUser = result.isNewUser
+                    ))
+                } else {
+                    call.respond(HttpStatusCode.Unauthorized, HuaweiAuthResponse(
+                        success = false,
+                        message = result.message
+                    ))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 华为原生登录失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, HuaweiAuthResponse(false, "请求格式错误"))
+            }
+        }
+
+        /**
+         * 华为 OAuth 账号绑定（老账号迁移，需 JWT 鉴权）
+         * 老用户登录后，将华为账号绑定到当前 userId
+         */
+        post("/api/account/bind-huawei") {
+            try {
+                val request = call.receive<HuaweiBindRequest>()
+                // 从 JWT 中获取当前用户 ID
+                val authHeader = call.request.headers[HttpHeaders.Authorization]
+                val token = authHeader?.removePrefix("Bearer ")?.trim()
+                val userId = if (token != null) JwtProvider.verifyAccessToken(token) else null
+                if (userId == null) {
+                    call.respond(HttpStatusCode.Unauthorized, HuaweiAuthResponse(false, "未登录"))
+                    return@post
+                }
+                val result = HuaweiAuthService.bindToUser(request.code, request.redirectUri, userId)
+                if (result.success) {
+                    call.respond(HuaweiAuthResponse(success = true, message = result.message))
+                } else {
+                    call.respond(HttpStatusCode.BadRequest, HuaweiAuthResponse(false, result.message))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 华为账号绑定失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, HuaweiAuthResponse(false, "请求格式错误"))
+            }
+        }
+
+        // ==================== 微信账号认证 API ====================
+
+        /**
+         * 微信 OAuth 登录
+         * Android 端微信 SDK 授权 -> 回调 -> 前端发 code -> 后端用 code 交换 token
+         */
+        post("/auth/wechat/login") {
+            try {
+                val request = call.receive<WechatLoginRequest>()
+                val result = WechatAuthService.login(request.code)
+                if (result.success) {
+                    call.respond(WechatAuthResponse(
+                        success = true,
+                        message = result.message,
+                        user = result.user,
+                        accessToken = result.accessToken,
+                        refreshToken = result.refreshToken,
+                        isNewUser = result.isNewUser
+                    ))
+                } else {
+                    call.respond(HttpStatusCode.Unauthorized, WechatAuthResponse(
+                        success = false,
+                        message = result.message
+                    ))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 微信登录失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, WechatAuthResponse(false, "请求格式错误"))
+            }
+        }
+
+        /**
+         * 更新用户资料（昵称）
+         */
+        put("/users/{userId}/profile") {
+            try {
+                val userId = call.parameters["userId"] ?: ""
+                if (userId.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少用户ID"))
+                    return@put
+                }
+
+                val body = call.receive<Map<String, String>>()
+                val newFullName = body["fullName"]?.trim() ?: ""
+
+                if (newFullName.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "昵称不能为空"))
+                    return@put
+                }
+                if (newFullName.length > 50) {
+                    call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "昵称不能超过50个字符"))
+                    return@put
+                }
+
+                val updated = UserRepository.updateFullName(userId, newFullName)
+                if (updated != null) {
+                    call.respond(SimpleResponse(true, "昵称更新成功"))
+                } else {
+                    call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "用户不存在"))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 更新用户资料失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "请求格式错误"))
+            }
+        }
+
+        /**
+         * 注销账号（删除用户及其所有关联数据）
+         */
+        delete("/users/{userId}/account") {
+            try {
+                val userId = call.parameters["userId"] ?: ""
+                if (userId.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少用户ID"))
+                    return@delete
+                }
+
+                val user = UserRepository.findUserById(userId)
+                if (user == null) {
+                    call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "用户不存在"))
+                    return@delete
+                }
+
+                val deleted = UserRepository.deleteUser(userId)
+                if (deleted) {
+                    call.respond(SimpleResponse(true, "账号已注销"))
+                } else {
+                    call.respond(HttpStatusCode.InternalServerError, SimpleResponse(false, "注销失败，请稍后重试"))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 注销账号失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "请求格式错误"))
+            }
+        }
+
+        /**
+         * 刷新 Access Token
+         */
+        post("/auth/refresh") {
+            try {
+                val request = call.receive<RefreshTokenRequest>()
+                val newAccessToken = JwtProvider.refreshAccessToken(request.refreshToken)
+                if (newAccessToken != null) {
+                    call.respond(TokenRefreshResponse(
+                        success = true,
+                        message = "Token 已刷新",
+                        accessToken = newAccessToken
+                    ))
+                } else {
+                    call.respond(HttpStatusCode.Unauthorized, TokenRefreshResponse(
+                        success = false,
+                        message = "Refresh Token 无效或已过期"
+                    ))
+                }
+            } catch (e: Exception) {
+                logger.error("❌ Token 刷新失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, TokenRefreshResponse(false, "请求格式错误"))
+            }
+        }
+        
+        /**
+         * 登出（撤销 Refresh Token）
+         */
+        post("/auth/logout") {
+            try {
+                val request = call.receive<LogoutRequest>()
+                JwtProvider.revokeRefreshToken(request.refreshToken)
+                call.respond(AuthResponse(true, "已登出"))
+            } catch (e: Exception) {
+                logger.error("❌ 登出失败: {}", e.message)
+                call.respond(HttpStatusCode.BadRequest, AuthResponse(false, "请求格式错误"))
+            }
+        }
+        
         // 群组管理API
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.groupContactRoutes() {
         post("/groups/create") {
             try {
                 val request = call.receive<CreateGroupRequest>()
+                // 禁止创建以 [Silk] 开头的群组（系统保留）
+                if (request.groupName.trimStart().startsWith("[Silk]")) {
+                    call.respond(HttpStatusCode.BadRequest, GroupResponse(false, "群组名不能以 [Silk] 开头"))
+                    return@post
+                }
                 val response = GroupService.createGroup(request)
                 
-                // 如果创建成功，发送欢迎消息到群组
-                if (response.success && response.group != null) {
-                    val welcomeMessage = buildString {
-                        append("🎉 欢迎加入群组！\n\n")
-                        append("群组名称：${response.group.name}\n")
-                        append("邀请码：${response.group.invitationCode}\n\n")
-                        append("分享邀请码，邀请朋友加入群组吧！")
-                    }
-                    // TODO: 发送欢迎消息到群组聊天室
+                if (response.success && response.group != null && request.type == "ccconnect") {
+                    val token = com.silk.backend.ccconnect.CcConnectTokenRepository.generateToken(
+                        response.group.id, response.group.name
+                    )
+                    call.respond(response.copy(ccConnectToken = token))
+                } else {
+                    call.respond(response)
                 }
-                
-                call.respond(response)
             } catch (e: Exception) {
                 logger.error("❌ 创建群组失败: {}", e.message)
                 call.respond(HttpStatusCode.BadRequest, GroupResponse(false, "请求格式错误"))
@@ -1036,6 +1512,12 @@ fun Application.configureRouting() {
         post("/groups/join") {
             try {
                 val request = call.receive<JoinGroupRequest>()
+                // 禁止通过邀请码加入 [Silk] 专属对话
+                val targetGroup = GroupRepository.findGroupByInvitationCode(request.invitationCode)
+                if (targetGroup != null && targetGroup.name.startsWith("[Silk]")) {
+                    call.respond(HttpStatusCode.Forbidden, GroupResponse(false, "该群组为专属对话，无法通过邀请码加入"))
+                    return@post
+                }
                 val response = GroupService.joinGroup(request)
                 call.respond(response)
             } catch (e: Exception) {
@@ -1119,7 +1601,8 @@ fun Application.configureRouting() {
                 GroupMemberApi(
                     id = member.userId,
                     fullName = user?.fullName ?: member.userName,
-                    phone = user?.phoneNumber ?: ""
+                    phone = user?.phoneNumber ?: "",
+                    role = member.role.name,
                 )
             }
             call.respond(GroupMembersResponse(success = true, members = apiMembers))
@@ -1318,6 +1801,12 @@ fun Application.configureRouting() {
                 val group = GroupRepository.findGroupById(groupId)
                 if (group == null) {
                     call.respond(SimpleResponse(false, "群组不存在"))
+                    return@post
+                }
+                
+                // 禁止向 Silk 专属对话添加成员
+                if (group.name.startsWith("[Silk]")) {
+                    call.respond(SimpleResponse(false, "专属对话无法添加成员"))
                     return@post
                 }
                 
@@ -1568,6 +2057,11 @@ fun Application.configureRouting() {
         // ==================== 未读消息 API ====================
         
         // 获取用户所有群组的未读消息数
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.unreadTodoMessageRoutes() {
         get("/api/unread/{userId}") {
             val userId = call.parameters["userId"] ?: ""
             
@@ -2052,6 +2546,11 @@ fun Application.configureRouting() {
         
         // ==================== Agent Bridge WebSocket (ACP) ====================
 
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
+private fun Route.agentBridgeRoute() {
         webSocket("/agent-bridge") {
             val token = call.request.queryParameters["token"]
             if (token.isNullOrBlank()) {
@@ -2128,9 +2627,877 @@ fun Application.configureRouting() {
                 logger.error("❌ Agent Bridge WebSocket 错误: userId={}, agentType={}, error={}", userId, agentType, e.message)
             } finally {
                 logger.info("🔌 Agent Bridge 断开: userId={}, agentType={}", userId, agentType)
+                scope.cancel()
                 AcpRegistry.unregister(userId, agentType)
                 AgentRuntime.handleAgentDisconnect(userId, agentType)
             }
+        }
+
+        // ==================== cc-connect Bridge WebSocket ====================
+
+}
+
+// cc-connect 适配器 WebSocket：单 handler 内驱动完整流式协议（hello/reply/stream/status/done），
+// 控制流刚合并并经人工验证，强行拆分有破坏转发行为的实际风险，故抑制 CyclomaticComplexMethod。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.ccConnectBridgeRoute() {
+        webSocket("/ccconnect-bridge") {
+            val token = call.request.queryParameters["token"]
+            if (token.isNullOrBlank()) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing token"))
+                return@webSocket
+            }
+            val groupId = com.silk.backend.ccconnect.CcConnectTokenRepository.findGroupIdByToken(token)
+            if (groupId == null) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid token"))
+                return@webSocket
+            }
+
+            val groupName = GroupRepository.findGroupById(groupId)?.name ?: groupId
+            logger.info("[CcConnect] WS connected: groupId={}", groupId)
+
+            // Wait for hello handshake
+            val helloFrame = incoming.receive()
+            val helloRaw = (helloFrame as? Frame.Text)?.readText() ?: run {
+                close(CloseReason(CloseReason.Codes.PROTOCOL_ERROR, "expected text frame"))
+                return@webSocket
+            }
+
+            val hello = try {
+                com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                    com.silk.backend.ccconnect.HelloMessage.serializer(), helloRaw
+                )
+            } catch (_: Exception) {
+                val ack = com.silk.backend.ccconnect.HelloAckMessage(ok = false, error = "invalid hello")
+                send(Frame.Text(com.silk.backend.ccconnect.protocolJson.encodeToString(
+                    com.silk.backend.ccconnect.HelloAckMessage.serializer(), ack
+                )))
+                close(CloseReason(CloseReason.Codes.PROTOCOL_ERROR, "invalid hello"))
+                return@webSocket
+            }
+
+            val meta = com.silk.backend.ccconnect.CcConnectConnectionMeta(
+                groupId = groupId,
+                project = hello.project,
+                agentType = hello.agentType,
+                cwd = hello.cwd,
+            )
+            com.silk.backend.ccconnect.CcConnectRegistry.register(groupId, this, meta)
+
+            val ack = com.silk.backend.ccconnect.HelloAckMessage(
+                ok = true, groupId = groupId, groupName = groupName
+            )
+            send(Frame.Text(com.silk.backend.ccconnect.protocolJson.encodeToString(
+                com.silk.backend.ccconnect.HelloAckMessage.serializer(), ack
+            )))
+
+            val chatServer = getGroupChatServer(groupId)
+
+            val statusMsg = Message(
+                id = java.util.UUID.randomUUID().toString(),
+                userId = "system",
+                userName = "cc-connect",
+                content = "cc-connect (${hello.agentType}) connected — project: ${hello.project}",
+                timestamp = System.currentTimeMillis(),
+                type = MessageType.SYSTEM,
+                isTransient = true,
+            )
+            chatServer.broadcast(statusMsg)
+
+            // Phased turn aggregation: classify reply messages into
+            // thinking / tool / answer sections and build structured
+            // markdown so the frontend renders a Cursor-like display.
+            var turnActive = false
+            val thinkingParts = mutableListOf<String>()
+            val toolParts = mutableListOf<String>()
+            var answerText = ""
+            var gotReplyAfterStream = false
+            // Streaming block state: ordered list of content blocks as they arrive in real time.
+            // Each reply_stream fragment is scanned for 💭/🔧 emoji markers that delimit
+            // thinking/tool_use blocks, emitting updated contentBlocks with every fragment.
+            val streamBlockTypes = mutableListOf<String>()        // "thinking", "tool_use", "text"
+            val streamBlockContent = mutableListOf<StringBuilder>()
+            var finalBlocksSent = false
+            var pendingFinalBlocks = emptyList<com.silk.backend.ai.ContentBlock>()  // contentBlocks from done:true, for status:idle broadcast
+            var lastStreamBlocks = emptyList<com.silk.backend.ai.ContentBlock>()    // last streaming blocks, for question context
+            var preQuestionBlocks = emptyList<com.silk.backend.ai.ContentBlock>()   // blocks saved before question, merged into final
+            var expectFinalizeReply = false   // done=true sent → Finalize fallback reply incoming, skip it
+
+            // convertImageUrls detects plain HTTP(S) image URLs in text and wraps them
+            // in markdown image syntax so the frontend renders them inline.
+            // HTTP images are proxied through /api/image-proxy by the frontend.
+            fun convertImageUrls(text: String): String {
+                val imageUrlRegex = Regex(
+                    """https?://[^\s"'<>)]++\.(?:png|jpg|jpeg|gif|webp)(?:\?[^\s"'<>)]*+)?(?:&[^\s"'<>)]*+)*+(?!\))""",
+                    RegexOption.IGNORE_CASE
+                )
+                return imageUrlRegex.replace(text) { match ->
+                    val url = match.value
+                    "![]($url)"
+                }
+            }
+
+            /** 检测 cc-connect 回复是否为权限请求提示，若是则返回交互式按钮选项。 */
+            fun detectPermissionRequest(text: String): List<InteractiveOption>? {
+                val trimmed = text.trim()
+                // 中文权限提示
+                if (trimmed.contains("允许") && trimmed.contains("拒绝") && trimmed.contains("允许所有")) {
+                    return listOf(
+                        InteractiveOption(label = "✅ 允许", value = "允许"),
+                        InteractiveOption(label = "❌ 拒绝", value = "拒绝"),
+                        InteractiveOption(label = "🔄 允许所有", value = "允许所有"),
+                    )
+                }
+                // 英文权限提示
+                if (trimmed.contains("allow", ignoreCase = true) &&
+                    trimmed.contains("deny", ignoreCase = true) &&
+                    trimmed.contains("allow all", ignoreCase = true)
+                ) {
+                    return listOf(
+                        InteractiveOption(label = "✅ Allow", value = "allow"),
+                        InteractiveOption(label = "❌ Deny", value = "deny"),
+                        InteractiveOption(label = "🔄 Allow All", value = "allow all"),
+                    )
+                }
+                return null
+            }
+
+            fun buildStructuredContent(collapseTools: Boolean = false): String {
+                val sb = StringBuilder()
+                sb.append("<!--CC_TURN-->\n")
+
+                val hasPostThinkingContent = toolParts.isNotEmpty() || answerText.isNotEmpty()
+
+                if (thinkingParts.isNotEmpty()) {
+                    val joined = thinkingParts.joinToString("\n\n")
+                    if (hasPostThinkingContent) {
+                        sb.append(joined)
+                        sb.append("\n<!--THINKING_END-->\n\n")
+                    } else {
+                        sb.append(joined)
+                    }
+                }
+
+                if (toolParts.isNotEmpty()) {
+                    sb.append(toolParts.joinToString("\n\n"))
+                    if (collapseTools) {
+                        sb.append("\n<!--TOOLS_END-->\n\n")
+                    } else if (answerText.isNotEmpty()) {
+                        sb.append("\n\n---\n\n")
+                    }
+                }
+
+                if (answerText.isNotEmpty()) {
+                    sb.append(convertImageUrls(answerText))
+                }
+
+                return sb.toString()
+            }
+
+            fun buildContentBlockList(preBlocks: List<ContentBlock> = emptyList()): List<ContentBlock> {
+                val blocks = mutableListOf<ContentBlock>()
+                var index = 0
+
+                // Prepend non-text pre-blocks (thinking/tool_use from pre-question context,
+                // preserved across permission resolution / question-answer boundaries)
+                for (b in preBlocks) {
+                    if (b.type != "text") {
+                        blocks.add(b.copy(index = index++))
+                    }
+                }
+
+                val hasPostThinkingContent = toolParts.isNotEmpty() || answerText.isNotEmpty()
+                if (thinkingParts.isNotEmpty()) {
+                    blocks.add(ContentBlock(
+                        index = index++,
+                        type = "thinking",
+                        content = thinkingParts.joinToString("\n\n"),
+                        isComplete = hasPostThinkingContent
+                    ))
+                }
+                for (toolPart in toolParts) {
+                    val toolName = toolPart.lines().firstOrNull()
+                        ?.removePrefix("🔧")
+                        ?.trim()
+                        ?.replace("**", "")
+                        ?.trim()
+                        ?.take(40) ?: ""
+                    blocks.add(ContentBlock(
+                        index = index++,
+                        type = "tool_use",
+                        content = toolPart,
+                        isComplete = true,
+                        toolName = toolName
+                    ))
+                }
+                if (answerText.isNotEmpty()) {
+                    blocks.add(ContentBlock(
+                        index = index++,
+                        type = "text",
+                        content = answerText,
+                        isComplete = true
+                    ))
+                }
+                return blocks
+            }
+
+            fun isLikelyQuestion(text: String): Boolean {
+                if (text.isBlank()) return false
+                if (text.contains("?") || text.contains("？")) return true
+                if (text.contains(Regex("""[（(]\d+[)）]"""))) return true
+                if (text.contains("选项") || text.contains("choose", true) || text.contains("select", true)) return true
+                if (text.contains(Regex("""\d+\.""")) && text.length < 500) return true
+                // Chinese permission/confirmation patterns
+                if (text.contains("请回复") || text.contains("请选择")) return true
+                if (text.contains("允许") || text.contains("拒绝")) return true
+                if (text.contains("是否") || text.contains("确认")) return true
+                if (text.contains("权限") || text.contains("等待")) return true
+                if (text.contains("继续执行")) return true
+                return false
+            }
+
+
+            val ccUserName = com.silk.backend.ccconnect.agentTriggerName(hello.agentType).replaceFirstChar { it.uppercaseChar() }
+
+            try {
+                @Suppress("LoopWithTooManyJumpStatements")
+                for (frame in incoming) {
+                    val text = (frame as? Frame.Text)?.readText() ?: continue
+                    val msgType = com.silk.backend.ccconnect.parseMessageType(text) ?: continue
+
+                    when (msgType) {
+                        "reply" -> {
+                            val reply = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                com.silk.backend.ccconnect.ReplyMessage.serializer(), text
+                            )
+                            // ── 从等待回答恢复：清累积器，继续新段落 ──
+                            if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
+                                thinkingParts.clear()
+                                toolParts.clear()
+                                answerText = ""
+                                gotReplyAfterStream = false
+                                streamBlockTypes.clear()
+                                streamBlockContent.clear()
+                                com.silk.backend.ccconnect.CcConnectRegistry.clearWaitingForInput(groupId)
+                                turnActive = true
+                                logger.info("[CcConnect][{}] answer received → continuation (reply)", groupId)
+                            }
+                            if (turnActive) {
+                                // ── 结构化最终块已发送：引擎 Finalize 回退的 reply ──
+                                // expectFinalizeReply 在 done=true 时设置，独立于 finalBlocksSent。
+                                // 避免 status=idle 清除 finalBlocksSent 后 reply 被当作普通消息广播。
+                                if (expectFinalizeReply) {
+                                    expectFinalizeReply = false
+                                    val rawContent = reply.content.trimStart()
+                                    if (rawContent.startsWith("💭") || rawContent.startsWith("🔧")) {
+                                        // 工具/思考块 → 正常处理（continue 后落到下方 when）
+                                        finalBlocksSent = false
+                                    } else {
+                                        finalBlocksSent = false
+                                        answerText = convertImageUrls(reply.content)
+                                        gotReplyAfterStream = true
+                                        logger.info("[CcConnect][{}] expectFinalizeReply → skip reply (Finalize fallback)", groupId)
+                                        continue
+                                    }
+                                }
+                                val content = reply.content.trimStart()
+                                when {
+                                    content.startsWith("\uD83D\uDCAD") -> thinkingParts.add(reply.content)
+                                    content.startsWith("\uD83D\uDD27") -> toolParts.add(reply.content)
+                                    else -> {
+                                        answerText = reply.content
+                                        gotReplyAfterStream = true
+                                    }
+                                }
+                                val msg = Message(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    userId = "cc-connect",
+                                    userName = ccUserName,
+                                    content = buildStructuredContent(),
+                                    timestamp = System.currentTimeMillis(),
+                                    type = MessageType.TEXT,
+                                    isTransient = true,
+                                    isIncremental = false,
+                                    contentBlocks = buildContentBlockList(preBlocks = preQuestionBlocks),
+                                )
+                                chatServer.broadcast(msg)
+                            } else {
+                                val replyText = convertImageUrls(reply.content)
+                                // 检测是否为权限请求提示，自动生成交互式按钮
+                                val permOptions = detectPermissionRequest(replyText)
+                                val msg = Message(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    userId = "cc-connect",
+                                    userName = ccUserName,
+                                    content = replyText,
+                                    timestamp = System.currentTimeMillis(),
+                                    type = MessageType.TEXT,
+                                    interactiveOptions = permOptions,
+                                )
+                                chatServer.broadcast(msg)
+                                // 非 turn 中收到的 reply 通常是错误/日志或已完成回复，标记空闲让排队消息继续
+                                logger.info("[CcConnect][{}] non-turn reply → markIdle", groupId)
+                                com.silk.backend.ccconnect.CcConnectRegistry.markIdle(groupId)
+                            }
+                        }
+                        "reply_stream" -> {
+                            val stream = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                com.silk.backend.ccconnect.ReplyStreamMessage.serializer(), text
+                            )
+                            // ── 结构化事件通道：优先使用引擎直接发来的 contentBlocks ──
+                            val rawJson = com.silk.backend.ccconnect.protocolJson.parseToJsonElement(text).jsonObject
+                            val engineContentBlocks = rawJson["contentBlocks"]?.jsonArray
+                            if (engineContentBlocks != null) {
+                                val blocks = engineContentBlocks.map { elem ->
+                                    val obj = elem.jsonObject
+                                    com.silk.backend.ai.ContentBlock(
+                                        index = obj["index"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                                        type = obj["type"]?.jsonPrimitive?.content ?: "",
+                                        content = obj["content"]?.jsonPrimitive?.content ?: "",
+                                        isComplete = obj["isComplete"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: true,
+                                        toolName = obj["toolName"]?.jsonPrimitive?.content ?: "",
+                                    )
+                                }
+                                // ── 在 question 之后，引擎的 UpdateStructured 可能只发 answer text ──
+                                // （thinking/tools 为空，且旧 thinking 未进入 completedThinking）。
+                                // 此时合并 preQuestionBlocks 中非 text 块，确保前序内容不消失。
+                                val displayBlocks: List<com.silk.backend.ai.ContentBlock>
+                                if (preQuestionBlocks.isNotEmpty()) {
+                                    val hasNonText = blocks.any { it.type == "thinking" || it.type == "tool_use" }
+                                    if (hasNonText) {
+                                        // 引擎已赶上，直接使用其 blocks，后续不再需要 preQuestionBlocks
+                                        preQuestionBlocks = emptyList()
+                                        displayBlocks = blocks
+                                    } else {
+                                        // 引擎只发了 text → 补充前序 thinking/tool 块
+                                        val preNonText = preQuestionBlocks.filter { it.type != "text" }
+                                        if (preNonText.isNotEmpty()) {
+                                            displayBlocks = (preNonText + blocks).mapIndexed { i, b -> b.copy(index = i) }
+                                        } else {
+                                            displayBlocks = blocks
+                                        }
+                                    }
+                                } else {
+                                    displayBlocks = blocks
+                                }
+                                // Preserve streaming blocks for question context
+                                if (!stream.done) lastStreamBlocks = displayBlocks
+                                // Extract answer text for content field and question detection
+                                var contentField = stream.content
+                                if (stream.done) {
+                                    for (block in blocks) {
+                                        if (block.type == "text" && block.content.isNotBlank()) {
+                                            contentField = convertImageUrls(block.content)
+                                            answerText = convertImageUrls(block.content)
+                                        }
+                                    }
+                                }
+                                val msg = Message(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    userId = "cc-connect",
+                                    userName = ccUserName,
+                                    content = contentField,
+                                    timestamp = System.currentTimeMillis(),
+                                    type = MessageType.TEXT,
+                                    isTransient = true,
+                                    isIncremental = false,
+                                    contentBlocks = displayBlocks,
+                                )
+                                chatServer.broadcast(msg)
+                                if (stream.done) {
+                                    streamBlockTypes.clear()
+                                    streamBlockContent.clear()
+                                    pendingFinalBlocks = displayBlocks
+                                    finalBlocksSent = true
+                                    expectFinalizeReply = true
+                                }
+                                continue
+                            }
+                            // ── 从等待回答恢复：清累积器，继续新段落 ──
+                            if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
+                                thinkingParts.clear()
+                                toolParts.clear()
+                                answerText = ""
+                                gotReplyAfterStream = false
+                                streamBlockTypes.clear()
+                                streamBlockContent.clear()
+                                com.silk.backend.ccconnect.CcConnectRegistry.clearWaitingForInput(groupId)
+                                turnActive = true
+                                logger.info("[CcConnect][{}] answer received → continuation (stream)", groupId)
+                            }
+                            if (turnActive) {
+                                // silk.go now sends structured contentBlocks directly via the
+                                // engineContentBlocks check above. This is a safety fallback:
+                                // just send raw content as plain text. Include preQuestionBlocks
+                                // to prevent frontend from clearing transient display during
+                                // question-answer-handoff.
+                                val fallbackBlocks = if (preQuestionBlocks.isNotEmpty()) {
+                                    preQuestionBlocks
+                                } else {
+                                    emptyList()
+                                }
+                                chatServer.broadcast(Message(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    userId = "cc-connect",
+                                    userName = ccUserName,
+                                    content = stream.content,
+                                    timestamp = System.currentTimeMillis(),
+                                    type = MessageType.TEXT,
+                                    isTransient = true,
+                                    isIncremental = false,
+                                    contentBlocks = fallbackBlocks.ifEmpty { null },
+                                ))
+                            } else {
+                                val isIncremental = stream.incremental ?: !stream.done
+                                val msg = Message(
+                                    id = java.util.UUID.randomUUID().toString(),
+                                    userId = "cc-connect",
+                                    userName = ccUserName,
+                                    content = stream.content,
+                                    timestamp = System.currentTimeMillis(),
+                                    type = MessageType.TEXT,
+                                    isTransient = !stream.done,
+                                    isIncremental = isIncremental,
+                                )
+                                chatServer.broadcast(msg)
+                            }
+                        }
+                        "reply_images" -> {
+                            // cc-connect agent generated images during this turn (e.g. PNG/SVG from tools).
+                            // Render as Markdown data URI images — the frontend markdown renderer
+                            // handles ![](data:image/png;base64,...) natively.
+                            try {
+                                val replyImages = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                    com.silk.backend.ccconnect.ReplyImagesMessage.serializer(), text
+                                )
+                                logger.info("[CcConnect][{}] reply_images: received {} image(s)", groupId, replyImages.images.size)
+
+                                for (img in replyImages.images) {
+                                    try {
+                                        val content = "![](data:${img.mimeType};base64,${img.data})"
+                                        val imgMsg = Message(
+                                            id = java.util.UUID.randomUUID().toString(),
+                                            userId = "cc-connect",
+                                            userName = ccUserName,
+                                            content = content,
+                                            timestamp = System.currentTimeMillis(),
+                                            type = MessageType.TEXT,
+                                        )
+                                        chatServer.broadcast(imgMsg)
+                                        logger.info("[CcConnect][{}] reply_images: broadcast {} (mime={}, base64_len={})",
+                                            groupId, img.fileName, img.mimeType, img.data.length)
+                                    } catch (e: Exception) {
+                                        logger.warn("[CcConnect][{}] failed to broadcast reply image {}: {}",
+                                            groupId, img.fileName, e.message)
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                logger.warn("[CcConnect][{}] failed to parse reply_images: {}", groupId, e.message)
+                            }
+                        }
+                        "question" -> {
+                            val question = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                com.silk.backend.ccconnect.QuestionMessage.serializer(), text
+                            )
+                            logger.info("[CcConnect][{}] question received: options={}", groupId, question.options.size)
+
+                            // 将 button rows 展平为 InteractiveOption 列表（所有按钮平铺）
+                            val interactiveOptions = question.options.flatMap { row ->
+                                row.row.map { btn ->
+                                    InteractiveOption(label = btn.label, value = btn.value)
+                                }
+                            }
+
+                            // Convert streaming blocks to thinkingParts/toolParts for the question context
+                            // Strategy: prefer the engine's structured contentBlocks (lastStreamBlocks),
+                            // fall back to emoji-based streamBlockTypes/streamBlockContent for non-structured path.
+                            val blocks: MutableList<ContentBlock>
+                            if (lastStreamBlocks.isNotEmpty()) {
+                                // Structured path: preserve what was streaming before question
+                                // Save pre-question blocks separately so they survive the answer→continuation boundary
+                                preQuestionBlocks = lastStreamBlocks.toList()
+                                blocks = lastStreamBlocks.toMutableList()
+                                lastStreamBlocks = emptyList()
+                            } else if (pendingFinalBlocks.isNotEmpty()) {
+                                // Stream already done=true before question: use pendingFinalBlocks
+                                preQuestionBlocks = pendingFinalBlocks.toList()
+                                blocks = pendingFinalBlocks.toMutableList()
+                            } else {
+                                // Non-structured path: rebuild from emoji markers
+                                if (streamBlockTypes.isNotEmpty()) {
+                                    for (i in streamBlockTypes.indices) {
+                                        when (streamBlockTypes[i]) {
+                                            "thinking" -> thinkingParts.add(streamBlockContent[i].toString())
+                                            "tool_use" -> toolParts.add(streamBlockContent[i].toString())
+                                            "text" -> {} // preceding text is superseded by question
+                                        }
+                                    }
+                                    streamBlockTypes.clear()
+                                    streamBlockContent.clear()
+                                }
+                                blocks = buildContentBlockList(preBlocks = preQuestionBlocks).toMutableList()
+                            }
+                            // Always include the question text as a text block (frontend renders
+                            // contentBlocks + interactiveOptions, but NOT message.content)
+                            blocks.add(ContentBlock(
+                                index = blocks.size + 1,
+                                type = "text",
+                                content = question.content,
+                                isComplete = true
+                            ))
+                            val msg = Message(
+                                id = java.util.UUID.randomUUID().toString(),
+                                userId = "cc-connect",
+                                userName = ccUserName,
+                                content = question.content,
+                                timestamp = System.currentTimeMillis(),
+                                type = MessageType.TEXT,
+                                isTransient = true,
+                                contentBlocks = blocks,
+                                interactiveOptions = interactiveOptions.ifEmpty { null },
+                            )
+                            chatServer.broadcast(msg)
+                            // 引擎已阻塞等待回答，设置 waitingForInput
+                            com.silk.backend.ccconnect.CcConnectRegistry.setWaitingForInput(groupId)
+                            expectFinalizeReply = false
+                            logger.info("[CcConnect][{}] question broadcast with {} options: {}, waitingForInput set", groupId, interactiveOptions.size, interactiveOptions.map { it.label })
+                        }
+                        "status" -> {
+                            val status = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                com.silk.backend.ccconnect.StatusMessage.serializer(), text
+                            )
+                            when (status.state) {
+                                "thinking" -> {
+                                    // ── 如果 waitingForInput, 清除（新段落开始） ──
+                                    if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
+                                        com.silk.backend.ccconnect.CcConnectRegistry.clearWaitingForInput(groupId)
+                                        logger.info("[CcConnect][{}] clearWaitingForInput (status=thinking)", groupId)
+                                    }
+                                    logger.info("[CcConnect][{}] status=thinking, turnActive={}→true", groupId, turnActive)
+                                    turnActive = true
+                                    thinkingParts.clear()
+                                    toolParts.clear()
+                                    answerText = ""
+                                    gotReplyAfterStream = false
+                                    streamBlockTypes.clear()
+                                    streamBlockContent.clear()
+                                    finalBlocksSent = false
+                                    expectFinalizeReply = false
+                                    pendingFinalBlocks = emptyList()
+                                    lastStreamBlocks = emptyList()
+                                    // 保留 preQuestionBlocks：权限回复后 engine 发 status=thinking 开启新段落，
+                                    // 但 pre-question blocks 仍需在后续 reply_stream 中合并显示，直到 engine 自己产生新块。
+                                    chatServer.broadcastSystemStatus("Thinking...")
+                                }
+                                "tool_use" -> {
+                                    chatServer.broadcastSystemStatus(
+                                        "Using tool: ${status.tool ?: ""}${if (status.detail != null) " — ${status.detail}" else ""}"
+                                    )
+                                }
+                                "idle" -> {
+                                    logger.info("[CcConnect][{}] status=idle, turnActive={}", groupId, turnActive)
+                                    if (turnActive) {
+                                        if (finalBlocksSent || pendingFinalBlocks.isNotEmpty()) {
+                                            // 结构化流路径：广播最终消息（含 thinking / tool / text 完整 blocks）
+                                            var blocks = pendingFinalBlocks.also { pendingFinalBlocks = emptyList() }
+                                            // 如果 post-answer 没有 done=true blocks（引擎回答后没有继续输出），
+                                            // 使用 pre-question blocks 作为最终消息，确保提问前的内容不丢失。
+                                            if (blocks.isEmpty() && preQuestionBlocks.isNotEmpty()) {
+                                                blocks = preQuestionBlocks
+                                                preQuestionBlocks = emptyList()
+                                            }
+                                            val finalContent = convertImageUrls(answerText).ifEmpty {
+                                                blocks.firstOrNull { it.type == "text" }?.content ?: ""
+                                            }
+                                            if (blocks.isNotEmpty() || finalContent.isNotBlank()) {
+                                                val msg = Message(
+                                                    id = java.util.UUID.randomUUID().toString(),
+                                                    userId = "cc-connect",
+                                                    userName = ccUserName,
+                                                    content = finalContent,
+                                                    timestamp = System.currentTimeMillis(),
+                                                    type = MessageType.TEXT,
+                                                    contentBlocks = blocks,
+                                                )
+                                                chatServer.broadcast(msg)
+                                            }
+                                            finalBlocksSent = false
+                                        } else {
+                                            // 旧路径：直接使用已累积的 thinkingParts/toolParts/answerText
+                                            // （reply/reply_stream 处理器已通过 emoji 标记解析填充它们）
+                                            val finalContent = buildStructuredContent(collapseTools = true)
+                                            if (finalContent.isNotBlank() &&
+                                                finalContent != "<!--CC_TURN-->\n") {
+                                                val msg = Message(
+                                                    id = java.util.UUID.randomUUID().toString(),
+                                                    userId = "cc-connect",
+                                                    userName = ccUserName,
+                                                    content = finalContent,
+                                                    timestamp = System.currentTimeMillis(),
+                                                    type = MessageType.TEXT,
+                                                    contentBlocks = buildContentBlockList(preBlocks = preQuestionBlocks),
+                                                )
+                                                chatServer.broadcast(msg)
+                                            }
+                                        }
+                                        // ── 检测 AI 是否在提问 → 保持会话存活 ──
+                                        val isQuestion = isLikelyQuestion(answerText) || expectFinalizeReply ||
+                                            com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)
+                                        if (isQuestion) {
+                                            logger.info("[CcConnect][{}] question detected → waitingForAnswer, answers={}, tools={}",
+                                                groupId, answerText.length, toolParts.size)
+                                            com.silk.backend.ccconnect.CcConnectRegistry.setWaitingForInput(groupId)
+                                            // 保持 turnActive=true, 不清除累积器
+                                        } else {
+                                            turnActive = false
+                                            thinkingParts.clear()
+                                            toolParts.clear()
+                                            answerText = ""
+                                            pendingFinalBlocks = emptyList()
+                                            lastStreamBlocks = emptyList()
+                                            preQuestionBlocks = emptyList()
+                                            expectFinalizeReply = false
+                                        }
+                                    }
+                                    // ── 提问场景：不清除状态，不标记空闲 ──
+                                    if (!com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(groupId)) {
+                                        chatServer.broadcastSystemStatus("CLEAR_STATUS")
+                                        com.silk.backend.ccconnect.CcConnectRegistry.markIdle(groupId)
+                                    }
+                                }
+                                else -> chatServer.broadcastSystemStatus(status.state)
+                            }
+                        }
+                        "pong" -> { /* keepalive response */ }
+                        "metadata" -> {
+                            val metadata = com.silk.backend.ccconnect.protocolJson.decodeFromString(
+                                com.silk.backend.ccconnect.MetadataMessage.serializer(), text
+                            )
+                            com.silk.backend.ccconnect.CcConnectRegistry.updateMetadata(groupId, metadata)
+                            val metaJson = kotlinx.serialization.json.buildJsonObject {
+                                put("type", kotlinx.serialization.json.JsonPrimitive("cc_metadata"))
+                                put("mode", kotlinx.serialization.json.JsonPrimitive(metadata.mode))
+                                put("model", kotlinx.serialization.json.JsonPrimitive(metadata.model))
+                                put("available_modes", kotlinx.serialization.json.Json.encodeToJsonElement(
+                                    kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModeOption.serializer()),
+                                    metadata.availableModes ?: emptyList()
+                                ))
+                                put("available_models", kotlinx.serialization.json.Json.encodeToJsonElement(
+                                    kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModelOption.serializer()),
+                                    metadata.availableModels ?: emptyList()
+                                ))
+                            }
+                            val metaBroadcast = Message(
+                                id = java.util.UUID.randomUUID().toString(),
+                                userId = "system",
+                                userName = "cc-connect",
+                                content = metaJson.toString(),
+                                timestamp = System.currentTimeMillis(),
+                                type = MessageType.SYSTEM,
+                                isTransient = true,
+                            )
+                            chatServer.broadcast(metaBroadcast)
+                        }
+                    }
+                }
+            } catch (_: CancellationException) {
+            } catch (e: Exception) {
+                logger.error("[CcConnect] WS error: groupId={}, err={}", groupId, e.message)
+            } finally {
+                logger.info("[CcConnect] WS disconnected: groupId={}", groupId)
+
+                // ── 持久化未完成轮次的回复内容 ──
+                // 当引擎重启/崩溃时，status:idle 不会到达，流式回复仅以 transient
+                // 方式广播过。此处将已累积内容作为最终消息持久化，确保刷新后不丢失。
+                if (turnActive) {
+                    val blocks = pendingFinalBlocks.ifEmpty {
+                        // 无结构化 blocks → 从 legacy thinkingParts/toolParts/answerText 构建
+                        buildContentBlockList(preBlocks = preQuestionBlocks)
+                    }
+                    val finalContent = answerText.ifEmpty {
+                        blocks.firstOrNull { it.type == "text" }?.content ?: ""
+                    }
+                    if (blocks.isNotEmpty() || finalContent.isNotBlank()) {
+                        val msg = Message(
+                            id = java.util.UUID.randomUUID().toString(),
+                            userId = "cc-connect",
+                            userName = ccUserName,
+                            content = finalContent,
+                            timestamp = System.currentTimeMillis(),
+                            type = MessageType.TEXT,
+                            contentBlocks = blocks,
+                        )
+                        chatServer.broadcast(msg)
+                        logger.info("[CcConnect][{}] persisted in-flight turn on disconnect: blocks={}, contentLen={}",
+                            groupId, blocks.size, finalContent.length)
+                    }
+                    turnActive = false
+                }
+                com.silk.backend.ccconnect.CcConnectRegistry.unregister(groupId, this)
+
+                val offlineMsg = Message(
+                    id = java.util.UUID.randomUUID().toString(),
+                    userId = "system",
+                    userName = "cc-connect",
+                    content = "cc-connect disconnected",
+                    timestamp = System.currentTimeMillis(),
+                    type = MessageType.SYSTEM,
+                    isTransient = true,
+                )
+                chatServer.broadcast(offlineMsg)
+            }
+        }
+
+        // ==================== cc-connect Token Management ====================
+
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.ccConnectApiRoutes() {
+        get("/api/ccconnect/groups/{groupId}/token-info") {
+            val groupId = call.parameters["groupId"] ?: run {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing groupId"))
+                return@get
+            }
+            val userId = call.request.queryParameters["userId"]
+            if (userId.isNullOrBlank()) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing userId"))
+                return@get
+            }
+            val group = GroupRepository.findGroupById(groupId)
+            if (group == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "group not found"))
+                return@get
+            }
+            if (group.hostId != userId) {
+                if (!GroupRepository.isUserInGroup(groupId, userId)) {
+                    call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "非群组成员"))
+                    return@get
+                }
+                val connected = com.silk.backend.ccconnect.CcConnectRegistry.isConnected(groupId)
+                val meta = com.silk.backend.ccconnect.CcConnectRegistry.getConnectionInfo(groupId)
+                val tokenExists = com.silk.backend.ccconnect.CcConnectTokenRepository.getTokenForGroup(groupId) != null
+                if (!tokenExists) {
+                    call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "not a cc-connect group"))
+                    return@get
+                }
+                val json = kotlinx.serialization.json.buildJsonObject {
+                    put("success", kotlinx.serialization.json.JsonPrimitive(true))
+                    put("token", kotlinx.serialization.json.JsonPrimitive(null as String?))
+                    put("connected", kotlinx.serialization.json.JsonPrimitive(connected))
+                    put("agentType", kotlinx.serialization.json.JsonPrimitive(meta?.agentType))
+                    put("project", kotlinx.serialization.json.JsonPrimitive(meta?.project))
+                    put("cwd", kotlinx.serialization.json.JsonPrimitive(meta?.cwd))
+                    put("mode", kotlinx.serialization.json.JsonPrimitive(meta?.mode))
+                    put("model", kotlinx.serialization.json.JsonPrimitive(meta?.model))
+                    if (meta?.availableModes != null) {
+                        put("availableModes", kotlinx.serialization.json.Json.encodeToJsonElement(
+                            kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModeOption.serializer()), meta.availableModes))
+                    }
+                    if (meta?.availableModels != null) {
+                        put("availableModels", kotlinx.serialization.json.Json.encodeToJsonElement(
+                            kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModelOption.serializer()), meta.availableModels))
+                    }
+                }
+                call.respondText(json.toString(), ContentType.Application.Json)
+                return@get
+            }
+            val tokenInfo = com.silk.backend.ccconnect.CcConnectTokenRepository.getTokenForGroup(groupId)
+            if (tokenInfo == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "not a cc-connect group"))
+                return@get
+            }
+            val connected = com.silk.backend.ccconnect.CcConnectRegistry.isConnected(groupId)
+            val meta = com.silk.backend.ccconnect.CcConnectRegistry.getConnectionInfo(groupId)
+            val json = kotlinx.serialization.json.buildJsonObject {
+                put("success", kotlinx.serialization.json.JsonPrimitive(true))
+                put("token", kotlinx.serialization.json.JsonPrimitive(tokenInfo.token))
+                put("connected", kotlinx.serialization.json.JsonPrimitive(connected))
+                put("agentType", kotlinx.serialization.json.JsonPrimitive(meta?.agentType))
+                put("project", kotlinx.serialization.json.JsonPrimitive(meta?.project))
+                put("cwd", kotlinx.serialization.json.JsonPrimitive(meta?.cwd))
+                put("mode", kotlinx.serialization.json.JsonPrimitive(meta?.mode))
+                put("model", kotlinx.serialization.json.JsonPrimitive(meta?.model))
+                if (meta?.availableModes != null) {
+                    put("availableModes", kotlinx.serialization.json.Json.encodeToJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModeOption.serializer()), meta.availableModes))
+                }
+                if (meta?.availableModels != null) {
+                    put("availableModels", kotlinx.serialization.json.Json.encodeToJsonElement(
+                        kotlinx.serialization.builtins.ListSerializer(com.silk.backend.ccconnect.CcModelOption.serializer()), meta.availableModels))
+                }
+            }
+            call.respondText(json.toString(), ContentType.Application.Json)
+        }
+
+        post("/api/ccconnect/groups/{groupId}/regenerate-token") {
+            val groupId = call.parameters["groupId"] ?: run {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing groupId"))
+                return@post
+            }
+            val body = call.receiveText()
+            val bodyJson = try {
+                kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject
+            } catch (_: Exception) { null }
+            val userId = bodyJson?.get("userId")?.jsonPrimitive?.contentOrNull
+            if (userId.isNullOrBlank()) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing userId"))
+                return@post
+            }
+            val group = GroupRepository.findGroupById(groupId)
+            if (group == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "group not found"))
+                return@post
+            }
+            if (group.hostId != userId) {
+                call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "仅群主可重新生成 token"))
+                return@post
+            }
+            val newToken = com.silk.backend.ccconnect.CcConnectTokenRepository.regenerateToken(groupId, group.name)
+            val json = kotlinx.serialization.json.buildJsonObject {
+                put("success", kotlinx.serialization.json.JsonPrimitive(true))
+                put("token", kotlinx.serialization.json.JsonPrimitive(newToken))
+            }
+            call.respondText(json.toString(), ContentType.Application.Json)
+        }
+
+        post("/api/ccconnect/groups/{groupId}/set-operator") {
+            val groupId = call.parameters["groupId"] ?: run {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing groupId"))
+                return@post
+            }
+            val body = call.receiveText()
+            val bodyJson = try {
+                kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject
+            } catch (_: Exception) { null }
+            val userId = bodyJson?.get("userId")?.jsonPrimitive?.contentOrNull
+            val targetUserId = bodyJson?.get("targetUserId")?.jsonPrimitive?.contentOrNull
+            val grant = bodyJson?.get("grant")?.jsonPrimitive?.booleanOrNull
+            if (userId.isNullOrBlank() || targetUserId.isNullOrBlank() || grant == null) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "missing userId, targetUserId, or grant"))
+                return@post
+            }
+            val group = GroupRepository.findGroupById(groupId)
+            if (group == null) {
+                call.respond(HttpStatusCode.NotFound, SimpleResponse(false, "group not found"))
+                return@post
+            }
+            if (group.hostId != userId) {
+                call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "仅群主可设置 operator"))
+                return@post
+            }
+            if (targetUserId == group.hostId) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "不能修改群主角色"))
+                return@post
+            }
+            if (!GroupRepository.isUserInGroup(groupId, targetUserId)) {
+                call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "目标用户不在群组中"))
+                return@post
+            }
+            val newRole = if (grant) MemberRole.OPERATOR else MemberRole.GUEST
+            val ok = GroupRepository.updateMemberRole(groupId, targetUserId, newRole)
+            call.respond(SimpleResponse(ok, if (ok) "角色已更新" else "更新失败"))
         }
 
         // ==================== Agents API ====================
@@ -2139,6 +3506,11 @@ fun Application.configureRouting() {
         // 列出可作为 workflow agent 的选项：仅包含已注册的 bridge agent（claude_code / codex 等）。
         // silk_chat 走普通会话路径，不在工作流 agent 选择范围内。
         // agentType 字段使用 workflow 存储一致的 underscore 形式。
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.workflowKbRoutes() {
         get("/api/agents") {
             val userId = call.request.queryParameters["userId"]
             if (userId.isNullOrBlank()) {
@@ -2200,6 +3572,7 @@ fun Application.configureRouting() {
             val desc = req["description"]?.jsonPrimitive?.content ?: ""
             val agentType = req["agentType"]?.jsonPrimitive?.contentOrNull ?: "claude_code"
             val taskFocus = req["taskFocus"]?.jsonPrimitive?.contentOrNull ?: ""
+            val permissionMode = req["permissionMode"]?.jsonPrimitive?.contentOrNull ?: ""
 
             // 自动创建关联群组（工作流私聊）
             val groupName = "wf_${sanitizeFileName(name)}_${System.currentTimeMillis()}"
@@ -2269,7 +3642,11 @@ fun Application.configureRouting() {
             // 同步把 workingDir 写到 workflow record，确保返回给前端的 wf 对象包含真实路径
             val resolvedPath = (cdResult as AgentRuntime.CdResult.Ok).resolvedPath
             workflowManager.updateWorkingDir(group.id, resolvedPath)
-            val wfWithDir = wf.copy(workingDir = resolvedPath, updatedAt = System.currentTimeMillis())
+            // 创建时指定的 permissionMode 持久化到 workflow record（seed 加载时生效）
+            if (permissionMode.isNotBlank()) {
+                workflowManager.updatePermissionMode(group.id, permissionMode)
+            }
+            val wfWithDir = wf.copy(workingDir = resolvedPath, permissionMode = permissionMode, updatedAt = System.currentTimeMillis())
 
             call.respondText(
                 Json.encodeToString(Workflow.serializer(), wfWithDir),
@@ -2299,6 +3676,34 @@ fun Application.configureRouting() {
             )
         }
 
+        put("/api/workflows/{workflowId}") {
+            val workflowId = call.parameters["workflowId"] ?: ""
+            val body = call.receiveText()
+            val json = Json { ignoreUnknownKeys = true }
+            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
+            val userId = req["userId"]?.jsonPrimitive?.content ?: ""
+            val newName = req["name"]?.jsonPrimitive?.content?.trim() ?: ""
+            if (workflowId.isBlank() || userId.isBlank() || newName.isBlank()) {
+                call.respondText(
+                    """{"success":false,"message":"Missing workflowId, userId, or name"}""",
+                    ContentType.Application.Json, HttpStatusCode.BadRequest
+                )
+                return@put
+            }
+            val updated = workflowManager.renameWorkflow(workflowId, userId, newName)
+            if (updated == null) {
+                call.respondText(
+                    """{"success":false,"message":"Workflow not found"}""",
+                    ContentType.Application.Json, HttpStatusCode.NotFound
+                )
+                return@put
+            }
+            call.respondText(
+                Json.encodeToString(Workflow.serializer(), updated),
+                ContentType.Application.Json
+            )
+        }
+
         get("/api/workflows/by-group/{groupId}") {
             val groupId = call.parameters["groupId"] ?: ""
             if (groupId.isBlank()) {
@@ -2318,167 +3723,40 @@ fun Application.configureRouting() {
 
         // ==================== Knowledge Base API ====================
 
-        get("/api/kb/topics") {
-            val userId = call.request.queryParameters["userId"]
-            if (userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@get
-            }
-            val list = knowledgeBaseManager.listTopics(userId)
-            call.respondText(
-                Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBTopic.serializer()), list),
-                ContentType.Application.Json
-            )
-        }
+        registerApiKbTopicsGetRoute()
+        registerApiKbTopicsPostRoute()
+        registerApiKbTopicsTopicIdPutRoute()
+        registerApiKbTopicsTopicIdDeleteRoute()
+        registerApiKbEntriesGetRoute()
+        registerApiKbEntriesEntryIdGetRoute()
+        registerApiKbEntriesPostRoute()
+        registerApiKbCapturesPostRoute()
+        registerApiKbEntriesEntryIdPutRoute()
+        registerApiKbEntriesEntryIdDeleteRoute()
+        registerApiKbEntriesEntryIdExportGetRoute()
 
-        post("/api/kb/topics") {
-            val body = call.receiveText()
-            val json = Json { ignoreUnknownKeys = true }
-            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
-            val userId = req["userId"]?.jsonPrimitive?.content
-            val name = req["name"]?.jsonPrimitive?.content
-            if (userId.isNullOrBlank() || name.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId or name"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@post
-            }
-            val project = req["project"]?.jsonPrimitive?.content ?: ""
-            val topic = knowledgeBaseManager.createTopic(name, project, userId)
-            call.respondText(
-                Json.encodeToString(KBTopic.serializer(), topic),
-                ContentType.Application.Json,
-                HttpStatusCode.Created
-            )
-        }
+}
 
-        delete("/api/kb/topics/{topicId}") {
-            val topicId = call.parameters["topicId"] ?: ""
-            val userId = call.request.queryParameters["userId"]
-            if (userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@delete
-            }
-            val ok = knowledgeBaseManager.deleteTopic(topicId, userId)
-            call.respondText(
-                """{"success":$ok}""",
-                ContentType.Application.Json,
-                if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
-            )
-        }
-
-        get("/api/kb/entries") {
-            val topicId = call.request.queryParameters["topicId"]
-            val userId = call.request.queryParameters["userId"]
-            if (topicId.isNullOrBlank() || userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing topicId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@get
-            }
-            val list = knowledgeBaseManager.listEntries(topicId, userId)
-            call.respondText(
-                Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBEntry.serializer()), list),
-                ContentType.Application.Json
-            )
-        }
-
-        post("/api/kb/entries") {
-            val body = call.receiveText()
-            val json = Json { ignoreUnknownKeys = true }
-            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
-            val userId = req["userId"]?.jsonPrimitive?.content
-            val topicId = req["topicId"]?.jsonPrimitive?.content
-            val title = req["title"]?.jsonPrimitive?.content
-            if (userId.isNullOrBlank() || topicId.isNullOrBlank() || title.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing required fields"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@post
-            }
-            val content = req["content"]?.jsonPrimitive?.content ?: ""
-            val tags = try {
-                req["tags"]?.let { tagsEl ->
-                    tagsEl.jsonArray.map { it.jsonPrimitive.content }
-                }
-            } catch (_: Exception) { null } ?: emptyList()
-            val entry = knowledgeBaseManager.createEntry(topicId, title, content, tags, userId)
-            if (entry == null) {
-                call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
-            } else {
-                call.respondText(
-                    Json.encodeToString(KBEntry.serializer(), entry),
-                    ContentType.Application.Json,
-                    HttpStatusCode.Created
-                )
-            }
-        }
-
-        put("/api/kb/entries/{entryId}") {
-            val entryId = call.parameters["entryId"] ?: ""
-            val body = call.receiveText()
-            val json = Json { ignoreUnknownKeys = true }
-            val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
-            val userId = req["userId"]?.jsonPrimitive?.content
-            if (userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@put
-            }
-            val title = req["title"]?.jsonPrimitive?.content
-            val content = req["content"]?.jsonPrimitive?.content
-            val tags = try {
-                req["tags"]?.let { tagsEl ->
-                    tagsEl.jsonArray.map { it.jsonPrimitive.content }
-                }
-            } catch (_: Exception) { null }
-            val updated = knowledgeBaseManager.updateEntry(entryId, title, content, tags, userId)
-            if (updated == null) {
-                call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
-            } else {
-                call.respondText(
-                    Json.encodeToString(KBEntry.serializer(), updated),
-                    ContentType.Application.Json
-                )
-            }
-        }
-
-        delete("/api/kb/entries/{entryId}") {
-            val entryId = call.parameters["entryId"] ?: ""
-            val userId = call.request.queryParameters["userId"]
-            if (userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@delete
-            }
-            val ok = knowledgeBaseManager.deleteEntry(entryId, userId)
-            call.respondText(
-                """{"success":$ok}""",
-                ContentType.Application.Json,
-                if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
-            )
-        }
-
-        get("/api/kb/entries/{entryId}/export") {
-            val entryId = call.parameters["entryId"] ?: ""
-            val entry = knowledgeBaseManager.getEntry(entryId)
-            if (entry == null) {
-                call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
-                return@get
-            }
-            val topic = knowledgeBaseManager.getTopic(entry.topicId)
-            if (topic == null) {
-                call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
-                return@get
-            }
-            val markdown = KBObsidianExporter.toMarkdown(topic, entry)
-            val vaultPath = KBObsidianExporter.suggestVaultPath(topic, entry)
-            call.respondText(
-                buildJsonObject {
-                    put("success", true)
-                    put("markdown", markdown)
-                    put("vaultPath", vaultPath)
-                    put("fileName", "${sanitizeFileName(entry.title)}.md")
-                }.toString(),
-                ContentType.Application.Json
-            )
-        }
-
+// /chat 聊天 WebSocket：单 handler 内处理连接/历史回放/消息分发，控制流敏感且耦合，拆分风险高于收益。
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+private fun Route.chatWebSocketRoute() {
         webSocket("/chat") {
-            val userId = call.parameters["userId"] ?: UUID.randomUUID().toString()
-            val userName = call.parameters["userName"] ?: "User_${userId.take(6)}"
+            // 支持 JWT 认证：优先从 token 参数解析 userId，fallback 到旧版 userId 参数
+            val token = call.parameters["token"]
+            val resolvedUserId = if (!token.isNullOrBlank()) {
+                JwtProvider.verifyAccessToken(token) ?: call.parameters["userId"]
+            } else {
+                call.parameters["userId"]
+            }
+            val userId = resolvedUserId ?: UUID.randomUUID().toString()
+            val userName = if (!token.isNullOrBlank() && JwtProvider.verifyAccessToken(token) != null) {
+                // 从 JWT 登录的用户名（从数据库查找）
+                UserRepository.findUserById(userId)?.fullName
+                    ?: call.parameters["userName"]
+                    ?: "User_${userId.take(6)}"
+            } else {
+                call.parameters["userName"] ?: "User_${userId.take(6)}"
+            }
             val groupId = call.parameters["groupId"] ?: "default_room"
 
             logger.info("👤 用户连接: {} ({}) -> 群组: {}", userName, userId, groupId)
@@ -2496,6 +3774,18 @@ fun Application.configureRouting() {
                         else -> workflow.agentType
                     }
                 AgentRuntime.autoActivateForWorkflow(userId, "group_$groupId", resolvedAgent)
+
+                // Re-broadcast pending question if agent is waiting for user answer
+                val pendingSnapshot = AgentRuntime.snapshotPendingQuestion(userId, "group_$groupId")
+                if (pendingSnapshot != null) {
+                    val questionMsg = com.silk.backend.agents.core.AgentMessages.question(
+                        content = com.silk.backend.agents.core.AgentMessages.formatQuestionText(pendingSnapshot.questions),
+                        requestId = pendingSnapshot.requestId,
+                        agentUserId = pendingSnapshot.agentUserId,
+                        agentName = pendingSnapshot.agentName,
+                    )
+                    groupChatServer.broadcast(questionMsg)
+                }
             }
 
             try {
@@ -2507,6 +3797,38 @@ fun Application.configureRouting() {
                             val receivedText = frame.readText()
                             try {
                                 val message = Json.decodeFromString<Message>(receivedText)
+
+                                // ⛔ cc-connect 按钮答案拦截：按钮值（如 perm:allow）是引擎产生的
+                                // 机器 token，不应作为聊天消息显示。拦截在 broadcast() 之前，
+                                // 完全不存历史、不广播给客户端。
+                                // 仅拦截已知的按钮 token 格式（自然语言回复仍正常显示）。
+                                val isCcButtonAnswerCandidate = message.type == MessageType.TEXT &&
+                                    !message.isTransient &&
+                                    message.userId != "cc-connect" && message.userId != "system"
+                                if (isCcButtonAnswerCandidate) {
+                                    val ccGid = groupId
+                                    val ccReg = com.silk.backend.ccconnect.CcConnectRegistry
+                                    if (ccReg.isConnected(ccGid) && ccReg.isWaitingForInput(ccGid)) {
+                                        // 映射按钮值 → 引擎期望的权限回复文本
+                                        val engineContent = when (message.content) {
+                                            "perm:allow", "perm:allow_all" -> "allow"
+                                            "perm:deny" -> "deny"
+                                            else -> null  // 不是已知按钮值 → 走正常 broadcast 流程
+                                        }
+                                        if (engineContent != null) {
+                                            val userMsg = com.silk.backend.ccconnect.UserMessage(
+                                                content = engineContent,
+                                                userId = message.userId,
+                                                userName = message.userName,
+                                                msgId = message.id,
+                                            )
+                                            ccReg.forwardAnswer(ccGid, userMsg)
+                                            logger.info("[CcAnswer] 按钮答案已转发: groupId={}, content={}→{}", ccGid, message.content, engineContent)
+                                            return@consumeEach
+                                        }
+                                    }
+                                }
+
                                 groupChatServer.broadcast(message)
                             } catch (e: Exception) {
                                 logger.warn("⚠️ 解析消息失败: {}", e.message)
@@ -2525,6 +3847,11 @@ fun Application.configureRouting() {
             }
         }
 
+}
+
+// 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
+private fun Route.audioDuplexRoute() {
         webSocket("/ws/audio-duplex") {
             val sessionId = call.request.queryParameters["sessionId"]
             if (sessionId.isNullOrBlank()) {
@@ -2578,5 +3905,406 @@ fun Application.configureRouting() {
                 httpClient.close()
             }
         }
+}
+
+// ==================== KB access-control routes (KB layer 4, grafted from chore 245c71c/44e5c0e/b3fe1b0/8fe4e75) ====================
+private val kbRouteJson = Json { ignoreUnknownKeys = true }
+
+private const val KB_AUTHENTICATED_USER_ID_HEADER = "X-Silk-Authenticated-User-Id"
+
+private data class KbCallerResolution(
+    val userId: String?,
+    val mismatch: Boolean = false,
+)
+
+
+private fun resolveKbCallerUserId(call: ApplicationCall, fallbackUserId: String?): KbCallerResolution {
+    val authenticatedUserId = call.request.headers[KB_AUTHENTICATED_USER_ID_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
+    val requestUserId = fallbackUserId?.trim()?.takeIf { it.isNotEmpty() }
+    return when {
+        authenticatedUserId != null && requestUserId != null && authenticatedUserId != requestUserId ->
+            KbCallerResolution(userId = authenticatedUserId, mismatch = true)
+        authenticatedUserId != null -> KbCallerResolution(userId = authenticatedUserId)
+        else -> KbCallerResolution(userId = requestUserId)
     }
+}
+
+private suspend fun resolveKbCallerUserIdOrRespond(
+    call: ApplicationCall,
+    fallbackUserId: String?,
+): String? {
+    val resolution = resolveKbCallerUserId(call, fallbackUserId)
+    if (resolution.mismatch) {
+        call.respondText(
+            """{"success":false,"message":"Authenticated user mismatch"}""",
+            ContentType.Application.Json,
+            HttpStatusCode.Forbidden,
+        )
+        return null
+    }
+    return resolution.userId
+}
+
+private fun Route.registerApiKbTopicsGetRoute() {
+
+    // ==================== Knowledge Base API ====================
+
+    get("/api/kb/topics") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val list = knowledgeBaseManager.listTopics(userId)
+        call.respondText(
+            Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBTopic.serializer()), list),
+            ContentType.Application.Json
+        )
+    }
+}
+
+private fun Route.registerApiKbTopicsPostRoute() {
+
+    post("/api/kb/topics") {
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
+        val name = req["name"]?.jsonPrimitive?.content
+        if (userId.isNullOrBlank() || name.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId or name"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val project = req["project"]?.jsonPrimitive?.content ?: ""
+        val spaceType = parseKnowledgeSpaceType(req["spaceType"]?.jsonPrimitive?.contentOrNull)
+        if (spaceType == null && req["spaceType"] != null) {
+            call.respondText("""{"success":false,"message":"Invalid spaceType"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val accessPolicy = parseKbAccessPolicy(req)
+        if (accessPolicy == null && req["accessPolicy"] != null) {
+            call.respondText("""{"success":false,"message":"Invalid accessPolicy"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val topic = try {
+            knowledgeBaseManager.createTopic(
+                name = name,
+                project = project,
+                userId = userId,
+                spaceType = spaceType ?: KnowledgeSpaceType.PERSONAL,
+                groupId = req["groupId"]?.jsonPrimitive?.contentOrNull,
+                accessPolicy = accessPolicy ?: KBAccessPolicy(),
+            )
+        } catch (e: IllegalArgumentException) {
+            call.respondText(
+                """{"success":false,"message":"${e.message ?: "Invalid topic request"}"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest
+            )
+            return@post
+        }
+        call.respondText(
+            Json.encodeToString(KBTopic.serializer(), topic),
+            ContentType.Application.Json,
+            HttpStatusCode.Created
+        )
+    }
+}
+
+private fun Route.registerApiKbTopicsTopicIdPutRoute() {
+
+    put("/api/kb/topics/{topicId}") {
+        val topicId = call.parameters["topicId"] ?: ""
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@put
+        }
+        val accessPolicy = parseKbAccessPolicy(req)
+        if (accessPolicy == null && req["accessPolicy"] != null) {
+            call.respondText("""{"success":false,"message":"Invalid accessPolicy"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@put
+        }
+        val updated = knowledgeBaseManager.updateTopic(
+            topicId = topicId,
+            userId = userId,
+            name = req["name"]?.jsonPrimitive?.contentOrNull,
+            project = req["project"]?.jsonPrimitive?.contentOrNull,
+            accessPolicy = accessPolicy,
+        )
+        if (updated == null) {
+            call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+        } else {
+            call.respondText(
+                Json.encodeToString(KBTopic.serializer(), updated),
+                ContentType.Application.Json
+            )
+        }
+    }
+}
+
+private fun Route.registerApiKbTopicsTopicIdDeleteRoute() {
+
+    delete("/api/kb/topics/{topicId}") {
+        val topicId = call.parameters["topicId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@delete
+        }
+        val ok = knowledgeBaseManager.deleteTopic(topicId, userId)
+        call.respondText(
+            """{"success":$ok}""",
+            ContentType.Application.Json,
+            if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
+        )
+    }
+}
+
+private fun Route.registerApiKbEntriesGetRoute() {
+
+    get("/api/kb/entries") {
+        val topicId = call.request.queryParameters["topicId"]
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (topicId.isNullOrBlank() || userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing topicId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val list = knowledgeBaseManager.listEntries(topicId, userId)
+        call.respondText(
+            Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBEntry.serializer()), list),
+            ContentType.Application.Json
+        )
+    }
+}
+
+private fun Route.registerApiKbEntriesEntryIdGetRoute() {
+
+    get("/api/kb/entries/{entryId}") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (entryId.isBlank() || userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing entryId or userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val entry = knowledgeBaseManager.getEntry(entryId, userId)
+        if (entry == null) {
+            call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@get
+        }
+        call.respondText(
+            Json.encodeToString(KBEntry.serializer(), entry),
+            ContentType.Application.Json
+        )
+    }
+}
+
+private fun Route.registerApiKbEntriesPostRoute() {
+
+    post("/api/kb/entries") {
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
+        val topicId = req["topicId"]?.jsonPrimitive?.content
+        val title = req["title"]?.jsonPrimitive?.content
+        if (userId.isNullOrBlank() || topicId.isNullOrBlank() || title.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing required fields"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val content = req["content"]?.jsonPrimitive?.content ?: ""
+        val tags = req["tags"]?.let { tagsEl ->
+            runCatching {
+                tagsEl.jsonArray.map { it.jsonPrimitive.content }
+            }.getOrNull()
+        } ?: emptyList()
+        val entry = knowledgeBaseManager.createEntry(topicId, title, content, tags, userId)
+        if (entry == null) {
+            call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+        } else {
+            call.respondText(
+                Json.encodeToString(KBEntry.serializer(), entry),
+                ContentType.Application.Json,
+                HttpStatusCode.Created
+            )
+        }
+    }
+}
+
+private fun Route.registerApiKbCapturesPostRoute() {
+
+    post("/api/kb/captures") {
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.contentOrNull)
+        val topicId = req["topicId"]?.jsonPrimitive?.contentOrNull
+        val title = req["title"]?.jsonPrimitive?.contentOrNull?.trim()
+        val content = req["content"]?.jsonPrimitive?.contentOrNull
+        val tags = req["tags"]?.let { tagsEl ->
+            runCatching { tagsEl.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull } }.getOrNull()
+        } ?: emptyList()
+        val source = parseKbEntrySource(req)
+        val requestedStatus = parseKbEntryStatus(req)
+
+        if (isMissingKbCaptureFields(userId, topicId, title, content)) {
+            call.respondText("""{"success":false,"message":"Missing required capture fields"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        if (source == null || source.sourceType == KBSourceType.MANUAL) {
+            call.respondText("""{"success":false,"message":"Invalid capture source"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        if (req["status"] != null && requestedStatus == null) {
+            call.respondText("""{"success":false,"message":"Invalid capture status"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val validUserId = userId!!
+        val validTopicId = topicId!!
+        val validTitle = title!!
+        val validContent = content!!
+        val status = when (source.sourceType) {
+            KBSourceType.CHAT, KBSourceType.WORKFLOW -> KBEntryStatus.CANDIDATE
+            else -> requestedStatus ?: KBEntryStatus.CANDIDATE
+        }
+
+        val entry = knowledgeBaseManager.createEntry(
+            topicId = validTopicId,
+            title = validTitle,
+            content = validContent,
+            tags = tags,
+            userId = validUserId,
+            status = status,
+            source = source,
+        )
+        if (entry == null) {
+            call.respondText("""{"success":false,"message":"Topic not found or write denied"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@post
+        }
+
+        call.respondText(
+            Json.encodeToString(KBEntry.serializer(), entry),
+            ContentType.Application.Json,
+            HttpStatusCode.Created,
+        )
+    }
+}
+
+private fun isMissingKbCaptureFields(
+    userId: String?,
+    topicId: String?,
+    title: String?,
+    content: String?,
+): Boolean {
+    return userId.isNullOrBlank() ||
+        topicId.isNullOrBlank() ||
+        title.isNullOrBlank() ||
+        content.isNullOrBlank()
+}
+
+private fun Route.registerApiKbEntriesEntryIdPutRoute() {
+
+    put("/api/kb/entries/{entryId}") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@put
+        }
+        val title = req["title"]?.jsonPrimitive?.content
+        val content = req["content"]?.jsonPrimitive?.content
+        val tags = req["tags"]?.let { tagsEl ->
+            runCatching {
+                tagsEl.jsonArray.map { it.jsonPrimitive.content }
+            }.getOrNull()
+        }
+        val status = req["status"]?.jsonPrimitive?.contentOrNull?.let {
+            runCatching { KBEntryStatus.valueOf(it) }.getOrNull()
+        }
+        if (req["status"] != null && status == null) {
+            call.respondText("""{"success":false,"message":"Invalid status"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@put
+        }
+        val updated = knowledgeBaseManager.updateEntry(entryId, title, content, tags, status, userId)
+        if (updated == null) {
+            call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+        } else {
+            call.respondText(
+                Json.encodeToString(KBEntry.serializer(), updated),
+                ContentType.Application.Json
+            )
+        }
+    }
+}
+
+private fun Route.registerApiKbEntriesEntryIdDeleteRoute() {
+
+    delete("/api/kb/entries/{entryId}") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@delete
+        }
+        val ok = knowledgeBaseManager.deleteEntry(entryId, userId)
+        call.respondText(
+            """{"success":$ok}""",
+            ContentType.Application.Json,
+            if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
+        )
+    }
+}
+
+private fun Route.registerApiKbEntriesEntryIdExportGetRoute() {
+
+    get("/api/kb/entries/{entryId}/export") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val entry = knowledgeBaseManager.getEntry(entryId, userId)
+        if (entry == null) {
+            call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@get
+        }
+        val topic = knowledgeBaseManager.getTopic(entry.topicId, userId)
+        if (topic == null) {
+            call.respondText("""{"success":false,"message":"Topic not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@get
+        }
+        val markdown = KBObsidianExporter.toMarkdown(topic, entry)
+        val vaultPath = KBObsidianExporter.suggestVaultPath(topic, entry)
+        call.respondText(
+            buildJsonObject {
+                put("success", true)
+                put("markdown", markdown)
+                put("vaultPath", vaultPath)
+                put("fileName", "${sanitizeFileName(entry.title)}.md")
+            }.toString(),
+            ContentType.Application.Json
+        )
+    }
+}
+
+private fun parseKnowledgeSpaceType(raw: String?): KnowledgeSpaceType? {
+    if (raw.isNullOrBlank()) return null
+    return runCatching { KnowledgeSpaceType.valueOf(raw.trim().uppercase()) }.getOrNull()
+}
+
+private fun parseKbAccessPolicy(req: JsonObject): KBAccessPolicy? {
+    val accessPolicy = req["accessPolicy"] ?: return null
+    return runCatching { kbRouteJson.decodeFromJsonElement(KBAccessPolicy.serializer(), accessPolicy) }.getOrNull()
+}
+
+private fun parseKbEntrySource(req: JsonObject): KBEntrySource? {
+    val source = req["source"] ?: return null
+    return runCatching { kbRouteJson.decodeFromJsonElement(KBEntrySource.serializer(), source) }.getOrNull()
+}
+
+private fun parseKbEntryStatus(req: JsonObject): KBEntryStatus? {
+    val raw = req["status"]?.jsonPrimitive?.contentOrNull ?: return null
+    return runCatching { KBEntryStatus.valueOf(raw.trim().uppercase()) }.getOrNull()
 }

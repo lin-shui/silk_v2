@@ -10,6 +10,7 @@
 - `WorkflowScreen.kt`
 - `WorkflowChatScreen.kt`
 - `WorkflowDialogs.kt`
+- `CardMessageRenderer.kt`
 - `KnowledgeBaseScreen.kt`
 - `AudioDuplexScreen.kt`
 - `SettingsScreen.kt`
@@ -20,6 +21,7 @@
 - 登录后主壳是底部四 Tab
 - 聊天页 / 工作流会话页隐藏底栏
 - 工作流会话页（`WorkflowChatScreen.kt`）复用 `com.silk.shared.ChatClient`，通过 `wf.groupId` 走 `/chat` WebSocket
+- 工作流会话页支持 `MessageType.CARD` 交互卡片渲染与 `CARD_REPLY` 回复发送
 - 包含版本检查 / APK 下载 / 文件处理 / ASR / Audio Duplex
 
 ## Build-Time Facts

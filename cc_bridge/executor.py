@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Executor: spawn claude CLI subprocess, parse stream-json output, relay events."""
+"""Executor: spawn claude CLI subprocess in stream-json stdin/stdout mode.
+
+Uses --input-format stream-json and --permission-prompt-tool stdio for
+bidirectional communication. Prompts are sent via stdin JSON; permissions
+and AskUserQuestion interactions are handled via control_request/control_response
+on stdout/stdin.
+"""
 
 from __future__ import annotations
 
@@ -15,9 +21,29 @@ from typing import Any, Callable, Coroutine
 
 logger = logging.getLogger(__name__)
 
+# Separate raw I/O logger — writes complete stdin/stdout JSON to cli_raw.log.
+# Enable via BRIDGE_CLI_RAW_LOG=1 (or any truthy value).
+# This logger is independent of BRIDGE_LOG_LEVEL so it won't pollute bridge.log.
+_raw_logger: logging.Logger | None = None
+
+
+def _init_raw_logger() -> logging.Logger | None:
+    flag = os.environ.get("BRIDGE_CLI_RAW_LOG", "").strip().lower()
+    if flag not in ("1", "true", "yes"):
+        return None
+    rl = logging.getLogger("cli_raw")
+    rl.setLevel(logging.DEBUG)
+    rl.propagate = False  # don't send to root / bridge.log
+    log_dir = os.environ.get("BRIDGE_CLI_RAW_LOG_DIR", os.path.dirname(__file__))
+    fh = logging.FileHandler(os.path.join(log_dir, "cli_raw.log"), encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03.0f %(message)s", datefmt="%H:%M:%S"))
+    rl.addHandler(fh)
+    return rl
+
 # ---------------------------------------------------------------------------
 # Configuration (env vars with defaults)
 # ---------------------------------------------------------------------------
+
 
 def _detect_claude_path() -> str:
     """Auto-detect the claude CLI executable path.
@@ -124,11 +150,15 @@ def _die_claude_not_found(system: str, extra: str = "") -> None:
 
 
 CLAUDE_CODE_PATH: str = _detect_claude_path()
+_raw_logger = _init_raw_logger()
 CLAUDE_CODE_MAX_TURNS: int = int(os.environ.get("CLAUDE_CODE_MAX_TURNS", "100"))
 CLAUDE_CODE_TIMEOUT: int = int(os.environ.get("CLAUDE_CODE_TIMEOUT", "36000"))
 CLAUDE_CODE_MAX_OUTPUT_CHARS: int = int(
     os.environ.get("CLAUDE_CODE_MAX_OUTPUT_CHARS", "30000")
 )
+CLAUDE_CODE_PERMISSION_MODE: str = os.environ.get(
+    "CLAUDE_CODE_PERMISSION_MODE", "default"
+).strip()
 
 # Proxy for claude CLI subprocess only (does not affect bridge's own connections)
 CLAUDE_HTTP_PROXY: str = os.environ.get("CLAUDE_HTTP_PROXY", "")
@@ -161,8 +191,12 @@ TOOL_ICONS: dict[str, str] = {
 
 PARAM_MAX: int = 60
 
-# Type alias for the WebSocket send callback
+# Type aliases
 SendFn = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
+PermissionCallbackFn = Callable[
+    [str, str, dict[str, Any]],  # request_id, tool_name, tool_input
+    Coroutine[Any, Any, dict[str, Any]],  # returns {"behavior": "allow/deny", ...}
+]
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +206,10 @@ SendFn = Callable[[dict[str, Any]], Coroutine[Any, Any, None]]
 class ParsedLine:
     """Result of parsing a single JSON line from claude CLI output."""
 
-    __slots__ = ("text_chunk", "tool_logs", "tool_results", "meta")
+    __slots__ = (
+        "text_chunk", "tool_logs", "tool_results", "meta",
+        "control_request", "session_id",
+    )
 
     def __init__(
         self,
@@ -180,11 +217,15 @@ class ParsedLine:
         tool_logs: list[dict[str, Any]] | None = None,
         tool_results: list[dict[str, Any]] | None = None,
         meta: dict[str, Any] | None = None,
+        control_request: dict[str, Any] | None = None,
+        session_id: str = "",
     ) -> None:
         self.text_chunk = text_chunk
         self.tool_logs = tool_logs or []
         self.tool_results = tool_results or []
         self.meta = meta
+        self.control_request = control_request
+        self.session_id = session_id
 
 
 def format_tool_call(tool_name: str, input_obj: dict[str, Any]) -> str:
@@ -202,7 +243,6 @@ def format_tool_call(tool_name: str, input_obj: dict[str, Any]) -> str:
             param = val
             break
     if not param:
-        # Fall back to first string value
         for v in input_obj.values():
             if isinstance(v, str):
                 param = v
@@ -234,6 +274,8 @@ def parse_line(json_line: str) -> ParsedLine:
         return _parse_result(data)
     if event_type == "system":
         return _parse_system(data)
+    if event_type == "control_request":
+        return _parse_control_request(data)
     return ParsedLine()
 
 
@@ -241,6 +283,7 @@ def _parse_assistant(data: dict[str, Any]) -> ParsedLine:
     blocks = (data.get("message") or {}).get("content") or []
     text_parts: list[str] = []
     tool_logs: list[dict[str, Any]] = []
+    session_id = data.get("session_id", "")
 
     for block in blocks:
         if isinstance(block, str):
@@ -254,7 +297,7 @@ def _parse_assistant(data: dict[str, Any]) -> ParsedLine:
             text_parts.append(block.get("text", ""))
         elif block_type == "thinking":
             tool_logs.append({
-                "line": "\U0001f4ad \u601d\u8003...",   # 💭 思考...
+                "line": "\U0001f4ad \u601d\u8003...",
                 "toolUseId": None,
                 "toolName": "thinking",
             })
@@ -269,7 +312,7 @@ def _parse_assistant(data: dict[str, Any]) -> ParsedLine:
             })
 
     text = "\n\n".join(p for p in text_parts if p)
-    return ParsedLine(text_chunk=text, tool_logs=tool_logs)
+    return ParsedLine(text_chunk=text, tool_logs=tool_logs, session_id=session_id)
 
 
 def _parse_user(data: dict[str, Any]) -> ParsedLine:
@@ -306,6 +349,7 @@ def _parse_user(data: dict[str, Any]) -> ParsedLine:
             "toolUseId": tool_use_id,
             "isError": is_error,
             "summary": summary,
+            "content": content_str,
         })
 
     return ParsedLine(tool_results=results)
@@ -326,14 +370,27 @@ def _parse_result(data: dict[str, Any]) -> ParsedLine:
 
 def _parse_system(data: dict[str, Any]) -> ParsedLine:
     subtype = data.get("subtype", "")
+    session_id = data.get("session_id", "")
     if subtype == "compact_boundary":
         pre_tokens = (data.get("compact_metadata") or {}).get("pre_tokens", 0)
         if pre_tokens > 0:
             text = f"\u4e0a\u4e0b\u6587\u5df2\u538b\u7f29\uff08\u538b\u7f29\u524d {pre_tokens:,} tokens\uff09"
         else:
             text = "\u4e0a\u4e0b\u6587\u5df2\u538b\u7f29"
-        return ParsedLine(text_chunk=text)
-    return ParsedLine()
+        return ParsedLine(text_chunk=text, session_id=session_id)
+    return ParsedLine(session_id=session_id)
+
+
+def _parse_control_request(data: dict[str, Any]) -> ParsedLine:
+    """Parse a control_request event (permission prompt via stdio)."""
+    request_id = data.get("request_id", "")
+    request = data.get("request", {})
+    return ParsedLine(control_request={
+        "request_id": request_id,
+        "subtype": request.get("subtype", ""),
+        "tool_name": request.get("tool_name", ""),
+        "input": request.get("input", {}),
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +398,12 @@ def _parse_system(data: dict[str, Any]) -> ParsedLine:
 # ---------------------------------------------------------------------------
 
 class Executor:
-    """Manage a single claude CLI subprocess at a time."""
+    """Manage a single claude CLI subprocess at a time.
+
+    Uses --input-format stream-json mode: the process stays alive for one
+    prompt turn. Prompt is sent via stdin JSON, output is read from stdout,
+    and permission interactions happen via control_request/control_response.
+    """
 
     def __init__(self) -> None:
         self._process: asyncio.subprocess.Process | None = None
@@ -377,6 +439,7 @@ class Executor:
         working_dir: str,
         resume: bool = False,
         on_session_upsert: Callable[[str, str, str], None] | None = None,
+        on_permission_request: PermissionCallbackFn | None = None,
     ) -> None:
         """Spawn claude CLI and stream parsed events to *send*.
 
@@ -393,10 +456,15 @@ class Executor:
         working_dir:
             Working directory for the subprocess.
         resume:
-            If True, use ``--resume`` instead of ``--session-id``.
+            If True, use ``--resume`` instead of fresh session.
         on_session_upsert:
             Optional callback ``(session_id, working_dir, title)`` to
             persist session metadata when a result meta arrives.
+        on_permission_request:
+            Async callback for permission/AskUserQuestion requests.
+            Called with (request_id, tool_name, tool_input).
+            Must return a dict: {"behavior": "allow", "updatedInput": {...}}
+            or {"behavior": "deny", "message": "..."}.
         """
         self._cancel_requested = False
 
@@ -405,17 +473,12 @@ class Executor:
             title = prompt[:50] + "\u2026" if len(prompt) > 50 else prompt
             on_session_upsert(session_id, working_dir, title)
 
-        cmd = self._build_command(prompt, session_id, resume)
+        cmd = self._build_command(session_id, resume)
         logger.info(
             "[Executor] Spawning subprocess: cmd=%s, cwd=%s",
             " ".join(f'"{c}"' for c in cmd),
             working_dir,
         )
-
-        # When using ``script`` PTY wrapper (Linux/macOS), claude's stderr goes
-        # through the PTY and won't be captured by stderr=PIPE.  Merge stderr
-        # into stdout so we can still see error messages in the output stream.
-        use_pty = platform.system() != "Windows"
 
         # Build subprocess env: inherit current env + inject proxy for claude only
         sub_env: dict[str, str] | None = None
@@ -431,11 +494,12 @@ class Executor:
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT if use_pty else asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=working_dir,
                 env=sub_env,
-                limit=10 * 1024 * 1024,  # 10 MB – CC tool results can exceed the 64 KB default
+                limit=10 * 1024 * 1024,  # 10 MB
             )
         except Exception as exc:
             logger.error("[Executor] Failed to start claude CLI: %s", exc)
@@ -450,13 +514,34 @@ class Executor:
 
         self._process = process
 
+        # Send the prompt via stdin
+        try:
+            await self._write_stdin(process, {
+                "type": "user",
+                "message": {"role": "user", "content": prompt},
+            })
+        except Exception as exc:
+            logger.error("[Executor] Failed to write prompt to stdin: %s", exc)
+            await send({
+                "type": "error",
+                "requestId": request_id,
+                "error": f"\u53d1\u9001 prompt \u5931\u8d25: {exc}",
+                "exitCode": -1,
+                "stderr": str(exc),
+            })
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            return
+
         # -- Timeout watchdog --
         timeout_task = asyncio.create_task(self._timeout_watchdog(process))
 
         # -- State for stream processing --
         accumulated_text = ""
         last_meta: dict[str, Any] | None = None
-        active_tool_ids: dict[str, str] = {}  # tool_use_id → log line
+        active_tool_ids: dict[str, dict[str, str]] = {}
         last_push_time = time.monotonic()
         last_push_len = 0
 
@@ -470,7 +555,6 @@ class Executor:
             assert process.stdout is not None
             line_count = 0
 
-            # Read stdout line-by-line with idle timeout
             while not should_break:
                 try:
                     raw_bytes = await asyncio.wait_for(
@@ -478,7 +562,6 @@ class Executor:
                         timeout=IDLE_REFRESH_S,
                     )
                 except asyncio.TimeoutError:
-                    # No data within IDLE_REFRESH_S
                     if process.returncode is not None:
                         break
                     elapsed = int(time.monotonic() - phase_start_time)
@@ -494,7 +577,6 @@ class Executor:
                     continue
 
                 if not raw_bytes:
-                    # EOF
                     break
 
                 line_count += 1
@@ -505,11 +587,48 @@ class Executor:
                     logger.info("[Executor] Non-JSON output: %s", line[:200])
                     continue
 
-                logger.debug(
-                    "[Executor] Line %d (%d chars): %s",
-                    line_count, len(line), line[:80],
-                )
+                if _raw_logger:
+                    _raw_logger.debug("STDOUT <<< %s", line)
                 parsed = parse_line(line)
+
+                # ---- Control request (permission / AskUserQuestion) ----
+                if parsed.control_request:
+                    ctrl = parsed.control_request
+                    ctrl_request_id = ctrl["request_id"]
+                    tool_name = ctrl["tool_name"]
+                    tool_input = ctrl["input"]
+
+                    logger.info(
+                        "[Executor] control_request: tool=%s, request_id=%s",
+                        tool_name, ctrl_request_id[:8] if ctrl_request_id else "?",
+                    )
+
+                    if on_permission_request:
+                        try:
+                            result = await on_permission_request(
+                                ctrl_request_id, tool_name, tool_input,
+                            )
+                        except Exception as exc:
+                            logger.error(
+                                "[Executor] permission callback error: %s", exc
+                            )
+                            result = {
+                                "behavior": "deny",
+                                "message": f"Permission callback error: {exc}",
+                            }
+                    else:
+                        result = {"behavior": "allow", "updatedInput": tool_input}
+
+                    await self._write_control_response(process, ctrl_request_id, result)
+                    phase_start_time = time.monotonic()
+                    continue
+
+                # ---- Track session ID from system events ----
+                if parsed.session_id:
+                    session_id = parsed.session_id
+                    if on_session_upsert:
+                        title = prompt[:50] + "\u2026" if len(prompt) > 50 else prompt
+                        on_session_upsert(session_id, working_dir, title)
 
                 # ---- Phase state transitions ----
                 has_tool_results = bool(parsed.tool_results)
@@ -524,7 +643,6 @@ class Executor:
                 if model_thinking != prev_thinking:
                     phase_start_time = time.monotonic()
 
-                # Thinking completed -> update the thinking log with duration
                 if has_assistant_output and prev_thinking:
                     thinking_duration = int(time.monotonic() - prev_phase_start)
                     for tool_log in parsed.tool_logs:
@@ -544,8 +662,10 @@ class Executor:
                 for tool_log in parsed.tool_logs:
                     tool_use_id = tool_log.get("toolUseId")
                     if tool_use_id:
-                        active_tool_ids[tool_use_id] = tool_log["line"]
-                    # Thinking already handled above
+                        active_tool_ids[tool_use_id] = {
+                            "line": tool_log["line"],
+                            "toolName": tool_log.get("toolName", ""),
+                        }
                     if tool_log.get("toolName") == "thinking":
                         continue
                     await send({
@@ -555,13 +675,14 @@ class Executor:
                         "stableId": tool_use_id,
                     })
 
-                # ---- Tool results (append checkmark/cross) ----
+                # ---- Tool results ----
                 for result in parsed.tool_results:
                     tool_use_id = result.get("toolUseId", "")
-                    original_line = active_tool_ids.pop(tool_use_id, None)
-                    if original_line is not None:
+                    info = active_tool_ids.pop(tool_use_id, None)
+                    if info is not None:
+                        original_line = info["line"]
+                        summary = result.get("summary", "")
                         if result.get("isError"):
-                            summary = result.get("summary", "")
                             suffix = f" \u2192 \u274c {summary}" if summary else " \u2192 \u274c"
                         else:
                             suffix = " \u2192 \u2705"
@@ -580,7 +701,6 @@ class Executor:
                 if should_append:
                     accumulated_text += parsed.text_chunk
 
-                    # Truncation protection
                     if len(accumulated_text) > CLAUDE_CODE_MAX_OUTPUT_CHARS:
                         accumulated_text = accumulated_text[:CLAUDE_CODE_MAX_OUTPUT_CHARS]
                         logger.warning(
@@ -609,7 +729,6 @@ class Executor:
                         should_break = True
                         continue
 
-                    # Throttled push
                     now = time.monotonic()
                     new_chars = len(accumulated_text) - last_push_len
                     if (
@@ -624,10 +743,9 @@ class Executor:
                         last_push_time = now
                         last_push_len = len(accumulated_text)
 
-                # ---- Meta ----
+                # ---- Meta (result event) ----
                 if parsed.meta is not None:
                     last_meta = parsed.meta
-                    # Persist session from meta
                     if on_session_upsert and parsed.meta.get("sessionId"):
                         title = prompt[:50] + "\u2026" if len(prompt) > 50 else prompt
                         on_session_upsert(
@@ -635,6 +753,9 @@ class Executor:
                             working_dir,
                             title,
                         )
+                    # stream-json mode: process won't exit until we close
+                    # stdin, so break out of the read loop on result.
+                    should_break = True
 
             # Push remaining text
             if len(accumulated_text) > last_push_len:
@@ -644,13 +765,20 @@ class Executor:
                     "text": accumulated_text,
                 })
 
-            # Wait for process to finish
+            # Close stdin to signal the process to exit
+            if process.stdin:
+                try:
+                    process.stdin.close()
+                    await process.stdin.wait_closed()
+                except Exception:
+                    pass
+
             logger.info(
                 "[Executor] stdout finished (%d lines), waiting for process exit...",
                 line_count,
             )
             try:
-                await asyncio.wait_for(process.wait(), timeout=10.0)
+                await asyncio.wait_for(process.wait(), timeout=30.0)
             except asyncio.TimeoutError:
                 logger.warning("[Executor] Process did not exit in time, killing")
                 try:
@@ -662,7 +790,6 @@ class Executor:
             timeout_task.cancel()
             exit_code = process.returncode or 0
 
-            # Read stderr
             stderr_text = ""
             if process.stderr:
                 try:
@@ -728,37 +855,67 @@ class Executor:
     # Internals
     # ------------------------------------------------------------------
 
-    def _build_command(
-        self, prompt: str, session_id: str, resume: bool
-    ) -> list[str]:
-        """Build the full command line including ``script`` PTY wrapper."""
+    def _build_command(self, session_id: str, resume: bool) -> list[str]:
+        """Build the claude CLI command for stream-json stdin/stdout mode."""
         claude_args: list[str] = [
             CLAUDE_CODE_PATH,
-            "-p", prompt,
             "--output-format", "stream-json",
+            "--input-format", "stream-json",
+            "--permission-prompt-tool", "stdio",
+            "--verbose",
+            "--max-turns", str(CLAUDE_CODE_MAX_TURNS),
         ]
+        if CLAUDE_CODE_PERMISSION_MODE.lower() not in {"", "none", "off", "false", "0"}:
+            claude_args.extend(["--permission-mode", CLAUDE_CODE_PERMISSION_MODE])
         if resume:
             claude_args.extend(["--resume", session_id])
+        return claude_args
+
+    async def _write_stdin(
+        self, process: asyncio.subprocess.Process, payload: dict[str, Any]
+    ) -> None:
+        """Write a JSON message to the process stdin."""
+        assert process.stdin is not None
+        data = json.dumps(payload, ensure_ascii=False) + "\n"
+        if _raw_logger:
+            _raw_logger.debug("STDIN  >>> %s", data.rstrip())
+        process.stdin.write(data.encode("utf-8"))
+        await process.stdin.drain()
+
+    async def _write_control_response(
+        self,
+        process: asyncio.subprocess.Process,
+        ctrl_request_id: str,
+        result: dict[str, Any],
+    ) -> None:
+        """Write a control_response to stdin in response to a control_request."""
+        behavior = result.get("behavior", "deny")
+
+        if behavior == "allow":
+            perm_response = {
+                "behavior": "allow",
+                "updatedInput": result.get("updatedInput", {}),
+            }
         else:
-            claude_args.extend(["--session-id", session_id])
+            perm_response = {
+                "behavior": "deny",
+                "message": result.get("message", "User denied this tool use."),
+            }
 
-        claude_args.extend([
-            "--verbose",
-            "--permission-mode", "bypassPermissions",
-            "--max-turns", str(CLAUDE_CODE_MAX_TURNS),
-        ])
+        control_response = {
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": ctrl_request_id,
+                "response": perm_response,
+            },
+        }
 
-        # Windows: run claude CLI directly (no PTY needed)
-        # Linux:  script -q -c "cmd" /dev/null
-        # macOS:  script -q /dev/null cmd args...
-        system = platform.system()
-        if system == "Windows":
-            return claude_args
-        if system == "Darwin":
-            return ["script", "-q", "/dev/null"] + claude_args
-        # Linux and others
-        shell_cmd = " ".join(_shell_quote(a) for a in claude_args)
-        return ["script", "-q", "-c", shell_cmd, "/dev/null"]
+        logger.debug(
+            "[Executor] Writing control_response: request_id=%s, behavior=%s",
+            ctrl_request_id[:8] if ctrl_request_id else "?", behavior,
+        )
+        await self._write_stdin(process, control_response)
 
     async def _timeout_watchdog(self, process: asyncio.subprocess.Process) -> None:
         """Kill the subprocess after CLAUDE_CODE_TIMEOUT seconds."""
@@ -775,10 +932,3 @@ class Executor:
                     pass
         except asyncio.CancelledError:
             pass
-
-
-def _shell_quote(arg: str) -> str:
-    """Quote a shell argument with single quotes, escaping embedded single quotes."""
-    if any(c in arg for c in (" ", '"', "'", "\n", "\t", "\\", "$", "`", "!", "#")):
-        return "'" + arg.replace("'", "'\\''") + "'"
-    return arg

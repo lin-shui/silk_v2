@@ -1,0 +1,13 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>LargeClass:AIStepwiseAgent.kt$AIStepwiseAgent</ID>
+    <ID>LargeClass:AgentRuntime.kt$AgentRuntime</ID>
+    <ID>LargeClass:BackendWebSocketContractTest.kt$BackendWebSocketContractTest</ID>
+    <ID>LargeClass:GroupTodoExtractionService.kt$GroupTodoExtractionService</ID>
+    <ID>LargeClass:UserTodoStore.kt$UserTodoStore</ID>
+    <ID>LargeClass:WeaviateClient.kt$WeaviateClient</ID>
+    <ID>LargeClass:WebSocketConfig.kt$ChatServer</ID>
+  </CurrentIssues>
+</SmellBaseline>

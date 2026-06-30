@@ -22,6 +22,7 @@ data class FsCapability(
     val writeTextFile: Boolean = false,
 )
 
+@Suppress("ConstructorParameterNaming")
 @Serializable
 data class AgentCapabilities(
     val loadSession: Boolean = false,

@@ -5,11 +5,18 @@
 - 当前主线 agent 是 `ai/DirectModelAgent.kt`
 - `SilkAgent.kt` 仍保留旧接口与兼容逻辑，但新代码默认沿着 `DirectModelAgent` 看
 - `AIConfig.kt` 统一读取：
-  - OpenAI-compatible API
-  - Weaviate
-  - 外部搜索
+  - Anthropic Claude API（Messages API）
   - ASR
   - 工具开关
+
+## Anthropic Client
+
+- `ai/AnthropicClient.kt` 封装与 Anthropic Messages API 的通信：
+  - SSE 流式解析（content_block_start/delta/stop + message_delta，含 thinking_delta）
+  - 结构化 content block 追踪：流式过程中维护 `streamingBlocks` 映射（thinking/text/tool_use），通过 `blocks_state` 回调每步推送到前端实时渲染
+  - 内部 Message ↔ Anthropic 格式双向转换
+  - 工具定义转换（custom tools → {name, description, input_schema}，web_search → 原生 `web_search_20260209`）
+  - tool_use 收集与残缺 JSON 修复
 
 ## Tool Calling
 
@@ -24,15 +31,19 @@
 
 ## Search Stack
 
-- `DirectModelAgent.search_web` 优先级：SearXNG -> SerpAPI -> Brave Search
-- `autocli` 工具仅在 `AUTOCLI_ENABLED=true` 时暴露，命令经 `ToolPolicyManager` 的 sandbox / safeCommands 校验
-- `search/WeaviateClient.kt`:
-  - 前景/背景搜索
-  - 当前 session 与跨 session 搜索区分
-  - 兼顾中文查询 + 英文文件名兜底
-- `search/ExternalSearchService.kt`:
-  - SerpAPI / Brave / Bing / DuckDuckGo 兜底
-- `utils/WebPageDownloader.kt`:
+- Claude 原生 `web_search` 工具（由 AnthropicClient 转换为 `web_search_20260209` 类型）：
+  - 替代旧 SerpAPI / Brave / Bing / SearXNG 外部搜索
+  - 模型自动触发，无需后端编排
+- `searchContext()` 后端 grep 搜索（替代 Weaviate）：
+  - 基于 `DirectModelAgent.accessibleSessionIds` 限制搜索范围
+  - 搜索 `_text.txt`（PDF 提取文本）和 `session.json`（聊天消息）
+  - 结果截断至 30000 字符，路径层级限制防逃逸
+- `writeOtherGroupsHistories()` 跨群上下文注入：
+  - 仅在 Silk 专属对话中触发（`accessibleSessionIds.size > 1`）
+  - 遍历用户其他群组，读取最近 50 条 TEXT 消息
+  - 写入 `workspaceDir/other_groups/chat_history_<群名>.md`
+  - AI 可通过 Grep/Read 工具跨群搜索，提示词中明确告知跨群访问权限
+- `utils/WebPageDownloader.kt`：
   - URL 提取、HTML/PDF 下载、提取、落盘
   - `WebPageDownloaderSmokeTest` 覆盖本地 smoke
 
@@ -58,7 +69,8 @@
 ## Change Checklist
 
 - 改 tool schema / tool permission：更新后端测试
-- 改 Weaviate 搜索过滤：确认 session/user 隔离不被破坏
-- 改 agent 指令路由：看 `agents/core/CommandRouter.kt` + 对应 adapter
+- 改 AnthropicClient 格式转换：同步验证 convertMessage / convertTool 双向兼容
+- 改 grep searchContext：确认 accessibleSessionIds 隔离不被破坏
+- 改 agent 指令路由：看 `agents/core/CommandRouter.kt` + 对应 adapter；外部 adapter：同时查看 `cc_bridge/`、`codex_bridge/`
 - 改 ASR 协议：同步看 Web/Android/Harmony 调用端
 - 改 Audio Duplex 代理协议：同步看 Web/Android/Harmony Audio Duplex 调用端

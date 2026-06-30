@@ -73,8 +73,9 @@ data class MarkReadRequest(
  */
 @Serializable
 enum class MemberRole {
-    HOST,  // 群主（管理员）
-    GUEST  // 普通成员
+    HOST,      // 群主（管理员）
+    OPERATOR,  // 可触发 CC-Connect 命令
+    GUEST      // 普通成员
 }
 
 /**
@@ -104,7 +105,9 @@ data class LoginRequest(
 data class AuthResponse(
     val success: Boolean,
     val message: String,
-    val user: User? = null
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null
 )
 
 /**
@@ -113,7 +116,8 @@ data class AuthResponse(
 @Serializable
 data class CreateGroupRequest(
     val userId: String,
-    val groupName: String // 用户输入的群组名称
+    val groupName: String,
+    val type: String? = null, // null = normal group, "ccconnect" = cc-connect group
 )
 
 /**
@@ -157,7 +161,8 @@ data class GroupResponse(
     val success: Boolean,
     val message: String,
     val group: Group? = null,
-    val groups: List<Group>? = null
+    val groups: List<Group>? = null,
+    val ccConnectToken: String? = null,
 )
 
 // ==================== 联系人相关模型 ====================
@@ -414,7 +419,8 @@ data class RefreshUserTodosRequest(
 data class GroupMemberApi(
     val id: String,       // userId
     val fullName: String,
-    val phone: String = ""
+    val phone: String = "",
+    val role: String = "GUEST",
 )
 
 /**
@@ -513,4 +519,117 @@ data class RecallMessageResponse(
     val success: Boolean,
     val message: String,
     val recalledMessageIds: List<String> = emptyList()  // 被撤回的消息ID列表（可能包含用户消息和AI回复）
+)
+
+// ==================== 微信账号认证模型 ====================
+
+/**
+ * 微信登录请求（接收 Android 端微信 SDK 返回的授权 code）
+ */
+@Serializable
+data class WechatLoginRequest(
+    val code: String
+)
+
+/**
+ * 微信用户信息
+ */
+@Serializable
+data class WechatUserInfo(
+    val openId: String,
+    val unionId: String = "",
+    val nickname: String = "",
+    val headimgurl: String = ""
+)
+
+/**
+ * 微信账号认证响应
+ */
+@Serializable
+data class WechatAuthResponse(
+    val success: Boolean,
+    val message: String,
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val isNewUser: Boolean = false
+)
+
+// ==================== 华为账号认证模型 ====================
+
+/**
+ * 华为 Web OAuth 登录请求
+ */
+@Serializable
+data class HuaweiWebLoginRequest(
+    val code: String,
+    val redirectUri: String
+)
+
+/**
+ * 华为 ID Token 登录请求（用于 Harmony/Android 原生端）
+ */
+@Serializable
+data class HuaweiLoginRequest(
+    val idToken: String
+)
+
+/**
+ * 刷新 Token 请求
+ */
+@Serializable
+data class RefreshTokenRequest(
+    val refreshToken: String
+)
+
+/**
+ * 登出请求
+ */
+@Serializable
+data class LogoutRequest(
+    val refreshToken: String
+)
+
+/**
+ * 华为 OAuth 用户信息
+ */
+@Serializable
+data class HuaweiUserInfo(
+    val openId: String,
+    val name: String = "",
+    val avatar: String = ""
+)
+
+/**
+ * 华为 OAuth 账号绑定请求
+ * 老用户登录后，将华为账号绑定到已有 userId
+ */
+@Serializable
+data class HuaweiBindRequest(
+    val code: String,
+    val redirectUri: String
+)
+
+/**
+ * 华为账号认证响应
+ */
+@Serializable
+data class HuaweiAuthResponse(
+    val success: Boolean,
+    val message: String,
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val isNewUser: Boolean = false
+)
+
+/**
+ * Token 刷新响应
+ */
+@Serializable
+data class TokenRefreshResponse(
+    val success: Boolean,
+    val message: String = "",
+    val accessToken: String? = null,
+    val refreshToken: String? = null
 )
