@@ -94,6 +94,8 @@ class DirectModelAgent(
         val path: String? = null,
         val origin: String? = null,
         val reason: String? = null,
+        val spaceId: String? = null,
+        val spaceLabel: String? = null,
     )
 
     data class AgentResponse(

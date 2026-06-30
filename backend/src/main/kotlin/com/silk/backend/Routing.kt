@@ -62,6 +62,7 @@ import com.silk.backend.database.UserTodoRefreshStatusResponse
 import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.export.ChatObsidianExporter
 import com.silk.backend.kb.KBObsidianExporter
+import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
 import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
@@ -3736,6 +3737,8 @@ private fun Route.workflowKbRoutes() {
         registerApiKbEntriesEntryIdPutRoute()
         registerApiKbEntriesEntryIdDeleteRoute()
         registerApiKbEntriesEntryIdExportGetRoute()
+        registerApiKbContextPreferencesGetRoute()
+        registerApiKbContextPreferencesPutRoute()
 
 }
 
@@ -3913,6 +3916,9 @@ private fun Route.audioDuplexRoute() {
 private val kbRouteJson = Json { ignoreUnknownKeys = true }
 
 private const val KB_AUTHENTICATED_USER_ID_HEADER = "X-Silk-Authenticated-User-Id"
+
+private val knowledgeBaseContextPreferenceStore: KnowledgeBaseContextPreferenceStore
+    get() = KnowledgeBaseContextPreferenceStore()
 
 private data class KbCallerResolution(
     val userId: String?,
@@ -4228,7 +4234,8 @@ private fun Route.registerApiKbEntriesEntryIdPutRoute() {
             call.respondText("""{"success":false,"message":"Invalid status"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@put
         }
-        val updated = knowledgeBaseManager.updateEntry(entryId, title, content, tags, status, userId)
+        val topicId = req["topicId"]?.jsonPrimitive?.contentOrNull
+        val updated = knowledgeBaseManager.updateEntry(entryId, topicId, title, content, tags, status, userId)
         if (updated == null) {
             call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
         } else {
@@ -4287,6 +4294,43 @@ private fun Route.registerApiKbEntriesEntryIdExportGetRoute() {
                 put("fileName", "${sanitizeFileName(entry.title)}.md")
             }.toString(),
             ContentType.Application.Json
+        )
+    }
+}
+
+private fun Route.registerApiKbContextPreferencesGetRoute() {
+
+    get("/api/kb/context-preferences") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val preferences = knowledgeBaseContextPreferenceStore.get(userId)
+        call.respondText(
+            Json.encodeToString(com.silk.backend.kb.KnowledgeBaseContextPreferences.serializer(), preferences),
+            ContentType.Application.Json,
+        )
+    }
+}
+
+private fun Route.registerApiKbContextPreferencesPutRoute() {
+
+    put("/api/kb/context-preferences") {
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.contentOrNull)
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@put
+        }
+        val excludedSpaceIds = req["excludedSpaceIds"]?.let { element ->
+            runCatching { element.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull } }.getOrNull()
+        } ?: emptyList()
+        val updated = knowledgeBaseContextPreferenceStore.updateExcludedSpaces(userId, excludedSpaceIds)
+        call.respondText(
+            Json.encodeToString(com.silk.backend.kb.KnowledgeBaseContextPreferences.serializer(), updated),
+            ContentType.Application.Json,
         )
     }
 }
