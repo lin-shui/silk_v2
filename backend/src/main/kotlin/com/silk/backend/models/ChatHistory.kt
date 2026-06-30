@@ -35,7 +35,18 @@ data class MessageReference(
     val title: String,
     val url: String? = null,
     val snippet: String? = null,
-    val path: String? = null
+    val path: String? = null,
+    val origin: String? = null,
+    val reason: String? = null,
+    val spaceId: String? = null,
+    val spaceLabel: String? = null,
+)
+
+@Serializable
+data class KnowledgeBaseContextSelection(
+    val pinnedEntryIds: List<String> = emptyList(),
+    val excludedEntryIds: List<String> = emptyList(),
+    val excludedSpaceIds: List<String> = emptyList(),
 )
 
 /**
@@ -49,7 +60,8 @@ data class ChatHistoryEntry(
     val content: String,
     val timestamp: Long,
     val messageType: String, // TEXT, JOIN, LEAVE, SYSTEM
-    val references: List<MessageReference> = emptyList()
+    val references: List<MessageReference> = emptyList(),
+    val kbContextSelection: KnowledgeBaseContextSelection? = null,
 )
 
 /**
@@ -62,4 +74,3 @@ data class ChatHistory(
     // @Silk 设置的角色提示，作为 AI 回复的 system prompt suffix
     var rolePrompt: String? = null
 )
-

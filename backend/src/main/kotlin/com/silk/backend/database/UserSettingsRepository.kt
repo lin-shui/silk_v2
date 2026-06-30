@@ -1,8 +1,12 @@
 package com.silk.backend.database
 
-import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.jetbrains.exposed.sql.update
+import org.slf4j.LoggerFactory
 import java.security.SecureRandom
 import java.time.LocalDateTime
 
@@ -12,6 +16,7 @@ import java.time.LocalDateTime
 object UserSettingsRepository {
 
     private val secureRandom = SecureRandom()
+    private val logger = LoggerFactory.getLogger(UserSettingsRepository::class.java)
 
     /**
      * 获取用户设置
@@ -60,14 +65,55 @@ object UserSettingsRepository {
         }
     }
 
+    fun getOrCreateAppAuthToken(userId: String): String {
+        getAppAuthToken(userId)?.let { return it }
+        return issueAppAuthToken(userId)
+    }
+
+    fun getAppAuthToken(userId: String): String? {
+        return transaction {
+            UserSettingsTable.select { UserSettingsTable.userId eq userId }
+                .singleOrNull()
+                ?.get(UserSettingsTable.appAuthToken)
+        }
+    }
+
+    fun issueAppAuthToken(userId: String): String {
+        val token = generateHexToken()
+        transaction {
+            val existing = UserSettingsTable.select { UserSettingsTable.userId eq userId }
+                .singleOrNull()
+
+            if (existing == null) {
+                UserSettingsTable.insert {
+                    it[UserSettingsTable.userId] = userId
+                    it[appAuthToken] = token
+                    it[updatedAt] = LocalDateTime.now()
+                }
+            } else {
+                UserSettingsTable.update({ UserSettingsTable.userId eq userId }) {
+                    it[appAuthToken] = token
+                    it[updatedAt] = LocalDateTime.now()
+                }
+            }
+        }
+        return token
+    }
+
+    fun findUserIdByAppAuthToken(token: String): String? {
+        return transaction {
+            UserSettingsTable.select { UserSettingsTable.appAuthToken eq token }
+                .singleOrNull()
+                ?.get(UserSettingsTable.userId)
+        }
+    }
+
     /**
      * 生成 Bridge Token
      * 用 SecureRandom 生成 32 字符 hex token 并存储
      */
     fun generateBridgeToken(userId: String): String {
-        val bytes = ByteArray(16)
-        secureRandom.nextBytes(bytes)
-        val token = bytes.joinToString("") { "%02x".format(it) }
+        val token = generateHexToken()
 
         transaction {
             val existing = UserSettingsTable.select { UserSettingsTable.userId eq userId }
@@ -119,7 +165,8 @@ object UserSettingsRepository {
         val languageStr = row[UserSettingsTable.language]
         val language = try {
             Language.valueOf(languageStr)
-        } catch (e: Exception) {
+        } catch (e: IllegalArgumentException) {
+            logger.warn("Unknown user language '{}', fallback to CHINESE", languageStr, e)
             Language.CHINESE // 默认值
         }
 
@@ -128,5 +175,11 @@ object UserSettingsRepository {
             defaultAgentInstruction = row[UserSettingsTable.defaultAgentInstruction],
             ccBridgeToken = row[UserSettingsTable.ccBridgeToken],
         )
+    }
+
+    private fun generateHexToken(): String {
+        val bytes = ByteArray(16)
+        secureRandom.nextBytes(bytes)
+        return bytes.joinToString("") { "%02x".format(it) }
     }
 }

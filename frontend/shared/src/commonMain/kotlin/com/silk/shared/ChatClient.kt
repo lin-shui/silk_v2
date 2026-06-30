@@ -1,14 +1,18 @@
 package com.silk.shared
 
 import com.silk.shared.models.Message
-import com.silk.shared.models.MessageType
 import com.silk.shared.models.MessageCategory
+import com.silk.shared.models.MessageType
+import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.isAgentUserId
-import kotlinx.coroutines.flow.*
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.decodeFromString
 import kotlinx.datetime.Clock
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 // 日志回调
 typealias LogCallback = (String) -> Unit
@@ -52,7 +56,11 @@ class ChatClient(
     // 系统状态消息列表（用于显示搜索、索引等状态）
     private val _statusMessages = MutableStateFlow<List<Message>>(emptyList())
     val statusMessages: StateFlow<List<Message>> = _statusMessages.asStateFlow()
-    
+
+    // Agent 提问等待回答状态（AskUserQuestion requestId）
+    private val _pendingQuestionId = MutableStateFlow<String?>(null)
+    val pendingQuestionId: StateFlow<String?> = _pendingQuestionId.asStateFlow()
+
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
     
@@ -81,7 +89,7 @@ class ChatClient(
         if (oldWs != null) {
             log("🔄 [ChatClient] 静默关闭旧连接")
             webSocket = null
-            try { oldWs.disconnect() } catch (_: Exception) {}
+            oldWs.disconnect()
         }
         
         historyBuffer.clear()
@@ -130,134 +138,195 @@ class ChatClient(
     }
 
     private fun handleMessage(text: String) {
-        // 批量历史帧：服务端将最多 50 条消息编码为 JSON 数组一次性发送
-        // 不依赖 _isLoadingHistory 状态，防止超时后历史消息被丢弃
-        if (text.startsWith("[")) {
-            try {
-                val batch = Json.decodeFromString<List<Message>>(text)
-                if (_isLoadingHistory.value) {
-                    historyBuffer.addAll(batch)
-                    log("📜 [ChatClient] 收到批量历史: ${batch.size} 条")
-                } else {
-                    // 历史加载已完成但批量历史晚到：直接写入消息列表
-                    log("📜 [ChatClient] 历史加载已完成，直接写入 ${batch.size} 条历史消息")
-                    _messages.value = (_messages.value + batch).distinctBy { it.id }
-                }
-                return
-            } catch (_: Exception) {
-                log("⚠️ [ChatClient] 批量解析失败，回退单条解析")
-            }
-        }
+        if (handleBatchHistoryFrame(text)) return
+        decodeMessage(text)?.let(::handleDecodedMessage)
+    }
 
-        try {
-            val message = Json.decodeFromString<Message>(text)
-
-            // 历史加载完成标记
-            if (message.isTransient && message.type == MessageType.SYSTEM && message.content == "__history_end__") {
-                log("📜 [ChatClient] 收到 history_end 标记")
-                flushHistoryBuffer()
-                return
-            }
-
-            // 安全超时：超过 30 秒仍在缓冲则强制刷入
+    private fun handleBatchHistoryFrame(text: String): Boolean {
+        if (!text.startsWith("[")) return false
+        return try {
+            val batch = Json.decodeFromString<List<Message>>(text)
             if (_isLoadingHistory.value) {
-                val elapsed = Clock.System.now().toEpochMilliseconds() - historyLoadStartMs
-                if (elapsed > 30000) {
-                    log("⏰ [ChatClient] 历史加载超时 (30s)，强制刷入")
-                    flushHistoryBuffer()
-                }
+                historyBuffer.addAll(batch)
+                log("📜 [ChatClient] 收到批量历史: ${batch.size} 条")
+            } else {
+                log("📜 [ChatClient] 历史加载已完成，直接写入 ${batch.size} 条历史消息")
+                _messages.value = (_messages.value + batch).distinctBy { it.id }
             }
-
-            // 历史加载期间：缓冲普通消息，不逐条更新 UI
-            if (_isLoadingHistory.value && !message.isTransient && message.category != MessageCategory.AGENT_STATUS && message.type != MessageType.RECALL) {
-                historyBuffer.add(message)
-                return
-            }
-            
-            val isSilkAi = isAgentUserId(message.userId)
-            
-            // 停止后抑制残余流式消息（允许 CLEAR_STATUS 通过）
-            if (suppressTransient && isSilkAi && message.isTransient) {
-                if (message.category == MessageCategory.AGENT_STATUS &&
-                    message.content.startsWith("CLEAR_STATUS")) {
-                    _statusMessages.value = emptyList()
-                }
-                return
-            }
-            
-            when {
-                // 撤回消息：从列表中移除指定消息
-                message.type == MessageType.RECALL -> {
-                    log("🗑️ [ChatClient] 收到撤回消息: ${message.content}")
-                    val messageIdsToRemove = message.content.split(",").map { it.trim() }
-                    _messages.value = _messages.value.filter { msg -> 
-                        msg.id !in messageIdsToRemove 
-                    }
-                    log("🗑️ [ChatClient] 已移除 ${messageIdsToRemove.size} 条消息")
-                }
-                // Agent 状态消息：添加到状态消息列表（灰色显示）
-                message.category == MessageCategory.AGENT_STATUS -> {
-                    if (message.content.startsWith("CLEAR_STATUS")) {
-                        log("🧹 [ChatClient] 清除状态消息")
-                        _statusMessages.value = emptyList()
-                        _isGenerating.value = false
-                        suppressTransient = false
-                    } else {
-                        log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
-                        if (isSilkAi) _isGenerating.value = true
-                        val existingIndex = _statusMessages.value.indexOfFirst { it.id == message.id }
-                        val updated = if (existingIndex >= 0) {
-                            _statusMessages.value.toMutableList().apply { set(existingIndex, message) }
-                        } else {
-                            (_statusMessages.value + message).takeLast(10)
-                        }
-                        _statusMessages.value = updated
-                    }
-                }
-                // 增量临时消息：拼接到已有内容尾部
-                message.isTransient && message.isIncremental -> {
-                    if (isSilkAi) _isGenerating.value = true
-                    val existing = _transientMessage.value
-                    if (existing != null &&
-                        existing.userId == message.userId &&
-                        existing.type == message.type) {
-                        val newContent = existing.content + message.content
-                        _transientMessage.value = existing.copy(
-                            content = newContent,
-                            timestamp = message.timestamp,
-                            currentStep = message.currentStep,
-                            totalSteps = message.totalSteps
-                        )
-                        log("📝 [ChatClient] 增量拼接: +${message.content.length}字 -> 总${newContent.length}字")
-                    } else {
-                        _transientMessage.value = message
-                        log("📝 [ChatClient] 增量首帧: ${message.content.length}字")
-                    }
-                }
-                // 完整临时消息：直接替换
-                message.isTransient -> {
-                    log("📝 [ChatClient] 完整临时消息")
-                    if (isSilkAi) _isGenerating.value = true
-                    _transientMessage.value = message
-                }
-                // 普通消息：添加到消息列表（如果不存在）
-                else -> {
-                    val exists = _messages.value.any { it.id == message.id }
-                    if (!exists) {
-                        log("💬 [ChatClient] 普通消息，添加到列表")
-                        _messages.value = _messages.value + message
-                    } else {
-                        log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
-                    }
-                    _transientMessage.value = null
-                    _statusMessages.value = emptyList()
-                    _isGenerating.value = false
-                    suppressTransient = false
-                }
-            }
-        } catch (e: Exception) {
-            log("❌ [ChatClient] 解析消息失败: ${e.message}")
+            true
+        } catch (_: SerializationException) {
+            log("⚠️ [ChatClient] 批量解析失败，回退单条解析")
+            false
         }
+    }
+
+    private fun decodeMessage(text: String): Message? {
+        return try {
+            Json.decodeFromString<Message>(text)
+        } catch (e: SerializationException) {
+            log("❌ [ChatClient] 解析消息失败: ${e.message}")
+            null
+        }
+    }
+
+    private fun handleDecodedMessage(message: Message) {
+        if (handleHistoryEndMarker(message)) return
+        flushHistoryBufferOnTimeout()
+        if (shouldBufferHistoryMessage(message)) {
+            historyBuffer.add(message)
+            return
+        }
+
+        val isSilkAi = isAgentUserId(message.userId)
+        if (shouldSuppressTransientMessage(message, isSilkAi)) return
+
+        when {
+            message.type == MessageType.RECALL -> handleRecallMessage(message)
+            message.category == MessageCategory.AGENT_STATUS -> handleAgentStatusMessage(message, isSilkAi)
+            message.isTransient && message.isIncremental -> handleIncrementalTransientMessage(message, isSilkAi)
+            message.isTransient -> handleTransientMessage(message, isSilkAi)
+            else -> handlePersistentMessage(message)
+        }
+    }
+
+    private fun handleHistoryEndMarker(message: Message): Boolean {
+        val isHistoryEnd =
+            message.isTransient &&
+                message.type == MessageType.SYSTEM &&
+                message.content == "__history_end__"
+        if (isHistoryEnd) {
+            log("📜 [ChatClient] 收到 history_end 标记")
+            flushHistoryBuffer()
+        }
+        return isHistoryEnd
+    }
+
+    private fun flushHistoryBufferOnTimeout() {
+        if (!_isLoadingHistory.value) return
+        val elapsed = Clock.System.now().toEpochMilliseconds() - historyLoadStartMs
+        if (elapsed > 30000) {
+            log("⏰ [ChatClient] 历史加载超时 (30s)，强制刷入")
+            flushHistoryBuffer()
+        }
+    }
+
+    private fun shouldBufferHistoryMessage(message: Message): Boolean {
+        return _isLoadingHistory.value &&
+            !message.isTransient &&
+            message.category != MessageCategory.AGENT_STATUS &&
+            message.type != MessageType.RECALL
+    }
+
+    private fun shouldSuppressTransientMessage(message: Message, isSilkAi: Boolean): Boolean {
+        if (!suppressTransient || !isSilkAi || !message.isTransient) return false
+        if (message.category == MessageCategory.AGENT_STATUS &&
+            message.content.startsWith("CLEAR_STATUS")) {
+            clearAgentStatusState()
+        }
+        return true
+    }
+
+    private fun handleRecallMessage(message: Message) {
+        log("🗑️ [ChatClient] 收到撤回消息: ${message.content}")
+        val messageIdsToRemove = message.content.split(",").map { it.trim() }
+        _messages.value = _messages.value.filter { msg -> msg.id !in messageIdsToRemove }
+        log("🗑️ [ChatClient] 已移除 ${messageIdsToRemove.size} 条消息")
+    }
+
+    private fun handleAgentStatusMessage(message: Message, isSilkAi: Boolean) {
+        if (message.content.startsWith("CLEAR_STATUS")) {
+            log("🧹 [ChatClient] 清除状态消息")
+            clearAgentStatusState()
+            return
+        }
+
+        log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
+        if (isSilkAi) _isGenerating.value = true
+        val existingIndex = _statusMessages.value.indexOfFirst { it.id == message.id }
+        _statusMessages.value = if (existingIndex >= 0) {
+            _statusMessages.value.toMutableList().apply { set(existingIndex, message) }
+        } else {
+            (_statusMessages.value + message).takeLast(10)
+        }
+    }
+
+    private fun handleIncrementalTransientMessage(message: Message, isSilkAi: Boolean) {
+        if (isSilkAi) _isGenerating.value = true
+        val existing = _transientMessage.value
+        if (existing != null &&
+            existing.userId == message.userId &&
+            existing.type == message.type) {
+            val newContent = existing.content + message.content
+            _transientMessage.value = existing.copy(
+                content = newContent,
+                timestamp = message.timestamp,
+                currentStep = message.currentStep,
+                totalSteps = message.totalSteps
+            )
+            log("📝 [ChatClient] 增量拼接: +${message.content.length}字 -> 总${newContent.length}字")
+            return
+        }
+
+        _transientMessage.value = message
+        log("📝 [ChatClient] 增量首帧: ${message.content.length}字")
+    }
+
+    private fun handleTransientMessage(message: Message, isSilkAi: Boolean) {
+        log("📝 [ChatClient] 完整临时消息")
+        if (isSilkAi) _isGenerating.value = true
+        _transientMessage.value = message
+    }
+
+    private fun handlePersistentMessage(message: Message) {
+        if (message.action == "edit") {
+            log("✏️ [ChatClient] 编辑消息: ${message.id}")
+            _messages.value = _messages.value.map {
+                if (it.id == message.id) message else it
+            }
+            return
+        }
+
+        appendMessageIfMissing(message)
+        updateStateForPersistentMessage(message)
+    }
+
+    private fun appendMessageIfMissing(message: Message) {
+        val exists = _messages.value.any { it.id == message.id }
+        if (!exists) {
+            log("💬 [ChatClient] 普通消息，添加到列表")
+            _messages.value = _messages.value + message
+        } else {
+            log("⚠️ [ChatClient] 消息已存在，跳过: ${message.id}")
+        }
+    }
+
+    private fun updateStateForPersistentMessage(message: Message) {
+        when {
+            message.type == MessageType.CARD_REPLY -> Unit
+            message.category == MessageCategory.AGENT_QUESTION -> {
+                _pendingQuestionId.value = message.id.removePrefix("agent_question_")
+                _isGenerating.value = false
+                _transientMessage.value = null
+                suppressTransient = false
+            }
+            message.category == MessageCategory.AGENT_PERMISSION -> {
+                _transientMessage.value = null
+            }
+            else -> {
+                _transientMessage.value = null
+                _statusMessages.value = emptyList()
+                _isGenerating.value = false
+                suppressTransient = false
+                _pendingQuestionId.value = null
+            }
+        }
+    }
+
+    private fun clearAgentStatusState() {
+        _statusMessages.value = emptyList()
+        _isGenerating.value = false
+        suppressTransient = false
+        _pendingQuestionId.value = null
     }
     
     fun stopGeneration(userId: String, userName: String) {
@@ -285,7 +354,7 @@ class ChatClient(
         try {
             val jsonMessage = Json.encodeToString(stopMessage)
             webSocket?.send(jsonMessage)
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
             log("❌ [ChatClient] 发送停止信号失败: ${e.message}")
         }
         
@@ -293,9 +362,15 @@ class ChatClient(
         _isGenerating.value = false
         _transientMessage.value = null
         _statusMessages.value = emptyList()
+        _pendingQuestionId.value = null
     }
     
-    suspend fun sendMessage(userId: String, userName: String, content: String) {
+    suspend fun sendMessage(
+        userId: String,
+        userName: String,
+        content: String,
+        kbContextSelection: KnowledgeBaseContextSelection? = null,
+    ) {
         suppressTransient = false
         
         val message = Message(
@@ -304,7 +379,8 @@ class ChatClient(
             userName = userName,
             content = content,
             timestamp = Clock.System.now().toEpochMilliseconds(),
-            type = MessageType.TEXT
+            type = MessageType.TEXT,
+            kbContextSelection = kbContextSelection,
         )
         
         _messages.value = _messages.value + message
@@ -315,23 +391,40 @@ class ChatClient(
             log("📤 [ChatClient] 发送消息: ${content.take(50)}...")
             webSocket?.send(jsonMessage)
             log("✅ [ChatClient] 消息已发送到服务器")
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
             log("❌ [ChatClient] 发送消息失败: ${e.message}")
         }
     }
-    
-    suspend fun disconnect() {
+
+    /**
+     * 发送指定类型的消息（用于 CARD_REPLY 等非 TEXT 消息）。
+     * 不添加到本地消息列表——卡片回复由服务器广播后通过 handleMessage 统一处理。
+     */
+    suspend fun sendMessage(userId: String, userName: String, content: String, type: MessageType) {
+        val message = Message(
+            id = generateId(),
+            userId = userId,
+            userName = userName,
+            content = content,
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+            type = type,
+        )
         try {
-            webSocket?.disconnect()
-            webSocket = null
-            _connectionState.value = ConnectionState.DISCONNECTED
-            _isGenerating.value = false
-            suppressTransient = false
-            log("✅ [ChatClient] 已断开连接")
-        } catch (e: Exception) {
-            log("⚠️ [ChatClient] 断开连接: ${e.message}")
-            _connectionState.value = ConnectionState.DISCONNECTED
+            val jsonMessage = Json.encodeToString(message)
+            log("📤 [ChatClient] 发送 ${type.name} 消息: ${content.take(50)}...")
+            webSocket?.send(jsonMessage)
+        } catch (e: SerializationException) {
+            log("❌ [ChatClient] 发送 ${type.name} 消息失败: ${e.message}")
         }
+    }
+
+    suspend fun disconnect() {
+        webSocket?.disconnect()
+        webSocket = null
+        _connectionState.value = ConnectionState.DISCONNECTED
+        _isGenerating.value = false
+        suppressTransient = false
+        log("✅ [ChatClient] 已断开连接")
     }
     
     fun clearMessages() {

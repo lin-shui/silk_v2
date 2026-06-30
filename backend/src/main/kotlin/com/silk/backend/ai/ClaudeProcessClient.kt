@@ -1,0 +1,251 @@
+package com.silk.backend.ai
+
+import com.silk.backend.EnvLoader
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.slf4j.LoggerFactory
+import java.io.File
+import java.util.UUID
+
+/**
+ * Claude CLI 进程客户端。
+ * 通过 PTY（伪终端）启动 claude CLI 子进程。
+ *
+ * pty_chat.py 使用 claude -p --include-partial-messages，
+ * 让 claude 逐 token 写入 PTY，实现真正的实时流式。
+ */
+class ClaudeProcessClient(
+    /** 群组标识（如 group_<uuid>），用于日志/workspace 路径 */
+    private val groupId: String,
+    /** 进程工作目录（群组隔离） */
+    private val workspaceDir: String,
+    /** Claude CLI permission mode: null(默认), "bypassPermissions", "dontAsk" */
+    private val permissionMode: String? = null,
+) {
+    private val logger = LoggerFactory.getLogger(ClaudeProcessClient::class.java)
+
+    /** PTY 桥接脚本路径 */
+    private val ptyChatPath: String by lazy {
+        resolvePtyChatPath()
+    }
+
+    /**
+     * 从 CWD 向上查找 cc_bridge/pty_chat.py。
+     */
+    private fun resolvePtyChatPath(): String {
+        val target = "cc_bridge/pty_chat.py"
+        var dir = File(System.getProperty("user.dir"))
+        while (true) {
+            val candidate = File(dir, target)
+            if (candidate.exists()) return candidate.absolutePath
+            dir = dir.parentFile ?: break
+        }
+        return File(workspaceDir, "../../../cc_bridge/pty_chat.py").absoluteFile.absolutePath
+    }
+
+    /** 单次响应超时 */
+    private val responseTimeoutMs = AIConfig.CLAUDE_CLI_RESPONSE_TIMEOUT_MS
+
+    /** 每批发送的字符数阈值 */
+    private val sendThreshold = 30
+
+    /**
+     * 发送 prompt 到 claude CLI 并流式读取回复。
+     *
+     * @param fullPrompt 包含 system prompt + 对话历史 + 当前消息的完整 prompt
+     * @param callback 流式回调 (stepType, content, isComplete)
+     * @return 完整回复文本
+     */
+    suspend fun streamCompletion(
+        fullPrompt: String,
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+    ): String {
+        val callId = UUID.randomUUID().toString().take(8)
+
+        // 将 prompt 写入临时文件（避免 shell 转义和命令行长度限制）
+        val promptFile = File.createTempFile("silk-prompt-", ".txt").apply {
+            writeText(fullPrompt)
+            deleteOnExit()
+        }
+
+        // 通过 PTY 桥接脚本运行 claude
+        val cmd = buildClaudeCommand(promptFile)
+
+        logger.info("[ClaudeProcessClient-{}] 启动 claude PTY: groupId={}, promptLen={}, script={}",
+            callId, groupId, fullPrompt.length, ptyChatPath)
+
+        return withContext(Dispatchers.IO) {
+            val processBuilder = ProcessBuilder(cmd)
+                .directory(File(workspaceDir))
+                .redirectErrorStream(true)
+            processBuilder.environment().putAll(buildProcessEnvironment())
+
+            val process = processBuilder.start()
+
+            try {
+                runCatching {
+                    runProcessWithWatchdog(process, callId, callback)
+                }.getOrElse { error ->
+                    process.destroyForcibly()
+                    if (error is CancellationException) {
+                        throw error
+                    }
+                    logger.error("[ClaudeProcessClient-{}] 异常: {}", callId, error.message)
+                    throw error
+                }
+            } finally {
+                promptFile.delete()
+            }
+        }
+    }
+
+    private fun buildClaudeCommand(promptFile: File): List<String> = buildList {
+        add("python3")
+        add(ptyChatPath)
+        add(promptFile.absolutePath)
+        permissionMode?.let {
+            add("--permission-mode")
+            add(it)
+        }
+    }
+
+    private fun buildProcessEnvironment(): Map<String, String> {
+        val env = mutableMapOf("PYTHONUNBUFFERED" to "1")
+        proxyEnvironmentKeys.forEach { key ->
+            (System.getenv(key) ?: EnvLoader.get(key))
+                ?.takeIf { it.isNotBlank() }
+                ?.let { env[key] = it }
+        }
+        return env
+    }
+
+    private suspend fun runProcessWithWatchdog(
+        process: Process,
+        callId: String,
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+    ): String = coroutineScope {
+        val watchdog = launch {
+            delay(responseTimeoutMs)
+            logger.warn("[ClaudeProcessClient-{}] 响应超时 ({}ms)，强制关闭进程", callId, responseTimeoutMs)
+            process.destroyForcibly()
+        }
+
+        try {
+            val result = readProcessOutput(process, callback)
+            logProcessExit(callId, process.waitFor(), result)
+            result
+        } finally {
+            watchdog.cancel()
+        }
+    }
+
+    private suspend fun readProcessOutput(
+        process: Process,
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+    ): String {
+        val output = StringBuilder()
+        var lastSentLength = 0
+        var overflow = ByteArray(0)
+        val buf = ByteArray(256)
+
+        while (true) {
+            val bytesRead = process.inputStream.read(buf)
+            if (bytesRead == -1) break
+            currentCoroutineContext().ensureActive()
+
+            val merged = mergeOverflowBytes(overflow, buf, bytesRead)
+            val decoded = merged.decodeToString()
+            overflow = captureTrailingPartial(decoded, merged)
+
+            val cleaned = stripTerminalControlSequences(decoded)
+            if (cleaned.isNotBlank()) {
+                output.append(cleaned)
+                lastSentLength = sendIncrementalIfNeeded(output, lastSentLength, callback)
+            }
+        }
+
+        sendRemainingOutput(output, lastSentLength, callback)
+        return output.toString()
+    }
+
+    private fun mergeOverflowBytes(overflow: ByteArray, buf: ByteArray, bytesRead: Int): ByteArray {
+        if (overflow.isEmpty()) return buf.copyOfRange(0, bytesRead)
+        return ByteArray(overflow.size + bytesRead).apply {
+            overflow.copyInto(this)
+            buf.copyInto(this, overflow.size, 0, bytesRead)
+        }
+    }
+
+    private fun stripTerminalControlSequences(text: String): String {
+        return text
+            .replace("\r", "")
+            .replace(Regex("\\e\\[[\\d;?<>]*[a-zA-Z]"), "")
+            .replace(Regex("\\e\\][^\\e\\x07]*[\\e\\x07]"), "")
+            .replace(Regex("\\e[()][a-zA-Z]"), "")
+    }
+
+    private suspend fun sendIncrementalIfNeeded(
+        output: StringBuilder,
+        lastSentLength: Int,
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+    ): Int {
+        if (output.length - lastSentLength < sendThreshold) return lastSentLength
+        val delta = output.substring(lastSentLength)
+        callback("streaming_incremental", delta, false)
+        return output.length
+    }
+
+    private suspend fun sendRemainingOutput(
+        output: StringBuilder,
+        lastSentLength: Int,
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+    ) {
+        if (output.length <= lastSentLength) return
+        val remaining = output.substring(lastSentLength)
+        if (remaining.isNotBlank()) {
+            callback("streaming_incremental", remaining, false)
+        }
+    }
+
+    private fun logProcessExit(callId: String, exitCode: Int, result: String) {
+        if (exitCode == 0) {
+            logger.info("[ClaudeProcessClient-{}] 完成: groupId={}, chars={}", callId, groupId, result.length)
+        } else {
+            logger.warn("[ClaudeProcessClient-{}] 退出码非零: exitCode={}, groupId={}, output={}",
+                callId, exitCode, groupId, result.take(500))
+        }
+    }
+
+    /**
+     * 检查解码后的字符串末尾是否有因为跨 read 边界截断而导致的不完整 UTF-8 序列。
+     * 如有，从原始字节中提取不完整尾部字节返回；否则返回空数组。
+     */
+    private fun captureTrailingPartial(decoded: String, raw: ByteArray): ByteArray {
+        if (!decoded.endsWith('�')) return ByteArray(0)
+        var i = raw.size - 1
+        while (i >= 0 && (raw[i].toInt() and 0xC0) == 0x80) {
+            i--
+        }
+        if (i < 0 || (raw[i].toInt() and 0xC0) != 0xC0) return ByteArray(0)
+        return raw.copyOfRange(i, raw.size)
+    }
+
+    private companion object {
+        val proxyEnvironmentKeys = listOf(
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "https_proxy",
+            "http_proxy",
+            "CLAUDE_HTTPS_PROXY",
+            "CLAUDE_HTTP_PROXY",
+            "NO_PROXY",
+            "no_proxy",
+        )
+    }
+}

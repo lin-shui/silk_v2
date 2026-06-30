@@ -1,6 +1,10 @@
 package com.silk.backend.auth
 
-import com.silk.backend.database.*
+import com.silk.backend.database.AuthResponse
+import com.silk.backend.database.LoginRequest
+import com.silk.backend.database.RegisterRequest
+import com.silk.backend.database.UserRepository
+import com.silk.backend.database.UserSettingsRepository
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
 
@@ -50,7 +54,12 @@ object AuthService {
         )
         
         return if (user != null) {
-            AuthResponse(true, "注册成功", user)
+            AuthResponse(
+                success = true,
+                message = "注册成功",
+                user = user,
+                token = UserSettingsRepository.getOrCreateAppAuthToken(user.id),
+            )
         } else {
             AuthResponse(false, "注册失败，请稍后重试")
         }
@@ -103,7 +112,12 @@ object AuthService {
         }
         
         logger.debug("🔐 [Login] 成功: {}", user.loginName)
-        return AuthResponse(true, "登录成功", user)
+        return AuthResponse(
+            success = true,
+            message = "登录成功",
+            user = user,
+            token = UserSettingsRepository.getOrCreateAppAuthToken(user.id),
+        )
     }
     
     /**
@@ -113,4 +127,3 @@ object AuthService {
         return UserRepository.findUserById(userId) != null
     }
 }
-

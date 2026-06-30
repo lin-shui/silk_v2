@@ -6,12 +6,18 @@ import com.silk.backend.search.SearchMode
 import com.silk.backend.search.IsolatedSearchResults
 import com.silk.backend.search.ExternalSearchService
 import com.silk.backend.search.ExternalSearchResults
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.floatOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.slf4j.LoggerFactory
 import java.net.URI
 import java.net.http.HttpClient
@@ -35,8 +41,20 @@ import java.time.Duration
 class SearchDrivenAgent(
     private val apiKey: String = AIConfig.API_KEY,
     private val sessionId: String = "default",
-    private val userId: String = "default_user"
+    private val userId: String = "system"
 ) {
+    private sealed interface StreamChunkReadResult {
+        data object EndOfStream : StreamChunkReadResult
+        data object Done : StreamChunkReadResult
+        data object Skip : StreamChunkReadResult
+        data class Chunk(val value: String) : StreamChunkReadResult
+    }
+
+    private data class KeywordRule(
+        val label: String,
+        val keywords: List<String>
+    )
+
     private val logger = LoggerFactory.getLogger(SearchDrivenAgent::class.java)
     
     private val httpClient = HttpClient.newBuilder()
@@ -51,6 +69,19 @@ class SearchDrivenAgent(
     
     private val weaviateClient = WeaviateClient(AIConfig.requireWeaviateUrl())
     private val externalSearchService = ExternalSearchService()
+    private val goalRules = listOf(
+        KeywordRule("寻求方法指导", listOf("如何", "怎么")),
+        KeywordRule("理解原因", listOf("为什么")),
+        KeywordRule("获取信息", listOf("什么是", "是什么")),
+        KeywordRule("请求帮助", listOf("帮")),
+        KeywordRule("提出问题", listOf("?", "？"))
+    )
+    private val emotionRules = listOf(
+        KeywordRule("积极", listOf("谢谢", "感谢", "棒")),
+        KeywordRule("焦虑", listOf("困难", "问题", "不行")),
+        KeywordRule("困惑", listOf("不懂", "迷惑"))
+    )
+    private val helpKeywords = listOf("?", "？", "帮", "如何", "怎么")
     
     /**
      * 用户意图分析结果
@@ -177,42 +208,10 @@ class SearchDrivenAgent(
         callback("searching", "  └─ Layer 3: 搜索外部引擎...", false)
         
         // Layer 1 & 2: Weaviate 搜索
-        val weaviateDeferred = async {
-            try {
-                if (weaviateClient.isReady()) {
-                    weaviateClient.isolatedSearch(
-                        query = query,
-                        userId = userId,
-                        currentSessionId = sessionId,
-                        mode = SearchMode.FOREGROUND_FIRST,
-                        foregroundLimit = 5,
-                        backgroundLimit = 3,
-                        alpha = 0.5f
-                    )
-                } else {
-                    logger.warn("⚠️ Weaviate 不可用")
-                    null
-                }
-            } catch (e: Exception) {
-                logger.error("❌ Weaviate 搜索失败: ${e.message}")
-                null
-            }
-        }
+        val weaviateDeferred = async { searchWeaviateSafely(query) }
         
         // Layer 3: 外部搜索
-        val externalDeferred = async {
-            try {
-                externalSearchService.search(query, limit = 3)
-            } catch (e: Exception) {
-                logger.error("❌ 外部搜索失败: ${e.message}")
-                ExternalSearchResults(
-                    success = false,
-                    source = "error",
-                    results = emptyList(),
-                    searchTimeMs = 0
-                )
-            }
-        }
+        val externalDeferred = async { searchExternalSafely(query) }
         
         // 等待所有搜索完成
         val weaviateResults = weaviateDeferred.await()
@@ -341,7 +340,7 @@ ${if (searchResults.foregroundCount > 0) searchResults.foreground else "（无�
             return buildFallbackResponse(searchResults, intentAnalysis)
         }
         
-        return try {
+        return runCatching {
             val responseBuilder = StringBuilder()
             
             callAIApiStreaming(prompt) { chunk ->
@@ -352,8 +351,9 @@ ${if (searchResults.foregroundCount > 0) searchResults.foreground else "（无�
             }
             
             responseBuilder.toString()
-        } catch (e: Exception) {
-            logger.error("生成回复失败: ${e.message}")
+        }.getOrElse { throwable ->
+            rethrowIfCancellation(throwable)
+            logger.error("生成回复失败: ${throwable.message}", throwable)
             buildFallbackResponse(searchResults, intentAnalysis)
         }
     }
@@ -408,7 +408,7 @@ $userInput
 请以 JSON 格式回复。
         """.trimIndent()
         
-        return try {
+        return runCatching {
             val response = callAIApi(prompt)
             
             // 解析 JSON 响应
@@ -425,8 +425,9 @@ $userInput
             } else {
                 analyzeIntentOffline(userInput)
             }
-        } catch (e: Exception) {
-            logger.error("意图分析失败: ${e.message}")
+        }.getOrElse { throwable ->
+            rethrowIfCancellation(throwable)
+            logger.error("意图分析失败: ${throwable.message}", throwable)
             analyzeIntentOffline(userInput)
         }
     }
@@ -437,25 +438,9 @@ $userInput
     private fun analyzeIntentOffline(userInput: String): IntentAnalysis {
         val input = userInput.lowercase()
         
-        val goal = when {
-            input.contains("如何") || input.contains("怎么") -> "寻求方法指导"
-            input.contains("为什么") -> "理解原因"
-            input.contains("什么是") || input.contains("是什么") -> "获取信息"
-            input.contains("帮") -> "请求帮助"
-            input.contains("?") || input.contains("？") -> "提出问题"
-            else -> "进行对话"
-        }
-        
-        val emotion = when {
-            input.contains("谢谢") || input.contains("感谢") || input.contains("棒") -> "积极"
-            input.contains("困难") || input.contains("问题") || input.contains("不行") -> "焦虑"
-            input.contains("不懂") || input.contains("迷惑") -> "困惑"
-            else -> "中性"
-        }
-        
-        val needsHelp = input.contains("?") || input.contains("？") || 
-                       input.contains("帮") || input.contains("如何") ||
-                       input.contains("怎么")
+        val goal = firstMatchingRule(input, goalRules, fallback = "进行对话")
+        val emotion = firstMatchingRule(input, emotionRules, fallback = "中性")
+        val needsHelp = helpKeywords.any(input::contains)
         
         return IntentAnalysis(
             goal = goal,
@@ -491,7 +476,7 @@ $userInput
             model = AIConfig.MODEL,
             messages = listOf(ApiMessage(role = "user", content = prompt)),
             temperature = 0.7,
-            max_tokens = 2000,
+            maxTokens = 2000,
             stream = false
         )
         
@@ -509,7 +494,7 @@ $userInput
             val apiResponse = json.decodeFromString<ApiResponse>(response.body())
             apiResponse.choices.firstOrNull()?.message?.content ?: ""
         } else {
-            throw Exception("API 调用失败：${response.statusCode()}")
+            error("API 调用失败：${response.statusCode()}")
         }
     }
     
@@ -524,7 +509,7 @@ $userInput
             model = AIConfig.MODEL,
             messages = listOf(ApiMessage(role = "user", content = prompt)),
             temperature = 0.7,
-            max_tokens = 2000,
+            maxTokens = 2000,
             stream = true
         )
         
@@ -539,31 +524,19 @@ $userInput
         val response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream())
         
         if (response.statusCode() != 200) {
-            throw Exception("API 调用失败：${response.statusCode()}")
+            error("API 调用失败：${response.statusCode()}")
         }
         
         val fullText = StringBuilder()
         
         response.body().bufferedReader().use { reader ->
-            var line: String?
-            while (reader.readLine().also { line = it } != null) {
-                if (line!!.startsWith("data: ")) {
-                    val jsonData = line!!.substring(6).trim()
-                    if (jsonData == "[DONE]") break
-                    
-                    try {
-                        val streamResponse = json.decodeFromString<StreamResponse>(jsonData)
-                        val delta = streamResponse.choices.firstOrNull()?.delta
-                        val content = delta?.content ?: ""
-                        val reasoning = delta?.reasoning ?: ""
-                        val combinedText = content + reasoning
-
-                        if (combinedText.isNotEmpty()) {
-                            fullText.append(combinedText)
-                            onChunk(combinedText)
-                        }
-                    } catch (e: Exception) {
-                        // 忽略解析错误
+            while (true) {
+                when (val result = readNextStreamingChunk(reader)) {
+                    StreamChunkReadResult.EndOfStream, StreamChunkReadResult.Done -> break
+                    StreamChunkReadResult.Skip -> Unit
+                    is StreamChunkReadResult.Chunk -> {
+                        fullText.append(result.value)
+                        onChunk(result.value)
                     }
                 }
             }
@@ -579,7 +552,7 @@ $userInput
         message: ChatHistoryEntry,
         participants: List<String>
     ): Boolean {
-        return try {
+        return runCatching {
             weaviateClient.indexDocument(
                 document = com.silk.backend.search.IndexDocument(
                     content = message.content,
@@ -594,9 +567,91 @@ $userInput
                 ),
                 participants = participants
             )
-        } catch (e: Exception) {
-            logger.error("索引消息失败: ${e.message}")
+        }.getOrElse { throwable ->
+            rethrowIfCancellation(throwable)
+            logger.error("索引消息失败: ${throwable.message}", throwable)
             false
+        }
+    }
+
+    private suspend fun searchWeaviateSafely(query: String): IsolatedSearchResults? {
+        if (!weaviateClient.isReady()) {
+            logger.warn("⚠️ Weaviate 不可用")
+            return null
+        }
+
+        return runCatching {
+            weaviateClient.isolatedSearch(
+                query = query,
+                userId = userId,
+                currentSessionId = sessionId,
+                mode = SearchMode.FOREGROUND_FIRST,
+                foregroundLimit = 5,
+                backgroundLimit = 3
+            )
+        }.getOrElse { throwable ->
+            rethrowIfCancellation(throwable)
+            logger.error("❌ Weaviate 搜索失败: ${throwable.message}", throwable)
+            null
+        }
+    }
+
+    private suspend fun searchExternalSafely(query: String): ExternalSearchResults {
+        return runCatching {
+            externalSearchService.search(query, limit = 3)
+        }.getOrElse { throwable ->
+            rethrowIfCancellation(throwable)
+            logger.error("❌ 外部搜索失败: ${throwable.message}", throwable)
+            ExternalSearchResults(
+                success = false,
+                source = "error",
+                results = emptyList(),
+                searchTimeMs = 0
+            )
+        }
+    }
+
+    private fun firstMatchingRule(input: String, rules: List<KeywordRule>, fallback: String): String {
+        return rules.firstOrNull { rule -> rule.keywords.any(input::contains) }?.label ?: fallback
+    }
+
+    private fun extractStreamPayload(line: String): String? {
+        if (!line.startsWith("data: ")) {
+            return null
+        }
+        return line.substring(6).trim()
+    }
+
+    private fun readNextStreamingChunk(reader: java.io.BufferedReader): StreamChunkReadResult {
+        val line = reader.readLine() ?: return StreamChunkReadResult.EndOfStream
+        val jsonData = extractStreamPayload(line) ?: return StreamChunkReadResult.Skip
+        if (jsonData == "[DONE]") {
+            return StreamChunkReadResult.Done
+        }
+        return decodeStreamingChunk(jsonData)
+            ?.let(StreamChunkReadResult::Chunk)
+            ?: StreamChunkReadResult.Skip
+    }
+
+    private fun decodeStreamingChunk(jsonData: String): String? {
+        return try {
+            val streamResponse = json.decodeFromString<StreamResponse>(jsonData)
+            val delta = streamResponse.choices.firstOrNull()?.delta
+            val content = delta?.content.orEmpty()
+            val reasoning = delta?.reasoning.orEmpty()
+            (content + reasoning).ifEmpty { null }
+        } catch (exception: SerializationException) {
+            logger.debug("忽略无法解析的流式片段: {}", jsonData, exception)
+            null
+        } catch (exception: IllegalArgumentException) {
+            logger.debug("忽略非法流式片段: {}", jsonData, exception)
+            null
+        }
+    }
+
+    private fun rethrowIfCancellation(throwable: Throwable) {
+        if (throwable is CancellationException) {
+            throw throwable
         }
     }
     
@@ -605,4 +660,3 @@ $userInput
         externalSearchService.close()
     }
 }
-

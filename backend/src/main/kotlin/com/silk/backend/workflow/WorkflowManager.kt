@@ -3,10 +3,12 @@ package com.silk.backend.workflow
 import com.silk.backend.models.AgentSessionState
 import com.silk.backend.models.Workflow
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
@@ -34,7 +36,13 @@ class WorkflowManager(
         return if (storeFile.exists()) {
             try {
                 json.decodeFromString(storeFile.readText())
-            } catch (e: Exception) {
+            } catch (e: SerializationException) {
+                logger.error("Failed to decode workflow store: {}", e.message)
+                WorkflowStore()
+            } catch (e: IllegalArgumentException) {
+                logger.error("Invalid workflow store content: {}", e.message)
+                WorkflowStore()
+            } catch (e: IOException) {
                 logger.error("Failed to load workflow store: {}", e.message)
                 WorkflowStore()
             }
@@ -70,7 +78,7 @@ class WorkflowManager(
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
         )
-        store.workflows.add(workflow)
+        store.workflows.add(0, workflow)
         save(store)
         logger.info("Created workflow: {} for user {}, groupId={}, agentType={}", workflow.id, userId, groupId, agentType)
         return workflow
@@ -102,9 +110,24 @@ class WorkflowManager(
         return true
     }
 
+    @Synchronized
+    fun renameWorkflow(workflowId: String, userId: String, newName: String): Workflow? {
+        val store = load()
+        val idx = store.workflows.indexOfFirst { it.id == workflowId && it.ownerId == userId }
+        if (idx < 0) return null
+        val updated = store.workflows[idx].copy(
+            name = newName,
+            updatedAt = System.currentTimeMillis()
+        )
+        store.workflows[idx] = updated
+        save(store)
+        logger.info("Renamed workflow {} to '{}'", workflowId, newName)
+        return updated
+    }
+
     /**
      * 持久化 bridge 上一次的 sessionId + sessionStarted。后端重启后据此发起 resume，
-     * 让用户续上之前的对话历史（前提：bridge 端的 ~/.silk/cc_sessions.json 还有这个 session）。
+     * 让用户续上之前的对话历史（前提：bridge 端的本地 session 文件还在）。
      * 跳过无变化的写入，避免 prompt 高频持久化时的 I/O 抖动。
      */
     @Synchronized
@@ -179,6 +202,23 @@ class WorkflowManager(
         )
         save(store)
         logger.info("Workflow {} activeAgent 持久化: {}", old.id, activeAgent)
+        return true
+    }
+
+    /** 持久化工具权限模式。 */
+    @Synchronized
+    fun updatePermissionMode(groupId: String, permissionMode: String): Boolean {
+        val store = load()
+        val idx = store.workflows.indexOfFirst { it.groupId == groupId }
+        if (idx < 0) return false
+        val old = store.workflows[idx]
+        if (old.permissionMode == permissionMode) return false
+        store.workflows[idx] = old.copy(
+            permissionMode = permissionMode,
+            updatedAt = System.currentTimeMillis(),
+        )
+        save(store)
+        logger.info("Workflow {} permissionMode 持久化: {}", old.id, permissionMode)
         return true
     }
 

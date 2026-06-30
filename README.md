@@ -139,6 +139,16 @@ All commands are run from the project root. `silk.sh` loads `.env` automatically
 
 APK download URL (when backend is up): `https://<BACKEND_HOST>:8006/api/files/download-apk` (or `http://` if `BACKEND_SCHEME=http`).
 
+## Development checks
+
+Run the repository lint gate before sending broad Kotlin or Gradle-script changes:
+
+```bash
+./gradlew silkLint
+```
+
+Only refresh `config/lint/detekt/` baselines with `./gradlew silkLintBaseline` when existing findings are intentionally accepted.
+
 ---
 
 ## Workflow

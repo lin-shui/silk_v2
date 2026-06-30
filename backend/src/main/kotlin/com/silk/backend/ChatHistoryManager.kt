@@ -1,11 +1,16 @@
 package com.silk.backend
 
 import com.silk.backend.agents.core.AgentRuntime
-import com.silk.backend.models.*
+import com.silk.backend.models.ChatHistory
+import com.silk.backend.models.ChatHistoryEntry
+import com.silk.backend.models.SessionData
+import com.silk.backend.models.SessionMember
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.ConcurrentHashMap
@@ -61,14 +66,6 @@ class ChatHistoryManager(
         return "$baseDir/$normalizedSessionName"
     }
     
-    /**
-     * 获取会话目录路径（不进行标准化，用于查找旧格式目录）
-     */
-    private fun getSessionDirLegacy(sessionName: String): String {
-        val safeName = sessionName.replace(Regex("[^a-zA-Z0-9_-]"), "_")
-        return "$baseDir/$safeName"
-    }
-
     private fun getSessionFile(sessionName: String): File {
         return File("${getSessionDir(sessionName)}/session.json")
     }
@@ -90,7 +87,9 @@ class ChatHistoryManager(
         try {
             Files.copy(file.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
             logger.warn("⚠️ 已备份损坏文件: {} -> {} (原因: {})", file.name, backupFile.name, reason)
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            logger.error("❌ 备份损坏文件失败: {}", e.message)
+        } catch (e: SecurityException) {
             logger.error("❌ 备份损坏文件失败: {}", e.message)
         }
     }
@@ -106,7 +105,10 @@ class ChatHistoryManager(
             tempFile.writeText(content)
             // 原子重命名
             Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            if (tempFile.exists()) tempFile.delete()
+            throw e
+        } catch (e: SecurityException) {
             // 清理临时文件
             if (tempFile.exists()) tempFile.delete()
             throw e
@@ -206,9 +208,21 @@ class ChatHistoryManager(
                     return null
                 }
                 json.decodeFromString<SessionData>(content)
-            } catch (e: Exception) {
+            } catch (e: SerializationException) {
                 logger.error("❌ 加载会话数据失败: {}", e.message)
                 backupCorruptedFile(sessionFile, e.message ?: "JSON解析错误")
+                null
+            } catch (e: IllegalArgumentException) {
+                logger.error("❌ 加载会话数据失败: {}", e.message)
+                backupCorruptedFile(sessionFile, e.message ?: "JSON解析错误")
+                null
+            } catch (e: IOException) {
+                logger.error("❌ 加载会话数据失败: {}", e.message)
+                backupCorruptedFile(sessionFile, e.message ?: "I/O错误")
+                null
+            } catch (e: SecurityException) {
+                logger.error("❌ 加载会话数据失败: {}", e.message)
+                backupCorruptedFile(sessionFile, e.message ?: "权限错误")
                 null
             }
         } else {
@@ -227,7 +241,9 @@ class ChatHistoryManager(
         try {
             atomicWrite(sessionFile, json.encodeToString(sessionData))
             logger.debug("💾 会话数据已保存: {}", sessionName)
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            logger.error("❌ 保存会话数据失败: {}", e.message)
+        } catch (e: SecurityException) {
             logger.error("❌ 保存会话数据失败: {}", e.message)
         }
     }
@@ -253,9 +269,21 @@ class ChatHistoryManager(
                     return ChatHistory(sessionId = history.sessionId, messages = mutableListOf())
                 }
                 history
-            } catch (e: Exception) {
+            } catch (e: SerializationException) {
                 logger.error("❌ 加载聊天历史失败: {}", e.message)
                 backupCorruptedFile(historyFile, e.message ?: "JSON解析错误")
+                null
+            } catch (e: IllegalArgumentException) {
+                logger.error("❌ 加载聊天历史失败: {}", e.message)
+                backupCorruptedFile(historyFile, e.message ?: "JSON解析错误")
+                null
+            } catch (e: IOException) {
+                logger.error("❌ 加载聊天历史失败: {}", e.message)
+                backupCorruptedFile(historyFile, e.message ?: "I/O错误")
+                null
+            } catch (e: SecurityException) {
+                logger.error("❌ 加载聊天历史失败: {}", e.message)
+                backupCorruptedFile(historyFile, e.message ?: "权限错误")
                 null
             }
         } else {
@@ -274,7 +302,9 @@ class ChatHistoryManager(
         try {
             atomicWrite(historyFile, json.encodeToString(chatHistory))
             logger.debug("💾 聊天历史已保存: {} ({} 条消息)", sessionName, chatHistory.messages.size)
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            logger.error("❌ 保存聊天历史失败: {}", e.message)
+        } catch (e: SecurityException) {
             logger.error("❌ 保存聊天历史失败: {}", e.message)
         }
     }
@@ -304,13 +334,46 @@ class ChatHistoryManager(
             content = message.content,
             timestamp = message.timestamp,
             messageType = message.type.name,
-            references = message.references
+            references = message.references,
+            kbContextSelection = message.kbContextSelection,
         )
         
         chatHistory.messages.add(entry)
         saveChatHistory(sessionName, chatHistory)
     }
-    
+
+    /**
+     * 替换聊天历史中的已有消息（用于卡片更新等 action="edit" 场景）
+     */
+    fun editMessage(
+        sessionName: String,
+        message: Message,
+    ) {
+        val chatHistory = loadChatHistory(sessionName) ?: return
+
+        val entry = ChatHistoryEntry(
+            messageId = message.id,
+            senderId = message.userId,
+            senderName = message.userName,
+            content = message.content,
+            timestamp = message.timestamp,
+            messageType = message.type.name,
+            references = message.references,
+            kbContextSelection = message.kbContextSelection,
+        )
+
+        val index = chatHistory.messages.indexOfFirst { it.messageId == message.id }
+        if (index >= 0) {
+            chatHistory.messages[index] = entry
+            saveChatHistory(sessionName, chatHistory)
+            logger.debug("✏️ [editMessage] 替换历史消息: {} in {}", message.id, sessionName)
+        } else {
+            logger.warn("⚠️ [editMessage] 未找到原消息，改为追加: {} in {}", message.id, sessionName)
+            chatHistory.messages.add(entry)
+            saveChatHistory(sessionName, chatHistory)
+        }
+    }
+
     /**
      * 更新 session 的 AI 角色提示
      * @Silk 消息中的角色指令会被保存，用于后续 AI 回复
@@ -479,35 +542,65 @@ class ChatHistoryManager(
         if (userMessageIndex == -1) return emptyList()
         
         val userMessage = chatHistory.messages[userMessageIndex]
-        val userTimestamp = userMessage.timestamp
         
         val isAgent = { id: String -> AgentRuntime.isAgentUserId(id) }
-
-        // 查找用户消息之后、连续的AI回复消息
-        val agentReplies = mutableListOf<String>()
-
-        for (i in (userMessageIndex + 1) until chatHistory.messages.size) {
-            val msg = chatHistory.messages[i]
-
-            // 如果遇到其他用户的消息，停止查找
-            if (!isAgent(msg.senderId) && msg.senderId != userMessage.senderId) {
-                break
-            }
-
-            // 如果是AI的回复，添加到列表
-            if (isAgent(msg.senderId)) {
-                // 检查是否是连续的AI回复（时间间隔在5分钟内）
-                val prevMsg = if (agentReplies.isEmpty()) userMessage else chatHistory.messages[i - 1]
-                if (msg.timestamp - prevMsg.timestamp < 5 * 60 * 1000) {
-                    agentReplies.add(msg.messageId)
-                } else {
-                    break
-                }
-            }
-        }
+        val agentReplies = collectContiguousAgentReplies(
+            messages = chatHistory.messages,
+            userMessageIndex = userMessageIndex,
+            userSenderId = userMessage.senderId,
+            isAgent = isAgent,
+        )
         
         logger.debug("🔍 查找AI回复: 用户消息 {} -> 找到 {} 条AI回复", userMessageId, agentReplies.size)
         return agentReplies
+    }
+
+    private fun collectContiguousAgentReplies(
+        messages: List<ChatHistoryEntry>,
+        userMessageIndex: Int,
+        userSenderId: String,
+        isAgent: (String) -> Boolean,
+    ): List<String> {
+        return messages.asSequence()
+            .drop(userMessageIndex + 1)
+            .mapIndexed { offset, message -> offset to message }
+            .takeWhile { (offset, message) ->
+                shouldContinueAgentReplyScan(
+                    message = message,
+                    userSenderId = userSenderId,
+                    isAgent = isAgent,
+                ) && isReplyWithinAgentWindow(
+                    messages = messages,
+                    userMessageIndex = userMessageIndex,
+                    offset = offset,
+                    message = message,
+                    isAgent = isAgent,
+                )
+            }
+            .mapNotNull { (_, message) ->
+                message.takeIf { isAgent(it.senderId) }?.messageId
+            }
+            .toList()
+    }
+
+    private fun shouldContinueAgentReplyScan(
+        message: ChatHistoryEntry,
+        userSenderId: String,
+        isAgent: (String) -> Boolean,
+    ): Boolean {
+        return isAgent(message.senderId) || message.senderId == userSenderId
+    }
+
+    private fun isReplyWithinAgentWindow(
+        messages: List<ChatHistoryEntry>,
+        userMessageIndex: Int,
+        offset: Int,
+        message: ChatHistoryEntry,
+        isAgent: (String) -> Boolean,
+    ): Boolean {
+        if (!isAgent(message.senderId)) return true
+        val previousMessage = messages[userMessageIndex + offset]
+        return message.timestamp - previousMessage.timestamp < 5 * 60 * 1000
     }
     
     /**

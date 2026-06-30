@@ -5,6 +5,7 @@ import com.silk.backend.ai.AIStepwiseAgent
 import com.silk.backend.ai.SearchDrivenAgent
 import com.silk.backend.ai.DirectModelAgent
 import com.silk.backend.models.ChatHistoryEntry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import org.slf4j.LoggerFactory
 import java.time.LocalTime
@@ -34,12 +35,15 @@ class SilkAgent {
     // 保留旧 agent 用于兼容（可选）
     private var stepwiseAgent: AIStepwiseAgent? = null
     private var searchAgent: SearchDrivenAgent? = null
+
+    private fun requireStepwiseAgent(): AIStepwiseAgent =
+        checkNotNull(stepwiseAgent) { "Agent not initialized" }
     
     fun initializeAgent(sessionName: String) {
         currentSessionId = sessionName
         directAgent = DirectModelAgent(sessionId = sessionName)
         if (AIConfig.WEAVIATE_URL.isNotBlank()) {
-            searchAgent = SearchDrivenAgent(sessionId = sessionName, userId = "system")
+            searchAgent = SearchDrivenAgent(sessionId = sessionName)
         }
     }
     
@@ -203,7 +207,7 @@ class SilkAgent {
         groupDisplayName: String? = null,
         hostId: String? = null
     ): AIStepwiseAgent.DiagnosisResult {
-        return (stepwiseAgent ?: throw IllegalStateException("Agent not initialized"))
+        return requireStepwiseAgent()
             .executeStepwiseDiagnosis(chatHistory, callback, userName, groupDisplayName, hostId)
     }
     
@@ -217,7 +221,7 @@ class SilkAgent {
         userName: String = "用户",
         groupDisplayName: String? = null
     ) {
-        (stepwiseAgent ?: throw IllegalStateException("Agent not initialized"))
+        requireStepwiseAgent()
             .processDoctorDiagnosisUpdate(chatHistory, doctorMessage, callback, userName, groupDisplayName)
     }
     
@@ -230,7 +234,7 @@ class SilkAgent {
         prompt: String,
         callback: suspend (content: String, isComplete: Boolean) -> Unit
     ) {
-        (stepwiseAgent ?: throw IllegalStateException("Agent not initialized"))
+        requireStepwiseAgent()
             .generateQuickResponse(prompt, callback)
     }
     
@@ -238,17 +242,15 @@ class SilkAgent {
      * 使用搜索驱动的智能响应（调用 Weaviate 搜索）
      * @param userInput 用户输入
      * @param recentHistory 最近聊天历史
-     * @param userId 发送消息的用户 ID
      * @param callback 状态回调 (stepType, content, isComplete)
      * @return AI 回复
      */
     suspend fun generateSearchDrivenResponse(
         userInput: String,
         recentHistory: List<ChatHistoryEntry> = emptyList(),
-        userId: String = "user",
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
-        val agent = searchAgent ?: SearchDrivenAgent(sessionId = currentSessionId, userId = userId).also { searchAgent = it }
+        val agent = searchAgent ?: SearchDrivenAgent(sessionId = currentSessionId).also { searchAgent = it }
         
         val result = agent.processInput(
             userInput = userInput,
@@ -263,10 +265,11 @@ class SilkAgent {
      * 索引消息到 Weaviate
      */
     suspend fun indexMessageToSearch(message: ChatHistoryEntry, participants: List<String>): Boolean {
-        return try {
+        return runCatching {
             searchAgent?.indexMessage(message, participants) ?: false
-        } catch (e: Exception) {
-            logger.error("❌ 索引消息失败: {}", e.message)
+        }.getOrElse { error ->
+            if (error is CancellationException) throw error
+            logger.error("❌ 索引消息失败: {}", error.message)
             false
         }
     }
@@ -293,4 +296,3 @@ AI Agent 将会：
 """.trimIndent()
     }
 }
-

@@ -17,6 +17,7 @@
   - `WorkflowPage.ets`
   - `KnowledgeBasePage.ets`
   - `TodoPage.ets`
+  - `AudioDuplexPage.ets`
   - `SettingsPage.ets`
 
 ## Tooling Facts
@@ -30,8 +31,16 @@
 
 - 改 Todo 时，Harmony 是真实主承载端之一
 - 改网络协议时，同时看 `api/ApiClient.ets` 与 `api/WebSocketClient.ets`
+- 改 Audio Duplex 时，同时看 `pages/AudioDuplexPage.ets`、`api/AudioDuplexSession.ets`、`common/AudioDuplexCapturer.ets`、`common/AudioDuplexPlayer.ets`
 - 改 Markdown / KaTeX 渲染时，看 `components/MarkdownWeb.ets`, `MarkdownLite.ets`, `MathKatexWeb.ets`
 - 改元服务/购物跳转时，同时看 `common/MetaServiceLauncher.ets`、`common/MetaServiceConfig.ets`、`common/ShoppingLauncher.ets`
+- Harmony Knowledge Base 已有最小空间化与权限可见性：
+  - topic 顶部支持个人/团队空间切换，创建主题会继承当前空间
+  - topic / entry 列表会显示空间、条目状态与来源 badge
+  - entry 列表支持 `全部 / 候选 / 已发布 / 已归档` 状态筛选；候选/已发布/已归档条目可在编辑页直接做发布、归档、重新发布
+  - entry 页支持“会议入库” sheet，走统一 `POST /api/kb/captures` 契约，把会议纪要沉淀成 `MEETING` 来源的 `candidate` 或 `published` 条目
+  - 只读 topic 会禁用“创建条目”和“保存”，编辑页会明确提示当前只读
+  - 条目编辑页会展示最小 provenance 明细：来源群组、workflowId、消息 id 摘要、置信度、创建人/更新人
 
 ## 元服务（Meta-Service / Atomic Service）
 

@@ -69,6 +69,8 @@ data class CcStateResponse(
     val agentType: String = "",
     /** 当前激活 agent 的显示名称（含 emoji）；未激活则为空字符串 */
     val agentDisplayName: String = "",
+    /** 当前工具权限模式（INTERACTIVE / ACCEPT_EDITS / BYPASS）；空字符串表示默认 */
+    val permissionMode: String = "",
     val error: String? = null,
 )
 

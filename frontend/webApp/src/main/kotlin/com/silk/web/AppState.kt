@@ -1,6 +1,8 @@
 package com.silk.web
 
-import androidx.compose.runtime.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.browser.localStorage
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -20,6 +22,18 @@ enum class NavTab {
     AUDIO_DUPLEX
 }
 
+data class ChatNavigationTarget(
+    val groupId: String,
+    val messageId: String? = null,
+    val requestId: Long,
+)
+
+data class WorkflowNavigationTarget(
+    val workflowId: String,
+    val messageId: String? = null,
+    val requestId: Long,
+)
+
 class WebAppState {
     var currentScene by mutableStateOf(Scene.LOGIN)
         private set
@@ -31,6 +45,13 @@ class WebAppState {
         private set
 
     var currentTab by mutableStateOf(NavTab.SILK)
+
+    var knowledgeBaseNavigationTarget by mutableStateOf<KnowledgeBaseNavigationTarget?>(null)
+        private set
+    var chatNavigationTarget by mutableStateOf<ChatNavigationTarget?>(null)
+        private set
+    var workflowNavigationTarget by mutableStateOf<WorkflowNavigationTarget?>(null)
+        private set
     
     // 标记用户是否明确请求了退出登录
     private var explicitLogoutRequested = false
@@ -45,12 +66,15 @@ class WebAppState {
         sceneHistory.clear()
         
         // 清除可能的旧版本LocalStorage数据
-        try {
+        recoverNonCancellation(
+            block = {
             localStorage.removeItem("silk_selected_group")
             localStorage.removeItem("silk_scene")
-        } catch (e: Exception) {
-            console.log("清理LocalStorage:", e.message)
-        }
+            },
+            recover = { error ->
+                console.log("清理LocalStorage:", error.message)
+            },
+        )
         
         // 尝试从LocalStorage加载用户
         loadUserFromStorage()
@@ -64,6 +88,12 @@ class WebAppState {
         currentUser = user
         saveUserToStorage(user)
         navigateTo(Scene.GROUP_LIST)
+    }
+
+    fun setAuthSession(user: User, token: String?) {
+        ApiClient.setAuthToken(token)
+        saveAuthTokenToStorage(token)
+        setUser(user)
     }
     
     fun selectGroup(group: Group) {
@@ -83,6 +113,55 @@ class WebAppState {
     fun selectTab(tab: NavTab) {
         if (currentScene == Scene.SETTINGS) navigateBack()
         currentTab = tab
+    }
+
+    fun openKnowledgeBaseEntry(entryId: String, topicId: String? = null) {
+        knowledgeBaseNavigationTarget = KnowledgeBaseNavigationTarget(
+            entryId = entryId,
+            topicId = topicId,
+            requestId = kotlin.js.Date.now().toLong(),
+        )
+        selectTab(NavTab.KNOWLEDGE_BASE)
+    }
+
+    fun openChatGroup(group: Group, messageId: String? = null) {
+        chatNavigationTarget = ChatNavigationTarget(
+            groupId = group.id,
+            messageId = messageId,
+            requestId = kotlin.js.Date.now().toLong(),
+        )
+        selectTab(NavTab.SILK)
+        selectGroup(group)
+    }
+
+    fun openWorkflow(workflowId: String, messageId: String? = null) {
+        workflowNavigationTarget = WorkflowNavigationTarget(
+            workflowId = workflowId,
+            messageId = messageId,
+            requestId = kotlin.js.Date.now().toLong(),
+        )
+        selectTab(NavTab.WORKFLOW)
+    }
+
+    fun consumeKnowledgeBaseNavigationTarget(requestId: Long) {
+        val current = knowledgeBaseNavigationTarget ?: return
+        if (current.requestId == requestId) {
+            knowledgeBaseNavigationTarget = null
+        }
+    }
+
+    fun consumeChatNavigationTarget(requestId: Long) {
+        val current = chatNavigationTarget ?: return
+        if (current.requestId == requestId) {
+            chatNavigationTarget = null
+        }
+    }
+
+    fun consumeWorkflowNavigationTarget(requestId: Long) {
+        val current = workflowNavigationTarget ?: return
+        if (current.requestId == requestId) {
+            workflowNavigationTarget = null
+        }
     }
     
     fun navigateBack(): Boolean {
@@ -126,10 +205,15 @@ class WebAppState {
     fun logout() {
         console.log("🚪 用户明确请求退出登录")
         explicitLogoutRequested = true
+        ApiClient.setAuthToken(null)
         currentUser = null
         selectedGroup = null
+        knowledgeBaseNavigationTarget = null
+        chatNavigationTarget = null
+        workflowNavigationTarget = null
         sceneHistory.clear()
         localStorage.removeItem("silk_user")
+        localStorage.removeItem("silk_auth_token")
         currentScene = Scene.LOGIN
     }
     
@@ -145,46 +229,76 @@ class WebAppState {
         }
         
         // 检查是否有保存的用户数据
-        try {
+        return recoverNonCancellation(
+            block = {
             val json = localStorage.getItem("silk_user")
             if (json != null) {
                 val user = kotlinx.serialization.json.Json.decodeFromString<User>(json)
+                ApiClient.setAuthToken(localStorage.getItem("silk_auth_token"))
                 console.log("🔄 检测到保存的用户数据，用户未明确退出登录，自动恢复到群组列表")
                 currentUser = user
                 currentScene = Scene.GROUP_LIST
                 sceneHistory.clear()
-                return true
+                true
+            } else {
+                false
             }
-        } catch (e: Exception) {
-            console.log("检查会话失败:", e.message)
+        },
+            recover = { error ->
+                console.log("检查会话失败:", error.message)
+                false
+            },
+        ).also { restored ->
+            if (!restored) {
+                console.log("🔐 没有保存的用户数据，保持在登录页")
+            }
         }
-        
-        console.log("🔐 没有保存的用户数据，保持在登录页")
-        return false
     }
     
     private fun saveUserToStorage(user: User) {
-        try {
-            val json = Json.encodeToString(user)
-            localStorage.setItem("silk_user", json)
-            console.log("用户信息已保存到LocalStorage")
-        } catch (e: Exception) {
-            console.log("保存用户信息失败:", e)
-        }
+        recoverNonCancellation(
+            block = {
+                val json = Json.encodeToString(user)
+                localStorage.setItem("silk_user", json)
+                console.log("用户信息已保存到LocalStorage")
+            },
+            recover = { error ->
+                console.log("保存用户信息失败:", error)
+            },
+        )
     }
     
     private fun loadUserFromStorage() {
-        try {
-            val json = localStorage.getItem("silk_user")
-            if (json != null) {
-                val user = Json.decodeFromString<User>(json)
-                currentUser = user
-                currentScene = Scene.GROUP_LIST
-                console.log("自动登录:", user.fullName)
-            }
-        } catch (e: Exception) {
-            console.log("加载用户信息失败:", e)
-        }
+        recoverNonCancellation(
+            block = {
+                val json = localStorage.getItem("silk_user")
+                if (json != null) {
+                    val user = Json.decodeFromString<User>(json)
+                    ApiClient.setAuthToken(localStorage.getItem("silk_auth_token"))
+                    currentUser = user
+                    currentScene = Scene.GROUP_LIST
+                    console.log("自动登录:", user.fullName)
+                }
+            },
+            recover = { error ->
+                console.log("加载用户信息失败:", error)
+            },
+        )
     }
-}
 
+    private fun saveAuthTokenToStorage(token: String?) {
+        recoverNonCancellation(
+            block = {
+                if (token.isNullOrBlank()) {
+                    localStorage.removeItem("silk_auth_token")
+                } else {
+                    localStorage.setItem("silk_auth_token", token)
+                }
+            },
+            recover = { error ->
+                console.log("保存认证 token 失败:", error)
+            },
+        )
+    }
+
+}

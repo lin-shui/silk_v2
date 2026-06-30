@@ -33,77 +33,85 @@ object CommandRouter {
         currentAgentType: String?,
     ): RouteResult {
         val trimmed = text.trim()
+        val lower = trimmed.lowercase()
 
-        // 1. /agents
-        if (trimmed.lowercase() == "/agents") {
+        if (lower == "/agents") {
             return RouteResult.ListAgents
         }
 
-        // 2. /use <agent> / /use none
-        if (trimmed.lowercase().startsWith("/use ")) {
-            val name = trimmed.substring(5).trim().lowercase()
-            if (name == "none") return RouteResult.UseAgent(null)
-            val descriptor = AgentRegistry.get(name)
-            return if (descriptor != null) {
-                RouteResult.UseAgent(descriptor.agentType)
-            } else {
-                RouteResult.Command(SilkCommand.Unknown("未找到 agent: $name"))
-            }
-        }
+        parseUseAgent(trimmed, lower)?.let { return it }
+        parseTriggerCommand(trimmed, lower)?.let { return it }
+        parseAtAgent(trimmed)?.let { return it }
 
-        // 3. triggerCommand 匹配（支持 `/cc` 单独触发，也支持 `/cc <text>` 切换+发送）
-        AgentRegistry.list().forEach { d ->
-            val trigger = d.triggerCommand.lowercase()
-            val lower = trimmed.lowercase()
-            if (lower == trigger) {
-                return RouteResult.TriggerAgent(d.agentType)
-            }
-            if (lower.startsWith("$trigger ")) {
-                val inline = trimmed.substring(d.triggerCommand.length).trim()
-                return RouteResult.TriggerAgent(d.agentType, inlineText = inline.ifBlank { null })
-            }
-        }
-
-        // 4. @xxx 一次性插队
-        if (trimmed.startsWith("@")) {
-            val parts = trimmed.substring(1).split(" ", limit = 2)
-            val name = parts[0].lowercase()
-            val remaining = if (parts.size > 1) parts[1] else ""
-            val descriptor = AgentRegistry.get(name)
-            if (descriptor != null) {
-                return RouteResult.AtAgent(descriptor.agentType, remaining)
-            }
-            // 未注册的 @xxx 放行（普通提及）
-        }
-
-        // 5. 当前无 agent 指针 → 放行
         if (currentAgentType == null) {
             return RouteResult.PassThrough
         }
 
-        // 6. slash 命令分发
-        val lower = trimmed.lowercase()
-        when {
-            lower == "/exit" -> return RouteResult.Command(SilkCommand.Exit(userId, groupId))
-            lower == "/cancel" -> return RouteResult.Command(SilkCommand.Cancel(userId, groupId))
-            lower == "/new" -> return RouteResult.Command(SilkCommand.New(userId, groupId))
-            lower == "/status" -> return RouteResult.Command(SilkCommand.Status)
-            lower == "/queue" -> return RouteResult.Command(SilkCommand.Queue(false))
-            lower == "/queue clear" -> return RouteResult.Command(SilkCommand.Queue(true))
-            lower == "/help" -> return RouteResult.Command(SilkCommand.Help)
-            lower == "/compact" -> return RouteResult.Command(SilkCommand.Compact(userId, groupId))
-            lower == "/session" -> return RouteResult.Command(SilkCommand.SessionList(userId, groupId))
-            lower.startsWith("/session ") -> {
-                val prefix = trimmed.substring(9).trim()
-                return RouteResult.Command(SilkCommand.SessionLoad(prefix))
+        return parseSlashCommand(trimmed, lower, userId, groupId) ?: RouteResult.Prompt(trimmed)
+    }
+
+    private fun parseUseAgent(trimmed: String, lower: String): RouteResult? {
+        if (!lower.startsWith("/use ")) {
+            return null
+        }
+        val name = trimmed.substring(5).trim().lowercase()
+        if (name == "none") {
+            return RouteResult.UseAgent(null)
+        }
+        val descriptor = AgentRegistry.get(name)
+        return if (descriptor != null) {
+            RouteResult.UseAgent(descriptor.agentType)
+        } else {
+            RouteResult.Command(SilkCommand.Unknown("未找到 agent: $name"))
+        }
+    }
+
+    private fun parseTriggerCommand(trimmed: String, lower: String): RouteResult? {
+        AgentRegistry.list().forEach { descriptor ->
+            val trigger = descriptor.triggerCommand.lowercase()
+            if (lower == trigger) {
+                return RouteResult.TriggerAgent(descriptor.agentType)
             }
-            lower.startsWith("/cd ") -> {
-                val path = trimmed.substring(4).trim()
-                return RouteResult.Command(SilkCommand.Cd(path))
+            if (lower.startsWith("$trigger ")) {
+                val inline = trimmed.substring(descriptor.triggerCommand.length).trim()
+                return RouteResult.TriggerAgent(
+                    descriptor.agentType,
+                    inlineText = inline.ifBlank { null }
+                )
             }
         }
+        return null
+    }
 
-        // 7. 普通 prompt
-        return RouteResult.Prompt(trimmed)
+    private fun parseAtAgent(trimmed: String): RouteResult? {
+        if (!trimmed.startsWith("@")) {
+            return null
+        }
+        val parts = trimmed.substring(1).split(" ", limit = 2)
+        val descriptor = AgentRegistry.get(parts[0].lowercase()) ?: return null
+        val remaining = parts.getOrElse(1) { "" }
+        return RouteResult.AtAgent(descriptor.agentType, remaining)
+    }
+
+    private fun parseSlashCommand(
+        trimmed: String,
+        lower: String,
+        userId: String,
+        groupId: String,
+    ): RouteResult? = when {
+        lower == "/exit" -> RouteResult.Command(SilkCommand.Exit(userId, groupId))
+        lower == "/cancel" -> RouteResult.Command(SilkCommand.Cancel(userId, groupId))
+        lower == "/new" -> RouteResult.Command(SilkCommand.New(userId, groupId))
+        lower == "/status" -> RouteResult.Command(SilkCommand.Status)
+        lower == "/queue" -> RouteResult.Command(SilkCommand.Queue(false))
+        lower == "/queue clear" -> RouteResult.Command(SilkCommand.Queue(true))
+        lower == "/help" -> RouteResult.Command(SilkCommand.Help)
+        lower == "/compact" -> RouteResult.Command(SilkCommand.Compact(userId, groupId))
+        lower == "/session" -> RouteResult.Command(SilkCommand.SessionList(userId, groupId))
+        lower.startsWith("/session ") -> {
+            RouteResult.Command(SilkCommand.SessionLoad(trimmed.substring(9).trim()))
+        }
+        lower.startsWith("/cd ") -> RouteResult.Command(SilkCommand.Cd(trimmed.substring(4).trim()))
+        else -> null
     }
 }

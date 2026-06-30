@@ -4,6 +4,7 @@ package com.silk.backend.agents.acp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -36,35 +37,39 @@ class AcpClient(
     private val nextId = AtomicLong(1)
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<JsonRpcResponse>>()
 
-    @Volatile
-    private var sessionUpdateHandler: ((SessionUpdateNotification) -> Unit)? = null
-
-    @Volatile
-    private var permissionHandler: (suspend (PermissionRequestParams) -> PermissionResponse)? = null
+    private val sessionUpdateHandlers = ConcurrentHashMap<String, (SessionUpdateNotification) -> Unit>()
+    private val permissionHandlers = ConcurrentHashMap<String, suspend (PermissionRequestParams) -> PermissionResponse>()
 
     /**
-     * 注册 `session/update` 通知处理器。
+     * 为指定 ACP session 注册 `session/update` 通知处理器。
      *
-     * **重要**：在触发任何可能导致服务端推送通知的 RPC（如 `sessionPrompt`）之前完成注册，
-     * 否则早到的通知会被静默丢弃。
+     * 同一 sessionId 重复注册会覆盖旧 handler（同一 session 的 queue drain 循环换 accumulated 时正常）。
+     * 不同 sessionId 的 handler 互不影响。
      *
-     * **重要**：handler 会在 receive loop 的协程里同步执行——不要阻塞，不要调用长耗时的 suspend 操作，
-     * 否则会阻塞所有后续消息（包括待响应的 RPC）。需要耗时处理时，handler 内部应 `launch` 到另一个 scope。
+     * **重要**：handler 在 receive-loop 协程中同步执行，会阻塞该循环对后续消息的处理。
+     * 不要在 handler 内做耗时操作或挂起；如需执行重型工作，请在 handler 内 `launch` 到另一个 scope。
      */
-    fun onSessionUpdate(handler: (SessionUpdateNotification) -> Unit) {
-        sessionUpdateHandler = handler
+    fun onSessionUpdate(sessionId: String, handler: (SessionUpdateNotification) -> Unit) {
+        sessionUpdateHandlers[sessionId] = handler
     }
 
     /**
-     * 注册 `session/request_permission` 服务端请求处理器。
+     * 为指定 ACP session 注册 `session/request_permission` 处理器。
      *
-     * 同 [onSessionUpdate]：必须在任何可能触发权限请求的 RPC 之前注册，
-     * 且 handler 不应长时间阻塞 receive loop。
-     *
-     * 未注册处理器时，收到 `session/request_permission` 会回以 JSON-RPC error -32601。
+     * 同 [onSessionUpdate]：按 sessionId 隔离，handler 不应长时间阻塞 receive loop。
+     * 未注册 handler 的 session 收到 permission request 会回以 JSON-RPC error -32601。
      */
-    fun onPermissionRequest(handler: suspend (PermissionRequestParams) -> PermissionResponse) {
-        permissionHandler = handler
+    fun onPermissionRequest(sessionId: String, handler: suspend (PermissionRequestParams) -> PermissionResponse) {
+        permissionHandlers[sessionId] = handler
+    }
+
+    /**
+     * 注销指定 session 的所有 handler。
+     * 在 prompt 结束或 session 销毁时调用，防止内存泄漏。
+     */
+    fun removeHandlers(sessionId: String) {
+        sessionUpdateHandlers.remove(sessionId)
+        permissionHandlers.remove(sessionId)
     }
 
     init {
@@ -79,11 +84,11 @@ class AcpClient(
     suspend fun sessionNew(
         cwd: String,
         mcpServers: List<McpServer> = emptyList(),
-        ccSessionId: String? = null,
+        cliSessionId: String? = null,
     ): SessionNewResult {
         val params = json.encodeToJsonElement(
             SessionNewParams.serializer(),
-            SessionNewParams(cwd = cwd, mcpServers = mcpServers, ccSessionId = ccSessionId),
+            SessionNewParams(cwd = cwd, mcpServers = mcpServers, cliSessionId = cliSessionId),
         )
         val resp = call("session/new", params)
         return decodeResultOrThrow(resp, SessionNewResult.serializer())
@@ -106,7 +111,7 @@ class AcpClient(
             SessionPromptParams.serializer(),
             SessionPromptParams(sessionId = sessionId, prompt = prompt),
         )
-        val resp = call("session/prompt", params)
+        val resp = call("session/prompt", params, timeoutMs = PROMPT_TIMEOUT_MS)
         return decodeResultOrThrow(resp, SessionPromptResult.serializer())
     }
 
@@ -138,22 +143,46 @@ class AcpClient(
 
     // ---- core ----
 
-    private suspend fun call(method: String, params: JsonElement): JsonRpcResponse {
+    private suspend fun call(
+        method: String,
+        params: JsonElement,
+        timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+    ): JsonRpcResponse {
         val id = nextId.getAndIncrement()
         val deferred = CompletableDeferred<JsonRpcResponse>()
         pending[id] = deferred
-        val req = JsonRpcRequest(id = id, method = method, params = params)
-        transport.send(json.encodeToString(JsonRpcRequest.serializer(), req))
-        return deferred.await()
+        runCatching {
+            val req = JsonRpcRequest(id = id, method = method, params = params)
+            transport.send(json.encodeToString(JsonRpcRequest.serializer(), req))
+        }.onFailure {
+            pending.remove(id)
+        }.getOrThrow()
+        return try {
+            if (timeoutMs == Long.MAX_VALUE) {
+                deferred.await()
+            } else {
+                withTimeout(timeoutMs) { deferred.await() }
+            }
+        } finally {
+            pending.remove(id)
+        }
+    }
+
+    companion object {
+        /** 控制面操作（initialize / sessionNew / sessionLoad / callExtension）的默认超时。 */
+        const val DEFAULT_TIMEOUT_MS = 30_000L
+        /** sessionPrompt 不设超时，生命周期由 session/cancel + promptJob.cancelAndJoin 管理。 */
+        const val PROMPT_TIMEOUT_MS = Long.MAX_VALUE
     }
 
     private suspend fun receiveLoop() {
         try {
-            transport.incoming.collect { line -> dispatch(line) }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.warn("[AcpClient] receive loop ended: {}", e.message)
+            runCatching {
+                transport.incoming.collect { line -> dispatch(line) }
+            }.onFailure { error ->
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                logger.warn("[AcpClient] receive loop ended: {}", error.message)
+            }
         } finally {
             // receive loop 终止（transport 关闭 / scope 取消 / 异常）：失败所有 pending
             val cause = IllegalStateException("receive loop terminated")
@@ -163,16 +192,16 @@ class AcpClient(
     }
 
     private suspend fun dispatch(line: String) {
-        val element = try {
+        val element = runCatching {
             json.parseToJsonElement(line).jsonObject
-        } catch (e: Exception) {
-            logger.warn("[AcpClient] malformed JSON: {}", e.message)
+        }.getOrElse { error ->
+            logger.warn("[AcpClient] malformed JSON: {}", error.message)
             return
         }
         val id = element["id"]?.jsonPrimitive?.longOrNull
         val method = element["method"]?.jsonPrimitive?.contentOrNull
 
-        try {
+        runCatching {
             when {
                 // 响应（有 id 但没有 method）
                 id != null && method == null -> {
@@ -185,11 +214,10 @@ class AcpClient(
                 id != null && method != null -> handleServerRequest(id, method, element["params"])
                 else -> logger.warn("[AcpClient] unrecognized message: {}", line)
             }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
+        }.onFailure { error ->
+            if (error is kotlinx.coroutines.CancellationException) throw error
             // 单条消息处理失败不应杀死整个 receive loop（影响所有待响应的 RPC）
-            logger.warn("[AcpClient] dispatch failed for method={}, id={}: {}", method, id, e.message)
+            logger.warn("[AcpClient] dispatch failed for method={}, id={}: {}", method, id, error.message)
         }
     }
 
@@ -198,7 +226,7 @@ class AcpClient(
             "session/update" -> {
                 if (params == null) return
                 val notif = json.decodeFromJsonElement(SessionUpdateNotification.serializer(), params)
-                sessionUpdateHandler?.invoke(notif)
+                sessionUpdateHandlers[notif.sessionId]?.invoke(notif)
             }
             else -> logger.debug("[AcpClient] unhandled notification: {}", method)
         }
@@ -207,20 +235,28 @@ class AcpClient(
     private suspend fun handleServerRequest(id: Long, method: String, params: JsonElement?) {
         when (method) {
             "session/request_permission" -> {
-                val handler = permissionHandler
-                if (handler == null || params == null) {
-                    sendError(id, JsonRpcError(JsonRpcError.METHOD_NOT_FOUND, "no permission handler"))
+                if (params == null) {
+                    sendError(id, JsonRpcError(JsonRpcError.INVALID_PARAMS, "no params"))
                     return
                 }
-                try {
-                    val req = json.decodeFromJsonElement(PermissionRequestParams.serializer(), params)
+                val req = runCatching {
+                    json.decodeFromJsonElement(PermissionRequestParams.serializer(), params)
+                }.getOrElse { error ->
+                    sendError(id, JsonRpcError(JsonRpcError.INVALID_PARAMS, "bad params: ${error.message}"))
+                    return
+                }
+                val handler = permissionHandlers[req.sessionId]
+                if (handler == null) {
+                    sendError(id, JsonRpcError(JsonRpcError.METHOD_NOT_FOUND, "no permission handler for session ${req.sessionId}"))
+                    return
+                }
+                runCatching {
                     val resp = handler(req)
                     val result = json.encodeToJsonElement(PermissionResponse.serializer(), resp)
                     sendResponse(id, result)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    sendError(id, JsonRpcError(JsonRpcError.INTERNAL_ERROR, e.message ?: "handler error"))
+                }.onFailure { error ->
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    sendError(id, JsonRpcError(JsonRpcError.INTERNAL_ERROR, error.message ?: "handler error"))
                 }
             }
             else -> sendError(id, JsonRpcError(JsonRpcError.METHOD_NOT_FOUND, method))

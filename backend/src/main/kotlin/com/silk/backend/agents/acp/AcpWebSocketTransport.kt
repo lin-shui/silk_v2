@@ -1,7 +1,11 @@
 // backend/src/main/kotlin/com/silk/backend/agents/acp/AcpWebSocketTransport.kt
 package com.silk.backend.agents.acp
 
-import io.ktor.websocket.*
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.WebSocketSession
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
 import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -29,7 +33,7 @@ class AcpWebSocketTransport(
     }
 
     override suspend fun send(line: String) {
-        if (isClosed) throw IllegalStateException("transport closed")
+        check(!isClosed) { "transport closed" }
         session.send(Frame.Text(line))
     }
 

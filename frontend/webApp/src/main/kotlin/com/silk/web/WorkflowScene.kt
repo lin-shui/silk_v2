@@ -1,15 +1,76 @@
 package com.silk.web
 
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
+import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.DirEntry
 import com.silk.shared.models.DirListingResponse
 import com.silk.shared.models.Message
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.web.attributes.InputType
-import org.jetbrains.compose.web.css.*
-import org.jetbrains.compose.web.dom.*
+import org.jetbrains.compose.web.css.AlignItems
+import org.jetbrains.compose.web.css.Color
+import org.jetbrains.compose.web.css.DisplayStyle
+import org.jetbrains.compose.web.css.FlexDirection
+import org.jetbrains.compose.web.css.JustifyContent
+import org.jetbrains.compose.web.css.LineStyle
+import org.jetbrains.compose.web.css.Position
+import org.jetbrains.compose.web.css.alignItems
+import org.jetbrains.compose.web.css.backgroundColor
+import org.jetbrains.compose.web.css.border
+import org.jetbrains.compose.web.css.borderRadius
+import org.jetbrains.compose.web.css.bottom
+import org.jetbrains.compose.web.css.color
+import org.jetbrains.compose.web.css.display
+import org.jetbrains.compose.web.css.flexDirection
+import org.jetbrains.compose.web.css.fontFamily
+import org.jetbrains.compose.web.css.fontSize
+import org.jetbrains.compose.web.css.fontStyle
+import org.jetbrains.compose.web.css.fontWeight
+import org.jetbrains.compose.web.css.height
+import org.jetbrains.compose.web.css.justifyContent
+import org.jetbrains.compose.web.css.left
+import org.jetbrains.compose.web.css.marginBottom
+import org.jetbrains.compose.web.css.marginTop
+import org.jetbrains.compose.web.css.maxHeight
+import org.jetbrains.compose.web.css.minHeight
+import org.jetbrains.compose.web.css.padding
+import org.jetbrains.compose.web.css.percent
+import org.jetbrains.compose.web.css.position
+import org.jetbrains.compose.web.css.px
+import org.jetbrains.compose.web.css.right
+import org.jetbrains.compose.web.css.style
+import org.jetbrains.compose.web.css.top
+import org.jetbrains.compose.web.css.width
+import org.jetbrains.compose.web.dom.Button
+import org.jetbrains.compose.web.dom.Div
+import org.jetbrains.compose.web.dom.H3
+import org.jetbrains.compose.web.dom.Input
+import org.jetbrains.compose.web.dom.Option
+import org.jetbrains.compose.web.dom.P
+import org.jetbrains.compose.web.dom.Select
+import org.jetbrains.compose.web.dom.Span
+import org.jetbrains.compose.web.dom.Text
+import org.jetbrains.compose.web.dom.TextArea
+
+
+private fun shouldSubmitWorkflowMessage(event: org.jetbrains.compose.web.events.SyntheticKeyboardEvent, messageText: String): Boolean {
+    if (event.key != "Enter") return false
+    if (event.shiftKey) return false
+    val isComposing = event.nativeEvent.asDynamic().isComposing == true
+    return !isComposing && messageText.isNotBlank()
+}
 
 @Composable
 fun WorkflowScene(appState: WebAppState) {
@@ -22,39 +83,32 @@ fun WorkflowScene(appState: WebAppState) {
     var newInitialDir by remember { mutableStateOf("") }
     var availableAgents by remember { mutableStateOf<List<AgentInfo>>(emptyList()) }
     var selectedAgentType by remember { mutableStateOf("") }
+    var selectedPermissionMode by remember { mutableStateOf("") }
     var showCreatePicker by remember { mutableStateOf(false) }
     var selectedWorkflow by remember { mutableStateOf<WorkflowItem?>(null) }
-    // 创建对话框中"加载默认目录"的失败原因（一般是 Bridge 未连接）。
-    // Bridge 离线时整个创建流程都会失败（后端拒绝），所以这里也用作"是否禁用创建按钮"的依据。
-    var dirLoadError by remember { mutableStateOf<String?>(null) }
+    // 操作菜单状态
+    var menuWorkflow by remember { mutableStateOf<WorkflowItem?>(null) }
+    var renameTarget by remember { mutableStateOf<WorkflowItem?>(null) }
+    var renameText by remember { mutableStateOf("") }
+    var deleteTarget by remember { mutableStateOf<WorkflowItem?>(null) }
+    // Bridge 是否在线（从 agent 列表判断），离线时禁用创建相关操作
+    var bridgeConnected by remember { mutableStateOf(true) }
+    // 默认目录加载失败时的非致命警告（不阻塞创建，用户仍可手动输入或选择目录）
+    var dirWarning by remember { mutableStateOf<String?>(null) }
     // 信任确认弹窗状态（替代浏览器原生 confirm）
     var showTrustConfirm by remember { mutableStateOf(false) }
     var trustConfirmPath by remember { mutableStateOf("") }
     var trustConfirmBridgeId by remember { mutableStateOf<String?>(null) }
-
-    // 提取创建 workflow 的 suspend 函数，供信任弹窗回调复用
-    suspend fun performCreateWorkflow() {
-        val agentType = selectedAgentType.ifBlank { "claude_code" }
-        val result = ApiClient.createWorkflow(
-            newName.trim(), "", user.id, newInitialDir.trim(), agentType,
-        )
-        workflows = ApiClient.getWorkflows(user.id)
-        when (result) {
-            is ApiClient.CreateWorkflowResult.Ok -> {
-                selectedWorkflow = result.workflow
-                showCreateDialog = false
-                newName = ""
-                newInitialDir = ""
-                selectedAgentType = ""
-                dirLoadError = null
-            }
-            is ApiClient.CreateWorkflowResult.Err -> {
-                kotlinx.browser.window.alert("创建工作流失败：${result.message}")
-                val probe = ApiClient.listCcDir(user.id, null)
-                dirLoadError = if (probe.success) null else (probe.error ?: "无法获取默认目录")
-            }
-        }
-    }
+    var kbCaptureDraft by remember { mutableStateOf<KnowledgeCaptureDraft?>(null) }
+    var kbCaptureTopics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
+    var kbCaptureGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
+    var kbCaptureSelectedSpaceId by remember { mutableStateOf(PERSONAL_SPACE_ID) }
+    var kbCaptureSelectedTopicId by remember { mutableStateOf("") }
+    var kbCaptureTitle by remember { mutableStateOf("") }
+    var kbCaptureContent by remember { mutableStateOf("") }
+    var kbCaptureSaving by remember { mutableStateOf(false) }
+    var kbCaptureResult by remember { mutableStateOf<String?>(null) }
+    var pendingWorkflowMessageId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(user.id) {
         isLoading = true
@@ -62,6 +116,181 @@ fun WorkflowScene(appState: WebAppState) {
         isLoading = false
     }
 
+    val workflowNavigationTarget = appState.workflowNavigationTarget
+    LaunchedEffect(workflows, workflowNavigationTarget?.requestId) {
+        val target = workflowNavigationTarget ?: return@LaunchedEffect
+        val workflow = workflows.find { it.id == target.workflowId } ?: return@LaunchedEffect
+        selectedWorkflow = workflow
+        pendingWorkflowMessageId = target.messageId?.takeIf { it.isNotBlank() }
+        appState.consumeWorkflowNavigationTarget(target.requestId)
+    }
+
+    val resetCreateDialog = {
+        showCreateDialog = false
+        newName = ""
+        newInitialDir = ""
+        selectedAgentType = ""
+        selectedPermissionMode = ""
+        dirWarning = null
+    }
+    val resetKnowledgeCaptureDialog = {
+        kbCaptureDraft = null
+        kbCaptureTopics = emptyList()
+        kbCaptureGroups = emptyList()
+        kbCaptureSelectedSpaceId = PERSONAL_SPACE_ID
+        kbCaptureSelectedTopicId = ""
+        kbCaptureTitle = ""
+        kbCaptureContent = ""
+        kbCaptureSaving = false
+        kbCaptureResult = null
+    }
+
+    WorkflowSceneLayout(
+        workflows = workflows,
+        isLoading = isLoading,
+        selectedWorkflow = selectedWorkflow,
+        pendingWorkflowMessageId = pendingWorkflowMessageId,
+        userId = user.id,
+        userName = user.fullName,
+        onCaptureToKnowledgeBase = { workflow, message ->
+            scope.launch {
+                val context = loadKnowledgeCaptureContext(user.id)
+                val preferredSpaceId = preferredKnowledgeCaptureSpaceId(workflow.groupId, context.topics)
+                kbCaptureDraft = KnowledgeCaptureDraft(
+                    message = message,
+                    sourceType = messageKnowledgeCaptureSourceType(message, KBSourceType.WORKFLOW),
+                    sourceGroupId = workflow.groupId,
+                    workflowId = workflow.id,
+                    preferredSpaceId = preferredSpaceId,
+                )
+                kbCaptureTopics = context.topics
+                kbCaptureGroups = context.groups
+                kbCaptureSelectedSpaceId = preferredSpaceId
+                kbCaptureSelectedTopicId = defaultKnowledgeCaptureTopicId(context.topics, preferredSpaceId).orEmpty()
+                kbCaptureTitle = buildDefaultKnowledgeCaptureTitle(message.content)
+                kbCaptureContent = message.content
+                kbCaptureSaving = false
+                kbCaptureResult = if (context.topics.isEmpty()) "还没有可用主题，请先去知识库创建主题。" else null
+            }
+        },
+        onOpenCreateDialog = { showCreateDialog = true },
+        onSelectWorkflow = { selectedWorkflow = it },
+        onWorkflowMessageNavigated = { pendingWorkflowMessageId = null },
+        onToggleMenuWorkflow = { wf -> menuWorkflow = toggleWorkflowMenu(menuWorkflow, wf) },
+    )
+    WorkflowCreateFlow(
+        scope = scope,
+        userId = user.id,
+        showCreateDialog = showCreateDialog,
+        newName = newName,
+        newInitialDir = newInitialDir,
+        availableAgents = availableAgents,
+        selectedAgentType = selectedAgentType,
+        selectedPermissionMode = selectedPermissionMode,
+        bridgeConnected = bridgeConnected,
+        dirWarning = dirWarning,
+        showCreatePicker = showCreatePicker,
+        showTrustConfirm = showTrustConfirm,
+        trustConfirmPath = trustConfirmPath,
+        trustConfirmBridgeId = trustConfirmBridgeId,
+        onNameChange = { newName = it },
+        onInitialDirChange = { newInitialDir = it },
+        onAvailableAgentsChange = { availableAgents = it },
+        onSelectedAgentTypeChange = { selectedAgentType = it },
+        onSelectedPermissionModeChange = { selectedPermissionMode = it },
+        onBridgeConnectedChange = { bridgeConnected = it },
+        onDirWarningChange = { dirWarning = it },
+        onShowCreatePickerChange = { showCreatePicker = it },
+        onShowTrustConfirmChange = { showTrustConfirm = it },
+        onTrustConfirmPathChange = { trustConfirmPath = it },
+        onTrustConfirmBridgeIdChange = { trustConfirmBridgeId = it },
+        onWorkflowsChange = { workflows = it },
+        onSelectedWorkflowChange = { selectedWorkflow = it },
+        onDismissCreateDialog = resetCreateDialog,
+    )
+    WorkflowManagementDialogs(
+        scope = scope,
+        userId = user.id,
+        menuWorkflow = menuWorkflow,
+        renameTarget = renameTarget,
+        renameText = renameText,
+        deleteTarget = deleteTarget,
+        selectedWorkflowId = selectedWorkflow?.id,
+        onMenuWorkflowChange = { menuWorkflow = it },
+        onRenameTargetChange = { renameTarget = it },
+        onRenameTextChange = { renameText = it },
+        onDeleteTargetChange = { deleteTarget = it },
+        onSelectedWorkflowChange = { selectedWorkflow = it },
+        onWorkflowsChange = { workflows = it },
+    )
+
+    kbCaptureDraft?.let { draft ->
+        KnowledgeBaseCaptureDialog(
+            draft = draft,
+            spaceOptions = buildKnowledgeSpaceOptions(kbCaptureGroups),
+            topics = kbCaptureTopics,
+            selectedSpaceId = kbCaptureSelectedSpaceId,
+            selectedTopicId = kbCaptureSelectedTopicId,
+            title = kbCaptureTitle,
+            content = kbCaptureContent,
+            isSaving = kbCaptureSaving,
+            resultMessage = kbCaptureResult,
+            onSelectedSpaceIdChange = { kbCaptureSelectedSpaceId = it },
+            onSelectedTopicIdChange = { kbCaptureSelectedTopicId = it },
+            onTitleChange = { kbCaptureTitle = it },
+            onContentChange = { kbCaptureContent = it },
+            onDismiss = resetKnowledgeCaptureDialog,
+            onConfirm = {
+                if (!canSubmitKnowledgeCapture(kbCaptureSaving, kbCaptureSelectedTopicId, kbCaptureTitle, kbCaptureContent)) {
+                    return@KnowledgeBaseCaptureDialog
+                }
+                scope.launch {
+                    kbCaptureSaving = true
+                    val created = ApiClient.captureKBEntry(
+                        topicId = kbCaptureSelectedTopicId,
+                        title = kbCaptureTitle.trim(),
+                        content = kbCaptureContent,
+                        tags = emptyList(),
+                        userId = user.id,
+                        source = KBEntrySource(
+                            sourceType = draft.sourceType,
+                            sourceGroupId = draft.sourceGroupId,
+                            workflowId = draft.workflowId,
+                            messageIds = listOf(draft.message.id),
+                        ),
+                    )
+                    kbCaptureSaving = false
+                    if (created == null) {
+                        kbCaptureResult = "保存失败，请确认目标主题仍可写。"
+                    } else {
+                        resetKnowledgeCaptureDialog()
+                        appState.openKnowledgeBaseEntry(created.id, created.topicId)
+                    }
+                }
+            },
+        )
+    }
+}
+
+private fun toggleWorkflowMenu(
+    current: WorkflowItem?,
+    workflow: WorkflowItem,
+): WorkflowItem? = if (current == workflow) null else workflow
+
+@Composable
+private fun WorkflowSceneLayout(
+    workflows: List<WorkflowItem>,
+    isLoading: Boolean,
+    selectedWorkflow: WorkflowItem?,
+    pendingWorkflowMessageId: String?,
+    userId: String,
+    userName: String,
+    onCaptureToKnowledgeBase: (WorkflowItem, Message) -> Unit,
+    onOpenCreateDialog: () -> Unit,
+    onSelectWorkflow: (WorkflowItem) -> Unit,
+    onWorkflowMessageNavigated: () -> Unit,
+    onToggleMenuWorkflow: (WorkflowItem) -> Unit,
+) {
     Div({
         style {
             display(DisplayStyle.Flex)
@@ -71,472 +300,1139 @@ fun WorkflowScene(appState: WebAppState) {
             property("background", SilkColors.backgroundGradient)
         }
     }) {
-        // Left: workflow list
-        Div({
-            style {
-                width(320.px)
-                property("flex-shrink", "0")
-                property("border-right", "1px solid ${SilkColors.border}")
-                display(DisplayStyle.Flex)
-                flexDirection(FlexDirection.Column)
-                backgroundColor(Color(SilkColors.surface))
-            }
-        }) {
-            // Header
-            Div({
-                style {
-                    padding(16.px)
-                    property("border-bottom", "1px solid ${SilkColors.border}")
-                    display(DisplayStyle.Flex)
-                    justifyContent(JustifyContent.SpaceBetween)
-                    alignItems(AlignItems.Center)
-                }
-            }) {
-                Span({
-                    style {
-                        fontSize(18.px)
-                        fontWeight("bold")
-                        color(Color(SilkColors.textPrimary))
-                    }
-                }) { Text("工作流") }
-                Button({
-                    style {
-                        backgroundColor(Color(SilkColors.primary))
-                        color(Color.white)
-                        border(0.px)
-                        borderRadius(6.px)
-                        padding(6.px, 12.px)
-                        property("cursor", "pointer")
-                    }
-                    onClick { showCreateDialog = true }
-                }) { Text("+ 创建") }
-            }
+        WorkflowSidebar(
+            workflows = workflows,
+            isLoading = isLoading,
+            selectedWorkflow = selectedWorkflow,
+            onOpenCreateDialog = onOpenCreateDialog,
+            onSelectWorkflow = onSelectWorkflow,
+            onToggleMenuWorkflow = onToggleMenuWorkflow,
+        )
+        WorkflowMainPanel(
+            selectedWorkflow = selectedWorkflow,
+            pendingMessageId = pendingWorkflowMessageId,
+            userId = userId,
+            userName = userName,
+            onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
+            onMessageNavigated = onWorkflowMessageNavigated,
+        )
+    }
+}
 
-            // List
-            Div({
-                style {
-                    property("flex", "1")
-                    property("overflow-y", "auto")
-                }
-            }) {
-                if (isLoading) {
-                    Div({ style { padding(20.px); property("text-align", "center") } }) {
-                        Text("加载中...")
-                    }
-                } else if (workflows.isEmpty()) {
-                    Div({
-                        style {
-                            padding(40.px, 20.px)
-                            property("text-align", "center")
-                            color(Color(SilkColors.textSecondary))
-                        }
-                    }) {
-                        Text("暂无工作流")
-                    }
-                } else {
-                    workflows.forEach { wf ->
-                        val isSelected = selectedWorkflow?.id == wf.id
-                        Div({
-                            style {
-                                padding(12.px, 16.px)
-                                property("border-bottom", "1px solid ${SilkColors.border}")
-                                display(DisplayStyle.Flex)
-                                justifyContent(JustifyContent.SpaceBetween)
-                                alignItems(AlignItems.Center)
-                                property("cursor", "pointer")
-                                backgroundColor(
-                                    if (isSelected) Color("rgba(201, 168, 108, 0.15)")
-                                    else Color("transparent")
-                                )
-                                if (isSelected) {
-                                    property("border-left", "3px solid ${SilkColors.primary}")
-                                }
-                            }
-                            onClick {
-                                selectedWorkflow = wf
-                            }
-                        }) {
-                            Span({
-                                style {
-                                    color(Color(SilkColors.textPrimary))
-                                    fontSize(14.px)
-                                    property("flex", "1")
-                                    property("overflow", "hidden")
-                                    property("text-overflow", "ellipsis")
-                                    property("white-space", "nowrap")
-                                    if (isSelected) fontWeight("bold")
-                                }
-                            }) { Text(wf.name) }
-                            Button({
-                                style {
-                                    backgroundColor(Color("transparent"))
-                                    color(Color(SilkColors.error))
-                                    border(0.px)
-                                    property("cursor", "pointer")
-                                    fontSize(12.px)
-                                }
-                                onClick { evt ->
-                                    evt.stopPropagation()
-                                    scope.launch {
-                                        ApiClient.deleteWorkflow(wf.id, user.id)
-                                        if (selectedWorkflow?.id == wf.id) {
-                                            selectedWorkflow = null
-                                        }
-                                        workflows = ApiClient.getWorkflows(user.id)
-                                    }
-                                }
-                            }) { Text("删除") }
-                        }
-                    }
-                }
+@Composable
+private fun WorkflowSidebar(
+    workflows: List<WorkflowItem>,
+    isLoading: Boolean,
+    selectedWorkflow: WorkflowItem?,
+    onOpenCreateDialog: () -> Unit,
+    onSelectWorkflow: (WorkflowItem) -> Unit,
+    onToggleMenuWorkflow: (WorkflowItem) -> Unit,
+) {
+    Div({
+        style {
+            width(320.px)
+            property("flex-shrink", "0")
+            property("border-right", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            backgroundColor(Color(SilkColors.surface))
+        }
+    }) {
+        WorkflowSidebarHeader(onOpenCreateDialog)
+        WorkflowSidebarList(
+            workflows = workflows,
+            isLoading = isLoading,
+            selectedWorkflow = selectedWorkflow,
+            onSelectWorkflow = onSelectWorkflow,
+            onToggleMenuWorkflow = onToggleMenuWorkflow,
+        )
+    }
+}
+
+@Composable
+private fun WorkflowSidebarHeader(onOpenCreateDialog: () -> Unit) {
+    Div({
+        style {
+            padding(16.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.SpaceBetween)
+            alignItems(AlignItems.Center)
+        }
+    }) {
+        Span({
+            style {
+                fontSize(18.px)
+                fontWeight("bold")
+                color(Color(SilkColors.textPrimary))
+            }
+        }) { Text("工作流") }
+        Button({
+            style {
+                backgroundColor(Color(SilkColors.primary))
+                color(Color.white)
+                border(0.px)
+                borderRadius(6.px)
+                padding(6.px, 12.px)
+                property("cursor", "pointer")
+            }
+            onClick { onOpenCreateDialog() }
+        }) { Text("+ 创建") }
+    }
+}
+
+@Composable
+private fun WorkflowSidebarList(
+    workflows: List<WorkflowItem>,
+    isLoading: Boolean,
+    selectedWorkflow: WorkflowItem?,
+    onSelectWorkflow: (WorkflowItem) -> Unit,
+    onToggleMenuWorkflow: (WorkflowItem) -> Unit,
+) {
+    Div({
+        style {
+            property("flex", "1")
+            property("overflow-y", "auto")
+        }
+    }) {
+        when {
+            isLoading -> WorkflowSidebarMessage("加载中...")
+            workflows.isEmpty() -> WorkflowSidebarMessage("暂无工作流", true)
+            else -> workflows.forEach { workflow ->
+                WorkflowSidebarItem(
+                    workflow = workflow,
+                    isSelected = selectedWorkflow?.id == workflow.id,
+                    onSelect = onSelectWorkflow,
+                    onToggleMenu = onToggleMenuWorkflow,
+                )
             }
         }
+    }
+}
 
-        // Right: chat area or placeholder
-        Div({
-            style {
-                property("flex", "1")
-                display(DisplayStyle.Flex)
-                flexDirection(FlexDirection.Column)
-                height(100.percent)
-                property("overflow", "hidden")
-            }
-        }) {
-            val wf = selectedWorkflow
-            if (wf == null || wf.groupId.isBlank()) {
-                // Placeholder
-                Div({
-                    style {
-                        property("flex", "1")
-                        display(DisplayStyle.Flex)
-                        justifyContent(JustifyContent.Center)
-                        alignItems(AlignItems.Center)
-                        flexDirection(FlexDirection.Column)
-                    }
-                }) {
-                    Span({ style { fontSize(48.px); marginBottom(16.px) } }) { Text("\uD83E\uDD16") }
-                    Span({
-                        style {
-                            fontSize(18.px)
-                            color(Color(SilkColors.textSecondary))
-                        }
-                    }) { Text("选择或创建一个工作流开始对话") }
-                }
+@Composable
+private fun WorkflowSidebarMessage(
+    message: String,
+    emptyState: Boolean = false,
+) {
+    Div({
+        style {
+            if (emptyState) {
+                padding(40.px, 20.px)
             } else {
-                // Chat panel for selected workflow
-                // key(wf.groupId) 使切换 workflow 时 Compose 销毁旧组件再创建新组件，
-                // 避免共用同一个 ChatClient 导致旧会话的流式消息泄漏到新会话 UI
-                key(wf.groupId) {
-                    WorkflowChatPanel(
-                        userId = user.id,
-                        userName = user.fullName,
-                        groupId = wf.groupId,
-                        workflowName = wf.name,
-                    )
+                padding(20.px)
+            }
+            property("text-align", "center")
+            if (emptyState) {
+                color(Color(SilkColors.textSecondary))
+            }
+        }
+    }) { Text(message) }
+}
+
+@Composable
+private fun WorkflowSidebarItem(
+    workflow: WorkflowItem,
+    isSelected: Boolean,
+    onSelect: (WorkflowItem) -> Unit,
+    onToggleMenu: (WorkflowItem) -> Unit,
+) {
+    Div({
+        style {
+            padding(12.px, 16.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.SpaceBetween)
+            alignItems(AlignItems.Center)
+            property("cursor", "pointer")
+            backgroundColor(if (isSelected) Color("rgba(201, 168, 108, 0.15)") else Color("transparent"))
+            if (isSelected) {
+                property("border-left", "3px solid ${SilkColors.primary}")
+            }
+        }
+        onClick { onSelect(workflow) }
+    }) {
+        Span({
+            style {
+                color(Color(SilkColors.textPrimary))
+                fontSize(14.px)
+                property("flex", "1")
+                property("overflow", "hidden")
+                property("text-overflow", "ellipsis")
+                property("white-space", "nowrap")
+                if (isSelected) {
+                    fontWeight("bold")
                 }
+            }
+        }) { Text(workflow.name) }
+        Button({
+            style {
+                backgroundColor(Color("transparent"))
+                color(Color(SilkColors.textSecondary))
+                border(0.px)
+                property("cursor", "pointer")
+                fontSize(18.px)
+                padding(4.px, 8.px)
+            }
+            onClick { event ->
+                event.stopPropagation()
+                onToggleMenu(workflow)
+            }
+        }) { Text("⋮") }
+    }
+}
+
+@Composable
+private fun WorkflowMainPanel(
+    selectedWorkflow: WorkflowItem?,
+    pendingMessageId: String?,
+    userId: String,
+    userName: String,
+    onCaptureToKnowledgeBase: (WorkflowItem, Message) -> Unit,
+    onMessageNavigated: () -> Unit,
+) {
+    Div({
+        style {
+            property("flex", "1")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            height(100.percent)
+            property("overflow", "hidden")
+        }
+    }) {
+        val workflow = selectedWorkflow
+        if (workflow == null || workflow.groupId.isBlank()) {
+            WorkflowEmptyState()
+        } else {
+            key(workflow.groupId) {
+                WorkflowChatPanel(
+                    userId = userId,
+                    userName = userName,
+                    groupId = workflow.groupId,
+                    workflowName = workflow.name,
+                    pendingMessageId = pendingMessageId,
+                    onCaptureToKnowledgeBase = { message -> onCaptureToKnowledgeBase(workflow, message) },
+                    onMessageNavigated = onMessageNavigated,
+                )
             }
         }
     }
+}
 
-    // Create dialog
+@Composable
+private fun WorkflowEmptyState() {
+    Div({
+        style {
+            property("flex", "1")
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            flexDirection(FlexDirection.Column)
+        }
+    }) {
+        Span({ style { fontSize(48.px); marginBottom(16.px) } }) { Text("\uD83E\uDD16") }
+        Span({
+            style {
+                fontSize(18.px)
+                color(Color(SilkColors.textSecondary))
+            }
+        }) { Text("选择或创建一个工作流开始对话") }
+    }
+}
+
+@Composable
+private fun WorkflowCreateFlow(
+    scope: CoroutineScope,
+    userId: String,
+    showCreateDialog: Boolean,
+    newName: String,
+    newInitialDir: String,
+    availableAgents: List<AgentInfo>,
+    selectedAgentType: String,
+    selectedPermissionMode: String,
+    bridgeConnected: Boolean,
+    dirWarning: String?,
+    showCreatePicker: Boolean,
+    showTrustConfirm: Boolean,
+    trustConfirmPath: String,
+    trustConfirmBridgeId: String?,
+    onNameChange: (String) -> Unit,
+    onInitialDirChange: (String) -> Unit,
+    onAvailableAgentsChange: (List<AgentInfo>) -> Unit,
+    onSelectedAgentTypeChange: (String) -> Unit,
+    onSelectedPermissionModeChange: (String) -> Unit,
+    onBridgeConnectedChange: (Boolean) -> Unit,
+    onDirWarningChange: (String?) -> Unit,
+    onShowCreatePickerChange: (Boolean) -> Unit,
+    onShowTrustConfirmChange: (Boolean) -> Unit,
+    onTrustConfirmPathChange: (String) -> Unit,
+    onTrustConfirmBridgeIdChange: (String?) -> Unit,
+    onWorkflowsChange: (List<WorkflowItem>) -> Unit,
+    onSelectedWorkflowChange: (WorkflowItem?) -> Unit,
+    onDismissCreateDialog: () -> Unit,
+) {
     if (showCreateDialog) {
-        // 打开时若 newInitialDir 为空，拉一次 bridge 默认目录作为初始值；
-        // 失败时记下原因，UI 切换提示，并禁用创建按钮（避免拿到 backend 服务器进程的 cwd 当兜底）
-        //
-        // key 用 Unit 表达"每次对话框打开只执行一次"：外层 if (showCreateDialog) 决定
-        // 这个 LaunchedEffect 是否进入组合，一旦进入就跑一次；用 showCreateDialog 做 key
-        // 在"key 始终为 true"的情况下会造成阅读歧义，所以改用 Unit 更贴合语义
         LaunchedEffect(Unit) {
-            // 加载可选 agent 列表，并按"已连接 codex > 已连接 claude_code > 兜底 claude_code"决定默认值。
-            val agents = ApiClient.listAgents(user.id)
-            availableAgents = agents
-            if (selectedAgentType.isBlank()) {
-                val codexConnected = agents.firstOrNull { it.agentType == "codex" && it.connected } != null
-                val ccConnected = agents.firstOrNull { it.agentType == "claude_code" && it.connected } != null
-                selectedAgentType = when {
-                    codexConnected -> "codex"
-                    ccConnected -> "claude_code"
-                    else -> "claude_code"
-                }
-            }
-            if (newInitialDir.isBlank()) {
-                dirLoadError = null
-                val resp = ApiClient.listCcDir(user.id, null)
-                if (resp.success && resp.path.isNotBlank()) {
-                    newInitialDir = resp.path
-                } else {
-                    dirLoadError = resp.error ?: "无法获取默认目录"
-                }
-            }
+            initializeWorkflowCreateDialog(
+                userId = userId,
+                currentInitialDir = newInitialDir,
+                currentSelectedAgentType = selectedAgentType,
+                onAvailableAgentsChange = onAvailableAgentsChange,
+                onSelectedAgentTypeChange = onSelectedAgentTypeChange,
+                onBridgeConnectedChange = onBridgeConnectedChange,
+                onDirWarningChange = onDirWarningChange,
+                onInitialDirChange = onInitialDirChange,
+            )
         }
-        ModalOverlay(
-            onDismiss = {
-                // 任意路径关闭对话框（点遮罩、未来加 Esc 等）都统一清空 state，
-                // 下次再开会重新拉一次 bridge 默认目录，避免旧值 stale
-                showCreateDialog = false
-                newName = ""
-                newInitialDir = ""
-                selectedAgentType = ""
-                dirLoadError = null
-            },
-            zIndex = 1000,
-        ) {
-            Div({
-                style {
-                    backgroundColor(Color.white)
-                    borderRadius(12.px)
-                    padding(24.px)
-                    width(440.px)
-                    property("max-width", "90vw")
-                    property("box-shadow", "0 8px 32px rgba(0,0,0,0.15)")
-                }
-            }) {
-                H3({ style { marginTop(0.px); color(Color(SilkColors.textPrimary)) } }) { Text("创建工作流") }
-                // 工作流名称
-                Input(InputType.Text) {
-                    value(newName)
-                    onInput { newName = it.value }
-                    attr("placeholder", "工作流名称")
-                    style {
-                        width(100.percent)
-                        height(40.px)
-                        borderRadius(6.px)
-                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                        padding(8.px)
-                        fontSize(14.px)
-                        marginBottom(12.px)
-                        property("box-sizing", "border-box")
-                    }
-                }
-                // Agent 选择
-                Span({
-                    style {
-                        fontSize(12.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("display", "block")
-                        marginBottom(4.px)
-                    }
-                }) { Text("Agent") }
-                Select({
-                    style {
-                        width(100.percent)
-                        height(40.px)
-                        borderRadius(6.px)
-                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                        padding(8.px)
-                        fontSize(14.px)
-                        marginBottom(12.px)
-                        property("box-sizing", "border-box")
-                        backgroundColor(Color.white)
-                    }
-                    onChange { event ->
-                        val newValue = event.value ?: return@onChange
-                        selectedAgentType = newValue
-                    }
-                }) {
-                    if (availableAgents.isEmpty()) {
-                        Option("") { Text("加载中…") }
-                    } else {
-                        availableAgents.forEach { agent ->
-                            Option(
-                                value = agent.agentType,
-                                attrs = {
-                                    if (!agent.connected) attr("disabled", "")
-                                    if (agent.agentType == selectedAgentType) attr("selected", "")
-                                },
-                            ) {
-                                val suffix = if (agent.connected) "" else "（未连接）"
-                                Text("${agent.displayName}${suffix}")
-                            }
-                        }
-                    }
-                }
-                // 工作目录
-                Span({
-                    style {
-                        fontSize(12.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("display", "block")
-                        marginBottom(4.px)
-                    }
-                }) { Text("工作目录") }
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        property("gap", "8px")
-                        marginBottom(if (dirLoadError != null) 6.px else 16.px)
-                    }
-                }) {
-                    Input(InputType.Text) {
-                        value(newInitialDir)
-                        onInput { newInitialDir = it.value }
-                        // Bridge 离线时整个创建流程都会失败（后端会拒绝），输入路径也无意义，
-                        // 因此明确引导用户先去解决 Bridge 问题，不再鼓励手动输入
-                        attr(
-                            "placeholder",
-                            if (dirLoadError != null) "Bridge 未连接，请先启动 Bridge"
-                            else "加载默认目录中…",
-                        )
-                        // Bridge 离线时禁用输入框，避免用户白费功夫
-                        if (dirLoadError != null) attr("disabled", "")
-                        style {
-                            property("flex", "1")
-                            height(40.px)
-                            borderRadius(6.px)
-                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                            padding(8.px)
-                            fontSize(13.px)
-                            fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
-                            property("box-sizing", "border-box")
-                            if (dirLoadError != null) {
-                                backgroundColor(Color(SilkColors.surface))
-                                color(Color(SilkColors.textLight))
-                            }
-                        }
-                    }
-                    Button({
-                        // Bridge 离线时浏览器肯定也用不了，提前禁用更友好
-                        val pickerDisabled = dirLoadError != null
-                        if (pickerDisabled) attr("disabled", "")
-                        style {
-                            backgroundColor(Color("transparent"))
-                            color(
-                                if (pickerDisabled) Color(SilkColors.textLight)
-                                else Color(SilkColors.primary)
-                            )
-                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                            borderRadius(6.px)
-                            padding(6.px, 10.px)
-                            property("cursor", if (pickerDisabled) "not-allowed" else "pointer")
-                            fontSize(13.px)
-                            property("white-space", "nowrap")
-                        }
-                        attr("title", "浏览选择目录（需 Bridge 在线）")
-                        onClick { if (!pickerDisabled) showCreatePicker = true }
-                    }) { Text("\uD83D\uDCC2 选择…") }
-                }
-                // 加载失败时的小提示行
-                if (dirLoadError != null) {
-                    Div({
-                        style {
-                            fontSize(12.px)
-                            color(Color(SilkColors.error))
-                            marginBottom(16.px)
-                        }
-                    }) { Text("⚠ ${dirLoadError}。请先启动 Bridge Agent 再创建工作流。") }
-                }
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        justifyContent(JustifyContent.FlexEnd)
-                        property("gap", "8px")
-                    }
-                }) {
-                    Button({
-                        style {
-                            backgroundColor(Color(SilkColors.surface))
-                            color(Color(SilkColors.textSecondary))
-                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                            borderRadius(6.px)
-                            padding(8.px, 16.px)
-                            property("cursor", "pointer")
-                        }
-                        onClick {
-                            showCreateDialog = false
-                            newName = ""
-                            newInitialDir = ""
-                            selectedAgentType = ""
-                            dirLoadError = null
-                        }
-                    }) { Text("取消") }
-                    Button({
-                        val canCreate = newName.isNotBlank() && dirLoadError == null && newInitialDir.isNotBlank()
-                        if (!canCreate) attr("disabled", "")
-                        style {
-                            backgroundColor(
-                                if (canCreate) Color(SilkColors.primary)
-                                else Color(SilkColors.primaryLight)
-                            )
-                            color(Color.white)
-                            border(0.px)
-                            borderRadius(6.px)
-                            padding(8.px, 16.px)
-                            property("cursor", if (canCreate) "pointer" else "not-allowed")
-                        }
-                        attr(
-                            "title",
-                            when {
-                                dirLoadError != null -> "Bridge 未连接，无法创建"
-                                newName.isBlank() -> "请输入工作流名称"
-                                newInitialDir.isBlank() -> "请填写或选择工作目录"
-                                else -> "创建工作流"
-                            },
-                        )
-                        onClick {
-                            if (!canCreate) return@onClick
-                            val initDir = newInitialDir.trim()
-                            scope.launch {
-                                // 1. 信任目录检查
-                                val trustCheck = ApiClient.checkTrustedDir(user.id, initDir)
-                                when (trustCheck) {
-                                    is ApiClient.TrustCheckResult.BridgeDisconnected -> {
-                                        kotlinx.browser.window.alert("Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
-                                        return@launch
-                                    }
-                                    is ApiClient.TrustCheckResult.NotTrusted -> {
-                                        trustConfirmPath = initDir
-                                        trustConfirmBridgeId = trustCheck.bridgeId
-                                        showTrustConfirm = true
-                                        return@launch
-                                    }
-                                    is ApiClient.TrustCheckResult.Error -> {
-                                        kotlinx.browser.window.alert("检查信任状态失败：${trustCheck.message}")
-                                        return@launch
-                                    }
-                                    else -> {} // 已信任，继续
-                                }
-
-                                // 2. 创建 workflow
-                                performCreateWorkflow()
-                            }
-                        }
-                    }) { Text("创建") }
-                }
-            }
-        }
-    }
-
-    // 创建工作流对话框里的 Folder Picker
-    if (showCreatePicker) {
-        FolderPickerDialog(
-            userId = user.id,
-            initialPath = newInitialDir.ifBlank { null },
-            onDismiss = { showCreatePicker = false },
-            onConfirm = { selectedPath ->
-                newInitialDir = selectedPath
-                showCreatePicker = false
+        WorkflowCreateDialog(
+            newName = newName,
+            newInitialDir = newInitialDir,
+            availableAgents = availableAgents,
+            selectedAgentType = selectedAgentType,
+            selectedPermissionMode = selectedPermissionMode,
+            bridgeConnected = bridgeConnected,
+            dirWarning = dirWarning,
+            onNameChange = onNameChange,
+            onInitialDirChange = onInitialDirChange,
+            onSelectedAgentTypeChange = onSelectedAgentTypeChange,
+            onSelectedPermissionModeChange = onSelectedPermissionModeChange,
+            onOpenPicker = { onShowCreatePickerChange(true) },
+            onDismiss = onDismissCreateDialog,
+            onCreate = {
+                handleWorkflowCreateSubmit(
+                    scope = scope,
+                    userId = userId,
+                    newName = newName,
+                    newInitialDir = newInitialDir,
+                    selectedAgentType = selectedAgentType,
+                    selectedPermissionMode = selectedPermissionMode,
+                    onShowTrustConfirmChange = onShowTrustConfirmChange,
+                    onTrustConfirmPathChange = onTrustConfirmPathChange,
+                    onTrustConfirmBridgeIdChange = onTrustConfirmBridgeIdChange,
+                    onWorkflowsChange = onWorkflowsChange,
+                    onSelectedWorkflowChange = onSelectedWorkflowChange,
+                    onDismissCreateDialog = onDismissCreateDialog,
+                    onBridgeConnectedChange = onBridgeConnectedChange,
+                    onSelectedAgentTypeChange = onSelectedAgentTypeChange,
+                    onSelectedPermissionModeChange = onSelectedPermissionModeChange,
+                    onDirWarningChange = onDirWarningChange,
+                    onInitialDirChange = onInitialDirChange,
+                )
             },
         )
     }
 
-    // 信任确认弹窗（Silk 风格，替代浏览器原生 confirm）
+    if (showCreatePicker) {
+        FolderPickerDialog(
+            userId = userId,
+            initialPath = newInitialDir.ifBlank { null },
+            onDismiss = { onShowCreatePickerChange(false) },
+            onConfirm = { selectedPath ->
+                onInitialDirChange(selectedPath)
+                onShowCreatePickerChange(false)
+            },
+        )
+    }
+
     if (showTrustConfirm) {
         TrustConfirmDialog(
             path = trustConfirmPath,
             bridgeId = trustConfirmBridgeId,
-            onDismiss = { showTrustConfirm = false },
+            onDismiss = { onShowTrustConfirmChange(false) },
             onTrust = {
+                handleWorkflowCreateTrustConfirm(
+                    scope = scope,
+                    userId = userId,
+                    trustConfirmPath = trustConfirmPath,
+                    newName = newName,
+                    newInitialDir = newInitialDir,
+                    selectedAgentType = selectedAgentType,
+                    selectedPermissionMode = selectedPermissionMode,
+                    onShowTrustConfirmChange = onShowTrustConfirmChange,
+                    onWorkflowsChange = onWorkflowsChange,
+                    onSelectedWorkflowChange = onSelectedWorkflowChange,
+                    onDismissCreateDialog = onDismissCreateDialog,
+                    onBridgeConnectedChange = onBridgeConnectedChange,
+                    onSelectedAgentTypeChange = onSelectedAgentTypeChange,
+                    onSelectedPermissionModeChange = onSelectedPermissionModeChange,
+                    onDirWarningChange = onDirWarningChange,
+                    onInitialDirChange = onInitialDirChange,
+                )
+            },
+        )
+    }
+}
+
+@Composable
+private fun WorkflowCreateDialog(
+    newName: String,
+    newInitialDir: String,
+    availableAgents: List<AgentInfo>,
+    selectedAgentType: String,
+    selectedPermissionMode: String,
+    bridgeConnected: Boolean,
+    dirWarning: String?,
+    onNameChange: (String) -> Unit,
+    onInitialDirChange: (String) -> Unit,
+    onSelectedAgentTypeChange: (String) -> Unit,
+    onSelectedPermissionModeChange: (String) -> Unit,
+    onOpenPicker: () -> Unit,
+    onDismiss: () -> Unit,
+    onCreate: () -> Unit,
+) {
+    ModalOverlay(
+        onDismiss = onDismiss,
+        zIndex = 1000,
+    ) {
+        Div({
+            style {
+                backgroundColor(Color.white)
+                borderRadius(12.px)
+                padding(24.px)
+                width(440.px)
+                property("max-width", "90vw")
+                property("box-shadow", "0 8px 32px rgba(0,0,0,0.15)")
+            }
+        }) {
+            H3({ style { marginTop(0.px); color(Color(SilkColors.textPrimary)) } }) { Text("创建工作流") }
+            WorkflowCreateNameField(
+                value = newName,
+                onValueChange = onNameChange,
+            )
+            WorkflowCreateAgentField(
+                availableAgents = availableAgents,
+                selectedAgentType = selectedAgentType,
+                onSelectedAgentTypeChange = onSelectedAgentTypeChange,
+            )
+            WorkflowCreatePermissionField(
+                selectedPermissionMode = selectedPermissionMode,
+                onSelectedPermissionModeChange = onSelectedPermissionModeChange,
+            )
+            WorkflowCreateDirectoryField(
+                newInitialDir = newInitialDir,
+                bridgeConnected = bridgeConnected,
+                dirWarning = dirWarning,
+                onInitialDirChange = onInitialDirChange,
+                onOpenPicker = onOpenPicker,
+            )
+            WorkflowCreateDirectoryWarning(
+                bridgeConnected = bridgeConnected,
+                dirWarning = dirWarning,
+            )
+            WorkflowCreateDialogActions(
+                newName = newName,
+                newInitialDir = newInitialDir,
+                bridgeConnected = bridgeConnected,
+                onDismiss = onDismiss,
+                onCreate = onCreate,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkflowCreateNameField(
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    Input(InputType.Text) {
+        value(value)
+        onInput { onValueChange(it.value) }
+        attr("placeholder", "工作流名称")
+        style {
+            width(100.percent)
+            height(40.px)
+            borderRadius(6.px)
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            padding(8.px)
+            fontSize(14.px)
+            marginBottom(12.px)
+            property("box-sizing", "border-box")
+        }
+    }
+}
+
+@Composable
+private fun WorkflowCreateAgentField(
+    availableAgents: List<AgentInfo>,
+    selectedAgentType: String,
+    onSelectedAgentTypeChange: (String) -> Unit,
+) {
+    WorkflowCreateFieldLabel("Agent")
+    Select({
+        style {
+            width(100.percent)
+            height(40.px)
+            borderRadius(6.px)
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            padding(8.px)
+            fontSize(14.px)
+            marginBottom(12.px)
+            property("box-sizing", "border-box")
+            backgroundColor(Color.white)
+        }
+        onChange { event ->
+            val newValue = event.value ?: return@onChange
+            onSelectedAgentTypeChange(newValue)
+        }
+    }) {
+        if (availableAgents.isEmpty()) {
+            Option("") { Text("加载中…") }
+        } else {
+            availableAgents.forEach { agent ->
+                Option(
+                    value = agent.agentType,
+                    attrs = {
+                        if (!agent.connected) {
+                            attr("disabled", "")
+                        }
+                        if (agent.agentType == selectedAgentType) {
+                            attr("selected", "")
+                        }
+                    },
+                ) {
+                    Text("${agent.displayName}${if (agent.connected) "" else "（未连接）"}")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkflowCreatePermissionField(
+    selectedPermissionMode: String,
+    onSelectedPermissionModeChange: (String) -> Unit,
+) {
+    WorkflowCreateFieldLabel("权限模式")
+    Select({
+        style {
+            width(100.percent)
+            height(40.px)
+            borderRadius(6.px)
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            padding(8.px)
+            fontSize(14.px)
+            marginBottom(12.px)
+            property("box-sizing", "border-box")
+            backgroundColor(Color.white)
+        }
+        onChange { event ->
+            onSelectedPermissionModeChange(event.value ?: "")
+        }
+    }) {
+        Option("", attrs = { if (selectedPermissionMode.isBlank()) attr("selected", "") }) { Text("Interactive") }
+        Option("ACCEPT_EDITS", attrs = { if (selectedPermissionMode == "ACCEPT_EDITS") attr("selected", "") }) { Text("Accept Edits") }
+        Option("BYPASS", attrs = { if (selectedPermissionMode == "BYPASS") attr("selected", "") }) { Text("Bypass") }
+    }
+}
+
+@Composable
+private fun WorkflowCreateFieldLabel(label: String) {
+    Span({
+        style {
+            fontSize(12.px)
+            color(Color(SilkColors.textSecondary))
+            property("display", "block")
+            marginBottom(4.px)
+        }
+    }) { Text(label) }
+}
+
+@Composable
+private fun WorkflowCreateDirectoryField(
+    newInitialDir: String,
+    bridgeConnected: Boolean,
+    dirWarning: String?,
+    onInitialDirChange: (String) -> Unit,
+    onOpenPicker: () -> Unit,
+) {
+    WorkflowCreateFieldLabel("工作目录")
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            property("gap", "8px")
+            marginBottom(if (!bridgeConnected || dirWarning != null) 6.px else 16.px)
+        }
+    }) {
+        Input(InputType.Text) {
+            value(newInitialDir)
+            onInput { onInitialDirChange(it.value) }
+            attr("placeholder", workflowCreateDirectoryPlaceholder(bridgeConnected, dirWarning))
+            if (!bridgeConnected) {
+                attr("disabled", "")
+            }
+            style {
+                property("flex", "1")
+                height(40.px)
+                borderRadius(6.px)
+                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                padding(8.px)
+                fontSize(13.px)
+                fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
+                property("box-sizing", "border-box")
+                if (!bridgeConnected) {
+                    backgroundColor(Color(SilkColors.surface))
+                    color(Color(SilkColors.textLight))
+                }
+            }
+        }
+        Button({
+            val pickerDisabled = !bridgeConnected
+            if (pickerDisabled) {
+                attr("disabled", "")
+            }
+            style {
+                backgroundColor(Color("transparent"))
+                color(Color(if (pickerDisabled) SilkColors.textLight else SilkColors.primary))
+                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                borderRadius(6.px)
+                padding(6.px, 10.px)
+                property("cursor", if (pickerDisabled) "not-allowed" else "pointer")
+                fontSize(13.px)
+                property("white-space", "nowrap")
+            }
+            attr("title", "浏览选择目录（需 Bridge 在线）")
+            onClick {
+                if (!pickerDisabled) {
+                    onOpenPicker()
+                }
+            }
+        }) { Text("\uD83D\uDCC2 选择…") }
+    }
+}
+
+@Composable
+private fun WorkflowCreateDirectoryWarning(
+    bridgeConnected: Boolean,
+    dirWarning: String?,
+) {
+    when {
+        !bridgeConnected -> Div({
+            style {
+                fontSize(12.px)
+                color(Color(SilkColors.error))
+                marginBottom(16.px)
+            }
+        }) { Text("⚠ Bridge 未连接。请先启动 Bridge Agent 再创建工作流。") }
+
+        dirWarning != null -> Div({
+            style {
+                fontSize(12.px)
+                color(Color(SilkColors.warning))
+                marginBottom(16.px)
+            }
+        }) { Text("⚠ ${dirWarning}，请手动输入或选择工作目录。") }
+    }
+}
+
+@Composable
+private fun WorkflowCreateDialogActions(
+    newName: String,
+    newInitialDir: String,
+    bridgeConnected: Boolean,
+    onDismiss: () -> Unit,
+    onCreate: () -> Unit,
+) {
+    val canCreate = workflowCreateCanSubmit(newName, bridgeConnected, newInitialDir)
+
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.FlexEnd)
+            property("gap", "8px")
+        }
+    }) {
+        Button({
+            style {
+                backgroundColor(Color(SilkColors.surface))
+                color(Color(SilkColors.textSecondary))
+                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                borderRadius(6.px)
+                padding(8.px, 16.px)
+                property("cursor", "pointer")
+            }
+            onClick { onDismiss() }
+        }) { Text("取消") }
+        Button({
+            if (!canCreate) {
+                attr("disabled", "")
+            }
+            style {
+                backgroundColor(Color(if (canCreate) SilkColors.primary else SilkColors.primaryLight))
+                color(Color.white)
+                border(0.px)
+                borderRadius(6.px)
+                padding(8.px, 16.px)
+                property("cursor", if (canCreate) "pointer" else "not-allowed")
+            }
+            attr("title", workflowCreateSubmitTitle(newName, bridgeConnected, newInitialDir))
+            onClick {
+                if (canCreate) {
+                    onCreate()
+                }
+            }
+        }) { Text("创建") }
+    }
+}
+
+private fun workflowCreateCanSubmit(
+    newName: String,
+    bridgeConnected: Boolean,
+    newInitialDir: String,
+): Boolean = newName.isNotBlank() && bridgeConnected && newInitialDir.isNotBlank()
+
+private fun workflowCreateSubmitTitle(
+    newName: String,
+    bridgeConnected: Boolean,
+    newInitialDir: String,
+): String = when {
+    !bridgeConnected -> "Bridge 未连接，无法创建"
+    newName.isBlank() -> "请输入工作流名称"
+    newInitialDir.isBlank() -> "请填写或选择工作目录"
+    else -> "创建工作流"
+}
+
+private fun workflowCreateDirectoryPlaceholder(
+    bridgeConnected: Boolean,
+    dirWarning: String?,
+): String = when {
+    !bridgeConnected -> "Bridge 未连接，请先启动 Bridge"
+    dirWarning != null -> "请输入或选择工作目录"
+    else -> "加载默认目录中…"
+}
+
+private suspend fun initializeWorkflowCreateDialog(
+    userId: String,
+    currentInitialDir: String,
+    currentSelectedAgentType: String,
+    onAvailableAgentsChange: (List<AgentInfo>) -> Unit,
+    onSelectedAgentTypeChange: (String) -> Unit,
+    onBridgeConnectedChange: (Boolean) -> Unit,
+    onDirWarningChange: (String?) -> Unit,
+    onInitialDirChange: (String) -> Unit,
+) {
+    val agents = ApiClient.listAgents(userId)
+    onAvailableAgentsChange(agents)
+    if (currentSelectedAgentType.isBlank()) {
+        onSelectedAgentTypeChange(defaultWorkflowAgentType(agents))
+    }
+    val bridgeConnected = agents.any { it.connected }
+    onBridgeConnectedChange(bridgeConnected)
+    if (currentInitialDir.isBlank() && bridgeConnected) {
+        onDirWarningChange(null)
+        val response = ApiClient.listCcDir(userId, null)
+        if (response.success && response.path.isNotBlank()) {
+            onInitialDirChange(response.path)
+        } else {
+            onDirWarningChange(response.error ?: "无法获取默认目录")
+        }
+    }
+}
+
+private fun defaultWorkflowAgentType(agents: List<AgentInfo>): String = when {
+    agents.any { it.agentType == "codex" && it.connected } -> "codex"
+    agents.any { it.agentType == "claude_code" && it.connected } -> "claude_code"
+    else -> "claude_code"
+}
+
+private fun handleWorkflowCreateSubmit(
+    scope: CoroutineScope,
+    userId: String,
+    newName: String,
+    newInitialDir: String,
+    selectedAgentType: String,
+    selectedPermissionMode: String,
+    onShowTrustConfirmChange: (Boolean) -> Unit,
+    onTrustConfirmPathChange: (String) -> Unit,
+    onTrustConfirmBridgeIdChange: (String?) -> Unit,
+    onWorkflowsChange: (List<WorkflowItem>) -> Unit,
+    onSelectedWorkflowChange: (WorkflowItem?) -> Unit,
+    onDismissCreateDialog: () -> Unit,
+    onBridgeConnectedChange: (Boolean) -> Unit,
+    onSelectedAgentTypeChange: (String) -> Unit,
+    onSelectedPermissionModeChange: (String) -> Unit,
+    onDirWarningChange: (String?) -> Unit,
+    onInitialDirChange: (String) -> Unit,
+) {
+    val initDir = newInitialDir.trim()
+    scope.launch {
+        when (val trustCheck = ApiClient.checkTrustedDir(userId, initDir)) {
+            is TrustCheckResult.BridgeDisconnected -> {
+                kotlinx.browser.window.alert("Bridge 未连接，无法创建工作流。请先启动 Bridge Agent。")
+            }
+            is TrustCheckResult.NotTrusted -> {
+                onTrustConfirmPathChange(initDir)
+                onTrustConfirmBridgeIdChange(trustCheck.bridgeId)
+                onShowTrustConfirmChange(true)
+            }
+            is TrustCheckResult.Error -> {
+                kotlinx.browser.window.alert("检查信任状态失败：${trustCheck.message}")
+            }
+            else -> {
+                launchWorkflowCreate(
+                    userId = userId,
+                    newName = newName,
+                    newInitialDir = newInitialDir,
+                    selectedAgentType = selectedAgentType,
+                    selectedPermissionMode = selectedPermissionMode,
+                    onWorkflowsChange = onWorkflowsChange,
+                    onSelectedWorkflowChange = onSelectedWorkflowChange,
+                    onDismissCreateDialog = onDismissCreateDialog,
+                    onBridgeConnectedChange = onBridgeConnectedChange,
+                    onSelectedAgentTypeChange = onSelectedAgentTypeChange,
+                    onSelectedPermissionModeChange = onSelectedPermissionModeChange,
+                    onDirWarningChange = onDirWarningChange,
+                    onInitialDirChange = onInitialDirChange,
+                )
+            }
+        }
+    }
+}
+
+private fun handleWorkflowCreateTrustConfirm(
+    scope: CoroutineScope,
+    userId: String,
+    trustConfirmPath: String,
+    newName: String,
+    newInitialDir: String,
+    selectedAgentType: String,
+    selectedPermissionMode: String,
+    onShowTrustConfirmChange: (Boolean) -> Unit,
+    onWorkflowsChange: (List<WorkflowItem>) -> Unit,
+    onSelectedWorkflowChange: (WorkflowItem?) -> Unit,
+    onDismissCreateDialog: () -> Unit,
+    onBridgeConnectedChange: (Boolean) -> Unit,
+    onSelectedAgentTypeChange: (String) -> Unit,
+    onSelectedPermissionModeChange: (String) -> Unit,
+    onDirWarningChange: (String?) -> Unit,
+    onInitialDirChange: (String) -> Unit,
+) {
+    scope.launch {
+        val added = ApiClient.addTrustedDir(userId, trustConfirmPath)
+        if (!added) {
+            kotlinx.browser.window.alert("添加信任记录失败，请重试。")
+            return@launch
+        }
+        onShowTrustConfirmChange(false)
+        launchWorkflowCreate(
+            userId = userId,
+            newName = newName,
+            newInitialDir = newInitialDir,
+            selectedAgentType = selectedAgentType,
+            selectedPermissionMode = selectedPermissionMode,
+            onWorkflowsChange = onWorkflowsChange,
+            onSelectedWorkflowChange = onSelectedWorkflowChange,
+            onDismissCreateDialog = onDismissCreateDialog,
+            onBridgeConnectedChange = onBridgeConnectedChange,
+            onSelectedAgentTypeChange = onSelectedAgentTypeChange,
+            onSelectedPermissionModeChange = onSelectedPermissionModeChange,
+            onDirWarningChange = onDirWarningChange,
+            onInitialDirChange = onInitialDirChange,
+        )
+    }
+}
+
+private suspend fun launchWorkflowCreate(
+    userId: String,
+    newName: String,
+    newInitialDir: String,
+    selectedAgentType: String,
+    selectedPermissionMode: String,
+    onWorkflowsChange: (List<WorkflowItem>) -> Unit,
+    onSelectedWorkflowChange: (WorkflowItem?) -> Unit,
+    onDismissCreateDialog: () -> Unit,
+    onBridgeConnectedChange: (Boolean) -> Unit,
+    onSelectedAgentTypeChange: (String) -> Unit,
+    onSelectedPermissionModeChange: (String) -> Unit,
+    onDirWarningChange: (String?) -> Unit,
+    onInitialDirChange: (String) -> Unit,
+) {
+    val agentType = selectedAgentType.ifBlank { "claude_code" }
+    val result = ApiClient.createWorkflow(
+        newName.trim(),
+        "",
+        userId,
+        newInitialDir.trim(),
+        agentType,
+        selectedPermissionMode,
+    )
+    onWorkflowsChange(ApiClient.getWorkflows(userId))
+    when (result) {
+        is CreateWorkflowResult.Ok -> {
+            onSelectedWorkflowChange(result.workflow)
+            onDismissCreateDialog()
+            onSelectedAgentTypeChange("")
+            onSelectedPermissionModeChange("")
+            onDirWarningChange(null)
+            onInitialDirChange("")
+        }
+        is CreateWorkflowResult.Err -> {
+            kotlinx.browser.window.alert("创建工作流失败：${result.message}")
+            val agents = ApiClient.listAgents(userId)
+            onBridgeConnectedChange(agents.any { it.connected })
+        }
+    }
+}
+
+@Composable
+private fun WorkflowManagementDialogs(
+    scope: CoroutineScope,
+    userId: String,
+    menuWorkflow: WorkflowItem?,
+    renameTarget: WorkflowItem?,
+    renameText: String,
+    deleteTarget: WorkflowItem?,
+    selectedWorkflowId: String?,
+    onMenuWorkflowChange: (WorkflowItem?) -> Unit,
+    onRenameTargetChange: (WorkflowItem?) -> Unit,
+    onRenameTextChange: (String) -> Unit,
+    onDeleteTargetChange: (WorkflowItem?) -> Unit,
+    onSelectedWorkflowChange: (WorkflowItem?) -> Unit,
+    onWorkflowsChange: (List<WorkflowItem>) -> Unit,
+) {
+    menuWorkflow?.let { workflow ->
+        WorkflowActionMenuDialog(
+            workflow = workflow,
+            onDismiss = { onMenuWorkflowChange(null) },
+            onRename = {
+                onRenameTargetChange(workflow)
+                onRenameTextChange(workflow.name)
+                onMenuWorkflowChange(null)
+            },
+            onDelete = {
+                onDeleteTargetChange(workflow)
+                onMenuWorkflowChange(null)
+            },
+        )
+    }
+
+    renameTarget?.let { workflow ->
+        WorkflowRenameDialog(
+            workflowName = workflow.name,
+            renameText = renameText,
+            onRenameTextChange = onRenameTextChange,
+            onDismiss = {
+                onRenameTargetChange(null)
+                onRenameTextChange("")
+            },
+            onConfirm = {
                 scope.launch {
-                    val added = ApiClient.addTrustedDir(user.id, trustConfirmPath)
-                    if (added) {
-                        showTrustConfirm = false
-                        performCreateWorkflow()
+                    val updated = ApiClient.renameWorkflow(workflow.id, userId, renameText.trim())
+                    if (updated != null) {
+                        onWorkflowsChange(ApiClient.getWorkflows(userId))
+                        onRenameTargetChange(null)
+                        onRenameTextChange("")
                     } else {
-                        kotlinx.browser.window.alert("添加信任记录失败，请重试。")
+                        kotlinx.browser.window.alert("重命名失败")
                     }
                 }
             },
         )
+    }
+
+    deleteTarget?.let { workflow ->
+        WorkflowDeleteDialog(
+            workflowName = workflow.name,
+            onDismiss = { onDeleteTargetChange(null) },
+            onConfirm = {
+                scope.launch {
+                    ApiClient.deleteWorkflow(workflow.id, userId)
+                    if (selectedWorkflowId == workflow.id) {
+                        onSelectedWorkflowChange(null)
+                    }
+                    onWorkflowsChange(ApiClient.getWorkflows(userId))
+                    onDeleteTargetChange(null)
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun WorkflowActionMenuDialog(
+    workflow: WorkflowItem,
+    onDismiss: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    ModalOverlay(
+        onDismiss = onDismiss,
+        zIndex = 1001,
+    ) {
+        Div({
+            style {
+                backgroundColor(Color.white)
+                borderRadius(12.px)
+                padding(16.px)
+                width(200.px)
+                property("box-shadow", "0 4px 16px rgba(0,0,0,0.12)")
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("gap", "4px")
+            }
+        }) {
+            Span({
+                style {
+                    fontSize(14.px)
+                    fontWeight("bold")
+                    color(Color(SilkColors.textPrimary))
+                    padding(8.px, 12.px)
+                }
+            }) { Text(workflow.name) }
+            Div({
+                style {
+                    height(1.px)
+                    backgroundColor(Color(SilkColors.border))
+                    marginTop(4.px)
+                    marginBottom(4.px)
+                }
+            }) {}
+            WorkflowActionMenuButton("✏ 重命名", SilkColors.textPrimary, onRename)
+            WorkflowActionMenuButton("🗑 删除", SilkColors.error, onDelete)
+            WorkflowActionMenuButton("取消", SilkColors.textSecondary, onDismiss)
+        }
+    }
+}
+
+@Composable
+private fun WorkflowActionMenuButton(
+    label: String,
+    textColor: String,
+    onClick: () -> Unit,
+) {
+    Button({
+        style {
+            backgroundColor(Color("transparent"))
+            color(Color(textColor))
+            border(0.px)
+            borderRadius(6.px)
+            padding(10.px, 12.px)
+            property("cursor", "pointer")
+            fontSize(14.px)
+            property("text-align", "left")
+        }
+        onClick { onClick() }
+    }) { Text(label) }
+}
+
+@Composable
+private fun WorkflowRenameDialog(
+    workflowName: String,
+    renameText: String,
+    onRenameTextChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    ModalOverlay(
+        onDismiss = onDismiss,
+        zIndex = 1002,
+    ) {
+        Div({
+            style {
+                backgroundColor(Color.white)
+                borderRadius(12.px)
+                padding(24.px)
+                width(380.px)
+                property("max-width", "90vw")
+                property("box-shadow", "0 8px 32px rgba(0,0,0,0.15)")
+            }
+        }) {
+            H3({ style { marginTop(0.px); color(Color(SilkColors.textPrimary)) } }) { Text("重命名工作流") }
+            Input(InputType.Text) {
+                value(renameText)
+                onInput { onRenameTextChange(it.value) }
+                attr("placeholder", workflowName)
+                style {
+                    width(100.percent)
+                    height(40.px)
+                    borderRadius(6.px)
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    padding(8.px)
+                    fontSize(14.px)
+                    marginBottom(16.px)
+                    property("box-sizing", "border-box")
+                }
+            }
+            WorkflowConfirmActions(
+                confirmLabel = "确认",
+                confirmColor = SilkColors.primary,
+                onDismiss = onDismiss,
+                onConfirm = onConfirm,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkflowDeleteDialog(
+    workflowName: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    ModalOverlay(
+        onDismiss = onDismiss,
+        zIndex = 1002,
+    ) {
+        Div({
+            style {
+                backgroundColor(Color.white)
+                borderRadius(12.px)
+                padding(24.px)
+                width(360.px)
+                property("max-width", "90vw")
+                property("box-shadow", "0 8px 32px rgba(0,0,0,0.15)")
+            }
+        }) {
+            H3({ style { marginTop(0.px); color(Color(SilkColors.error)) } }) { Text("删除工作流") }
+            P({ style { fontSize(14.px); color(Color(SilkColors.textPrimary)); marginBottom(20.px) } }) {
+                Text("确定要删除「${workflowName}」吗？此操作不可撤销。")
+            }
+            WorkflowConfirmActions(
+                confirmLabel = "删除",
+                confirmColor = SilkColors.error,
+                onDismiss = onDismiss,
+                onConfirm = onConfirm,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkflowConfirmActions(
+    confirmLabel: String,
+    confirmColor: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.FlexEnd)
+            property("gap", "8px")
+        }
+    }) {
+        Button({
+            style {
+                backgroundColor(Color(SilkColors.surface))
+                color(Color(SilkColors.textSecondary))
+                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                borderRadius(6.px)
+                padding(8.px, 16.px)
+                property("cursor", "pointer")
+            }
+            onClick { onDismiss() }
+        }) { Text("取消") }
+        Button({
+            style {
+                backgroundColor(Color(confirmColor))
+                color(Color.white)
+                border(0.px)
+                borderRadius(6.px)
+                padding(8.px, 16.px)
+                property("cursor", "pointer")
+            }
+            onClick { onConfirm() }
+        }) { Text(confirmLabel) }
     }
 }
 
@@ -546,6 +1442,9 @@ private fun WorkflowChatPanel(
     userName: String,
     groupId: String,
     workflowName: String,
+    pendingMessageId: String?,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
+    onMessageNavigated: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val wsUrl = remember { backendWsOrigin() }
@@ -555,27 +1454,22 @@ private fun WorkflowChatPanel(
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
+    val isHistoryLoading by chatClient.isLoadingHistory.collectAsState()
     var messageText by remember(groupId) { mutableStateOf("") }
+    var kbContextSelection by remember(groupId) { mutableStateOf(KnowledgeBaseContextSelection()) }
+    var persistentKbExcludedSpaceIds by remember(groupId) { mutableStateOf<List<String>?>(null) }
+    var restoredKbContextSelection by remember(groupId) { mutableStateOf(false) }
     var workingDir by remember(groupId) { mutableStateOf("") }
     var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
+    var permissionMode by remember(groupId) { mutableStateOf("") }
+    var availableAgents by remember(groupId) { mutableStateOf<List<AgentInfo>>(emptyList()) }
     var showFolderPicker by remember(groupId) { mutableStateOf(false) }
-    // 信任确认弹窗状态（替代浏览器原生 confirm）
     var showTrustConfirm by remember(groupId) { mutableStateOf(false) }
     var trustConfirmPath by remember(groupId) { mutableStateOf("") }
     var trustConfirmBridgeId by remember(groupId) { mutableStateOf<String?>(null) }
-
-    // 提取执行 cd 的 suspend 函数，供信任弹窗回调复用
-    suspend fun performCd(path: String) {
-        val resp = ApiClient.cdCcDir(userId, groupId, path)
-        if (resp.success) {
-            workingDir = resp.workingDir
-        } else {
-            val err = resp.error
-            if (err != null) {
-                kotlinx.browser.window.alert("切换目录失败：$err")
-            }
-        }
-    }
+    var showPermModeDropdown by remember(groupId) { mutableStateOf(false) }
+    var showAgentDropdown by remember(groupId) { mutableStateOf(false) }
+    var switchError by remember(groupId) { mutableStateOf<String?>(null) }
 
     // 拉取当前 CC 工作目录：
     // - groupId 变化时（切换工作流）
@@ -597,18 +1491,21 @@ private fun WorkflowChatPanel(
         if (snap.success) {
             workingDir = snap.workingDir
             activeAgentDisplay = snap.agentDisplayName
+            permissionMode = snap.permissionMode
         }
+        availableAgents = ApiClient.listAgents(userId)
     }
 
-    // M4 Task 4: 监听 /use 切换后的系统消息，自动刷新 activeAgent 显示
+    // 监听新增消息，刷新 activeAgent / permissionMode 显示。
+    // 后端在 agent 切换、权限模式切换时都会广播 SYSTEM 消息（"已切换到 ..."），
+    // 新增消息改变 messages.size → 触发此 effect → 仅检查最新一条是否匹配。
     LaunchedEffect(messages.size) {
         val latest = messages.lastOrNull() ?: return@LaunchedEffect
-        if (latest.type == com.silk.shared.models.MessageType.SYSTEM &&
-            (latest.content.startsWith("已切换到") || latest.content.contains("已激活") || latest.content.contains("已退出 agent"))
-        ) {
+        if (isWorkflowAgentLifecycleMessage(latest)) {
             val snap = ApiClient.getCcState(userId, groupId)
             if (snap.success) {
                 activeAgentDisplay = snap.agentDisplayName
+                permissionMode = snap.permissionMode
             }
         }
     }
@@ -634,6 +1531,30 @@ private fun WorkflowChatPanel(
         }
     }
 
+    LaunchedEffect(groupId) {
+        persistentKbExcludedSpaceIds = ApiClient.getKBContextPreferences(userId).excludedSpaceIds
+    }
+
+    LaunchedEffect(groupId, isHistoryLoading, messages, persistentKbExcludedSpaceIds) {
+        val persistentExcludedSpaceIds = persistentKbExcludedSpaceIds
+        if (restoredKbContextSelection || isHistoryLoading || persistentExcludedSpaceIds == null) {
+            return@LaunchedEffect
+        }
+        kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+            restoredSelection = latestKnowledgeBaseContextSelection(messages, userId),
+            persistentExcludedSpaceIds = persistentExcludedSpaceIds,
+        )
+        restoredKbContextSelection = true
+    }
+
+    HandlePendingWorkflowMessageNavigation(
+        groupId = groupId,
+        isHistoryLoading = isHistoryLoading,
+        messagesSize = messages.size,
+        pendingMessageId = pendingMessageId,
+        onMessageNavigated = onMessageNavigated,
+    )
+
     // Auto-scroll
     LaunchedEffect(messages.size, transientMessage, statusMessages.size) {
         js("""
@@ -644,7 +1565,166 @@ private fun WorkflowChatPanel(
         """)
     }
 
-    // Header
+    WorkflowChatHeader(
+        workflowName = workflowName,
+        workingDir = workingDir,
+        connectionState = connectionState,
+        onChangeDirectory = { showFolderPicker = true },
+    )
+    WorkflowMessagesArea(
+        messages = messages,
+        statusMessages = statusMessages,
+        transientMessage = transientMessage,
+        userId = userId,
+        userName = userName,
+        chatClient = chatClient,
+        onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
+    )
+    WorkflowChatComposer(
+        statusMessages = statusMessages,
+        kbContextSelection = kbContextSelection,
+        permissionMode = permissionMode,
+        activeAgentDisplay = activeAgentDisplay,
+        availableAgents = availableAgents,
+        showPermModeDropdown = showPermModeDropdown,
+        showAgentDropdown = showAgentDropdown,
+        switchError = switchError,
+        messageText = messageText,
+        isGenerating = isGenerating,
+        onTogglePermModeDropdown = {
+            showPermModeDropdown = !showPermModeDropdown
+            showAgentDropdown = false
+        },
+        onToggleAgentDropdown = {
+            showAgentDropdown = !showAgentDropdown
+            showPermModeDropdown = false
+        },
+        onSelectPermMode = { mode ->
+            showPermModeDropdown = false
+            applyWorkflowPermissionModeSelection(
+                scope = scope,
+                userId = userId,
+                groupId = groupId,
+                currentPermissionMode = permissionMode,
+                selectedMode = mode,
+                onPermissionModeChanged = { permissionMode = it },
+                onError = { switchError = it },
+            )
+        },
+        onSelectAgent = { agent ->
+            showAgentDropdown = false
+            applyWorkflowAgentSelection(
+                scope = scope,
+                userId = userId,
+                groupId = groupId,
+                currentAgentDisplay = activeAgentDisplay,
+                agent = agent,
+                onAgentChanged = { activeAgentDisplay = it.agentDisplayName; permissionMode = it.permissionMode },
+                onError = { switchError = it },
+            )
+        },
+        onClearSwitchError = { switchError = null },
+        onMessageTextChange = { messageText = it },
+        onKnowledgeBaseContextSelectionChange = { nextSelection ->
+            kbContextSelection = nextSelection
+            if (persistentKbExcludedSpaceIds != nextSelection.excludedSpaceIds) {
+                scope.launch {
+                    val updated = ApiClient.updateKBContextPreferences(userId, nextSelection.excludedSpaceIds)
+                    persistentKbExcludedSpaceIds = updated.excludedSpaceIds
+                }
+            }
+        },
+        onStartNewSession = { startWorkflowNewSession(scope, chatClient, userId, userName) },
+        onSendMessage = {
+            submitWorkflowMessage(
+                scope = scope,
+                chatClient = chatClient,
+                userId = userId,
+                userName = userName,
+                messageText = messageText,
+                kbContextSelection = kbContextSelection,
+                onMessageTextChange = { messageText = it },
+            )
+        },
+        onStopGeneration = { stopWorkflowGeneration(scope, chatClient, userId, userName) },
+    )
+    WorkflowChatDialogs(
+        showFolderPicker = showFolderPicker,
+        workingDir = workingDir,
+        userId = userId,
+        showTrustConfirm = showTrustConfirm,
+        trustConfirmPath = trustConfirmPath,
+        trustConfirmBridgeId = trustConfirmBridgeId,
+        onDismissFolderPicker = { showFolderPicker = false },
+        onConfirmFolderPicker = { selectedPath ->
+            handleWorkflowFolderPickerConfirm(
+                scope = scope,
+                userId = userId,
+                groupId = groupId,
+                selectedPath = selectedPath,
+                currentWorkingDir = workingDir,
+                onClosePicker = { showFolderPicker = false },
+                onWorkingDirChanged = { workingDir = it },
+                onTrustRequired = { path, bridgeId ->
+                    trustConfirmPath = path
+                    trustConfirmBridgeId = bridgeId
+                    showTrustConfirm = true
+                },
+                onError = { switchError = it },
+            )
+        },
+        onDismissTrustConfirm = { showTrustConfirm = false },
+        onTrustCurrentPath = {
+            handleWorkflowTrustConfirm(
+                scope = scope,
+                userId = userId,
+                groupId = groupId,
+                trustConfirmPath = trustConfirmPath,
+                onCloseTrustDialog = { showTrustConfirm = false },
+                onWorkingDirChanged = { workingDir = it },
+                onError = { switchError = it },
+            )
+        },
+    )
+}
+
+@Composable
+private fun HandlePendingWorkflowMessageNavigation(
+    groupId: String,
+    isHistoryLoading: Boolean,
+    messagesSize: Int,
+    pendingMessageId: String?,
+    onMessageNavigated: () -> Unit,
+) {
+    LaunchedEffect(groupId, isHistoryLoading, messagesSize, pendingMessageId) {
+        val messageId = pendingMessageId?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        if (isHistoryLoading) {
+            return@LaunchedEffect
+        }
+        if (scrollMessageIntoView(containerId = "wf-messages", messageId = messageId)) {
+            onMessageNavigated()
+        }
+    }
+}
+
+private data class WorkflowAgentSelectionResult(
+    val agentDisplayName: String,
+    val permissionMode: String,
+)
+
+private val workflowPermissionOptions = listOf(
+    "INTERACTIVE" to "Interactive",
+    "ACCEPT_EDITS" to "Accept Edits",
+    "BYPASS" to "Bypass",
+)
+
+@Composable
+private fun WorkflowChatHeader(
+    workflowName: String,
+    workingDir: String,
+    connectionState: ConnectionState,
+    onChangeDirectory: () -> Unit,
+) {
     Div({
         style {
             property("flex-shrink", "0")
@@ -657,105 +1737,108 @@ private fun WorkflowChatPanel(
         }
     }) {
         Span({ style { fontSize(20.px) } }) { Text("\uD83E\uDD16") }
+        WorkflowChatHeaderTitle(
+            workflowName = workflowName,
+            workingDir = workingDir,
+            onChangeDirectory = onChangeDirectory,
+        )
+        WorkflowConnectionStatus(connectionState)
+    }
+}
+
+@Composable
+private fun WorkflowChatHeaderTitle(
+    workflowName: String,
+    workingDir: String,
+    onChangeDirectory: () -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("gap", "2px")
+            property("flex", "1")
+            property("min-width", "0")
+        }
+    }) {
+        Span({
+            style {
+                fontSize(16.px)
+                fontWeight("600")
+                color(Color(SilkColors.textPrimary))
+                property("overflow", "hidden")
+                property("text-overflow", "ellipsis")
+                property("white-space", "nowrap")
+            }
+        }) { Text(workflowName) }
         Div({
             style {
                 display(DisplayStyle.Flex)
-                flexDirection(FlexDirection.Column)
-                property("gap", "2px")
-                property("flex", "1")
+                alignItems(AlignItems.Center)
+                property("gap", "8px")
                 property("min-width", "0")
             }
         }) {
-            Span({
-                style {
-                    fontSize(16.px)
-                    fontWeight("600")
-                    color(Color(SilkColors.textPrimary))
-                    property("overflow", "hidden")
-                    property("text-overflow", "ellipsis")
-                    property("white-space", "nowrap")
-                }
-            }) { Text(workflowName) }
-            // 工作目录 + 内联"更改"链接（贴在路径右侧，视觉更紧凑）
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("gap", "8px")
-                    property("min-width", "0")
-                }
-            }) {
-                if (workingDir.isNotBlank()) {
-                    Span({
-                        style {
-                            fontSize(11.px)
-                            color(Color(SilkColors.textSecondary))
-                            fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
-                            property("overflow", "hidden")
-                            property("text-overflow", "ellipsis")
-                            property("white-space", "nowrap")
-                            property("min-width", "0")
-                        }
-                        attr("title", workingDir)
-                    }) { Text("\uD83D\uDCC1 $workingDir") }
-                }
-                // M4 Task 4: 显示当前激活的 agent（/use 切换后实时更新）
-                if (activeAgentDisplay.isNotBlank()) {
-                    Span({
-                        style {
-                            fontSize(11.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("flex-shrink", "0")
-                            property("white-space", "nowrap")
-                            property("padding", "1px 6px")
-                            property("border-radius", "4px")
-                            property("background", "rgba(0,0,0,0.04)")
-                        }
-                        attr("title", "当前激活的 Agent")
-                    }) { Text(activeAgentDisplay) }
-                }
+            if (workingDir.isNotBlank()) {
                 Span({
                     style {
                         fontSize(11.px)
-                        color(Color(SilkColors.primary))
-                        property("cursor", "pointer")
-                        property("flex-shrink", "0")
+                        color(Color(SilkColors.textSecondary))
+                        fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
+                        property("overflow", "hidden")
+                        property("text-overflow", "ellipsis")
                         property("white-space", "nowrap")
-                        property("user-select", "none")
-                        property("text-decoration", "underline")
-                        property("text-decoration-style", "dotted")
+                        property("min-width", "0")
                     }
-                    attr("title", "选择工作目录")
-                    onClick { showFolderPicker = true }
-                }) {
-                    Text(if (workingDir.isBlank()) "\uD83D\uDCC2 选择目录" else "更改")
-                }
+                    attr("title", workingDir)
+                }) { Text("\uD83D\uDCC1 $workingDir") }
             }
-        }
-        // Connection status indicator - only show when not connected
-        if (connectionState != ConnectionState.CONNECTED) {
             Span({
                 style {
-                    fontSize(12.px)
-                    color(
-                        when (connectionState) {
-                            ConnectionState.CONNECTING -> Color("#FF9800")
-                            else -> Color("#F44336")
-                        }
-                    )
+                    fontSize(11.px)
+                    color(Color(SilkColors.primary))
+                    property("cursor", "pointer")
+                    property("flex-shrink", "0")
+                    property("white-space", "nowrap")
+                    property("user-select", "none")
+                    property("text-decoration", "underline")
+                    property("text-decoration-style", "dotted")
                 }
+                attr("title", "切换工作目录")
+                onClick { onChangeDirectory() }
             }) {
-                Text(
-                    when (connectionState) {
-                        ConnectionState.CONNECTING -> "● 连接中..."
-                        else -> "● 会话连接失败"
-                    }
-                )
+                Text("更改")
             }
         }
     }
+}
 
-    // Messages area
+@Composable
+private fun WorkflowConnectionStatus(connectionState: ConnectionState) {
+    if (connectionState == ConnectionState.CONNECTED) {
+        return
+    }
+
+    Span({
+        style {
+            fontSize(12.px)
+            color(Color(if (connectionState == ConnectionState.CONNECTING) "#FF9800" else "#F44336"))
+        }
+    }) {
+        Text(if (connectionState == ConnectionState.CONNECTING) "● 连接中..." else "● 会话连接失败")
+    }
+}
+
+@Composable
+private fun WorkflowMessagesArea(
+    messages: List<Message>,
+    statusMessages: List<Message>,
+    transientMessage: Message?,
+    userId: String,
+    userName: String,
+    chatClient: ChatClient,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
+) {
     Div({
         id("wf-messages")
         style {
@@ -766,65 +1849,111 @@ private fun WorkflowChatPanel(
             property("background", SilkColors.backgroundGradient)
         }
     }) {
-        // Persistent messages
-        messages.forEach { message ->
-            MessageItem(
-                message = message,
-                isTransient = false,
-                currentUserId = userId,
-                groupId = groupId,
-                onCopy = { content -> copyTextToClipboard(content) }
-            )
-        }
-
-        // Status messages
-        if (statusMessages.isNotEmpty()) {
-            Div({
-                style {
-                    backgroundColor(Color("#F5F5F5"))
-                    borderRadius(8.px)
-                    padding(10.px, 14.px)
-                    marginBottom(8.px)
-                    property("border-left", "3px solid #9E9E9E")
-                }
-            }) {
-                statusMessages.forEach { status ->
-                    Div({
-                        style {
-                            color(Color("#757575"))
-                            fontSize(13.px)
-                            fontStyle("italic")
-                            marginBottom(4.px)
-                        }
-                    }) {
-                        Text(status.content)
-                    }
-                }
+        messages.forEachIndexed { index, message ->
+            key(message.id) {
+                MessageItem(
+                    message = message,
+                    isTransient = false,
+                    isLastMessage = index == messages.lastIndex,
+                    currentUserId = userId,
+                    currentUserName = userName,
+                    chatClient = chatClient,
+                    onCopy = { content -> copyTextToClipboard(content) },
+                    onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
+                )
             }
         }
+        WorkflowStatusMessages(statusMessages)
+        WorkflowTransientMessage(
+            transientMessage = transientMessage,
+            userId = userId,
+            userName = userName,
+            chatClient = chatClient,
+            onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
+        )
+    }
+}
 
-        // Transient (streaming) message
-        transientMessage?.let { message ->
-            if (
-                message.content.isNotBlank() &&
-                message.currentStep == null &&
-                message.totalSteps == null &&
-                !isLikelyAgentStatusContent(message.content)
-            ) {
-                MessageItem(
-                    message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
-                    isTransient = true,
-                    currentUserId = userId,
-                    groupId = groupId,
-                    onCopy = { content -> copyTextToClipboard(content) }
-                )
-            } else {
-                TransientMessageItem(message)
+@Composable
+private fun WorkflowStatusMessages(statusMessages: List<Message>) {
+    val visibleStatusMessages = filterNonKnowledgeBaseContextStatusMessages(statusMessages)
+    if (visibleStatusMessages.isEmpty()) {
+        return
+    }
+
+    Div({
+        style {
+            backgroundColor(Color("#F5F5F5"))
+            borderRadius(8.px)
+            padding(10.px, 14.px)
+            marginBottom(8.px)
+            property("border-left", "3px solid #9E9E9E")
+        }
+    }) {
+        visibleStatusMessages.forEach { status ->
+            Div({
+                style {
+                    color(Color("#757575"))
+                    fontSize(13.px)
+                    fontStyle("italic")
+                    marginBottom(4.px)
+                    property("white-space", "pre-wrap")
+                    property("word-break", "break-word")
+                }
+            }) {
+                Text(status.content)
             }
         }
     }
+}
 
-    // Input area
+@Composable
+private fun WorkflowTransientMessage(
+    transientMessage: Message?,
+    userId: String,
+    userName: String,
+    chatClient: ChatClient,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
+) {
+    val message = transientMessage ?: return
+    if (shouldRenderInlineTransientMessage(message)) {
+        MessageItem(
+            message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
+            isTransient = true,
+            currentUserId = userId,
+            currentUserName = userName,
+            chatClient = chatClient,
+            onCopy = { content -> copyTextToClipboard(content) },
+            onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
+        )
+        return
+    }
+    TransientMessageItem(message)
+}
+
+@Composable
+private fun WorkflowChatComposer(
+    statusMessages: List<Message>,
+    kbContextSelection: KnowledgeBaseContextSelection,
+    permissionMode: String,
+    activeAgentDisplay: String,
+    availableAgents: List<AgentInfo>,
+    showPermModeDropdown: Boolean,
+    showAgentDropdown: Boolean,
+    switchError: String?,
+    messageText: String,
+    isGenerating: Boolean,
+    onTogglePermModeDropdown: () -> Unit,
+    onToggleAgentDropdown: () -> Unit,
+    onSelectPermMode: (String) -> Unit,
+    onSelectAgent: (AgentInfo) -> Unit,
+    onClearSwitchError: () -> Unit,
+    onMessageTextChange: (String) -> Unit,
+    onKnowledgeBaseContextSelectionChange: (KnowledgeBaseContextSelection) -> Unit,
+    onStartNewSession: () -> Unit,
+    onSendMessage: () -> Unit,
+    onStopGeneration: () -> Unit,
+) {
     Div({
         style {
             property("flex-shrink", "0")
@@ -832,133 +1961,957 @@ private fun WorkflowChatPanel(
             property("border-top", "1px solid ${SilkColors.border}")
             backgroundColor(Color(SilkColors.surfaceElevated))
             display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("gap", "8px")
+        }
+    }) {
+        KnowledgeBaseContextTray(
+            statusMessages = statusMessages,
+            selection = kbContextSelection,
+            onSelectionChange = onKnowledgeBaseContextSelectionChange,
+        )
+        WorkflowChatBadgeRow(
+            permissionMode = permissionMode,
+            activeAgentDisplay = activeAgentDisplay,
+            availableAgents = availableAgents,
+            showPermModeDropdown = showPermModeDropdown,
+            showAgentDropdown = showAgentDropdown,
+            switchError = switchError,
+            onStartNewSession = onStartNewSession,
+            onTogglePermModeDropdown = onTogglePermModeDropdown,
+            onToggleAgentDropdown = onToggleAgentDropdown,
+            onSelectPermMode = onSelectPermMode,
+            onSelectAgent = onSelectAgent,
+            onClearSwitchError = onClearSwitchError,
+        )
+        WorkflowMessageInputRow(
+            messageText = messageText,
+            isGenerating = isGenerating,
+            onMessageTextChange = onMessageTextChange,
+            onSendMessage = onSendMessage,
+            onStopGeneration = onStopGeneration,
+        )
+    }
+}
+
+@Composable
+private fun WorkflowChatBadgeRow(
+    permissionMode: String,
+    activeAgentDisplay: String,
+    availableAgents: List<AgentInfo>,
+    showPermModeDropdown: Boolean,
+    showAgentDropdown: Boolean,
+    switchError: String?,
+    onStartNewSession: () -> Unit,
+    onTogglePermModeDropdown: () -> Unit,
+    onToggleAgentDropdown: () -> Unit,
+    onSelectPermMode: (String) -> Unit,
+    onSelectAgent: (AgentInfo) -> Unit,
+    onClearSwitchError: () -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "6px")
+            property("position", "relative")
+        }
+    }) {
+        WorkflowNewSessionBadge(onStartNewSession)
+        WorkflowPermissionModeBadge(
+            permissionMode = permissionMode,
+            showDropdown = showPermModeDropdown,
+            onToggleDropdown = onTogglePermModeDropdown,
+            onSelectMode = onSelectPermMode,
+        )
+        WorkflowAgentBadge(
+            activeAgentDisplay = activeAgentDisplay,
+            availableAgents = availableAgents,
+            showDropdown = showAgentDropdown,
+            onToggleDropdown = onToggleAgentDropdown,
+            onSelectAgent = onSelectAgent,
+        )
+        WorkflowSwitchErrorToast(switchError = switchError, onClear = onClearSwitchError)
+    }
+}
+
+@Composable
+private fun WorkflowNewSessionBadge(onStartNewSession: () -> Unit) {
+    Div({
+        style {
+            property("position", "relative")
+            display(DisplayStyle.InlineBlock)
+        }
+    }) {
+        Span({
+            style {
+                fontSize(12.px)
+                fontWeight("500")
+                color(Color("#1565C0"))
+                backgroundColor(Color("#E3F2FD"))
+                border(1.px, LineStyle.Solid, Color("#90CAF9"))
+                borderRadius(12.px)
+                padding(2.px, 10.px)
+                property("cursor", "pointer")
+                property("user-select", "none")
+            }
+            onClick { onStartNewSession() }
+        }) { Text("新会话") }
+    }
+}
+
+@Composable
+private fun WorkflowPermissionModeBadge(
+    permissionMode: String,
+    showDropdown: Boolean,
+    onToggleDropdown: () -> Unit,
+    onSelectMode: (String) -> Unit,
+) {
+    if (permissionMode.isBlank()) {
+        return
+    }
+
+    Div({
+        style {
+            property("position", "relative")
+            display(DisplayStyle.InlineBlock)
+        }
+    }) {
+        Span({
+            style {
+                fontSize(12.px)
+                fontWeight("500")
+                color(Color("#555555"))
+                backgroundColor(Color("#F7F7F7"))
+                border(1.px, LineStyle.Solid, Color("#E0E0E0"))
+                borderRadius(12.px)
+                padding(2.px, 10.px)
+                property("cursor", "pointer")
+                property("user-select", "none")
+            }
+            onClick { onToggleDropdown() }
+        }) { Text(workflowPermissionModeLabel(permissionMode)) }
+
+        if (showDropdown) {
+            WorkflowPermissionModeDropdown(
+                permissionMode = permissionMode,
+                onSelectMode = onSelectMode,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkflowPermissionModeDropdown(
+    permissionMode: String,
+    onSelectMode: (String) -> Unit,
+) {
+    Div({
+        style {
+            property("position", "absolute")
+            bottom(28.px)
+            property("left", "0")
+            backgroundColor(Color.white)
+            border(1.px, LineStyle.Solid, Color("#E0E0E0"))
+            borderRadius(8.px)
+            property("box-shadow", "0 4px 12px rgba(0,0,0,0.12)")
+            property("z-index", "100")
+            property("min-width", "140px")
+            padding(4.px)
+        }
+    }) {
+        workflowPermissionOptions.forEach { (value, label) ->
+            val isCurrent = value == permissionMode
+            Div({
+                style {
+                    padding(8.px, 12.px)
+                    borderRadius(4.px)
+                    fontSize(14.px)
+                    property("cursor", "pointer")
+                    fontWeight(if (isCurrent) "600" else "normal")
+                    color(if (isCurrent) Color(SilkColors.primary) else Color("#333333"))
+                    if (isCurrent) {
+                        backgroundColor(Color("#F0F4FF"))
+                    }
+                }
+                onClick { onSelectMode(value) }
+            }) {
+                Text(if (isCurrent) "\u2713 $label" else "  $label")
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkflowAgentBadge(
+    activeAgentDisplay: String,
+    availableAgents: List<AgentInfo>,
+    showDropdown: Boolean,
+    onToggleDropdown: () -> Unit,
+    onSelectAgent: (AgentInfo) -> Unit,
+) {
+    if (activeAgentDisplay.isBlank()) {
+        return
+    }
+
+    Div({
+        style {
+            property("position", "relative")
+            display(DisplayStyle.InlineBlock)
+        }
+    }) {
+        Span({
+            style {
+                fontSize(12.px)
+                fontWeight("500")
+                color(Color("#6A1B9A"))
+                backgroundColor(Color("#F3E5F5"))
+                border(1.px, LineStyle.Solid, Color("#CE93D8"))
+                borderRadius(12.px)
+                padding(2.px, 10.px)
+                property("cursor", "pointer")
+                property("user-select", "none")
+            }
+            onClick { onToggleDropdown() }
+        }) { Text(activeAgentDisplay) }
+
+        if (showDropdown) {
+            WorkflowAgentDropdown(
+                activeAgentDisplay = activeAgentDisplay,
+                availableAgents = availableAgents,
+                onSelectAgent = onSelectAgent,
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkflowAgentDropdown(
+    activeAgentDisplay: String,
+    availableAgents: List<AgentInfo>,
+    onSelectAgent: (AgentInfo) -> Unit,
+) {
+    Div({
+        style {
+            property("position", "absolute")
+            bottom(28.px)
+            property("left", "0")
+            backgroundColor(Color.white)
+            border(1.px, LineStyle.Solid, Color("#E0E0E0"))
+            borderRadius(8.px)
+            property("box-shadow", "0 4px 12px rgba(0,0,0,0.12)")
+            property("z-index", "100")
+            property("min-width", "180px")
+            padding(4.px)
+        }
+    }) {
+        availableAgents.forEach { agent ->
+            val isCurrent = isCurrentWorkflowAgent(activeAgentDisplay, agent)
+            Div({
+                style {
+                    padding(8.px, 12.px)
+                    borderRadius(4.px)
+                    fontSize(14.px)
+                    property("cursor", if (agent.connected) "pointer" else "default")
+                    fontWeight(if (isCurrent) "600" else "normal")
+                    color(Color(workflowAgentMenuColor(agent = agent, isCurrent = isCurrent)))
+                    if (isCurrent) {
+                        backgroundColor(Color("#F3E5F5"))
+                    }
+                    if (!agent.connected) {
+                        property("opacity", "0.6")
+                    }
+                }
+                onClick { onSelectAgent(agent) }
+            }) {
+                Text(workflowAgentMenuLabel(agent = agent, isCurrent = isCurrent))
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkflowSwitchErrorToast(
+    switchError: String?,
+    onClear: () -> Unit,
+) {
+    val error = switchError ?: return
+
+    Span({
+        style {
+            fontSize(11.px)
+            color(Color("#F44336"))
+        }
+    }) { Text(error) }
+
+    LaunchedEffect(error) {
+        kotlinx.coroutines.delay(3000)
+        onClear()
+    }
+}
+
+@Composable
+private fun WorkflowMessageInputRow(
+    messageText: String,
+    isGenerating: Boolean,
+    onMessageTextChange: (String) -> Unit,
+    onSendMessage: () -> Unit,
+    onStopGeneration: () -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
             alignItems(AlignItems.Center)
             property("gap", "10px")
         }
     }) {
-        Input(InputType.Text) {
+        TextArea {
             value(messageText)
-            onInput { messageText = it.value }
-            attr("placeholder", "向 Agent 发送消息...")
+            onInput { onMessageTextChange(it.value) }
+            attr("placeholder", "向 Agent 发送消息...（Shift+Enter 换行）")
             onKeyDown { event ->
-                if (event.key == "Enter" && !event.shiftKey && !event.isComposing && messageText.isNotBlank()) {
+                if (shouldSubmitWorkflowMessage(event, messageText)) {
                     event.preventDefault()
-                    val text = messageText.trim()
-                    messageText = ""
-                    scope.launch {
-                        chatClient.sendMessage(userId, userName, text)
-                    }
+                    onSendMessage()
                 }
             }
             style {
                 property("flex", "1")
-                height(40.px)
+                minHeight(40.px)
+                maxHeight(160.px)
                 borderRadius(8.px)
                 border(1.px, LineStyle.Solid, Color(SilkColors.border))
                 padding(8.px, 12.px)
                 fontSize(14.px)
                 property("box-sizing", "border-box")
                 property("outline", "none")
+                property("resize", "none")
+                property("white-space", "pre-wrap")
+                property("line-height", "1.5")
             }
         }
 
         if (isGenerating) {
-            Button({
-                style {
-                    backgroundColor(Color("#FF4D4F"))
-                    color(Color.white)
-                    border(0.px)
-                    borderRadius(8.px)
-                    padding(8.px, 16.px)
-                    property("cursor", "pointer")
-                    fontSize(14.px)
-                    property("font-weight", "600")
-                    property("transition", "all 0.2s ease")
-                }
-                onClick {
-                    scope.launch { chatClient.stopGeneration(userId, userName) }
-                }
-            }) { Text("停止") }
+            WorkflowChatActionButton(
+                label = "停止",
+                background = "#FF4D4F",
+                cursor = "pointer",
+                fontWeight = "600",
+                onClick = onStopGeneration,
+            )
         } else {
-            Button({
-                style {
-                    backgroundColor(
-                        if (messageText.isNotBlank()) Color(SilkColors.primary) else Color(SilkColors.primaryLight)
-                    )
-                    color(Color.white)
-                    border(0.px)
-                    borderRadius(8.px)
-                    padding(8.px, 16.px)
-                    property("cursor", if (messageText.isNotBlank()) "pointer" else "default")
-                    fontSize(14.px)
-                }
-                onClick {
-                    if (messageText.isNotBlank()) {
-                        val text = messageText.trim()
-                        messageText = ""
-                        scope.launch {
-                            chatClient.sendMessage(userId, userName, text)
-                        }
-                    }
-                }
-            }) { Text("发送") }
+            WorkflowChatActionButton(
+                label = "发送",
+                background = if (messageText.isNotBlank()) SilkColors.primary else SilkColors.primaryLight,
+                cursor = if (messageText.isNotBlank()) "pointer" else "default",
+                onClick = onSendMessage,
+            )
         }
     }
+}
 
-    // Folder Picker 弹窗
+@Composable
+private fun WorkflowChatActionButton(
+    label: String,
+    background: String,
+    cursor: String,
+    fontWeight: String? = null,
+    onClick: () -> Unit,
+) {
+    Button({
+        style {
+            backgroundColor(Color(background))
+            color(Color.white)
+            border(0.px)
+            borderRadius(8.px)
+            padding(8.px, 16.px)
+            property("cursor", cursor)
+            fontSize(14.px)
+            fontWeight?.let { property("font-weight", it) }
+            property("transition", "all 0.2s ease")
+        }
+        onClick { onClick() }
+    }) { Text(label) }
+}
+
+@Composable
+private fun WorkflowChatDialogs(
+    showFolderPicker: Boolean,
+    workingDir: String,
+    userId: String,
+    showTrustConfirm: Boolean,
+    trustConfirmPath: String,
+    trustConfirmBridgeId: String?,
+    onDismissFolderPicker: () -> Unit,
+    onConfirmFolderPicker: (String) -> Unit,
+    onDismissTrustConfirm: () -> Unit,
+    onTrustCurrentPath: () -> Unit,
+) {
     if (showFolderPicker) {
         FolderPickerDialog(
             userId = userId,
             initialPath = workingDir.ifBlank { null },
-            onDismiss = { showFolderPicker = false },
-            onConfirm = { selectedPath ->
-                showFolderPicker = false
-                scope.launch {
-                    // 1. 信任目录检查
-                    val trustCheck = ApiClient.checkTrustedDir(userId, selectedPath)
-                    when (trustCheck) {
-                        is ApiClient.TrustCheckResult.BridgeDisconnected -> {
-                            kotlinx.browser.window.alert("Bridge 未连接，无法切换目录。")
-                            return@launch
-                        }
-                        is ApiClient.TrustCheckResult.NotTrusted -> {
-                            trustConfirmPath = selectedPath
-                            trustConfirmBridgeId = trustCheck.bridgeId
-                            showTrustConfirm = true
-                            return@launch
-                        }
-                        is ApiClient.TrustCheckResult.Error -> {
-                            kotlinx.browser.window.alert("检查信任状态失败：${trustCheck.message}")
-                            return@launch
-                        }
-                        else -> {} // 已信任，继续
-                    }
-
-                    // 2. 执行 cd
-                    performCd(selectedPath)
-                }
-            },
+            onDismiss = onDismissFolderPicker,
+            onConfirm = onConfirmFolderPicker,
         )
     }
 
-    // 信任确认弹窗（Silk 风格，替代浏览器原生 confirm）
     if (showTrustConfirm) {
         TrustConfirmDialog(
             path = trustConfirmPath,
             bridgeId = trustConfirmBridgeId,
-            onDismiss = { showTrustConfirm = false },
-            onTrust = {
-                scope.launch {
-                    val added = ApiClient.addTrustedDir(userId, trustConfirmPath)
-                    if (added) {
-                        showTrustConfirm = false
-                        performCd(trustConfirmPath)
-                    } else {
-                        kotlinx.browser.window.alert("添加信任记录失败，请重试。")
+            onDismiss = onDismissTrustConfirm,
+            onTrust = onTrustCurrentPath,
+        )
+    }
+}
+
+private fun workflowPermissionModeLabel(permissionMode: String): String = when (permissionMode) {
+    "INTERACTIVE" -> "Interactive"
+    "ACCEPT_EDITS" -> "Accept Edits"
+    "BYPASS" -> "Bypass"
+    else -> permissionMode
+}
+
+private fun isCurrentWorkflowAgent(
+    activeAgentDisplay: String,
+    agent: AgentInfo,
+): Boolean {
+    return activeAgentDisplay.contains(agent.displayName) ||
+        activeAgentDisplay.contains(agent.agentType)
+}
+
+private fun workflowAgentMenuColor(
+    agent: AgentInfo,
+    isCurrent: Boolean,
+): String = when {
+    isCurrent -> "#6A1B9A"
+    !agent.connected -> "#BDBDBD"
+    else -> "#333333"
+}
+
+private fun workflowAgentMenuLabel(
+    agent: AgentInfo,
+    isCurrent: Boolean,
+): String {
+    val prefix = if (isCurrent) "\u2713 " else "  "
+    val suffix = if (agent.connected) "" else "（未连接）"
+    return "$prefix${agent.displayName}$suffix"
+}
+
+private fun startWorkflowNewSession(
+    scope: CoroutineScope,
+    chatClient: ChatClient,
+    userId: String,
+    userName: String,
+) {
+    scope.launch {
+        chatClient.sendMessage(userId, userName, "/new")
+    }
+}
+
+private fun submitWorkflowMessage(
+    scope: CoroutineScope,
+    chatClient: ChatClient,
+    userId: String,
+    userName: String,
+    messageText: String,
+    kbContextSelection: KnowledgeBaseContextSelection,
+    onMessageTextChange: (String) -> Unit,
+) {
+    val text = messageText.trim()
+    if (text.isBlank()) {
+        return
+    }
+
+    onMessageTextChange("")
+    scope.launch {
+        chatClient.sendMessage(
+            userId,
+            userName,
+            text,
+            kbContextSelection,
+        )
+    }
+}
+
+private fun stopWorkflowGeneration(
+    scope: CoroutineScope,
+    chatClient: ChatClient,
+    userId: String,
+    userName: String,
+) {
+    scope.launch {
+        chatClient.stopGeneration(userId, userName)
+    }
+}
+
+private fun applyWorkflowPermissionModeSelection(
+    scope: CoroutineScope,
+    userId: String,
+    groupId: String,
+    currentPermissionMode: String,
+    selectedMode: String,
+    onPermissionModeChanged: (String) -> Unit,
+    onError: (String) -> Unit,
+) {
+    if (selectedMode == currentPermissionMode) {
+        return
+    }
+
+    scope.launch {
+        val response = ApiClient.updateCcSettings(
+            userId,
+            groupId,
+            permissionMode = selectedMode,
+        )
+        if (response.success) {
+            onPermissionModeChanged(response.permissionMode)
+        } else {
+            onError(response.error ?: "切换失败")
+        }
+    }
+}
+
+private fun applyWorkflowAgentSelection(
+    scope: CoroutineScope,
+    userId: String,
+    groupId: String,
+    currentAgentDisplay: String,
+    agent: AgentInfo,
+    onAgentChanged: (WorkflowAgentSelectionResult) -> Unit,
+    onError: (String) -> Unit,
+) {
+    if (!agent.connected || isCurrentWorkflowAgent(currentAgentDisplay, agent)) {
+        return
+    }
+
+    scope.launch {
+        val response = ApiClient.updateCcSettings(
+            userId,
+            groupId,
+            activeAgent = agent.agentType,
+        )
+        if (response.success) {
+            onAgentChanged(
+                WorkflowAgentSelectionResult(
+                    agentDisplayName = response.agentDisplayName,
+                    permissionMode = response.permissionMode,
+                ),
+            )
+        } else {
+            onError(response.error ?: "切换失败")
+        }
+    }
+}
+
+private fun handleWorkflowFolderPickerConfirm(
+    scope: CoroutineScope,
+    userId: String,
+    groupId: String,
+    selectedPath: String,
+    currentWorkingDir: String,
+    onClosePicker: () -> Unit,
+    onWorkingDirChanged: (String) -> Unit,
+    onTrustRequired: (String, String?) -> Unit,
+    onError: (String) -> Unit,
+) {
+    onClosePicker()
+    if (selectedPath == currentWorkingDir) {
+        return
+    }
+
+    scope.launch {
+        when (val trustCheck = ApiClient.checkTrustedDir(userId, selectedPath)) {
+            is TrustCheckResult.BridgeDisconnected -> onError("Bridge 未连接，无法切换目录。")
+            is TrustCheckResult.NotTrusted -> onTrustRequired(selectedPath, trustCheck.bridgeId)
+            is TrustCheckResult.Error -> onError("检查信任状态失败：${trustCheck.message}")
+            is TrustCheckResult.Trusted -> {
+                val response = ApiClient.cdCcDir(userId, groupId, selectedPath)
+                if (response.success) {
+                    onWorkingDirChanged(response.workingDir)
+                } else {
+                    onError("切换目录失败：${response.error ?: "未知错误"}")
+                }
+            }
+        }
+    }
+}
+
+private fun handleWorkflowTrustConfirm(
+    scope: CoroutineScope,
+    userId: String,
+    groupId: String,
+    trustConfirmPath: String,
+    onCloseTrustDialog: () -> Unit,
+    onWorkingDirChanged: (String) -> Unit,
+    onError: (String) -> Unit,
+) {
+    scope.launch {
+        val added = ApiClient.addTrustedDir(userId, trustConfirmPath)
+        if (!added) {
+            onError("添加信任记录失败，请重试。")
+            onCloseTrustDialog()
+            return@launch
+        }
+
+        onCloseTrustDialog()
+        val response = ApiClient.cdCcDir(userId, groupId, trustConfirmPath)
+        if (response.success) {
+            onWorkingDirChanged(response.workingDir)
+        } else {
+            onError("切换目录失败：${response.error ?: "未知错误"}")
+        }
+    }
+}
+
+/** applyWorkflowSettings 的返回值：成功 / 需要信任确认 / 错误。 */
+private sealed class SettingsApplyResult {
+    data class Ok(val dir: String, val agent: String, val perm: String) : SettingsApplyResult()
+    data class NeedTrust(val path: String, val bridgeId: String?) : SettingsApplyResult()
+    data class Error(val msg: String) : SettingsApplyResult()
+}
+
+/** 纯业务逻辑：cd + agent/perm 变更，不持有 Compose 状态。 */
+private suspend fun applyWorkflowSettings(
+    userId: String, groupId: String,
+    editDir: String, currentWorkingDir: String,
+    selectedAgentType: String, currentAgentDisplay: String,
+    selectedPermMode: String, currentPermissionMode: String,
+): SettingsApplyResult {
+    val resultDir = editDir.trim()
+    var newDir = currentWorkingDir
+    var newAgentDisplay = currentAgentDisplay
+    var newPermMode = currentPermissionMode
+
+    if (resultDir.isNotBlank() && resultDir != currentWorkingDir) {
+        when (val tc = ApiClient.checkTrustedDir(userId, resultDir)) {
+            is TrustCheckResult.BridgeDisconnected -> return SettingsApplyResult.Error("Bridge 未连接，无法切换目录。")
+            is TrustCheckResult.NotTrusted -> return SettingsApplyResult.NeedTrust(resultDir, tc.bridgeId)
+            is TrustCheckResult.Error -> return SettingsApplyResult.Error("检查信任状态失败：${tc.message}")
+            else -> {}
+        }
+        val cdResp = ApiClient.cdCcDir(userId, groupId, resultDir)
+        if (!cdResp.success) return SettingsApplyResult.Error("切换目录失败：${cdResp.error ?: "未知错误"}")
+        newDir = cdResp.workingDir
+    }
+
+    val currentAgentUnderscore = ApiClient.getCcState(userId, groupId).agentType.replace('-', '_')
+    val agentChanged = selectedAgentType !in listOf("", currentAgentUnderscore)
+    val permChanged = selectedPermMode != currentPermissionMode
+    if (agentChanged || permChanged) {
+        val resp = ApiClient.updateCcSettings(
+            userId, groupId,
+            activeAgent = selectedAgentType.takeIf { agentChanged },
+            permissionMode = selectedPermMode.ifBlank { "INTERACTIVE" }.takeIf { permChanged },
+        )
+        if (!resp.success) return SettingsApplyResult.Error("更新设置失败：${resp.error ?: "未知错误"}")
+        newAgentDisplay = resp.agentDisplayName
+        newPermMode = resp.permissionMode
+        if (newDir == currentWorkingDir) newDir = resp.workingDir
+    }
+
+    return SettingsApplyResult.Ok(newDir, newAgentDisplay, newPermMode)
+}
+
+/**
+ * 会话设置弹窗：工作目录 / Agent / 权限模式三合一。
+ */
+@Suppress("UnusedPrivateMember")
+@Composable
+private fun WorkflowSettingsDialog(
+    userId: String,
+    groupId: String,
+    currentWorkingDir: String,
+    currentAgentDisplay: String,
+    currentPermissionMode: String,
+    onDismiss: () -> Unit,
+    onApplied: (workingDir: String, agentDisplay: String, permissionMode: String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var editDir by remember { mutableStateOf(currentWorkingDir) }
+    var availableAgents by remember { mutableStateOf<List<AgentInfo>>(emptyList()) }
+    var selectedAgentType by remember { mutableStateOf("") }
+    var selectedPermMode by remember { mutableStateOf(currentPermissionMode) }
+    var showFolderPicker by remember { mutableStateOf(false) }
+    var showTrustConfirm by remember { mutableStateOf(false) }
+    var trustConfirmPath by remember { mutableStateOf("") }
+    var trustConfirmBridgeId by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        availableAgents = ApiClient.listAgents(userId)
+        val snap = ApiClient.getCcState(userId, groupId)
+        if (snap.success && snap.agentType.isNotBlank()) {
+            selectedAgentType = snap.agentType.replace('-', '_')
+        }
+    }
+
+    fun handleApply() {
+        scope.launch {
+            saving = true
+            errorMsg = null
+            try {
+                when (val r = applyWorkflowSettings(
+                    userId, groupId, editDir, currentWorkingDir,
+                    selectedAgentType, currentAgentDisplay,
+                    selectedPermMode, currentPermissionMode,
+                )) {
+                    is SettingsApplyResult.Ok -> onApplied(r.dir, r.agent, r.perm)
+                    is SettingsApplyResult.NeedTrust -> {
+                        trustConfirmPath = r.path
+                        trustConfirmBridgeId = r.bridgeId
+                        showTrustConfirm = true
+                    }
+                    is SettingsApplyResult.Error -> errorMsg = r.msg
+                }
+            } finally {
+                saving = false
+            }
+        }
+    }
+
+    fun handleTrustThenApply() {
+        scope.launch {
+            saving = true
+            errorMsg = null
+            try {
+                val added = ApiClient.addTrustedDir(userId, trustConfirmPath)
+                if (!added) { errorMsg = "添加信任记录失败，请重试。"; return@launch }
+                showTrustConfirm = false
+                // 直接调用业务逻辑而非 handleApply()，避免启动新协程导致 saving 间隙
+                when (val r = applyWorkflowSettings(
+                    userId, groupId, editDir, currentWorkingDir,
+                    selectedAgentType, currentAgentDisplay,
+                    selectedPermMode, currentPermissionMode,
+                )) {
+                    is SettingsApplyResult.Ok -> onApplied(r.dir, r.agent, r.perm)
+                    is SettingsApplyResult.NeedTrust -> {
+                        trustConfirmPath = r.path
+                        trustConfirmBridgeId = r.bridgeId
+                        showTrustConfirm = true
+                    }
+                    is SettingsApplyResult.Error -> errorMsg = r.msg
+                }
+            } finally {
+                saving = false
+            }
+        }
+    }
+
+    SettingsDialogBody(
+        availableAgents = availableAgents,
+        selectedAgentType = selectedAgentType,
+        onAgentTypeChange = { selectedAgentType = it },
+        selectedPermMode = selectedPermMode,
+        onPermModeChange = { selectedPermMode = it },
+        editDir = editDir,
+        onEditDirChange = { editDir = it },
+        onFolderPickerClick = { showFolderPicker = true },
+        errorMsg = errorMsg,
+        saving = saving,
+        onDismiss = onDismiss,
+        onSave = ::handleApply,
+    )
+
+    if (showFolderPicker) {
+        FolderPickerDialog(
+            userId = userId,
+            initialPath = editDir.ifBlank { null },
+            onDismiss = { showFolderPicker = false },
+            onConfirm = { path -> editDir = path; showFolderPicker = false },
+        )
+    }
+
+    if (showTrustConfirm) {
+        TrustConfirmDialog(
+            path = trustConfirmPath,
+            bridgeId = trustConfirmBridgeId,
+            onDismiss = { showTrustConfirm = false; saving = false },
+            onTrust = ::handleTrustThenApply,
+        )
+    }
+}
+
+@Composable
+private fun AgentSelectorField(
+    availableAgents: List<AgentInfo>,
+    selectedAgentType: String,
+    onAgentTypeChange: (String) -> Unit,
+) {
+    Span({
+        style {
+            fontSize(12.px); color(Color(SilkColors.textSecondary))
+            property("display", "block"); marginBottom(4.px)
+        }
+    }) { Text("Agent") }
+    Select({
+        style {
+            width(100.percent); height(40.px); borderRadius(6.px)
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            padding(8.px); fontSize(14.px); marginBottom(12.px)
+            property("box-sizing", "border-box"); backgroundColor(Color.white)
+        }
+        onChange { onAgentTypeChange(it.value ?: "") }
+    }) {
+        if (availableAgents.isEmpty()) {
+            Option("") { Text("加载中…") }
+        } else {
+            availableAgents.forEach { agent ->
+                Option(
+                    value = agent.agentType,
+                    attrs = {
+                        if (!agent.connected) attr("disabled", "")
+                        if (agent.agentType == selectedAgentType) attr("selected", "")
+                    },
+                ) {
+                    val suffix = if (agent.connected) "" else "（未连接）"
+                    Text("${agent.displayName}${suffix}")
+                }
+            }
+        }
+    }
+}
+
+/** 设置弹窗的表单 UI：Agent / 权限模式 / 工作目录 + 保存/取消按钮。 */
+@Composable
+private fun SettingsDialogBody(
+    availableAgents: List<AgentInfo>,
+    selectedAgentType: String,
+    onAgentTypeChange: (String) -> Unit,
+    selectedPermMode: String,
+    onPermModeChange: (String) -> Unit,
+    editDir: String,
+    onEditDirChange: (String) -> Unit,
+    onFolderPickerClick: () -> Unit,
+    errorMsg: String?,
+    saving: Boolean,
+    onDismiss: () -> Unit,
+    onSave: () -> Unit,
+) {
+    Div({
+        style {
+            position(Position.Fixed)
+            property("inset", "0")
+            backgroundColor(Color("rgba(0,0,0,0.4)"))
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            property("z-index", "1000")
+        }
+        onClick { if (!saving) onDismiss() }
+    }) {
+        Div({
+            style {
+                backgroundColor(Color.white)
+                borderRadius(12.px)
+                padding(24.px)
+                width(440.px)
+                property("max-width", "90vw")
+                property("box-shadow", "0 8px 32px rgba(0,0,0,0.15)")
+            }
+            onClick { it.stopPropagation() }
+        }) {
+            H3({ style { marginTop(0.px); color(Color(SilkColors.textPrimary)) } }) { Text("会话设置") }
+
+            AgentSelectorField(availableAgents, selectedAgentType, onAgentTypeChange)
+
+            // 权限模式
+            Span({
+                style {
+                    fontSize(12.px); color(Color(SilkColors.textSecondary))
+                    property("display", "block"); marginBottom(4.px)
+                }
+            }) { Text("权限模式") }
+            Select({
+                style {
+                    width(100.percent); height(40.px); borderRadius(6.px)
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    padding(8.px); fontSize(14.px); marginBottom(12.px)
+                    property("box-sizing", "border-box"); backgroundColor(Color.white)
+                }
+                onChange { onPermModeChange(it.value ?: "") }
+            }) {
+                Option("", attrs = { if (selectedPermMode.isBlank() || selectedPermMode == "INTERACTIVE") attr("selected", "") }) { Text("Interactive") }
+                Option("ACCEPT_EDITS", attrs = { if (selectedPermMode == "ACCEPT_EDITS") attr("selected", "") }) { Text("Accept Edits") }
+                Option("BYPASS", attrs = { if (selectedPermMode == "BYPASS") attr("selected", "") }) { Text("Bypass") }
+            }
+
+            // 工作目录
+            Span({
+                style {
+                    fontSize(12.px); color(Color(SilkColors.textSecondary))
+                    property("display", "block"); marginBottom(4.px)
+                }
+            }) { Text("工作目录") }
+            Div({
+                style {
+                    display(DisplayStyle.Flex); property("gap", "8px"); marginBottom(16.px)
+                }
+            }) {
+                Input(InputType.Text) {
+                    value(editDir)
+                    onInput { onEditDirChange(it.value) }
+                    attr("placeholder", "工作目录路径")
+                    style {
+                        property("flex", "1"); height(40.px); borderRadius(6.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        padding(8.px); fontSize(13.px)
+                        fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
+                        property("box-sizing", "border-box")
                     }
                 }
-            },
-        )
+                Button({
+                    style {
+                        backgroundColor(Color("transparent"))
+                        color(Color(SilkColors.primary))
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(6.px); padding(6.px, 10.px)
+                        property("cursor", "pointer"); fontSize(13.px)
+                        property("white-space", "nowrap")
+                    }
+                    onClick { onFolderPickerClick() }
+                }) { Text("\uD83D\uDCC2 选择…") }
+            }
+
+            // 错误提示
+            errorMsg?.let { msg ->
+                Div({
+                    style { fontSize(12.px); color(Color(SilkColors.error)); marginBottom(12.px) }
+                }) { Text(msg) }
+            }
+
+            // 按钮行
+            Div({
+                style {
+                    display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd)
+                    property("gap", "8px")
+                }
+            }) {
+                Button({
+                    if (saving) attr("disabled", "")
+                    style {
+                        backgroundColor(Color(SilkColors.surface))
+                        color(Color(SilkColors.textSecondary))
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(6.px); padding(8.px, 16.px)
+                        property("cursor", "pointer")
+                    }
+                    onClick { onDismiss() }
+                }) { Text("取消") }
+                Button({
+                    if (saving) attr("disabled", "")
+                    style {
+                        backgroundColor(Color(SilkColors.primary))
+                        color(Color.white); border(0.px)
+                        borderRadius(6.px); padding(8.px, 16.px)
+                        property("cursor", if (saving) "wait" else "pointer")
+                    }
+                    onClick { onSave() }
+                }) { Text(if (saving) "保存中…" else "保存") }
+            }
+        }
     }
 }
 
@@ -1023,213 +2976,253 @@ private fun FolderPickerDialog(
                 property("overflow", "hidden")
             }
         }) {
-            // 标题
-            Div({
-                style {
-                    padding(16.px, 20.px)
-                    property("border-bottom", "1px solid ${SilkColors.border}")
-                    display(DisplayStyle.Flex)
-                    justifyContent(JustifyContent.SpaceBetween)
-                    alignItems(AlignItems.Center)
-                }
-            }) {
-                Span({
-                    style {
-                        fontSize(16.px)
-                        fontWeight("600")
-                        color(Color(SilkColors.textPrimary))
-                    }
-                }) { Text("选择工作目录") }
-                Span({
-                    style {
-                        fontSize(18.px)
-                        property("cursor", "pointer")
-                        color(Color(SilkColors.textSecondary))
-                    }
-                    onClick { onDismiss() }
-                }) { Text("×") }
-            }
-
-            // 面包屑
             val current = listing
-            if (current != null) {
-                Div({
-                    style {
-                        padding(10.px, 20.px)
-                        property("border-bottom", "1px solid ${SilkColors.border}")
-                        display(DisplayStyle.Flex)
-                        property("flex-wrap", "wrap")
-                        alignItems(AlignItems.Center)
-                        property("gap", "4px")
-                        fontSize(13.px)
-                        fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
-                    }
-                }) {
-                    current.segments.forEachIndexed { idx, seg ->
-                        val isLast = idx == current.segments.size - 1
-                        Span({
-                            style {
-                                color(
-                                    if (isLast) Color(SilkColors.textPrimary)
-                                    else Color(SilkColors.primary)
-                                )
-                                if (!isLast) property("cursor", "pointer")
-                                if (isLast) fontWeight("600")
-                                padding(2.px, 6.px)
-                                borderRadius(4.px)
-                            }
-                            if (!isLast) {
-                                onClick {
-                                    // 拼接 segments[0..idx] -> 路径（使用后端提供的 separator）
-                                    val target = buildBreadcrumbPath(current.segments, idx, current.separator)
-                                    requestLoad(target)
-                                }
-                            }
-                        }) { Text(seg) }
-                        if (!isLast) {
-                            Span({
-                                style {
-                                    color(Color(SilkColors.textLight))
-                                    padding(0.px, 2.px)
-                                }
-                            }) { Text("›") }
-                        }
-                    }
-                }
+            FolderPickerHeader(onDismiss = onDismiss)
+            FolderPickerBreadcrumbs(current = current, onNavigate = { requestLoad(it) })
+            FolderPickerListContent(
+                loading = loading,
+                errorMsg = errorMsg,
+                current = current,
+                onNavigate = { requestLoad(it) },
+            )
+            FolderPickerFooter(
+                manualInput = manualInput,
+                current = current,
+                onManualInputChange = { manualInput = it },
+                onDismiss = onDismiss,
+                onNavigate = { requestLoad(it) },
+                onConfirm = onConfirm,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FolderPickerHeader(onDismiss: () -> Unit) {
+    Div({
+        style {
+            padding(16.px, 20.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.SpaceBetween)
+            alignItems(AlignItems.Center)
+        }
+    }) {
+        Span({
+            style {
+                fontSize(16.px)
+                fontWeight("600")
+                color(Color(SilkColors.textPrimary))
             }
-
-            // 列表区
-            Div({
-                style {
-                    property("flex", "1")
-                    property("overflow-y", "auto")
-                    padding(8.px, 0.px)
-                    property("min-height", "240px")
-                    property("max-height", "380px")
-                }
-            }) {
-                when {
-                    loading -> Div({
-                        style {
-                            padding(40.px)
-                            property("text-align", "center")
-                            color(Color(SilkColors.textSecondary))
-                        }
-                    }) { Text("加载中...") }
-
-                    errorMsg != null -> Div({
-                        style {
-                            padding(20.px)
-                            color(Color(SilkColors.error))
-                            fontSize(13.px)
-                        }
-                    }) { Text("⚠ $errorMsg") }
-
-                    current != null -> {
-                        // ..
-                        if (current.parent != null) {
-                            FolderRow(name = "..", subtle = true) {
-                                requestLoad(current.parent)
-                            }
-                        }
-                        current.entries.forEach { entry ->
-                            FolderRow(name = entry.name) {
-                                val nextPath = joinPath(current.path, entry.name, current.separator)
-                                requestLoad(nextPath)
-                            }
-                        }
-                        if (current.entries.isEmpty() && current.parent == null) {
-                            Div({
-                                style {
-                                    padding(20.px)
-                                    color(Color(SilkColors.textSecondary))
-                                    fontSize(13.px)
-                                }
-                            }) { Text("此目录下无子文件夹") }
-                        }
-                        if (current.truncated) {
-                            Div({
-                                style {
-                                    padding(8.px, 20.px)
-                                    fontSize(12.px)
-                                    color(Color(SilkColors.textLight))
-                                    fontStyle("italic")
-                                }
-                            }) { Text("目录项过多，仅显示前 500 个") }
-                        }
-                    }
-                }
+        }) { Text("选择工作目录") }
+        Span({
+            style {
+                fontSize(18.px)
+                property("cursor", "pointer")
+                color(Color(SilkColors.textSecondary))
             }
+            onClick { onDismiss() }
+        }) { Text("×") }
+    }
+}
 
-            // 底部：路径输入 + 操作
-            Div({
+@Composable
+private fun FolderPickerBreadcrumbs(
+    current: DirListingResponse?,
+    onNavigate: (String?) -> Unit,
+) {
+    if (current == null) {
+        return
+    }
+
+    Div({
+        style {
+            padding(10.px, 20.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            property("flex-wrap", "wrap")
+            alignItems(AlignItems.Center)
+            property("gap", "4px")
+            fontSize(13.px)
+            fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
+        }
+    }) {
+        current.segments.forEachIndexed { idx, seg ->
+            val isLast = idx == current.segments.size - 1
+            Span({
                 style {
-                    padding(12.px, 20.px)
-                    property("border-top", "1px solid ${SilkColors.border}")
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("gap", "8px")
+                    color(if (isLast) Color(SilkColors.textPrimary) else Color(SilkColors.primary))
+                    if (!isLast) property("cursor", "pointer")
+                    if (isLast) fontWeight("600")
+                    padding(2.px, 6.px)
+                    borderRadius(4.px)
                 }
-            }) {
-                Input(InputType.Text) {
-                    value(manualInput)
-                    onInput { manualInput = it.value }
-                    attr("placeholder", "路径，Enter 跳转")
-                    onKeyDown { evt ->
-                        if (evt.key == "Enter" && manualInput.isNotBlank()) {
-                            evt.preventDefault()
-                            requestLoad(manualInput.trim())
-                        } else if (evt.key == "Escape") {
-                            onDismiss()
-                        }
-                    }
-                    style {
-                        property("flex", "1")
-                        height(34.px)
-                        borderRadius(6.px)
-                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                        padding(4.px, 10.px)
-                        fontSize(13.px)
-                        fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
-                        property("box-sizing", "border-box")
-                        property("outline", "none")
-                    }
-                }
-                Button({
-                    style {
-                        backgroundColor(Color(SilkColors.surface))
-                        color(Color(SilkColors.textSecondary))
-                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                        borderRadius(6.px)
-                        padding(7.px, 14.px)
-                        property("cursor", "pointer")
-                        fontSize(13.px)
-                    }
-                    onClick { onDismiss() }
-                }) { Text("取消") }
-                Button({
-                    val enabled = current?.success == true
-                    if (!enabled) attr("disabled", "")
-                    style {
-                        backgroundColor(
-                            if (enabled) Color(SilkColors.primary)
-                            else Color(SilkColors.primaryLight)
-                        )
-                        color(Color.white)
-                        border(0.px)
-                        borderRadius(6.px)
-                        padding(7.px, 14.px)
-                        property("cursor", if (enabled) "pointer" else "not-allowed")
-                        fontSize(13.px)
-                        property("font-weight", "600")
-                    }
+                if (!isLast) {
                     onClick {
-                        val path = current?.path
-                        if (!path.isNullOrBlank()) onConfirm(path)
+                        onNavigate(buildBreadcrumbPath(current.segments, idx, current.separator))
                     }
-                }) { Text("选择此目录") }
+                }
+            }) { Text(seg) }
+            if (!isLast) {
+                Span({
+                    style {
+                        color(Color(SilkColors.textLight))
+                        padding(0.px, 2.px)
+                    }
+                }) { Text("›") }
             }
         }
+    }
+}
+
+@Composable
+private fun FolderPickerListContent(
+    loading: Boolean,
+    errorMsg: String?,
+    current: DirListingResponse?,
+    onNavigate: (String?) -> Unit,
+) {
+    Div({
+        style {
+            property("flex", "1")
+            property("overflow-y", "auto")
+            padding(8.px, 0.px)
+            property("min-height", "240px")
+            property("max-height", "380px")
+        }
+    }) {
+        when {
+            loading -> FolderPickerStatusMessage("加载中...", SilkColors.textSecondary)
+            errorMsg != null -> FolderPickerStatusMessage("⚠ $errorMsg", SilkColors.error)
+            current != null -> FolderPickerDirectoryEntries(current = current, onNavigate = onNavigate)
+        }
+    }
+}
+
+@Composable
+private fun FolderPickerDirectoryEntries(
+    current: DirListingResponse,
+    onNavigate: (String?) -> Unit,
+) {
+    current.parent?.let { parent ->
+        FolderRow(name = "..", subtle = true) {
+            onNavigate(parent)
+        }
+    }
+
+    current.entries.forEach { entry ->
+        FolderRow(name = entry.name) {
+            onNavigate(joinPath(current.path, entry.name, current.separator))
+        }
+    }
+
+    if (current.entries.isEmpty() && current.parent == null) {
+        FolderPickerStatusMessage("此目录下无子文件夹", SilkColors.textSecondary)
+    }
+
+    if (current.truncated) {
+        Div({
+            style {
+                padding(8.px, 20.px)
+                fontSize(12.px)
+                color(Color(SilkColors.textLight))
+                fontStyle("italic")
+            }
+        }) { Text("目录项过多，仅显示前 500 个") }
+    }
+}
+
+@Composable
+private fun FolderPickerStatusMessage(
+    message: String,
+    textColor: String,
+) {
+    Div({
+        style {
+            padding(if (message == "加载中...") 40.px else 20.px)
+            property("text-align", if (message == "加载中...") "center" else "left")
+            color(Color(textColor))
+            fontSize(13.px)
+        }
+    }) { Text(message) }
+}
+
+@Composable
+private fun FolderPickerFooter(
+    manualInput: String,
+    current: DirListingResponse?,
+    onManualInputChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onNavigate: (String?) -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val confirmEnabled = current?.success == true
+
+    Div({
+        style {
+            padding(12.px, 20.px)
+            property("border-top", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "8px")
+        }
+    }) {
+        Input(InputType.Text) {
+            value(manualInput)
+            onInput { onManualInputChange(it.value) }
+            attr("placeholder", "路径，Enter 跳转")
+            onKeyDown { evt ->
+                when {
+                    evt.key == "Enter" && manualInput.isNotBlank() -> {
+                        evt.preventDefault()
+                        onNavigate(manualInput.trim())
+                    }
+                    evt.key == "Escape" -> onDismiss()
+                }
+            }
+            style {
+                property("flex", "1")
+                height(34.px)
+                borderRadius(6.px)
+                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                padding(4.px, 10.px)
+                fontSize(13.px)
+                fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
+                property("box-sizing", "border-box")
+                property("outline", "none")
+            }
+        }
+        Button({
+            style {
+                backgroundColor(Color(SilkColors.surface))
+                color(Color(SilkColors.textSecondary))
+                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                borderRadius(6.px)
+                padding(7.px, 14.px)
+                property("cursor", "pointer")
+                fontSize(13.px)
+            }
+            onClick { onDismiss() }
+        }) { Text("取消") }
+        Button({
+            if (!confirmEnabled) attr("disabled", "")
+            style {
+                backgroundColor(if (confirmEnabled) Color(SilkColors.primary) else Color(SilkColors.primaryLight))
+                color(Color.white)
+                border(0.px)
+                borderRadius(6.px)
+                padding(7.px, 14.px)
+                property("cursor", if (confirmEnabled) "pointer" else "not-allowed")
+                fontSize(13.px)
+                property("font-weight", "600")
+            }
+            onClick {
+                val path = current?.path
+                if (!path.isNullOrBlank()) {
+                    onConfirm(path)
+                }
+            }
+        }) { Text("选择此目录") }
     }
 }
 
