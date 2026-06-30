@@ -22,6 +22,18 @@ enum class NavTab {
     AUDIO_DUPLEX
 }
 
+data class ChatNavigationTarget(
+    val groupId: String,
+    val messageId: String? = null,
+    val requestId: Long,
+)
+
+data class WorkflowNavigationTarget(
+    val workflowId: String,
+    val messageId: String? = null,
+    val requestId: Long,
+)
+
 class WebAppState {
     var currentScene by mutableStateOf(Scene.LOGIN)
         private set
@@ -35,6 +47,10 @@ class WebAppState {
     var currentTab by mutableStateOf(NavTab.SILK)
 
     var knowledgeBaseNavigationTarget by mutableStateOf<KnowledgeBaseNavigationTarget?>(null)
+        private set
+    var chatNavigationTarget by mutableStateOf<ChatNavigationTarget?>(null)
+        private set
+    var workflowNavigationTarget by mutableStateOf<WorkflowNavigationTarget?>(null)
         private set
     
     // 标记用户是否明确请求了退出登录
@@ -73,6 +89,12 @@ class WebAppState {
         saveUserToStorage(user)
         navigateTo(Scene.GROUP_LIST)
     }
+
+    fun setAuthSession(user: User, token: String?) {
+        ApiClient.setAuthToken(token)
+        saveAuthTokenToStorage(token)
+        setUser(user)
+    }
     
     fun selectGroup(group: Group) {
         console.log("📌 选择群组:", group.name)
@@ -102,10 +124,43 @@ class WebAppState {
         selectTab(NavTab.KNOWLEDGE_BASE)
     }
 
+    fun openChatGroup(group: Group, messageId: String? = null) {
+        chatNavigationTarget = ChatNavigationTarget(
+            groupId = group.id,
+            messageId = messageId,
+            requestId = kotlin.js.Date.now().toLong(),
+        )
+        selectTab(NavTab.SILK)
+        selectGroup(group)
+    }
+
+    fun openWorkflow(workflowId: String, messageId: String? = null) {
+        workflowNavigationTarget = WorkflowNavigationTarget(
+            workflowId = workflowId,
+            messageId = messageId,
+            requestId = kotlin.js.Date.now().toLong(),
+        )
+        selectTab(NavTab.WORKFLOW)
+    }
+
     fun consumeKnowledgeBaseNavigationTarget(requestId: Long) {
         val current = knowledgeBaseNavigationTarget ?: return
         if (current.requestId == requestId) {
             knowledgeBaseNavigationTarget = null
+        }
+    }
+
+    fun consumeChatNavigationTarget(requestId: Long) {
+        val current = chatNavigationTarget ?: return
+        if (current.requestId == requestId) {
+            chatNavigationTarget = null
+        }
+    }
+
+    fun consumeWorkflowNavigationTarget(requestId: Long) {
+        val current = workflowNavigationTarget ?: return
+        if (current.requestId == requestId) {
+            workflowNavigationTarget = null
         }
     }
     
@@ -150,11 +205,15 @@ class WebAppState {
     fun logout() {
         console.log("🚪 用户明确请求退出登录")
         explicitLogoutRequested = true
+        ApiClient.setAuthToken(null)
         currentUser = null
         selectedGroup = null
         knowledgeBaseNavigationTarget = null
+        chatNavigationTarget = null
+        workflowNavigationTarget = null
         sceneHistory.clear()
         localStorage.removeItem("silk_user")
+        localStorage.removeItem("silk_auth_token")
         currentScene = Scene.LOGIN
     }
     
@@ -175,6 +234,7 @@ class WebAppState {
             val json = localStorage.getItem("silk_user")
             if (json != null) {
                 val user = kotlinx.serialization.json.Json.decodeFromString<User>(json)
+                ApiClient.setAuthToken(localStorage.getItem("silk_auth_token"))
                 console.log("🔄 检测到保存的用户数据，用户未明确退出登录，自动恢复到群组列表")
                 currentUser = user
                 currentScene = Scene.GROUP_LIST
@@ -214,6 +274,7 @@ class WebAppState {
                 val json = localStorage.getItem("silk_user")
                 if (json != null) {
                     val user = Json.decodeFromString<User>(json)
+                    ApiClient.setAuthToken(localStorage.getItem("silk_auth_token"))
                     currentUser = user
                     currentScene = Scene.GROUP_LIST
                     console.log("自动登录:", user.fullName)
@@ -224,4 +285,20 @@ class WebAppState {
             },
         )
     }
+
+    private fun saveAuthTokenToStorage(token: String?) {
+        recoverNonCancellation(
+            block = {
+                if (token.isNullOrBlank()) {
+                    localStorage.removeItem("silk_auth_token")
+                } else {
+                    localStorage.setItem("silk_auth_token", token)
+                }
+            },
+            recover = { error ->
+                console.log("保存认证 token 失败:", error)
+            },
+        )
+    }
+
 }

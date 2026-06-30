@@ -75,6 +75,7 @@ export class AppStore {
       if (response.success && loginData && loginData.user) {
         this._currentUser = loginData.user;
         this._token = loginData.token ? loginData.token : '';
+        this.apiClient.setAuthToken(this._token);
         this._isLoggedIn = true;
         
         // 保存登录状态到本地存储
@@ -134,6 +135,7 @@ export class AppStore {
   async logout(): Promise<void> {
     this._currentUser = null;
     this._token = '';
+    this.apiClient.setAuthToken('');
     this._isLoggedIn = false;
     this._groups = [];
     this._currentGroup = null;
@@ -158,6 +160,7 @@ export class AppStore {
         name: userName
       };
       this._token = token;
+      this.apiClient.setAuthToken(token);
       this._isLoggedIn = true;
       await this.loadSettings();
       return true;

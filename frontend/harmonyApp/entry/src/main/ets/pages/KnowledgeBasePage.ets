@@ -26,6 +26,14 @@ export struct KnowledgeBasePage {
 
   @State showCreateEntrySheet: boolean = false;
   @State newEntryTitle: string = '';
+  @State showMeetingCaptureSheet: boolean = false;
+  @State meetingCaptureTopicId: string = '';
+  @State meetingCaptureTitle: string = '';
+  @State meetingCaptureContent: string = '';
+  @State meetingCaptureTagsText: string = 'meeting, minutes';
+  @State meetingCaptureStatus: 'CANDIDATE' | 'PUBLISHED' = 'CANDIDATE';
+  @State meetingCaptureConfidenceText: string = '0.90';
+  @State meetingCaptureResultMessage: string = '';
 
   private readonly appStore = globalAppStore;
   private readonly apiClient = globalApiClient;
@@ -188,6 +196,10 @@ export struct KnowledgeBasePage {
       height: 200,
       backgroundColor: SilkColors.surface
     })
+    .bindSheet($$this.showMeetingCaptureSheet, this.buildMeetingCaptureSheet(), {
+      height: 720,
+      backgroundColor: SilkColors.surface
+    })
   }
 
   private selectedSpaceOption(): { id: string; label: string; type: 'PERSONAL' | 'TEAM'; groupId?: string } {
@@ -315,6 +327,97 @@ export struct KnowledgeBasePage {
       case 'PUBLISHED':
       default:
         return { label: '归档', status: 'ARCHIVED' };
+    }
+  }
+
+  private writableTopics(): KBTopicApiItem[] {
+    return this.filteredTopics().filter((topic) => this.canWriteTopic(topic));
+  }
+
+  private defaultMeetingCaptureTitle(topic?: KBTopicApiItem | null): string {
+    if (topic?.name) {
+      return `${topic.name} 会议纪要`;
+    }
+    return '会议纪要';
+  }
+
+  private parseKnowledgeCaptureTags(raw: string): string[] {
+    return raw
+      .split(/[，,]/)
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0)
+      .filter((item, index, arr) => arr.indexOf(item) === index);
+  }
+
+  private parseKnowledgeCaptureConfidence(raw: string): number | undefined {
+    const trimmed = raw.trim();
+    if (!trimmed) return undefined;
+    const value = Number(trimmed);
+    if (Number.isNaN(value)) return undefined;
+    return Math.min(1, Math.max(0, value));
+  }
+
+  private meetingCaptureSource(): { sourceType: 'MEETING'; sourceGroupId?: string; confidence?: number } {
+    const topic = this.topics.find((item) => item.id === this.meetingCaptureTopicId);
+    return {
+      sourceType: 'MEETING',
+      sourceGroupId: topic?.spaceType === 'TEAM' ? topic.groupId : undefined,
+      confidence: this.parseKnowledgeCaptureConfidence(this.meetingCaptureConfidenceText)
+    };
+  }
+
+  private openMeetingCapture(): void {
+    const topic = this.selectedTopic;
+    if (!topic || !this.canWriteTopic(topic)) {
+      return;
+    }
+    this.meetingCaptureTopicId = topic.id;
+    this.meetingCaptureTitle = this.defaultMeetingCaptureTitle(topic);
+    this.meetingCaptureContent = '';
+    this.meetingCaptureTagsText = 'meeting, minutes';
+    this.meetingCaptureStatus = 'CANDIDATE';
+    this.meetingCaptureConfidenceText = '0.90';
+    this.meetingCaptureResultMessage = '';
+    this.showMeetingCaptureSheet = true;
+  }
+
+  async submitMeetingCapture(): Promise<void> {
+    const userId = this.getUserId();
+    if (!userId || !this.meetingCaptureTopicId || !this.meetingCaptureTitle.trim() || !this.meetingCaptureContent.trim()) {
+      this.meetingCaptureResultMessage = '请补全目标主题、标题和内容';
+      return;
+    }
+    this.isSaving = true;
+    this.meetingCaptureResultMessage = '';
+    try {
+      const created = await this.apiClient.captureKBEntry(
+        this.meetingCaptureTopicId,
+        this.meetingCaptureTitle.trim(),
+        this.meetingCaptureContent.trim(),
+        this.parseKnowledgeCaptureTags(this.meetingCaptureTagsText),
+        userId,
+        this.meetingCaptureSource(),
+        this.meetingCaptureStatus
+      );
+      if (!created) {
+        this.meetingCaptureResultMessage = '会议纪要入库失败';
+        return;
+      }
+      const topic = this.topics.find((item) => item.id === this.meetingCaptureTopicId) ?? this.selectedTopic;
+      if (topic) {
+        this.selectedTopic = topic;
+        this.entries = await this.apiClient.getKBEntries(topic.id, userId);
+      }
+      this.selectedEntry = this.entries.find((item) => item.id === created.id) ?? created;
+      this.editorContent = this.selectedEntry.content;
+      this.entryFilter = this.selectedEntry.status === 'PUBLISHED' ? 'PUBLISHED' : 'CANDIDATE';
+      this.subPage = 'editor';
+      this.showMeetingCaptureSheet = false;
+      this.showToast(this.meetingCaptureStatus === 'PUBLISHED' ? '会议纪要已发布到知识库' : '会议纪要已作为候选入库');
+    } catch (_) {
+      this.meetingCaptureResultMessage = '会议纪要入库失败';
+    } finally {
+      this.isSaving = false;
     }
   }
 
@@ -462,6 +565,14 @@ export struct KnowledgeBasePage {
           .fontWeight(FontWeight.Bold)
           .fontColor(SilkColors.textPrimary)
           .layoutWeight(1)
+        Button('会议入库')
+          .height(32)
+          .fontSize(13)
+          .backgroundColor(this.canWriteTopic(this.selectedTopic) ? SilkColors.surface : SilkColors.surfaceVariant)
+          .fontColor(SilkColors.textPrimary)
+          .enabled(this.canWriteTopic(this.selectedTopic))
+          .margin({ right: 8 })
+          .onClick(() => { this.openMeetingCapture(); })
         Button('+ 创建')
           .height(32)
           .fontSize(13)
@@ -699,6 +810,128 @@ export struct KnowledgeBasePage {
           .enabled(this.newEntryTitle.trim().length > 0)
           .onClick(() => { void this.createEntry(); })
       }.width('100%').justifyContent(FlexAlign.SpaceBetween).margin({ top: 16 })
+    }.width('100%').padding(16)
+  }
+
+  @Builder
+  buildMeetingCaptureSheet() {
+    const writableTopics = this.writableTopics();
+    Column() {
+      Text('会议纪要入库')
+        .fontSize(18)
+        .fontWeight(FontWeight.Bold)
+        .fontColor(SilkColors.textPrimary)
+        .margin({ bottom: 8 })
+      Text('通过统一 capture API 保存会议纪要，可直接存为候选或发布。')
+        .fontSize(12)
+        .fontColor(SilkColors.textSecondary)
+        .margin({ bottom: 12 })
+      TextInput({ placeholder: '标题', text: $$this.meetingCaptureTitle })
+        .width('100%')
+        .height(48)
+        .backgroundColor(SilkColors.background)
+        .onChange((value: string) => this.meetingCaptureTitle = value)
+      TextArea({ placeholder: '会议内容', text: $$this.meetingCaptureContent })
+        .width('100%')
+        .height(180)
+        .backgroundColor(SilkColors.background)
+        .margin({ top: 8 })
+        .onChange((value: string) => this.meetingCaptureContent = value)
+      TextInput({ placeholder: '标签（例如 meeting, minutes）', text: $$this.meetingCaptureTagsText })
+        .width('100%')
+        .height(48)
+        .backgroundColor(SilkColors.background)
+        .margin({ top: 8 })
+        .onChange((value: string) => this.meetingCaptureTagsText = value)
+      TextInput({ placeholder: '置信度（0.0 - 1.0）', text: $$this.meetingCaptureConfidenceText })
+        .width('100%')
+        .height(48)
+        .backgroundColor(SilkColors.background)
+        .margin({ top: 8 })
+        .onChange((value: string) => this.meetingCaptureConfidenceText = value)
+      Row() {
+        Button('候选')
+          .height(32)
+          .fontSize(13)
+          .backgroundColor(this.meetingCaptureStatus === 'CANDIDATE' ? SilkColors.primary : SilkColors.surfaceVariant)
+          .fontColor(this.meetingCaptureStatus === 'CANDIDATE' ? Color.White : SilkColors.textPrimary)
+          .margin({ right: 8 })
+          .onClick(() => { this.meetingCaptureStatus = 'CANDIDATE'; })
+        Button('发布')
+          .height(32)
+          .fontSize(13)
+          .backgroundColor(this.meetingCaptureStatus === 'PUBLISHED' ? SilkColors.primary : SilkColors.surfaceVariant)
+          .fontColor(this.meetingCaptureStatus === 'PUBLISHED' ? Color.White : SilkColors.textPrimary)
+          .onClick(() => { this.meetingCaptureStatus = 'PUBLISHED'; })
+      }
+      .width('100%')
+      .margin({ top: 8, bottom: 8 })
+      Text('目标主题')
+        .fontSize(12)
+        .fontColor(SilkColors.textSecondary)
+        .margin({ bottom: 8 })
+      if (writableTopics.length === 0) {
+        Text('当前空间暂无可写主题，请先创建主题。')
+          .fontSize(12)
+          .fontColor(SilkColors.textSecondary)
+          .margin({ bottom: 8 })
+      } else {
+        List({ space: 6 }) {
+          ForEach(writableTopics, (topic: KBTopicApiItem) => {
+            ListItem() {
+              Column() {
+                Text(topic.name)
+                  .fontSize(14)
+                  .fontColor(SilkColors.textPrimary)
+                  .fontWeight(FontWeight.Medium)
+                Row() {
+                  this.buildBadge(
+                    this.meetingCaptureTopicId === topic.id ? '目标主题' : '可写主题',
+                    this.meetingCaptureTopicId === topic.id ? SilkColors.primary : SilkColors.surface,
+                    this.meetingCaptureTopicId === topic.id ? Color.White : SilkColors.textPrimary
+                  )
+                }
+                .margin({ top: 6 })
+              }
+              .width('100%')
+              .padding(12)
+              .backgroundColor(this.meetingCaptureTopicId === topic.id ? SilkColors.background : SilkColors.surfaceVariant)
+              .borderRadius(12)
+              .alignItems(HorizontalAlign.Start)
+              .onClick(() => { this.meetingCaptureTopicId = topic.id; })
+            }
+          }, (topic: KBTopicApiItem) => topic.id)
+        }
+        .height(180)
+        .width('100%')
+      }
+      if (this.meetingCaptureResultMessage) {
+        Text(this.meetingCaptureResultMessage)
+          .fontSize(12)
+          .fontColor(SilkColors.textSecondary)
+          .margin({ top: 8 })
+      }
+      Row() {
+        Button('取消')
+          .width('45%')
+          .backgroundColor(SilkColors.surface)
+          .fontColor(SilkColors.textSecondary)
+          .onClick(() => { this.showMeetingCaptureSheet = false; })
+        Button(this.isSaving ? '保存中...' : (this.meetingCaptureStatus === 'PUBLISHED' ? '发布纪要' : '存入候选'))
+          .width('45%')
+          .backgroundColor(SilkColors.primary)
+          .fontColor(Color.White)
+          .enabled(
+            !this.isSaving &&
+            this.meetingCaptureTopicId.length > 0 &&
+            this.meetingCaptureTitle.trim().length > 0 &&
+            this.meetingCaptureContent.trim().length > 0
+          )
+          .onClick(() => { void this.submitMeetingCapture(); })
+      }
+      .width('100%')
+      .justifyContent(FlexAlign.SpaceBetween)
+      .margin({ top: 16 })
     }.width('100%').padding(16)
   }
 }

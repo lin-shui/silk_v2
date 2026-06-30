@@ -108,11 +108,21 @@ fun WorkflowScene(appState: WebAppState) {
     var kbCaptureContent by remember { mutableStateOf("") }
     var kbCaptureSaving by remember { mutableStateOf(false) }
     var kbCaptureResult by remember { mutableStateOf<String?>(null) }
+    var pendingWorkflowMessageId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(user.id) {
         isLoading = true
         workflows = ApiClient.getWorkflows(user.id)
         isLoading = false
+    }
+
+    val workflowNavigationTarget = appState.workflowNavigationTarget
+    LaunchedEffect(workflows, workflowNavigationTarget?.requestId) {
+        val target = workflowNavigationTarget ?: return@LaunchedEffect
+        val workflow = workflows.find { it.id == target.workflowId } ?: return@LaunchedEffect
+        selectedWorkflow = workflow
+        pendingWorkflowMessageId = target.messageId?.takeIf { it.isNotBlank() }
+        appState.consumeWorkflowNavigationTarget(target.requestId)
     }
 
     val resetCreateDialog = {
@@ -139,6 +149,7 @@ fun WorkflowScene(appState: WebAppState) {
         workflows = workflows,
         isLoading = isLoading,
         selectedWorkflow = selectedWorkflow,
+        pendingWorkflowMessageId = pendingWorkflowMessageId,
         userId = user.id,
         userName = user.fullName,
         onCaptureToKnowledgeBase = { workflow, message ->
@@ -164,6 +175,7 @@ fun WorkflowScene(appState: WebAppState) {
         },
         onOpenCreateDialog = { showCreateDialog = true },
         onSelectWorkflow = { selectedWorkflow = it },
+        onWorkflowMessageNavigated = { pendingWorkflowMessageId = null },
         onToggleMenuWorkflow = { wf -> menuWorkflow = toggleWorkflowMenu(menuWorkflow, wf) },
     )
     WorkflowCreateFlow(
@@ -270,11 +282,13 @@ private fun WorkflowSceneLayout(
     workflows: List<WorkflowItem>,
     isLoading: Boolean,
     selectedWorkflow: WorkflowItem?,
+    pendingWorkflowMessageId: String?,
     userId: String,
     userName: String,
     onCaptureToKnowledgeBase: (WorkflowItem, Message) -> Unit,
     onOpenCreateDialog: () -> Unit,
     onSelectWorkflow: (WorkflowItem) -> Unit,
+    onWorkflowMessageNavigated: () -> Unit,
     onToggleMenuWorkflow: (WorkflowItem) -> Unit,
 ) {
     Div({
@@ -296,9 +310,11 @@ private fun WorkflowSceneLayout(
         )
         WorkflowMainPanel(
             selectedWorkflow = selectedWorkflow,
+            pendingMessageId = pendingWorkflowMessageId,
             userId = userId,
             userName = userName,
             onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
+            onMessageNavigated = onWorkflowMessageNavigated,
         )
     }
 }
@@ -469,9 +485,11 @@ private fun WorkflowSidebarItem(
 @Composable
 private fun WorkflowMainPanel(
     selectedWorkflow: WorkflowItem?,
+    pendingMessageId: String?,
     userId: String,
     userName: String,
     onCaptureToKnowledgeBase: (WorkflowItem, Message) -> Unit,
+    onMessageNavigated: () -> Unit,
 ) {
     Div({
         style {
@@ -492,7 +510,9 @@ private fun WorkflowMainPanel(
                     userName = userName,
                     groupId = workflow.groupId,
                     workflowName = workflow.name,
+                    pendingMessageId = pendingMessageId,
                     onCaptureToKnowledgeBase = { message -> onCaptureToKnowledgeBase(workflow, message) },
+                    onMessageNavigated = onMessageNavigated,
                 )
             }
         }
@@ -1422,7 +1442,9 @@ private fun WorkflowChatPanel(
     userName: String,
     groupId: String,
     workflowName: String,
+    pendingMessageId: String?,
     onCaptureToKnowledgeBase: (Message) -> Unit,
+    onMessageNavigated: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val wsUrl = remember { backendWsOrigin() }
@@ -1524,6 +1546,14 @@ private fun WorkflowChatPanel(
         )
         restoredKbContextSelection = true
     }
+
+    HandlePendingWorkflowMessageNavigation(
+        groupId = groupId,
+        isHistoryLoading = isHistoryLoading,
+        messagesSize = messages.size,
+        pendingMessageId = pendingMessageId,
+        onMessageNavigated = onMessageNavigated,
+    )
 
     // Auto-scroll
     LaunchedEffect(messages.size, transientMessage, statusMessages.size) {
@@ -1656,6 +1686,25 @@ private fun WorkflowChatPanel(
             )
         },
     )
+}
+
+@Composable
+private fun HandlePendingWorkflowMessageNavigation(
+    groupId: String,
+    isHistoryLoading: Boolean,
+    messagesSize: Int,
+    pendingMessageId: String?,
+    onMessageNavigated: () -> Unit,
+) {
+    LaunchedEffect(groupId, isHistoryLoading, messagesSize, pendingMessageId) {
+        val messageId = pendingMessageId?.takeIf { it.isNotBlank() } ?: return@LaunchedEffect
+        if (isHistoryLoading) {
+            return@LaunchedEffect
+        }
+        if (scrollMessageIntoView(containerId = "wf-messages", messageId = messageId)) {
+            onMessageNavigated()
+        }
+    }
 }
 
 private data class WorkflowAgentSelectionResult(

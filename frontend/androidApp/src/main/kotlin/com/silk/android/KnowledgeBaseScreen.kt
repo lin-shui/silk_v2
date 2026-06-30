@@ -56,6 +56,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
@@ -261,6 +264,31 @@ private fun filterForStatus(status: KBEntryStatus): KnowledgeEntryFilter =
         KBEntryStatus.DELETED -> KnowledgeEntryFilter.ALL
     }
 
+private fun buildDefaultMeetingCaptureTitle(topic: KBTopicItem?): String =
+    topic?.name?.takeIf { it.isNotBlank() }?.let { "$it 会议纪要" } ?: run {
+        val date = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+        "会议纪要 $date"
+    }
+
+private fun parseKnowledgeCaptureTags(raw: String): List<String> =
+    raw.split(',', '，')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+
+private fun parseKnowledgeCaptureConfidence(raw: String): Double? =
+    raw.trim()
+        .takeIf { it.isNotEmpty() }
+        ?.toDoubleOrNull()
+        ?.coerceIn(0.0, 1.0)
+
+private fun buildMeetingCaptureSource(topic: KBTopicItem?, confidenceText: String): KBEntrySource =
+    KBEntrySource(
+        sourceType = KBSourceType.MEETING,
+        sourceGroupId = topic?.takeIf { it.spaceType == KnowledgeSpaceType.TEAM }?.groupId,
+        confidence = parseKnowledgeCaptureConfidence(confidenceText),
+    )
+
 @Composable
 private fun HandleKnowledgeBaseBackNavigation(
     subPage: KBSubPage,
@@ -367,6 +395,57 @@ private suspend fun createKnowledgeEntry(
     onFinished()
 }
 
+private suspend fun submitMeetingKnowledgeCapture(
+    userId: String,
+    topics: List<KBTopicItem>,
+    selectedTopicId: String,
+    title: String,
+    content: String,
+    tagsText: String,
+    status: KBEntryStatus,
+    confidenceText: String,
+    onSavingChange: (Boolean) -> Unit,
+    onResultMessageChange: (String?) -> Unit,
+    onSelectedTopicChange: (KBTopicItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+    onFilterChange: (KnowledgeEntryFilter) -> Unit,
+    onSubPageChange: (KBSubPage) -> Unit,
+    onVisibilityChange: (Boolean) -> Unit,
+) {
+    val topic = topics.find { it.id == selectedTopicId } ?: run {
+        onResultMessageChange("请选择目标主题")
+        return
+    }
+    onSavingChange(true)
+    onResultMessageChange(null)
+    val created = ApiClient.captureKBEntry(
+        topicId = topic.id,
+        title = title.trim(),
+        content = content.trim(),
+        tags = parseKnowledgeCaptureTags(tagsText),
+        userId = userId,
+        source = buildMeetingCaptureSource(topic, confidenceText),
+        status = status,
+    )
+    if (created == null) {
+        onSavingChange(false)
+        onResultMessageChange("会议纪要入库失败")
+        return
+    }
+    val refreshedEntries = ApiClient.getKBEntries(topic.id, userId)
+    val selectedEntry = refreshedEntries.find { it.id == created.id } ?: created
+    onSelectedTopicChange(topic)
+    onEntriesChange(refreshedEntries)
+    onSelectedEntryChange(selectedEntry)
+    onEditorContentChange(selectedEntry.content)
+    onFilterChange(filterForStatus(selectedEntry.status))
+    onSubPageChange(KBSubPage.EDITOR)
+    onSavingChange(false)
+    onVisibilityChange(false)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun KnowledgeBaseScreen(appState: AppState) {
@@ -389,6 +468,14 @@ fun KnowledgeBaseScreen(appState: AppState) {
     var newTopicProject by remember { mutableStateOf("") }
     var showCreateEntryDialog by remember { mutableStateOf(false) }
     var newEntryTitle by remember { mutableStateOf("") }
+    var showMeetingCaptureDialog by remember { mutableStateOf(false) }
+    var meetingCaptureTopicId by remember { mutableStateOf("") }
+    var meetingCaptureTitle by remember { mutableStateOf("") }
+    var meetingCaptureContent by remember { mutableStateOf("") }
+    var meetingCaptureTagsText by remember { mutableStateOf("meeting, minutes") }
+    var meetingCaptureStatus by remember { mutableStateOf(KBEntryStatus.CANDIDATE) }
+    var meetingCaptureConfidenceText by remember { mutableStateOf("0.90") }
+    var meetingCaptureResultMessage by remember { mutableStateOf<String?>(null) }
     var editorContent by remember { mutableStateOf("") }
     var isSaving by remember { mutableStateOf(false) }
 
@@ -456,6 +543,17 @@ fun KnowledgeBaseScreen(appState: AppState) {
         },
         onBackToTopics = backToTopics,
         onShowCreateEntry = { showCreateEntryDialog = true },
+        onShowMeetingCapture = {
+            val topic = selectedTopic ?: return@KnowledgeBasePageHost
+            meetingCaptureTopicId = topic.id
+            meetingCaptureTitle = buildDefaultMeetingCaptureTitle(topic)
+            meetingCaptureContent = ""
+            meetingCaptureTagsText = "meeting, minutes"
+            meetingCaptureStatus = KBEntryStatus.CANDIDATE
+            meetingCaptureConfidenceText = "0.90"
+            meetingCaptureResultMessage = null
+            showMeetingCaptureDialog = true
+        },
         onEntrySelected = { entry ->
             selectedEntry = entry
             editorContent = entry.content
@@ -501,6 +599,7 @@ fun KnowledgeBaseScreen(appState: AppState) {
     )
 
     KnowledgeBaseDialogs(
+        isSaving = isSaving,
         showCreateTopicDialog = showCreateTopicDialog,
         newTopicName = newTopicName,
         newTopicProject = newTopicProject,
@@ -561,6 +660,56 @@ fun KnowledgeBaseScreen(appState: AppState) {
                 }
             }
         },
+        showMeetingCaptureDialog = showMeetingCaptureDialog,
+        meetingCaptureTopics = filteredTopics.filter { canWriteKnowledgeTopic(it, user.id) },
+        meetingCaptureTopicId = meetingCaptureTopicId,
+        meetingCaptureTitle = meetingCaptureTitle,
+        meetingCaptureContent = meetingCaptureContent,
+        meetingCaptureTagsText = meetingCaptureTagsText,
+        meetingCaptureStatus = meetingCaptureStatus,
+        meetingCaptureConfidenceText = meetingCaptureConfidenceText,
+        meetingCaptureResultMessage = meetingCaptureResultMessage,
+        onMeetingCaptureTopicChange = { meetingCaptureTopicId = it },
+        onMeetingCaptureTitleChange = { meetingCaptureTitle = it },
+        onMeetingCaptureContentChange = { meetingCaptureContent = it },
+        onMeetingCaptureTagsTextChange = { meetingCaptureTagsText = it },
+        onMeetingCaptureStatusChange = { meetingCaptureStatus = it },
+        onMeetingCaptureConfidenceTextChange = { meetingCaptureConfidenceText = it },
+        onDismissMeetingCapture = {
+            showMeetingCaptureDialog = false
+            meetingCaptureResultMessage = null
+        },
+        onConfirmMeetingCapture = {
+            scope.launch {
+                val captureStatus = meetingCaptureStatus
+                submitMeetingKnowledgeCapture(
+                    userId = user.id,
+                    topics = topics,
+                    selectedTopicId = meetingCaptureTopicId,
+                    title = meetingCaptureTitle,
+                    content = meetingCaptureContent,
+                    tagsText = meetingCaptureTagsText,
+                    status = captureStatus,
+                    confidenceText = meetingCaptureConfidenceText,
+                    onSavingChange = { isSaving = it },
+                    onResultMessageChange = { meetingCaptureResultMessage = it },
+                    onSelectedTopicChange = { selectedTopic = it },
+                    onEntriesChange = { entries = it },
+                    onSelectedEntryChange = { selectedEntry = it },
+                    onEditorContentChange = { editorContent = it },
+                    onFilterChange = { entryFilter = it },
+                    onSubPageChange = { subPage = it },
+                    onVisibilityChange = { showMeetingCaptureDialog = it },
+                )
+                if (!showMeetingCaptureDialog) {
+                    Toast.makeText(
+                        context,
+                        if (captureStatus == KBEntryStatus.PUBLISHED) "会议纪要已发布到知识库" else "会议纪要已作为候选入库",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
+        },
     )
 }
 
@@ -586,6 +735,7 @@ private fun KnowledgeBasePageHost(
     onTopicSelected: (KBTopicItem) -> Unit,
     onBackToTopics: () -> Unit,
     onShowCreateEntry: () -> Unit,
+    onShowMeetingCapture: () -> Unit,
     onEntrySelected: (KBEntryItem) -> Unit,
     onBackToEntries: () -> Unit,
     onEditorContentChange: (String) -> Unit,
@@ -614,6 +764,7 @@ private fun KnowledgeBasePageHost(
             onFilterChange = onEntryFilterChange,
             onBack = onBackToTopics,
             onShowCreateEntry = onShowCreateEntry,
+            onShowMeetingCapture = onShowMeetingCapture,
             onEntrySelected = onEntrySelected,
         )
         KBSubPage.EDITOR -> KnowledgeBaseEditorPage(
@@ -750,6 +901,7 @@ private fun KnowledgeBaseEntriesPage(
     onFilterChange: (KnowledgeEntryFilter) -> Unit,
     onBack: () -> Unit,
     onShowCreateEntry: () -> Unit,
+    onShowMeetingCapture: () -> Unit,
     onEntrySelected: (KBEntryItem) -> Unit,
 ) {
     Scaffold(
@@ -759,6 +911,14 @@ private fun KnowledgeBaseEntriesPage(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    TextButton(
+                        onClick = onShowMeetingCapture,
+                        enabled = canWriteSelectedTopic,
+                    ) {
+                        Text("会议入库")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -1026,6 +1186,7 @@ private fun KnowledgeDetailRow(label: String, value: String) {
 
 @Composable
 private fun KnowledgeBaseDialogs(
+    isSaving: Boolean,
     showCreateTopicDialog: Boolean,
     newTopicName: String,
     newTopicProject: String,
@@ -1040,6 +1201,23 @@ private fun KnowledgeBaseDialogs(
     onEntryTitleChange: (String) -> Unit,
     onDismissCreateEntry: () -> Unit,
     onConfirmCreateEntry: () -> Unit,
+    showMeetingCaptureDialog: Boolean,
+    meetingCaptureTopics: List<KBTopicItem>,
+    meetingCaptureTopicId: String,
+    meetingCaptureTitle: String,
+    meetingCaptureContent: String,
+    meetingCaptureTagsText: String,
+    meetingCaptureStatus: KBEntryStatus,
+    meetingCaptureConfidenceText: String,
+    meetingCaptureResultMessage: String?,
+    onMeetingCaptureTopicChange: (String) -> Unit,
+    onMeetingCaptureTitleChange: (String) -> Unit,
+    onMeetingCaptureContentChange: (String) -> Unit,
+    onMeetingCaptureTagsTextChange: (String) -> Unit,
+    onMeetingCaptureStatusChange: (KBEntryStatus) -> Unit,
+    onMeetingCaptureConfidenceTextChange: (String) -> Unit,
+    onDismissMeetingCapture: () -> Unit,
+    onConfirmMeetingCapture: () -> Unit,
 ) {
     if (showCreateTopicDialog) {
         AlertDialog(
@@ -1115,5 +1293,215 @@ private fun KnowledgeBaseDialogs(
                 }
             },
         )
+    }
+
+    if (showMeetingCaptureDialog) {
+        MeetingCaptureDialog(
+            isSaving = isSaving,
+            meetingCaptureTopics = meetingCaptureTopics,
+            meetingCaptureTopicId = meetingCaptureTopicId,
+            meetingCaptureTitle = meetingCaptureTitle,
+            meetingCaptureContent = meetingCaptureContent,
+            meetingCaptureTagsText = meetingCaptureTagsText,
+            meetingCaptureStatus = meetingCaptureStatus,
+            meetingCaptureConfidenceText = meetingCaptureConfidenceText,
+            meetingCaptureResultMessage = meetingCaptureResultMessage,
+            onMeetingCaptureTopicChange = onMeetingCaptureTopicChange,
+            onMeetingCaptureTitleChange = onMeetingCaptureTitleChange,
+            onMeetingCaptureContentChange = onMeetingCaptureContentChange,
+            onMeetingCaptureTagsTextChange = onMeetingCaptureTagsTextChange,
+            onMeetingCaptureStatusChange = onMeetingCaptureStatusChange,
+            onMeetingCaptureConfidenceTextChange = onMeetingCaptureConfidenceTextChange,
+            onDismissMeetingCapture = onDismissMeetingCapture,
+            onConfirmMeetingCapture = onConfirmMeetingCapture,
+        )
+    }
+}
+
+@Composable
+private fun MeetingCaptureDialog(
+    isSaving: Boolean,
+    meetingCaptureTopics: List<KBTopicItem>,
+    meetingCaptureTopicId: String,
+    meetingCaptureTitle: String,
+    meetingCaptureContent: String,
+    meetingCaptureTagsText: String,
+    meetingCaptureStatus: KBEntryStatus,
+    meetingCaptureConfidenceText: String,
+    meetingCaptureResultMessage: String?,
+    onMeetingCaptureTopicChange: (String) -> Unit,
+    onMeetingCaptureTitleChange: (String) -> Unit,
+    onMeetingCaptureContentChange: (String) -> Unit,
+    onMeetingCaptureTagsTextChange: (String) -> Unit,
+    onMeetingCaptureStatusChange: (KBEntryStatus) -> Unit,
+    onMeetingCaptureConfidenceTextChange: (String) -> Unit,
+    onDismissMeetingCapture: () -> Unit,
+    onConfirmMeetingCapture: () -> Unit,
+) {
+    val canSubmit = !isSaving &&
+        meetingCaptureTopicId.isNotBlank() &&
+        meetingCaptureTitle.isNotBlank() &&
+        meetingCaptureContent.isNotBlank()
+    AlertDialog(
+        onDismissRequest = onDismissMeetingCapture,
+        title = { Text("会议纪要入库") },
+        text = {
+            MeetingCaptureDialogContent(
+                meetingCaptureTopics = meetingCaptureTopics,
+                meetingCaptureTopicId = meetingCaptureTopicId,
+                meetingCaptureTitle = meetingCaptureTitle,
+                meetingCaptureContent = meetingCaptureContent,
+                meetingCaptureTagsText = meetingCaptureTagsText,
+                meetingCaptureStatus = meetingCaptureStatus,
+                meetingCaptureConfidenceText = meetingCaptureConfidenceText,
+                meetingCaptureResultMessage = meetingCaptureResultMessage,
+                onMeetingCaptureTopicChange = onMeetingCaptureTopicChange,
+                onMeetingCaptureTitleChange = onMeetingCaptureTitleChange,
+                onMeetingCaptureContentChange = onMeetingCaptureContentChange,
+                onMeetingCaptureTagsTextChange = onMeetingCaptureTagsTextChange,
+                onMeetingCaptureStatusChange = onMeetingCaptureStatusChange,
+                onMeetingCaptureConfidenceTextChange = onMeetingCaptureConfidenceTextChange,
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirmMeetingCapture,
+                enabled = canSubmit,
+                colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+            ) {
+                Text(if (isSaving) "保存中..." else if (meetingCaptureStatus == KBEntryStatus.PUBLISHED) "发布纪要" else "存入候选")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismissMeetingCapture) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
+private fun MeetingCaptureDialogContent(
+    meetingCaptureTopics: List<KBTopicItem>,
+    meetingCaptureTopicId: String,
+    meetingCaptureTitle: String,
+    meetingCaptureContent: String,
+    meetingCaptureTagsText: String,
+    meetingCaptureStatus: KBEntryStatus,
+    meetingCaptureConfidenceText: String,
+    meetingCaptureResultMessage: String?,
+    onMeetingCaptureTopicChange: (String) -> Unit,
+    onMeetingCaptureTitleChange: (String) -> Unit,
+    onMeetingCaptureContentChange: (String) -> Unit,
+    onMeetingCaptureTagsTextChange: (String) -> Unit,
+    onMeetingCaptureStatusChange: (KBEntryStatus) -> Unit,
+    onMeetingCaptureConfidenceTextChange: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "通过统一 capture API 保存会议纪要，可直接存为候选或发布。",
+            color = SilkColors.textSecondary,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        OutlinedTextField(
+            value = meetingCaptureTitle,
+            onValueChange = onMeetingCaptureTitleChange,
+            label = { Text("标题") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = meetingCaptureContent,
+            onValueChange = onMeetingCaptureContentChange,
+            label = { Text("内容") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 6,
+        )
+        OutlinedTextField(
+            value = meetingCaptureTagsText,
+            onValueChange = onMeetingCaptureTagsTextChange,
+            label = { Text("标签") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = meetingCaptureConfidenceText,
+            onValueChange = onMeetingCaptureConfidenceTextChange,
+            label = { Text("置信度") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        MeetingCaptureStatusSelector(
+            selectedStatus = meetingCaptureStatus,
+            onStatusChange = onMeetingCaptureStatusChange,
+        )
+        Text(
+            "目标主题",
+            color = SilkColors.textSecondary,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        MeetingCaptureTopicPicker(
+            topics = meetingCaptureTopics,
+            selectedTopicId = meetingCaptureTopicId,
+            onTopicChange = onMeetingCaptureTopicChange,
+        )
+        meetingCaptureResultMessage?.takeIf { it.isNotBlank() }?.let { message ->
+            Text(
+                message,
+                color = SilkColors.textSecondary,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MeetingCaptureStatusSelector(
+    selectedStatus: KBEntryStatus,
+    onStatusChange: (KBEntryStatus) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(KBEntryStatus.CANDIDATE to "候选", KBEntryStatus.PUBLISHED to "发布").forEach { (status, label) ->
+            Button(
+                onClick = { onStatusChange(status) },
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (selectedStatus == status) SilkColors.primary else SilkColors.surface,
+                    contentColor = if (selectedStatus == status) Color.White else SilkColors.textPrimary,
+                ),
+            ) {
+                Text(label)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MeetingCaptureTopicPicker(
+    topics: List<KBTopicItem>,
+    selectedTopicId: String,
+    onTopicChange: (String) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxWidth().height(180.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        items(topics) { topic ->
+            val isSelected = selectedTopicId == topic.id
+            Card(
+                modifier = Modifier.fillMaxWidth().clickable { onTopicChange(topic.id) },
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isSelected) SilkColors.background else SilkColors.cardBackground,
+                ),
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(topic.name, fontWeight = FontWeight.Medium)
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        KnowledgeBadge(
+                            text = if (isSelected) "目标主题" else "可写主题",
+                            backgroundColor = if (isSelected) SilkColors.primary else SilkColors.surface,
+                            contentColor = if (isSelected) Color.White else SilkColors.textPrimary,
+                        )
+                    }
+                }
+            }
+        }
     }
 }

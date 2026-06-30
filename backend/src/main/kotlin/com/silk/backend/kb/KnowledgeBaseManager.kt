@@ -206,6 +206,7 @@ class KnowledgeBaseManager(
 
     fun updateEntry(
         entryId: String,
+        topicId: String?,
         title: String?,
         content: String?,
         tags: List<String>?,
@@ -216,9 +217,18 @@ class KnowledgeBaseManager(
         val idx = store.entries.indexOfFirst { it.id == entryId }
         if (idx == -1) return null
         val old = store.entries[idx]
-        val topic = store.topics.find { it.id == old.topicId } ?: return null
-        if (!canWriteTopic(topic, userId)) return null
+        val sourceTopic = store.topics.find { it.id == old.topicId } ?: return null
+        val targetTopic = topicId
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && it != old.topicId }
+            ?.let { requestedTopicId -> store.topics.find { it.id == requestedTopicId } }
+            ?: sourceTopic
+        if (!canWriteTopic(sourceTopic, userId) || !canWriteTopic(targetTopic, userId)) return null
+        require(canMoveEntryBetweenTopics(sourceTopic, targetTopic)) {
+            "Entries can only move within the same knowledge space"
+        }
         val updated = old.copy(
+            topicId = targetTopic.id,
             title = title ?: old.title,
             content = content ?: old.content,
             tags = tags ?: old.tags,
@@ -350,6 +360,15 @@ class KnowledgeBaseManager(
     private fun normalizeGroupId(spaceType: KnowledgeSpaceType, groupId: String?): String? {
         val normalized = groupId?.trim()?.takeIf { it.isNotEmpty() }
         return if (spaceType == KnowledgeSpaceType.TEAM) normalized else null
+    }
+
+    private fun canMoveEntryBetweenTopics(sourceTopic: KBTopic, targetTopic: KBTopic): Boolean {
+        if (sourceTopic.id == targetTopic.id) return true
+        if (sourceTopic.spaceType != targetTopic.spaceType) return false
+        return when (sourceTopic.spaceType) {
+            KnowledgeSpaceType.PERSONAL -> true
+            KnowledgeSpaceType.TEAM -> sourceTopic.groupId == targetTopic.groupId
+        }
     }
 
     private fun normalizePolicy(accessPolicy: KBAccessPolicy, spaceType: KnowledgeSpaceType): KBAccessPolicy {

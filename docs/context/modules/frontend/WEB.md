@@ -42,10 +42,14 @@
 - Context Tray 支持“固定下轮 / 排除下轮 / 关闭某个空间的自动推荐”最小控制闭环：Web 会把用户选择写进消息合同里的 `kbContextSelection(pinnedEntryIds, excludedEntryIds, excludedSpaceIds)`，即使当前已清空也会显式落盘，后端按该选择重建下一轮 KB context；space 级关闭只抑制自动召回，不覆盖手动引用或 pinned 条目
 - Web 还会通过 `GET/PUT /api/kb/context-preferences` 维护用户级长期空间偏好：聊天页和 Workflow 面板初始化时会先拉取持久化的 `excludedSpaceIds`，再与最近一条用户消息里的 `kbContextSelection` 合并；因此“关闭某个空间的自动推荐”不仅能跨刷新 / 重连保留，也不会因为用户下一条消息没有手动再带一次而失效。Workflow 面板仍会把这类 KB context 状态从普通灰色状态列表中过滤掉，避免和 Tray 重复展示
 - 聊天与 Workflow 的文本消息操作栏支持“📚入库”：选择目标 topic 后会把消息保存成 `candidate` 知识条目；用户消息会带 `CHAT` / `WORKFLOW` 来源元数据，AI 回复会带 `AI_RESPONSE` 来源元数据，保存成功后直接跳到对应 KB 文档
-- KB 编辑区的条目 meta bar 不再只显示来源 badge，还会展开 provenance 明细：来源群组、工作流 id、消息 id 摘要、置信度、创建人/更新人，便于在 candidate inbox 和已发布条目中快速追溯上下文
+- KB 编辑区的条目 meta bar 不再只显示来源 badge，还会展开 provenance 明细：来源群组、工作流、来源消息条数、置信度、创建人/更新人；Web 会优先显示人类可读名称，对 UUID / `wf-*` / `msg-*` 这类内部标识默认去噪隐藏
+- Web KB 条目 provenance 现支持最小回跳：来源群组可直接切回对应 Silk 群聊，工作流可切到对应 Workflow，若 provenance 带 `messageIds` 则会优先定位到来源消息并临时高亮
 - 知识库条目侧栏提供 candidate inbox 过滤与批处理：可按“全部 / 候选 / 已发布 / 已归档”切换；候选条目支持勾选后批量发布/归档/并入已有文档，单条 candidate 也可在编辑区直接发布，已发布条目可归档，归档条目可重新发布
 - 候选条目支持最小 merge 流：在 KB 编辑区可把当前 `candidate` 并入同 topic 下的已有文档；candidate inbox 里也可把多条已选候选批量并入同一目标文档。前端会先更新目标条目内容和 tags，再把原 candidate 归档
 - 知识库条目侧栏还提供“会议入库”入口：用户可在 KB 页面直接录入会议纪要，选择目标空间/主题、标签、置信度，以及保存为 `candidate` 或直接 `published`；该入口走统一 `POST /api/kb/captures` 契约并写入 `MEETING` provenance
+- Web KB 侧栏现已补上最小搜索闭环：topic 侧支持按名称 / project 过滤，entry 侧支持按标题 / 标签 / 内容 / 来源搜索，空列表会区分“暂无数据”和“无搜索结果”
+- Web KB 布局现支持本地可调分栏：topic 栏、entry 栏、Markdown 编辑/预览 split 都可拖动调整，最近一次宽度/比例写入浏览器 `localStorage`；窄屏下保留最小宽度并允许横向滚动，避免编辑区被直接压缩到不可用
+- Web KB 条目整理现有两层交互：entry 列表里的可编辑条目可直接拖到左侧同一 knowledge space 的其他 topic 完成 move；编辑器工具栏仍保留“移动到主题”对话框作为兜底，同时 manager 可控 topic/entry 继续提供显式删除确认。后端 `PUT /api/kb/entries/{entryId}` 仍是唯一 move 契约，personal 与 team 空间之间禁止跨空间移动
 - 知识库面板已接上 M2 骨架：
   - 左侧按“个人 + 我所在群组”切换空间，前端对可访问 topic 做 personal/team 过滤
   - topic / entry 编辑器展示空间 badge、读写 badge、条目状态与来源
