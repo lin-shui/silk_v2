@@ -4,6 +4,10 @@
 
 - 当前主线 agent 是 `ai/DirectModelAgent.kt`
 - `SilkAgent.kt` 仍保留旧接口与兼容逻辑，但新代码默认沿着 `DirectModelAgent` 看
+- `DirectModelAgent.processInput(...)` 关键参数：
+  - `availableReferences`：本轮可引用的 KB 条目列表（含 `spaceId`/`spaceLabel`/`origin`/`reason`），经 `registerReference` 写入 `MessageReference`
+  - `additionalContext: String?`：由 `resolveKnowledgeBasePromptContext` 生成的 KB prompt 文本块，追加到系统提示词末尾
+  - `callback`：流式回调（thinking/text/blocks_state/tool 相关事件）
 - `AIConfig.kt` 统一读取：
   - Anthropic Claude API（Messages API）
   - ASR

@@ -4,6 +4,8 @@ import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageCategory
 import com.silk.shared.models.MessageReference
+import com.silk.shared.models.MessageType
+import com.silk.shared.models.SILK_AGENT_USER_ID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -45,6 +47,46 @@ class KnowledgeBaseSceneLogicTest {
 
         assertEquals(listOf("p1"), filterTopicsForSpace(topics, PERSONAL_SPACE_ID).map { it.id })
         assertEquals(listOf("t1"), filterTopicsForSpace(topics, "g-1").map { it.id })
+    }
+
+    @Test
+    fun topicSearchMatchesNameAndProject() {
+        val topics = listOf(
+            KBTopicItem(id = "t1", name = "架构决策", ownerId = "u1", project = "silk"),
+            KBTopicItem(id = "t2", name = "测试计划", ownerId = "u1", project = "qa"),
+        )
+
+        assertEquals(listOf("t1"), filterTopicsByQuery(topics, "架构").map { it.id })
+        assertEquals(listOf("t2"), filterTopicsByQuery(topics, "qa").map { it.id })
+        assertEquals(listOf("t1", "t2"), filterTopicsByQuery(topics, " ").map { it.id })
+    }
+
+    @Test
+    fun knowledgePanePersistenceHelpersClampInvalidValues() {
+        assertEquals(
+            KNOWLEDGE_TOPIC_SIDEBAR_DEFAULT_WIDTH,
+            parseStoredKnowledgeSidebarWidth(raw = null, defaultWidth = KNOWLEDGE_TOPIC_SIDEBAR_DEFAULT_WIDTH),
+        )
+        assertEquals(
+            KNOWLEDGE_SIDEBAR_MAX_WIDTH,
+            parseStoredKnowledgeSidebarWidth(raw = "999", defaultWidth = KNOWLEDGE_TOPIC_SIDEBAR_DEFAULT_WIDTH),
+        )
+        assertEquals(
+            KNOWLEDGE_SIDEBAR_MIN_WIDTH,
+            clampKnowledgeSidebarWidth(120.0),
+        )
+        assertEquals(
+            KNOWLEDGE_EDITOR_SPLIT_DEFAULT_RATIO,
+            parseStoredKnowledgeEditorSplitRatio(raw = "oops", defaultRatio = KNOWLEDGE_EDITOR_SPLIT_DEFAULT_RATIO),
+        )
+        assertEquals(
+            KNOWLEDGE_EDITOR_SPLIT_MIN_RATIO,
+            clampKnowledgeEditorSplitRatio(0.1),
+        )
+        assertEquals(
+            KNOWLEDGE_EDITOR_SPLIT_MAX_RATIO,
+            clampKnowledgeEditorSplitRatio(0.95),
+        )
     }
 
     @Test
@@ -115,6 +157,31 @@ class KnowledgeBaseSceneLogicTest {
     }
 
     @Test
+    fun entrySearchMatchesTitleTagsContentAndSource() {
+        val entries = listOf(
+            KBEntryItem(
+                id = "e1",
+                title = "会议纪要",
+                content = "记录了发布决策",
+                tags = listOf("meeting", "decision"),
+                source = KBEntrySource(sourceType = KBSourceType.MEETING),
+            ),
+            KBEntryItem(
+                id = "e2",
+                title = "聊天总结",
+                content = "跟进 TODO",
+                tags = listOf("chat"),
+                source = KBEntrySource(sourceType = KBSourceType.CHAT),
+            ),
+        )
+
+        assertEquals(listOf("e1"), filterKnowledgeEntriesByQuery(entries, "发布").map { it.id })
+        assertEquals(listOf("e1"), filterKnowledgeEntriesByQuery(entries, "decision").map { it.id })
+        assertEquals(listOf("e1"), filterKnowledgeEntriesByQuery(entries, "会议").map { it.id })
+        assertEquals(listOf("e2"), filterKnowledgeEntriesByQuery(entries, "聊天").map { it.id })
+    }
+
+    @Test
     fun candidateInboxHelpersSupportSelectionAndMerge() {
         val selection = toggleKnowledgeEntrySelection(emptySet(), "c1")
         assertEquals(setOf("c1"), selection)
@@ -181,18 +248,264 @@ class KnowledgeBaseSceneLogicTest {
     }
 
     @Test
+    fun captureSourceTypeTreatsAgentMessagesAsAiResponses() {
+        val aiMessage = Message(
+            id = "msg-ai",
+            userId = SILK_AGENT_USER_ID,
+            userName = "Silk",
+            content = "这是 AI 回答",
+            timestamp = 1L,
+        )
+        val userMessage = aiMessage.copy(id = "msg-user", userId = "user-1", userName = "Alice")
+
+        assertEquals(KBSourceType.AI_RESPONSE, messageKnowledgeCaptureSourceType(aiMessage, KBSourceType.CHAT))
+        assertEquals(KBSourceType.AI_RESPONSE, messageKnowledgeCaptureSourceType(aiMessage, KBSourceType.WORKFLOW))
+        assertEquals(KBSourceType.CHAT, messageKnowledgeCaptureSourceType(userMessage, KBSourceType.CHAT))
+        assertEquals(KBSourceType.WORKFLOW, messageKnowledgeCaptureSourceType(userMessage, KBSourceType.WORKFLOW))
+    }
+
+    @Test
+    fun provenanceHelpersExposeReadableSourceLabelsAndDetails() {
+        val groups = listOf(
+            Group(id = "group-1", name = "架构组", invitationCode = "", hostId = "host"),
+        )
+        val entry = KBEntryItem(
+            id = "entry-1",
+            title = "AI 总结",
+            source = KBEntrySource(
+                sourceType = KBSourceType.AI_RESPONSE,
+                sourceGroupId = "group-1",
+                workflowId = "wf-7",
+                messageIds = listOf("msg-1", "msg-2", "msg-3", "msg-4"),
+                confidence = 0.83,
+            ),
+            createdBy = "owner",
+            updatedBy = "550e8400-e29b-41d4-a716-446655440000",
+        )
+
+        assertEquals("AI 回答", knowledgeSourceLabel(KBSourceType.AI_RESPONSE))
+        assertEquals("AI", knowledgeSourceShortLabel(KBSourceType.AI_RESPONSE))
+        assertEquals(
+            listOf(
+                "来源群组" to "架构组",
+                "工作流" to "已关联工作流",
+                "来源消息" to "共 4 条",
+                "置信度" to "83%",
+                "创建人" to "我",
+            ),
+            knowledgeSourceDetails(entry, groups, currentUserId = "owner"),
+        )
+    }
+
+    @Test
+    fun sourceMessageJumpPrefersWorkflowThenFallsBackToChat() {
+        val workflowEntry = KBEntryItem(
+            id = "entry-workflow",
+            title = "工作流总结",
+            source = KBEntrySource(
+                sourceType = KBSourceType.WORKFLOW,
+                sourceGroupId = "group-1",
+                workflowId = "wf-7",
+                messageIds = listOf("msg-1", "msg-2"),
+            ),
+        )
+        val chatEntry = workflowEntry.copy(
+            id = "entry-chat",
+            source = workflowEntry.source.copy(workflowId = null),
+        )
+
+        assertEquals(
+            KnowledgeSourceMessageJump(
+                kind = KnowledgeSourceMessageJumpKind.WORKFLOW,
+                targetId = "wf-7",
+                messageId = "msg-1",
+            ),
+            knowledgeSourceMessageJump(workflowEntry),
+        )
+        assertEquals(
+            KnowledgeSourceMessageJump(
+                kind = KnowledgeSourceMessageJumpKind.CHAT,
+                targetId = "group-1",
+                messageId = "msg-1",
+            ),
+            knowledgeSourceMessageJump(chatEntry),
+        )
+        assertEquals(
+            null,
+            knowledgeSourceMessageJump(chatEntry.copy(source = chatEntry.source.copy(messageIds = emptyList()))),
+        )
+    }
+
+    @Test
+    fun moveTargetTopicsStayInsideSameKnowledgeSpace() {
+        val personalA = KBTopicItem(id = "p1", name = "个人 A", ownerId = "u1")
+        val personalB = KBTopicItem(id = "p2", name = "个人 B", ownerId = "u1")
+        val teamA = KBTopicItem(
+            id = "t1",
+            name = "团队 A",
+            ownerId = "u1",
+            spaceType = KnowledgeSpaceType.TEAM,
+            groupId = "g-1",
+        )
+        val teamB = KBTopicItem(
+            id = "t2",
+            name = "团队 B",
+            ownerId = "u1",
+            spaceType = KnowledgeSpaceType.TEAM,
+            groupId = "g-2",
+        )
+
+        assertEquals(listOf("p2"), knowledgeMoveTargetTopics(listOf(personalA, personalB, teamA), personalA).map { it.id })
+        assertEquals(emptyList(), knowledgeMoveTargetTopics(listOf(personalA), personalA))
+        assertFalse(canMoveKnowledgeEntryToTopic(teamA, teamA))
+        assertTrue(canMoveKnowledgeEntryToTopic(teamA, teamA.copy(id = "t1-copy")))
+        assertEquals(emptyList(), knowledgeMoveTargetTopics(listOf(personalA, teamB), teamA).map { it.id })
+    }
+
+    @Test
+    fun dragDropHelpersOnlyAcceptValidTargetTopics() {
+        val personalA = KBTopicItem(id = "p1", name = "个人 A", ownerId = "u1")
+        val personalB = KBTopicItem(id = "p2", name = "个人 B", ownerId = "u1")
+        val teamA = KBTopicItem(
+            id = "t1",
+            name = "团队 A",
+            ownerId = "u1",
+            spaceType = KnowledgeSpaceType.TEAM,
+            groupId = "g-1",
+        )
+
+        val payload = KnowledgeEntryDragPayload(entryId = "entry-1", sourceTopicId = "p1")
+
+        assertEquals("p2", knowledgeEntryDropTargetTopicId(payload, listOf(personalA, personalB, teamA), "p2"))
+        assertEquals(null, knowledgeEntryDropTargetTopicId(payload, listOf(personalA, personalB, teamA), "p1"))
+        assertEquals(null, knowledgeEntryDropTargetTopicId(payload, listOf(personalA, personalB, teamA), "t1"))
+        assertEquals(null, knowledgeEntryDropTargetTopicId(null, listOf(personalA, personalB), "p2"))
+    }
+
+    @Test
+    fun knowledgeRowDomIdIsStableAndNamespaced() {
+        val domId = knowledgeRowDomId(prefix = "kb-entry-row", rawId = "entry-42")
+
+        assertTrue(domId.startsWith("kb-entry-row-"))
+        assertEquals(domId, knowledgeRowDomId(prefix = "kb-entry-row", rawId = "entry-42"))
+    }
+
+    @Test
     fun knowledgeContextSelectionTogglesStayMutuallyExclusive() {
-        val pinned = togglePinnedKnowledgeBaseEntry(KnowledgeBaseContextSelection(), "entry-1")
+        val pinned = togglePinnedKnowledgeBaseEntry(
+            KnowledgeBaseContextSelection(excludedSpaceIds = listOf("group-1")),
+            "entry-1",
+        )
         assertEquals(listOf("entry-1"), pinned.pinnedEntryIds)
         assertTrue(pinned.excludedEntryIds.isEmpty())
+        assertEquals(listOf("group-1"), pinned.excludedSpaceIds)
         assertTrue(hasKnowledgeBaseContextSelection(pinned))
 
         val excluded = toggleExcludedKnowledgeBaseEntry(pinned, "entry-1")
         assertTrue(excluded.pinnedEntryIds.isEmpty())
         assertEquals(listOf("entry-1"), excluded.excludedEntryIds)
+        assertEquals(listOf("group-1"), excluded.excludedSpaceIds)
 
         val cleared = toggleExcludedKnowledgeBaseEntry(excluded, "entry-1")
-        assertFalse(hasKnowledgeBaseContextSelection(cleared))
+        assertTrue(hasKnowledgeBaseContextSelection(cleared))
+    }
+
+    @Test
+    fun knowledgeContextSelectionCanExcludeWholeSpaceForNextTurn() {
+        val excluded = toggleExcludedKnowledgeBaseSpace(KnowledgeBaseContextSelection(), "group-1")
+
+        assertEquals(listOf("group-1"), excluded.excludedSpaceIds)
+        assertTrue(hasKnowledgeBaseContextSelection(excluded))
+
+        val restored = toggleExcludedKnowledgeBaseSpace(excluded, "group-1")
+        assertEquals(KnowledgeBaseContextSelection(), restored)
+    }
+
+    @Test
+    fun latestKnowledgeBaseContextSelectionRestoresLastExplicitUserPreference() {
+        val messages = listOf(
+            Message(
+                id = "m1",
+                userId = "user-1",
+                userName = "Alice",
+                content = "first",
+                timestamp = 1L,
+                kbContextSelection = KnowledgeBaseContextSelection(pinnedEntryIds = listOf("entry-1")),
+            ),
+            Message(
+                id = "m2",
+                userId = SILK_AGENT_USER_ID,
+                userName = "Silk",
+                content = "ignored",
+                timestamp = 2L,
+                kbContextSelection = KnowledgeBaseContextSelection(excludedEntryIds = listOf("ignored")),
+            ),
+            Message(
+                id = "m3",
+                userId = "user-1",
+                userName = "Alice",
+                content = "second",
+                timestamp = 3L,
+                kbContextSelection = KnowledgeBaseContextSelection(excludedEntryIds = listOf("entry-2")),
+            ),
+        )
+
+        assertEquals(
+            KnowledgeBaseContextSelection(excludedEntryIds = listOf("entry-2")),
+            latestKnowledgeBaseContextSelection(messages, "user-1"),
+        )
+    }
+
+    @Test
+    fun latestKnowledgeBaseContextSelectionKeepsExplicitClearState() {
+        val messages = listOf(
+            Message(
+                id = "m1",
+                userId = "user-1",
+                userName = "Alice",
+                content = "pin",
+                timestamp = 1L,
+                kbContextSelection = KnowledgeBaseContextSelection(pinnedEntryIds = listOf("entry-1")),
+            ),
+            Message(
+                id = "m2",
+                userId = "user-1",
+                userName = "Alice",
+                content = "clear",
+                timestamp = 2L,
+                type = MessageType.TEXT,
+                kbContextSelection = KnowledgeBaseContextSelection(),
+            ),
+        )
+
+        assertEquals(KnowledgeBaseContextSelection(), latestKnowledgeBaseContextSelection(messages, "user-1"))
+    }
+
+    @Test
+    fun persistentExcludedSpacesMergeIntoRestoredKnowledgeContextSelection() {
+        assertEquals(
+            KnowledgeBaseContextSelection(excludedSpaceIds = listOf("group-1")),
+            mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+                restoredSelection = null,
+                persistentExcludedSpaceIds = listOf("group-1"),
+            ),
+        )
+
+        assertEquals(
+            KnowledgeBaseContextSelection(
+                pinnedEntryIds = listOf("entry-1"),
+                excludedEntryIds = listOf("entry-2"),
+                excludedSpaceIds = listOf("group-1", "group-2"),
+            ),
+            mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+                restoredSelection = KnowledgeBaseContextSelection(
+                    pinnedEntryIds = listOf("entry-1"),
+                    excludedEntryIds = listOf("entry-2"),
+                    excludedSpaceIds = listOf("group-2"),
+                ),
+                persistentExcludedSpaceIds = listOf("group-1"),
+            ),
+        )
     }
 
     @Test

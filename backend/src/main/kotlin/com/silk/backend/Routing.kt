@@ -1254,9 +1254,10 @@ private fun Route.authRoutes() {
         get("/auth/validate/{userId}") {
             val userId = call.parameters["userId"] ?: ""
             val user = UserRepository.findUserById(userId)
-            
+
             if (user != null) {
-                call.respond(AuthResponse(true, "验证成功", user))
+                val appAuthToken = UserSettingsRepository.getOrCreateAppAuthToken(user.id)
+                call.respond(AuthResponse(true, "验证成功", user, appAuthToken = appAuthToken))
             } else {
                 call.respond(AuthResponse(false, "用户不存在或已失效"))
             }
@@ -3916,6 +3917,8 @@ private fun Route.audioDuplexRoute() {
 private val kbRouteJson = Json { ignoreUnknownKeys = true }
 
 private const val KB_AUTHENTICATED_USER_ID_HEADER = "X-Silk-Authenticated-User-Id"
+private const val AUTHORIZATION_HEADER = "Authorization"
+private const val BEARER_PREFIX = "Bearer "
 
 private val knowledgeBaseContextPreferenceStore: KnowledgeBaseContextPreferenceStore
     get() = KnowledgeBaseContextPreferenceStore()
@@ -3923,13 +3926,25 @@ private val knowledgeBaseContextPreferenceStore: KnowledgeBaseContextPreferenceS
 private data class KbCallerResolution(
     val userId: String?,
     val mismatch: Boolean = false,
+    val invalidToken: Boolean = false,
 )
 
+private fun ApplicationCall.resolveAuthenticatedUserId(): String? {
+    val authorization = request.headers[AUTHORIZATION_HEADER]?.trim().orEmpty()
+    if (!authorization.startsWith(BEARER_PREFIX, ignoreCase = true)) return null
+    val token = authorization.substring(BEARER_PREFIX.length).trim()
+    if (token.isEmpty()) return null
+    return UserSettingsRepository.findUserIdByAppAuthToken(token)
+}
 
 private fun resolveKbCallerUserId(call: ApplicationCall, fallbackUserId: String?): KbCallerResolution {
-    val authenticatedUserId = call.request.headers[KB_AUTHENTICATED_USER_ID_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
+    val bearerUserId = call.resolveAuthenticatedUserId()
+    val legacyAuthenticatedUserId = call.request.headers[KB_AUTHENTICATED_USER_ID_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
+    val authenticatedUserId = bearerUserId ?: legacyAuthenticatedUserId
     val requestUserId = fallbackUserId?.trim()?.takeIf { it.isNotEmpty() }
+    val bearerHeaderPresent = call.request.headers[AUTHORIZATION_HEADER]?.trim()?.startsWith(BEARER_PREFIX, ignoreCase = true) == true
     return when {
+        bearerHeaderPresent && bearerUserId == null -> KbCallerResolution(userId = null, invalidToken = true)
         authenticatedUserId != null && requestUserId != null && authenticatedUserId != requestUserId ->
             KbCallerResolution(userId = authenticatedUserId, mismatch = true)
         authenticatedUserId != null -> KbCallerResolution(userId = authenticatedUserId)
@@ -3942,6 +3957,14 @@ private suspend fun resolveKbCallerUserIdOrRespond(
     fallbackUserId: String?,
 ): String? {
     val resolution = resolveKbCallerUserId(call, fallbackUserId)
+    if (resolution.invalidToken) {
+        call.respondText(
+            """{"success":false,"message":"Invalid auth token"}""",
+            ContentType.Application.Json,
+            HttpStatusCode.Unauthorized,
+        )
+        return null
+    }
     if (resolution.mismatch) {
         call.respondText(
             """{"success":false,"message":"Authenticated user mismatch"}""",
@@ -4171,7 +4194,7 @@ private fun Route.registerApiKbCapturesPostRoute() {
         val validTitle = title!!
         val validContent = content!!
         val status = when (source.sourceType) {
-            KBSourceType.CHAT, KBSourceType.WORKFLOW -> KBEntryStatus.CANDIDATE
+            KBSourceType.CHAT, KBSourceType.AI_RESPONSE, KBSourceType.WORKFLOW -> KBEntryStatus.CANDIDATE
             else -> requestedStatus ?: KBEntryStatus.CANDIDATE
         }
 

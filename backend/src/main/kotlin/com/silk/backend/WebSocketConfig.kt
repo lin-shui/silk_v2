@@ -23,7 +23,51 @@ import com.silk.backend.todos.GroupTodoExtractionService
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.search.WeaviateClient
 import com.silk.backend.agents.core.AgentRuntime
+import com.silk.backend.kb.KnowledgeBaseManager
+import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
+import com.silk.backend.kb.KnowledgeBasePromptContext
+import com.silk.backend.kb.resolveKnowledgeBasePromptContext
+import com.silk.backend.models.KnowledgeBaseContextSelection
 import org.slf4j.LoggerFactory
+
+private val knowledgeBaseManager: KnowledgeBaseManager get() = KnowledgeBaseManager()
+private val knowledgeBaseContextPreferenceStore: KnowledgeBaseContextPreferenceStore get() = KnowledgeBaseContextPreferenceStore()
+
+private fun buildPersistentKnowledgeBaseContextSelection(userId: String): KnowledgeBaseContextSelection {
+    if (userId.isBlank()) return KnowledgeBaseContextSelection()
+    val preferences = knowledgeBaseContextPreferenceStore.get(userId)
+    return KnowledgeBaseContextSelection(excludedSpaceIds = preferences.excludedSpaceIds)
+}
+
+private fun mergeKnowledgeBaseContextSelection(
+    persistent: KnowledgeBaseContextSelection,
+    requestSelection: KnowledgeBaseContextSelection,
+): KnowledgeBaseContextSelection {
+    return KnowledgeBaseContextSelection(
+        pinnedEntryIds = requestSelection.pinnedEntryIds.distinct(),
+        excludedEntryIds = requestSelection.excludedEntryIds.distinct(),
+        excludedSpaceIds = (persistent.excludedSpaceIds + requestSelection.excludedSpaceIds).distinct(),
+    )
+}
+
+private fun buildKnowledgeBaseContextStatus(kbContext: KnowledgeBasePromptContext): String {
+    val total = kbContext.availableReferences.size
+    val manual = kbContext.diagnostics.manualReferenceCount
+    val pinned = kbContext.diagnostics.pinnedReferenceCount
+    val auto = kbContext.diagnostics.autoCandidateCount
+    val excluded = kbContext.diagnostics.excludedReferenceCount
+    return buildString {
+        append("📚 本轮知识库上下文已准备")
+        append("（共 $total 条")
+        if (manual > 0 || pinned > 0 || auto > 0) {
+            append("：手动 $manual")
+            if (pinned > 0) append("，固定 $pinned")
+            if (auto > 0) append("，自动 $auto")
+        }
+        if (excluded > 0) append("；排除 $excluded")
+        append("）")
+    }
+}
 
 @Serializable
 data class Message(
@@ -719,7 +763,7 @@ class ChatServer(
                         activeAiJob?.cancel()
                         activeAiJob = CoroutineScope(Dispatchers.IO).launch {
                             try {
-                                generateIntelligentResponse(silkContent, message.userId)
+                                generateIntelligentResponse(silkContent, message.userId, message.kbContextSelection)
                             } catch (e: CancellationException) {
                                 logger.info("🛑 AI 生成已被用户取消")
                             } catch (e: Exception) {
@@ -888,7 +932,10 @@ class ChatServer(
         broadcast(msg)
     }
 
-    suspend fun broadcastSystemStatus(status: String) {
+    suspend fun broadcastSystemStatus(
+        status: String,
+        references: List<com.silk.backend.models.MessageReference> = emptyList(),
+    ) {
         logger.debug("📢 [状态广播] {} (连接数: {})", status, allSessions().size)
 
         val statusMessage = Message(
@@ -899,7 +946,8 @@ class ChatServer(
             timestamp = System.currentTimeMillis(),
             type = MessageType.SYSTEM,
             isTransient = true,
-            category = MessageCategory.AGENT_STATUS
+            category = MessageCategory.AGENT_STATUS,
+            references = references,
         )
 
         val messageJson = Json.encodeToString(statusMessage)
@@ -1441,7 +1489,11 @@ class ChatServer(
             try { generateIntelligentResponse(userText, userId) } catch (_: Exception) {}
         }
     }
-    private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "") {
+    private suspend fun generateIntelligentResponse(
+        userMessage: String,
+        userId: String = "",
+        kbContextSelection: KnowledgeBaseContextSelection? = null,
+    ) {
         val callId = System.currentTimeMillis()
         logger.info("🤖 [Agent-{}] 开始直接调用模型 (userId={})", callId, userId)
 
@@ -1518,6 +1570,44 @@ class ChatServer(
         java.io.File(workspaceDir).mkdirs()
         directModelAgent.initClaudeClient(workspaceDir)
 
+        // 解析知识库上下文（手动引用 [[kb:...]] + pinned/excluded + 自动检索 + space 级排除）
+        val persistentSelection = buildPersistentKnowledgeBaseContextSelection(userId)
+        val kbContext = resolveKnowledgeBasePromptContext(
+            rawInput = userMessage,
+            userId = userId,
+            knowledgeBaseManager = knowledgeBaseManager,
+            preferredGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") },
+            selection = mergeKnowledgeBaseContextSelection(
+                persistentSelection,
+                kbContextSelection ?: KnowledgeBaseContextSelection(),
+            ),
+        )
+        if (kbContext.availableReferences.isNotEmpty()) {
+            logger.info(
+                "📚 [Agent-{}] 注入 {} 条知识库上下文（手动={}, 自动={}）",
+                callId,
+                kbContext.availableReferences.size,
+                kbContext.diagnostics.manualReferenceCount,
+                kbContext.diagnostics.autoCandidateCount,
+            )
+            broadcastSystemStatus(
+                status = buildKnowledgeBaseContextStatus(kbContext),
+                references = kbContext.availableReferences.mapIndexed { index, reference ->
+                    com.silk.backend.models.MessageReference(
+                        kind = "available",
+                        index = index + 1,
+                        title = reference.title,
+                        snippet = reference.snippet,
+                        path = reference.path,
+                        origin = reference.origin,
+                        reason = reference.reason,
+                        spaceId = reference.spaceId,
+                        spaceLabel = reference.spaceLabel,
+                    )
+                },
+            )
+        }
+
         var fullResponse = ""
         var agentReferences: List<com.silk.backend.models.MessageReference> = emptyList()
         // Track last structured blocks from blocks_state / streaming_incremental
@@ -1529,10 +1619,12 @@ class ChatServer(
         var hasStructuredBlocks = false
         try {
             val response = directModelAgent.processInput(
-                userInput = userMessage,
+                userInput = kbContext.resolvedUserInput,
                 systemPrompt = systemPrompt,
                 requestUserId = userId,
-                accessibleSessionIds = accessibleSessionIds
+                accessibleSessionIds = accessibleSessionIds,
+                availableReferences = kbContext.availableReferences,
+                additionalContext = kbContext.promptBlock,
             ) { stepType, content, isComplete ->
                 when (stepType) {
                     "thinking" -> {

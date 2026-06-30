@@ -107,7 +107,8 @@ data class AuthResponse(
     val message: String,
     val user: User? = null,
     val accessToken: String? = null,
-    val refreshToken: String? = null
+    val refreshToken: String? = null,
+    val appAuthToken: String? = null,
 )
 
 /**
@@ -460,6 +461,7 @@ enum class Language {
 data class UserSettings(
     val language: Language = Language.CHINESE,
     val defaultAgentInstruction: String = "You are a helpful technical research assistant. ",
+    val appAuthToken: String? = null,
     val ccBridgeToken: String? = null,
 )
 
