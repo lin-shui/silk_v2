@@ -72,6 +72,7 @@ import com.silk.backend.models.KBTopic
 import com.silk.backend.models.KnowledgeSpaceType
 import com.silk.backend.models.Workflow
 import com.silk.backend.workflow.WorkflowManager
+import com.silk.backend.routes.agentChangesRoutes
 import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
 import com.silk.backend.agents.acp.AcpRegistry
@@ -322,6 +323,7 @@ fun Application.configureRouting() {
 
     routing {
         coreRoutes()
+        agentChangesRoutes()
         authRoutes()
         groupContactRoutes()
         unreadTodoMessageRoutes()

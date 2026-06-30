@@ -2,6 +2,7 @@
 package com.silk.backend.agents.core
 
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.sync.Mutex
 import java.util.concurrent.ConcurrentLinkedDeque
 
 /**
@@ -37,7 +38,10 @@ class AgentSession(
     @Volatile var promptJob: Job? = null,
     /** 工具权限模式，默认 INTERACTIVE（读操作放行，写/执行需确认） */
     @Volatile var permissionMode: PermissionMode = PermissionMode.INTERACTIVE,
-)
+) {
+    /** 守护 acpSessionId 懒创建：避免代码审查 git 查询与并发查询重复 sessionNew。 */
+    val acpSessionLock: Mutex = Mutex()
+}
 
 data class QueuedMessage(val text: String, val userId: String, val userName: String)
 

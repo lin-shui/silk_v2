@@ -37,6 +37,7 @@ from websockets.exceptions import ConnectionClosed
 
 from executor import Executor
 from fs_listing import list_directory
+from git_ops import git_status, git_diff
 from cc_session_index import find_session_file, list_local_sessions
 
 logger = logging.getLogger("acp_bridge")
@@ -418,6 +419,10 @@ class AcpAgentServer:
                 await self._handle_silk_set_cwd(msg_id, params)
             elif method == "_silk/list_dir":
                 await self._handle_silk_list_dir(msg_id, params)
+            elif method == "_silk/git_status":
+                await self._handle_silk_git_status(msg_id, params)
+            elif method == "_silk/git_diff":
+                await self._handle_silk_git_diff(msg_id, params)
             elif method == "_silk/resolve_question":
                 await self._handle_silk_resolve_question(msg_id, params)
             elif method == "_silk/resolve_permission":
@@ -461,6 +466,8 @@ class AcpAgentServer:
                         "setCwd": True,
                         "listDir": True,
                         "resolveQuestion": True,
+                        "gitStatus": True,
+                        "gitDiff": True,
                     },
                 },
             },
@@ -804,6 +811,39 @@ class AcpAgentServer:
                         )
                         break
         logger.debug("[ACP] _silk/list_dir path=%s success=%s", path, result.get("success"))
+        await self._send_response(msg_id, result)
+
+    async def _handle_silk_git_status(self, msg_id: Any, params: Any) -> None:
+        sid = (params or {}).get("sessionId")
+        sess = self.sessions.get(sid) if sid else None
+        if sess is None:
+            await self._send_error(msg_id, -32602, f"Unknown session: {sid}")
+            return
+        try:
+            result = await git_status(sess.cwd)
+        except Exception as exc:
+            await self._send_error(msg_id, -32000, f"git_status failed: {exc}")
+            return
+        logger.debug("[ACP] _silk/git_status sid=%s files=%d", sid, len(result.get("files", [])))
+        await self._send_response(msg_id, result)
+
+    async def _handle_silk_git_diff(self, msg_id: Any, params: Any) -> None:
+        p = params or {}
+        sid = p.get("sessionId")
+        path = p.get("path")
+        sess = self.sessions.get(sid) if sid else None
+        if sess is None:
+            await self._send_error(msg_id, -32602, f"Unknown session: {sid}")
+            return
+        if not path:
+            await self._send_error(msg_id, -32602, "Missing path")
+            return
+        try:
+            result = await git_diff(sess.cwd, path)
+        except Exception as exc:
+            await self._send_error(msg_id, -32000, f"git_diff failed: {exc}")
+            return
+        logger.debug("[ACP] _silk/git_diff sid=%s path=%s", sid, path)
         await self._send_response(msg_id, result)
 
     async def _handle_silk_compact(self, msg_id: Any, params: Any) -> None:

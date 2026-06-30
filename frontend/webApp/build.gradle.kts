@@ -123,4 +123,5 @@ dependencies {
     implementation(npm("katex", "^0.16.22"))
     implementation(npm("highlight.js", "^11.11.1"))
     implementation(npm("github-markdown-css", "^5.8.1"))
+    implementation(npm("diff2html", "^3.4.45"))
 }

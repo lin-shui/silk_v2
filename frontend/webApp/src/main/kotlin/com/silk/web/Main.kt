@@ -658,6 +658,9 @@ fun ChatScene(appState: WebAppState) {
     var unreadCounts by remember(user?.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var isLoadingGroups by remember(user?.id) { mutableStateOf(true) }
     var sidebarCcStatus by remember(user?.id) { mutableStateOf<Map<String, CcConnectTokenInfo>>(emptyMap()) }
+    var chatListWidth by remember { mutableStateOf(LayoutPrefs.getInt("silk_chat_list_w", 320)) }
+    var chatListCollapsed by remember { mutableStateOf(LayoutPrefs.getBool("silk_chat_list_collapsed", false)) }
+    ensureLayoutStylesInjected()
     
     console.log("   群组:", group?.name ?: "null")
     console.log("   用户:", user?.fullName ?: "null")
@@ -738,9 +741,15 @@ fun ChatScene(appState: WebAppState) {
             property("background", SilkColors.backgroundGradient)
         }
     }) {
+        if (chatListCollapsed) {
+            ReopenBar(onExpand = {
+                chatListCollapsed = false
+                LayoutPrefs.setBool("silk_chat_list_collapsed", false)
+            })
+        } else {
         Div({
             style {
-                width(320.px)
+                width(chatListWidth.px)
                 property("flex-shrink", "0")
                 property("border-right", "1px solid ${SilkColors.border}")
                 backgroundColor(Color("rgba(255,255,255,0.88)"))
@@ -759,6 +768,22 @@ fun ChatScene(appState: WebAppState) {
                     property("gap", "8px")
                 }
             }) {
+                Button({
+                    attr("title", "收起列表")
+                    style {
+                        backgroundColor(Color("rgba(255,255,255,0.2)"))
+                        color(Color(SilkColors.textSecondary))
+                        property("border", "1px solid ${SilkColors.border}")
+                        borderRadius(6.px)
+                        padding(4.px, 9.px)
+                        property("cursor", "pointer")
+                        property("flex-shrink", "0")
+                    }
+                    onClick {
+                        chatListCollapsed = true
+                        LayoutPrefs.setBool("silk_chat_list_collapsed", true)
+                    }
+                }) { Text("«") }
                 Span({
                     style {
                         fontSize(16.px)
@@ -1138,6 +1163,15 @@ fun ChatScene(appState: WebAppState) {
                 }
             }
         }
+        ColumnResizer(
+            isLeftPanel = true,
+            minWidth = 220,
+            maxWidth = 520,
+            currentWidth = { chatListWidth },
+            onResize = { chatListWidth = it },
+            onCommit = { LayoutPrefs.setInt("silk_chat_list_w", chatListWidth) },
+        )
+        } // close 列表非折叠分支
 
         Div({
             style {
@@ -4615,6 +4649,17 @@ private external val githubMarkdownStylesheet: dynamic
 @JsNonModule
 private external val highlightStylesheet: dynamic
 
+@JsModule("diff2html")
+@JsNonModule
+@Suppress("UnusedParameter")
+private external object Diff2Html {
+    fun html(diffInput: String, configuration: dynamic = definedExternally): String
+}
+
+@JsModule("diff2html/bundles/css/diff2html.min.css")
+@JsNonModule
+private external val diff2htmlStylesheet: dynamic
+
 @Suppress("TopLevelPropertyNaming")
 private const val markdownRuntimeStyleId = "silk-markdown-runtime-style"
 
@@ -4802,6 +4847,7 @@ private fun ensureMarkdownAssetsLoaded() {
     githubMarkdownStylesheet
     katexStylesheet
     highlightStylesheet
+    diff2htmlStylesheet
 }
 
 private fun ensureMarkdownStylesInjected() {
@@ -5080,6 +5126,47 @@ private fun linkCitationMarkers(
         } else {
             match.value
         }
+    }
+}
+
+// diff2html / DOMPurify 配置对象：放在 @Composable 外（本文件约定 js("...") 不入 composable，避免 Compose LiveLiteral lowering 崩溃）
+private val jsDiff2HtmlConfig = js("({ drawFileList: false, matching: 'lines', outputFormat: 'line-by-line' })")
+private val jsDompurifyDiffConfig = js("({ ADD_ATTR: ['class'] })")
+
+/** 构建单文件 diff 的安全 HTML：diff2html 低层 html() → DOMPurify 消毒（顶层非 composable）。 */
+private fun buildDiffHtml(patch: String): String {
+    if (patch.isBlank()) return "<div class=\"silk-diff-empty\">(无差异内容)</div>"
+    val rawHtml = Diff2Html.html(patch, jsDiff2HtmlConfig)
+    return DOMPurify.sanitize(rawHtml, jsDompurifyDiffConfig)
+}
+
+/**
+ * 单文件 unified diff 渲染：buildDiffHtml → innerHTML。
+ * v1 只做 GitHub 式增/删配色，不做逐 token 语法高亮（不引入 diff2html-ui，避免绕过 DOMPurify）。
+ */
+@Composable
+fun RenderDiff(patch: String, fileName: String) {
+    // 唯一容器 id：文件名 + patch 长度，避免同页多个 diff 冲突
+    val containerId = remember(fileName, patch) { "diff-${fileName.hashCode()}-${patch.length}" }
+    val safeHtml = remember(patch) { buildDiffHtml(patch) }
+
+    Div({
+        classes("silk-diff-body")
+        id(containerId)
+        // diff2html 的行号 td 是 position:absolute；给容器一个定位上下文（且它随面板内容一起滚动），
+        // 否则行号会锚到视口而不随滚轮移动，造成与代码行错位。overflow-x 让超长行可横向滚动。
+        style {
+            property("position", "relative")
+            property("overflow-x", "auto")
+        }
+    }) { }
+
+    DisposableEffect(containerId, safeHtml) {
+        val element = document.getElementById(containerId) as? HTMLElement
+        if (element != null) {
+            element.innerHTML = safeHtml
+        }
+        onDispose { }
     }
 }
 
