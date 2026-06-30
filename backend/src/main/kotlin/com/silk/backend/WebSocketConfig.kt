@@ -41,6 +41,8 @@ data class Message(
     val references: List<com.silk.backend.models.MessageReference> = emptyList(),
     val contentBlocks: List<com.silk.backend.ai.ContentBlock>? = null,  // 结构化 content block（流式 / 持久化回放）
     val interactiveOptions: List<InteractiveOption>? = null,  // 交互式按钮选项（用于 cc-connect 提问）
+    val kbContextSelection: com.silk.backend.models.KnowledgeBaseContextSelection? = null,  // 本轮知识库上下文选择（手动/固定/排除）
+    val action: String? = null,  // null = 新消息(默认), "edit" = 覆盖同ID消息（CARD 编辑）
 )
 
 @Serializable
@@ -51,7 +53,7 @@ data class InteractiveOption(
 
 @Serializable
 enum class MessageType {
-    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CC_COMMAND
+    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CC_COMMAND, CARD, CARD_REPLY
 }
 
 @Serializable
@@ -62,6 +64,7 @@ enum class MessageCategory {
     FINAL_REPORT,     // 最终诊断报告（高亮度）
     AGENT_STATUS,     // Agent 工作状态（灰色，低亮度）
     AGENT_QUESTION,   // Agent 向用户提问（需要用户回答）
+    AGENT_PERMISSION, // Agent 工具权限确认（需要用户允许/拒绝）
 }
 
 @Serializable
