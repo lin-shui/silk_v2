@@ -320,10 +320,16 @@ class ChatClient(
                         }
                         // edit 只更新已有卡片内容，不影响状态（agent 可能仍在工作中）
                     } else {
-                        // 消息已在本地列表（发送者预添加），用服务端广播回来的归一化时间戳覆盖
-                        log("📌 [ChatClient] 更新消息时间戳: serverTs=${message.timestamp}")
-                        _messages.value = _messages.value.map {
-                            if (it.id == message.id) it.copy(timestamp = message.timestamp) else it
+                        val exists = _messages.value.any { it.id == message.id }
+                        if (!exists) {
+                            log("💬 [ChatClient] 普通消息，添加到列表: id=${message.id}")
+                            _messages.value = _messages.value + message
+                        } else {
+                            // 消息已在本地列表（发送者预添加），用服务端广播回来的归一化时间戳覆盖
+                            log("📌 [ChatClient] 更新消息时间戳: serverTs=${message.timestamp}")
+                            _messages.value = _messages.value.map {
+                                if (it.id == message.id) it.copy(timestamp = message.timestamp) else it
+                            }
                         }
                     }
                     // Track pending question state
