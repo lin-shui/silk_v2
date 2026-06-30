@@ -248,10 +248,14 @@ class SilkAgent {
     suspend fun generateSearchDrivenResponse(
         userInput: String,
         recentHistory: List<ChatHistoryEntry> = emptyList(),
+        userId: String = AGENT_ID,
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
-        val agent = searchAgent ?: SearchDrivenAgent(sessionId = currentSessionId).also { searchAgent = it }
-        
+        val agent = SearchDrivenAgent(
+            sessionId = currentSessionId,
+            userId = userId,
+        )
+
         val result = agent.processInput(
             userInput = userInput,
             recentHistory = recentHistory,
