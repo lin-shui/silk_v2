@@ -1,6 +1,7 @@
 package com.silk.backend
 
 import com.silk.backend.database.GroupRepository
+import com.silk.backend.database.UserSettingsRepository
 import com.silk.backend.kb.KnowledgeBaseContextPreferences
 import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.models.KBAccessPolicy
@@ -16,6 +17,7 @@ import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
@@ -81,6 +83,35 @@ class KnowledgeBaseRouteContractTest {
                     response.bodyAsText(),
                 )
                 assertEquals(listOf(topic.id), topics.map { it.id })
+            }
+        }
+    }
+
+    @Test
+    fun `kb routes accept bearer token and reject invalid token`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val topic = manager.createTopic(name = "Bearer Topic", project = "", userId = "owner")
+            val token = UserSettingsRepository.getOrCreateAppAuthToken("owner")
+
+            testApplication {
+                application { module() }
+
+                val bearerResponse = client.get("/api/kb/topics") {
+                    header(HttpHeaders.Authorization, "Bearer $token")
+                }
+                assertEquals(HttpStatusCode.OK, bearerResponse.status)
+                val topics = json.decodeFromString(
+                    ListSerializer(KBTopic.serializer()),
+                    bearerResponse.bodyAsText(),
+                )
+                assertEquals(listOf(topic.id), topics.map { it.id })
+
+                val invalidTokenResponse = client.get("/api/kb/topics?userId=owner") {
+                    header(HttpHeaders.Authorization, "Bearer invalid-token")
+                }
+                assertEquals(HttpStatusCode.Unauthorized, invalidTokenResponse.status)
+                assertTrue(invalidTokenResponse.bodyAsText().contains("Invalid auth token"))
             }
         }
     }
@@ -428,6 +459,51 @@ class KnowledgeBaseRouteContractTest {
 
                 val stored = assertNotNull(manager.getEntry(entry.id, "owner"))
                 assertEquals(KBEntryStatus.PUBLISHED, stored.status)
+            }
+        }
+    }
+
+    @Test
+    fun `entry update route can move entry within same knowledge space`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val sourceTopic = manager.createTopic(name = "Source Topic", project = "", userId = "owner")
+            val targetTopic = manager.createTopic(name = "Target Topic", project = "", userId = "owner")
+            val teamGroup = assertNotNull(GroupRepository.createGroup("KB Move Group", hostId = "host"))
+            assertTrue(GroupRepository.addUserToGroup(teamGroup.id, "owner"))
+            val teamTopic = manager.createTopic(
+                name = "Team Topic",
+                project = "",
+                userId = "owner",
+                spaceType = KnowledgeSpaceType.TEAM,
+                groupId = teamGroup.id,
+            )
+            val entry = assertNotNull(
+                manager.createEntry(
+                    topicId = sourceTopic.id,
+                    title = "可移动条目",
+                    content = "待移动",
+                    tags = emptyList(),
+                    userId = "owner",
+                )
+            )
+
+            testApplication {
+                application { module() }
+
+                val moved = client.put("/api/kb/entries/${entry.id}") {
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"userId":"owner","topicId":"${targetTopic.id}"}""")
+                }
+                assertEquals(HttpStatusCode.OK, moved.status)
+                val movedEntry = json.decodeFromString(KBEntry.serializer(), moved.bodyAsText())
+                assertEquals(targetTopic.id, movedEntry.topicId)
+
+                val invalidMove = client.put("/api/kb/entries/${entry.id}") {
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"userId":"owner","topicId":"${teamTopic.id}"}""")
+                }
+                assertEquals(HttpStatusCode.BadRequest, invalidMove.status)
             }
         }
     }

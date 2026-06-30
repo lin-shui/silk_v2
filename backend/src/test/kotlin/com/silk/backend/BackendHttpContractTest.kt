@@ -67,6 +67,7 @@ class BackendHttpContractTest {
                 val registerBody = registerResponse.decode<AuthResponse>()
                 assertTrue(registerBody.success)
                 val user = assertNotNull(registerBody.user)
+                assertTrue(!registerBody.token.isNullOrBlank())
 
                 val duplicateRegister = client.post("/auth/register") {
                     contentType(ContentType.Application.Json)
@@ -98,11 +99,13 @@ class BackendHttpContractTest {
                 val loginBody = loginResponse.decode<AuthResponse>()
                 assertTrue(loginBody.success)
                 assertEquals(user.id, loginBody.user?.id)
+                assertTrue(!loginBody.token.isNullOrBlank())
 
                 val validateBody = client.get("/auth/validate/${user.id}")
                     .decode<AuthResponse>()
                 assertTrue(validateBody.success)
                 assertEquals("Alice Chen", validateBody.user?.fullName)
+                assertTrue(!validateBody.token.isNullOrBlank())
 
                 val defaultSettings = client.get("/users/${user.id}/settings")
                     .decode<UserSettingsResponse>()

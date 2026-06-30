@@ -53,7 +53,8 @@ data class UnreadCountResponse(
 data class AuthResponse(
     val success: Boolean,
     val message: String,
-    val user: User? = null
+    val user: User? = null,
+    val token: String? = null,
 )
 
 @Serializable
@@ -197,6 +198,11 @@ private fun parseCreateWorkflowResponse(json: Json, response: String): CreateWor
 object ApiClient {
     private val baseUrl: String get() = BackendUrlHolder.getBaseUrl()
     private val jsonParser = Json { ignoreUnknownKeys = true }
+    private var authToken: String? = null
+
+    fun setAuthToken(token: String?) {
+        authToken = token?.trim()?.takeIf { it.isNotEmpty() }
+    }
 
     private suspend inline fun <T> recoverApiCall(
         logMessage: String? = null,
@@ -279,6 +285,11 @@ object ApiClient {
             val body = """{"userId":"$userId","groupName":"$groupName"}"""
             val response = post("/groups/create", body)
             jsonParser.decodeFromString(response)
+    }
+
+    private fun HttpURLConnection.applyAuthHeaders() {
+        setRequestProperty("Content-Type", "application/json")
+        authToken?.let { setRequestProperty("Authorization", "Bearer $it") }
     }
     
     suspend fun joinGroup(userId: String, invitationCode: String): GroupResponse = recoverApiCall(
@@ -537,7 +548,7 @@ object ApiClient {
             connection.apply {
                 requestMethod = "POST"
                 doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+                applyAuthHeaders()
                 connectTimeout = 10000
                 readTimeout = 10000
             }
@@ -560,7 +571,7 @@ object ApiClient {
             connection.apply {
                 requestMethod = "PUT"
                 doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+                applyAuthHeaders()
                 connectTimeout = 10000
                 readTimeout = 10000
             }
@@ -582,6 +593,7 @@ object ApiClient {
         return try {
             connection.apply {
                 requestMethod = "GET"
+                applyAuthHeaders()
                 connectTimeout = 10000
                 readTimeout = 10000
             }
@@ -598,6 +610,7 @@ object ApiClient {
         return try {
             connection.apply {
                 requestMethod = "DELETE"
+                applyAuthHeaders()
                 connectTimeout = 10000
                 readTimeout = 10000
             }
@@ -806,6 +819,31 @@ object ApiClient {
             val tagsJson = tags.joinToString(",") { "\"$it\"" }
             val body = """{"userId":"$userId","topicId":"$topicId","title":"$title","content":"$content","tags":[$tagsJson]}"""
             val response = post("/api/kb/entries", body)
+            jsonParser.decodeFromString(response)
+    }
+
+    suspend fun captureKBEntry(
+        topicId: String,
+        title: String,
+        content: String,
+        tags: List<String>,
+        userId: String,
+        source: KBEntrySource,
+        status: KBEntryStatus? = null,
+    ): KBEntryItem? = recoverApiCall(
+        logMessage = "保存知识库候选失败:",
+        fallback = { null },
+    ) {
+            val body = buildJsonObject {
+                put("userId", JsonPrimitive(userId))
+                put("topicId", JsonPrimitive(topicId))
+                put("title", JsonPrimitive(title))
+                put("content", JsonPrimitive(content))
+                put("tags", jsonParser.parseToJsonElement(jsonParser.encodeToString(tags)))
+                put("source", jsonParser.encodeToJsonElement(KBEntrySource.serializer(), source))
+                status?.let { put("status", JsonPrimitive(it.name)) }
+            }.toString()
+            val response = post("/api/kb/captures", body)
             jsonParser.decodeFromString(response)
     }
 

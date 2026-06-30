@@ -393,12 +393,17 @@ interface ResponseEnvelope {
 export class ApiClient {
   private baseUrl: string = API_BASE_URL;
   private timeout: number = API_TIMEOUT;
+  private authToken: string = '';
 
   /**
    * 设置基础 URL
    */
   setBaseUrl(url: string): void {
     this.baseUrl = url;
+  }
+
+  setAuthToken(token?: string): void {
+    this.authToken = token ? token.trim() : '';
   }
 
   /**
@@ -465,9 +470,7 @@ export class ApiClient {
     try {
       const opts: http.HttpRequestOptions = {
         method: http.RequestMethod.GET,
-        header: {
-          'Content-Type': 'application/json'
-        },
+        header: this.buildJsonHeaders(),
         connectTimeout: this.timeout,
         readTimeout: this.timeout
       };
@@ -497,9 +500,7 @@ export class ApiClient {
     try {
       const opts: http.HttpRequestOptions = {
         method: http.RequestMethod.POST,
-        header: {
-          'Content-Type': 'application/json'
-        },
+        header: this.buildJsonHeaders(),
         extraData: body,
         connectTimeout: this.timeout,
         readTimeout: this.timeout
@@ -527,9 +528,7 @@ export class ApiClient {
     try {
       const opts: http.HttpRequestOptions = {
         method: http.RequestMethod.PUT,
-        header: {
-          'Content-Type': 'application/json'
-        },
+        header: this.buildJsonHeaders(),
         extraData: body,
         connectTimeout: this.timeout,
         readTimeout: this.timeout
@@ -789,7 +788,7 @@ export class ApiClient {
   private async getRaw(endpoint: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.GET, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.GET, header: this.buildJsonHeaders(), connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts
@@ -803,7 +802,7 @@ export class ApiClient {
   private async postRaw(endpoint: string, body: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.POST, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.POST, header: this.buildJsonHeaders(), extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts
@@ -817,7 +816,7 @@ export class ApiClient {
   private async putRaw(endpoint: string, body: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.PUT, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.PUT, header: this.buildJsonHeaders(), extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts
@@ -831,7 +830,7 @@ export class ApiClient {
   private async deleteRaw(endpoint: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.DELETE, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.DELETE, header: this.buildJsonHeaders(), connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts
@@ -849,6 +848,16 @@ export class ApiClient {
    */
   async getGroups(userId: string): Promise<ApiResponse<Group[]>> {
     return this.get<Group[]>(`/groups/user/${userId}`);
+  }
+
+  private buildJsonHeaders(): Object {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    if (this.authToken.length > 0) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+    return headers;
   }
 
   /**
@@ -1490,6 +1499,22 @@ export class ApiClient {
     const body = JSON.stringify({ userId, topicId, title, content, tags });
     const result = await this.postRaw('/api/kb/entries', body);
     return JSON.parse(result) as KBEntryApiItem;
+  }
+
+  async captureKBEntry(
+    topicId: string,
+    title: string,
+    content: string,
+    tags: string[],
+    userId: string,
+    source: KBEntrySource,
+    status?: 'CANDIDATE' | 'PUBLISHED' | 'ARCHIVED' | 'DELETED'
+  ): Promise<KBEntryApiItem | undefined> {
+    try {
+      const body = JSON.stringify({ userId, topicId, title, content, tags, source, status });
+      const result = await this.postRaw('/api/kb/captures', body);
+      return JSON.parse(result) as KBEntryApiItem;
+    } catch (_) { return undefined; }
   }
 
   async updateKBEntry(

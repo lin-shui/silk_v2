@@ -178,6 +178,24 @@ internal fun downloadAsFile(content: String, fileName: String) {
     windowJs.URL.revokeObjectURL(objectUrl)
 }
 
+internal fun scrollMessageIntoView(containerId: String, messageId: String): Boolean {
+    val container = document.getElementById(containerId) ?: return false
+    val escapedMessageId = messageId
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+    val target = container.querySelector("[data-message-id='$escapedMessageId']") as? HTMLElement ?: return false
+    target.scrollIntoView(js("{ behavior: 'smooth', block: 'center' }"))
+    val previousOutline = target.style.outline
+    val previousBoxShadow = target.style.boxShadow
+    target.style.outline = "2px solid ${SilkColors.primary}"
+    target.style.boxShadow = "0 0 0 4px rgba(201, 168, 108, 0.18)"
+    window.setTimeout({
+        target.style.outline = previousOutline
+        target.style.boxShadow = previousBoxShadow
+    }, 2200)
+    return true
+}
+
 fun main() {
     console.log("🧵 Silk 正在启动...")
     console.log("1️⃣ 准备渲染...")
@@ -1189,6 +1207,14 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         restoredKbContextSelection = true
     }
 
+    HandlePendingChatNavigation(
+        groupId = group.id,
+        isHistoryLoading = isHistoryLoading,
+        messagesSize = messages.size,
+        navigationTarget = appState.chatNavigationTarget,
+        onConsumed = appState::consumeChatNavigationTarget,
+    )
+
     Div({ classes(SilkStylesheet.container) }) {
         ChatAppHeader(
             scope = scope,
@@ -1399,6 +1425,28 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         onInviteMemberResultChanged = { inviteMemberResult = it },
         onShowFolderExplorerChanged = { showFolderExplorer = it },
     )
+}
+
+@Composable
+private fun HandlePendingChatNavigation(
+    groupId: String,
+    isHistoryLoading: Boolean,
+    messagesSize: Int,
+    navigationTarget: ChatNavigationTarget?,
+    onConsumed: (Long) -> Unit,
+) {
+    LaunchedEffect(groupId, isHistoryLoading, messagesSize, navigationTarget?.requestId) {
+        val target = navigationTarget ?: return@LaunchedEffect
+        if (target.groupId != groupId || isHistoryLoading) {
+            return@LaunchedEffect
+        }
+        val handled = target.messageId?.takeIf { it.isNotBlank() }?.let { messageId ->
+            scrollMessageIntoView(containerId = "messages", messageId = messageId)
+        } ?: true
+        if (handled) {
+            onConsumed(target.requestId)
+        }
+    }
 }
 
 @Composable
@@ -5235,6 +5283,7 @@ fun AIMessageCard(
         Div({
             classes(SilkStylesheet.aiMessageCard)
             attr("id", "ai-msg-${message.id}")
+            attr("data-message-id", message.id)
             style {
                 property("flex", "1")
                 property("min-width", "0")
@@ -5555,6 +5604,7 @@ private fun StandardMessageCard(
         }
         Div({
             classes(SilkStylesheet.messageCard)
+            attr("data-message-id", message.id)
             style {
                 property("flex", "1")
                 property("min-width", "0")

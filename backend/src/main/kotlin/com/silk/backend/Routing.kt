@@ -141,19 +141,34 @@ private val knowledgeBaseContextPreferenceStore: KnowledgeBaseContextPreferenceS
     get() = KnowledgeBaseContextPreferenceStore()
 private val kbRouteJson = Json { ignoreUnknownKeys = true }
 private const val KB_AUTHENTICATED_USER_ID_HEADER = "X-Silk-Authenticated-User-Id"
+private const val AUTHORIZATION_HEADER = "Authorization"
+private const val BEARER_PREFIX = "Bearer "
 
 private data class KbCallerResolution(
     val userId: String?,
     val mismatch: Boolean = false,
+    val invalidToken: Boolean = false,
 )
 
 private fun sanitizeFileName(input: String): String =
     input.replace(Regex("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]"), "_").take(100)
 
+private fun ApplicationCall.resolveAuthenticatedUserId(): String? {
+    val authorization = request.headers[AUTHORIZATION_HEADER]?.trim().orEmpty()
+    if (!authorization.startsWith(BEARER_PREFIX, ignoreCase = true)) return null
+    val token = authorization.substring(BEARER_PREFIX.length).trim()
+    if (token.isEmpty()) return null
+    return UserSettingsRepository.findUserIdByAppAuthToken(token)
+}
+
 private fun resolveKbCallerUserId(call: ApplicationCall, fallbackUserId: String?): KbCallerResolution {
-    val authenticatedUserId = call.request.headers[KB_AUTHENTICATED_USER_ID_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
+    val bearerUserId = call.resolveAuthenticatedUserId()
+    val legacyAuthenticatedUserId = call.request.headers[KB_AUTHENTICATED_USER_ID_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
+    val authenticatedUserId = bearerUserId ?: legacyAuthenticatedUserId
     val requestUserId = fallbackUserId?.trim()?.takeIf { it.isNotEmpty() }
+    val bearerHeaderPresent = call.request.headers[AUTHORIZATION_HEADER]?.trim()?.startsWith(BEARER_PREFIX, ignoreCase = true) == true
     return when {
+        bearerHeaderPresent && bearerUserId == null -> KbCallerResolution(userId = null, invalidToken = true)
         authenticatedUserId != null && requestUserId != null && authenticatedUserId != requestUserId ->
             KbCallerResolution(userId = authenticatedUserId, mismatch = true)
         authenticatedUserId != null -> KbCallerResolution(userId = authenticatedUserId)
@@ -166,6 +181,14 @@ private suspend fun resolveKbCallerUserIdOrRespond(
     fallbackUserId: String?,
 ): String? {
     val resolution = resolveKbCallerUserId(call, fallbackUserId)
+    if (resolution.invalidToken) {
+        call.respondText(
+            """{"success":false,"message":"Invalid auth token"}""",
+            ContentType.Application.Json,
+            HttpStatusCode.Unauthorized,
+        )
+        return null
+    }
     if (resolution.mismatch) {
         call.respondText(
             """{"success":false,"message":"Authenticated user mismatch"}""",
@@ -1479,7 +1502,14 @@ private fun Route.registerAuthValidateUserIdGetRoute() {
         val user = UserRepository.findUserById(userId)
 
         if (user != null) {
-            call.respond(AuthResponse(true, "验证成功", user))
+            call.respond(
+                AuthResponse(
+                    success = true,
+                    message = "验证成功",
+                    user = user,
+                    token = UserSettingsRepository.getOrCreateAppAuthToken(user.id),
+                )
+            )
         } else {
             call.respond(AuthResponse(false, "用户不存在或已失效"))
         }
@@ -3258,6 +3288,7 @@ private fun Route.registerApiKbEntriesEntryIdPutRoute() {
                 tagsEl.jsonArray.map { it.jsonPrimitive.content }
             }.getOrNull()
         }
+        val topicId = req["topicId"]?.jsonPrimitive?.contentOrNull
         val status = req["status"]?.jsonPrimitive?.contentOrNull?.let {
             runCatching { KBEntryStatus.valueOf(it) }.getOrNull()
         }
@@ -3265,7 +3296,16 @@ private fun Route.registerApiKbEntriesEntryIdPutRoute() {
             call.respondText("""{"success":false,"message":"Invalid status"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
             return@put
         }
-        val updated = knowledgeBaseManager.updateEntry(entryId, title, content, tags, status, userId)
+        val updated = runCatching {
+            knowledgeBaseManager.updateEntry(entryId, topicId, title, content, tags, status, userId)
+        }.getOrElse { error ->
+            call.respondText(
+                """{"success":false,"message":"${error.message ?: "Invalid topic change"}"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@put
+        }
         if (updated == null) {
             call.respondText("""{"success":false,"message":"Entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
         } else {

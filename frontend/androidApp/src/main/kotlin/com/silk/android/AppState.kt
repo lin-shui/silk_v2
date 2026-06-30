@@ -88,6 +88,12 @@ class AppState(
         saveUserToStorage(user)
         navigateTo(Scene.GROUP_LIST)
     }
+
+    fun setAuthSession(user: User, token: String?) {
+        ApiClient.setAuthToken(token)
+        saveAuthTokenToStorage(token)
+        setUser(user)
+    }
     
     fun selectGroup(group: Group) {
         println("📌 选择群组: ${group.name}")
@@ -137,6 +143,7 @@ class AppState(
     fun logout() {
         println("🚪 用户明确请求退出登录")
         explicitLogoutRequested = true
+        ApiClient.setAuthToken(null)
         currentUser = null
         selectedGroup = null
         sceneHistory.clear()
@@ -162,6 +169,7 @@ class AppState(
         
         // 如果有保存的用户数据，说明用户没有明确退出，是意外到达登录页的
         if (storedUser != null) {
+            ApiClient.setAuthToken(prefs.getString("auth_token", null))
             println("🔄 检测到保存的用户数据，用户未明确退出登录，自动恢复到群组列表")
             // 恢复用户数据
             currentUser = storedUser
@@ -193,6 +201,8 @@ class AppState(
             val response = ApiClient.validateUser(user.id)
             when {
                 response.success && response.user != null -> {
+                    ApiClient.setAuthToken(response.token)
+                    saveAuthTokenToStorage(response.token)
                     currentUser = response.user
                     saveUserToStorage(response.user)
                     Pair(true, false)
@@ -218,6 +228,7 @@ class AppState(
         
         if (storedUser != null) {
             currentUser = storedUser
+            ApiClient.setAuthToken(prefs.getString("auth_token", null))
             
             // 启动时重新验证用户，但即使验证失败（网络问题）也保持登录状态
             scope.launch {
@@ -238,6 +249,14 @@ class AppState(
             putString("user_login_name", user.loginName)
             putString("user_full_name", user.fullName)
             putString("user_phone_number", user.phoneNumber)
+            apply()
+        }
+    }
+
+    private fun saveAuthTokenToStorage(token: String?) {
+        val prefs = context.getSharedPreferences("silk_prefs", Context.MODE_PRIVATE)
+        prefs.edit().apply {
+            if (token.isNullOrBlank()) remove("auth_token") else putString("auth_token", token)
             apply()
         }
     }

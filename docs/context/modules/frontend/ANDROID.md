@@ -43,5 +43,6 @@
   - topic 列表顶部支持“个人 + 我所在群组”空间切换，创建主题会落到当前选中空间
   - topic / entry 卡片会显示空间、只读/可编辑、条目状态与来源 badge
   - entry 列表支持 `全部 / 候选 / 已发布 / 已归档` 状态筛选；候选/已发布/已归档条目可在编辑页直接做发布、归档、重新发布
+  - entry 页顶部支持“会议入库”，通过统一 `POST /api/kb/captures` 契约把会议纪要存成 `MEETING` 来源的 `candidate` 或 `published` 条目
   - topic 无写权限时，创建条目与保存 Markdown 会禁用，并在编辑页显式提示只读
   - 条目编辑页会展开最小 provenance 明细：来源群组、workflowId、消息 id 摘要、置信度、创建人/更新人

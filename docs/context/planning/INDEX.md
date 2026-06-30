@@ -6,6 +6,7 @@
 
 ## Active Execution Plans
 
+- [Knowledge Base context and sharing plan](exec-plans/active/kb-context-sharing-plan.md)
 - [Lint baseline reduction](exec-plans/active/lint-baseline-reduction.md)
 
 ## Usage

@@ -141,7 +141,7 @@ fun LoginScreen(appState: AppState) {
                     }
                     if (response.success && response.user != null) {
                         println("${if (isLogin) "登录" else "注册"}成功: ${response.user.fullName}")
-                        appState.setUser(response.user)
+                        appState.setAuthSession(response.user, response.token)
                     } else {
                         errorMessage = response.message
                     }

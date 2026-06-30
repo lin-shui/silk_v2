@@ -157,7 +157,7 @@ private suspend fun submitAuth(
 
             if (response.success && response.user != null) {
                 console.log("${if (isLogin) "登录" else "注册"}成功:", response.user.fullName)
-                appState.setUser(response.user)
+                appState.setAuthSession(response.user, response.token)
             } else {
                 setErrorMessage(response.message)
             }

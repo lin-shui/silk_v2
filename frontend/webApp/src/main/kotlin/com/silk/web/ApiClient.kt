@@ -49,7 +49,8 @@ data class UnreadCountResponse(
 data class AuthResponse(
     val success: Boolean,
     val message: String,
-    val user: User? = null
+    val user: User? = null,
+    val token: String? = null,
 )
 
 @Serializable
@@ -342,6 +343,11 @@ object ApiClient {
             }
         }
     private val jsonParser = Json { ignoreUnknownKeys = true }
+    private var authToken: String? = null
+
+    fun setAuthToken(token: String?) {
+        authToken = token?.trim()?.takeIf { it.isNotEmpty() }
+    }
 
     private suspend inline fun <T> recoverApiCall(
         logMessage: String? = null,
@@ -814,8 +820,7 @@ object ApiClient {
     }
     
     private suspend fun post(endpoint: String, jsonBody: String): String {
-        val headers = org.w3c.fetch.Headers()
-        headers.append("Content-Type", "application/json")
+        val headers = buildJsonHeaders()
         
         val init = RequestInit(
             method = "POST",
@@ -831,7 +836,7 @@ object ApiClient {
         val url = "$BASE_URL$endpoint"
         val response = window.fetch(url, RequestInit(
             method = "PUT",
-            headers = json("Content-Type" to "application/json"),
+            headers = buildJsonHeaders(),
             body = jsonBody
         )).await()
         
@@ -843,8 +848,7 @@ object ApiClient {
     }
     
     private suspend fun delete(endpoint: String, jsonBody: String): String {
-        val headers = org.w3c.fetch.Headers()
-        headers.append("Content-Type", "application/json")
+        val headers = buildJsonHeaders()
         
         val init = RequestInit(
             method = "DELETE",
@@ -857,8 +861,18 @@ object ApiClient {
     }
 
     private suspend fun get(endpoint: String): String {
-        val response = window.fetch("$BASE_URL$endpoint").await()
+        val response = window.fetch(
+            "$BASE_URL$endpoint",
+            RequestInit(headers = buildJsonHeaders())
+        ).await()
         return response.text().await()
+    }
+
+    private fun buildJsonHeaders(): org.w3c.fetch.Headers {
+        val headers = org.w3c.fetch.Headers()
+        headers.append("Content-Type", "application/json")
+        authToken?.let { headers.append("Authorization", "Bearer $it") }
+        return headers
     }
 
     /** URL-encode a string via JS's encodeURIComponent. */
@@ -1144,6 +1158,7 @@ object ApiClient {
 
     suspend fun updateKBEntry(
         entryId: String,
+        topicId: String? = null,
         title: String?,
         content: String?,
         tags: List<String>?,
@@ -1155,6 +1170,7 @@ object ApiClient {
             fallback = { null },
         ) {
             val fields = mutableListOf("\"userId\":\"$userId\"")
+            if (topicId != null) fields.add("\"topicId\":\"${topicId.replace("\"", "\\\"")}\"")
             if (title != null) fields.add("\"title\":\"${title.replace("\"", "\\\"")}\"")
             if (content != null) {
                 val escaped = content.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
@@ -1164,6 +1180,28 @@ object ApiClient {
             if (status != null) fields.add("\"status\":\"${status.name}\"")
             val body = "{${fields.joinToString(",")}}"
             val response = put("/api/kb/entries/$entryId", body)
+            jsonParser.decodeFromString(response)
+        }
+    }
+
+    suspend fun deleteKBTopic(topicId: String, userId: String): SimpleResponse {
+        return recoverApiCall(
+            logMessage = "删除知识库主题失败:",
+            fallback = { SimpleResponse(false, "网络错误") },
+        ) {
+            val body = """{"userId":"$userId"}"""
+            val response = delete("/api/kb/topics/$topicId", body)
+            jsonParser.decodeFromString(response)
+        }
+    }
+
+    suspend fun deleteKBEntry(entryId: String, userId: String): SimpleResponse {
+        return recoverApiCall(
+            logMessage = "删除知识库条目失败:",
+            fallback = { SimpleResponse(false, "网络错误") },
+        ) {
+            val body = """{"userId":"$userId"}"""
+            val response = delete("/api/kb/entries/$entryId", body)
             jsonParser.decodeFromString(response)
         }
     }

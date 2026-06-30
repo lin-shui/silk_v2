@@ -93,6 +93,7 @@ class KnowledgeBaseManagerAccessControlTest {
             assertNull(
                 manager.updateEntry(
                     entryId = entry.id,
+                    topicId = null,
                     title = null,
                     content = "member edit",
                     tags = null,
