@@ -88,6 +88,14 @@ class DirectModelAgent(
         logger.info("📜 已注入 {} 条近期历史到 conversationHistory (session: {})", recent.size, sessionId)
     }
 
+    data class AvailableReferenceSeed(
+        val title: String,
+        val snippet: String? = null,
+        val path: String? = null,
+        val origin: String? = null,
+        val reason: String? = null,
+    )
+
     data class AgentResponse(
         val content: String,
         val references: List<com.silk.backend.models.MessageReference> = emptyList()
@@ -110,10 +118,16 @@ class DirectModelAgent(
         systemPrompt: String? = null,
         requestUserId: String = "",
         accessibleSessionIds: List<String> = listOf(sessionId),
+        availableReferences: List<AvailableReferenceSeed> = emptyList(),
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
         currentResponseReferences.clear()
         lastAgentResponse = null
+
+        // 注册用户提供的本地知识库引用（用于 [available:N] 引用解析）
+        availableReferences.forEach { ref ->
+            registerReference(kind = "available", title = ref.title, snippet = ref.snippet, path = ref.path, origin = ref.origin, reason = ref.reason)
+        }
 
         val now = java.time.LocalDateTime.now()
         val chineseFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
@@ -201,7 +215,9 @@ class DirectModelAgent(
         title: String,
         url: String? = null,
         snippet: String? = null,
-        path: String? = null
+        path: String? = null,
+        origin: String? = null,
+        reason: String? = null,
     ): Int {
         val index = currentResponseReferences.size + 1
         currentResponseReferences.add(
