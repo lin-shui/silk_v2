@@ -661,6 +661,9 @@ fun ChatScene(appState: WebAppState) {
     var chatListWidth by remember { mutableStateOf(LayoutPrefs.getInt("silk_chat_list_w", 320)) }
     var chatListCollapsed by remember { mutableStateOf(LayoutPrefs.getBool("silk_chat_list_collapsed", false)) }
     ensureLayoutStylesInjected()
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var showJoinDialog by remember { mutableStateOf(false) }
+    val strings = com.silk.shared.i18n.getStrings(com.silk.shared.models.Language.CHINESE)
     
     console.log("   群组:", group?.name ?: "null")
     console.log("   用户:", user?.fullName ?: "null")
@@ -887,12 +890,24 @@ fun ChatScene(appState: WebAppState) {
                         }) {
                             Div({
                                 style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { showCreateDialog = true; showMenu = false }
+                            }) { Text("➕ ${strings.createButton}") }
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { showJoinDialog = true; showMenu = false }
+                            }) { Text("🔗 ${strings.joinButton}") }
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { appState.navigateTo(Scene.CONTACTS); showMenu = false }
+                            }) { Text("👤 ${strings.contactsButton}") }
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
                                 onClick { appState.navigateTo(Scene.SETTINGS); showMenu = false }
-                            }) { Text("⚙️ 设置") }
+                            }) { Text("⚙️ ${strings.settingsButton}") }
                             Div({
                                 style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
                                 onClick { appState.logout(); showMenu = false }
-                            }) { Text("🚪 退出登录") }
+                            }) { Text("🚪 ${strings.logoutButton}") }
                         }
                     }
                 }
@@ -1183,6 +1198,30 @@ fun ChatScene(appState: WebAppState) {
         }) {
             ChatAppWithGroup(user, group, appState)
         }
+    }
+    
+    // 创建/加入群组对话框
+    if (showCreateDialog) {
+        CreateGroupDialog(
+            appState = appState,
+            strings = strings,
+            onDismiss = { showCreateDialog = false },
+            onGroupCreated = { newGroup ->
+                userGroups = userGroups + newGroup
+            },
+            onComplete = { showCreateDialog = false }
+        )
+    }
+    if (showJoinDialog) {
+        JoinGroupDialog(
+            appState = appState,
+            strings = strings,
+            onDismiss = { showJoinDialog = false },
+            onGroupJoined = { newGroup ->
+                userGroups = userGroups + newGroup
+                showJoinDialog = false
+            }
+        )
     }
 }
 
@@ -2300,6 +2339,53 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             } // close else (non-selection mode)
         }
         
+        // Auto-reconnect logic: on disconnect, refresh token then retry with exponential backoff
+        var reconnectCount by remember { mutableStateOf(0) }
+        LaunchedEffect(connectionState) {
+            if (connectionState == ConnectionState.DISCONNECTED) {
+                val maxRetries = 5
+                while (reconnectCount < maxRetries) {
+                    val delayMs = 2000L * (1L shl reconnectCount.coerceAtMost(4)) // 2,4,8,16,32s
+                    kotlinx.coroutines.delay(delayMs)
+                    reconnectCount++
+                    console.log("🔄 [AutoReconnect] 尝试 $reconnectCount/$maxRetries ...")
+                    try {
+                        // 每次重连前尝试刷新 JWT（静默刷新，token 未过期也安全）
+                        var jwt = JwtManager.getAccessToken()
+                        if (!jwt.isNullOrBlank()) {
+                            val refreshResult = ApiClient.refreshAccessToken()
+                            if (refreshResult.success && refreshResult.accessToken != null) {
+                                jwt = refreshResult.accessToken
+                                JwtManager.setAccessToken(jwt)
+                                if (refreshResult.refreshToken != null) {
+                                    JwtManager.setRefreshToken(refreshResult.refreshToken)
+                                }
+                            } else {
+                                // 刷新成功但无 token → refresh token 可能也过期了
+                                console.log("🔒 [AutoReconnect] Token 刷新失败，停止重连")
+                                break
+                            }
+                        } else {
+                            // 没有 stored token → 无法继续
+                            console.log("🔒 [AutoReconnect] 无存储的 Token，停止重连")
+                            break
+                        }
+                        chatClient.connect(user.id, user.fullName, group.id, token = jwt)
+                        kotlinx.coroutines.delay(500)
+                        if (connectionState == ConnectionState.CONNECTED) {
+                            console.log("✅ [AutoReconnect] 重连成功")
+                            reconnectCount = 0
+                            return@LaunchedEffect
+                        }
+                    } catch (e: Exception) {
+                        console.log("⚠️ [AutoReconnect] 异常: ${e.message}")
+                    }
+                }
+                console.log("🔒 [AutoReconnect] 全部重连失败，跳转登录页")
+                appState.logout()
+            }
+        }
+        
         // Status Bar - only show when not connected
         if (connectionState != ConnectionState.CONNECTED) {
             Div({ 
@@ -2316,27 +2402,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 Span {
                     Text(when (connectionState) {
                         ConnectionState.CONNECTING -> "⟳ ${strings.connecting}"
-                        ConnectionState.DISCONNECTED -> "✗ ${strings.disconnected}"
+                        ConnectionState.DISCONNECTED -> "✗ ${strings.disconnected} · 自动重连中..."
                         else -> ""
                     })
-                }
-                
-                if (connectionState == ConnectionState.DISCONNECTED) {
-                    Button({
-                        classes(SilkStylesheet.button)
-                        style { 
-                            padding(8.px, 16.px)
-                            fontSize(12.px)
-                        }
-                        onClick {
-                            scope.launch {
-                                val jwt = JwtManager.getAccessToken()
-                                chatClient.connect(user.id, user.fullName, group.id, token = jwt)
-                            }
-                        }
-                    }) {
-                        Text(strings.reconnecting)
-                    }
                 }
             }
         }

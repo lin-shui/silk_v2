@@ -30,6 +30,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - SQLite：`./silk_database.db`（可用 `-Dsilk.databasePath=...` 覆盖）
 - 聊天历史：`chat_history/<session>/session.json`、`chat_history.json`
 - 上传文件：`chat_history/<session>/uploads/`
+- AI 工作区（跨群上下文）：`backend/chat_workspaces/<session>/other_groups/`
 - URL 去重缓存：`processed_urls.txt`
 - 用户历史 workspace 视图：`user_workspace_views/user_<user>/`（通过 hardlink 映射该用户可访问的 `chat_history/group_<group>/`，供 `/recall` 只读检索）
 - AI 跨群工作区：`backend/chat_workspaces/<session>/other_groups/`（Silk 专属对话写入其他群最近历史，供 AI Grep/Read 跨群检索）

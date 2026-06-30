@@ -1,14 +1,8 @@
 package com.silk.backend
 
-import io.ktor.server.application.Application
-import io.ktor.server.application.install
-import io.ktor.server.websocket.WebSockets
-import io.ktor.server.websocket.pingPeriod
-import io.ktor.server.websocket.timeout
-import io.ktor.websocket.CloseReason
-import io.ktor.websocket.Frame
-import io.ktor.websocket.WebSocketSession
-import io.ktor.websocket.close
+import io.ktor.server.application.*
+import io.ktor.server.websocket.*
+import io.ktor.websocket.*
 import java.time.Duration
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.launch
@@ -18,15 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.addJsonObject
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
-import kotlinx.serialization.json.putJsonObject
+import kotlinx.serialization.json.*
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -53,10 +39,8 @@ data class Message(
     val isIncremental: Boolean = false, // true = 增量消息（前端需拼接），false = 完整消息（前端直接替换）
     val category: MessageCategory = MessageCategory.NORMAL,  // ✅ 消息类别（用于UI显示亮度区分）
     val references: List<com.silk.backend.models.MessageReference> = emptyList(),
-    val kbContextSelection: com.silk.backend.models.KnowledgeBaseContextSelection? = null,  // 本轮知识库上下文选择（手动/固定/排除）
     val contentBlocks: List<com.silk.backend.ai.ContentBlock>? = null,  // 结构化 content block（流式 / 持久化回放）
     val interactiveOptions: List<InteractiveOption>? = null,  // 交互式按钮选项（用于 cc-connect 提问）
-    val action: String? = null  // null = 新消息(默认), "edit" = 覆盖同ID消息（CARD 编辑）
 )
 
 @Serializable
@@ -67,7 +51,7 @@ data class InteractiveOption(
 
 @Serializable
 enum class MessageType {
-    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CC_COMMAND, CARD, CARD_REPLY
+    TEXT, JOIN, LEAVE, SYSTEM, FILE, RECALL, STOP_GENERATE, CC_COMMAND
 }
 
 @Serializable
@@ -78,7 +62,6 @@ enum class MessageCategory {
     FINAL_REPORT,     // 最终诊断报告（高亮度）
     AGENT_STATUS,     // Agent 工作状态（灰色，低亮度）
     AGENT_QUESTION,   // Agent 向用户提问（需要用户回答）
-    AGENT_PERMISSION, // Agent 工具权限确认（需要用户允许/拒绝）
 }
 
 @Serializable
@@ -97,7 +80,6 @@ data class PendingImageState(
     val timestamp: Long = System.currentTimeMillis()
 )
 
-@Suppress("TooGenericExceptionCaught")
 class ChatServer(
     private val sessionName: String = "default_room",
     private val isSilkChatWorkflow: Boolean = false
@@ -112,25 +94,22 @@ class ChatServer(
     }
     // 直接调用模型的 Agent（简化流程：让模型自动使用 tool 能力）
     private val directModelAgent = com.silk.backend.ai.DirectModelAgent(sessionId = sessionName)
-    private val knowledgeBaseManager = com.silk.backend.kb.KnowledgeBaseManager()
-    // 用户历史回忆 Agent（/recall 命令使用）
-    private val userHistoryAgent = com.silk.backend.ai.UserHistoryAgent()
     private var messagesSinceAgentResponse = 0
     private var isAgentJoined = false
-    
+
     @Volatile
     private var activeAiJob: Job? = null
-    
+
     // 已处理的URL缓存，避免重复下载（从持久化文件恢复）
     private val processedUrls = Collections.synchronizedSet(mutableSetOf<String>())
     private val processedUrlsFile: java.io.File
-    
+
     init {
         // 初始化并从文件恢复已处理的URL列表（使用统一的目录命名逻辑）
         val uploadDir = historyManager.getUploadsDir(sessionName)
         uploadDir.mkdirs()
         processedUrlsFile = java.io.File(uploadDir, "processed_urls.txt")
-        
+
         if (processedUrlsFile.exists()) {
             try {
                 processedUrlsFile.readLines().forEach { line ->
@@ -143,7 +122,7 @@ class ChatServer(
                 logger.warn("⚠️ 读取URL缓存失败: {}", e.message)
             }
         }
-        
+
         // 从持久化存储加载历史消息到内存（用于消息撤回等功能）
         try {
             val chatHistory = historyManager.loadChatHistory(sessionName)
@@ -157,11 +136,10 @@ class ChatServer(
                         timestamp = entry.timestamp,
                         type = try {
                             MessageType.valueOf(entry.messageType)
-                        } catch (@Suppress("SwallowedException") e: Exception) {
+                        } catch (e: Exception) {
                             MessageType.TEXT
                         },
                         references = entry.references,
-                        kbContextSelection = entry.kbContextSelection,
                         contentBlocks = entry.contentBlocksJson?.let {
                             try {
                                 historyJson.decodeFromString<List<com.silk.backend.ai.ContentBlock>>(it)
@@ -210,7 +188,7 @@ class ChatServer(
     fun hasPendingImage(userId: String): Boolean {
         return pendingImages.containsKey("$sessionName:$userId")
     }
-    
+
     // 保存已处理的URL到文件
     private fun saveProcessedUrl(url: String) {
         try {
@@ -219,7 +197,7 @@ class ChatServer(
             logger.warn("⚠️ 保存URL缓存失败: {}", e.message)
         }
     }
-    
+
     suspend fun join(userId: String, userName: String, session: WebSocketSession) {
         // 权限校验：群聊仅允许群成员加入（否则会导致历史/工具上下文越权）
         if (sessionName.startsWith("group_") && !AgentRuntime.isAgentUserId(userId)) {
@@ -236,15 +214,15 @@ class ChatServer(
         }
 
         connections.getOrPut(userId) { CopyOnWriteArrayList() }.add(session)
-        
+
         // 如果是第一个真实用户加入，让 Silk AI 也加入（静默模式）
         if (!isAgentJoined && !AgentRuntime.isAgentUserId(userId)) {
             joinSilkAgentSilently()
         }
-        
+
         // 添加成员到会话记录
         historyManager.addMember(sessionName, userId, userName)
-        
+
         // 从内存发送历史消息（init 已从磁盘加载，无需重复 I/O）
         val recentMessages = messageHistory.takeLast(50)
         if (recentMessages.isNotEmpty()) {
@@ -272,27 +250,27 @@ class ChatServer(
                 isTransient = true
             )
         )))
-        
+
         // 不发送加入消息到聊天室（避免产生无意义的历史记录）
         // 用户加入已经通过会话管理记录
         logger.debug("👤 用户已加入聊天室: {} ({})", userName, userId)
     }
-    
+
     /**
      * 让 Silk AI Agent 静默加入会话（不发送欢迎消息）
      */
     private suspend fun joinSilkAgentSilently() {
         if (isAgentJoined) return
-        
+
         isAgentJoined = true
         historyManager.addMember(sessionName, SilkAgent.AGENT_ID, SilkAgent.AGENT_NAME)
-        
+
         // 不发送加入消息和欢迎消息（避免无意义的 chat 消息）
         // Silk 只在用户发送消息时才响应
-        
+
         logger.info("🤖 Silk AI Agent 已静默加入会话")
     }
-    
+
     suspend fun leave(userId: String, userName: String, session: WebSocketSession) {
         val sessions = connections[userId]
         if (sessions != null) {
@@ -306,12 +284,12 @@ class ChatServer(
         if (connections[userId] == null) {
             historyManager.removeMember(sessionName, userId)
         }
-        
+
         // 不发送离开消息到聊天室（避免产生无意义的历史记录）
         // 用户离开已经通过会话管理记录
         logger.debug("👋 用户已离开聊天室: {} ({})", userName, userId)
     }
-    
+
     /**
      * 获取会话的参与者列表（优先从 SQL 群组成员获取，fallback 到 WebSocket 连接）
      */
@@ -331,14 +309,6 @@ class ChatServer(
         return connections.keys.toList().ifEmpty { listOf(userId) }
     }
 
-    /** 普通可持久化的新消息：非临时且非 edit 覆盖（用于去重与时间戳归一判定）。 */
-    private fun isPersistableNewMessage(message: Message): Boolean =
-        !message.isTransient && message.action != "edit"
-
-    /** 是否为已在历史中的重复消息（edit 消息除外）。 */
-    private fun isDuplicateIncomingMessage(message: Message): Boolean =
-        isPersistableNewMessage(message) && messageHistory.any { it.id == message.id }
-
     suspend fun broadcast(message: Message) {
         // 🛑 停止生成：立即取消活跃的 AI 任务并通知客户端
         if (message.type == MessageType.STOP_GENERATE) {
@@ -346,31 +316,55 @@ class ChatServer(
             return
         }
 
-        // 🃏 卡片回复：路由到 CardReplyRouter，不触发 AI/Agent 流程
-        if (message.type == MessageType.CARD_REPLY) {
-            handleCardReply(message)
-            return
-        }
-
         // ✅ 添加调试日志
         logger.debug("📨 [broadcast] 收到消息: ID={}, User={}, IsTransient={}, Content={}...", message.id, message.userName, message.isTransient, message.content.take(30))
-        
-        // ✅ 防止重复处理：检查消息是否已经在历史中（edit 消息除外）
-        if (isDuplicateIncomingMessage(message)) {
+
+        // ✅ 防止重复处理：检查消息是否已经在历史中
+        if (!message.isTransient && messageHistory.any { it.id == message.id }) {
             logger.warn("⚠️ [broadcast] 忽略重复消息: {} from {}", message.id, message.userName)
             return
         }
 
-        // 🕐 归一化时间戳（嫁接 fe6faba）：新消息统一用服务端时钟，避免客户端/浏览器时钟偏移影响持久化、广播与未读排序
-        val normalizedMessage = if (isPersistableNewMessage(message)) {
-            message.copy(timestamp = System.currentTimeMillis())
-        } else {
-            message
-        }
+        // 归一化时间戳：用服务端时间替换客户端/浏览器时间，确保所有消息使用同源时钟
+        val msg = if (!message.isTransient) message.copy(timestamp = System.currentTimeMillis()) else message
 
         // 只有非临时消息才添加到内存历史和持久化
-        if (!normalizedMessage.isTransient) {
-            persistAndIndexMessage(normalizedMessage)
+        if (!msg.isTransient) {
+            // 添加到内存历史
+            messageHistory.add(msg)
+
+            // 持久化到文件系统
+            historyManager.addMessage(sessionName, msg)
+            logger.debug("💾 [broadcast] 消息已保存: {}", msg.id)
+
+            // 记录新消息用于未读追踪（提取 groupId）
+            // 使用服务器时间而非客户端时间，避免时钟不同步导致未读状态错误
+            // 传入发送者ID，自动将发送者标记为已读（自己发的消息不应该显示为未读）
+            val groupId = sessionName.removePrefix("group_")
+            UnreadRepository.recordNewMessage(groupId, System.currentTimeMillis(), msg.userId)
+
+            // 索引到 Weaviate 搜索系统
+            CoroutineScope(Dispatchers.IO).launch {
+                try {
+                    val historyEntry = com.silk.backend.models.ChatHistoryEntry(
+                        messageId = msg.id,
+                        senderId = msg.userId,
+                        senderName = msg.userName,
+                        content = msg.content,
+                        timestamp = msg.timestamp,
+                        messageType = msg.type.name
+                    )
+                    // 获取会话参与者（优先从 SQL 群组成员获取）
+                    val participants = getSessionParticipants(msg.userId)
+
+                    val indexed = silkAgent.indexMessageToSearch(historyEntry, participants)
+                    if (indexed) {
+                        logger.debug("🔍 [broadcast] 消息已索引到 Weaviate: {}", msg.id)
+                    }
+                } catch (e: Exception) {
+                    logger.warn("⚠️ [broadcast] Weaviate 索引失败: {}", e.message)
+                }
+            }
         }
         // ✅ 优化：移除临时消息不保存的日志打印，减少日志量
         // else {
@@ -379,77 +373,32 @@ class ChatServer(
 
         // ⛔ cc-connect 等待回答时，用户 TEXT 消息由下方 cc-connect 路由直接转发给引擎，
         // 不必在此广播——否则按钮值（如 "perm:allow"）会作为用户消息展示给所有人。
-        broadcastToSessionsUnlessCcWaiting(normalizedMessage)
+        if (msg.type == MessageType.TEXT
+            && msg.userId != "cc-connect" && msg.userId != "system"
+            && com.silk.backend.ccconnect.CcConnectRegistry.isConnected(sessionName.removePrefix("group_"))
+            && com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(sessionName.removePrefix("group_"))
+        ) {
+            logger.debug("⏭️ [broadcast] 跳过广播: cc-connect waitingForInput (msg={})", msg.content.take(20))
+        } else {
+            val messageJson = Json.encodeToString(msg)
+            if (msg.interactiveOptions != null) {
+                logger.info("📨 [broadcast] 广播带 interactiveOptions 的消息: options={}, json(前300字符)={}",
+                    msg.interactiveOptions.size, messageJson.take(300))
+            }
+            val sessions = allSessions()
+            sessions.forEach { session ->
+                try {
+                    session.send(Frame.Text(messageJson))
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
+        }
 
         val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
 
         // ✅ URL检测和网页下载索引
-        launchUrlProcessingIfApplicable(message)
-
-        // ==================== cc-connect 命令转发 ====================
-        // 前端发 CC_COMMAND 类型消息时，或 TEXT 中的 cmd: 前缀，转发为 command 给 cc-connect agent。
-        if (forwardCcCommandIfApplicable(message)) {
-            return
-        }
-
-        // ==================== cc-connect 路由 ====================
-        // cc-connect 群组：仅 HOST / OPERATOR 的消息转发给适配器，GUEST 消息不触发命令
-        // 多人群需要 @-prefix 触发（@cc 通用或 @claude/@cursor 等代理特定前缀）；单人直接转发
-        if (routeCcConnectMessageIfApplicable(message)) {
-            return
-        }
-
-        // ==================== Claude Code 模式拦截 ====================
-        // 专属对话 [Silk] 必须走下方 Silk AI（DirectModelAgent）；否则用户若在其它群激活过 /cc，
-        // 此处会把「你好」当成 CC prompt，Bridge 未就绪时表现为空白回复。
-        if (handleClaudeCodeModeIfApplicable(message, isSilkPrivateChat)) {
-            return
-        }
-
-        // ==================== Vision 图片+文字合并处理 ====================
-        // 检测 ##VISION_IMG: 标记（前端将图片 base64 嵌入消息内容，一次性发来）
-        if (handleVisionImgMarker(message)) {
-            return  // 已处理，不再走下面 AI 回复流程
-        }
-
-        // Silk AI 回复逻辑
-        // isSilkPrivateChat：群组名以 "[Silk]" 开头（已在上方计算）
-        if (!AgentRuntime.isAgentMessage(message) && message.type == MessageType.TEXT && !message.isTransient) {
-            handleSilkAiReply(message, isSilkPrivateChat)
-        }
-    }
-
-    /**
-     * 将消息广播给所有连接；但 cc-connect 等待回答时跳过广播（按钮值不应作为用户消息显示）。
-     */
-    private suspend fun broadcastToSessionsUnlessCcWaiting(message: Message) {
-        val ccBroadcastGroupId = sessionName.removePrefix("group_")
-        val isCcWaitingUserText = message.type == MessageType.TEXT &&
-            message.userId != "cc-connect" && message.userId != "system" &&
-            com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccBroadcastGroupId) &&
-            com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(ccBroadcastGroupId)
-        if (isCcWaitingUserText) {
-            logger.debug("⏭️ [broadcast] 跳过广播: cc-connect waitingForInput (msg={})", message.content.take(20))
-            return
-        }
-        val messageJson = Json.encodeToString(message)
-        if (message.interactiveOptions != null) {
-            logger.info("📨 [broadcast] 广播带 interactiveOptions 的消息: options={}, json(前300字符)={}",
-                message.interactiveOptions.size, messageJson.take(300))
-        }
-        val sessions = allSessions()
-        sessions.forEach { session ->
-            try {
-                session.send(Frame.Text(messageJson))
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-        logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
-    }
-
-    /** 对非 agent 的非临时 TEXT 消息，异步检测/下载/索引其中的 URL。 */
-    private fun launchUrlProcessingIfApplicable(message: Message) {
         if (message.type == MessageType.TEXT && !message.isTransient && !AgentRuntime.isAgentMessage(message)) {
             CoroutineScope(Dispatchers.IO).launch {
                 try {
@@ -459,140 +408,10 @@ class ChatServer(
                 }
             }
         }
-    }
 
-    /**
-     * 若消息符合 cc-connect 路由条件（已连接、HOST/OPERATOR 的非临时 TEXT）则路由并返回 true。
-     */
-    private suspend fun routeCcConnectMessageIfApplicable(message: Message): Boolean {
-        val ccGroupId = sessionName.removePrefix("group_")
-        val isCcConnectUserText = com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId) &&
-            message.type == MessageType.TEXT && !message.isTransient &&
-            message.userId != "cc-connect" && message.userId != "system"
-        if (!isCcConnectUserText) {
-            return false
-        }
-        routeCcConnectMessage(message, ccGroupId)
-        return true
-    }
-
-    /**
-     * 非专属对话的非临时 TEXT（且非 agent 消息）尝试交给已激活的 Claude Code 会话处理。
-     * @return true 表示 CC 会话已处理该消息，调用方应停止后续流程。
-     */
-    private suspend fun handleClaudeCodeModeIfApplicable(message: Message, isSilkPrivateChat: Boolean): Boolean {
-        val isClaudeCodeCandidate = !isSilkPrivateChat && message.type == MessageType.TEXT &&
-            !message.isTransient && !AgentRuntime.isAgentMessage(message)
-        if (!isClaudeCodeCandidate) {
-            return false
-        }
-        return handleClaudeCodeMode(message)
-    }
-
-    /**
-     * 🃏 卡片回复：持久化、广播并路由到 CardReplyRouter，不触发 AI/Agent 流程。
-     */
-    private suspend fun handleCardReply(message: Message) {
-        logger.info("🃏 [broadcast] 收到卡片回复: {} from {}", message.content.take(80), message.userName)
-        // 持久化卡片回复到历史
-        if (!message.isTransient) {
-            messageHistory.add(message)
-            historyManager.addMessage(sessionName, message)
-        }
-        // 广播给所有客户端
-        val messageJson = Json.encodeToString(message)
-        allSessions().forEach { session ->
-            try { session.send(Frame.Text(messageJson)) } catch (_: Exception) {}
-        }
-        // 路由到注册的 handler
-        try {
-            val reply = Json.decodeFromString<com.silk.backend.card.CardReplyPayload>(message.content)
-            val broadcastRef: suspend (Message) -> Unit = { msg -> broadcast(msg) }
-            val expired = com.silk.backend.card.CardReplyRouter.route(sessionName, reply, broadcastRef)
-            if (expired) {
-                // 兜底：卡片已过期，发系统提示并 disable 卡片
-                broadcast(Message(
-                    id = java.util.UUID.randomUUID().toString(),
-                    userId = "system",
-                    userName = "系统",
-                    content = "该卡片已过期，无法处理此操作。",
-                    timestamp = System.currentTimeMillis(),
-                    type = MessageType.SYSTEM,
-                    isTransient = false,
-                ))
-                broadcast(Message(
-                    id = reply.cardId,
-                    userId = "system",
-                    userName = "系统",
-                    content = com.silk.backend.card.CardBuilder("已过期", template = "red")
-                        .addText("该卡片已过期。")
-                        .buildDisabled(),
-                    timestamp = System.currentTimeMillis(),
-                    type = MessageType.CARD,
-                    action = "edit",
-                ))
-            }
-        } catch (e: Exception) {
-            logger.error("🃏 [broadcast] 卡片回复解析失败: {}", e.message)
-        }
-    }
-
-    /**
-     * 非临时消息：写入内存历史 / 持久化历史，记录未读，并索引到 Weaviate。
-     */
-    private fun persistAndIndexMessage(message: Message) {
-        if (message.action == "edit") {
-            // 替换内存历史中的同 ID 消息
-            val idx = messageHistory.indexOfFirst { it.id == message.id }
-            if (idx >= 0) messageHistory[idx] = message
-            // 替换持久化历史
-            historyManager.editMessage(sessionName, message)
-        } else {
-            // 添加到内存历史
-            messageHistory.add(message)
-            // 持久化到文件系统
-            historyManager.addMessage(sessionName, message)
-        }
-        logger.debug("💾 [broadcast] 消息已保存: {}", message.id)
-
-        // 记录新消息用于未读追踪（提取 groupId）
-        // 使用服务器时间而非客户端时间，避免时钟不同步导致未读状态错误
-        // 传入发送者ID，自动将发送者标记为已读（自己发的消息不应该显示为未读）
-        val groupId = sessionName.removePrefix("group_")
-        UnreadRepository.recordNewMessage(groupId, System.currentTimeMillis(), message.userId)
-
-        // 索引到 Weaviate 搜索系统
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val historyEntry = com.silk.backend.models.ChatHistoryEntry(
-                    messageId = message.id,
-                    senderId = message.userId,
-                    senderName = message.userName,
-                    content = message.content,
-                    timestamp = message.timestamp,
-                    messageType = message.type.name
-                )
-                // 获取会话参与者（优先从 SQL 群组成员获取）
-                val participants = getSessionParticipants(message.userId)
-
-                val indexed = silkAgent.indexMessageToSearch(historyEntry, participants)
-                if (indexed) {
-                    logger.debug("🔍 [broadcast] 消息已索引到 Weaviate: {}", message.id)
-                }
-            } catch (e: Exception) {
-                logger.warn("⚠️ [broadcast] Weaviate 索引失败: {}", e.message)
-            }
-        }
-    }
-
-    /**
-     * cc-connect 命令转发：CC_COMMAND 类型消息，或 TEXT 中的 cmd: 前缀，
-     * 转发为 command 给 cc-connect agent（不进聊天记录）。
-     * @return true 表示已作为命令转发，调用方应停止后续广播流程。
-     */
-    private suspend fun forwardCcCommandIfApplicable(message: Message): Boolean {
-        val ccCmdGroupId = sessionName.removePrefix("group_")
+        // ==================== cc-connect 命令转发 ====================
         // 前端发 CC_COMMAND 类型消息时，转发为 command 给 cc-connect agent（不进聊天记录）
+        val ccCmdGroupId = sessionName.removePrefix("group_")
         if (message.type == MessageType.CC_COMMAND
             && com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccCmdGroupId)
         ) {
@@ -600,9 +419,10 @@ class ChatServer(
             if (memberRole == MemberRole.HOST || memberRole == MemberRole.OPERATOR) {
                 com.silk.backend.ccconnect.CcConnectRegistry.sendCommand(ccCmdGroupId, message.content)
             }
-            return true
+            return
         }
 
+        // ==================== cc-connect 命令转发（TEXT 中的 cmd: 前缀）====================
         // 用户在输入框手动输入 cmd: 开头的消息，或某些场景下按钮值以 TEXT 类型到达时，
         // 直接作为 CC_COMMAND 转发给 cc-connect agent（不进聊天记录）
         if (message.type == MessageType.TEXT
@@ -613,364 +433,309 @@ class ChatServer(
             if (memberRole == MemberRole.HOST || memberRole == MemberRole.OPERATOR) {
                 com.silk.backend.ccconnect.CcConnectRegistry.sendCommand(ccCmdGroupId, message.content.removePrefix("cmd:"))
             }
-            return true
-        }
-        return false
-    }
-
-    /**
-     * cc-connect 路由：仅 HOST / OPERATOR 的消息转发给适配器，GUEST 消息不触发命令。
-     * 多人群需要 @-prefix 触发（@cc 通用或 @claude/@cursor 等代理特定前缀）；单人直接转发。
-     */
-    private suspend fun routeCcConnectMessage(message: Message, ccGroupId: String) {
-        val memberRole = com.silk.backend.database.GroupRepository.getMemberRole(ccGroupId, message.userId)
-        if (memberRole != MemberRole.HOST && memberRole != MemberRole.OPERATOR) {
             return
         }
-        val memberCount = com.silk.backend.database.GroupRepository.getGroupMemberCount(ccGroupId)
-        val isSoloMode = memberCount <= 1L
-        val content = message.content
 
-        val connMeta = com.silk.backend.ccconnect.CcConnectRegistry.getConnectionInfo(ccGroupId)
-        val triggerName = com.silk.backend.ccconnect.agentTriggerName(connMeta?.agentType ?: "")
-        val prefixes = buildSet {
-            add("@cc")
-            if (triggerName != "cc") add("@$triggerName")
-        }
-        val matchedPrefix = prefixes.firstOrNull { p ->
-            content.startsWith("$p ", ignoreCase = true) || content.equals(p, ignoreCase = true)
-        }
-        val hasPrefix = matchedPrefix != null
+        // ==================== cc-connect 路由 ====================
+        // cc-connect 群组：仅 HOST / OPERATOR 的消息转发给适配器，GUEST 消息不触发命令
+        // 多人群需要 @-prefix 触发（@cc 通用或 @claude/@cursor 等代理特定前缀）；单人直接转发
+        val ccGroupId = sessionName.removePrefix("group_")
+        if (com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId)
+            && message.type == MessageType.TEXT && !message.isTransient
+            && message.userId != "cc-connect" && message.userId != "system"
+        ) {
+            val memberRole = com.silk.backend.database.GroupRepository.getMemberRole(ccGroupId, message.userId)
+            if (memberRole == MemberRole.HOST || memberRole == MemberRole.OPERATOR) {
+                val memberCount = com.silk.backend.database.GroupRepository.getGroupMemberCount(ccGroupId)
+                val isSoloMode = memberCount <= 1L
+                val content = message.content
 
-        if (!isSoloMode && !hasPrefix) {
-            return
-        }
-        val forwardContent = if (hasPrefix && matchedPrefix != null) {
-            val stripped = if (content.startsWith("$matchedPrefix ", ignoreCase = true)) {
-                content.substring(matchedPrefix.length + 1)
-            } else {
-                content.substring(matchedPrefix.length)
-            }
-            stripped.trim()
-        } else {
-            content
-        }
-        if (forwardContent.isBlank()) {
-            return
-        }
-        forwardToCcConnect(message, ccGroupId, forwardContent)
-    }
-
-    /**
-     * 将用户消息（含最近群聊上下文）转发给 cc-connect 适配器。
-     * 按钮 token（perm:allow/deny/allow_all）映射为引擎期望的精确文本；
-     * AI 等待回答时直达会话（forwardAnswer），否则走正常排队（forwardToAdapter）。
-     */
-    private suspend fun forwardToCcConnect(message: Message, ccGroupId: String, forwardContent: String) {
-        // Transform cc-connect button values to text the engine understands.
-        // Permission button values (perm:allow/perm:deny/perm:allow_all) must be
-        // mapped to the exact text that isAllowResponse/isDenyResponse/isApproveAllResponse
-        // expect, because the engine uses exact string matching.
-        val engineContent = when (forwardContent) {
-            "perm:allow" -> "allow"
-            "perm:deny" -> "deny"
-            "perm:allow_all" -> "allow all"
-            else -> forwardContent
-        }
-        // Load recent chat history so cc-connect agents have
-        // the same full group-chat context that DirectModelAgent
-        // receives (last 50 TEXT entries, capped for performance).
-        val chatHistory = historyManager.loadChatHistory(sessionName)
-        val historyEntries = chatHistory?.messages
-            ?.filter { it.messageType == "TEXT" }
-            ?.takeLast(50)
-            ?.map { entry ->
-                com.silk.backend.ccconnect.HistoryEntry(
-                    senderId = entry.senderId,
-                    senderName = entry.senderName,
-                    content = entry.content,
-                    messageType = entry.messageType,
-                    timestamp = entry.timestamp,
-                )
-            }
-        val userMsg = com.silk.backend.ccconnect.UserMessage(
-            content = engineContent,
-            userId = message.userId,
-            userName = message.userName,
-            msgId = message.id,
-            history = historyEntries,
-        )
-        // 如果 AI 正在等待回答，直达已有会话；否则走正常 processing/排队
-        if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(ccGroupId)) {
-            com.silk.backend.ccconnect.CcConnectRegistry.forwardAnswer(ccGroupId, userMsg)
-        } else {
-            com.silk.backend.ccconnect.CcConnectRegistry.forwardToAdapter(ccGroupId, userMsg)
-        }
-    }
-
-    /**
-     * Claude Code 模式拦截：把消息交给已激活的 AgentRuntime 会话处理。
-     * @return true 表示 CC 会话已处理该消息，调用方应停止后续广播流程。
-     */
-    private suspend fun handleClaudeCodeMode(message: Message): Boolean {
-        val groupId = sessionName
-        // 构造单用户发送函数（CC 响应只发给触发用户的所有连接）
-        val ccUserId = message.userId
-        val userSessions = connections[ccUserId]
-        if (userSessions == null || userSessions.isEmpty()) {
-            return false
-        }
-        val ccBroadcastFn: suspend (Message) -> Unit = { msg ->
-            try {
-                // 非 transient 消息需要持久化到聊天历史（重连后可恢复）
-                if (!msg.isTransient) {
-                    messageHistory.add(msg)
-                    historyManager.addMessage(sessionName, msg)
+                val connMeta = com.silk.backend.ccconnect.CcConnectRegistry.getConnectionInfo(ccGroupId)
+                val triggerName = com.silk.backend.ccconnect.agentTriggerName(connMeta?.agentType ?: "")
+                val prefixes = buildSet {
+                    add("@cc")
+                    if (triggerName != "cc") add("@$triggerName")
                 }
-                val msgJson = Json.encodeToString(msg)
-                // 调用时重新读取 session 列表，避免捕获过时引用
-                val currentSessions = connections[ccUserId] ?: emptyList()
-                currentSessions.forEach { session ->
-                    try {
-                        session.send(Frame.Text(msgJson))
-                    } catch (e: Exception) {
-                        logger.warn("[CC] 发送消息到某连接失败: {}", e.message)
+                val matchedPrefix = prefixes.firstOrNull { p ->
+                    content.startsWith("$p ", ignoreCase = true) || content.equals(p, ignoreCase = true)
+                }
+                val hasPrefix = matchedPrefix != null
+
+                if (isSoloMode || hasPrefix) {
+                    val forwardContent = if (hasPrefix && matchedPrefix != null) {
+                        val stripped = if (content.startsWith("$matchedPrefix ", ignoreCase = true)) {
+                            content.substring(matchedPrefix.length + 1)
+                        } else {
+                            content.substring(matchedPrefix.length)
+                        }
+                        stripped.trim()
+                    } else {
+                        content
+                    }
+                    if (forwardContent.isNotBlank()) {
+                        // Transform cc-connect button values to text the engine understands.
+                        // Permission button values (perm:allow/perm:deny/perm:allow_all) must be
+                        // mapped to the exact text that isAllowResponse/isDenyResponse/isApproveAllResponse
+                        // expect, because the engine uses exact string matching.
+                        val engineContent = when (forwardContent) {
+                            "perm:allow" -> "allow"
+                            "perm:deny" -> "deny"
+                            "perm:allow_all" -> "allow all"
+                            else -> forwardContent
+                        }
+                        // Load recent chat history so cc-connect agents have
+                        // the same full group-chat context that DirectModelAgent
+                        // receives (last 50 TEXT entries, capped for performance).
+                        val chatHistory = historyManager.loadChatHistory(sessionName)
+                        val historyEntries = chatHistory?.messages
+                            ?.filter { it.messageType == "TEXT" }
+                            ?.takeLast(50)
+                            ?.map { entry ->
+                                com.silk.backend.ccconnect.HistoryEntry(
+                                    senderId = entry.senderId,
+                                    senderName = entry.senderName,
+                                    content = entry.content,
+                                    messageType = entry.messageType,
+                                    timestamp = entry.timestamp,
+                                )
+                            }
+                        val userMsg = com.silk.backend.ccconnect.UserMessage(
+                            content = engineContent,
+                            userId = message.userId,
+                            userName = message.userName,
+                            msgId = message.id,
+                            history = historyEntries,
+                        )
+                        // 如果 AI 正在等待回答，直达已有会话；否则走正常 processing/排队
+                        if (com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(ccGroupId)) {
+                            com.silk.backend.ccconnect.CcConnectRegistry.forwardAnswer(ccGroupId, userMsg)
+                        } else {
+                            com.silk.backend.ccconnect.CcConnectRegistry.forwardToAdapter(ccGroupId, userMsg)
+                        }
                     }
                 }
-            } catch (e: Exception) {
-                logger.warn("[CC] 发送消息失败: {}", e.message)
+            }
+            return
+        }
+
+        // ==================== Claude Code 模式拦截 ====================
+        // 专属对话 [Silk] 必须走下方 Silk AI（DirectModelAgent）；否则用户若在其它群激活过 /cc，
+        // 此处会把「你好」当成 CC prompt，Bridge 未就绪时表现为空白回复。
+        if (!isSilkPrivateChat && message.type == MessageType.TEXT && !message.isTransient
+            && !AgentRuntime.isAgentMessage(message)
+        ) {
+            val groupId = sessionName
+            // 构造单用户发送函数（CC 响应只发给触发用户的所有连接）
+            val ccUserId = message.userId
+            val userSessions = connections[ccUserId]
+            if (userSessions != null && userSessions.isNotEmpty()) {
+                val ccBroadcastFn: suspend (Message) -> Unit = { msg ->
+                    try {
+                        // 非 transient 消息需要持久化到聊天历史（重连后可恢复）
+                        if (!msg.isTransient) {
+                            messageHistory.add(msg)
+                            historyManager.addMessage(sessionName, msg)
+                        }
+                        val msgJson = Json.encodeToString(msg)
+                        // 调用时重新读取 session 列表，避免捕获过时引用
+                        val currentSessions = connections[ccUserId] ?: emptyList()
+                        currentSessions.forEach { session ->
+                            try {
+                                session.send(Frame.Text(msgJson))
+                            } catch (e: Exception) {
+                                logger.warn("[CC] 发送消息到某连接失败: {}", e.message)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("[CC] 发送消息失败: {}", e.message)
+                    }
+                }
+                // 去掉 @silk/@Silk 前缀（群聊中用户需要 @silk 才能触发）
+                val ccText = message.content
+                    .removePrefix("@Silk").removePrefix("@silk")
+                    .trim()
+                val ccHandled = AgentRuntime.handleIfActive(
+                    userId = message.userId,
+                    groupId = groupId,
+                    text = ccText,
+                    userName = message.userName,
+                    broadcastFn = ccBroadcastFn,
+                )
+                if (ccHandled) return
             }
         }
-        // 去掉 @silk/@Silk 前缀（群聊中用户需要 @silk 才能触发）
-        val ccText = message.content
-            .removePrefix("@Silk").removePrefix("@silk")
-            .trim()
-        return AgentRuntime.handleIfActive(
-            userId = message.userId,
-            groupId = groupId,
-            text = ccText,
-            userName = message.userName,
-            broadcastFn = ccBroadcastFn,
-        )
-    }
 
-    /**
-     * Vision 图片+文字合并处理：检测 ##VISION_IMG: 标记并触发 Vision API。
-     * @return true 表示已识别并处理（或正在异步处理）该 vision 消息，调用方应停止后续 AI 流程。
-     */
-    private suspend fun handleVisionImgMarker(message: Message): Boolean {
+        // ==================== Vision 图片+文字合并处理 ====================
+        // 检测 ##VISION_IMG: 标记（前端将图片 base64 嵌入消息内容，一次性发来）
         val visionImgMarker = "##VISION_IMG:"
-        if (message.type != MessageType.TEXT || message.isTransient || !message.content.startsWith(visionImgMarker)) {
-            return false
-        }
-        val markerEnd = message.content.indexOf("##", visionImgMarker.length)
-        if (markerEnd == -1) {
-            return false
-        }
-        val base64Data = message.content.substring(visionImgMarker.length, markerEnd)
-        val userText = message.content.substring(markerEnd + 2)
+        if (message.type == MessageType.TEXT && !message.isTransient && message.content.startsWith(visionImgMarker)) {
+            val markerEnd = message.content.indexOf("##", visionImgMarker.length)
+            if (markerEnd != -1) {
+                val base64Data = message.content.substring(visionImgMarker.length, markerEnd)
+                val userText = message.content.substring(markerEnd + 2)
 
-        logger.info("📸 收到 WebSocket 内嵌图片: {} base64 字符 + {} 文字字符", base64Data.length, userText.length)
+                logger.info("📸 收到 WebSocket 内嵌图片: {} base64 字符 + {} 文字字符", base64Data.length, userText.length)
 
-        // 保存图片到文件（用于预览和持久化）
-        val uploadDir = historyManager.getUploadsDir(sessionName)
-        uploadDir.mkdirs()
-        val imageBytes = try {
-            val dataPart = base64Data.substringAfter(",")
-            java.util.Base64.getDecoder().decode(dataPart)
-        } catch (e: Exception) {
-            logger.error("❌ base64 解码失败: {}", e.message)
-            null
-        }
-
-        if (imageBytes == null) {
-            return false
-        }
-        val ext = when {
-            base64Data.contains("image/png") -> "png"
-            base64Data.contains("image/gif") -> "gif"
-            base64Data.contains("image/webp") -> "webp"
-            else -> "jpg"
-        }
-        val timestamp = System.currentTimeMillis()
-        val fileName = "vision_${timestamp}.${ext}"
-        val savedFile = java.io.File(uploadDir, fileName)
-        savedFile.writeBytes(imageBytes)
-
-        val downloadUrl = "/api/files/download/${sessionName.removePrefix("group_")}/${savedFile.name}"
-        logger.info("📸 已保存 vision 图片: {} -> {}", savedFile.absolutePath, downloadUrl)
-
-        // 调 Vision API
-        activeAiJob?.cancel()
-        activeAiJob = CoroutineScope(Dispatchers.IO).launch {
-            try {
-                handleVisionImageAndText(savedFile, base64Data, userText.trim(), downloadUrl, message.userId)
-            } catch (e: CancellationException) {
-                logger.info("🛑 Vision 生成已被取消: {}", e.message)
-            } catch (e: Exception) {
-                logger.error("❌ Vision 处理异常: {}", e.message, e)
-            } finally {
-                activeAiJob = null
-            }
-        }
-        return true
-    }
-
-    /**
-     * Silk AI 回复逻辑：根据触发条件分发到帮助提示 / 角色设置 / /recall / vision+文字 / 普通问答。
-     */
-    private suspend fun handleSilkAiReply(message: Message, isSilkPrivateChat: Boolean) {
-        messagesSinceAgentResponse++
-
-        // 在 Silk 私聊中，所有消息都直接触发 AI 回复
-        // 在 Silk Chat 工作流中，所有消息也直接触发 AI 回复
-        // 在普通群聊中，需要 @silk 才能触发 AI 回复
-        val shouldTriggerAI = isSilkPrivateChat || isSilkChatWorkflow ||
-                              message.content.startsWith("@Silk") ||
-                              message.content.startsWith("@silk")
-
-        if (!shouldTriggerAI) {
-            // 普通消息 - 只索引到 Weaviate，不生成 AI 回复
-            // 索引已在上面的代码中完成（historyManager.addMessage 和 indexMessageToSearch）
-            logger.debug("📝 [broadcast] 普通消息已索引，不触发 AI 回复: {}...", message.content.take(30))
-            return
-        }
-
-        // 提取实际内容（移除 @silk 前缀，如果是私聊或 Silk Chat 工作流则直接使用原消息）
-        val silkContent = if (isSilkPrivateChat || isSilkChatWorkflow) {
-            message.content  // Silk 私聊中直接使用原消息
-        } else {
-            message.content
-                .removePrefix("@Silk").removePrefix("@silk")
-                .trim()
-        }
-
-        // 判断是否是角色设置消息
-        val isRolePrompt = isRolePromptMessage(silkContent)
-
-        if (!isSilkPrivateChat && silkContent.isBlank()) {
-            // 只有 @silk（非私聊），显示帮助信息
-            logger.debug("📖 [broadcast] @silk 帮助提示")
-            CoroutineScope(Dispatchers.IO).launch {
-                sendAgentStatus("""
-                    🎯 Silk 使用帮助：
-                    • @silk [问题] - 向 Silk 提问
-                    • @silk 你是... - 设置 Silk 角色
-                    • @silk 重置角色 - 恢复默认角色
-                """.trimIndent())
-            }
-        } else if (silkContent == "重置角色" || silkContent.lowercase() == "reset") {
-            // 重置角色
-            historyManager.updateRolePrompt(sessionName, null)
-            logger.debug("🎭 [broadcast] 角色已重置")
-            CoroutineScope(Dispatchers.IO).launch {
-                sendAgentStatus("🎭 角色已重置为默认")
-            }
-        } else if (isRolePrompt) {
-            handleRolePromptSet(message, silkContent)
-        } else if (silkContent.startsWith("/recall ") || silkContent.startsWith("/recall\n")) {
-            handleRecallCommand(message, silkContent, isSilkPrivateChat)
-        } else {
-            handleNormalSilkQuestion(message, silkContent, isSilkPrivateChat)
-        }
-    }
-
-    /** 角色设置消息：保存角色提示并触发一次简短自我介绍。 */
-    private suspend fun handleRolePromptSet(message: Message, silkContent: String) {
-        historyManager.updateRolePrompt(sessionName, silkContent)
-        logger.debug("🎭 [broadcast] 角色已设置: {}", silkContent)
-
-        activeAiJob?.cancel()
-        activeAiJob = CoroutineScope(Dispatchers.IO).launch {
-            try {
-                sendAgentStatus("🎭 角色已设置")
-                generateIntelligentResponse("请简短地自我介绍（1-2句话）", message.userId)
-            } catch (e: CancellationException) {
-                logger.info("🛑 角色确认生成已被取消: {}", e.message)
-            } finally {
-                activeAiJob = null
-            }
-        }
-    }
-
-    /** /recall 命令：仅限 Silk 专属对话使用，触发历史会话搜索回复。 */
-    private suspend fun handleRecallCommand(message: Message, silkContent: String, isSilkPrivateChat: Boolean) {
-        // /recall 命令 - 仅限 Silk 专属对话使用（防止在群聊中泄露用户隐私）
-        if (!isSilkPrivateChat) {
-            sendMessageToAllSessions(buildSilkTextMessage("/recall 仅可在 Silk 专属对话中使用，请切换到专属对话后再试"))
-            return
-        }
-        val recallQuery = silkContent.removePrefix("/recall").trim()
-        logger.info("[/recall] userId={}, query={}...", message.userId, recallQuery.take(50))
-
-        activeAiJob?.cancel()
-        activeAiJob = CoroutineScope(Dispatchers.IO).launch {
-            try {
-                sendMessageToAllSessions(buildSilkTextMessage("正在搜索历史会话...", isTransient = true))
-                generateHistoryRecallResponse(recallQuery, message.userId)
-            } catch (e: CancellationException) {
-                logger.info("[/recall] 已被用户取消: {}", e.message)
-            } catch (e: Exception) {
-                logger.error("[/recall] 异常: {}", e.message, e)
-                sendAgentStatus("历史查询失败: ${e.message}")
-            } finally {
-                activeAiJob = null
-            }
-        }
-    }
-
-    /**
-     * 普通问题分发：若有待处理图片则图片+文字合并发给 vision 模型，否则走文字模型生成回复。
-     * （文字先到时短暂等待图片处理完成，以便合并。）
-     */
-    private suspend fun handleNormalSilkQuestion(message: Message, silkContent: String, isSilkPrivateChat: Boolean) {
-        // 普通问题 - 使用搜索 + AI 回复
-        val logPrefix = if (isSilkPrivateChat) "[Silk私聊]" else "[@silk]"
-        logger.debug("💬 [broadcast] {} 问题: {}...", logPrefix, silkContent.take(50))
-
-        // ✅ 检查是否有待处理的图片（图片+文字合并发给 vision 模型）
-        var pendingImg = getAndRemovePendingImage(message.userId)
-        // 如果文字先到，短暂等待图片处理完成（OCR 可能比文字慢几十ms）
-        if (pendingImg == null) {
-            kotlinx.coroutines.delay(500)
-            pendingImg = getAndRemovePendingImage(message.userId)
-            if (pendingImg != null) {
-                logger.info("📸 等待后取到待处理图片: user={}", message.userId)
-            }
-        }
-        if (pendingImg != null) {
-            logger.info("📸 检测到待处理图片，将图片+文字合并发送给 vision 模型: user={}", message.userId)
-            activeAiJob?.cancel()
-            activeAiJob = CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    sendAgentStatus("🤖 正在结合图片分析您的问题...")
-                    handleCombinedVisionAndText(pendingImg, silkContent, message.userId)
-                } catch (e: CancellationException) {
-                    logger.info("🛑 Vision+文字生成已被用户取消: {}", e.message)
+                // 保存图片到文件（用于预览和持久化）
+                val uploadDir = historyManager.getUploadsDir(sessionName)
+                uploadDir.mkdirs()
+                val imageBytes = try {
+                    val dataPart = base64Data.substringAfter(",")
+                    java.util.Base64.getDecoder().decode(dataPart)
                 } catch (e: Exception) {
-                    logger.error("❌ Vision+文字生成异常: {}", e.message, e)
-                    e.printStackTrace()
-                } finally {
-                    activeAiJob = null
+                    logger.error("❌ base64 解码失败: {}", e.message)
+                    null
                 }
-            }
-        } else {
-            activeAiJob?.cancel()
-            activeAiJob = CoroutineScope(Dispatchers.IO).launch {
-                try {
-                    generateIntelligentResponse(silkContent, message.userId, message.kbContextSelection)
-                } catch (e: CancellationException) {
-                    logger.info("🛑 AI 生成已被用户取消: {}", e.message)
-                } catch (e: Exception) {
-                    logger.error("❌ 生成AI回答异常: {}", e.message, e)
-                    e.printStackTrace()
-                } finally {
-                    activeAiJob = null
+
+                if (imageBytes != null) {
+                    val ext = when {
+                        base64Data.contains("image/png") -> "png"
+                        base64Data.contains("image/gif") -> "gif"
+                        base64Data.contains("image/webp") -> "webp"
+                        else -> "jpg"
+                    }
+                    val timestamp = System.currentTimeMillis()
+                    val fileName = "vision_${timestamp}.${ext}"
+                    val savedFile = java.io.File(uploadDir, fileName)
+                    savedFile.writeBytes(imageBytes)
+
+                    val downloadUrl = "/api/files/download/${sessionName.removePrefix("group_")}/${savedFile.name}"
+                    logger.info("📸 已保存 vision 图片: {} -> {}", savedFile.absolutePath, downloadUrl)
+
+                    // 调 Vision API
+                    activeAiJob?.cancel()
+                    activeAiJob = CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            handleVisionImageAndText(savedFile, base64Data, userText.trim(), downloadUrl, message.userId)
+                        } catch (e: CancellationException) {
+                            logger.info("🛑 Vision 生成已被取消")
+                        } catch (e: Exception) {
+                            logger.error("❌ Vision 处理异常: {}", e.message)
+                        } finally {
+                            activeAiJob = null
+                        }
+                    }
+                    return  // 已处理，不再走下面 AI 回复流程
                 }
             }
         }
+
+                // Silk AI 回复逻辑
+        // isSilkPrivateChat：群组名以 "[Silk]" 开头（已在上方计算）
+
+        if (!AgentRuntime.isAgentMessage(message) && message.type == MessageType.TEXT && !message.isTransient) {
+            messagesSinceAgentResponse++
+
+            // 在 Silk 私聊中，所有消息都直接触发 AI 回复
+            // 在 Silk Chat 工作流中，所有消息也直接触发 AI 回复
+            // 在普通群聊中，需要 @silk 才能触发 AI 回复
+            val shouldTriggerAI = isSilkPrivateChat || isSilkChatWorkflow ||
+                                  message.content.startsWith("@Silk") ||
+                                  message.content.startsWith("@silk")
+
+            if (shouldTriggerAI) {
+                // 提取实际内容（移除 @silk 前缀，如果是私聊或 Silk Chat 工作流则直接使用原消息）
+                val silkContent = if (isSilkPrivateChat || isSilkChatWorkflow) {
+                    message.content  // Silk 私聊中直接使用原消息
+                } else {
+                    message.content
+                        .removePrefix("@Silk").removePrefix("@silk")
+                        .trim()
+                }
+
+                // 判断是否是角色设置消息
+                val isRolePrompt = isRolePromptMessage(silkContent)
+
+                if (!isSilkPrivateChat && silkContent.isBlank()) {
+                    // 只有 @silk（非私聊），显示帮助信息
+                    logger.debug("📖 [broadcast] @silk 帮助提示")
+                    CoroutineScope(Dispatchers.IO).launch {
+                        sendAgentStatus("""
+                            🎯 Silk 使用帮助：
+                            • @silk [问题] - 向 Silk 提问
+                            • @silk 你是... - 设置 Silk 角色
+                            • @silk 重置角色 - 恢复默认角色
+                        """.trimIndent())
+                    }
+                } else if (silkContent == "重置角色" || silkContent.lowercase() == "reset") {
+                    // 重置角色
+                    historyManager.updateRolePrompt(sessionName, null)
+                    logger.debug("🎭 [broadcast] 角色已重置")
+                    CoroutineScope(Dispatchers.IO).launch {
+                        sendAgentStatus("🎭 角色已重置为默认")
+                    }
+                } else if (isRolePrompt) {
+                    // 角色设置消息
+                    historyManager.updateRolePrompt(sessionName, silkContent)
+                    logger.debug("🎭 [broadcast] 角色已设置: {}", silkContent)
+
+                    activeAiJob?.cancel()
+                    activeAiJob = CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            sendAgentStatus("🎭 角色已设置")
+                            generateIntelligentResponse("请简短地自我介绍（1-2句话）", message.userId)
+                        } catch (e: CancellationException) {
+                            logger.info("🛑 角色确认生成已被取消")
+                        } finally {
+                            activeAiJob = null
+                        }
+                    }
+                } else {
+
+                    // 普通问题 - 使用搜索 + AI 回复
+                    val logPrefix = if (isSilkPrivateChat) "[Silk私聊]" else "[@silk]"
+                    logger.debug("💬 [broadcast] {} 问题: {}...", logPrefix, silkContent.take(50))
+
+                    // ✅ 检查是否有待处理的图片（图片+文字合并发给 vision 模型）
+                    var pendingImg = getAndRemovePendingImage(message.userId)
+                    // 如果文字先到，短暂等待图片处理完成（OCR 可能比文字慢几十ms）
+                    if (pendingImg == null) {
+                        kotlinx.coroutines.delay(500)
+                        pendingImg = getAndRemovePendingImage(message.userId)
+                        if (pendingImg != null) {
+                            logger.info("📸 等待后取到待处理图片: user={}", message.userId)
+                        }
+                    }
+                    if (pendingImg != null) {
+                        logger.info("📸 检测到待处理图片，将图片+文字合并发送给 vision 模型: user={}", message.userId)
+                        activeAiJob?.cancel()
+                        activeAiJob = CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                sendAgentStatus("🤖 正在结合图片分析您的问题...")
+                                handleCombinedVisionAndText(pendingImg, silkContent, message.userId)
+                            } catch (e: CancellationException) {
+                                logger.info("🛑 Vision+文字生成已被用户取消")
+                            } catch (e: Exception) {
+                                logger.error("❌ Vision+文字生成异常: {}", e.message)
+                                e.printStackTrace()
+                            } finally {
+                                activeAiJob = null
+                            }
+                        }
+                    } else {
+                        activeAiJob?.cancel()
+                        activeAiJob = CoroutineScope(Dispatchers.IO).launch {
+                            try {
+                                generateIntelligentResponse(silkContent, message.userId)
+                            } catch (e: CancellationException) {
+                                logger.info("🛑 AI 生成已被用户取消")
+                            } catch (e: Exception) {
+                                logger.error("❌ 生成AI回答异常: {}", e.message)
+                                e.printStackTrace()
+                            } finally {
+                                activeAiJob = null
+                            }
+                        }
+                    }
+                }
+            } else {
+                // 普通消息 - 只索引到 Weaviate，不生成 AI 回复
+                // 索引已在上面的代码中完成（historyManager.addMessage 和 indexMessageToSearch）
+                logger.debug("📝 [broadcast] 普通消息已索引，不触发 AI 回复: {}...", message.content.take(30))
+            }
+        }
     }
-    
+
     /**
      * 处理消息中的URL - 下载网页并索引
      */
@@ -978,30 +743,96 @@ class ChatServer(
         logger.debug("🔗 [URL检测] 开始检测消息: {}...", message.content.take(50))
         val urls = com.silk.backend.utils.WebPageDownloader.extractUrls(message.content)
         logger.debug("🔗 [URL检测] 提取到 {} 个URL: {}", urls.size, urls)
-        
+
         if (urls.isEmpty()) {
             logger.debug("🔗 [URL检测] 没有URL，跳过")
             return
         }
-        
+
         // 过滤掉已经处理过的URL
-        val newUrls = urls.filter { url -> 
+        val newUrls = urls.filter { url ->
             val normalized = url.lowercase().trimEnd('/')
             !processedUrls.contains(normalized)
         }
-        
+
         if (newUrls.isEmpty()) {
             logger.debug("🔗 检测到 {} 个URL，但都已处理过，跳过", urls.size)
             return
         }
-        
+
         logger.debug("🔗 检测到 {} 个URL，其中 {} 个是新的: {}", urls.size, newUrls.size, newUrls)
-        
+
         // 创建上传目录（使用统一的方法获取目录路径）
         val uploadDir = historyManager.getUploadsDir(sessionName)
-        
+
         for (url in newUrls) {
-            downloadAndIndexSingleUrl(url, message, uploadDir)
+            val normalizedUrl = url.lowercase().trimEnd('/')
+
+            try {
+                // 发送状态消息
+                broadcastSystemStatus("🌐 正在下载: $url")
+
+                // 下载内容（支持网页和PDF）
+                val content = com.silk.backend.utils.WebPageDownloader.downloadAndExtract(url)
+
+                if (content != null) {
+                    // ✅ 只有成功下载后才标记为已处理
+                    processedUrls.add(normalizedUrl)
+                    saveProcessedUrl(normalizedUrl)
+
+                    // 保存到文件
+                    val savedFile = com.silk.backend.utils.WebPageDownloader.saveToFile(content, uploadDir)
+                    val downloadSessionId = sessionName.removePrefix("group_")
+
+                    // 发送状态消息
+                    val fileType = if (content.isPdf) "PDF" else "网页"
+                    broadcastSystemStatus("📄 已下载$fileType: ${content.title}")
+                    broadcast(
+                        Message(
+                            id = generateId(),
+                            userId = message.userId,
+                            userName = message.userName,
+                            content = buildFileMessageContent(
+                                fileName = savedFile.name,
+                                fileSize = savedFile.length(),
+                                downloadUrl = buildFileDownloadUrl(downloadSessionId, savedFile.name)
+                            ),
+                            timestamp = System.currentTimeMillis(),
+                            type = MessageType.FILE
+                        )
+                    )
+
+                    // 索引到 Weaviate
+                    val participants = getSessionParticipants(message.userId)
+
+                    // 创建一个代表内容的历史条目
+                    val webPageEntry = com.silk.backend.models.ChatHistoryEntry(
+                        messageId = "webpage_${System.currentTimeMillis()}",
+                        senderId = message.userId,
+                        senderName = "[$fileType] ${content.title}",
+                        content = """
+                            来源URL: ${content.url}
+                            标题: ${content.title}
+                            类型: $fileType
+
+                            ${content.textContent.take(10000)}
+                        """.trimIndent(),
+                        timestamp = System.currentTimeMillis(),
+                        messageType = if (content.isPdf) "PDF" else "WEBPAGE"
+                    )
+
+                    val indexed = silkAgent.indexMessageToSearch(webPageEntry, participants)
+                    if (indexed) {
+                        logger.debug("🔍 内容已索引: {}", content.title)
+                        broadcastSystemStatus("✅ 已索引$fileType: ${content.title}")
+                    }
+                } else {
+                    broadcastSystemStatus("⚠️ 无法下载: $url")
+                }
+            } catch (e: Exception) {
+                logger.error("❌ 处理URL失败: {} - {}", url, e.message)
+                broadcastSystemStatus("❌ 处理链接失败: $url")
+            }
         }
 
         // ✅ 处理完成后，延迟3秒清除状态消息（让用户能看到结果）
@@ -1010,111 +841,33 @@ class ChatServer(
     }
 
     /**
-     * 下载并索引单个 URL（网页或 PDF）：成功后广播文件消息并索引到 Weaviate。
-     * 任何异常都被捕获并以状态消息提示，不会中断整体 URL 处理循环。
-     */
-    private suspend fun downloadAndIndexSingleUrl(
-        url: String,
-        message: Message,
-        uploadDir: java.io.File,
-    ) {
-        val normalizedUrl = url.lowercase().trimEnd('/')
-        try {
-            // 发送状态消息
-            broadcastSystemStatus("🌐 正在下载: $url")
-
-            // 下载内容（支持网页和PDF）
-            val content = com.silk.backend.utils.WebPageDownloader.downloadAndExtract(url)
-
-            if (content == null) {
-                broadcastSystemStatus("⚠️ 无法下载: $url")
-                return
-            }
-            // ✅ 只有成功下载后才标记为已处理
-            processedUrls.add(normalizedUrl)
-            saveProcessedUrl(normalizedUrl)
-
-            // 保存到文件
-            val savedFile = com.silk.backend.utils.WebPageDownloader.saveToFile(content, uploadDir)
-            val downloadSessionId = sessionName.removePrefix("group_")
-
-            // 发送状态消息
-            val fileType = if (content.isPdf) "PDF" else "网页"
-            broadcastSystemStatus("📄 已下载$fileType: ${content.title}")
-            broadcast(
-                Message(
-                    id = generateId(),
-                    userId = message.userId,
-                    userName = message.userName,
-                    content = buildFileMessageContent(
-                        fileName = savedFile.name,
-                        fileSize = savedFile.length(),
-                        downloadUrl = buildFileDownloadUrl(downloadSessionId, savedFile.name)
-                    ),
-                    timestamp = System.currentTimeMillis(),
-                    type = MessageType.FILE
-                )
-            )
-
-            // 索引到 Weaviate
-            val participants = getSessionParticipants(message.userId)
-
-            // 创建一个代表内容的历史条目
-            val webPageEntry = com.silk.backend.models.ChatHistoryEntry(
-                messageId = "webpage_${System.currentTimeMillis()}",
-                senderId = message.userId,
-                senderName = "[$fileType] ${content.title}",
-                content = """
-                    来源URL: ${content.url}
-                    标题: ${content.title}
-                    类型: $fileType
-
-                    ${content.textContent.take(10000)}
-                """.trimIndent(),
-                timestamp = System.currentTimeMillis(),
-                messageType = if (content.isPdf) "PDF" else "WEBPAGE"
-            )
-
-            val indexed = silkAgent.indexMessageToSearch(webPageEntry, participants)
-            if (indexed) {
-                logger.debug("🔍 内容已索引: {}", content.title)
-                broadcastSystemStatus("✅ 已索引$fileType: ${content.title}")
-            }
-        } catch (e: Exception) {
-            logger.error("❌ 处理URL失败: {} - {}", url, e.message)
-            broadcastSystemStatus("❌ 处理链接失败: $url")
-        }
-    }
-    
-    /**
      * 判断是否是角色设置消息
      * 角色设置关键词：你是、扮演、假设你是、作为、角色是、请以...身份
      */
     private fun isRolePromptMessage(content: String): Boolean {
         val roleKeywords = listOf(
-            "你是", "你现在是", "扮演", "假设你是", "作为", "角色是", 
+            "你是", "你现在是", "扮演", "假设你是", "作为", "角色是",
             "请以", "假装你是", "模拟", "充当", "担任",
             "you are", "act as", "pretend to be", "role:", "persona:"
         )
         val lowerContent = content.lowercase()
-        return roleKeywords.any { keyword -> 
-            lowerContent.startsWith(keyword.lowercase()) || 
+        return roleKeywords.any { keyword ->
+            lowerContent.startsWith(keyword.lowercase()) ||
             lowerContent.contains("角色") ||
             lowerContent.contains("身份")
         }
     }
-    
+
     /**
      * 发送 Agent 状态消息（灰色显示）- 内部使用
      */
     private suspend fun sendAgentStatus(status: String) {
         broadcastSystemStatus(status)
     }
-    
+
     /**
      * 广播系统状态消息（灰色显示）- 公开方法，供其他模块调用
      */
-    @Suppress("UnusedParameter")
     suspend fun broadcastExtractedContent(content: String, label: String, downloadUrl: String = "") {
         logger.debug("📄 [提取内容广播] {} ({} 字符)", label, content.length)
         // 文件消息已有图片预览，提取内容不再重复加图片
@@ -1132,10 +885,7 @@ class ChatServer(
         broadcast(msg)
     }
 
-    suspend fun broadcastSystemStatus(
-        status: String,
-        references: List<com.silk.backend.models.MessageReference> = emptyList(),
-    ) {
+    suspend fun broadcastSystemStatus(status: String) {
         logger.debug("📢 [状态广播] {} (连接数: {})", status, allSessions().size)
 
         val statusMessage = Message(
@@ -1146,8 +896,7 @@ class ChatServer(
             timestamp = System.currentTimeMillis(),
             type = MessageType.SYSTEM,
             isTransient = true,
-            category = MessageCategory.AGENT_STATUS,
-            references = references,
+            category = MessageCategory.AGENT_STATUS
         )
 
         val messageJson = Json.encodeToString(statusMessage)
@@ -1160,7 +909,7 @@ class ChatServer(
             }
         }
     }
-    
+
     /**
      * 处理停止生成请求：取消活跃 AI 任务并清理客户端状态。
      * 同时支持 Silk 普通会话（取消协程）和 Claude Code 模式（委托 Bridge 取消）。
@@ -1218,33 +967,9 @@ class ChatServer(
         return trimmed + "\n\n*（模型未输出正文，请重试。）*"
     }
 
-    private suspend fun sendMessageToAllSessions(message: Message) {
-        val messageJson = Json.encodeToString(message)
-        allSessions().forEach { session ->
-            try { session.send(Frame.Text(messageJson)) } catch (_: Exception) {}
-        }
-    }
-
-    private fun buildSilkTextMessage(
-        content: String,
-        isTransient: Boolean = false,
-        isIncremental: Boolean = false,
-    ): Message {
-        return Message(
-            id = generateId(),
-            userId = SilkAgent.AGENT_ID,
-            userName = SilkAgent.AGENT_NAME,
-            content = content,
-            timestamp = System.currentTimeMillis(),
-            type = MessageType.TEXT,
-            isTransient = isTransient,
-            isIncremental = isIncremental
-        )
-    }
-    
     /**
      * 生成智能回答 - 简化流程
-     * 
+     *
      * 直接调用模型，让模型使用其内置的 tool 能力（搜索文件、浏览器等）
      * 不再执行复杂的三层搜索流程
      */
@@ -1277,8 +1002,7 @@ class ChatServer(
         }
         logger.info("📸 [broadcastUserMessage] 已广播用户消息: {} 字符", previewContent.length)
     }
-    
-    @Suppress("UnusedParameter")
+
     suspend fun broadcastCombinedVisionResult(
         pendingImg: PendingImageState,
         text: String,
@@ -1296,14 +1020,14 @@ class ChatServer(
         )
         messageHistory.add(finalMessage)
         historyManager.addMessage(sessionName, finalMessage)
-        
+
         val messageJson = kotlinx.serialization.json.Json.encodeToString(finalMessage)
         allSessions().forEach { session ->
             try { session.send(io.ktor.websocket.Frame.Text(messageJson)) } catch (_: Exception) {}
         }
         logger.info("✅ [CombinedVision-{}] 广播完成: {} 字符", callId, text.length)
     }
-    
+
     /**
      * 处理 WebSocket 内嵌的 Vision 图片+文字
      * 前端将图片 base64 嵌入消息（##VISION_IMG:data:...##用户文字），后端在此统一处理
@@ -1386,7 +1110,6 @@ class ChatServer(
         }
     }
 
-    @Suppress("UnusedParameter")
     suspend fun handleVisionImageAndText(
         imageFile: java.io.File,
         base64Data: String,
@@ -1396,13 +1119,13 @@ class ChatServer(
     ) {
         val callId = System.currentTimeMillis()
         logger.info("🤖 [VisionWS-{}] 开始处理 WebSocket 内嵌图片", callId)
-        
+
         try {
             if (!imageFile.exists()) {
                 sendAgentStatus("❌ 图片文件不存在")
                 return
             }
-            
+
             val imageBytes = imageFile.readBytes()
             val base64Image = java.util.Base64.getEncoder().encodeToString(imageBytes)
             val ext = imageFile.extension.lowercase()
@@ -1412,81 +1135,137 @@ class ChatServer(
                 "webp" -> "image/webp"
                 else -> "image/jpeg"
             }
-            
+
             val combinedPrompt = if (userText.isNotBlank()) userText else "请用中文详细描述这张图片的内容"
 
             // 优先 Anthropic API，其次 OpenAI 兼容 API
             val visionText = if (com.silk.backend.ai.AIConfig.ANTHROPIC_API_KEY.isNotBlank()) {
-                callAnthropicVision(base64Image, mediaType, combinedPrompt, callId)
+                // Anthropic API
+                sendAgentStatus("🤖 正在分析图片...")
+
+                val requestBody = kotlinx.serialization.json.buildJsonObject {
+                    put("model", com.silk.backend.ai.AIConfig.VISION_MODEL)
+                    put("max_tokens", 4096)
+                    putJsonArray("messages") {
+                        addJsonObject {
+                            put("role", "user")
+                            putJsonArray("content") {
+                                addJsonObject {
+                                    put("type", "image")
+                                    putJsonObject("source") {
+                                        put("type", "base64")
+                                        put("media_type", mediaType)
+                                        put("data", base64Image)
+                                    }
+                                }
+                                addJsonObject {
+                                    put("type", "text")
+                                    put("text", combinedPrompt)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                val baseUrl = com.silk.backend.ai.AIConfig.ANTHROPIC_API_BASE_URL.trimEnd('/')
+                val httpRequest = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create("$baseUrl/v1/messages"))
+                    .header("Content-Type", "application/json")
+                    .header("x-api-key", com.silk.backend.ai.AIConfig.ANTHROPIC_API_KEY)
+                    .header("anthropic-version", "2023-06-01")
+                    .timeout(java.time.Duration.ofSeconds(300))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                    .build()
+
+                val httpClient = java.net.http.HttpClient.newBuilder()
+                    .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                    .connectTimeout(java.time.Duration.ofSeconds(30))
+                    .build()
+
+                val response = httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
+
+                if (response.statusCode() == 200) {
+                    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                    val body = json.parseToJsonElement(response.body()).jsonObject
+                    body["content"]?.jsonArray?.firstOrNull()?.jsonObject
+                        ?.get("text")?.jsonPrimitive?.content ?: ""
+                } else {
+                    val errMsg = response.body().take(200)
+                    logger.warn("⚠️ [VisionWS-{}] Anthropic API 返回 {}: {}", callId, response.statusCode(), errMsg)
+                    "⚠️ Vision API 返回 ${response.statusCode()}"
+                }
             } else if (com.silk.backend.ai.AIConfig.VISION_BASE_URL.isNotBlank()) {
-                callOpenAiVision(base64Image, mediaType, combinedPrompt, callId)
+                // OpenAI 兼容 API
+                sendAgentStatus("🤖 正在分析图片...")
+
+                val requestBody = kotlinx.serialization.json.buildJsonObject {
+                    put("model", com.silk.backend.ai.AIConfig.VISION_MODEL)
+                    put("max_tokens", 4096)
+                    putJsonArray("messages") {
+                        addJsonObject {
+                            put("role", "user")
+                            putJsonArray("content") {
+                                addJsonObject {
+                                    put("type", "image_url")
+                                    putJsonObject("image_url") {
+                                        put("url", "data:$mediaType;base64,$base64Image")
+                                    }
+                                }
+                                addJsonObject {
+                                    put("type", "text")
+                                    put("text", combinedPrompt)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                val baseUrl = com.silk.backend.ai.AIConfig.VISION_BASE_URL.trimEnd('/')
+                val url = "$baseUrl/chat/completions"
+                val apiKey = com.silk.backend.ai.AIConfig.VISION_API_KEY.ifBlank { "sk-no-key" }
+
+                val httpRequest = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer $apiKey")
+                    .timeout(java.time.Duration.ofSeconds(300))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                    .build()
+
+                val httpClient = java.net.http.HttpClient.newBuilder()
+                    .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                    .connectTimeout(java.time.Duration.ofSeconds(30))
+                    .build()
+
+                val response = httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
+
+                if (response.statusCode() == 200) {
+                    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                    val body = json.parseToJsonElement(response.body()).jsonObject
+                    body["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+                        ?.get("message")?.jsonObject
+                        ?.get("content")?.jsonPrimitive?.content ?: ""
+                } else {
+                    val errMsg = response.body().take(200)
+                    logger.warn("⚠️ [VisionWS-{}] OpenAI API 返回 {}: {}", callId, response.statusCode(), errMsg)
+                    "⚠️ Vision API 返回 ${response.statusCode()}"
+                }
             } else {
                 "⚠️ 未配置 Vision 模型"
             }
 
             sendAgentStatus("CLEAR_STATUS")
-            
+
             // 用 PendingImageState 构造临时对象来复用 broadcastCombinedVisionResult
             val tmpState = PendingImageState(userId, "", imageFile.name, imageFile, downloadUrl)
             broadcastCombinedVisionResult(tmpState, visionText, callId)
             logger.info("✅ [VisionWS-{}] Vision 处理完成", callId)
-            
+
         } catch (e: java.util.concurrent.CancellationException) {
             throw e
         } catch (e: Exception) {
             logger.error("❌ [VisionWS-{}] 处理失败: {}", callId, e.message, e)
             sendAgentStatus("❌ 图片分析失败: ${e.message}")
-        }
-    }
-
-    /**
-     * 调用 Anthropic Vision API（/v1/messages），返回模型文本或错误提示。
-     */
-    private suspend fun callAnthropicVision(
-        base64Image: String,
-        mediaType: String,
-        combinedPrompt: String,
-        callId: Long,
-    ): String {
-        sendAgentStatus("🤖 正在分析图片...")
-
-        val response = sendAnthropicVisionRequest(base64Image, mediaType, combinedPrompt)
-
-        return if (response.statusCode() == 200) {
-            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            val body = json.parseToJsonElement(response.body()).jsonObject
-            body["content"]?.jsonArray?.firstOrNull()?.jsonObject
-                ?.get("text")?.jsonPrimitive?.content ?: ""
-        } else {
-            val errMsg = response.body().take(200)
-            logger.warn("⚠️ [VisionWS-{}] Anthropic API 返回 {}: {}", callId, response.statusCode(), errMsg)
-            "⚠️ Vision API 返回 ${response.statusCode()}"
-        }
-    }
-
-    /**
-     * 调用 OpenAI 兼容 Vision API（/chat/completions），返回模型文本或错误提示。
-     */
-    private suspend fun callOpenAiVision(
-        base64Image: String,
-        mediaType: String,
-        combinedPrompt: String,
-        callId: Long,
-    ): String {
-        sendAgentStatus("🤖 正在分析图片...")
-
-        val response = sendOpenAiVisionRequest(base64Image, mediaType, combinedPrompt)
-
-        return if (response.statusCode() == 200) {
-            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            val body = json.parseToJsonElement(response.body()).jsonObject
-            body["choices"]?.jsonArray?.firstOrNull()?.jsonObject
-                ?.get("message")?.jsonObject
-                ?.get("content")?.jsonPrimitive?.content ?: ""
-        } else {
-            val errMsg = response.body().take(200)
-            logger.warn("⚠️ [VisionWS-{}] OpenAI API 返回 {}: {}", callId, response.statusCode(), errMsg)
-            "⚠️ Vision API 返回 ${response.statusCode()}"
         }
     }
 
@@ -1497,14 +1276,14 @@ class ChatServer(
     ) {
         val callId = System.currentTimeMillis()
         logger.info("🤖 [CombinedVision-{}] 开始合并处理图片+文字", callId)
-        
+
         try {
             val imageFile = pendingImg.imageFile
             if (!imageFile.exists()) {
                 sendAgentStatus("❌ 图片文件已不存在")
                 return
             }
-            
+
             // 读取图片
             val imageBytes = imageFile.readBytes()
             val base64Image = java.util.Base64.getEncoder().encodeToString(imageBytes)
@@ -1515,18 +1294,134 @@ class ChatServer(
                 "webp" -> "image/webp"
                 else -> "image/jpeg"
             }
-            
+
             // 构建 prompt：只使用用户问题，图片由模型自行理解
             val combinedPrompt = if (userText.isNotBlank()) {
                 userText
             } else {
                 "请用中文详细描述这张图片的内容"
             }
-            
+
             if (com.silk.backend.ai.AIConfig.ANTHROPIC_API_KEY.isNotBlank()) {
-                processCombinedAnthropicVision(base64Image, mediaType, combinedPrompt, pendingImg, callId)
+                // Anthropic API
+                sendAgentStatus("🤖 正在分析图片...")
+
+                val requestBody = kotlinx.serialization.json.buildJsonObject {
+                    put("model", com.silk.backend.ai.AIConfig.VISION_MODEL)
+                    put("max_tokens", 4096)
+                    putJsonArray("messages") {
+                        addJsonObject {
+                            put("role", "user")
+                            putJsonArray("content") {
+                                addJsonObject {
+                                    put("type", "image")
+                                    putJsonObject("source") {
+                                        put("type", "base64")
+                                        put("media_type", mediaType)
+                                        put("data", base64Image)
+                                    }
+                                }
+                                addJsonObject {
+                                    put("type", "text")
+                                    put("text", combinedPrompt)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                val baseUrl = com.silk.backend.ai.AIConfig.ANTHROPIC_API_BASE_URL.trimEnd('/')
+                val httpRequest = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create("$baseUrl/v1/messages"))
+                    .header("Content-Type", "application/json")
+                    .header("x-api-key", com.silk.backend.ai.AIConfig.ANTHROPIC_API_KEY)
+                    .header("anthropic-version", "2023-06-01")
+                    .timeout(java.time.Duration.ofSeconds(300))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                    .build()
+
+                val httpClient = java.net.http.HttpClient.newBuilder()
+                    .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                    .connectTimeout(java.time.Duration.ofSeconds(30))
+                    .build()
+
+                val response = httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
+
+                if (response.statusCode() == 200) {
+                    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                    val body = json.parseToJsonElement(response.body()).jsonObject
+                    val text = body["content"]?.jsonArray?.firstOrNull()?.jsonObject
+                        ?.get("text")?.jsonPrimitive?.content ?: ""
+
+                    sendAgentStatus("CLEAR_STATUS")
+                    broadcastCombinedVisionResult(pendingImg, text.ifEmpty { "抱歉，未能分析图片内容" }, callId)
+                } else {
+                    val errBody = response.body().take(200)
+                    logger.warn("⚠️ [CombinedVision-{}] Vision API 返回 {}: {}", callId, response.statusCode(), errBody)
+                    val errText = "⚠️ Vision API 返回 ${response.statusCode()}，请检查模型配置。\n\n**错误信息**: $errBody"
+                    // 仍然广播带图片预览的 SYSTEM 消息，即使 API 失败
+                    broadcastCombinedVisionResult(pendingImg, errText, callId)
+                }
             } else if (com.silk.backend.ai.AIConfig.VISION_BASE_URL.isNotBlank()) {
-                processCombinedOpenAiVision(base64Image, mediaType, combinedPrompt, pendingImg, callId)
+                // OpenAI 兼容 API
+                sendAgentStatus("🤖 正在分析图片...")
+
+                val requestBody = kotlinx.serialization.json.buildJsonObject {
+                    put("model", com.silk.backend.ai.AIConfig.VISION_MODEL)
+                    put("max_tokens", 4096)
+                    putJsonArray("messages") {
+                        addJsonObject {
+                            put("role", "user")
+                            putJsonArray("content") {
+                                addJsonObject {
+                                    put("type", "image_url")
+                                    putJsonObject("image_url") {
+                                        put("url", "data:$mediaType;base64,$base64Image")
+                                    }
+                                }
+                                addJsonObject {
+                                    put("type", "text")
+                                    put("text", combinedPrompt)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                val baseUrl = com.silk.backend.ai.AIConfig.VISION_BASE_URL.trimEnd('/')
+                val url = "$baseUrl/chat/completions"
+                val apiKey = com.silk.backend.ai.AIConfig.VISION_API_KEY.ifBlank { "sk-no-key" }
+
+                val httpRequest = java.net.http.HttpRequest.newBuilder()
+                    .uri(java.net.URI.create(url))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer $apiKey")
+                    .timeout(java.time.Duration.ofSeconds(300))
+                    .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBody.toString()))
+                    .build()
+
+                val httpClient = java.net.http.HttpClient.newBuilder()
+                    .version(java.net.http.HttpClient.Version.HTTP_1_1)
+                    .connectTimeout(java.time.Duration.ofSeconds(30))
+                    .build()
+
+                val response = httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
+
+                if (response.statusCode() == 200) {
+                    val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                    val body = json.parseToJsonElement(response.body()).jsonObject
+                    val text = body["choices"]?.jsonArray?.firstOrNull()?.jsonObject
+                        ?.get("message")?.jsonObject
+                        ?.get("content")?.jsonPrimitive?.content ?: ""
+
+                    sendAgentStatus("CLEAR_STATUS")
+                    broadcastCombinedVisionResult(pendingImg, text.ifEmpty { "抱歉，未能分析图片内容" }, callId)
+                } else {
+                    val errBody = response.body().take(200)
+                    logger.warn("⚠️ [CombinedVision-{}] Vision API 返回 {}: {}", callId, response.statusCode(), errBody)
+                    val errText = "⚠️ Vision API 返回 ${response.statusCode()}，请检查模型配置。\n\n**错误信息**: $errBody"
+                    broadcastCombinedVisionResult(pendingImg, errText, callId)
+                }
             } else {
                 // 没有 vision 模型配置，fallback 到文字模型
                 logger.warn("⚠️ [CombinedVision-{}] 未配置 vision 模型，回退到文字模型", callId)
@@ -1543,177 +1438,46 @@ class ChatServer(
             try { generateIntelligentResponse(userText, userId) } catch (_: Exception) {}
         }
     }
-
-    /** 合并图片+文字：调用 Anthropic Vision 并广播结果（失败时广播错误但仍带图片预览）。 */
-    private suspend fun processCombinedAnthropicVision(
-        base64Image: String,
-        mediaType: String,
-        combinedPrompt: String,
-        pendingImg: PendingImageState,
-        callId: Long,
-    ) {
-        sendAgentStatus("🤖 正在分析图片...")
-        val response = sendAnthropicVisionRequest(base64Image, mediaType, combinedPrompt)
-        if (response.statusCode() == 200) {
-            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            val body = json.parseToJsonElement(response.body()).jsonObject
-            val text = body["content"]?.jsonArray?.firstOrNull()?.jsonObject
-                ?.get("text")?.jsonPrimitive?.content ?: ""
-
-            sendAgentStatus("CLEAR_STATUS")
-            broadcastCombinedVisionResult(pendingImg, text.ifEmpty { "抱歉，未能分析图片内容" }, callId)
-        } else {
-            val errBody = response.body().take(200)
-            logger.warn("⚠️ [CombinedVision-{}] Vision API 返回 {}: {}", callId, response.statusCode(), errBody)
-            val errText = "⚠️ Vision API 返回 ${response.statusCode()}，请检查模型配置。\n\n**错误信息**: $errBody"
-            // 仍然广播带图片预览的 SYSTEM 消息，即使 API 失败
-            broadcastCombinedVisionResult(pendingImg, errText, callId)
-        }
-    }
-
-    /** 合并图片+文字：调用 OpenAI 兼容 Vision 并广播结果（失败时广播错误但仍带图片预览）。 */
-    private suspend fun processCombinedOpenAiVision(
-        base64Image: String,
-        mediaType: String,
-        combinedPrompt: String,
-        pendingImg: PendingImageState,
-        callId: Long,
-    ) {
-        sendAgentStatus("🤖 正在分析图片...")
-        val response = sendOpenAiVisionRequest(base64Image, mediaType, combinedPrompt)
-        if (response.statusCode() == 200) {
-            val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-            val body = json.parseToJsonElement(response.body()).jsonObject
-            val text = body["choices"]?.jsonArray?.firstOrNull()?.jsonObject
-                ?.get("message")?.jsonObject
-                ?.get("content")?.jsonPrimitive?.content ?: ""
-
-            sendAgentStatus("CLEAR_STATUS")
-            broadcastCombinedVisionResult(pendingImg, text.ifEmpty { "抱歉，未能分析图片内容" }, callId)
-        } else {
-            val errBody = response.body().take(200)
-            logger.warn("⚠️ [CombinedVision-{}] Vision API 返回 {}: {}", callId, response.statusCode(), errBody)
-            val errText = "⚠️ Vision API 返回 ${response.statusCode()}，请检查模型配置。\n\n**错误信息**: $errBody"
-            broadcastCombinedVisionResult(pendingImg, errText, callId)
-        }
-    }
-
-    /**
-     * 构建并发送 Anthropic Vision 请求（/v1/messages），返回原始 HTTP 响应。
-     */
-    private fun sendAnthropicVisionRequest(
-        base64Image: String,
-        mediaType: String,
-        combinedPrompt: String,
-    ): java.net.http.HttpResponse<String> {
-        val requestBody = kotlinx.serialization.json.buildJsonObject {
-            put("model", com.silk.backend.ai.AIConfig.VISION_MODEL)
-            put("max_tokens", 4096)
-            putJsonArray("messages") {
-                addJsonObject {
-                    put("role", "user")
-                    putJsonArray("content") {
-                        addJsonObject {
-                            put("type", "image")
-                            putJsonObject("source") {
-                                put("type", "base64")
-                                put("media_type", mediaType)
-                                put("data", base64Image)
-                            }
-                        }
-                        addJsonObject {
-                            put("type", "text")
-                            put("text", combinedPrompt)
-                        }
-                    }
-                }
-            }
-        }
-
-        val baseUrl = com.silk.backend.ai.AIConfig.ANTHROPIC_API_BASE_URL.trimEnd('/')
-        val httpRequest = java.net.http.HttpRequest.newBuilder()
-            .uri(java.net.URI.create("$baseUrl/v1/messages"))
-            .header("Content-Type", "application/json")
-            .header("x-api-key", com.silk.backend.ai.AIConfig.ANTHROPIC_API_KEY)
-            .header("anthropic-version", "2023-06-01")
-            .timeout(java.time.Duration.ofSeconds(300))
-            .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-            .build()
-
-        val httpClient = java.net.http.HttpClient.newBuilder()
-            .version(java.net.http.HttpClient.Version.HTTP_1_1)
-            .connectTimeout(java.time.Duration.ofSeconds(30))
-            .build()
-
-        return httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
-    }
-
-    /**
-     * 构建并发送 OpenAI 兼容 Vision 请求（/chat/completions），返回原始 HTTP 响应。
-     */
-    private fun sendOpenAiVisionRequest(
-        base64Image: String,
-        mediaType: String,
-        combinedPrompt: String,
-    ): java.net.http.HttpResponse<String> {
-        val requestBody = kotlinx.serialization.json.buildJsonObject {
-            put("model", com.silk.backend.ai.AIConfig.VISION_MODEL)
-            put("max_tokens", 4096)
-            putJsonArray("messages") {
-                addJsonObject {
-                    put("role", "user")
-                    putJsonArray("content") {
-                        addJsonObject {
-                            put("type", "image_url")
-                            putJsonObject("image_url") {
-                                put("url", "data:$mediaType;base64,$base64Image")
-                            }
-                        }
-                        addJsonObject {
-                            put("type", "text")
-                            put("text", combinedPrompt)
-                        }
-                    }
-                }
-            }
-        }
-
-        val baseUrl = com.silk.backend.ai.AIConfig.VISION_BASE_URL.trimEnd('/')
-        val url = "$baseUrl/chat/completions"
-        val apiKey = com.silk.backend.ai.AIConfig.VISION_API_KEY.ifBlank { "sk-no-key" }
-
-        val httpRequest = java.net.http.HttpRequest.newBuilder()
-            .uri(java.net.URI.create(url))
-            .header("Content-Type", "application/json")
-            .header("Authorization", "Bearer $apiKey")
-            .timeout(java.time.Duration.ofSeconds(300))
-            .POST(java.net.http.HttpRequest.BodyPublishers.ofString(requestBody.toString()))
-            .build()
-
-        val httpClient = java.net.http.HttpClient.newBuilder()
-            .version(java.net.http.HttpClient.Version.HTTP_1_1)
-            .connectTimeout(java.time.Duration.ofSeconds(30))
-            .build()
-
-        return httpClient.send(httpRequest, java.net.http.HttpResponse.BodyHandlers.ofString())
-    }
-
-    private suspend fun generateIntelligentResponse(
-        userMessage: String,
-        userId: String = "",
-        kbContextSelection: com.silk.backend.models.KnowledgeBaseContextSelection? = null,
-    ) {
+    private suspend fun generateIntelligentResponse(userMessage: String, userId: String = "") {
         val callId = System.currentTimeMillis()
         logger.info("🤖 [Agent-{}] 开始直接调用模型 (userId={})", callId, userId)
-        
+
         // 发送开始状态
         sendAgentStatus("🤖 正在处理您的问题...")
-        
+
         // 获取 session 的角色提示（通过 @Silk 设置）
         val rolePrompt = historyManager.getRolePrompt(sessionName)
 
         // 构建系统提示
-        val systemPrompt = buildSilkSystemPrompt(rolePrompt)
+        val systemPrompt = buildString {
+            // 首先注入当前精确时间（皮带+吊带：此处与 DirectModelAgent.processInput 双重注入）
+            val now = java.time.LocalDateTime.now()
+            val chineseFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
+            val isoFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            logger.info("🤖 [generateIntelligentResponse] 注入系统时间: {} (epochMs={})",
+                now.format(isoFmt), java.time.Instant.now().toEpochMilli())
+            appendLine("## 当前日期和时间（系统精确注入，以此为准）")
+            appendLine("当前日期：${now.format(chineseFmt)}")
+            appendLine("ISO 格式：${now.format(isoFmt)}")
+            appendLine("⚠️ 你必须使用上述精确时间回答所有时间/日期相关问题，不得自行推理或猜测。")
+            appendLine()
+            if (rolePrompt != null) {
+                appendLine("你的角色设定：$rolePrompt")
+                appendLine()
+                appendLine("请以上述角色身份回答问题。")
+            } else {
+                appendLine("你是 Silk，一个智能助手。")
+            }
+            appendLine()
+            appendLine("你可以使用互联网搜索工具来查找最新信息。")
+            appendLine("对于天气、新闻、实时数据等时效性信息，你必须使用互联网搜索获取最新结果，不能仅凭训练数据回答。")
+            appendLine()
+            appendLine("【HarmonyOS 元服务能力】")
+            appendLine("你在 HarmonyOS 系统上运行，支持调用系统元服务（免安装应用）：")
+            appendLine("- **出行/打车类请求**（如\"打车\"、\"叫车\"、\"去机场\"）→ 系统会自动在回复顶部显示 T3出行 快捷按钮和输入框，用户填写出发地/目的地后可直接跳转。")
+            appendLine("- **购物类请求**（如\"买手机\"、\"京东购物\"）→ 系统会自动在回复顶部显示对应的购物应用快捷按钮。")
+            appendLine("你无需在回复中模拟打开应用，只需正常回答用户问题。如果用户询问能否打车/买东西，确认可以并引导用户使用上方提供的按钮。")
+        }
 
         // 加载聊天历史并设置到 Agent（用于群组统计等功能 + 近期上下文）
         val chatHistory = historyManager.loadChatHistory(sessionName)
@@ -1730,7 +1494,20 @@ class ChatServer(
         }
 
         // 根据“群聊作用域 / 私聊跨群作用域”计算用户可访问的 sessionId 列表
-        val accessibleSessionIds: List<String> = computeAccessibleSessionIds(userId)
+        val accessibleSessionIds: List<String> = if (sessionName.startsWith("group_") && userId.isNotBlank()) {
+            val groupId = sessionName.removePrefix("group_")
+            val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
+            if (isSilkPrivateChat) {
+                // 私聊：用户自己的所有群（包括专属 [Silk] 对话群本身）
+                GroupRepository.getUserGroups(userId).map { "group_${it.id}" }.distinct()
+            } else {
+                // 普通群聊：只允许访问当前群
+                if (GroupRepository.isUserInGroup(groupId, userId)) listOf(sessionName) else emptyList()
+            }
+        } else {
+            // 非 group session 或 userId 缺失：默认仅允许当前 session
+            listOf(sessionName)
+        }
 
         // 使用 DirectModelAgent 直接调用模型
         // 初始化 claude CLI 进程客户端（设置群组隔离的工作目录）
@@ -1738,53 +1515,155 @@ class ChatServer(
         java.io.File(workspaceDir).mkdirs()
         directModelAgent.initClaudeClient(workspaceDir)
 
-        val streamState = IntelligentResponseState()
-        val kbContext = com.silk.backend.kb.resolveKnowledgeBasePromptContext(
-            rawInput = userMessage,
-            userId = userId,
-            knowledgeBaseManager = knowledgeBaseManager,
-            preferredGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") },
-            selection = kbContextSelection ?: com.silk.backend.models.KnowledgeBaseContextSelection(),
-        )
-        if (kbContext.availableReferences.isNotEmpty()) {
-            logger.info(
-                "📚 [Agent-{}] 注入 {} 条知识库上下文（手动={}, 自动={}）",
-                callId,
-                kbContext.availableReferences.size,
-                kbContext.diagnostics.manualReferenceCount,
-                kbContext.diagnostics.autoCandidateCount,
-            )
-            broadcastSystemStatus(
-                status = buildKnowledgeBaseContextStatus(kbContext),
-                references = kbContext.availableReferences.mapIndexed { index, reference ->
-                    com.silk.backend.models.MessageReference(
-                        kind = "available",
-                        index = index + 1,
-                        title = reference.title,
-                        snippet = reference.snippet,
-                        path = reference.path,
-                        origin = reference.origin,
-                        reason = reference.reason,
-                    )
-                },
-            )
-        }
+        var fullResponse = ""
+        var agentReferences: List<com.silk.backend.models.MessageReference> = emptyList()
+        // Track last structured blocks from blocks_state / streaming_incremental
+        var lastBlocks: List<com.silk.backend.ai.ContentBlock> = emptyList()
+        var streamingAccumulated = StringBuilder()
+        // When Anthropic API produces structured blocks (thinking/tool_use/text),
+        // we rely on blocks_state for display and suppress competing streaming_incremental
+        // transient messages. CLI fallback path only emits streaming_incremental.
+        var hasStructuredBlocks = false
         try {
             val response = directModelAgent.processInput(
-                userInput = kbContext.resolvedUserInput,
+                userInput = userMessage,
                 systemPrompt = systemPrompt,
                 requestUserId = userId,
-                accessibleSessionIds = accessibleSessionIds,
-                additionalContext = kbContext.promptBlock,
-                availableReferences = kbContext.availableReferences,
+                accessibleSessionIds = accessibleSessionIds
             ) { stepType, content, isComplete ->
-                handleIntelligentResponseStep(streamState, callId, userId, stepType, content, isComplete)
+                when (stepType) {
+                    "thinking" -> {
+                        // Structured path: thinking content comes via blocks_state
+                        // CLI fallback: brief thinking notification as status
+                        if (!hasStructuredBlocks) {
+                            sendAgentStatus(content)
+                        }
+                    }
+                    "tool" -> {
+                        // Structured path: tool content comes via blocks_state
+                        // CLI fallback: brief tool notification as status
+                        if (!hasStructuredBlocks) {
+                            sendAgentStatus(content)
+                        }
+                    }
+                    "streaming_incremental" -> {
+                        streamingAccumulated.append(content)
+                        val accumulated = streamingAccumulated.toString()
+                        if (!hasStructuredBlocks) {
+                            // CLI fallback: send transient text messages for progressive display.
+                            // The CLI produces <!--THINKING--> markers in content; we don't set
+                            // lastBlocks here so the final message falls back to contentBlocks=null,
+                            // letting the frontend's StructuredContent parse the markers into
+                            // collapsible thinking/tool sections (matching cc-connect display).
+                            val blockMessage = Message(
+                                id = "streaming_${System.currentTimeMillis()}",
+                                userId = SilkAgent.AGENT_ID,
+                                userName = SilkAgent.AGENT_NAME,
+                                content = accumulated,
+                                timestamp = System.currentTimeMillis(),
+                                type = MessageType.TEXT,
+                                isTransient = true,
+                                isIncremental = false,
+                            )
+                            logger.info("📤 [流式-{}] 增量 {}字符 -> {}个连接", callId, accumulated.length, allSessions().size)
+                            val messageJson = Json.encodeToString(blockMessage)
+                            allSessions().forEach { session ->
+                                try {
+                                    session.send(Frame.Text(messageJson))
+                                } catch (e: Exception) {
+                                    logger.error("📤 [流式-{}] 发送失败: {}", callId, e.message)
+                                }
+                            }
+                        }
+                        // Structured path: blocks_state drives display; don't send
+                        // competing text-only transient messages that would overwrite
+                        // the rich thinking/tool_use blocks in the frontend.
+                    }
+                    "blocks_state" -> {
+                        hasStructuredBlocks = true
+                        val blocks = Json.decodeFromString<List<com.silk.backend.ai.ContentBlock>>(content)
+                        lastBlocks = blocks
+                        // Populate content from the text block (matching cc-connect format)
+                        val textContent = blocks.firstOrNull { it.type == "text" }?.content ?: ""
+                        val blockMessage = Message(
+                            id = "streaming_${System.currentTimeMillis()}",
+                            userId = SilkAgent.AGENT_ID,
+                            userName = SilkAgent.AGENT_NAME,
+                            content = textContent,
+                            timestamp = System.currentTimeMillis(),
+                            type = MessageType.TEXT,
+                            isTransient = true,
+                            isIncremental = false,
+                            contentBlocks = blocks
+                        )
+                        val messageJson = Json.encodeToString(blockMessage)
+                        allSessions().forEach { session ->
+                            try {
+                                session.send(Frame.Text(messageJson))
+                            } catch (e: Exception) {
+                                logger.error("📤 [blocks_state-{}] 发送失败: {}", callId, e.message)
+                            }
+                        }
+                    }
+                    "complete" -> {
+                        fullResponse = ensureSilkReplyVisible(content)
+                        agentReferences = directModelAgent.lastAgentResponse?.references ?: emptyList()
+                    }
+                    "error" -> {
+                        sendAgentStatus("❌ $content")
+                    }
+                }
+
+                // 流式输出：发送增量消息
+                if (stepType == "complete" && isComplete) {
+                    // 发送最终消息
+                    logger.debug("📤 [智能回答-{}] 准备发送最终消息，内容长度: {}", callId, fullResponse.length)
+
+                    val messageId = generateId()
+                    logger.debug("📤 [智能回答-{}] 生成消息ID: {} (响应userId={})", callId, messageId, userId)
+
+                    val finalMessage = Message(
+                        id = messageId,
+                        userId = SilkAgent.AGENT_ID,
+                        userName = SilkAgent.AGENT_NAME,
+                        content = fullResponse,
+                        timestamp = System.currentTimeMillis(),
+                        type = MessageType.TEXT,
+                        isTransient = false,
+                        isIncremental = false,
+                        references = agentReferences,
+                        contentBlocks = lastBlocks.ifEmpty { null },
+                    )
+
+                    // 检查是否已经在历史中（防止重复）
+                    if (messageHistory.any { it.id == messageId }) {
+                        logger.warn("⚠️ [智能回答-{}] 消息ID已存在，跳过发送: {}", callId, messageId)
+                        return@processInput
+                    }
+
+                    messageHistory.add(finalMessage)
+                    historyManager.addMessage(sessionName, finalMessage)
+                    logger.debug("📤 [智能回答-{}] 已保存到历史，当前历史大小: {}", callId, messageHistory.size)
+
+                    // 发送最终消息
+                    val messageJson = Json.encodeToString(finalMessage)
+                    logger.debug("📤 [智能回答-{}] 发送最终消息到 {} 个连接", callId, allSessions().size)
+                    allSessions().forEach { session ->
+                        try {
+                            session.send(Frame.Text(messageJson))
+                            logger.info("   ✅ [智能回答-{}] 已发送到一个连接", callId)
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                    logger.debug("📤 [智能回答-{}] 最终消息发送完成 (messageId={})", callId, messageId)
+                }
             }
 
             val agentResponse = directModelAgent.lastAgentResponse
-            streamState.fullResponse = ensureSilkReplyVisible(agentResponse?.content ?: response)
-            streamState.agentReferences = agentResponse?.references ?: emptyList()
-            logger.debug("🏁 [generateIntelligentResponse-{}] 函数执行完成，响应长度: {}, 引用数: {}", callId, streamState.fullResponse.length, streamState.agentReferences.size)
+            fullResponse = ensureSilkReplyVisible(agentResponse?.content ?: response)
+            agentReferences = agentResponse?.references ?: emptyList()
+            logger.debug("🏁 [generateIntelligentResponse-{}] 函数执行完成，响应长度: {}, 引用数: {}", callId, fullResponse.length, agentReferences.size)
 
             if (userId.isNotBlank() && getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true) {
                 CoroutineScope(Dispatchers.IO).launch {
@@ -1800,7 +1679,8 @@ class ChatServer(
             logger.info("🛑 [generateIntelligentResponse-{}] 生成被取消", callId)
             throw e
         } catch (e: Exception) {
-            logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败: {}", callId, e.message, e)
+            logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败: {}", callId, e.message)
+            e.printStackTrace()
 
             // 发送错误消息
             val errorMessage = Message(
@@ -1813,7 +1693,7 @@ class ChatServer(
                 isTransient = false,
                 isIncremental = false
             )
-            
+
             val messageJson = Json.encodeToString(errorMessage)
             allSessions().forEach { session ->
                 try {
@@ -1826,297 +1706,235 @@ class ChatServer(
     }
 
     /**
-     * 构建知识库上下文状态文案（系统状态条），汇总本轮注入的手动/固定/自动/排除数量。
+     * 执行智能诊断（根据历史决定完整诊断或快速更新）
      */
-    private fun buildKnowledgeBaseContextStatus(
-        kbContext: com.silk.backend.kb.KnowledgeBasePromptContext,
-    ): String {
-        val total = kbContext.availableReferences.size
-        val manual = kbContext.diagnostics.manualReferenceCount
-        val pinned = kbContext.diagnostics.pinnedReferenceCount
-        val auto = kbContext.diagnostics.autoCandidateCount
-        val excluded = kbContext.diagnostics.excludedReferenceCount
-        return buildString {
-            append("📚 本轮知识库上下文已准备")
-            append("（共 $total 条")
-            if (manual > 0 || pinned > 0 || auto > 0) {
-                append("：手动 $manual")
-                if (pinned > 0) append("，固定 $pinned")
-                if (auto > 0) append("，自动 $auto")
-            }
-            if (excluded > 0) append("；排除 $excluded")
-            append("）")
-        }
-    }
+    private suspend fun executeSmartDiagnosis() {
+        // 检查是否有之前的诊断结果
+        val hasPreviousDiagnosis = checkPreviousDiagnosis()
 
-    /**
-     * 跨步骤累积的 DirectModelAgent 流式回答状态（替代原 generateIntelligentResponse
-     * 中的多个闭包可变变量，使流处理逻辑可拆分到独立方法）。
-     */
-    private class IntelligentResponseState {
-        var fullResponse: String = ""
-        var agentReferences: List<com.silk.backend.models.MessageReference> = emptyList()
-        // Track last structured blocks from blocks_state / streaming_incremental
-        var lastBlocks: List<com.silk.backend.ai.ContentBlock> = emptyList()
-        val streamingAccumulated = StringBuilder()
-        // When Anthropic API produces structured blocks (thinking/tool_use/text),
-        // we rely on blocks_state for display and suppress competing streaming_incremental
-        // transient messages. CLI fallback path only emits streaming_incremental.
-        var hasStructuredBlocks = false
-    }
-
-    /**
-     * 构建 Silk 系统提示（注入精确时间、角色设定、搜索能力与 HarmonyOS 元服务说明）。
-     */
-    private fun buildSilkSystemPrompt(rolePrompt: String?): String = buildString {
-        // 首先注入当前精确时间（皮带+吊带：此处与 DirectModelAgent.processInput 双重注入）
-        val now = java.time.LocalDateTime.now()
-        val chineseFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
-        val isoFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-        appendLine("## 当前日期和时间（系统精确注入，以此为准）")
-        appendLine("当前日期：${now.format(chineseFmt)}")
-        appendLine("ISO 格式：${now.format(isoFmt)}")
-        appendLine("⚠️ 你必须使用上述精确时间回答所有时间/日期相关问题，不得自行推理或猜测。")
-        appendLine()
-        if (rolePrompt != null) {
-            appendLine("你的角色设定：$rolePrompt")
-            appendLine()
-            appendLine("请以上述角色身份回答问题。")
+        if (hasPreviousDiagnosis) {
+            logger.debug("📋 发现历史诊断，执行快速更新流程")
+            // 执行快速诊断更新
+            executeQuickDiagnosisUpdate()
         } else {
-            appendLine("你是 Silk，一个智能助手。")
+            logger.debug("📋 无历史诊断，执行完整11步诊断")
+            // 执行完整诊断
+            executeStepwiseAITask()
         }
-        appendLine()
-        appendLine("你可以使用互联网搜索工具来查找最新信息。")
-        appendLine("对于天气、新闻、实时数据等时效性信息，你必须使用互联网搜索获取最新结果，不能仅凭训练数据回答。")
-        appendLine()
-        appendLine("【HarmonyOS 元服务能力】")
-        appendLine("你在 HarmonyOS 系统上运行，支持调用系统元服务（免安装应用）：")
-        appendLine("- **出行/打车类请求**（如\"打车\"、\"叫车\"、\"去机场\"）→ 系统会自动在回复顶部显示 T3出行 快捷按钮和输入框，用户填写出发地/目的地后可直接跳转。")
-        appendLine("- **购物类请求**（如\"买手机\"、\"京东购物\"）→ 系统会自动在回复顶部显示对应的购物应用快捷按钮。")
-        appendLine("你无需在回复中模拟打开应用，只需正常回答用户问题。如果用户询问能否打车/买东西，确认可以并引导用户使用上方提供的按钮。")
     }
 
     /**
-     * 根据“群聊作用域 / 私聊跨群作用域”计算用户可访问的 sessionId 列表。
+     * 检查是否有之前的诊断结果
      */
-    private fun computeAccessibleSessionIds(userId: String): List<String> {
-        return if (sessionName.startsWith("group_") && userId.isNotBlank()) {
-            val groupId = sessionName.removePrefix("group_")
-            val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
-            if (isSilkPrivateChat) {
-                // 私聊：用户自己的所有群（包括专属 [Silk] 对话群本身）
-                GroupRepository.getUserGroups(userId).map { "group_${it.id}" }.distinct()
+    private fun checkPreviousDiagnosis(): Boolean {
+        return try {
+            logger.debug("🔍 检查历史诊断文件:")
+            logger.debug("   sessionName: {}", sessionName)
+
+            // 尝试多个可能的路径（因为工作目录可能不同）
+            val possiblePaths = listOf(
+                "chat_history/$sessionName/last_diagnosis.json",
+                "backend/chat_history/$sessionName/last_diagnosis.json",
+                "/Users/mac/Documents/Silk/backend/chat_history/$sessionName/last_diagnosis.json"
+            )
+
+            possiblePaths.forEachIndexed { index, path ->
+                val testFile = java.io.File(path)
+                logger.debug("   路径{}: {}", index + 1, testFile.absolutePath)
+                logger.debug("     存在: {}", testFile.exists())
+                if (testFile.exists()) {
+                    logger.debug("     大小: {} bytes", testFile.length())
+                }
+            }
+
+            val file = possiblePaths
+                .map { java.io.File(it) }
+                .firstOrNull { it.exists() && it.length() > 0 }
+
+            if (file != null) {
+                logger.info("✅ 找到历史诊断文件: {}", file.absolutePath)
+                logger.debug("   文件大小: {} bytes", file.length())
+                logger.debug("   将执行快速更新")
+                true
             } else {
-                // 普通群聊：只允许访问当前群
-                if (GroupRepository.isUserInGroup(groupId, userId)) listOf(sessionName) else emptyList()
+                logger.debug("ℹ️ 无历史诊断文件")
+                logger.debug("   将执行完整11步诊断")
+                false
             }
-        } else {
-            // 非 group session 或 userId 缺失：默认仅允许当前 session
-            listOf(sessionName)
-        }
-    }
-
-    /**
-     * 处理 DirectModelAgent 的单个流式步骤回调（thinking / tool / streaming_incremental /
-     * blocks_state / complete / error），并在 complete && isComplete 时发送最终消息。
-     * 通过 [state] 在多个步骤间累积可变状态，行为与原内联回调一致。
-     */
-    private suspend fun handleIntelligentResponseStep(
-        state: IntelligentResponseState,
-        callId: Long,
-        userId: String,
-        stepType: String,
-        content: String,
-        isComplete: Boolean,
-    ) {
-        when (stepType) {
-            "thinking" -> {
-                // Structured path: thinking content comes via blocks_state
-                // CLI fallback: brief thinking notification as status
-                if (!state.hasStructuredBlocks) {
-                    sendAgentStatus(content)
-                }
-            }
-            "tool" -> {
-                // Structured path: tool content comes via blocks_state
-                // CLI fallback: brief tool notification as status
-                if (!state.hasStructuredBlocks) {
-                    sendAgentStatus(content)
-                }
-            }
-            "streaming_incremental" -> sendStreamingIncrementalStep(state, callId, content)
-            "blocks_state" -> sendBlocksStateStep(state, callId, content)
-            "complete" -> {
-                state.fullResponse = ensureSilkReplyVisible(content)
-                state.agentReferences = directModelAgent.lastAgentResponse?.references ?: emptyList()
-            }
-            "error" -> {
-                sendAgentStatus("❌ $content")
-            }
-        }
-
-        // 流式输出：发送增量消息
-        if (stepType == "complete" && isComplete) {
-            sendFinalIntelligentResponse(state, callId, userId)
-        }
-    }
-
-    /**
-     * streaming_incremental 步骤：CLI 回退路径累积文本并发送 transient 增量消息（结构化路径下不发，由 blocks_state 驱动）。
-     */
-    private suspend fun sendStreamingIncrementalStep(state: IntelligentResponseState, callId: Long, content: String) {
-        state.streamingAccumulated.append(content)
-        val accumulated = state.streamingAccumulated.toString()
-        if (state.hasStructuredBlocks) {
-            // Structured path: blocks_state drives display; don't send
-            // competing text-only transient messages that would overwrite
-            // the rich thinking/tool_use blocks in the frontend.
-            return
-        }
-        // CLI fallback: send transient text messages for progressive display.
-        // The CLI produces <!--THINKING--> markers in content; we don't set
-        // lastBlocks here so the final message falls back to contentBlocks=null,
-        // letting the frontend's StructuredContent parse the markers into
-        // collapsible thinking/tool sections (matching cc-connect display).
-        val blockMessage = Message(
-            id = "streaming_${System.currentTimeMillis()}",
-            userId = SilkAgent.AGENT_ID,
-            userName = SilkAgent.AGENT_NAME,
-            content = accumulated,
-            timestamp = System.currentTimeMillis(),
-            type = MessageType.TEXT,
-            isTransient = true,
-            isIncremental = false,
-        )
-        logger.info("📤 [流式-{}] 增量 {}字符 -> {}个连接", callId, accumulated.length, allSessions().size)
-        val messageJson = Json.encodeToString(blockMessage)
-        allSessions().forEach { session ->
-            try {
-                session.send(Frame.Text(messageJson))
-            } catch (e: Exception) {
-                logger.error("📤 [流式-{}] 发送失败: {}", callId, e.message)
-            }
-        }
-    }
-
-    /**
-     * blocks_state 步骤：解析结构化 content blocks，记录到 state 并发送带 contentBlocks 的 transient 消息。
-     */
-    private suspend fun sendBlocksStateStep(state: IntelligentResponseState, callId: Long, content: String) {
-        state.hasStructuredBlocks = true
-        val blocks = Json.decodeFromString<List<com.silk.backend.ai.ContentBlock>>(content)
-        state.lastBlocks = blocks
-        // Populate content from the text block (matching cc-connect format)
-        val textContent = blocks.firstOrNull { it.type == "text" }?.content ?: ""
-        val blockMessage = Message(
-            id = "streaming_${System.currentTimeMillis()}",
-            userId = SilkAgent.AGENT_ID,
-            userName = SilkAgent.AGENT_NAME,
-            content = textContent,
-            timestamp = System.currentTimeMillis(),
-            type = MessageType.TEXT,
-            isTransient = true,
-            isIncremental = false,
-            contentBlocks = blocks
-        )
-        val messageJson = Json.encodeToString(blockMessage)
-        allSessions().forEach { session ->
-            try {
-                session.send(Frame.Text(messageJson))
-            } catch (e: Exception) {
-                logger.error("📤 [blocks_state-{}] 发送失败: {}", callId, e.message)
-            }
-        }
-    }
-
-    /**
-     * 发送 generateIntelligentResponse 的最终（非临时）消息：去重、保存历史并广播。
-     */
-    private suspend fun sendFinalIntelligentResponse(state: IntelligentResponseState, callId: Long, userId: String) {
-        // 发送最终消息
-        logger.debug("📤 [智能回答-{}] 准备发送最终消息，内容长度: {}", callId, state.fullResponse.length)
-
-        val messageId = generateId()
-        logger.debug("📤 [智能回答-{}] 生成消息ID: {} (响应userId={})", callId, messageId, userId)
-
-        val finalMessage = Message(
-            id = messageId,
-            userId = SilkAgent.AGENT_ID,
-            userName = SilkAgent.AGENT_NAME,
-            content = state.fullResponse,
-            timestamp = System.currentTimeMillis(),
-            type = MessageType.TEXT,
-            isTransient = false,
-            isIncremental = false,
-            references = state.agentReferences,
-            contentBlocks = state.lastBlocks.ifEmpty { null },
-        )
-
-        // 检查是否已经在历史中（防止重复）
-        if (messageHistory.any { it.id == messageId }) {
-            logger.warn("⚠️ [智能回答-{}] 消息ID已存在，跳过发送: {}", callId, messageId)
-            return
-        }
-
-        messageHistory.add(finalMessage)
-        historyManager.addMessage(sessionName, finalMessage)
-        logger.debug("📤 [智能回答-{}] 已保存到历史，当前历史大小: {}", callId, messageHistory.size)
-
-        // 发送最终消息
-        val messageJson = Json.encodeToString(finalMessage)
-        logger.debug("📤 [智能回答-{}] 发送最终消息到 {} 个连接", callId, allSessions().size)
-        allSessions().forEach { session ->
-            try {
-                session.send(Frame.Text(messageJson))
-                logger.info("   ✅ [智能回答-{}] 已发送到一个连接", callId)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-        logger.debug("📤 [智能回答-{}] 最终消息发送完成 (messageId={})", callId, messageId)
-    }
-
-    /**
-     * 生成历史回忆回复 - 通过 UserHistoryAgent 在用户 workspace 中搜索历史会话
-     */
-    private suspend fun generateHistoryRecallResponse(query: String, userId: String) {
-        val callId = System.currentTimeMillis()
-        logger.info("[/recall-{}] userId={}, query={}...", callId, userId, query.take(50))
-
-        try {
-            val fullResponse = userHistoryAgent.queryWithHistory(
-                userId = userId,
-                userMessage = query,
-            ) { _, content, isComplete ->
-                sendHistoryRecallDelta(content, isComplete)
-            }
-
-            sendFinalHistoryRecallResponse(fullResponse)
-            logger.info("[/recall-{}] 完成, responseLen={}", callId, fullResponse.length)
-        } catch (e: CancellationException) {
-            logger.info("[/recall-{}] 已取消", callId)
-            throw e
         } catch (e: Exception) {
-            logger.error("[/recall-{}] 失败: {}", callId, e.message)
-            sendMessageToAllSessions(buildSilkTextMessage("历史查询失败: ${e.message}"))
+            logger.warn("⚠️ 检查历史诊断失败: {}", e.message)
+            e.printStackTrace()
+            false
         }
     }
 
-    private suspend fun sendHistoryRecallDelta(content: String, isComplete: Boolean) {
-        val message = buildSilkTextMessage(
-            content = content,
-            isTransient = !isComplete,
-            isIncremental = true,
+    /**
+     * 执行快速诊断更新（基于之前的诊断）
+     */
+    private suspend fun executeQuickDiagnosisUpdate() {
+        val chatHistory = historyManager.loadChatHistory(sessionName)
+        val historyEntries = chatHistory?.messages ?: emptyList()
+
+        val latestUserName = historyEntries
+            .filter { !AgentRuntime.isAgentUserId(it.senderId) }
+            .lastOrNull()?.senderName ?: "用户"
+
+        val groupDisplayName = getGroupDisplayName(sessionName)
+
+        // 定义回调
+        val callback: suspend (String, String, Int?, Int?) -> Unit = { stepType, content, currentStep, totalSteps ->
+            val agentMessage = Message(
+                id = generateId(),
+                userId = SilkAgent.AGENT_ID,
+                userName = SilkAgent.AGENT_NAME,
+                content = content,
+                timestamp = System.currentTimeMillis(),
+                type = MessageType.TEXT,
+                isTransient = stepType != "PDF报告",
+                currentStep = currentStep,
+                totalSteps = totalSteps,
+                isIncremental = stepType == "streaming_incremental"
+            )
+
+            if (!agentMessage.isTransient) {
+                messageHistory.add(agentMessage)
+                historyManager.addMessage(sessionName, agentMessage)
+            }
+
+            val messageJson = Json.encodeToString(agentMessage)
+            allSessions().forEach { session ->
+                try {
+                    session.send(Frame.Text(messageJson))
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            kotlinx.coroutines.delay(300)
+        }
+
+        // 执行快速诊断更新
+        val message = historyEntries
+            .filter { !AgentRuntime.isAgentUserId(it.senderId) }
+            .lastOrNull()?.content ?: ""
+
+        silkAgent.executeDoctorDiagnosisUpdate(
+            chatHistory = historyEntries,
+            doctorMessage = message,
+            callback = callback,
+            userName = latestUserName,
+            groupDisplayName = groupDisplayName
         )
-        sendMessageToAllSessions(message)
     }
 
-    private suspend fun sendFinalHistoryRecallResponse(fullResponse: String) {
-        if (fullResponse.isBlank()) return
-        val finalMsg = buildSilkTextMessage(fullResponse)
-        messageHistory.add(finalMsg)
-        sendMessageToAllSessions(finalMsg)
-        historyManager.addMessage(sessionName, finalMsg)
+    /**
+     * 执行多步骤 AI 任务
+     * 类似于 MoxiTreat 的 stepwise_diagnosis
+     */
+    private suspend fun executeStepwiseAITask() {
+        // 从持久化的历史中加载聊天记录
+        val chatHistory = historyManager.loadChatHistory(sessionName)
+        val historyEntries = chatHistory?.messages ?: emptyList()
+
+        // 提取最新的用户名（用于 PDF 文件命名）
+        val latestUserName = historyEntries
+            .filter { !AgentRuntime.isAgentUserId(it.senderId) }
+            .lastOrNull()?.senderName ?: "用户"
+
+        // 获取群组显示名称（用于PDF标题和文件名）
+        val groupDisplayName = getGroupDisplayName(sessionName)
+
+        // 获取Host用户ID（用于区分医生和病人）
+        val hostId = getGroupHostId(sessionName)
+
+        // ✅ 新的消息策略：
+        // - TODO list和步骤结果作为独立消息保留（isTransient=false）
+        // - streaming过程使用临时消息实时显示（isTransient=true）
+        // - 通过category区分显示亮度
+        val callback: suspend (String, String, Int?, Int?) -> Unit = { stepType, content, currentStep, totalSteps ->
+
+            // ✅ 判断是否为临时消息
+            val isTransient = when (stepType) {
+                "todo_list" -> false          // TODO列表保留
+                "step_complete" -> false      // ✅ 步骤完成结果保留
+                "总结报告" -> false            // 总结报告保留
+                "PDF报告" -> false             // PDF报告保留
+                "streaming_incremental" -> true  // ✅ 流式输出是临时的（实时显示）
+                else -> true                  // 其他都是临时的
+            }
+
+            // ✅ 根据stepType设置消息类别
+            val category = when (stepType) {
+                "todo_list" -> MessageCategory.TODO_LIST          // TODO列表（低亮度）
+                "step_complete" -> MessageCategory.STEP_PROCESS   // 步骤结果（低亮度，可转发）
+                "streaming_incremental" -> MessageCategory.STEP_PROCESS  // 流式输出（低亮度）
+                "总结报告" -> MessageCategory.FINAL_REPORT        // 最终报告（高亮度）
+                "PDF报告" -> MessageCategory.FINAL_REPORT         // PDF报告（高亮度）
+                else -> MessageCategory.STEP_PROCESS              // 其他（低亮度）
+            }
+
+            // ✅ 判断是否为增量消息
+            val isIncremental = stepType == "streaming_incremental"
+
+            val agentMessage = Message(
+                id = generateId(),
+                userId = SilkAgent.AGENT_ID,
+                userName = SilkAgent.AGENT_NAME,
+                content = content,
+                timestamp = System.currentTimeMillis(),
+                type = MessageType.TEXT,
+                isTransient = isTransient,
+                currentStep = currentStep,
+                totalSteps = totalSteps,
+                isIncremental = isIncremental,
+                category = category
+            )
+
+            // 所有非临时消息都保存到历史
+            if (!isTransient) {
+                messageHistory.add(agentMessage)
+                historyManager.addMessage(sessionName, agentMessage)
+            }
+
+            // 直接发送给所有连接的客户端（临时和普通消息都发送）
+            val messageJson = Json.encodeToString(agentMessage)
+            allSessions().forEach { session ->
+                try {
+                    session.send(Frame.Text(messageJson))
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            // 短暂延迟，让消息按顺序显示
+            kotlinx.coroutines.delay(300)
+        }
+
+        // 执行多步骤任务（传递hostId以区分医生和病人）
+        try {
+            silkAgent.executeStepwiseTask(historyEntries, callback, latestUserName, groupDisplayName, hostId)
+        } catch (e: Exception) {
+            val errorMessage = Message(
+                id = generateId(),
+                userId = SilkAgent.AGENT_ID,
+                userName = SilkAgent.AGENT_NAME,
+                content = "❌ AI Agent 执行出错：${e.message}",
+                timestamp = System.currentTimeMillis(),
+                type = MessageType.SYSTEM
+            )
+
+            messageHistory.add(errorMessage)
+            historyManager.addMessage(sessionName, errorMessage)
+
+            val messageJson = Json.encodeToString(errorMessage)
+            allSessions().forEach { session ->
+                try {
+                    session.send(Frame.Text(messageJson))
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
     }
 
     fun getOnlineUsers(): List<User> {
@@ -2128,7 +1946,29 @@ class ChatServer(
     /** 获取所有活跃的 WebSocket 会话（展平多连接） */
     private fun allSessions(): List<WebSocketSession> =
         connections.values.flatMap { it }
-    
+
+    /**
+     * 检查用户是否是群组的Host（医生角色）
+     */
+    private fun checkIfUserIsHost(sessionName: String, userId: String): Boolean {
+        return if (sessionName.startsWith("group_")) {
+            val groupId = sessionName.removePrefix("group_")
+            try {
+                val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
+                val isHost = group?.hostId == userId
+                if (isHost) {
+                    logger.debug("🩺 确认用户是Host（医生）: {}", userId)
+                }
+                isHost
+            } catch (e: Exception) {
+                logger.warn("⚠️ 检查Host角色失败: {}", e.message)
+                false
+            }
+        } else {
+            false
+        }
+    }
+
     /**
      * 执行医生诊断更新（Host的消息）
      */
@@ -2146,13 +1986,13 @@ class ChatServer(
                 currentStep = currentStep,
                 totalSteps = totalSteps
             )
-            
+
             // 非临时消息保存到历史
             if (!agentMessage.isTransient) {
                 messageHistory.add(agentMessage)
                 historyManager.addMessage(sessionName, agentMessage)
             }
-            
+
             // 发送给所有客户端
             val messageJson = Json.encodeToString(agentMessage)
             allSessions().forEach { session ->
@@ -2162,22 +2002,22 @@ class ChatServer(
                     e.printStackTrace()
                 }
             }
-            
+
             kotlinx.coroutines.delay(300)
         }
-        
+
         // 获取群组显示名称
         val groupDisplayName = getGroupDisplayName(sessionName)
-        
+
         // 加载聊天历史
         val chatHistory = historyManager.loadChatHistory(sessionName)
         val historyEntries = chatHistory?.messages ?: emptyList()
-        
+
         // 提取用户名
         val userName = historyEntries
             .filter { !AgentRuntime.isAgentUserId(it.senderId) }
             .lastOrNull()?.senderName ?: "用户"
-        
+
         // 执行医生诊断更新
         try {
             silkAgent.executeDoctorDiagnosisUpdate(
@@ -2188,10 +2028,11 @@ class ChatServer(
                 groupDisplayName = groupDisplayName
             )
         } catch (e: Exception) {
-            logger.error("❌ 医生诊断更新失败: {}", e.message, e)
+            logger.error("❌ 医生诊断更新失败: {}", e.message)
+            e.printStackTrace()
         }
     }
-    
+
     /**
      * 获取群组的Host用户ID
      */
@@ -2209,7 +2050,7 @@ class ChatServer(
             null
         }
     }
-    
+
     /**
      * 获取群组的显示名称
      * 从sessionName（格式：group_<uuid>）获取实际的群组名称
@@ -2219,7 +2060,7 @@ class ChatServer(
             // 提取群组ID
             val groupId = sessionName.removePrefix("group_")
             logger.debug("📋 正在查询群组名称，groupId: {}", groupId)
-            
+
             // 从数据库查询群组名称
             try {
                 val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
@@ -2231,7 +2072,8 @@ class ChatServer(
                     null
                 }
             } catch (e: Exception) {
-                logger.warn("⚠️ 查询群组名称失败: {}", e.message, e)
+                logger.warn("⚠️ 查询群组名称失败: {}", e.message)
+                e.printStackTrace()
                 null
             }
         } else {
@@ -2240,7 +2082,7 @@ class ChatServer(
             null
         }
     }
-    
+
     /**
      * 撤回消息
      * @param messageId 要撤回的消息ID
@@ -2250,7 +2092,7 @@ class ChatServer(
     suspend fun recallMessage(messageId: String, userId: String): RecallResult {
         logger.debug("🔄 [recallMessage] 开始撤回消息: {} by user {}", messageId, userId)
         logger.debug("🔄 [recallMessage] sessionName: {}", sessionName)
-        
+
         // 1. 从历史记录中查找消息
         val chatHistory = historyManager.loadChatHistory(sessionName)
         logger.debug("🔄 [recallMessage] chatHistory: {}, messages count: {}", chatHistory != null, chatHistory?.messages?.size)
@@ -2258,18 +2100,18 @@ class ChatServer(
             logger.debug("🔄 [recallMessage] message IDs in history: {}", chatHistory.messages.map { it.messageId })
         }
         val messageEntry = chatHistory?.messages?.find { it.messageId == messageId }
-        
+
         if (messageEntry == null) {
             logger.error("❌ [recallMessage] 消息不存在: {}", messageId)
             return RecallResult(false, "消息不存在", emptyList())
         }
-        
+
         // 2. 验证权限：只有消息发送者才能撤回
         if (messageEntry.senderId != userId) {
             logger.error("❌ [recallMessage] 无权撤回此消息: sender={}, requester={}", messageEntry.senderId, userId)
             return RecallResult(false, "只能撤回自己发送的消息", emptyList())
         }
-        
+
         val deletedMessageIds = mutableListOf<String>()
 
         // 3. 查找用户消息之后的所有连续 Agent 回复（Silk / cc-connect 等），级联删除
@@ -2312,28 +2154,28 @@ class ChatServer(
                 }
             }
         }
-        
+
         return RecallResult(true, "撤回成功", deletedMessageIds)
     }
-    
+
     /**
      * 删除消息
      * 权限：1) 自己的消息可删  2) Silk回复自己@silk触发的消息可删  3) 群主可删任意消息
      */
     suspend fun deleteMessage(messageId: String, userId: String): RecallResult {
         logger.debug("🗑️ [deleteMessage] 删除消息: {} by user {}", messageId, userId)
-        
+
         val chatHistory = historyManager.loadChatHistory(sessionName)
         val messageEntry = chatHistory?.messages?.find { it.messageId == messageId }
-        
+
         if (messageEntry == null) {
             return RecallResult(false, "消息不存在", emptyList())
         }
-        
+
         val isOwnMessage = messageEntry.senderId == userId
         val hostId = getGroupHostId(sessionName)
         val isGroupHost = hostId == userId
-        
+
         val isSilkReplyToMe = if (AgentRuntime.isAgentUserId(messageEntry.senderId)) {
             val msgIndex = chatHistory.messages.indexOf(messageEntry)
             val precedingMsg = chatHistory.messages
@@ -2342,11 +2184,11 @@ class ChatServer(
             precedingMsg?.senderId == userId &&
                 (precedingMsg.content.startsWith("@Silk") || precedingMsg.content.startsWith("@silk"))
         } else false
-        
+
         if (!isOwnMessage && !isGroupHost && !isSilkReplyToMe) {
             return RecallResult(false, "无权删除此消息", emptyList())
         }
-        
+
         historyManager.deleteMessages(sessionName, listOf(messageId))
         messageHistory.removeIf { it.id == messageId }
         broadcastRecallNotification(listOf(messageId))
@@ -2363,7 +2205,7 @@ class ChatServer(
             messageId, userId, isOwnMessage, isGroupHost, isSilkReplyToMe)
         return RecallResult(true, "删除成功", listOf(messageId))
     }
-    
+
     /**
      * 广播撤回通知给所有连接的客户端
      */
@@ -2378,7 +2220,7 @@ class ChatServer(
             isTransient = true
         )
         val notificationJson = Json.encodeToString(recallMessage)
-        
+
         allSessions().forEach { session ->
             try {
                 session.send(Frame.Text(notificationJson))
@@ -2388,7 +2230,7 @@ class ChatServer(
         }
         logger.debug("📢 [broadcastRecallNotification] 已广播撤回通知: {}", messageIds)
     }
-    
+
     private fun generateId(): String {
         return System.currentTimeMillis().toString() + (0..999).random()
     }

@@ -29,7 +29,7 @@ object JwtProvider {
         }
     }
 
-    private const val ACCESS_TOKEN_TTL_MINUTES = 60L
+    private const val ACCESS_TOKEN_TTL_MINUTES = 1440L // 24小时
     private const val REFRESH_TOKEN_TTL_DAYS = 30L
 
     /**

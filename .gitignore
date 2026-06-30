@@ -153,3 +153,5 @@ backend/knowledge_base/
 # Python virtual environments
 cc_bridge/.venv/
 search/.venv/
+frontend/harmonyApp/signing/
+search/=4.4.0

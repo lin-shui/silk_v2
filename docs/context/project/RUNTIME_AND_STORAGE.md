@@ -19,6 +19,7 @@
 | Chat history root | `chat_history/` or `-Dsilk.chatHistoryDir=...` | `ChatHistoryManager`, 文件上传、URL 缓存 |
 | Session history | `chat_history/<session>/session.json`, `chat_history.json` | WebSocket 历史回放 |
 | Uploaded files | `chat_history/<session>/uploads/` | 文件消息、下载 |
+| AI workspace (cross-group) | `backend/chat_workspaces/<session>/other_groups/` | Silk 专属对话 AI 跨群搜索上下文 |
 | URL dedupe | `chat_history/<session>/uploads/processed_urls.txt` | URL/PDF 下载去重 |
 | User history workspace views | `user_workspace_views/user_<user>/` | `UserWorkspaceManager` 为 `/recall` 创建 hardlink 视图，映射该用户可访问的 `chat_history/group_<group>/` |
 | AI cross-group workspace | `backend/chat_workspaces/<session>/other_groups/` | `DirectModelAgent.writeOtherGroupsHistories()`：Silk 专属对话写入其他群最近历史，供 AI Grep/Read 跨群检索 |

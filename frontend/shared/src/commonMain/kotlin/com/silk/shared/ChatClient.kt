@@ -320,42 +320,32 @@ class ChatClient(
                         }
                         // edit 只更新已有卡片内容，不影响状态（agent 可能仍在工作中）
                     } else {
-                        val exists = _messages.value.any { it.id == message.id }
-                        if (!exists) {
-                            log("💬 [ChatClient] 普通消息，添加到列表")
-                            _messages.value = _messages.value + message
-                        } else {
-                            // 消息已在本地列表（发送者预添加），用服务端广播回来的归一化时间戳覆盖（嫁接 fe6faba）
-                            log("📌 [ChatClient] 更新消息时间戳: serverTs=${message.timestamp}")
-                            _messages.value = _messages.value.map {
-                                if (it.id == message.id) it.copy(timestamp = message.timestamp) else it
-                            }
+                        // 消息已在本地列表（发送者预添加），用服务端广播回来的归一化时间戳覆盖
+                        log("📌 [ChatClient] 更新消息时间戳: serverTs=${message.timestamp}")
+                        _messages.value = _messages.value.map {
+                            if (it.id == message.id) it.copy(timestamp = message.timestamp) else it
                         }
-                        // 新消息到达时更新状态（edit 消息走上面分支，不进入此处，不影响状态）
-                        if (message.type == MessageType.CARD_REPLY) {
-                            // 卡片回复：agent 仍在工作中，保留状态消息
-                        } else if (message.category == MessageCategory.AGENT_QUESTION) {
-                            val reqId = message.id.removePrefix("agent_question_")
-                            _pendingQuestionId.value = reqId
-                            // 清 isGenerating 让发送按钮显示（而非停止按钮）
-                            _isGenerating.value = false
-                            _transientMessage.value = null
-                            _transientContentBlocks.value = emptyList()
-                            // 保留 statusMessages（agent 仍在工作中）；不清 cc-connect interactiveOptions
-                            suppressTransient = false
-                        } else if (message.category == MessageCategory.AGENT_PERMISSION) {
-                            // 权限卡片：agent 仍在工作中，保留状态消息
-                            _transientMessage.value = null
-                        } else {
-                            _transientMessage.value = null
-                            _statusMessages.value = emptyList()
-                            _isGenerating.value = false
-                            _transientContentBlocks.value = emptyList()
-                            // 不清除 _interactiveOptions：cc-connect 的交互按钮独立于普通消息生命周期，
-                            // 由 CLEAR_STATUS 或 sendCcAnswer 负责清除。普通消息到达不应取消等待中的按钮。
-                            suppressTransient = false
-                            _pendingQuestionId.value = null
-                        }
+                    }
+                    // Track pending question state
+                    if (message.category == MessageCategory.AGENT_QUESTION) {
+                        val reqId = message.id.removePrefix("agent_question_")
+                        _pendingQuestionId.value = reqId
+                        // Must clear isGenerating so the send button shows (not stop button)
+                        _isGenerating.value = false
+                        _transientMessage.value = null
+                        _statusMessages.value = emptyList()
+                        _transientContentBlocks.value = emptyList()
+                        _interactiveOptions.value = emptyList()
+                        suppressTransient = false
+                    } else {
+                        _transientMessage.value = null
+                        _statusMessages.value = emptyList()
+                        _isGenerating.value = false
+                        _transientContentBlocks.value = emptyList()
+                        // 不清除 _interactiveOptions：cc-connect 的交互按钮独立于普通消息生命周期，
+                        // 由 CLEAR_STATUS 或 sendCcAnswer 负责清除。普通消息到达不应取消等待中的按钮。
+                        suppressTransient = false
+                        _pendingQuestionId.value = null
                     }
                 }
             }
