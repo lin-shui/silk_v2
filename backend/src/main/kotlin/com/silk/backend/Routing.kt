@@ -3934,7 +3934,8 @@ private fun ApplicationCall.resolveAuthenticatedUserId(): String? {
     if (!authorization.startsWith(BEARER_PREFIX, ignoreCase = true)) return null
     val token = authorization.substring(BEARER_PREFIX.length).trim()
     if (token.isEmpty()) return null
-    return UserSettingsRepository.findUserIdByAppAuthToken(token)
+    return JwtProvider.verifyAccessToken(token)
+        ?: UserSettingsRepository.findUserIdByAppAuthToken(token)
 }
 
 private fun resolveKbCallerUserId(call: ApplicationCall, fallbackUserId: String?): KbCallerResolution {
