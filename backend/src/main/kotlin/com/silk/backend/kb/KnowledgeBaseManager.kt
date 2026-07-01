@@ -30,6 +30,8 @@ data class KBContextSearchHit(
     val reasons: List<String>,
 )
 
+internal const val PERSONAL_KB_SPACE_ID = "__personal__"
+
 class KnowledgeBaseManager(
     private val baseDir: String =
         System.getProperty("silk.kbDir")?.trim()?.takeIf { it.isNotEmpty() } ?: "knowledge_base"
@@ -204,6 +206,7 @@ class KnowledgeBaseManager(
 
     fun updateEntry(
         entryId: String,
+        topicId: String? = null,
         title: String?,
         content: String?,
         tags: List<String>?,
@@ -214,9 +217,18 @@ class KnowledgeBaseManager(
         val idx = store.entries.indexOfFirst { it.id == entryId }
         if (idx == -1) return null
         val old = store.entries[idx]
-        val topic = store.topics.find { it.id == old.topicId } ?: return null
-        if (!canWriteTopic(topic, userId)) return null
+        val sourceTopic = store.topics.find { it.id == old.topicId } ?: return null
+        val targetTopic = topicId
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && it != old.topicId }
+            ?.let { requestedTopicId -> store.topics.find { it.id == requestedTopicId } }
+            ?: sourceTopic
+        if (!canWriteTopic(sourceTopic, userId) || !canWriteTopic(targetTopic, userId)) return null
+        require(canMoveEntryBetweenTopics(sourceTopic, targetTopic)) {
+            "Entries can only move within the same knowledge space"
+        }
         val updated = old.copy(
+            topicId = targetTopic.id,
             title = title ?: old.title,
             content = content ?: old.content,
             tags = tags ?: old.tags,
@@ -250,6 +262,7 @@ class KnowledgeBaseManager(
         preferredGroupId: String? = null,
         limit: Int = 3,
         excludedEntryIds: Set<String> = emptySet(),
+        excludedSpaceIds: Set<String> = emptySet(),
     ): List<KBContextSearchHit> {
         val terms = extractSearchTerms(query)
         if (terms.isEmpty() || limit <= 0) return emptyList()
@@ -262,6 +275,7 @@ class KnowledgeBaseManager(
             .mapNotNull { entry ->
                 val topic = topicById[entry.topicId] ?: return@mapNotNull null
                 if (!canReadTopic(topic, userId)) return@mapNotNull null
+                if (topic.spacePreferenceId() in excludedSpaceIds) return@mapNotNull null
                 scoreContextCandidate(
                     topic = topic,
                     entry = entry,
@@ -353,6 +367,22 @@ class KnowledgeBaseManager(
             accessPolicy.copy(teamMembersCanWrite = false)
         } else {
             accessPolicy
+        }
+    }
+
+    private fun canMoveEntryBetweenTopics(sourceTopic: KBTopic, targetTopic: KBTopic): Boolean {
+        if (sourceTopic.id == targetTopic.id) return true
+        if (sourceTopic.spaceType != targetTopic.spaceType) return false
+        return when (sourceTopic.spaceType) {
+            KnowledgeSpaceType.PERSONAL -> true
+            KnowledgeSpaceType.TEAM -> sourceTopic.groupId == targetTopic.groupId
+        }
+    }
+
+    internal fun KBTopic.spacePreferenceId(): String {
+        return when (spaceType) {
+            KnowledgeSpaceType.TEAM -> groupId?.takeIf { it.isNotBlank() } ?: PERSONAL_KB_SPACE_ID
+            KnowledgeSpaceType.PERSONAL -> PERSONAL_KB_SPACE_ID
         }
     }
 

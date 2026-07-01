@@ -26,7 +26,8 @@
 | User todos | `chat_history/user_todos/*.json` or `-Dsilk.userTodoBaseDir=...` | `UserTodoStore`（兼容旧 `backend/chat_history/user_todos` / `../chat_history/user_todos` 查找） |
 | Workflow store | `~/.silk-data/workflows/workflow_store.json`, `SILK_WORKFLOW_DIR`, or `-Dsilk.workflowDir=...` | `WorkflowManager` |
 | Trusted directories | `~/.silk-data/workflows/trusted_dirs.json` (co-located with workflow store) | `TrustedDirManager` |
-| KB store | `knowledge_base/kb_store.json` or `-Dsilk.kbDir=...` | `KnowledgeBaseManager` |
+| KB store | `knowledge_base/kb_store.json` or `-Dsilk.kbDir=...` | `KnowledgeBaseManager`（topic-level personal/team scope、ACL、旧 store 兼容读取） |
+| KB context preferences | `knowledge_base/context_preferences.json` (co-located with KB store) | `KnowledgeBaseContextPreferenceStore`（用户级 `excludedSpaceIds` 长期偏好，`GET/PUT /api/kb/context-preferences`） |
 | Web static / APK / HAP | `backend/static/` | 后端静态分发 |
 | Claude Code sessions | `~/.silk/cc_sessions.json` | `cc_bridge/session_manager.py` |
 | Codex sessions | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` | `codex_bridge/codex_session_index.py` |

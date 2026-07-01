@@ -252,6 +252,7 @@ enum class KBEntryStatus {
 enum class KBSourceType {
     MANUAL,
     CHAT,
+    AI_RESPONSE,
     WORKFLOW,
     MEETING,
     FILE,
@@ -1392,6 +1393,7 @@ object ApiClient {
 
     suspend fun updateKBEntry(
         entryId: String,
+        topicId: String? = null,
         title: String?,
         content: String?,
         tags: List<String>?,
@@ -1400,6 +1402,7 @@ object ApiClient {
     ): KBEntryItem? {
         return try {
             val fields = mutableListOf("\"userId\":\"$userId\"")
+            if (topicId != null) fields.add("\"topicId\":\"${topicId.replace("\"", "\\\"")}\"")
             if (title != null) fields.add("\"title\":\"${title.replace("\"", "\\\"")}\"")
             if (content != null) {
                 val escaped = content.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
@@ -1413,6 +1416,28 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("更新知识库条目失败:", e)
             null
+        }
+    }
+
+    suspend fun deleteKBTopic(topicId: String, userId: String): SimpleResponse {
+        return try {
+            val body = """{"userId":"$userId"}"""
+            val response = delete("/api/kb/topics/$topicId", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("删除知识库主题失败:", e)
+            SimpleResponse(false, "网络错误")
+        }
+    }
+
+    suspend fun deleteKBEntry(entryId: String, userId: String): SimpleResponse {
+        return try {
+            val body = """{"userId":"$userId"}"""
+            val response = delete("/api/kb/entries/$entryId", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("删除知识库条目失败:", e)
+            SimpleResponse(false, "网络错误")
         }
     }
 

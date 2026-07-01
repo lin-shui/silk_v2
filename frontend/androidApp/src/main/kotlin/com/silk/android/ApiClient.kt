@@ -1007,12 +1007,25 @@ object ApiClient {
         }
     }
 
-    suspend fun createKBTopic(name: String, project: String, userId: String): KBTopicItem? = withContext(Dispatchers.IO) {
+    suspend fun createKBTopic(
+        name: String,
+        project: String,
+        userId: String,
+        spaceType: KnowledgeSpaceType = KnowledgeSpaceType.PERSONAL,
+        groupId: String? = null,
+    ): KBTopicItem? = withContext(Dispatchers.IO) {
         try {
-            val body = """{"userId":"$userId","name":"$name","project":"$project"}"""
+            val body = buildJsonObject {
+                put("userId", JsonPrimitive(userId))
+                put("name", JsonPrimitive(name))
+                put("project", JsonPrimitive(project))
+                put("spaceType", JsonPrimitive(spaceType.name))
+                groupId?.let { put("groupId", JsonPrimitive(it)) }
+            }.toString()
             val response = post("/api/kb/topics", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             println("创建知识库主题失败: $e")
             null
         }
@@ -1040,7 +1053,7 @@ object ApiClient {
         }
     }
 
-    suspend fun updateKBEntry(entryId: String, title: String?, content: String?, tags: List<String>?, userId: String): KBEntryItem? = withContext(Dispatchers.IO) {
+    suspend fun updateKBEntry(entryId: String, title: String?, content: String?, tags: List<String>?, userId: String, status: KBEntryStatus? = null): KBEntryItem? = withContext(Dispatchers.IO) {
         try {
             val fields = mutableListOf("\"userId\":\"$userId\"")
             if (title != null) fields.add("\"title\":\"${title.replace("\"", "\\\"")}\"")
@@ -1049,11 +1062,41 @@ object ApiClient {
                 fields.add("\"content\":\"$escaped\"")
             }
             if (tags != null) fields.add("\"tags\":[${tags.joinToString(",") { "\"$it\"" }}]")
+            if (status != null) fields.add("\"status\":\"${status.name}\"")
             val body = "{${fields.joinToString(",")}}"
             val response = put("/api/kb/entries/$entryId", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             println("更新知识库条目失败: $e")
+            null
+        }
+    }
+
+    suspend fun captureKBEntry(
+        topicId: String,
+        title: String,
+        content: String,
+        tags: List<String>,
+        userId: String,
+        source: KBEntrySource,
+        status: KBEntryStatus? = null,
+    ): KBEntryItem? = withContext(Dispatchers.IO) {
+        try {
+            val body = buildJsonObject {
+                put("userId", JsonPrimitive(userId))
+                put("topicId", JsonPrimitive(topicId))
+                put("title", JsonPrimitive(title))
+                put("content", JsonPrimitive(content))
+                put("tags", jsonParser.parseToJsonElement(jsonParser.encodeToString(tags)))
+                put("source", jsonParser.encodeToJsonElement(KBEntrySource.serializer(), source))
+                status?.let { put("status", JsonPrimitive(it.name)) }
+            }.toString()
+            val response = post("/api/kb/captures", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("保存知识库候选失败: $e")
             null
         }
     }

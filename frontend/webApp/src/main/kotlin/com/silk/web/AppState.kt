@@ -25,6 +25,18 @@ enum class NavTab {
     AUDIO_DUPLEX
 }
 
+data class ChatNavigationTarget(
+    val groupId: String,
+    val messageId: String? = null,
+    val requestId: Long,
+)
+
+data class WorkflowNavigationTarget(
+    val workflowId: String,
+    val messageId: String? = null,
+    val requestId: Long,
+)
+
 class WebAppState {
     var currentScene by mutableStateOf(Scene.LOGIN)
         private set
@@ -48,6 +60,10 @@ class WebAppState {
 
     // KB 内联引用：点击聊天里的 [[kb:...]] 链接 → 跳转到知识库对应条目
     var knowledgeBaseNavigationTarget by mutableStateOf<KnowledgeBaseNavigationTarget?>(null)
+        private set
+    var chatNavigationTarget by mutableStateOf<ChatNavigationTarget?>(null)
+        private set
+    var workflowNavigationTarget by mutableStateOf<WorkflowNavigationTarget?>(null)
         private set
 
     // 标记用户是否明确请求了退出登录
@@ -139,6 +155,39 @@ class WebAppState {
             knowledgeBaseNavigationTarget = null
         }
     }
+
+    fun openChatGroup(group: Group, messageId: String? = null) {
+        chatNavigationTarget = ChatNavigationTarget(
+            groupId = group.id,
+            messageId = messageId,
+            requestId = kotlin.js.Date.now().toLong(),
+        )
+        selectTab(NavTab.SILK)
+        selectGroup(group)
+    }
+
+    fun openWorkflow(workflowId: String, messageId: String? = null) {
+        workflowNavigationTarget = WorkflowNavigationTarget(
+            workflowId = workflowId,
+            messageId = messageId,
+            requestId = kotlin.js.Date.now().toLong(),
+        )
+        selectTab(NavTab.WORKFLOW)
+    }
+
+    fun consumeChatNavigationTarget(requestId: Long) {
+        val current = chatNavigationTarget ?: return
+        if (current.requestId == requestId) {
+            chatNavigationTarget = null
+        }
+    }
+
+    fun consumeWorkflowNavigationTarget(requestId: Long) {
+        val current = workflowNavigationTarget ?: return
+        if (current.requestId == requestId) {
+            workflowNavigationTarget = null
+        }
+    }
     
     fun navigateBack(): Boolean {
         return if (sceneHistory.isNotEmpty()) {
@@ -190,6 +239,9 @@ class WebAppState {
         explicitLogoutRequested = true
         currentUser = null
         selectedGroup = null
+        knowledgeBaseNavigationTarget = null
+        chatNavigationTarget = null
+        workflowNavigationTarget = null
         sceneHistory.clear()
         currentScene = Scene.LOGIN
     }

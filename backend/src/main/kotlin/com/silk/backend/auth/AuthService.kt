@@ -4,6 +4,7 @@ import com.silk.backend.database.AuthResponse
 import com.silk.backend.database.LoginRequest
 import com.silk.backend.database.RegisterRequest
 import com.silk.backend.database.UserRepository
+import com.silk.backend.database.UserSettingsRepository
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
 
@@ -72,7 +73,9 @@ object AuthService {
         logger.debug("🔐 [Login] 成功: {}", user.loginName)
         // 生成 JWT Token，供绑定 API 等需要鉴权的端点使用
         val (accessToken, refreshToken) = JwtProvider.generateTokenPair(user.id)
-        return AuthResponse(true, "登录成功", user, accessToken, refreshToken)
+        // 生成或复用 App HTTP 认证 token，供 KB 等 API bearer 认证使用
+        val appAuthToken = UserSettingsRepository.getOrCreateAppAuthToken(user.id)
+        return AuthResponse(true, "登录成功", user, accessToken, refreshToken, appAuthToken)
     }
     
     /**

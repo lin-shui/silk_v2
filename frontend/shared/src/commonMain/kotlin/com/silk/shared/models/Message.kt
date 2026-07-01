@@ -53,13 +53,16 @@ data class MessageReference(
     val snippet: String? = null,
     val path: String? = null,
     val origin: String? = null,
-    val reason: String? = null
+    val reason: String? = null,
+    val spaceId: String? = null,
+    val spaceLabel: String? = null,
 )
 
 @Serializable
 data class KnowledgeBaseContextSelection(
     val pinnedEntryIds: List<String> = emptyList(),
     val excludedEntryIds: List<String> = emptyList(),
+    val excludedSpaceIds: List<String> = emptyList(),
 )
 
 /** 结构化 content block，对应 Anthropic Messages API 的 content block 概念。 */

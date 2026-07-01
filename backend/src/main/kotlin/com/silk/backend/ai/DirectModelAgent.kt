@@ -94,6 +94,8 @@ class DirectModelAgent(
         val path: String? = null,
         val origin: String? = null,
         val reason: String? = null,
+        val spaceId: String? = null,
+        val spaceLabel: String? = null,
     )
 
     data class AgentResponse(
@@ -119,6 +121,7 @@ class DirectModelAgent(
         requestUserId: String = "",
         accessibleSessionIds: List<String> = listOf(sessionId),
         availableReferences: List<AvailableReferenceSeed> = emptyList(),
+        additionalContext: String? = null,
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
         currentResponseReferences.clear()
@@ -126,7 +129,7 @@ class DirectModelAgent(
 
         // 注册用户提供的本地知识库引用（用于 [available:N] 引用解析）
         availableReferences.forEach { ref ->
-            registerReference(kind = "available", title = ref.title, snippet = ref.snippet, path = ref.path, origin = ref.origin, reason = ref.reason)
+            registerReference(kind = "available", title = ref.title, snippet = ref.snippet, path = ref.path, origin = ref.origin, reason = ref.reason, spaceId = ref.spaceId, spaceLabel = ref.spaceLabel)
         }
 
         val now = java.time.LocalDateTime.now()
@@ -145,6 +148,10 @@ class DirectModelAgent(
             appendLine("⚠️ 注意：对话历史中你之前的回答可能包含旧的过期时间，那些时间已失效。每次都要以本系统提示开头的注入时间为准，不要引用自己之前回答中的时间。")
             appendLine()
             appendLine(withCitationGuidelines(systemPrompt ?: "你是 Silk，一个智能助手。"))
+            if (!additionalContext.isNullOrBlank()) {
+                appendLine()
+                appendLine(additionalContext)
+            }
         }
 
         // 1. 添加用户消息到历史
@@ -218,6 +225,8 @@ class DirectModelAgent(
         path: String? = null,
         origin: String? = null,
         reason: String? = null,
+        spaceId: String? = null,
+        spaceLabel: String? = null,
     ): Int {
         val index = currentResponseReferences.size + 1
         currentResponseReferences.add(
@@ -227,7 +236,11 @@ class DirectModelAgent(
                 title = title,
                 url = url,
                 snippet = snippet,
-                path = path
+                path = path,
+                origin = origin,
+                reason = reason,
+                spaceId = spaceId,
+                spaceLabel = spaceLabel,
             )
         )
         return index
