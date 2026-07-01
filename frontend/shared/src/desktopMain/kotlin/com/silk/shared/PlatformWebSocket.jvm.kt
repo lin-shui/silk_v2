@@ -48,7 +48,8 @@ actual class PlatformWebSocket actual constructor(
     actual val isConnected: Boolean
         get() = session != null
     
-    actual fun connect(userId: String, userName: String, groupId: String) {
+    @Suppress("CyclomaticComplexMethod")
+    actual fun connect(token: String?, userId: String, userName: String, groupId: String) {
         val connectToken = connectionGen.incrementAndGet()
 
         // 切群时先让旧连接失效，避免旧协程 finally 把新连接状态清空。

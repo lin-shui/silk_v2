@@ -13,12 +13,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
+import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import com.silk.shared.models.SILK_AGENT_USER_ID
 import com.silk.shared.models.UserSettings
 import com.silk.shared.models.isAgentUserId
+import com.silk.shared.models.ContentBlock
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.await
 import kotlinx.coroutines.withTimeoutOrNull
@@ -73,6 +75,7 @@ import org.jetbrains.compose.web.dom.Br
 import org.jetbrains.compose.web.dom.Button
 import org.jetbrains.compose.web.dom.Div
 import org.jetbrains.compose.web.dom.H3
+import org.jetbrains.compose.web.dom.Img
 import org.jetbrains.compose.web.dom.Input
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
@@ -124,7 +127,7 @@ object SilkColors {
     const val divider = "#F0E8DC"
 }
 
-private fun backendHttpOrigin(): String {
+fun backendHttpOrigin(): String {
     val protocol = window.location.protocol
     val hostname = window.location.hostname
     val currentPort = window.location.port
@@ -156,6 +159,7 @@ private val jsBlobToArrayBuffer = js("(function(blob) { return blob.arrayBuffer(
 private val jsArrayBufferToBase64 = js("(function(ab) { var u8 = new Uint8Array(ab); var b = ''; for (var i = 0; i < u8.length; i++) b += String.fromCharCode(u8[i]); return btoa(b); })")
 private val jsStopTracks = js("(function(stream) { if (stream && stream.getTracks) { stream.getTracks().forEach(function(t) { t.stop(); }); } })")
 
+
 internal fun downloadAsFile(content: String, fileName: String) {
     val blob = org.w3c.files.Blob(
         arrayOf(content),
@@ -173,6 +177,7 @@ internal fun downloadAsFile(content: String, fileName: String) {
     windowJs.URL.revokeObjectURL(objectUrl)
 }
 
+@Suppress("UnusedPrivateMember")
 private fun parseFileNameFromContentDisposition(contentDisposition: String?): String? {
     if (contentDisposition.isNullOrBlank()) return null
     val fileNameStar = Regex("filename\\*=UTF-8''([^;]+)", RegexOption.IGNORE_CASE)
@@ -188,7 +193,265 @@ private fun parseFileNameFromContentDisposition(contentDisposition: String?): St
         ?.getOrNull(1)
 }
 
+/** Strip provider prefix and middle-ellipsis long model ids for compact badges. */
+private fun compactModelId(modelId: String, maxLen: Int = 40): String {
+    val bare = modelId.substringAfterLast('/').trim()
+    if (bare.length <= maxLen) return bare
+    val keep = (maxLen - 1) / 2
+    return bare.take(keep) + "…" + bare.takeLast(maxLen - keep - 1)
+}
+
 fun main() {
+    console.log("showCropOverlay init")
+    js("""
+(function() {
+    window.showCropOverlay = function(dataUrl, sessionId, userId, uploadUrl) {
+        var MASK_COLOR = 'rgba(0,0,0,0.55)';
+        var SELECTION_BORDER = '#3b82f6';
+        var HANDLE_SIZE = 8;
+        var TOOLBAR_HEIGHT = 44;
+
+        var isSelecting = false;
+        var isDragging = false;
+        var startX = 0, startY = 0;
+        var endX = 0, endY = 0;
+        var hasSelection = false;
+        var dragHandle = null;
+        var dragOffsetX = 0, dragOffsetY = 0;
+
+        var overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:99999;background:' + MASK_COLOR + ';display:flex;align-items:center;justify-content:center;user-select:none;';
+
+        var img = new Image();
+        img.onload = function() {
+            var imgW = img.width;
+            var imgH = img.height;
+            var vw = window.innerWidth;
+            var vh = window.innerHeight;
+            var padX = 60;
+            var padY = 80;
+            var scale = Math.min((vw - padX) / imgW, (vh - padY) / imgH, 1);
+            var dispW = Math.round(imgW * scale);
+            var dispH = Math.round(imgH * scale);
+
+            overlay.innerHTML = '';
+
+            var wrapper = document.createElement('div');
+            wrapper.style.cssText = 'position:relative;display:inline-block;border-radius:4px;overflow:hidden;box-shadow:0 4px 40px rgba(0,0,0,0.5);';
+
+            var dispImg = document.createElement('img');
+            dispImg.src = dataUrl;
+            dispImg.style.cssText = 'display:block;width:' + dispW + 'px;height:' + dispH + 'px;';
+            wrapper.appendChild(dispImg);
+
+            var canvas = document.createElement('canvas');
+            canvas.width = dispW;
+            canvas.height = dispH;
+            canvas.style.cssText = 'position:absolute;top:0;left:0;cursor:crosshair;';
+            var ctx = canvas.getContext('2d');
+            wrapper.appendChild(canvas);
+
+            // toolbar: positioned OUTSIDE the wrapper (overflow:hidden would clip it)
+            var toolbar = document.createElement('div');
+            toolbar.style.cssText = 'margin-top:12px;display:none;align-items:center;gap:12px;background:#1e1e1e;padding:6px 16px;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.3);';
+            toolbar.innerHTML = '<span id="crop-dims" style="color:#aaa;font-size:13px;margin-right:4px;"></span>'
+                + '<button id="crop-confirm" style="background:#3b82f6;color:#fff;border:none;padding:6px 20px;border-radius:6px;font-size:14px;cursor:pointer;">✓ Confirm</button>'
+                + '<button id="crop-cancel" style="background:transparent;color:#ccc;border:1px solid #555;padding:6px 20px;border-radius:6px;font-size:14px;cursor:pointer;">Cancel</button>';
+
+            overlay.style.flexDirection = 'column';
+            overlay.appendChild(wrapper);
+            overlay.appendChild(toolbar);
+            document.body.appendChild(overlay);
+
+            function imgCoords(e) {
+                var rect = canvas.getBoundingClientRect();
+                return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+            }
+
+            function actualCoords(dispX, dispY) {
+                return { x: Math.round(dispX / scale), y: Math.round(dispY / scale) };
+            }
+
+            function clamp(v, min, max) { return Math.min(Math.max(v, min), max); }
+
+            function redraw() {
+                ctx.clearRect(0, 0, dispW, dispH);
+                if (!hasSelection) return;
+                var l = Math.min(startX, endX);
+                var t = Math.min(startY, endY);
+                var r = Math.max(startX, endX);
+                var b = Math.max(startY, endY);
+                var w = r - l;
+                var h = b - t;
+                if (w < 1 || h < 1) return;
+
+                ctx.fillStyle = MASK_COLOR;
+                ctx.fillRect(0, 0, dispW, t);
+                ctx.fillRect(0, b, dispW, dispH - b);
+                ctx.fillRect(0, t, l, h);
+                ctx.fillRect(r, t, dispW - r, h);
+
+                ctx.strokeStyle = SELECTION_BORDER;
+                ctx.lineWidth = 2;
+                ctx.strokeRect(l, t, w, h);
+
+                ctx.fillStyle = '#fff';
+                ctx.strokeStyle = SELECTION_BORDER;
+                ctx.lineWidth = 1.5;
+                var handles = [
+                    { x: l, y: t }, { x: r, y: t },
+                    { x: l, y: b }, { x: r, y: b }
+                ];
+                for (var i = 0; i < handles.length; i++) {
+                    ctx.fillRect(handles[i].x - HANDLE_SIZE/2, handles[i].y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
+                    ctx.strokeRect(handles[i].x - HANDLE_SIZE/2, handles[i].y - HANDLE_SIZE/2, HANDLE_SIZE, HANDLE_SIZE);
+                }
+
+                var actual = actualCoords(w, h);
+                var dimsEl = document.getElementById('crop-dims');
+                if (dimsEl) dimsEl.textContent = actual.x + ' × ' + actual.y;
+            }
+
+            function getSelectionRect() {
+                var l = Math.min(startX, endX);
+                var t = Math.min(startY, endY);
+                var r = Math.max(startX, endX);
+                var b = Math.max(startY, endY);
+                return { l: l, t: t, r: r, b: b, w: r - l, h: b - t };
+            }
+
+            function hitTest(e) {
+                var p = imgCoords(e);
+                if (!hasSelection) return null;
+                var r = getSelectionRect();
+                var hh = HANDLE_SIZE / 2;
+                if (Math.abs(p.x - r.l) <= hh && Math.abs(p.y - r.t) <= hh) return 'tl';
+                if (Math.abs(p.x - r.r) <= hh && Math.abs(p.y - r.t) <= hh) return 'tr';
+                if (Math.abs(p.x - r.l) <= hh && Math.abs(p.y - r.b) <= hh) return 'bl';
+                if (Math.abs(p.x - r.r) <= hh && Math.abs(p.y - r.b) <= hh) return 'br';
+                if (p.x >= r.l && p.x <= r.r && p.y >= r.t && p.y <= r.b) return 'move';
+                return null;
+            }
+
+            canvas.addEventListener('mousedown', function(e) {
+                var p = imgCoords(e);
+                var hit = hitTest(e);
+                if (hit === 'move') {
+                    isDragging = true;
+                    dragHandle = 'move';
+                    dragOffsetX = p.x - startX;
+                    dragOffsetY = p.y - startY;
+                    canvas.style.cursor = 'grabbing';
+                    return;
+                }
+                if (hit) {
+                    isDragging = true;
+                    dragHandle = hit;
+                    dragOffsetX = p.x;
+                    dragOffsetY = p.y;
+                    return;
+                }
+                isSelecting = true;
+                hasSelection = true;
+                startX = p.x;
+                startY = p.y;
+                endX = p.x;
+                endY = p.y;
+                toolbar.style.display = 'none';
+            });
+
+            window.addEventListener('mousemove', function(e) {
+                var p = imgCoords(e);
+                if (isSelecting) {
+                    endX = clamp(p.x, 0, dispW);
+                    endY = clamp(p.y, 0, dispH);
+                    redraw();
+                    return;
+                }
+                if (isDragging) {
+                    if (dragHandle === 'move') {
+                        var dx = p.x - dragOffsetX;
+                        var dy = p.y - dragOffsetY;
+                        var r = getSelectionRect();
+                        startX = clamp(dx, 0, dispW - r.w);
+                        startY = clamp(dy, 0, dispH - r.h);
+                        endX = startX + r.w;
+                        endY = startY + r.h;
+                    } else {
+                        var r = getSelectionRect();
+                        var fixL = Math.min(startX, endX);
+                        var fixT = Math.min(startY, endY);
+                        var fixR = Math.max(startX, endX);
+                        var fixB = Math.max(startY, endY);
+                        if (dragHandle === 'tl' || dragHandle === 'tr') startY = clamp(p.y, 0, fixB - 10);
+                        if (dragHandle === 'bl' || dragHandle === 'br') endY = clamp(p.y, fixT + 10, dispH);
+                        if (dragHandle === 'tl' || dragHandle === 'bl') startX = clamp(p.x, 0, fixR - 10);
+                        if (dragHandle === 'tr' || dragHandle === 'br') endX = clamp(p.x, fixL + 10, dispW);
+                    }
+                    redraw();
+                    return;
+                }
+                var h = hitTest(e);
+                canvas.style.cursor = h === 'move' ? 'move' : h ? 'nwse-resize' : 'crosshair';
+            });
+
+            window.addEventListener('mouseup', function(e) {
+                if (isSelecting || isDragging) {
+                    isSelecting = false;
+                    isDragging = false;
+                    dragHandle = null;
+                    var r = getSelectionRect();
+                    if (r.w > 5 && r.h > 5) {
+                        toolbar.style.display = 'flex';
+                    } else {
+                        hasSelection = false;
+                        redraw();
+                        toolbar.style.display = 'none';
+                    }
+                }
+            });
+
+            document.getElementById('crop-confirm').addEventListener('click', function() {
+                var r = getSelectionRect();
+                if (r.w < 2 || r.h < 2) return;
+                var sx = Math.round(r.l / scale);
+                var sy = Math.round(r.t / scale);
+                var sw = Math.round(r.w / scale);
+                var sh = Math.round(r.h / scale);
+                var cropCanvas = document.createElement('canvas');
+                cropCanvas.width = sw;
+                cropCanvas.height = sh;
+                var cropCtx = cropCanvas.getContext('2d');
+                var fullImg = new Image();
+                fullImg.onload = function() {
+                    cropCtx.drawImage(fullImg, sx, sy, sw, sh, 0, 0, sw, sh);
+                    cropCanvas.toBlob(function(blob) {
+                        window.__pendingScreenshotBlob = blob;
+                        document.body.removeChild(overlay);
+                        if (window.__screenshotDone) { window.__screenshotDone(); window.__screenshotDone = undefined; }
+                    }, 'image/png');
+                };
+                fullImg.src = dataUrl;
+            });
+
+            document.getElementById('crop-cancel').addEventListener('click', function() {
+                document.body.removeChild(overlay);
+                if (window.__screenshotDone) { window.__screenshotDone(); window.__screenshotDone = undefined; }
+            });
+
+            function onKeyDown(e) {
+                if (e.key === 'Escape') {
+                    document.body.removeChild(overlay);
+                    if (window.__screenshotDone) { window.__screenshotDone(); window.__screenshotDone = undefined; }
+                    window.removeEventListener('keydown', onKeyDown);
+                }
+            }
+            window.addEventListener('keydown', onKeyDown);
+        };
+        img.src = dataUrl;
+    };
+})();
+""")
     console.log("🧵 Silk 正在启动...")
     console.log("1️⃣ 准备渲染...")
     
@@ -196,6 +459,7 @@ fun main() {
         console.log("2️⃣ renderComposable 已调用")
         
         Style(SilkStylesheet)
+        SilkChatStyles.inject()
         console.log("3️⃣ Silk样式已加载")
         
         SilkApp()
@@ -209,9 +473,19 @@ fun main() {
 fun SilkApp() {
     val appState = remember { WebAppState() }
     val scope = rememberCoroutineScope()
+    
+    // 处理华为 OAuth 回调
+    LaunchedEffect(Unit) {
+        val handled = handleOAuthCallback(appState)
+        if (handled) {
+            console.log("✅ OAuth 回调处理完成")
+        }
+    }
 
     if (appState.currentScene == Scene.LOGIN) {
         LoginScene(appState)
+    } else if (appState.currentScene == Scene.NICKNAME_SETUP) {
+        NicknameSetupScene(appState)
     } else {
         Div({
             style {
@@ -227,7 +501,7 @@ fun SilkApp() {
                     property("flex", "1")
                     minWidth(0.px)
                     height(100.percent)
-                    property("overflow", "hidden")
+                    property("overflow", if (appState.currentScene == Scene.SETTINGS) "auto" else "hidden")
                     position(Position.Relative)
                 }
             }) {
@@ -372,6 +646,7 @@ fun SilkTabContent(appState: WebAppState) {
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
 @Composable
 fun ChatScene(appState: WebAppState) {
     console.log("🎬 ChatScene被调用")
@@ -382,6 +657,13 @@ fun ChatScene(appState: WebAppState) {
     var userGroups by remember(user?.id) { mutableStateOf<List<Group>>(emptyList()) }
     var unreadCounts by remember(user?.id) { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var isLoadingGroups by remember(user?.id) { mutableStateOf(true) }
+    var sidebarCcStatus by remember(user?.id) { mutableStateOf<Map<String, CcConnectTokenInfo>>(emptyMap()) }
+    var chatListWidth by remember { mutableStateOf(LayoutPrefs.getInt("silk_chat_list_w", 320)) }
+    var chatListCollapsed by remember { mutableStateOf(LayoutPrefs.getBool("silk_chat_list_collapsed", false)) }
+    ensureLayoutStylesInjected()
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var showJoinDialog by remember { mutableStateOf(false) }
+    val strings = com.silk.shared.i18n.getStrings(com.silk.shared.models.Language.CHINESE)
     
     console.log("   群组:", group?.name ?: "null")
     console.log("   用户:", user?.fullName ?: "null")
@@ -408,6 +690,14 @@ fun ChatScene(appState: WebAppState) {
             if (unreadResponse.success) {
                 unreadCounts = unreadResponse.unreadCounts
             }
+            val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
+            userGroups.forEach { g ->
+                val info = ApiClient.getCcConnectTokenInfo(g.id, user.id)
+                if (info != null && info.success) {
+                    statusMap[g.id] = info
+                }
+            }
+            sidebarCcStatus = statusMap
         } catch (e: Exception) {
             console.error("❌ 加载聊天室群组列表失败:", e)
         } finally {
@@ -417,6 +707,17 @@ fun ChatScene(appState: WebAppState) {
 
     LaunchedEffect(user.id, group.id) {
         refreshSidebarGroups()
+    }
+
+    // KB 内联引用：注册 window 桥，供聊天内 [[kb:...]] 链接点击跳转到知识库对应条目
+    DisposableEffect(appState) {
+        val bridge: (String?, String) -> Unit = { topicId, entryId ->
+            appState.openKnowledgeBaseEntry(entryId = entryId, topicId = topicId)
+        }
+        window.asDynamic().__silkOpenKnowledgeBaseEntry = bridge
+        onDispose {
+            window.asDynamic().__silkOpenKnowledgeBaseEntry = null
+        }
     }
 
     LaunchedEffect(user.id) {
@@ -443,9 +744,15 @@ fun ChatScene(appState: WebAppState) {
             property("background", SilkColors.backgroundGradient)
         }
     }) {
+        if (chatListCollapsed) {
+            ReopenBar(onExpand = {
+                chatListCollapsed = false
+                LayoutPrefs.setBool("silk_chat_list_collapsed", false)
+            })
+        } else {
         Div({
             style {
-                width(320.px)
+                width(chatListWidth.px)
                 property("flex-shrink", "0")
                 property("border-right", "1px solid ${SilkColors.border}")
                 backgroundColor(Color("rgba(255,255,255,0.88)"))
@@ -457,15 +764,153 @@ fun ChatScene(appState: WebAppState) {
         }) {
             Div({
                 style {
-                    padding(16.px, 16.px, 12.px, 16.px)
+                    padding(12.px, 16.px)
                     property("border-bottom", "1px solid ${SilkColors.border}")
-                    color(Color(SilkColors.textPrimary))
-                    fontSize(16.px)
-                    property("font-weight", "700")
-                    property("letter-spacing", "1px")
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "8px")
                 }
             }) {
-                Text("全部群组")
+                Button({
+                    attr("title", "收起列表")
+                    style {
+                        backgroundColor(Color("rgba(255,255,255,0.2)"))
+                        color(Color(SilkColors.textSecondary))
+                        property("border", "1px solid ${SilkColors.border}")
+                        borderRadius(6.px)
+                        padding(4.px, 9.px)
+                        property("cursor", "pointer")
+                        property("flex-shrink", "0")
+                    }
+                    onClick {
+                        chatListCollapsed = true
+                        LayoutPrefs.setBool("silk_chat_list_collapsed", true)
+                    }
+                }) { Text("«") }
+                Span({
+                    style {
+                        fontSize(16.px)
+                        color(Color(SilkColors.primary))
+                        property("font-weight", "700")
+                        property("letter-spacing", "1px")
+                        property("flex-shrink", "0")
+                    }
+                }) {
+                    Text("Silk")
+                }
+                Div({
+                    style {
+                        property("flex", "1")
+                    }
+                })
+                Span({
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("overflow", "hidden")
+                        property("text-overflow", "ellipsis")
+                        property("white-space", "nowrap")
+                        property("max-width", "120px")
+                    }
+                }) {
+                    Text(user.fullName)
+                }
+                // 🤖 与 Silk 对话按钮
+                Button({
+                    style {
+                        padding(4.px, 8.px)
+                        backgroundColor(Color("#7BA8C9"))
+                        color(Color.white)
+                        border { width(0.px) }
+                        borderRadius(6.px)
+                        property("cursor", "pointer")
+                        property("box-shadow", "0 2px 8px rgba(123, 168, 201, 0.4)")
+                        fontSize(14.px)
+                        property("flex-shrink", "0")
+                    }
+                    onClick {
+                        scope.launch {
+                            val uid = appState.currentUser?.id ?: return@launch
+                            val r = ApiClient.startSilkPrivateChat(uid)
+                            if (r.success && r.group != null) appState.selectGroup(r.group!!)
+                        }
+                    }
+                }) { Text("🤖") }
+                
+                // ☰ 下拉菜单
+                var showMenu by remember { mutableStateOf(false) }
+                Div({
+                    style {
+                        position(Position.Relative)
+                    }
+                }) {
+                    Button({
+                        style {
+                            padding(4.px, 10.px)
+                            backgroundColor(Color("rgba(255,255,255,0.2)"))
+                            color(Color(SilkColors.textPrimary))
+                            border {
+                                width(1.px)
+                                style(LineStyle.Solid)
+                                color(Color(SilkColors.border))
+                            }
+                            borderRadius(6.px)
+                            property("cursor", "pointer")
+                            fontSize(16.px)
+                        }
+                        onClick { showMenu = !showMenu }
+                    }) { Text("☰") }
+                    
+                    if (showMenu) {
+                        Div({
+                            style {
+                                position(Position.Fixed)
+                                property("top", "0")
+                                property("left", "0")
+                                property("right", "0")
+                                property("bottom", "0")
+                                property("z-index", "99")
+                            }
+                            onClick { showMenu = false }
+                        })
+                        Div({
+                            style {
+                                position(Position.Absolute)
+                                property("top", "100%")
+                                property("right", "0")
+                                property("z-index", "100")
+                                backgroundColor(Color("#2a2a2a"))
+                                borderRadius(10.px)
+                                property("box-shadow", "0 4px 20px rgba(0,0,0,0.3)")
+                                property("min-width", "160px")
+                                padding(6.px)
+                                marginTop(6.px)
+                            }
+                            onClick { showMenu = false }
+                        }) {
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { showCreateDialog = true; showMenu = false }
+                            }) { Text("➕ ${strings.createButton}") }
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { showJoinDialog = true; showMenu = false }
+                            }) { Text("🔗 ${strings.joinButton}") }
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { appState.navigateTo(Scene.CONTACTS); showMenu = false }
+                            }) { Text("👤 ${strings.contactsButton}") }
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { appState.navigateTo(Scene.SETTINGS); showMenu = false }
+                            }) { Text("⚙️ ${strings.settingsButton}") }
+                            Div({
+                                style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }
+                                onClick { appState.logout(); showMenu = false }
+                            }) { Text("🚪 ${strings.logoutButton}") }
+                        }
+                    }
+                }
             }
 
             Div({
@@ -501,9 +946,17 @@ fun ChatScene(appState: WebAppState) {
                         }
                     }
                     else -> {
-                        userGroups.forEach { item ->
+                        val silkPrivateGroups = userGroups.filter { it.name.startsWith("[Silk]") }
+                        val ccGroups = userGroups.filter { sidebarCcStatus.containsKey(it.id) }
+                        val silkNormalGroups = userGroups.filter { !it.name.startsWith("[Silk]") && !sidebarCcStatus.containsKey(it.id) }
+
+                        @Composable
+                        fun renderGroupItem(item: Group) {
                             val isActive = item.id == group.id
                             val unread = unreadCounts[item.id] ?: 0
+                            val ccInfo = sidebarCcStatus[item.id]
+                            val isCcGroup = ccInfo != null
+                            val isSilkPrivate = item.name.startsWith("[Silk]")
                             Div({
                                 style {
                                     padding(12.px, 14.px)
@@ -549,6 +1002,48 @@ fun ChatScene(appState: WebAppState) {
                                     }) {
                                         Text(item.name)
                                     }
+                                    val typeBadge: String? = when {
+                                        isCcGroup -> {
+                                            val raw = (ccInfo?.agentType ?: "").lowercase().trim()
+                                            when {
+                                                raw.startsWith("claude") -> "claude"
+                                                raw.startsWith("cursor") -> "cursor"
+                                                raw.startsWith("gemini") -> "gemini"
+                                                raw.startsWith("codex")  -> "codex"
+                                                raw.startsWith("copilot") -> "copilot"
+                                                raw.isBlank() -> "cc"
+                                                else -> raw
+                                            }
+                                        }
+                                        isSilkPrivate -> null
+                                        else -> "silk"
+                                    }
+                                    if (typeBadge != null) {
+                                        Span({
+                                            style {
+                                                fontSize(9.px)
+                                                padding(1.px, 5.px)
+                                                borderRadius(3.px)
+                                                property("font-weight", "600")
+                                                property("letter-spacing", "0.3px")
+                                                property("flex-shrink", "0")
+                                                if (isCcGroup) {
+                                                    if (ccInfo?.connected == true) {
+                                                        backgroundColor(Color("#E8F5E9"))
+                                                        color(Color("#2E7D32"))
+                                                    } else {
+                                                        backgroundColor(Color("#FFF3E0"))
+                                                        color(Color("#E65100"))
+                                                    }
+                                                } else {
+                                                    backgroundColor(Color("rgba(201, 168, 108, 0.15)"))
+                                                    color(Color(SilkColors.primary))
+                                                }
+                                            }
+                                        }) {
+                                            Text(if (isCcGroup && ccInfo?.connected != true) "$typeBadge ⏸" else typeBadge)
+                                        }
+                                    }
                                     if (unread > 0) {
                                         Span({
                                             style {
@@ -569,6 +1064,8 @@ fun ChatScene(appState: WebAppState) {
                                         }
                                     }
                                 }
+                                // 非 Silk 专属对话才显示邀请码
+                                if (!isSilkPrivate) {
                                 Div({
                                     style {
                                         color(Color(SilkColors.textSecondary))
@@ -579,12 +1076,117 @@ fun ChatScene(appState: WebAppState) {
                                 }) {
                                     Text("[${item.invitationCode}]")
                                 }
+                                }
                             }
+                        }
+
+                        // --- Section 1: Silk 专属对话 ---
+                        if (silkPrivateGroups.isNotEmpty()) {
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "8px")
+                                    marginBottom(8.px)
+                                }
+                            }) {
+                                Span({
+                                    style {
+                                        fontSize(11.px)
+                                        color(Color(SilkColors.primary))
+                                        property("font-weight", "700")
+                                        property("letter-spacing", "1px")
+                                        property("white-space", "nowrap")
+                                    }
+                                }) { Text("Silk AI") }
+                                Div({
+                                    style {
+                                        property("flex", "1")
+                                        height(1.px)
+                                        backgroundColor(Color(SilkColors.primary))
+                                        property("opacity", "0.3")
+                                    }
+                                })
+                            }
+                            silkPrivateGroups.forEach { renderGroupItem(it) }
+                        }
+
+                        // --- Section 2: CC-Connect 群组 ---
+                        if (ccGroups.isNotEmpty()) {
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "8px")
+                                    marginTop(if (silkPrivateGroups.isNotEmpty()) 12.px else 0.px)
+                                    marginBottom(8.px)
+                                }
+                            }) {
+                                Span({
+                                    style {
+                                        fontSize(11.px)
+                                        color(Color("#2E7D32"))
+                                        property("font-weight", "700")
+                                        property("letter-spacing", "1px")
+                                        property("white-space", "nowrap")
+                                    }
+                                }) { Text("CC-Connect") }
+                                Div({
+                                    style {
+                                        property("flex", "1")
+                                        height(1.px)
+                                        backgroundColor(Color("#4CAF50"))
+                                        property("opacity", "0.3")
+                                    }
+                                })
+                            }
+                            ccGroups.forEach { renderGroupItem(it) }
+                        }
+
+                        // --- Section 3: Silk 普通群组 ---
+                        if (silkNormalGroups.isNotEmpty()) {
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "8px")
+                                    marginTop(if (silkPrivateGroups.isNotEmpty() || ccGroups.isNotEmpty()) 12.px else 0.px)
+                                    marginBottom(8.px)
+                                }
+                            }) {
+                                Span({
+                                    style {
+                                        fontSize(11.px)
+                                        color(Color(SilkColors.textSecondary))
+                                        property("font-weight", "700")
+                                        property("letter-spacing", "1px")
+                                        property("white-space", "nowrap")
+                                    }
+                                }) { Text("Silk Groups") }
+                                Div({
+                                    style {
+                                        property("flex", "1")
+                                        height(1.px)
+                                        backgroundColor(Color(SilkColors.textSecondary))
+                                        property("opacity", "0.2")
+                                    }
+                                })
+                            }
+                            silkNormalGroups.forEach { renderGroupItem(it) }
                         }
                     }
                 }
             }
         }
+        ColumnResizer(
+            isLeftPanel = true,
+            minWidth = 220,
+            maxWidth = 520,
+            currentWidth = { chatListWidth },
+            onResize = { chatListWidth = it },
+            onCommit = { LayoutPrefs.setInt("silk_chat_list_w", chatListWidth) },
+        )
+        } // close 列表非折叠分支
 
         Div({
             style {
@@ -596,6 +1198,30 @@ fun ChatScene(appState: WebAppState) {
         }) {
             ChatAppWithGroup(user, group, appState)
         }
+    }
+    
+    // 创建/加入群组对话框
+    if (showCreateDialog) {
+        CreateGroupDialog(
+            appState = appState,
+            strings = strings,
+            onDismiss = { showCreateDialog = false },
+            onGroupCreated = { newGroup ->
+                userGroups = userGroups + newGroup
+            },
+            onComplete = { showCreateDialog = false }
+        )
+    }
+    if (showJoinDialog) {
+        JoinGroupDialog(
+            appState = appState,
+            strings = strings,
+            onDismiss = { showJoinDialog = false },
+            onGroupJoined = { newGroup ->
+                userGroups = userGroups + newGroup
+                showJoinDialog = false
+            }
+        )
     }
 }
 
@@ -942,6 +1568,7 @@ object SilkStylesheet : StyleSheet() {
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "LoopWithTooManyJumpStatements", "TooGenericExceptionCaught", "SwallowedException", "UnusedPrivateProperty")
 @Composable
 fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     console.log("🎯 ChatAppWithGroup - 用户:", user.fullName, "群组:", group.name)
@@ -969,6 +1596,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
+    // cc-connect status for this group
+    var ccConnectInfo by remember(group.id) { mutableStateOf<CcConnectTokenInfo?>(null) }
+    LaunchedEffect(group.id) {
+        val info = ApiClient.getCcConnectTokenInfo(group.id, user.id)
+        if (info != null && info.success) ccConnectInfo = info
+    }
+
     // 动态生成 WebSocket URL，兼容同源代理与本地分端口开发
     val wsUrl = remember {
         val url = backendWsOrigin()
@@ -983,12 +1617,77 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
     val pendingQuestionId by chatClient.pendingQuestionId.collectAsState()
+    val ccMetadataJson by chatClient.ccMetadataJson.collectAsState()
+    val contentBlocks by chatClient.transientContentBlocks.collectAsState()
+    val interactiveOptions by chatClient.interactiveOptions.collectAsState()
+
+    // Update ccConnectInfo when metadata arrives via WebSocket
+    LaunchedEffect(ccMetadataJson) {
+        val raw = ccMetadataJson ?: return@LaunchedEffect
+        try {
+            val parsed = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                .decodeFromString<CcMetadataEvent>(raw)
+            val current = ccConnectInfo ?: return@LaunchedEffect
+            ccConnectInfo = current.copy(
+                mode = parsed.mode ?: current.mode,
+                model = parsed.model ?: current.model,
+                availableModes = if (parsed.availableModes.isNullOrEmpty()) current.availableModes else parsed.availableModes,
+                availableModels = if (parsed.availableModels.isNullOrEmpty()) current.availableModels else parsed.availableModels,
+            )
+        } catch (e: Exception) {
+            console.log("cc_metadata parse error:", e)
+        }
+    }
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
     
     var messageText by remember { mutableStateOf("") }
+    var kbContextSelection by remember(group.id) { mutableStateOf(KnowledgeBaseContextSelection()) }
+    var kbCaptureDraft by remember { mutableStateOf<KnowledgeCaptureDraft?>(null) }
+    var kbCaptureTopics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
+    var kbCaptureGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
+    var kbCaptureSelectedSpaceId by remember { mutableStateOf(PERSONAL_SPACE_ID) }
+    var kbCaptureSelectedTopicId by remember { mutableStateOf("") }
+    var kbCaptureTitle by remember { mutableStateOf("") }
+    var kbCaptureContent by remember { mutableStateOf("") }
+    var kbCaptureSaving by remember { mutableStateOf(false) }
+    var kbCaptureResult by remember { mutableStateOf<String?>(null) }
+    val resetKnowledgeCaptureDialog: () -> Unit = {
+        kbCaptureDraft = null
+        kbCaptureTopics = emptyList()
+        kbCaptureGroups = emptyList()
+        kbCaptureSelectedSpaceId = PERSONAL_SPACE_ID
+        kbCaptureSelectedTopicId = ""
+        kbCaptureTitle = ""
+        kbCaptureContent = ""
+        kbCaptureSaving = false
+        kbCaptureResult = null
+    }
+    val onCaptureToKnowledgeBase: (Message) -> Unit = { message ->
+        scope.launch {
+            val context = loadKnowledgeCaptureContext(user.id)
+            val preferredSpaceId = preferredKnowledgeCaptureSpaceId(group.id, context.topics)
+            kbCaptureDraft = KnowledgeCaptureDraft(
+                message = message,
+                sourceType = KBSourceType.CHAT,
+                sourceGroupId = group.id,
+                preferredSpaceId = preferredSpaceId,
+            )
+            kbCaptureTopics = context.topics
+            kbCaptureGroups = context.groups
+            kbCaptureSelectedSpaceId = preferredSpaceId
+            kbCaptureSelectedTopicId = defaultKnowledgeCaptureTopicId(context.topics, preferredSpaceId).orEmpty()
+            kbCaptureTitle = buildDefaultKnowledgeCaptureTitle(message.content)
+            kbCaptureContent = message.content
+            kbCaptureSaving = false
+            kbCaptureResult = if (context.topics.isEmpty()) "还没有可用主题，请先去知识库创建主题。" else null
+        }
+    }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
+    var pendingPasteImage by remember { mutableStateOf<dynamic?>(null) }
+    var pendingPasteImageUrl by remember { mutableStateOf<String?>(null) }
+    var isScreenshotCrop by remember { mutableStateOf(false) }
     var isExportingMarkdown by remember { mutableStateOf(false) }
     var exportMarkdownHint by remember { mutableStateOf<String?>(null) }
     var showFolderExplorer by remember { mutableStateOf(false) }
@@ -1023,6 +1722,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var mentionStartIndex by remember { mutableStateOf(-1) }
     var mentionMenuPosition by remember { mutableStateOf(Pair(0.0, 0.0)) } // (left, bottom)
     
+    // cc-connect token dialog
+    var showCcConnectTokenDialog by remember { mutableStateOf(false) }
+
+    // cc-connect mode/model dropdown state
+    var showModeDropdown by remember { mutableStateOf(false) }
+    var showModelDropdown by remember { mutableStateOf(false) }
+
     // 消息撤回相关状态：正在撤回中的消息ID集合，防止重复点击
     var recallingMessageIds by remember { mutableStateOf(setOf<String>()) }
     
@@ -1091,7 +1797,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         
         try {
             console.log("🔌 开始连接WebSocket...")
-            chatClient.connect(user.id, user.fullName, group.id)
+            val jwt = JwtManager.getAccessToken()
+            chatClient.connect(user.id, user.fullName, group.id, token = jwt)
             console.log("✅ WebSocket连接成功")
         } catch (e: dynamic) {
             console.error("❌ WebSocket连接失败:", e.toString())
@@ -1112,8 +1819,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
-    // 自动滚动到底部
-    LaunchedEffect(messages.size, transientMessage, statusMessages.size) {
+    // 自动滚动到底部 — 包括 contentBlocks（cc-connect / Claudian 流式回复的主要通道）
+    // 以及 interactiveOptions（交互式按钮出现在底部时）
+    LaunchedEffect(messages.size, transientMessage, statusMessages.size, contentBlocks, interactiveOptions) {
         js("""
             setTimeout(function() {
                 var messagesContainer = document.getElementById('messages');
@@ -1183,10 +1891,79 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             Div({ 
                 style { 
                     property("flex", "1") 
-                    property("letter-spacing", "2px")
+                    display(DisplayStyle.Flex)
+                    property("flex-direction", "column")
+                    property("gap", "2px")
                 } 
             }) {
-                Text(group.name)
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        alignItems(AlignItems.Center)
+                        property("gap", "8px")
+                        property("letter-spacing", "2px")
+                    }
+                }) {
+                    Text(group.name)
+                    if (ccConnectInfo != null) {
+                        Span({
+                            style {
+                                fontSize(10.px)
+                                padding(2.px, 8.px)
+                                borderRadius(4.px)
+                                property("font-weight", "600")
+                                property("letter-spacing", "0.5px")
+                                property("cursor", "pointer")
+                                property("transition", "opacity 0.2s ease")
+                                if (ccConnectInfo?.connected == true) {
+                                    backgroundColor(Color("#E8F5E9"))
+                                    color(Color("#2E7D32"))
+                                } else {
+                                    backgroundColor(Color("#FFF3E0"))
+                                    color(Color("#E65100"))
+                                }
+                            }
+                            attr("title", "Click to view token & connection info")
+                            onClick { showCcConnectTokenDialog = true }
+                        }) {
+                            val label = if (ccConnectInfo?.connected == true) {
+                                val agentName = run {
+                                    val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
+                                    when {
+                                        raw.startsWith("claude") -> "Claude"
+                                        raw.startsWith("cursor") -> "Cursor"
+                                        raw.startsWith("gemini") -> "Gemini"
+                                        raw.startsWith("codex")  -> "Codex"
+                                        raw.startsWith("copilot") -> "Copilot"
+                                        raw.isBlank() -> "agent"
+                                        else -> raw
+                                    }
+                                }
+                                "cc-connect ($agentName)"
+                            } else {
+                                "cc-connect (offline)"
+                            }
+                            Text(label)
+                        }
+                    }
+                }
+                val cwdText = ccConnectInfo?.cwd
+                if (ccConnectInfo?.connected == true && !cwdText.isNullOrBlank()) {
+                    Span({
+                        style {
+                            fontSize(11.px)
+                            color(Color(SilkColors.textSecondary))
+                            property("font-family", "monospace")
+                            property("letter-spacing", "0")
+                            property("overflow", "hidden")
+                            property("text-overflow", "ellipsis")
+                            property("white-space", "nowrap")
+                        }
+                        title(cwdText)
+                    }) {
+                        Text("📁 $cwdText")
+                    }
+                }
             }
             
             // 右侧按钮组
@@ -1236,6 +2013,39 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }) {
                         Text("📋复制")
+                    }
+                    
+                    // 删除选中消息
+                    Button({
+                        style {
+                            padding(8.px, 14.px)
+                            backgroundColor(Color(if (selectedMessageIds.isNotEmpty()) "rgba(255,80,80,0.35)" else "rgba(255,255,255,0.10)"))
+                            color(Color.white)
+                            border { width(0.px) }
+                            borderRadius(8.px)
+                            property("cursor", if (selectedMessageIds.isNotEmpty()) "pointer" else "default")
+                            fontSize(13.px)
+                            property("transition", "all 0.2s ease")
+                        }
+                        if (selectedMessageIds.isNotEmpty()) {
+                            onClick {
+                                val idsToDelete = selectedMessageIds
+                                scope.launch {
+                                    chatClient.removeMessages(idsToDelete)
+                                    for (msgId in idsToDelete) {
+                                        try {
+                                            ApiClient.deleteMessage(group.id, msgId, user.id)
+                                        } catch (e: dynamic) {
+                                            console.log("删除消息失败:", msgId, e)
+                                        }
+                                    }
+                                }
+                                isSelectionMode = false
+                                selectedMessageIds = emptySet()
+                            }
+                        }
+                    }) {
+                        Text("🗑删除")
                     }
                     
                     // 转发选中消息
@@ -1444,6 +2254,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }
                 
+                // 非 Silk 专属对话才显示邀请、添加成员、查看成员按钮
+                if (!group.name.startsWith("[Silk]")) {
+                
                 // 邀请按钮
                 Button({
                     style {
@@ -1521,8 +2334,56 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }) {
                     Text(strings.membersButton)
                 }
+                } // end if !group.name.startsWith("[Silk]")
             }
             } // close else (non-selection mode)
+        }
+        
+        // Auto-reconnect logic: on disconnect, refresh token then retry with exponential backoff
+        var reconnectCount by remember { mutableStateOf(0) }
+        LaunchedEffect(connectionState) {
+            if (connectionState == ConnectionState.DISCONNECTED) {
+                val maxRetries = 5
+                while (reconnectCount < maxRetries) {
+                    val delayMs = 2000L * (1L shl reconnectCount.coerceAtMost(4)) // 2,4,8,16,32s
+                    kotlinx.coroutines.delay(delayMs)
+                    reconnectCount++
+                    console.log("🔄 [AutoReconnect] 尝试 $reconnectCount/$maxRetries ...")
+                    try {
+                        // 每次重连前尝试刷新 JWT（静默刷新，token 未过期也安全）
+                        var jwt = JwtManager.getAccessToken()
+                        if (!jwt.isNullOrBlank()) {
+                            val refreshResult = ApiClient.refreshAccessToken()
+                            if (refreshResult.success && refreshResult.accessToken != null) {
+                                jwt = refreshResult.accessToken
+                                JwtManager.setAccessToken(jwt)
+                                if (refreshResult.refreshToken != null) {
+                                    JwtManager.setRefreshToken(refreshResult.refreshToken)
+                                }
+                            } else {
+                                // 刷新成功但无 token → refresh token 可能也过期了
+                                console.log("🔒 [AutoReconnect] Token 刷新失败，停止重连")
+                                break
+                            }
+                        } else {
+                            // 没有 stored token → 无法继续
+                            console.log("🔒 [AutoReconnect] 无存储的 Token，停止重连")
+                            break
+                        }
+                        chatClient.connect(user.id, user.fullName, group.id, token = jwt)
+                        kotlinx.coroutines.delay(500)
+                        if (connectionState == ConnectionState.CONNECTED) {
+                            console.log("✅ [AutoReconnect] 重连成功")
+                            reconnectCount = 0
+                            return@LaunchedEffect
+                        }
+                    } catch (e: Exception) {
+                        console.log("⚠️ [AutoReconnect] 异常: ${e.message}")
+                    }
+                }
+                console.log("🔒 [AutoReconnect] 全部重连失败，跳转登录页")
+                appState.logout()
+            }
         }
         
         // Status Bar - only show when not connected
@@ -1541,26 +2402,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 Span {
                     Text(when (connectionState) {
                         ConnectionState.CONNECTING -> "⟳ ${strings.connecting}"
-                        ConnectionState.DISCONNECTED -> "✗ ${strings.disconnected}"
+                        ConnectionState.DISCONNECTED -> "✗ ${strings.disconnected} · 自动重连中..."
                         else -> ""
                     })
-                }
-                
-                if (connectionState == ConnectionState.DISCONNECTED) {
-                    Button({
-                        classes(SilkStylesheet.button)
-                        style { 
-                            padding(8.px, 16.px)
-                            fontSize(12.px)
-                        }
-                        onClick {
-                            scope.launch {
-                                chatClient.connect(user.id, user.fullName, group.id)
-                            }
-                        }
-                    }) {
-                        Text(strings.reconnecting)
-                    }
                 }
             }
         }
@@ -1582,8 +2426,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
             }) {}
 
-            // 显示系统状态消息（灰色）
-            if (statusMessages.isNotEmpty()) {
+            // 显示系统状态消息（灰色）；KB 上下文状态条改由输入区上方的 KnowledgeBaseContextTray 展示
+            val visibleStatusMessages = statusMessages.filterNot(::isKnowledgeBaseContextStatusMessage)
+            if (visibleStatusMessages.isNotEmpty()) {
                 Div({
                     style {
                         backgroundColor(Color("#F5F5F5"))
@@ -1593,7 +2438,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         property("border-left", "3px solid #9E9E9E")
                     }
                 }) {
-                    statusMessages.forEach { status ->
+                    visibleStatusMessages.forEach { status ->
                         Div({
                             style {
                                 color(Color("#757575"))
@@ -1618,8 +2463,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     isTransient = false,
                     isLastMessage = message.id == lastMessageId,
                     currentUserId = user.id,
+                    currentUserName = user.fullName,
                     groupId = group.id,
                     isRecalling = message.id in recallingMessageIds,
+                    chatClient = chatClient,
                     onRecall = { messageId ->
                         if (messageId !in recallingMessageIds) {
                             recallingMessageIds = recallingMessageIds + messageId
@@ -1642,6 +2489,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         copyTextToClipboard(content)
                         console.log("✅ 消息已复制到剪贴板")
                     },
+                    onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                     onForward = { msg ->
                         messageToForward = msg
                         scope.launch {
@@ -1682,12 +2530,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
 
             // 显示临时消息（如果有）
             transientMessage?.let { message ->
-                if (
-                    message.content.isNotBlank() &&
+                val isStructuredCcContent = message.content.contains("<!--CC_TURN-->")
+                val shouldShowTransientMsg = message.content.isNotBlank() &&
                     message.currentStep == null &&
                     message.totalSteps == null &&
-                    !isLikelyAgentStatusContent(message.content)
-                ) {
+                    (isStructuredCcContent || !isLikelyAgentStatusContent(message.content))
+                if (shouldShowTransientMsg) {
                     MessageItem(
                         message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
                         isTransient = true,
@@ -1697,6 +2545,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             copyTextToClipboard(content)
                             console.log("✅ 消息已复制到剪贴板")
                         },
+                        onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                         onForward = { msg ->
                             messageToForward = msg
                             scope.launch {
@@ -1712,8 +2561,40 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     TransientMessageItem(message)
                 }
             }
+
+            // 显示流式 content blocks（thinking / tool_use / text 结构化渲染）
+            if (contentBlocks.isNotEmpty()) {
+                Div({
+                    classes(SilkStylesheet.aiMessageContent)
+                    style { property("margin-top", "4px") }
+                }) {
+                    // Thinking block rendered outside the loop for stable composition identity
+                    val thinkingBlock = contentBlocks.firstOrNull { it.type == "thinking" }
+                    if (thinkingBlock != null) {
+                        ThinkingBlock(content = thinkingBlock.content, isComplete = thinkingBlock.isComplete)
+                    }
+                    for (block in contentBlocks) {
+                        when (block.type) {
+                            "thinking" -> { /* rendered above */ }
+                            "text" -> MarkdownContent(content = block.content, references = emptyList())
+                            "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
+                        }
+                    }
+                }
+            }
+
+            // 显示交互式按钮选项（cc-connect 提问）
+            if (interactiveOptions.isNotEmpty()) {
+                console.log("🔘 [UI] rendering InteractiveOptions: ${interactiveOptions.size} options: ${interactiveOptions.map { it.label }}")
+                InteractiveOptions(
+                    options = interactiveOptions,
+                    onAnswer = { value ->
+                        chatClient.sendCcAnswer(value)
+                    }
+                )
+            }
         }
-        
+
         // Drag-and-drop event handlers - directly manipulate DOM for immediate visual feedback
         DisposableEffect(group.id) {
             val sessionId = group.id
@@ -1904,9 +2785,27 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     property("gap", "12px")
                 }
             }) {
-                // @Silk 快捷按钮（在 Silk 私聊中隐藏）
                 val isSilkPrivateChat = group.name.startsWith("[Silk]")
-                if (!isSilkPrivateChat) {
+                val isCcConnectGroup = ccConnectInfo != null
+                val currentMemberRole = groupMembers.find { it.id == user.id }?.role
+                val canTriggerCc = currentMemberRole == "HOST" || currentMemberRole == "OPERATOR"
+                val showCcButton = isCcConnectGroup && groupMembers.size >= 2 && canTriggerCc
+                val ccTriggerName = run {
+                    val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
+                    when {
+                        raw.startsWith("claude") -> "claude"
+                        raw.startsWith("cursor") -> "cursor"
+                        raw.startsWith("gemini") -> "gemini"
+                        raw.startsWith("codex")  -> "codex"
+                        raw.startsWith("copilot") -> "copilot"
+                        raw.isBlank() -> "cc"
+                        else -> raw
+                    }
+                }
+                val ccPrefix = "@$ccTriggerName"
+
+                // @Silk 快捷按钮（在 Silk 私聊和 cc-connect 群组中隐藏）
+                if (!isSilkPrivateChat && !isCcConnectGroup) {
                 Div({
                     style {
                         display(DisplayStyle.Flex)
@@ -1933,7 +2832,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             property("white-space", "nowrap")
                         }
                         onClick {
-                            // 在输入框中插入 @Silk
                             val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLTextAreaElement
                             if (input != null) {
                                 val currentText = messageText
@@ -1941,14 +2839,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 val beforeCursor = currentText.substring(0, cursorPos)
                                 val afterCursor = currentText.substring(cursorPos)
                                 messageText = "$beforeCursor@Silk $afterCursor"
-                                // 移动光标到插入文本之后
                                 window.setTimeout({
-                                    val newPos = cursorPos + 6 // "@Silk " 的长度
+                                    val newPos = cursorPos + 6
                                     input.setSelectionRange(newPos, newPos)
                                     input.focus()
                                 }, 0)
                             } else {
-                                // 如果无法获取输入框，直接追加
                                 messageText = if (messageText.isEmpty() || messageText.endsWith(" ")) {
                                     "${messageText}@Silk "
                                 } else {
@@ -1961,20 +2857,308 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }
                 }
-                
-                // 第一行：输入框占据整行
-                // 发送消息的函数
-                val sendMessage: () -> Unit = {
-                    if (messageText.isNotBlank()) {
-                        val msg = messageText
-                        messageText = ""
-                        scope.launch {
-                            chatClient.sendMessage(user.id, user.fullName, msg)
+
+                // 代理触发按钮（按连接的代理类型显示 @claude/@cursor 等，仅多人群 HOST/OPERATOR 可见）
+                if (showCcButton) {
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        property("justify-content", "flex-start")
+                        property("gap", "8px")
+                        alignItems(AlignItems.Center)
+                        property("flex-wrap", "wrap")
+                    }
+                }) {
+                    Button({
+                        style {
+                            padding(6.px, 12.px)
+                            backgroundColor(Color("rgba(76, 175, 80, 0.12)"))
+                            color(Color("#4CAF50"))
+                            border {
+                                width(1.px)
+                                style(LineStyle.Solid)
+                                color(Color("#4CAF50"))
+                            }
+                            borderRadius(16.px)
+                            property("cursor", "pointer")
+                            fontSize(13.px)
+                            property("font-weight", "500")
+                            property("transition", "all 0.2s ease")
+                            property("white-space", "nowrap")
+                        }
+                        onClick {
+                            val prefixWithSpace = "$ccPrefix "
+                            val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLTextAreaElement
+                            if (input != null) {
+                                val currentText = messageText
+                                val cursorPos = input.selectionStart ?: currentText.length
+                                val beforeCursor = currentText.substring(0, cursorPos)
+                                val afterCursor = currentText.substring(cursorPos)
+                                messageText = "$beforeCursor$prefixWithSpace$afterCursor"
+                                window.setTimeout({
+                                    val newPos = cursorPos + prefixWithSpace.length
+                                    input.setSelectionRange(newPos, newPos)
+                                    input.focus()
+                                }, 0)
+                            } else {
+                                messageText = if (messageText.isEmpty() || messageText.endsWith(" ")) {
+                                    "$messageText$prefixWithSpace"
+                                } else {
+                                    "$messageText $prefixWithSpace"
+                                }
+                            }
+                        }
+                    }) {
+                        Text(ccPrefix)
+                    }
+
+                    // mode/model badges inline with @agent button
+                    if (ccConnectInfo?.connected == true) {
+                        val modeKey = ccConnectInfo?.mode ?: ""
+                        val modelName = ccConnectInfo?.model ?: ""
+
+                        if (showModeDropdown || showModelDropdown) {
+                            Div({
+                                style {
+                                    property("position", "fixed")
+                                    property("top", "0"); property("left", "0")
+                                    property("right", "0"); property("bottom", "0")
+                                    property("z-index", "999")
+                                }
+                                onClick { showModeDropdown = false; showModelDropdown = false }
+                            })
+                        }
+
+                        // Mode
+                        if (modeKey.isNotBlank() || !ccConnectInfo?.availableModes.isNullOrEmpty()) {
+                            val modeName = ccConnectInfo?.availableModes?.find { it.key == modeKey }?.name ?: modeKey
+                            val (modeBg, modeFg, modeBorder) = when (modeKey) {
+                                "force", "bypassPermissions", "yolo" -> Triple("#FFF0F0", "#C62828", "#FFCDD2")
+                                "plan" -> Triple("#EDF4FF", "#1565C0", "#BBDEFB")
+                                "ask" -> Triple("#F0FFF0", "#2E7D32", "#C8E6C9")
+                                else -> Triple("#F7F7F7", "#555555", "#E0E0E0")
+                            }
+                            Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock) } }) {
+                                Span({
+                                    style {
+                                        fontSize(13.px); padding(4.px, 12.px); borderRadius(14.px)
+                                        property("font-weight", "500"); property("cursor", "pointer")
+                                        property("transition", "all 0.15s ease"); property("user-select", "none")
+                                        backgroundColor(Color(modeBg)); color(Color(modeFg))
+                                        property("border", "1px solid $modeBorder")
+                                    }
+                                    attr("title", "Permission mode")
+                                    onClick { showModeDropdown = !showModeDropdown; showModelDropdown = false }
+                                }) { Text("⚙ ${modeName.ifBlank { "mode" }}") }
+                                if (showModeDropdown && !ccConnectInfo?.availableModes.isNullOrEmpty()) {
+                                    Div({
+                                        style {
+                                            property("position", "absolute"); property("bottom", "100%"); property("left", "0")
+                                            property("z-index", "1000"); marginBottom(6.px)
+                                            backgroundColor(Color.white); borderRadius(10.px)
+                                            property("box-shadow", "0 4px 20px rgba(0,0,0,0.12)")
+                                            property("min-width", "180px"); padding(6.px)
+                                            property("border", "1px solid #E8E8E8")
+                                        }
+                                    }) {
+                                        Div({ style { padding(6.px, 12.px); fontSize(11.px); color(Color("#999")); property("font-weight", "500"); property("text-transform", "uppercase"); property("letter-spacing", "0.5px") } }) { Text("Mode") }
+                                        ccConnectInfo?.availableModes?.forEach { opt ->
+                                            val isCurrent = opt.key == modeKey
+                                            Div({
+                                                style {
+                                                    padding(8.px, 12.px); borderRadius(8.px); property("cursor", "pointer"); fontSize(14.px)
+                                                    if (isCurrent) { backgroundColor(Color("#F0F4FF")); property("font-weight", "600"); color(Color("#1565C0")) }
+                                                }
+                                                onClick { showModeDropdown = false; if (!isCurrent) chatClient.sendCcCommand(user.id, "/mode ${opt.key}") }
+                                                onMouseOver { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F0F4FF" else "#F5F5F5" }
+                                                onMouseOut { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F0F4FF" else "" }
+                                            }) { Text(if (isCurrent) "✓ ${opt.name}" else "  ${opt.name}") }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Model
+                        if (!ccConnectInfo?.availableModels.isNullOrEmpty()) {
+                            val badgeModel = if (modelName.isNotBlank()) compactModelId(modelName) else "default"
+                            val modelTitle = if (modelName.isNotBlank()) modelName else "agent default"
+                            Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock); maxWidth(320.px) } }) {
+                                Span({
+                                    style {
+                                        fontSize(13.px); padding(4.px, 12.px); borderRadius(14.px)
+                                        property("font-weight", "500"); property("cursor", "pointer")
+                                        property("transition", "all 0.15s ease"); property("user-select", "none")
+                                        backgroundColor(Color("#F8F0FF")); color(Color("#6A1B9A"))
+                                        property("border", "1px solid #E1BEE7")
+                                        display(DisplayStyle.InlineBlock); maxWidth(100.percent)
+                                        property("overflow", "hidden"); property("text-overflow", "ellipsis")
+                                        property("white-space", "nowrap"); property("vertical-align", "middle")
+                                        property("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
+                                    }
+                                    attr("title", "Model: $modelTitle")
+                                    onClick { showModelDropdown = !showModelDropdown; showModeDropdown = false }
+                                }) { Text("🤖 $badgeModel") }
+                                if (showModelDropdown) {
+                                    Div({
+                                        style {
+                                            property("position", "absolute"); property("bottom", "100%"); property("left", "0")
+                                            property("z-index", "1000"); marginBottom(6.px)
+                                            backgroundColor(Color.white); borderRadius(10.px)
+                                            property("box-shadow", "0 4px 20px rgba(0,0,0,0.12)")
+                                            minWidth(360.px); property("max-width", "min(520px, 92vw)")
+                                            property("max-height", "min(420px, 60vh)")
+                                            property("overflow-y", "auto"); padding(6.px)
+                                            property("border", "1px solid #E8E8E8")
+                                        }
+                                    }) {
+                                        Div({ style { padding(6.px, 12.px); fontSize(11.px); color(Color("#999")); property("font-weight", "500"); property("text-transform", "uppercase"); property("letter-spacing", "0.5px") } }) { Text("Model") }
+                                        ccConnectInfo?.availableModels?.forEach { opt ->
+                                            val isCurrent = opt.name == modelName
+                                            Div({
+                                                style {
+                                                    padding(8.px, 12.px); borderRadius(8.px); property("cursor", "pointer")
+                                                    property("white-space", "normal"); property("word-break", "break-all")
+                                                    if (isCurrent) { backgroundColor(Color("#F3E5F5")); color(Color("#6A1B9A")) }
+                                                }
+                                                onClick { showModelDropdown = false; if (!isCurrent) chatClient.sendCcCommand(user.id, "/model switch ${opt.name}") }
+                                                onMouseOver { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F3E5F5" else "#F5F5F5" }
+                                                onMouseOut { (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = if (isCurrent) "#F3E5F5" else "" }
+                                            }) {
+                                                Div({
+                                                    style {
+                                                        fontSize(13.px)
+                                                        if (isCurrent) property("font-weight", "600")
+                                                        property("font-family", "ui-monospace, SFMono-Regular, Menlo, monospace")
+                                                        property("line-height", "1.45")
+                                                    }
+                                                }) { Text(if (isCurrent) "✓ ${opt.name}" else opt.name) }
+                                                if (opt.desc.isNotBlank()) {
+                                                    Div({
+                                                        style {
+                                                            fontSize(12.px); color(Color("#888")); marginTop(2.px)
+                                                            property("line-height", "1.35"); property("word-break", "break-word")
+                                                        }
+                                                    }) { Text(opt.desc) }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+                }
                 
-                // 输入框容器（用于定位 mention 菜单）
+                // 第一行：输入框占据整行
+                // 发送消息的函数
+                                val sendMessage: () -> Unit = {
+                    val text = messageText
+                    val pendingImg = pendingPasteImage
+                    if (text.isNotBlank() || pendingImg != null) {
+                        messageText = ""
+                        pendingPasteImage = null
+                        val pendingUrl = pendingPasteImageUrl
+                        pendingPasteImageUrl = null
+                        if (pendingUrl != null) {
+                            js("window.URL.revokeObjectURL(pendingUrl)")
+                        }
+                        if (pendingImg == null && text.isNotBlank()) {
+                            scope.launch {
+                                chatClient.sendMessage(
+                                    user.id,
+                                    user.fullName,
+                                    text,
+                                    kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+                                )
+                            }
+                        }
+                        if (pendingImg != null) {
+                            isUploading = true
+                            // 图片+文字一起通过 HTTP 上传，后端保存后广播单条 ##PREVIEW_IMAGE 消息
+                            val w = js("window")
+                            w.__upGid = group.id
+                            w.__upUid = user.id
+                            w.__upUrl = "${backendHttpOrigin()}/api/files/upload"
+                            w.__upFile = pendingImg
+                            w.__upText = if (text.isNotBlank()) text else ""
+                            js("""
+                                var fd = new FormData();
+                                fd.append("sessionId", window.__upGid);
+                                fd.append("userId", window.__upUid);
+                                fd.append("file", window.__upFile);
+                                fd.append("text", window.__upText);
+                                var xhr = new XMLHttpRequest();
+                                xhr.open("POST", window.__upUrl, true);
+                                xhr.onload = function() { window.__upIsUploading = false; };
+                                xhr.onerror = function() { window.__upIsUploading = false; };
+                                xhr.send(fd);
+                            """)
+                            js("window.__upIsUploading = true;")
+                        }
+                    }
+                }
+
+
+
+
+
+
+                
+
+                                // 粘贴图片预览
+                if (pendingPasteImageUrl != null) {
+                    Div({
+                        style {
+                            display(DisplayStyle.Flex)
+                            alignItems(AlignItems.Center)
+                            property("gap", "8px")
+                            padding(8.px, 12.px)
+                            marginBottom(8.px)
+                            backgroundColor(Color("rgba(201, 168, 108, 0.08)"))
+                            borderRadius(8.px)
+                            property("border", "1px solid rgba(201, 168, 108, 0.25)")
+                        }
+                    }) {
+                        Img(src = pendingPasteImageUrl!!) {
+                            style {
+                                width(60.px)
+                                height(60.px)
+                                property("object-fit", "cover")
+                                borderRadius(4.px)
+                            }
+                        }
+                        Span({
+                            style {
+                                fontSize(13.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("flex", "1")
+                            }
+                        }) { Text("Send with image") }
+                        Span({
+                            style {
+                                fontSize(16.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("cursor", "pointer")
+                                padding(4.px)
+                            }
+                            onClick {
+                                val url = pendingPasteImageUrl
+                                pendingPasteImage = null
+                                pendingPasteImageUrl = null
+                                if (url != null) { js("window.URL.revokeObjectURL(url)") }
+                            }
+                        }) { Text("x") }
+                    }
+                }
+
+                KnowledgeBaseContextTray(
+                    statusMessages = statusMessages,
+                    selection = kbContextSelection,
+                    onSelectionChange = { kbContextSelection = it },
+                )
+// 输入框容器（用于定位 mention 菜单）
                 Div({
                     style {
                         property("position", "relative")
@@ -2020,6 +3204,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         attr("placeholder", when {
                             pendingQuestionId != null -> "回答 Claude Code 的问题..."
                             group.name.startsWith("[Silk]") -> strings.silkChatInputPlaceholder
+                            ccConnectInfo != null -> "Message cc-connect agent..."
                             else -> strings.messageInputPlaceholder
                         })
                         attr("rows", "2")
@@ -2030,6 +3215,34 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             property("resize", "none")
                         }
                     }
+                    
+                                        // 粘贴图片处理（存入待发送队列，不立即上传）
+                    DisposableEffect(Unit) {
+                        val handler: (org.w3c.dom.events.Event) -> Unit = { event ->
+                            val clipboardEvent = event.asDynamic()
+                            val items = clipboardEvent.clipboardData?.items
+                            if (items != null) {
+                                for (idx in 0 until items.length) {
+                                    val item = items[idx]
+                                    if (item.kind == "file" && item.type.startsWith("image/")) {
+                                        event.preventDefault()
+                                        val fileBlob = item.getAsFile()
+                                        if (fileBlob != null) {
+                                            pendingPasteImage = fileBlob
+                                            pendingPasteImageUrl = js("window.URL.createObjectURL(fileBlob)").toString()
+                                        }
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                        val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLElement
+                        input?.addEventListener("paste", handler)
+                        onDispose {
+                            input?.removeEventListener("paste", handler)
+                        }
+                    }
+
                     
                     // @ Mention 下拉菜单 - 使用 fixed 定位避免被 overflow:hidden 裁剪
                     if (showMentionMenu) {
@@ -2223,6 +3436,67 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         Text(if (isUploading) "⏳" else "📎")
                     }
 
+                    // 📷 截屏按钮（区域截图）
+                    Button({
+                        style {
+                            padding(12.px, 14.px)
+                            backgroundColor(Color(SilkColors.secondary))
+                            color(Color(SilkColors.textPrimary))
+                            border { width(0.px) }
+                            borderRadius(8.px)
+                            property("cursor", if (isUploading) "not-allowed" else "pointer")
+                            fontSize(18.px)
+                            property("transition", "all 0.2s ease")
+                            property("opacity", if (isUploading) "0.6" else "1")
+                        }
+                        attr("title", "截取屏幕区域")
+                        onClick {
+                            if (!isUploading) {
+                                isScreenshotCrop = true
+                                val sessionId = group.id
+                                val userId = user.id
+                                val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
+                                // 注册 JS 回调以重置 Kotlin 状态（保持注册直到 JS 侧使用完毕）
+                                window.asDynamic().__screenshotDone = {
+                                    val blob = js("window.__pendingScreenshotBlob")
+                                    if (blob != null) {
+                                        pendingPasteImage = blob
+                                        pendingPasteImageUrl = js("window.URL.createObjectURL(blob)").toString()
+                                        js("window.__pendingScreenshotBlob = null")
+                                    }
+                                    isScreenshotCrop = false
+                                }
+                                js("""
+                                    (function() {
+                                        var sid = sessionId;
+                                        var uid_ = userId;
+                                        var url = uploadUrl;
+                                        navigator.mediaDevices.getDisplayMedia().then(function(stream) {
+                                            var video = document.createElement('video');
+                                            video.srcObject = stream;
+                                            video.onloadedmetadata = function() {
+                                                video.play();
+                                                var canvas = document.createElement('canvas');
+                                                canvas.width = video.videoWidth;
+                                                canvas.height = video.videoHeight;
+                                                var ctx = canvas.getContext('2d');
+                                                ctx.drawImage(video, 0, 0);
+                                                stream.getTracks().forEach(function(t) { t.stop(); });
+                                                var dataUrl = canvas.toDataURL('image/png');
+                                                window.showCropOverlay(dataUrl, sid, uid_, url);
+                                            };
+                                        }).catch(function(e) {
+                                            console.log('截图取消:', e);
+                                            if (window.__screenshotDone) { window.__screenshotDone(); window.__screenshotDone = undefined; }
+                                        });
+                                    })();
+                                """)
+                            }
+                        }
+                    }) {
+                        Text("📷")
+                    }
+
                     // 🎤 语音输入按钮
                     if (isTranscribing) {
                         Button({
@@ -2368,6 +3642,54 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
+    // 知识库入库对话框
+    kbCaptureDraft?.let { draft ->
+        KnowledgeBaseCaptureDialog(
+            draft = draft,
+            spaceOptions = buildKnowledgeSpaceOptions(kbCaptureGroups),
+            topics = kbCaptureTopics,
+            selectedSpaceId = kbCaptureSelectedSpaceId,
+            selectedTopicId = kbCaptureSelectedTopicId,
+            title = kbCaptureTitle,
+            content = kbCaptureContent,
+            isSaving = kbCaptureSaving,
+            resultMessage = kbCaptureResult,
+            onSelectedSpaceIdChange = { kbCaptureSelectedSpaceId = it },
+            onSelectedTopicIdChange = { kbCaptureSelectedTopicId = it },
+            onTitleChange = { kbCaptureTitle = it },
+            onContentChange = { kbCaptureContent = it },
+            onDismiss = resetKnowledgeCaptureDialog,
+            onConfirm = {
+                if (!canSubmitKnowledgeCapture(kbCaptureSaving, kbCaptureSelectedTopicId, kbCaptureTitle, kbCaptureContent)) {
+                    return@KnowledgeBaseCaptureDialog
+                }
+                scope.launch {
+                    kbCaptureSaving = true
+                    val created = ApiClient.captureKBEntry(
+                        topicId = kbCaptureSelectedTopicId,
+                        title = kbCaptureTitle.trim(),
+                        content = kbCaptureContent,
+                        tags = emptyList(),
+                        userId = user.id,
+                        source = KBEntrySource(
+                            sourceType = draft.sourceType,
+                            sourceGroupId = draft.sourceGroupId,
+                            workflowId = draft.workflowId,
+                            messageIds = listOf(draft.message.id),
+                        ),
+                    )
+                    kbCaptureSaving = false
+                    if (created == null) {
+                        kbCaptureResult = "保存失败，请确认目标主题仍可写。"
+                    } else {
+                        resetKnowledgeCaptureDialog()
+                        appState.openKnowledgeBaseEntry(created.id, created.topicId)
+                    }
+                }
+            },
+        )
+    }
+
     // 转发对话框
     if (showForwardDialog && messageToForward != null) {
         Div({
@@ -2612,6 +3934,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             currentUserId = user.id,
             isLoading = isLoadingContacts,
             strings = strings,
+            isHost = group.hostId == user.id,
+            isCcConnectGroup = ccConnectInfo != null,
+            groupId = group.id,
             onMemberClick = { member ->
                 // 检查是否是联系人
                 val isContact = contacts.any { it.contactId == member.id }
@@ -2622,7 +3947,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         // 先断开当前WebSocket
                         try {
                             chatClient.disconnect()
-                        } catch (e: dynamic) { }
+                        } catch (e: dynamic) { /* ignore disconnect errors */ }
                         
                         // 调用API获取或创建与该联系人的对话
                         val response = ApiClient.startPrivateChat(user.id, member.id)
@@ -2642,10 +3967,27 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 showMembersDialog = false
                 selectedMemberForInvite = null
                 inviteMemberResult = null
+            },
+            onMembersChanged = {
+                scope.launch {
+                    val membersResponse = ApiClient.getGroupMembers(group.id)
+                    groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                }
             }
         )
     }
     
+    // cc-connect token info dialog
+    if (showCcConnectTokenDialog && ccConnectInfo != null) {
+        CcConnectTokenDialog(
+            groupId = group.id,
+            userId = user.id,
+            tokenInfo = ccConnectInfo!!,
+            onTokenRegenerated = { newInfo -> ccConnectInfo = newInfo },
+            onDismiss = { showCcConnectTokenDialog = false }
+        )
+    }
+
     // 邀请成员加入联系人确认对话框
     selectedMemberForInvite?.let { member ->
         Div({
@@ -2954,6 +4296,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught")
 @Composable
 fun FolderExplorerDialog(
     groupId: String,
@@ -2964,8 +4307,10 @@ fun FolderExplorerDialog(
     var processedUrls by remember { mutableStateOf<List<String>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var refreshTrigger by remember { mutableStateOf(0) }
+    val scope = rememberCoroutineScope()
     
-    LaunchedEffect(groupId) {
+    LaunchedEffect(groupId, refreshTrigger) {
         val apiUrl = "${backendHttpOrigin()}/api/files/list/$groupId"
         isLoading = true
         errorMessage = null
@@ -2973,7 +4318,7 @@ fun FolderExplorerDialog(
             console.log("📁 请求文件列表:", apiUrl)
             val response = window.fetch(apiUrl).await()
             if (!response.ok) {
-                throw IllegalStateException("HTTP ${response.status}")
+                error("HTTP ${response.status}")
             }
             val body = response.text().await()
             val parsed = parseWebFolderContents(body)
@@ -3258,6 +4603,14 @@ fun FolderExplorerDialog(
                                 }
                             }
                             
+                            // 操作按钮组
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    property("gap", "8px")
+                                    alignItems(AlignItems.Center)
+                                }
+                            }) {
                             // 下载按钮
                             Button({
                                 style {
@@ -3279,6 +4632,37 @@ fun FolderExplorerDialog(
                                 }
                             }) {
                                 Text("⬇️ ${strings.download}")
+                            }
+                            // 删除文件
+                            Span({
+                                style {
+                                    padding(8.px, 12.px)
+                                    color(Color("#E57373"))
+                                    property("cursor", "pointer")
+                                    fontSize(13.px)
+                                    property("transition", "all 0.2s ease")
+                                    property("border-radius", "4px")
+                                }
+                                onClick {
+                                    if (kotlinx.browser.window.confirm("确定删除 ${fileName} 吗？")) {
+                                        scope.launch {
+                                            try {
+                                                // 从下载链接解析 fileId: /api/files/download/{sessionId}/{fileId}
+                                                val parts = downloadUrl.split("/")
+                                                val fileId = parts.lastOrNull() ?: fileName
+                                                val sessionId = groupId
+                                                ApiClient.deleteFile(sessionId, fileId)
+                                                // 刷新文件列表
+                                                refreshTrigger = refreshTrigger + 1
+                                            } catch (e: Exception) {
+                                                console.error("删除文件失败:", e)
+                                            }
+                                        }
+                                    }
+                                }
+                            }) {
+                                Text("🗑")
+                            }
                             }
                         }
                     }
@@ -3303,6 +4687,7 @@ private external val markdownItTaskLists: dynamic
 
 @JsModule("highlight.js")
 @JsNonModule
+@Suppress("UnusedParameter")
 private external object HighlightJs {
     fun highlight(code: String, options: dynamic): dynamic
     fun highlightAuto(code: String): dynamic
@@ -3311,6 +4696,7 @@ private external object HighlightJs {
 
 @JsModule("dompurify")
 @JsNonModule
+@Suppress("UnusedParameter")
 private external object DOMPurify {
     fun sanitize(dirty: String, config: dynamic = definedExternally): String
 }
@@ -3331,6 +4717,18 @@ private external val githubMarkdownStylesheet: dynamic
 @JsNonModule
 private external val highlightStylesheet: dynamic
 
+@JsModule("diff2html")
+@JsNonModule
+@Suppress("UnusedParameter")
+private external object Diff2Html {
+    fun html(diffInput: String, configuration: dynamic = definedExternally): String
+}
+
+@JsModule("diff2html/bundles/css/diff2html.min.css")
+@JsNonModule
+private external val diff2htmlStylesheet: dynamic
+
+@Suppress("TopLevelPropertyNaming")
 private const val markdownRuntimeStyleId = "silk-markdown-runtime-style"
 
 private val silkMarkdownRuntimeCss = """
@@ -3517,6 +4915,7 @@ private fun ensureMarkdownAssetsLoaded() {
     githubMarkdownStylesheet
     katexStylesheet
     highlightStylesheet
+    diff2htmlStylesheet
 }
 
 private fun ensureMarkdownStylesInjected() {
@@ -3548,6 +4947,7 @@ private val mathDelimiters = listOf(
     MathDelimiter("\\(", "\\)")
 )
 
+@Suppress("LoopWithTooManyJumpStatements")
 private fun normalizeMathBlocks(markdown: String): String {
     val output = StringBuilder()
     var cursor = 0
@@ -3609,6 +5009,7 @@ private fun fixHeaderlessTables(markdown: String): String {
     return result.joinToString("\n")
 }
 
+@Suppress("CyclomaticComplexMethod", "NestedBlockDepth", "LoopWithTooManyJumpStatements")
 private fun fixOrphanCodeFences(markdown: String): String {
     val lines = markdown.split("\n").toMutableList()
     var idx = 0
@@ -3738,6 +5139,8 @@ private fun createSanitizeConfig(): dynamic {
     val config = js("{}")
     config.ADD_TAGS = arrayOf("input", "details", "summary")
     config.ADD_ATTR = arrayOf("checked", "disabled", "type", "class", "open")
+    // Allow data: URIs for <img> so Claude's data URI images render inline
+    config.ADD_DATA_URI_TAGS = arrayOf("img")
     return config
 }
 
@@ -3769,6 +5172,7 @@ private fun rememberMarkdownEngine(): MarkdownIt {
     return remember { createMarkdownEngine() }
 }
 
+@Suppress("UnusedParameter")
 private fun linkCitationMarkers(
     html: String,
     references: List<com.silk.shared.models.MessageReference>,
@@ -3793,6 +5197,48 @@ private fun linkCitationMarkers(
     }
 }
 
+// diff2html / DOMPurify 配置对象：放在 @Composable 外（本文件约定 js("...") 不入 composable，避免 Compose LiveLiteral lowering 崩溃）
+private val jsDiff2HtmlConfig = js("({ drawFileList: false, matching: 'lines', outputFormat: 'line-by-line' })")
+private val jsDompurifyDiffConfig = js("({ ADD_ATTR: ['class'] })")
+
+/** 构建单文件 diff 的安全 HTML：diff2html 低层 html() → DOMPurify 消毒（顶层非 composable）。 */
+private fun buildDiffHtml(patch: String): String {
+    if (patch.isBlank()) return "<div class=\"silk-diff-empty\">(无差异内容)</div>"
+    val rawHtml = Diff2Html.html(patch, jsDiff2HtmlConfig)
+    return DOMPurify.sanitize(rawHtml, jsDompurifyDiffConfig)
+}
+
+/**
+ * 单文件 unified diff 渲染：buildDiffHtml → innerHTML。
+ * v1 只做 GitHub 式增/删配色，不做逐 token 语法高亮（不引入 diff2html-ui，避免绕过 DOMPurify）。
+ */
+@Composable
+fun RenderDiff(patch: String, fileName: String) {
+    // 唯一容器 id：文件名 + patch 长度，避免同页多个 diff 冲突
+    val containerId = remember(fileName, patch) { "diff-${fileName.hashCode()}-${patch.length}" }
+    val safeHtml = remember(patch) { buildDiffHtml(patch) }
+
+    Div({
+        classes("silk-diff-body")
+        id(containerId)
+        // diff2html 的行号 td 是 position:absolute；给容器一个定位上下文（且它随面板内容一起滚动），
+        // 否则行号会锚到视口而不随滚轮移动，造成与代码行错位。overflow-x 让超长行可横向滚动。
+        style {
+            property("position", "relative")
+            property("overflow-x", "auto")
+        }
+    }) { }
+
+    DisposableEffect(containerId, safeHtml) {
+        val element = document.getElementById(containerId) as? HTMLElement
+        if (element != null) {
+            element.innerHTML = safeHtml
+        }
+        onDispose { }
+    }
+}
+
+@Suppress("CyclomaticComplexMethod", "UnusedParameter", "TooGenericExceptionCaught", "LoopWithTooManyJumpStatements")
 @Composable
 fun MarkdownContent(
     content: String,
@@ -3805,16 +5251,20 @@ fun MarkdownContent(
     val containerId = remember { "silk-markdown-${Random.nextInt(1_000_000)}" }
     val safeHtml = remember(content, references) {
         try {
+            // Strip the cc-connect turn routing marker (invisible to users)
+            val cleanContent = content
+                .replace("<!--CC_TURN-->\n", "")
+                .replace("<!--CC_TURN-->", "")
             // Escape < followed by non-HTML-tag characters (e.g., "<1.2m" → "&lt;1.2m")
             // before any other processing, so DOMPurify won't strip them as invalid tags.
-            val htmlSafeContent = content.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
+            val htmlSafeContent = cleanContent.replace(Regex("<(?![a-zA-Z/!])"), "&lt;")
             // Convert thinking section (before <!--THINKING_END-->) to collapsible <details>
-            // Note: processing on raw `content` so thinking-text escaping doesn't double-escape
+            // Note: processing on raw `cleanContent` so thinking-text escaping doesn't double-escape
             val thinkingMarker = "<!--THINKING_END-->"
-            val withThinkingDetails = if (content.contains(thinkingMarker)) {
-                val idx = content.indexOf(thinkingMarker)
-                val thinkingText = content.substring(0, idx).trim()
-                val tailRaw = content.substring(idx + thinkingMarker.length).trimStart('\n').trim()
+            val withThinkingDetails = if (cleanContent.contains(thinkingMarker)) {
+                val idx = cleanContent.indexOf(thinkingMarker)
+                val thinkingText = cleanContent.substring(0, idx).trim()
+                val tailRaw = cleanContent.substring(idx + thinkingMarker.length).trimStart('\n').trim()
                 val tailEffective =
                     if (tailRaw.isBlank()) "*（本次仅有思考过程或未生成正文，请重试。）*" else tailRaw
                 val escaped = thinkingText
@@ -3829,8 +5279,43 @@ fun MarkdownContent(
             } else {
                 htmlSafeContent
             }
+            // Convert tool-call section (before <!--TOOLS_END-->) to collapsible <details>
+            // Tools content is rendered through markdown-it to preserve formatting.
+            val toolsMarker = "<!--TOOLS_END-->"
+            val withToolsDetails = if (withThinkingDetails.contains(toolsMarker)) {
+                val tIdx = withThinkingDetails.indexOf(toolsMarker)
+                val beforeTools = withThinkingDetails.substring(0, tIdx)
+                val afterTools = withThinkingDetails.substring(tIdx + toolsMarker.length).trimStart('\n').trim()
+                val detailsEnd = beforeTools.lastIndexOf("</details>")
+                val prefix = if (detailsEnd >= 0) beforeTools.substring(0, detailsEnd + "</details>".length) else ""
+
+                // Extract raw tools content from cleanContent (before any escaping)
+                val rawToolsStart = if (cleanContent.contains(thinkingMarker)) {
+                    cleanContent.indexOf(thinkingMarker) + thinkingMarker.length
+                } else 0
+                val rawToolsEnd = cleanContent.indexOf(toolsMarker)
+                val rawToolsContent = if (rawToolsEnd > rawToolsStart) {
+                    cleanContent.substring(rawToolsStart, rawToolsEnd).trim()
+                } else ""
+
+                val toolsRenderedHtml = if (rawToolsContent.isNotBlank()) {
+                    DOMPurify.sanitize(
+                        markdownEngine.render(rawToolsContent),
+                        createSanitizeConfig()
+                    )
+                } else ""
+
+                val toolsDetails = "<details class=\"silk-thinking-details\">\n" +
+                    "<summary>🔧 工具调用过程</summary>\n" +
+                    toolsRenderedHtml + "\n</details>"
+                val answerEffective = if (afterTools.isBlank()) "" else "\n\n$afterTools"
+                if (prefix.isNotBlank()) "$prefix\n\n$toolsDetails$answerEffective"
+                else "$toolsDetails$answerEffective"
+            } else {
+                withThinkingDetails
+            }
             // Collapse excessive blank lines (3+ → 1 blank line)
-            val reducedBlanks = withThinkingDetails.replace(Regex("\\n{3,}"), "\n\n")
+            val reducedBlanks = withToolsDetails.replace(Regex("\\n{3,}"), "\n\n")
             // Normalize headings missing space after # (e.g., "##一、" → "## 一、")
             val normalizedHeadings = reducedBlanks.replace(
                 Regex("^(#{1,6})([^#\\s])", RegexOption.MULTILINE),
@@ -3845,13 +5330,15 @@ fun MarkdownContent(
             val unquotedBlockquotes = fixedFences
                 .replace(Regex("""^>\s*(-{3,})\s*$""", RegexOption.MULTILINE), "\n$1")
                 .replace(Regex("""^>\s*(\*\*Sources?:?\*\*)\s*$""", RegexOption.MULTILINE), "\n$1")
-            val linked = linkCitationMarkers(
-                DOMPurify.sanitize(
-                    markdownEngine.render(normalizeMathBlocks(unquotedBlockquotes)),
-                    createSanitizeConfig()
-                ),
-                references,
-                referenceAnchorPrefix
+            val linked = renderKnowledgeBaseMarkersInHtml(
+                linkCitationMarkers(
+                    DOMPurify.sanitize(
+                        markdownEngine.render(normalizeMathBlocks(unquotedBlockquotes)),
+                        createSanitizeConfig()
+                    ),
+                    references,
+                    referenceAnchorPrefix
+                )
             )
             linked
         } catch (_: Throwable) {
@@ -3871,6 +5358,23 @@ fun MarkdownContent(
         val element = document.getElementById(containerId) as? HTMLElement
         if (element != null) {
             element.innerHTML = safeHtml
+
+            // KB 内联引用：给 [[kb:...]] 渲染出的链接挂上点击处理（→ window.__silkOpenKnowledgeBaseEntry）
+            attachKnowledgeBaseLinkHandlers(element)
+
+            // Rewrite HTTP image src through backend proxy to avoid Mixed Content
+            val images = element.querySelectorAll("img")
+            for (imgIdx in 0 until images.length) {
+                val img = images.item(imgIdx) as? HTMLElement ?: continue
+                val src = img.getAttribute("src") ?: ""
+                if (src.startsWith("http://")) {
+                    // 代理在 API 后端，不在前端静态服务器
+                    val backendPort = BuildConfig.BACKEND_HTTP_PORT
+                    val loc = window.location
+                    val proxyBase = "${loc.protocol}//${loc.hostname}:$backendPort"
+                    img.setAttribute("src", "$proxyBase/api/image-proxy?url=${js("encodeURIComponent")(src)}")
+                }
+            }
 
             val links = element.querySelectorAll("a")
             for (index in 0 until links.length) {
@@ -4061,8 +5565,8 @@ fun ReferenceSourcesList(
  * 3. Markdown 内容优化渲染
  * 4. 可折叠的长内容
  */
+@Suppress("CyclomaticComplexMethod", "NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS")
 @Composable
-@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS")
 @NoLiveLiterals
 fun AIMessageCard(
     message: Message,
@@ -4070,6 +5574,7 @@ fun AIMessageCard(
     isTransient: Boolean = false,
     isLastMessage: Boolean = false,
     onCopy: (String) -> Unit = {},
+    onCaptureToKnowledgeBase: (Message) -> Unit = {},
     onForward: (Message) -> Unit = {},
     onDelete: (String) -> Unit = {},
     isSelectionMode: Boolean = false,
@@ -4077,7 +5582,8 @@ fun AIMessageCard(
     onToggleSelection: (String) -> Unit = {},
     onEnterSelectionMode: (String) -> Unit = {}
 ) {
-    val isLongContent = message.content.length > 500
+    val containsImageMd = message.content.contains("![](")
+    val isLongContent = message.content.length > 500 && !containsImageMd
     val collapsedPreview = remember(message.content) {
         message.content.trimStart().take(200).ifBlank { "（内容已折叠，点击展开）" }
     }
@@ -4115,7 +5621,7 @@ Div({
         }
         
     Div({
-        classes(SilkStylesheet.aiMessageCard)
+        classes(SilkStylesheet.aiMessageCard, "silk-ai-card")
         attr("id", "ai-msg-${message.id}")
         style {
             property("flex", "1")
@@ -4128,49 +5634,22 @@ Div({
     }) {
         // AI 头部标识
         Div({
-            style {
-                display(DisplayStyle.Flex)
-                alignItems(AlignItems.Center)
-                property("gap", "10px")
-                marginBottom(12.px)
-            }
+            classes("silk-ai-header")
         }) {
             // AI 图标
             Div({
-                classes(SilkStylesheet.aiBadge)
+                classes("silk-ai-avatar")
             }) {
                 Text("🤖")
             }
             
             // AI 名称和时间
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    flexDirection(FlexDirection.Column)
-                    property("gap", "2px")
-                }
-            }) {
-                Span({
-                    style {
-                        fontWeight("600")
-                        fontSize(14.px)
-                        color(Color(SilkColors.primary))
-                        property("letter-spacing", "0.5px")
-                    }
-                }) {
-                    val aiDisplayName = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
-                        .let { if (it.isBlank() || it == "Silk") "Silk AI" else it }
-                    Text(aiDisplayName)
-                }
-                Span({
-                    style {
-                        fontSize(11.px)
-                        color(Color(SilkColors.textLight))
-                    }
-                }) {
-                    Text(timeString)
-                }
+            Span({ classes("silk-ai-name") }) {
+                val aiDisplayName = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
+                    .let { if (it.isBlank() || it == "Silk") "Silk AI" else it }
+                Text(aiDisplayName)
             }
+            Span({ classes("silk-ai-time") }) { Text(timeString) }
             
             // 展开/收起按钮（长内容时显示，DOM 切换 display，不触发 Compose 重组）
             if (isLongContent && !isTransient) {
@@ -4230,7 +5709,25 @@ Div({
         }
         
         // 内容区域 — 长内容渲染折叠+展开两个视图，DOM 切换 display（不触发 Compose 重组）
-        if (isLongContent && !isTransient) {
+        val contentBlocksForRender = message.contentBlocks
+        if (!contentBlocksForRender.isNullOrEmpty()) {
+            // 持久化消息回放：从结构化 content blocks 渲染
+            Div({ classes(SilkStylesheet.aiMessageContent) }) {
+                // Thinking block rendered outside the loop for stable composition identity
+                val thinkingBlock = contentBlocksForRender.firstOrNull { it.type == "thinking" }
+                if (thinkingBlock != null) {
+                    ThinkingBlock(content = thinkingBlock.content, isComplete = thinkingBlock.isComplete)
+                }
+                for (block in contentBlocksForRender) {
+                    when (block.type) {
+                        "thinking" -> { /* rendered above */ }
+                        "text" -> MarkdownContent(content = block.content, references = message.references)
+                        "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
+                    }
+                }
+            }
+        } else {
+            if (isLongContent && !isTransient) {
             Div({
                 attr("data-view", "collapsed")
                 style {
@@ -4246,10 +5743,10 @@ Div({
                 style { display(DisplayStyle.None) }
                 classes(SilkStylesheet.aiMessageContent)
             }) {
-                MarkdownContent(
+                StructuredContent(
                     content = message.content,
                     references = message.references,
-                    referenceAnchorPrefix = "msg-${message.id}-"
+                    msgId = message.id
                 )
                 ReferenceSourcesList(
                     references = message.references,
@@ -4307,33 +5804,25 @@ Div({
                     }
                 }
             }
-        } else {
+            } else {
             Div({
                 classes(SilkStylesheet.aiMessageContent)
             }) {
-                MarkdownContent(
+                StructuredContent(
                     content = message.content,
                     references = message.references,
-                    referenceAnchorPrefix = "msg-${message.id}-"
+                    msgId = message.id
                 )
                 ReferenceSourcesList(
                     references = message.references,
                     anchorPrefix = "msg-${message.id}-"
                 )
             }
+            }
         }
         // 底部操作栏
         if (!isTransient && !isSelectionMode) {
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    property("justify-content", "flex-end")
-                    property("gap", "6px")
-                    marginTop(12.px)
-                    paddingTop(8.px)
-                    property("border-top", "1px solid rgba(232, 224, 212, 0.5)")
-                }
-            }) {
+            Div({ classes("silk-ai-actions") }) {
                 Span({
                     style {
                         fontSize(11.px)
@@ -4351,24 +5840,16 @@ Div({
                     Text("📋")
                     Text("复制")
                 }
-                
+
                 Span({
-                    style {
-                        fontSize(11.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("cursor", "pointer")
-                        padding(4.px, 10.px)
-                        borderRadius(4.px)
-                        property("transition", "all 0.2s")
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "4px")
-                    }
+                    classes("silk-ai-action")
+                    onClick { onCaptureToKnowledgeBase(message) }
+                }) { Text("📚 入库") }
+
+                Span({
+                    classes("silk-ai-action")
                     onClick { onForward(message) }
-                }) {
-                    Text("↗")
-                    Text("转发")
-                }
+                }) { Text("↗ 转发") }
                 
                 Span({
                     style {
@@ -4394,22 +5875,9 @@ Div({
 
                 
                 Span({
-                    style {
-                        fontSize(11.px)
-                        color(Color(SilkColors.textSecondary))
-                        property("cursor", "pointer")
-                        padding(4.px, 10.px)
-                        borderRadius(4.px)
-                        property("transition", "all 0.2s")
-                        display(DisplayStyle.Flex)
-                        alignItems(AlignItems.Center)
-                        property("gap", "4px")
-                    }
+                    classes("silk-ai-action")
                     onClick { onEnterSelectionMode(message.id) }
-                }) {
-                    Text("☑")
-                    Text("多选")
-                }
+                }) { Text("☑ 多选") }
             }
         }
         
@@ -4433,16 +5901,20 @@ Div({
     } // close outer selection wrapper
 }
 
+@Suppress("CyclomaticComplexMethod", "NestedBlockDepth", "UnusedParameter")
 @Composable
 fun MessageItem(
     message: Message,
     isTransient: Boolean = false,
     currentUserId: String = "",
+    currentUserName: String = "",
     groupId: String = "",
     isLastMessage: Boolean = false,
     isRecalling: Boolean = false,
+    chatClient: com.silk.shared.ChatClient? = null,
     onRecall: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
+    onCaptureToKnowledgeBase: (Message) -> Unit = {},
     onForward: (Message) -> Unit = {},
     onDelete: (String) -> Unit = {},
     isSelectionMode: Boolean = false,
@@ -4454,8 +5926,8 @@ fun MessageItem(
         formatMessageTimestampForWeb(message.timestamp)
     }
     
-    // 是否是 AI 消息
-    val isAIMessage = isAgentUserId(message.userId)
+    // 是否是 AI 消息（包含 cc-connect 代理回复）
+    val isAIMessage = isAgentUserId(message.userId) || message.userId == "cc-connect"
     
     // AI 消息使用专用卡片
     val isRegularAIText = isAIMessage && message.type == MessageType.TEXT &&
@@ -4468,6 +5940,7 @@ fun MessageItem(
             isTransient = isTransient,
             isLastMessage = isLastMessage,
             onCopy = onCopy,
+            onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
             onForward = onForward,
             onDelete = onDelete,
             isSelectionMode = isSelectionMode,
@@ -4511,7 +5984,11 @@ fun MessageItem(
     }
 
     // Agent 提问消息 - 橙色警告样式
-    if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION) {
+    // 注意：仅处理 cc-connect 的文本型提问（type=TEXT，按钮走底部 interactiveOptions）。
+    // ACP/Workflow agent 的提问是 CARD 类型（questionCard），必须落到下面 when(type) 的
+    // CARD 分支由 CardMessageRenderer 渲染，不能在此被当作文本拦截。
+    if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION &&
+        message.type != MessageType.CARD && message.type != MessageType.CARD_REPLY) {
         Div({
             style {
                 padding(12.px, 16.px)
@@ -4571,6 +6048,10 @@ fun MessageItem(
                 style {
                     property("flex", "1")
                     property("min-width", "0")
+                    if (message.userId == currentUserId) {
+                        property("max-width", "75%")
+                        property("margin-left", "auto")
+                    }
                     if (isSelected) {
                         backgroundColor(Color("rgba(76, 175, 80, 0.10)"))
                         property("outline", "2px solid ${SilkColors.primary}")
@@ -4711,8 +6192,8 @@ fun MessageItem(
                             }
                         }
                     } else {
-                        // 普通文本消息
-                        Text(message.content)
+                        // 普通文本消息 — 用 MarkdownContent 支持图片/格式渲染
+                        MarkdownContent(content = message.content)
                     }
                 }
                 
@@ -4721,7 +6202,7 @@ fun MessageItem(
                     Div({
                         style {
                             display(DisplayStyle.Flex)
-                            property("justify-content", "flex-end")
+                            property("justify-content", if (message.userId == currentUserId) "flex-end" else "flex-start")
                             property("gap", "6px")
                             marginTop(8.px)
                             property("opacity", "0.5")
@@ -4739,7 +6220,19 @@ fun MessageItem(
                             }
                             onClick { copyTextToClipboard(message.content) }
                         }) { Text("📋复制") }
-                        
+
+                        Span({
+                            style {
+                                fontSize(11.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("cursor", "pointer")
+                                property("padding", "2px 6px")
+                                property("border-radius", "4px")
+                                property("transition", "all 0.2s")
+                            }
+                            onClick { onCaptureToKnowledgeBase(message) }
+                        }) { Text("📚入库") }
+
                         Span({
                             style {
                                 fontSize(11.px)
@@ -4870,7 +6363,38 @@ fun MessageItem(
                     }
                 }
                 
-                // 文件卡片
+                // 图片预览（对图片文件）
+                if (webIsImageFile(fileName) && downloadUrl.isNotEmpty()) {
+                    val baseUrl = backendHttpOrigin()
+                    val fullImageUrl = "$baseUrl$downloadUrl"
+                    Div({
+                        style {
+                            borderRadius(8.px)
+                            property("overflow", "hidden")
+                            property("cursor", "pointer")
+                            property("max-width", "360px")
+                            property("border", "1px solid ${SilkColors.border}")
+                        }
+                        onClick {
+                            val w = js("window")
+                            w.open(fullImageUrl, "_blank")
+                        }
+                    }) {
+                        Img(src = fullImageUrl) {
+                            style {
+                                width(100.vw)
+                                property("max-width", "360px")
+                                property("max-height", "300px")
+                                property("object-fit", "contain")
+                                display(DisplayStyle.Block)
+                                backgroundColor(Color("#f0f0f0"))
+                            }
+                        }
+                    }
+                }
+
+                // 文件卡片（图片已有预览，不再显示冗余文件卡）
+                if (!webIsImageFile(fileName)) {
                 Div({
                     style {
                         display(DisplayStyle.Flex)
@@ -4973,6 +6497,7 @@ fun MessageItem(
                         Text("⬇")
                     }
                 }
+                } // end if-not-image
                 
                 // 文件消息操作按钮行
                 if (!isTransient && !isSelectionMode) {
@@ -5030,14 +6555,263 @@ fun MessageItem(
             }
             } // close selection wrapper Div
         }
-        MessageType.JOIN, MessageType.LEAVE, MessageType.SYSTEM -> {
+        MessageType.JOIN, MessageType.LEAVE -> {
             Div({ classes(SilkStylesheet.systemMessage) }) {
                 Text("• ${message.content} ($timeString)")
+            }
+        }
+        MessageType.SYSTEM -> {
+            // 检测是否包含图片预览标记（##PREVIEW_IMAGE:url##）
+            val previewMarker = "##PREVIEW_IMAGE:"
+            val content = message.content
+            if (content.startsWith(previewMarker)) {
+                val markerEnd = content.indexOf("##\n", previewMarker.length)
+                console.log("🖼 [PREVIEW] content starts with marker: markerEnd=$markerEnd content.length=${content.length}")
+                if (markerEnd != -1) {
+                    val imgUrl = content.substring(previewMarker.length, markerEnd)
+                    val textContent = content.substring(markerEnd + 3)
+                    val baseUrl = backendHttpOrigin()
+                    val fullUrl = "$baseUrl$imgUrl"
+                    console.log("🖼 [PREVIEW] imgUrl=$imgUrl fullUrl=$fullUrl")
+
+                    val isOwnMessage = message.userId == currentUserId
+                    console.log("🖼 [PREVIEW] message.userId=$message.userId currentUserId=$currentUserId isOwn=$isOwnMessage")
+                    Div({
+                        classes(SilkStylesheet.messageCard)
+                        style {
+                            property("flex", "1")
+                            property("min-width", "0")
+                            if (isOwnMessage) {
+                                property("max-width", "75%")
+                                property("margin-left", "auto")
+                            }
+                        }
+                    }) {
+                        Div({ classes(SilkStylesheet.messageHeader) }) {
+                            Span({ classes(SilkStylesheet.userName) }) { Text(message.userName) }
+                            Span({ classes(SilkStylesheet.timestamp) }) { Text(timeString) }
+                        }
+                        // 图片预览
+                        Div({
+                            style {
+                                borderRadius(8.px)
+                                property("overflow", "hidden")
+                                property("max-width", "360px")
+                                property("border", "1px solid ${SilkColors.border}")
+                                marginBottom(8.px)
+                                property("cursor", "pointer")
+                            }
+                            onClick { val w = js("window"); w.open(fullUrl, "_blank") }
+                        }) {
+                            Img(src = fullUrl) {
+                                style {
+                                    width(100.vw)
+                                    property("max-width", "360px")
+                                    property("max-height", "300px")
+                                    property("object-fit", "contain")
+                                    display(DisplayStyle.Block)
+                                    backgroundColor(Color("#f0f0f0"))
+                                }
+                                attr("onerror", """
+                                    console.error('🖼 [PREVIEW] Img load error:', this.src, 'complete:', this.complete, 'naturalWidth:', this.naturalWidth, 'naturalHeight:', this.naturalHeight);
+                                    // 显示 fallback 下载链接
+                                    this.style.display = 'none';
+                                    this.nextElementSibling && (this.nextElementSibling.style.display = 'block');
+                                """.trimIndent())
+                                attr("onload", """
+                                    console.log('🖼 [PREVIEW] Img loaded:', this.src, 'width:', this.width, 'height:', this.height, 'naturalWidth:', this.naturalWidth, 'naturalHeight:', this.naturalHeight);
+                                """.trimIndent())
+                            }
+                            // 图片加载失败时的 fallback
+                            Div({
+                                style {
+                                    display(DisplayStyle.None)
+                                    fontSize(13.px)
+                                    color(Color("#E57373"))
+                                    padding(8.px)
+                                    property("text-align", "center")
+                                }
+                            }) {
+                                Text("🖼 图片加载失败，")
+                                Span({
+                                    style {
+                                        color(Color("#1976D2"))
+                                        property("cursor", "pointer")
+                                        property("text-decoration", "underline")
+                                    }
+                                    onClick { val w = js("window"); w.open(fullUrl, "_blank") }
+                                }) { Text("点此在新标签页中打开") }
+                            }
+                        }
+                        // 提取内容文字
+                        if (textContent.isNotBlank()) {
+                            Div({
+                                style {
+                                    fontSize(13.px)
+                                    color(Color(SilkColors.textPrimary))
+                                    property("line-height", "1.6")
+                                    property("white-space", "pre-wrap")
+                                    property("word-break", "break-word")
+                                }
+                            }) {
+                                Text(textContent.trimStart())
+                            }
+                        }
+                    }
+                    // 底部操作栏
+                    if (!isTransient && !isSelectionMode) {
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                property("justify-content", if (message.userId == currentUserId) "flex-end" else "flex-start")
+                                property("gap", "6px")
+                                marginTop(12.px)
+                                paddingTop(8.px)
+                                property("border-top", "1px solid rgba(232, 224, 212, 0.5)")
+                            }
+                        }) {
+                            Span({
+                                style {
+                                    fontSize(11.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    property("cursor", "pointer")
+                                    padding(4.px, 10.px)
+                                    borderRadius(4.px)
+                                    property("transition", "all 0.2s")
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "4px")
+                                }
+                                onClick { onCopy(textContent.ifBlank { "" }) }
+                            }) {
+                                Text("📋")
+                                Text("复制")
+                            }
+                            Span({
+                                style {
+                                    fontSize(11.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    property("cursor", "pointer")
+                                    padding(4.px, 10.px)
+                                    borderRadius(4.px)
+                                    property("transition", "all 0.2s")
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "4px")
+                                }
+                                onClick { onForward(message) }
+                            }) {
+                                Text("↗")
+                                Text("转发")
+                            }
+                            if (message.userId == currentUserId && !isAgentUserId(message.userId)) {
+                                Span({
+                                    style {
+                                        fontSize(11.px)
+                                        color(Color(SilkColors.textSecondary))
+                                        property("cursor", "pointer")
+                                        padding(4.px, 10.px)
+                                        borderRadius(4.px)
+                                        property("transition", "all 0.2s")
+                                        display(DisplayStyle.Flex)
+                                        alignItems(AlignItems.Center)
+                                        property("gap", "4px")
+                                    }
+                                    onClick { onRecall(message.id) }
+                                }) {
+                                    Text("↩")
+                                    Text("撤回")
+                                }
+                            }
+                            Span({
+                                style {
+                                    fontSize(11.px)
+                                    color(Color("#E57373"))
+                                    property("cursor", "pointer")
+                                    padding(4.px, 10.px)
+                                    borderRadius(4.px)
+                                    property("transition", "all 0.2s")
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "4px")
+                                }
+                                onClick {
+                                    if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
+                                        onDelete(message.id)
+                                    }
+                                }
+                            }) {
+                                Text("🗑")
+                                Text("删除")
+                            }
+                            Span({
+                                style {
+                                    fontSize(11.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    property("cursor", "pointer")
+                                    padding(4.px, 10.px)
+                                    borderRadius(4.px)
+                                    property("transition", "all 0.2s")
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "4px")
+                                }
+                                onClick { onToggleSelection(message.id) }
+                            }) {
+                                Text("☑")
+                                Text("多选")
+                            }
+                        }
+                    }
+                } else {
+                    Div({ classes(SilkStylesheet.systemMessage) }) {
+                        Text("• ${content} ($timeString)")
+                    }
+                }
+            } else {
+                // 文件解析/提取内容卡片
+                if (content.startsWith("# 图片:") || content.contains("## OCR")) {
+                    Div({
+                        classes(SilkStylesheet.messageCard)
+                        style { property("flex", "1"); property("min-width", "0") }
+                    }) {
+                        Div({ classes(SilkStylesheet.messageHeader) }) {
+                            Span({ classes(SilkStylesheet.userName) }) { Text(message.userName) }
+                            Span({ classes(SilkStylesheet.timestamp) }) { Text(timeString) }
+                        }
+                        Div({
+                            style {
+                                fontSize(13.px)
+                                color(Color(SilkColors.textPrimary))
+                                property("line-height", "1.6")
+                                property("white-space", "pre-wrap")
+                                property("word-break", "break-word")
+                            }
+                        }) {
+                            Text(content)
+                        }
+                    }
+                } else {
+                    Div({ classes(SilkStylesheet.systemMessage) }) {
+                        Text("• ${content} ($timeString)")
+                    }
+                }
             }
         }
         MessageType.RECALL -> {
         }
         MessageType.STOP_GENERATE -> {
+        }
+        MessageType.CC_COMMAND -> {
+        }
+        MessageType.CARD -> {
+            // ACP/Workflow agent 交互卡片（问题/权限/计划）→ CardMessageRenderer
+            chatClient?.let {
+                CardMessageRenderer(message, it, currentUserId, currentUserName)
+            }
+        }
+        MessageType.CARD_REPLY -> {
+            // 卡片回复（用户点击）由服务器回放为卡片 edit，这里不单独渲染
         }
     }
 }
@@ -5218,6 +6992,195 @@ internal fun isLikelyAgentStatusContent(content: String): Boolean {
         "⏳"
     )
     return statusHints.any { hint -> text.contains(hint) }
+}
+
+@Suppress("CyclomaticComplexMethod")
+@Composable
+fun CcConnectTokenDialog(
+    groupId: String,
+    userId: String,
+    tokenInfo: CcConnectTokenInfo,
+    onTokenRegenerated: (CcConnectTokenInfo) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var tokenCopied by remember { mutableStateOf(false) }
+    var isRegenerating by remember { mutableStateOf(false) }
+
+    Div({
+        style {
+            position(Position.Fixed)
+            top(0.px); left(0.px)
+            width(100.percent); height(100.vh)
+            backgroundColor(Color("rgba(74, 64, 56, 0.5)"))
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            property("z-index", "1100")
+            property("backdrop-filter", "blur(4px)")
+        }
+        onClick { onDismiss() }
+    }) {
+        Div({
+            style {
+                backgroundColor(Color(SilkColors.surfaceElevated))
+                borderRadius(16.px)
+                padding(28.px)
+                width(460.px)
+                maxWidth(90.vw)
+                property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.2)")
+                property("border", "1px solid ${SilkColors.border}")
+            }
+            onClick { it.stopPropagation() }
+        }) {
+            H3({
+                style {
+                    marginTop(0.px); marginBottom(20.px)
+                    color(Color(SilkColors.textPrimary))
+                    property("font-weight", "600")
+                }
+            }) { Text("cc-connect Token") }
+
+            // Connection status
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "8px")
+                    marginBottom(16.px)
+                }
+            }) {
+                Span({
+                    style {
+                        width(8.px); height(8.px)
+                        borderRadius(50.percent)
+                        backgroundColor(Color(if (tokenInfo.connected) "#4CAF50" else "#FF9800"))
+                        display(DisplayStyle.InlineBlock)
+                    }
+                }) {}
+                Span({
+                    style {
+                        fontSize(13.px)
+                        color(Color(SilkColors.textPrimary))
+                    }
+                }) {
+                    if (tokenInfo.connected) {
+                        Text("Connected — ${tokenInfo.agentType ?: "agent"}${if (tokenInfo.project != null) " / ${tokenInfo.project}" else ""}")
+                    } else {
+                        Text("Offline — waiting for cc-connect to connect")
+                    }
+                }
+            }
+
+            // Token display (host only)
+            if (tokenInfo.token != null) {
+                Div({
+                    style {
+                        padding(16.px); borderRadius(8.px)
+                        property("background", SilkColors.surface)
+                        property("border", "1px solid ${SilkColors.border}")
+                        marginBottom(16.px)
+                        property("word-break", "break-all")
+                        fontFamily("monospace"); fontSize(14.px)
+                        color(Color(SilkColors.textPrimary))
+                    }
+                }) { Text(tokenInfo.token ?: "") }
+
+                // config.toml snippet
+                Div({
+                    style {
+                        fontSize(13.px); color(Color(SilkColors.textSecondary))
+                        marginBottom(16.px); property("line-height", "1.6")
+                    }
+                }) {
+                    Text("Paste this token into cc-connect's config.toml:")
+                    Div({
+                        style {
+                            fontSize(12.px); padding(12.px); borderRadius(6.px)
+                            property("background", SilkColors.surface)
+                            property("border", "1px solid ${SilkColors.border}")
+                            property("overflow-x", "auto")
+                            color(Color(SilkColors.textPrimary))
+                            fontFamily("monospace")
+                            property("white-space", "pre")
+                            marginTop(8.px)
+                        }
+                    }) {
+                        Text("""[[projects.platforms]]
+type = "silk"
+[projects.platforms.options]
+server = "wss://your-server:15003/ccconnect-bridge"
+token  = "${tokenInfo.token ?: ""}"
+""")
+                    }
+                }
+            }
+
+            // Action buttons
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.FlexEnd)
+                    property("gap", "12px")
+                }
+            }) {
+                if (tokenInfo.token != null) {
+                    Button({
+                        style {
+                            padding(10.px, 18.px)
+                            backgroundColor(Color(SilkColors.surface))
+                            color(Color(SilkColors.textSecondary))
+                            property("border", "1px solid ${SilkColors.border}")
+                            borderRadius(8.px)
+                            property("cursor", if (isRegenerating) "not-allowed" else "pointer")
+                            fontSize(13.px)
+                            property("opacity", if (isRegenerating) "0.6" else "1")
+                        }
+                        onClick {
+                            if (!isRegenerating) {
+                                scope.launch {
+                                    isRegenerating = true
+                                    val newToken = ApiClient.regenerateCcConnectToken(groupId, userId)
+                                    if (newToken != null) {
+                                        val updated = tokenInfo.copy(token = newToken)
+                                        onTokenRegenerated(updated)
+                                        tokenCopied = false
+                                    }
+                                    isRegenerating = false
+                                }
+                            }
+                        }
+                    }) { Text(if (isRegenerating) "Regenerating..." else "Regenerate") }
+
+                    Button({
+                        style {
+                            padding(10.px, 18.px)
+                            backgroundColor(Color(if (tokenCopied) "#4CAF50" else SilkColors.secondary))
+                            color(Color(if (tokenCopied) "white" else SilkColors.textPrimary))
+                            border { width(0.px) }; borderRadius(8.px)
+                            property("cursor", "pointer"); fontSize(13.px)
+                        }
+                        onClick {
+                            tokenInfo.token?.let { token ->
+                                kotlinx.browser.window.navigator.clipboard.writeText(token)
+                                tokenCopied = true
+                            }
+                        }
+                    }) { Text(if (tokenCopied) "Copied!" else "Copy Token") }
+                }
+
+                Button({
+                    style {
+                        padding(10.px, 18.px)
+                        property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                        color(Color.white); border { width(0.px) }; borderRadius(8.px)
+                        property("cursor", "pointer"); fontSize(13.px); property("font-weight", "600")
+                    }
+                    onClick { onDismiss() }
+                }) { Text("Done") }
+            }
+        }
+    }
 }
 
 /**
@@ -5422,6 +7385,7 @@ fun AddMemberDialog(
 /**
  * 群组成员列表对话框
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun MembersDialog(
     members: List<GroupMember>,
@@ -5429,10 +7393,15 @@ fun MembersDialog(
     currentUserId: String,
     isLoading: Boolean,
     strings: com.silk.shared.i18n.Strings,
+    isHost: Boolean = false,
+    isCcConnectGroup: Boolean = false,
+    groupId: String = "",
     onMemberClick: (GroupMember) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onMembersChanged: () -> Unit = {},
 ) {
     val contactIds = contacts.map { it.contactId }.toSet()
+    val scope = rememberCoroutineScope()
     
     Div({
         style {
@@ -5588,6 +7557,33 @@ fun MembersDialog(
                                                 Text(strings.me)
                                             }
                                         }
+                                        if (isCcConnectGroup && !isSilkAI) {
+                                            val roleLabel = when (member.role) {
+                                                "HOST" -> "Host"
+                                                "OPERATOR" -> "Operator"
+                                                else -> null
+                                            }
+                                            if (roleLabel != null) {
+                                                Span({
+                                                    style {
+                                                        fontSize(10.px)
+                                                        marginLeft(8.px)
+                                                        padding(2.px, 6.px)
+                                                        borderRadius(4.px)
+                                                        property("font-weight", "500")
+                                                        if (member.role == "HOST") {
+                                                            backgroundColor(Color("#FFF3E0"))
+                                                            color(Color("#E65100"))
+                                                        } else {
+                                                            backgroundColor(Color("#E3F2FD"))
+                                                            color(Color("#1565C0"))
+                                                        }
+                                                    }
+                                                }) {
+                                                    Text(roleLabel)
+                                                }
+                                            }
+                                        }
                                     }
                                     Div({
                                         style {
@@ -5609,14 +7605,58 @@ fun MembersDialog(
                             }
                             
                             // 右侧操作提示
-                            if (!isCurrentUser && !isSilkAI) {
+                            if (!isSilkAI) {
                                 Div({
                                     style {
-                                        fontSize(20.px)
-                                        color(Color(SilkColors.textLight))
+                                        display(DisplayStyle.Flex)
+                                        alignItems(AlignItems.Center)
+                                        property("gap", "8px")
                                     }
                                 }) {
-                                    Text(if (isContact) "💬" else "➕")
+                                    val canManageOperator = isCcConnectGroup && isHost && !isCurrentUser && member.role != "HOST"
+                                    if (canManageOperator) {
+                                        val isOperator = member.role == "OPERATOR"
+                                        Div({
+                                            style {
+                                                fontSize(11.px)
+                                                padding(4.px, 10.px)
+                                                borderRadius(6.px)
+                                                property("cursor", "pointer")
+                                                property("transition", "all 0.2s ease")
+                                                property("user-select", "none")
+                                                if (isOperator) {
+                                                    backgroundColor(Color("#E3F2FD"))
+                                                    color(Color("#1565C0"))
+                                                    property("border", "1px solid #90CAF9")
+                                                } else {
+                                                    backgroundColor(Color(SilkColors.surface))
+                                                    color(Color(SilkColors.textSecondary))
+                                                    property("border", "1px solid ${SilkColors.border}")
+                                                }
+                                            }
+                                            onClick {
+                                                it.stopPropagation()
+                                                scope.launch {
+                                                    val ok = ApiClient.setCcConnectOperator(
+                                                        groupId, currentUserId, member.id, !isOperator
+                                                    )
+                                                    if (ok) onMembersChanged()
+                                                }
+                                            }
+                                        }) {
+                                            Text(if (isOperator) "Revoke @cc" else "Grant @cc")
+                                        }
+                                    }
+                                    if (!isCurrentUser) {
+                                        Div({
+                                            style {
+                                                fontSize(20.px)
+                                                color(Color(SilkColors.textLight))
+                                            }
+                                        }) {
+                                            Text(if (isContact) "💬" else "➕")
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -5641,6 +7681,59 @@ fun MembersDialog(
                 onClick { onDismiss() }
             }) {
                 Text("关闭")
+            }
+        }
+    }
+}
+
+/**
+ * 交互式按钮选项（cc-connect AskUserQuestion）。
+ * 每个选项显示为一个可点击的按钮，点击后发送答案并禁用按钮。
+ */
+@Composable
+@Suppress("NO_EXPLICIT_RETURN_TYPE_IN_API_CLASS")
+@NoLiveLiterals
+fun InteractiveOptions(
+    options: List<com.silk.shared.models.InteractiveOption>,
+    onAnswer: (String) -> Unit
+) {
+    val clickedOption = remember { mutableStateOf<String?>(null) }
+
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            property("flex-wrap", "wrap")
+            property("gap", "8px")
+            marginTop(12.px)
+            padding(8.px, 0.px)
+        }
+    }) {
+        for (opt in options) {
+            val isClicked = clickedOption.value == opt.value
+            Button({
+                style {
+                    padding(8.px, 20.px)
+                    borderRadius(8.px)
+                    border {
+                        width(if (isClicked) 2.px else 1.px)
+                        style(LineStyle.Solid)
+                        color(Color(if (isClicked) "#C8A86C" else "#D0D0D0"))
+                    }
+                    backgroundColor(Color(if (isClicked) "#F5F0E6" else "#FFFFFF"))
+                    color(Color("#333333"))
+                    fontSize(14.px)
+                    property("cursor", if (isClicked) "default" else "pointer")
+                    property("transition", "all 0.2s")
+                    property("opacity", if (isClicked) "0.7" else "1.0")
+                }
+                if (!isClicked) {
+                    onClick {
+                        clickedOption.value = opt.value
+                        onAnswer(opt.value)
+                    }
+                }
+            }) {
+                Text(opt.label)
             }
         }
     }

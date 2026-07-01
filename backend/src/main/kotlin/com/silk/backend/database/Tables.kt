@@ -74,8 +74,62 @@ object UserSettingsTable : Table("user_settings") {
     val userId = varchar("user_id", 128).uniqueIndex() // 用户ID（唯一）
     val language = varchar("language", 20).default("CHINESE") // 语言偏好：ENGLISH 或 CHINESE
     val defaultAgentInstruction = text("default_agent_instruction").default("You are a helpful technical research assistant. ") // 默认代理指令
+    val appAuthToken = varchar("app_auth_token", 64).nullable() // App HTTP 认证 token（KB 等 API bearer 认证）
     val ccBridgeToken = varchar("cc_bridge_token", 64).nullable() // Bridge 认证 token
     val updatedAt = datetime("updated_at").default(LocalDateTime.now()) // 更新时间
     
     override val primaryKey = PrimaryKey(userId)
+}
+
+/**
+ * CcConnectTokens 表：cc-connect 平台插件连接 token
+ * 每个 token 绑定一个群组，cc-connect 通过 token 认证并加入对应群组
+ */
+object CcConnectTokens : Table("ccconnect_tokens") {
+    val token = varchar("token", 64).uniqueIndex()
+    val groupId = varchar("group_id", 128)
+    val label = varchar("label", 256)
+    val createdAt = datetime("created_at").default(LocalDateTime.now())
+
+    override val primaryKey = PrimaryKey(token)
+}
+
+/**
+ * HuaweiAccounts 表：华为账号绑定，将华为 openId 与 Silk 用户关联
+ */
+object HuaweiAccounts : Table("huawei_accounts") {
+    val openId = varchar("open_id", 128).uniqueIndex()
+    val userId = varchar("user_id", 128).references(Users.id)
+    val huaweiName = varchar("huawei_name", 256).nullable()
+    val huaweiAvatar = varchar("huawei_avatar", 512).nullable()
+    val createdAt = datetime("created_at").default(LocalDateTime.now())
+
+    override val primaryKey = PrimaryKey(openId)
+}
+
+/**
+ * WechatAccounts 表：微信账号绑定，将微信 openId/unionId 与 Silk 用户关联
+ */
+object WechatAccounts : Table("wechat_accounts") {
+    val openId = varchar("open_id", 128).uniqueIndex()
+    val unionId = varchar("union_id", 128).nullable()
+    val userId = varchar("user_id", 128).references(Users.id)
+    val wechatName = varchar("wechat_name", 256).nullable()
+    val wechatAvatar = varchar("wechat_avatar", 512).nullable()
+    val createdAt = datetime("created_at").default(LocalDateTime.now())
+
+    override val primaryKey = PrimaryKey(openId)
+}
+
+/**
+ * RefreshTokensTable 表：JWT 刷新令牌管理
+ */
+object RefreshTokensTable : Table("refresh_tokens") {
+    val jti = varchar("jti", 64).uniqueIndex()
+    val userId = varchar("user_id", 128).references(Users.id)
+    val expiresAt = datetime("expires_at")
+    val revoked = bool("revoked").default(false)
+    val createdAt = datetime("created_at").default(LocalDateTime.now())
+
+    override val primaryKey = PrimaryKey(jti)
 }

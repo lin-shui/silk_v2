@@ -67,10 +67,10 @@ actual class PlatformWebSocket actual constructor(
     private val isConnecting = AtomicBoolean(false)
     private val isExplicitlyDisconnected = AtomicBoolean(false)
     
-    // 自动重连配置
+    // 自动重连配置（无限重试 + 指数退避）
     private var reconnectAttempts = 0
-    private val maxReconnectAttempts = 5
-    private val baseReconnectDelay = 1000L  // 1秒基础延迟
+    private val minReconnectDelay = 1000L    // 1秒初始
+    private val maxReconnectDelay = 30_000L  // 最多30秒间隔
     
     private fun log(message: String) {
         println(message)
@@ -82,7 +82,8 @@ actual class PlatformWebSocket actual constructor(
     actual val isConnected: Boolean
         get() = session != null && !isExplicitlyDisconnected.get()
     
-    actual fun connect(userId: String, userName: String, groupId: String) {
+    @Suppress("CyclomaticComplexMethod")
+    actual fun connect(token: String?, userId: String, userName: String, groupId: String) {
         // 切群场景：先清理旧连接，不做重复连接判断
         val wasConnecting = isConnecting.getAndSet(true)
         if (wasConnecting || session != null) {
@@ -211,27 +212,28 @@ actual class PlatformWebSocket actual constructor(
     }
     
     /**
-     * 尝试自动重连
+     * 尝试自动重连（无限重试，指数退避 + 随机抖动）
      */
     private suspend fun attemptReconnect(userId: String, userName: String, groupId: String) {
         if (isExplicitlyDisconnected.get()) {
             log("⏹️ [WebSocket] 已明确断开，不重连")
             return
         }
-        
+
         reconnectAttempts++
-        if (reconnectAttempts > maxReconnectAttempts) {
-            log("❌ [WebSocket] 重连次数超限 (${maxReconnectAttempts}次)")
-            withContext(Dispatchers.Main) { onError("Connection lost after $maxReconnectAttempts reconnect attempts") }
-            return
-        }
-        
-        val delay = baseReconnectDelay * reconnectAttempts  // 指数退避
-        log("🔄 [WebSocket] 尝试重连 (${reconnectAttempts}/${maxReconnectAttempts})，延迟 ${delay}ms...")
-        delay(delay)
-        
+
+        // 指数退避：2^(n-1) 秒，上限 maxReconnectDelay
+        val exponential = minReconnectDelay * (1L shl (reconnectAttempts - 1).coerceAtMost(5))
+        val delayMs = exponential.coerceIn(minReconnectDelay, maxReconnectDelay)
+        // 随机 ±1s 抖动，避免多客户端同时重连
+        val jitter = (kotlin.random.Random.nextLong(2001) - 1000)
+        val actualDelay = (delayMs + jitter).coerceIn(minReconnectDelay, maxReconnectDelay)
+
+        log("🔄 [WebSocket] 尝试重连 #${reconnectAttempts}，延迟 ${actualDelay}ms...")
+        delay(actualDelay)
+
         isConnecting.set(false)
-        connect(userId, userName, groupId)
+        connect(null, userId, userName, groupId)
     }
     
     actual fun send(message: String) {

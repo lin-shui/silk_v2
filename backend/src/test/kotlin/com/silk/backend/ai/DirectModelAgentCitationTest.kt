@@ -15,8 +15,9 @@ class DirectModelAgentCitationTest {
         val prompt = agent.citationGuidelinesForTest("你是 Silk。")
 
         assertContains(prompt, "[citation:数字]")
-        assertContains(prompt, "引用标记必须放在相关内容的句末或段末")
-        assertContains(prompt, "禁止堆砌大量引用标记")
+        assertContains(prompt, "每个重要观点都必须标注来源引用")
+        assertContains(prompt, "参考来源列表（必须遵守）")
+        assertContains(prompt, "URL 必须是完整的 https:// 链接")
     }
 
     @Test
@@ -80,7 +81,8 @@ class DirectModelAgentCitationTest {
 
         val response = agent.finalizeCitationsForTest("这里只引用第二个来源。[citation:2]")
 
-        assertContains(response.content, "[citation:1]")
+        // stripCitationMarkers 已移除正文中的 [citation:N] 标记
+        assertTrue(!response.content.contains("[citation:1]"))
         assertTrue(!response.content.contains("[citation:2]"))
         assertEquals(1, response.references.size)
         assertEquals(1, response.references.first().index)

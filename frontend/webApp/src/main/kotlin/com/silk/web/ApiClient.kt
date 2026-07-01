@@ -3,20 +3,26 @@ package com.silk.web
 import com.silk.shared.models.CcSettingsResponse
 import com.silk.shared.models.CcStateResponse
 import com.silk.shared.models.DirListingResponse
+import com.silk.shared.models.GitChangesResponse
+import com.silk.shared.models.GitFileDiffResponse
 import com.silk.shared.models.Language
 import com.silk.shared.models.TrustedDirCheckResponse
 import com.silk.shared.models.UpdateUserSettingsRequest
 import com.silk.shared.models.UserSettingsResponse
+import kotlinx.browser.localStorage
 import kotlinx.browser.window
 import kotlinx.coroutines.await
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import org.w3c.fetch.Headers
 import org.w3c.fetch.RequestInit
 import kotlin.js.json
 
@@ -49,7 +55,9 @@ data class UnreadCountResponse(
 data class AuthResponse(
     val success: Boolean,
     val message: String,
-    val user: User? = null
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null
 )
 
 @Serializable
@@ -57,7 +65,37 @@ data class GroupResponse(
     val success: Boolean,
     val message: String,
     val group: Group? = null,
-    val groups: List<Group>? = null
+    val groups: List<Group>? = null,
+    val ccConnectToken: String? = null,
+)
+
+@Serializable
+data class CcModeOption(val key: String, val name: String)
+
+@Serializable
+data class CcModelOption(val name: String, val desc: String = "")
+
+@Serializable
+data class CcMetadataEvent(
+    val type: String = "cc_metadata",
+    val mode: String? = null,
+    val model: String? = null,
+    @SerialName("available_modes") val availableModes: List<CcModeOption>? = null,
+    @SerialName("available_models") val availableModels: List<CcModelOption>? = null,
+)
+
+@Serializable
+data class CcConnectTokenInfo(
+    val success: Boolean = false,
+    val token: String? = null,
+    val connected: Boolean = false,
+    val agentType: String? = null,
+    val project: String? = null,
+    val cwd: String? = null,
+    val mode: String? = null,
+    val model: String? = null,
+    val availableModes: List<CcModeOption>? = null,
+    val availableModels: List<CcModelOption>? = null,
 )
 
 // ==================== 联系人相关数据模型 ====================
@@ -119,7 +157,8 @@ data class PrivateChatResponse(
 data class GroupMember(
     val id: String,
     val fullName: String,
-    val phone: String = ""
+    val phone: String = "",
+    val role: String = "GUEST",
 )
 
 @Serializable
@@ -187,11 +226,59 @@ data class AgentInfo(
 // ==================== Knowledge Base models ====================
 
 @Serializable
+enum class KnowledgeSpaceType {
+    PERSONAL,
+    TEAM,
+}
+
+@Serializable
+data class KBAccessPolicy(
+    val readUserIds: List<String> = emptyList(),
+    val writeUserIds: List<String> = emptyList(),
+    val manageUserIds: List<String> = emptyList(),
+    val writeLocked: Boolean = false,
+    val teamMembersCanWrite: Boolean = true,
+)
+
+@Serializable
+enum class KBEntryStatus {
+    CANDIDATE,
+    PUBLISHED,
+    ARCHIVED,
+    DELETED,
+}
+
+@Serializable
+enum class KBSourceType {
+    MANUAL,
+    CHAT,
+    AI_RESPONSE,
+    WORKFLOW,
+    MEETING,
+    FILE,
+    URL,
+}
+
+@Serializable
+data class KBEntrySource(
+    val sourceType: KBSourceType = KBSourceType.MANUAL,
+    val sourceGroupId: String? = null,
+    val workflowId: String? = null,
+    val messageIds: List<String> = emptyList(),
+    val confidence: Double? = null,
+)
+
+@Serializable
 data class KBTopicItem(
     val id: String,
     val name: String,
     val project: String = "",
     val ownerId: String = "",
+    val spaceType: KnowledgeSpaceType = KnowledgeSpaceType.PERSONAL,
+    val groupId: String? = null,
+    val accessPolicy: KBAccessPolicy = KBAccessPolicy(),
+    val createdBy: String = "",
+    val updatedBy: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0
 )
@@ -204,6 +291,10 @@ data class KBEntryItem(
     val content: String = "",
     val tags: List<String> = emptyList(),
     val ownerId: String = "",
+    val status: KBEntryStatus = KBEntryStatus.PUBLISHED,
+    val source: KBEntrySource = KBEntrySource(),
+    val createdBy: String = "",
+    val updatedBy: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0
 )
@@ -215,6 +306,92 @@ data class ExportKBResponse(
     val vaultPath: String = "",
     val fileName: String = ""
 )
+/**
+ * JWT 令牌管理
+ */
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
+object JwtManager {
+    private const val STORAGE_KEY_JWT = "silk_jwt"
+    private const val STORAGE_KEY_REFRESH = "silk_refresh_token"
+    private const val STORAGE_KEY_USER = "silk_user"
+
+    fun getAccessToken(): String? {
+        return try {
+            localStorage.getItem(STORAGE_KEY_JWT)
+        } catch (e: Exception) { null }
+    }
+
+    fun setAccessToken(token: String) {
+        try { localStorage.setItem(STORAGE_KEY_JWT, token) } catch (_: Exception) {}
+    }
+
+    fun getRefreshToken(): String? {
+        return try {
+            localStorage.getItem(STORAGE_KEY_REFRESH)
+        } catch (e: Exception) { null }
+    }
+
+    fun setRefreshToken(token: String) {
+        try { localStorage.setItem(STORAGE_KEY_REFRESH, token) } catch (_: Exception) {}
+    }
+
+    fun getStoredUser(): User? {
+        return try {
+            val json = localStorage.getItem(STORAGE_KEY_USER)
+            if (json != null) Json.decodeFromString<User>(json) else null
+        } catch (e: Exception) { null }
+    }
+
+    fun setStoredUser(user: User) {
+        try { localStorage.setItem(STORAGE_KEY_USER, Json.encodeToString(user)) } catch (_: Exception) {}
+    }
+
+    fun clearAll() {
+        try {
+            localStorage.removeItem(STORAGE_KEY_JWT)
+            localStorage.removeItem(STORAGE_KEY_REFRESH)
+            localStorage.removeItem(STORAGE_KEY_USER)
+        } catch (_: Exception) {}
+    }
+}
+
+/**
+ * 华为 OAuth 认证响应
+ */
+@Serializable
+data class HuaweiAuthResponse(
+    val success: Boolean,
+    val message: String = "",
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val isNewUser: Boolean = false
+)
+
+/**
+ * 微信 OAuth 认证响应
+ */
+@Serializable
+data class WechatAuthResponse(
+    val success: Boolean,
+    val message: String = "",
+    val user: User? = null,
+    val accessToken: String? = null,
+    val refreshToken: String? = null,
+    val isNewUser: Boolean = false
+)
+
+/**
+ * Token 刷新响应
+ */
+@Serializable
+data class TokenRefreshResponse(
+    val success: Boolean,
+    val message: String = "",
+    val accessToken: String? = null
+)
+
+@Suppress("LargeClass", "TooGenericExceptionCaught", "SwallowedException")
 object ApiClient {
     private val BASE_URL: String
         get() {
@@ -233,40 +410,117 @@ object ApiClient {
         }
     private val jsonParser = Json { ignoreUnknownKeys = true }
 
-    
-    suspend fun register(
-        loginName: String,
-        fullName: String,
-        phoneNumber: String,
-        password: String
-    ): AuthResponse {
+    /**
+     * 华为 Web OAuth 登录：发送 code 到后端交换 token
+     */
+    suspend fun huaweiWebLogin(code: String, redirectUri: String): HuaweiAuthResponse {
         return try {
-            val body = """{"loginName":"$loginName","fullName":"$fullName","phoneNumber":"$phoneNumber","password":"$password"}"""
-            val response = post("/auth/register", body)
-            jsonParser.decodeFromString(response)
+            val body = """{"code":"$code","redirectUri":"$redirectUri"}"""
+            val response = post("/auth/huawei/web-login", body)
+            jsonParser.decodeFromString<HuaweiAuthResponse>(response)
         } catch (e: Exception) {
-            console.log("注册失败:", e)
-            AuthResponse(false, "网络错误: ${e.message}")
+            console.log("华为登录失败:", e)
+            HuaweiAuthResponse(false, "登录失败: ${e.message}")
         }
     }
-    
+
+    /**
+     * 华为 OAuth 账号绑定：将华为账号绑定到当前登录用户
+     */
+    suspend fun huaweiBind(code: String, redirectUri: String): AuthResponse {
+        return try {
+            val body = """{"code":"$code","redirectUri":"$redirectUri"}"""
+            val response = post("/api/account/bind-huawei", body)
+            jsonParser.decodeFromString<AuthResponse>(response)
+        } catch (e: Exception) {
+            console.log("华为绑定失败:", e)
+            AuthResponse(false, "绑定失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 微信 OAuth 登录：发送 code 到后端交换 token
+     * 适用于 Web 端扫码登录和 Android 端 SDK 登录
+     */
+    suspend fun wechatLogin(code: String): WechatAuthResponse {
+        return try {
+            val body = """{"code":"$code"}"""
+            val response = post("/auth/wechat/login", body)
+            jsonParser.decodeFromString<WechatAuthResponse>(response)
+        } catch (e: Exception) {
+            console.log("微信登录失败:", e)
+            WechatAuthResponse(false, "登录失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 用户名/密码登录
+     */
     suspend fun login(loginName: String, password: String): AuthResponse {
         return try {
             val body = """{"loginName":"$loginName","password":"$password"}"""
             val response = post("/auth/login", body)
-            jsonParser.decodeFromString(response)
+            jsonParser.decodeFromString<AuthResponse>(response)
         } catch (e: Exception) {
             console.log("登录失败:", e)
-            AuthResponse(false, "网络错误")
+            AuthResponse(false, "登录失败: ${e.message}")
         }
     }
-    
-    suspend fun validateUser(userId: String): AuthResponse {
+
+    /**
+     * 更新用户昵称
+     */
+    suspend fun updateUserProfile(userId: String, fullName: String): SimpleResponse {
         return try {
-            val response = get("/auth/validate/$userId")
-            jsonParser.decodeFromString(response)
+            val body = """{"fullName":"$fullName"}"""
+            val response = put("/users/$userId/profile", body)
+            jsonParser.decodeFromString<SimpleResponse>(response)
         } catch (e: Exception) {
-            AuthResponse(false, "验证失败")
+            console.log("更新用户资料失败:", e)
+            SimpleResponse(false, "网络错误")
+        }
+    }
+
+    /**
+     * 注销账号（删除用户及其所有数据）
+     */
+    suspend fun deleteAccount(userId: String): SimpleResponse {
+        return try {
+            val response = delete("/users/$userId/account", "")
+            jsonParser.decodeFromString<SimpleResponse>(response)
+        } catch (e: Exception) {
+            console.log("注销账号失败:", e)
+            SimpleResponse(false, "网络错误")
+        }
+    }
+
+    /**
+     * 刷新 Access Token
+     */
+    suspend fun refreshAccessToken(): HuaweiAuthResponse {
+        val refreshToken = JwtManager.getRefreshToken() ?: return HuaweiAuthResponse(false, "无 Refresh Token")
+        return try {
+            val body = """{"refreshToken":"$refreshToken"}"""
+            val response = post("/auth/refresh", body)
+            jsonParser.decodeFromString<HuaweiAuthResponse>(response)
+        } catch (e: Exception) {
+            console.log("Token 刷新失败:", e)
+            HuaweiAuthResponse(false, "Token 刷新失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 登出
+     */
+    suspend fun logout(): Boolean {
+        val refreshToken = JwtManager.getRefreshToken() ?: return true
+        return try {
+            val body = """{"refreshToken":"$refreshToken"}"""
+            post("/auth/logout", body)
+            true
+        } catch (e: Exception) {
+            console.log("登出请求失败:", e)
+            true // 即使失败也清除本地状态
         }
     }
     
@@ -307,9 +561,13 @@ object ApiClient {
         }
     }
     
-    suspend fun createGroup(userId: String, groupName: String): GroupResponse {
+    suspend fun createGroup(userId: String, groupName: String, type: String? = null): GroupResponse {
         return try {
-            val body = """{"userId":"$userId","groupName":"$groupName"}"""
+            val body = if (type != null) {
+                """{"userId":"$userId","groupName":"$groupName","type":"$type"}"""
+            } else {
+                """{"userId":"$userId","groupName":"$groupName"}"""
+            }
             val response = post("/groups/create", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
@@ -326,6 +584,39 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("加入群组失败:", e)
             GroupResponse(false, "网络错误")
+        }
+    }
+
+    suspend fun getCcConnectTokenInfo(groupId: String, userId: String): CcConnectTokenInfo? {
+        return try {
+            val response = get("/api/ccconnect/groups/$groupId/token-info?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取cc-connect信息失败:", e)
+            null
+        }
+    }
+
+    suspend fun regenerateCcConnectToken(groupId: String, userId: String): String? {
+        return try {
+            val response = post("/api/ccconnect/groups/$groupId/regenerate-token", """{"userId":"$userId"}""")
+            val parsed = jsonParser.decodeFromString<CcConnectTokenInfo>(response)
+            parsed.token
+        } catch (e: Exception) {
+            console.log("重新生成token失败:", e)
+            null
+        }
+    }
+
+    suspend fun setCcConnectOperator(groupId: String, userId: String, targetUserId: String, grant: Boolean): Boolean {
+        return try {
+            val body = """{"userId":"$userId","targetUserId":"$targetUserId","grant":$grant}"""
+            val response = post("/api/ccconnect/groups/$groupId/set-operator", body)
+            val parsed = jsonParser.decodeFromString<SimpleResponse>(response)
+            parsed.success
+        } catch (e: Exception) {
+            console.log("设置operator失败:", e)
+            false
         }
     }
     
@@ -607,6 +898,31 @@ object ApiClient {
         }
     }
     
+    /** 更新工作流会话设置（agent / permissionMode）。 */
+    suspend fun updateCcSettings(
+        userId: String,
+        groupId: String,
+        activeAgent: String? = null,
+        permissionMode: String? = null,
+    ): CcStateResponse {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("groupId", kotlinx.serialization.json.JsonPrimitive(groupId))
+                if (!activeAgent.isNullOrBlank()) {
+                    put("activeAgent", kotlinx.serialization.json.JsonPrimitive(activeAgent))
+                }
+                if (!permissionMode.isNullOrBlank()) {
+                    put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
+                }
+            }.toString()
+            val response = post("/users/$userId/cc-settings/update", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("更新会话设置失败:", e)
+            CcStateResponse(success = false, error = e.message)
+        }
+    }
+
     // ==================== 消息撤回相关 API ====================
     
     /**
@@ -669,29 +985,69 @@ object ApiClient {
         }
     }
     
-    private suspend fun post(endpoint: String, jsonBody: String): String {
+    /**
+     * 获取 Authorization header
+     */
+    private fun authHeaders(): org.w3c.fetch.Headers {
         val headers = org.w3c.fetch.Headers()
         headers.append("Content-Type", "application/json")
+        val token = JwtManager.getAccessToken()
+        if (token != null) {
+            headers.append("Authorization", "Bearer $token")
+        }
+        return headers
+    }
+
+    /**
+     * 尝试刷新 Token：如果 401 且有 Refresh Token，自动刷新后重试
+     */
+    private suspend fun fetchWithRetry(endpoint: String, init: RequestInit): org.w3c.fetch.Response {
+        val url = "$BASE_URL$endpoint"
+        var response = window.fetch(url, init).await()
         
+        // 401 自动刷新 Token
+        if (response.status.toInt() == 401) {
+            val refreshResult = refreshAccessToken()
+            if (refreshResult.success && refreshResult.accessToken != null) {
+                JwtManager.setAccessToken(refreshResult.accessToken!!)
+                // 用新 Token 重建 headers
+                val newHeaders = org.w3c.fetch.Headers()
+                newHeaders.append("Content-Type", "application/json")
+                newHeaders.append("Authorization", "Bearer ${refreshResult.accessToken}")
+                val retryInit = if (init.body != null) {
+                    RequestInit(method = init.method, headers = newHeaders, body = init.body)
+                } else {
+                    RequestInit(method = init.method, headers = newHeaders)
+                }
+                response = window.fetch(url, retryInit).await()
+            }
+        }
+        
+        return response
+    }
+    
+    private suspend fun post(endpoint: String, jsonBody: String): String {
         val init = RequestInit(
             method = "POST",
-            headers = headers,
+            headers = authHeaders(),
             body = jsonBody
         )
         
-        val response = window.fetch("$BASE_URL$endpoint", init).await()
+        val response = fetchWithRetry(endpoint, init)
         return response.text().await()
     }
     
     private suspend fun put(endpoint: String, jsonBody: String): String {
-        val url = "$BASE_URL$endpoint"
-        val response = window.fetch(url, RequestInit(
+        val init = RequestInit(
             method = "PUT",
-            headers = json("Content-Type" to "application/json"),
+            headers = authHeaders(),
             body = jsonBody
-        )).await()
+        )
+        
+        val response = fetchWithRetry(endpoint, init)
         
         if (!response.ok) {
+            @Suppress("TooGenericExceptionThrown")
             throw Exception("HTTP ${response.status}: ${response.statusText}")
         }
         
@@ -699,21 +1055,23 @@ object ApiClient {
     }
     
     private suspend fun delete(endpoint: String, jsonBody: String): String {
-        val headers = org.w3c.fetch.Headers()
-        headers.append("Content-Type", "application/json")
-        
         val init = RequestInit(
             method = "DELETE",
-            headers = headers,
+            headers = authHeaders(),
             body = jsonBody
         )
         
-        val response = window.fetch("$BASE_URL$endpoint", init).await()
+        val response = fetchWithRetry(endpoint, init)
         return response.text().await()
     }
 
     private suspend fun get(endpoint: String): String {
-        val response = window.fetch("$BASE_URL$endpoint").await()
+        val init = RequestInit(
+            method = "GET",
+            headers = authHeaders()
+        )
+        
+        val response = fetchWithRetry(endpoint, init)
         return response.text().await()
     }
 
@@ -729,6 +1087,29 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("获取工作流失败:", e)
             emptyList()
+        }
+    }
+
+    // ==================== Source Control (代码审查) API ====================
+
+    suspend fun getGitChanges(userId: String, groupId: String): GitChangesResponse {
+        return try {
+            val response = get("/api/agent/changes?userId=$userId&groupId=$groupId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取代码改动失败:", e)
+            GitChangesResponse(success = false, message = "网络错误")
+        }
+    }
+
+    suspend fun getGitFileDiff(userId: String, groupId: String, path: String): GitFileDiffResponse {
+        return try {
+            val encoded = js("encodeURIComponent")(path) as String
+            val response = get("/api/agent/changes/file?userId=$userId&groupId=$groupId&path=$encoded")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取文件 diff 失败:", e)
+            GitFileDiffResponse(success = false, message = "网络错误")
         }
     }
 
@@ -749,12 +1130,14 @@ object ApiClient {
         data class Err(val message: String) : CreateWorkflowResult()
     }
 
+    @Suppress("NestedBlockDepth")
     suspend fun createWorkflow(
         name: String,
         description: String,
         userId: String,
         initialDir: String = "",
         agentType: String = "claude_code",
+        permissionMode: String = "",
     ): CreateWorkflowResult {
         return try {
             // 构造 JSON，使用 JsonObject 安全编码避免手动转义
@@ -767,6 +1150,9 @@ object ApiClient {
                 }
                 if (agentType.isNotBlank()) {
                     put("agentType", kotlinx.serialization.json.JsonPrimitive(agentType))
+                }
+                if (permissionMode.isNotBlank()) {
+                    put("permissionMode", kotlinx.serialization.json.JsonPrimitive(permissionMode))
                 }
             }
             val response = post("/api/workflows", obj.toString())
@@ -880,13 +1266,59 @@ object ApiClient {
         }
     }
 
-    suspend fun createKBTopic(name: String, project: String, userId: String): KBTopicItem? {
+    suspend fun createKBTopic(
+        name: String,
+        project: String,
+        userId: String,
+        spaceType: KnowledgeSpaceType = KnowledgeSpaceType.PERSONAL,
+        groupId: String? = null,
+        accessPolicy: KBAccessPolicy = KBAccessPolicy(),
+    ): KBTopicItem? {
         return try {
-            val body = """{"userId":"$userId","name":"$name","project":"$project"}"""
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("name", kotlinx.serialization.json.JsonPrimitive(name))
+                put("project", kotlinx.serialization.json.JsonPrimitive(project))
+                put("spaceType", kotlinx.serialization.json.JsonPrimitive(spaceType.name))
+                groupId?.takeIf { it.isNotBlank() }?.let {
+                    put("groupId", kotlinx.serialization.json.JsonPrimitive(it))
+                }
+                put(
+                    "accessPolicy",
+                    jsonParser.encodeToJsonElement(KBAccessPolicy.serializer(), accessPolicy)
+                )
+            }.toString()
             val response = post("/api/kb/topics", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("创建知识库主题失败:", e)
+            null
+        }
+    }
+
+    suspend fun updateKBTopic(
+        topicId: String,
+        userId: String,
+        name: String? = null,
+        project: String? = null,
+        accessPolicy: KBAccessPolicy? = null,
+    ): KBTopicItem? {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                name?.let { put("name", kotlinx.serialization.json.JsonPrimitive(it)) }
+                project?.let { put("project", kotlinx.serialization.json.JsonPrimitive(it)) }
+                accessPolicy?.let {
+                    put(
+                        "accessPolicy",
+                        jsonParser.encodeToJsonElement(KBAccessPolicy.serializer(), it)
+                    )
+                }
+            }.toString()
+            val response = put("/api/kb/topics/$topicId", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("更新知识库主题失败:", e)
             null
         }
     }
@@ -898,6 +1330,17 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("获取知识库条目失败:", e)
             emptyList()
+        }
+    }
+
+    // KB 内联引用：按 entryId 取单条 entry 详情（[[kb:entryId|标题]] 预览/导航用）
+    suspend fun getKBEntry(entryId: String, userId: String): KBEntryItem? {
+        return try {
+            val response = get("/api/kb/entries/$entryId?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取知识库条目详情失败:", e)
+            null
         }
     }
 
@@ -913,15 +1356,60 @@ object ApiClient {
         }
     }
 
-    suspend fun updateKBEntry(entryId: String, title: String?, content: String?, tags: List<String>?, userId: String): KBEntryItem? {
+    suspend fun captureKBEntry(
+        topicId: String,
+        title: String,
+        content: String,
+        tags: List<String>,
+        userId: String,
+        source: KBEntrySource,
+        status: KBEntryStatus? = null,
+    ): KBEntryItem? {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("topicId", kotlinx.serialization.json.JsonPrimitive(topicId))
+                put("title", kotlinx.serialization.json.JsonPrimitive(title))
+                put("content", kotlinx.serialization.json.JsonPrimitive(content))
+                put(
+                    "tags",
+                    kotlinx.serialization.json.JsonArray(tags.map { kotlinx.serialization.json.JsonPrimitive(it) })
+                )
+                put(
+                    "source",
+                    jsonParser.encodeToJsonElement(KBEntrySource.serializer(), source)
+                )
+                status?.let {
+                    put("status", kotlinx.serialization.json.JsonPrimitive(it.name))
+                }
+            }.toString()
+            val response = post("/api/kb/captures", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("保存知识库候选失败:", e)
+            null
+        }
+    }
+
+    suspend fun updateKBEntry(
+        entryId: String,
+        topicId: String? = null,
+        title: String?,
+        content: String?,
+        tags: List<String>?,
+        userId: String,
+        status: KBEntryStatus? = null,
+    ): KBEntryItem? {
         return try {
             val fields = mutableListOf("\"userId\":\"$userId\"")
+            if (topicId != null) fields.add("\"topicId\":\"${topicId.replace("\"", "\\\"")}\"")
             if (title != null) fields.add("\"title\":\"${title.replace("\"", "\\\"")}\"")
             if (content != null) {
                 val escaped = content.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
                 fields.add("\"content\":\"$escaped\"")
             }
             if (tags != null) fields.add("\"tags\":[${tags.joinToString(",") { "\"$it\"" }}]")
+            if (status != null) fields.add("\"status\":\"${status.name}\"")
             val body = "{${fields.joinToString(",")}}"
             val response = put("/api/kb/entries/$entryId", body)
             jsonParser.decodeFromString(response)
@@ -931,9 +1419,31 @@ object ApiClient {
         }
     }
 
-    suspend fun exportKBEntry(entryId: String): ExportKBResponse? {
+    suspend fun deleteKBTopic(topicId: String, userId: String): SimpleResponse {
         return try {
-            val response = get("/api/kb/entries/$entryId/export")
+            val body = """{"userId":"$userId"}"""
+            val response = delete("/api/kb/topics/$topicId", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("删除知识库主题失败:", e)
+            SimpleResponse(false, "网络错误")
+        }
+    }
+
+    suspend fun deleteKBEntry(entryId: String, userId: String): SimpleResponse {
+        return try {
+            val body = """{"userId":"$userId"}"""
+            val response = delete("/api/kb/entries/$entryId", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("删除知识库条目失败:", e)
+            SimpleResponse(false, "网络错误")
+        }
+    }
+
+    suspend fun exportKBEntry(entryId: String, userId: String): ExportKBResponse? {
+        return try {
+            val response = get("/api/kb/entries/$entryId/export?userId=$userId")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("导出知识库条目失败:", e)
@@ -956,6 +1466,11 @@ object ApiClient {
             console.log("语音识别请求失败:", e)
             AsrResult(false, "", "语音识别失败: ${e.message}")
         }
+    }
+
+    suspend fun deleteFile(sessionId: String, fileId: String): SimpleResponse {
+        val response = delete("/api/files/$sessionId/$fileId", "{}")
+        return jsonParser.decodeFromString(response)
     }
 }
 

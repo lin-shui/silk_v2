@@ -15,6 +15,7 @@ data class WorkflowStore(
     val workflows: MutableList<Workflow> = mutableListOf()
 )
 
+@Suppress("TooGenericExceptionCaught")
 class WorkflowManager(
     private val baseDir: String =
         System.getProperty("silk.workflowDir")?.trim()?.takeIf { it.isNotEmpty() }
@@ -70,7 +71,7 @@ class WorkflowManager(
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
         )
-        store.workflows.add(workflow)
+        store.workflows.add(0, workflow)
         save(store)
         logger.info("Created workflow: {} for user {}, groupId={}, agentType={}", workflow.id, userId, groupId, agentType)
         return workflow
@@ -194,6 +195,23 @@ class WorkflowManager(
         )
         save(store)
         logger.info("Workflow {} activeAgent 持久化: {}", old.id, activeAgent)
+        return true
+    }
+
+    /** 持久化工具权限模式。 */
+    @Synchronized
+    fun updatePermissionMode(groupId: String, permissionMode: String): Boolean {
+        val store = load()
+        val idx = store.workflows.indexOfFirst { it.groupId == groupId }
+        if (idx < 0) return false
+        val old = store.workflows[idx]
+        if (old.permissionMode == permissionMode) return false
+        store.workflows[idx] = old.copy(
+            permissionMode = permissionMode,
+            updatedAt = System.currentTimeMillis(),
+        )
+        save(store)
+        logger.info("Workflow {} permissionMode 持久化: {}", old.id, permissionMode)
         return true
     }
 

@@ -26,6 +26,8 @@ allprojects {
         google()
         mavenCentral()
         maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
+        // 添加华为 Maven 仓库地址
+        maven("https://developer.huawei.com/repo/")
     }
 }
 

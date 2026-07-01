@@ -25,7 +25,7 @@ actual class PlatformWebSocket actual constructor(
     actual val isConnected: Boolean
         get() = ws?.readyState == BrowserWebSocket.OPEN
     
-    actual fun connect(userId: String, userName: String, groupId: String) {
+    actual fun connect(token: String?, userId: String, userName: String, groupId: String) {
         try {
             // 关闭旧连接（静默，不触发 onclose 回调）
             ws?.let { old ->
@@ -43,7 +43,12 @@ actual class PlatformWebSocket actual constructor(
             val safeUserName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")
             val safeGroupId = groupId.replace(" ", "_").replace("&", "_").replace("=", "_")
             
-            val fullUrl = "$serverUrl/chat?userId=$userId&userName=$safeUserName&groupId=$safeGroupId"
+            // 优先使用 JWT token，fallback 到 userId
+            val fullUrl = if (!token.isNullOrBlank()) {
+                "$serverUrl/chat?token=$token&userName=$safeUserName&groupId=$safeGroupId"
+            } else {
+                "$serverUrl/chat?userId=$userId&userName=$safeUserName&groupId=$safeGroupId"
+            }
             log("🔗 [WebSocket] 连接到: $fullUrl")
             
             ws = BrowserWebSocket(fullUrl)

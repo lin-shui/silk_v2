@@ -243,6 +243,7 @@ private val jsInitSession = js("""
 })();
 """)
 
+@Suppress("CyclomaticComplexMethod", "UnusedParameter", "UnusedPrivateProperty")
 @Composable
 fun AudioDuplexScene(appState: WebAppState) {
     var statusText by remember { mutableStateOf("点击开始语音对话") }

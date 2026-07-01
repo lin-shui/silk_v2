@@ -4,6 +4,10 @@
 
 - 当前主线 agent 是 `ai/DirectModelAgent.kt`
 - `SilkAgent.kt` 仍保留旧接口与兼容逻辑，但新代码默认沿着 `DirectModelAgent` 看
+- `DirectModelAgent.processInput(...)` 关键参数：
+  - `availableReferences`：本轮可引用的 KB 条目列表（含 `spaceId`/`spaceLabel`/`origin`/`reason`），经 `registerReference` 写入 `MessageReference`
+  - `additionalContext: String?`：由 `resolveKnowledgeBasePromptContext` 生成的 KB prompt 文本块，追加到系统提示词末尾
+  - `callback`：流式回调（thinking/text/blocks_state/tool 相关事件）
 - `AIConfig.kt` 统一读取：
   - Anthropic Claude API（Messages API）
   - ASR
@@ -12,7 +16,8 @@
 ## Anthropic Client
 
 - `ai/AnthropicClient.kt` 封装与 Anthropic Messages API 的通信：
-  - SSE 流式解析（content_block_start/delta/stop + message_delta）
+  - SSE 流式解析（content_block_start/delta/stop + message_delta，含 thinking_delta）
+  - 结构化 content block 追踪：流式过程中维护 `streamingBlocks` 映射（thinking/text/tool_use），通过 `blocks_state` 回调每步推送到前端实时渲染
   - 内部 Message ↔ Anthropic 格式双向转换
   - 工具定义转换（custom tools → {name, description, input_schema}，web_search → 原生 `web_search_20260209`）
   - tool_use 收集与残缺 JSON 修复
@@ -37,6 +42,11 @@
   - 基于 `DirectModelAgent.accessibleSessionIds` 限制搜索范围
   - 搜索 `_text.txt`（PDF 提取文本）和 `session.json`（聊天消息）
   - 结果截断至 30000 字符，路径层级限制防逃逸
+- `writeOtherGroupsHistories()` 跨群上下文注入：
+  - 仅在 Silk 专属对话中触发（`accessibleSessionIds.size > 1`）
+  - 遍历用户所有群组，读取最近 50 条 TEXT 消息
+  - 写入 `workspaceDir/other_groups/chat_history_<群名>.md`
+  - AI 可通过 Grep/Read 工具跨群搜索，提示词中明确告知跨群访问权限
 - `utils/WebPageDownloader.kt`：
   - URL 提取、HTML/PDF 下载、提取、落盘
   - `WebPageDownloaderSmokeTest` 覆盖本地 smoke

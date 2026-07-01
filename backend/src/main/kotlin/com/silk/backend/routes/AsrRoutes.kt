@@ -43,6 +43,7 @@ private val httpClient = HttpClient(CIO) {
 
 private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 fun Route.asrRoutes() {
     route("/api/asr") {
 
@@ -158,6 +159,7 @@ fun Route.asrRoutes() {
 /**
  * 使用 ffmpeg 将任意常见录音格式转为 16kHz 单声道 PCM WAV，供 mlx_audio/miniaudio 解码。
  */
+@Suppress("TooGenericExceptionCaught")
 private fun transcodeToWavWithFfmpeg(input: ByteArray, format: String): ByteArray? {
     val ext = when (format.lowercase()) {
         "webm", "m4a", "mp3", "mp4", "ogg", "flac", "aac", "wav" -> format.lowercase()

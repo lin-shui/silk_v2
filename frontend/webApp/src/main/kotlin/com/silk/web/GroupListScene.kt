@@ -61,12 +61,13 @@ import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Style
 import org.jetbrains.compose.web.dom.Text
 
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught")
 @Composable
 fun GroupListScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
     
     var groups by remember { mutableStateOf<List<Group>>(emptyList()) }
-    var isLoading by remember { mutableStateOf(true) }
+    var isLoading by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var showJoinDialog by remember { mutableStateOf(false) }
     
@@ -84,6 +85,9 @@ fun GroupListScene(appState: WebAppState) {
     
     // ✅ 未读消息计数
     var unreadCounts by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    
+    // cc-connect status: groupId -> CcConnectTokenInfo
+    var ccConnectStatus by remember { mutableStateOf<Map<String, CcConnectTokenInfo>>(emptyMap()) }
     
     // Language and strings
     var userLanguage by remember { mutableStateOf<Language>(Language.CHINESE) }
@@ -138,6 +142,17 @@ fun GroupListScene(appState: WebAppState) {
                             console.log("✅ 未读消息: ", unreadCounts)
                         }
                     }
+                    
+                    // 加载 cc-connect 连接状态
+                    val statusMap = mutableMapOf<String, CcConnectTokenInfo>()
+                    val currentUserId = appState.currentUser?.id ?: ""
+                    groups.forEach { group ->
+                        val info = ApiClient.getCcConnectTokenInfo(group.id, currentUserId)
+                        if (info != null && info.success) {
+                            statusMap[group.id] = info
+                        }
+                    }
+                    ccConnectStatus = statusMap
                 } else {
                     console.log("⚠️ 加载群组失败:", response?.message)
                 }
@@ -185,8 +200,8 @@ fun GroupListScene(appState: WebAppState) {
         style {
             display(DisplayStyle.Flex)
             flexDirection(FlexDirection.Column)
-            height(100.vh)
-            width(100.vw)
+            property("width", "100%")
+            property("height", "100%")
             property("overflow", "hidden")
             property("background", SilkColors.backgroundGradient)
             fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
@@ -197,14 +212,19 @@ fun GroupListScene(appState: WebAppState) {
             style {
                 property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
                 color(Color.white)
-                padding(16.px, 20.px)
+                padding(12.px, 16.px)
                 display(DisplayStyle.Flex)
                 justifyContent(JustifyContent.SpaceBetween)
-                alignItems(AlignItems.Center)
+                alignItems(AlignItems.FlexStart)
                 property("box-shadow", "0 2px 12px rgba(169, 137, 77, 0.25)")
             }
         }) {
-            Div {
+            Div({
+                style {
+                    property("flex-shrink", "0")
+                    property("min-width", "0")
+                }
+            }) {
                 // Logo
                 Div({
                     style {
@@ -221,7 +241,9 @@ fun GroupListScene(appState: WebAppState) {
                     style { 
                         fontSize(13.px)
                         property("opacity", "0.9")
-                        property("letter-spacing", "1px")
+                        property("white-space", "nowrap")
+                        property("overflow", "hidden")
+                        property("text-overflow", "ellipsis")
                     } 
                 }) {
                     Text(appState.currentUser?.fullName ?: "")
@@ -232,245 +254,92 @@ fun GroupListScene(appState: WebAppState) {
             Div({
                 style {
                     display(DisplayStyle.Flex)
-                    gap(12.px)
+                    gap(4.px)
                     alignItems(AlignItems.Center)
                 }
             }) {
-                // ➖ 删除/退出模式按钮
-                if (isDeleteMode) {
-                    // 取消按钮
-                    Button({
-                        style {
-                            padding(10.px, 18.px)
-                            backgroundColor(Color("rgba(255,255,255,0.3)"))
-                            color(Color.white)
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", "pointer")
-                            property("backdrop-filter", "blur(4px)")
-                            property("transition", "all 0.2s ease")
-                            fontSize(14.px)
-                            property("font-weight", "500")
-                        }
-                        onClick { 
-                            isDeleteMode = false
-                            selectedGroups = emptySet()
-                        }
-                    }) {
-                        Text(strings.cancelButton)
-                    }
-                    
-                    // 确认退出按钮
-                    if (selectedGroups.isNotEmpty()) {
-                        Button({
-                            style {
-                                padding(10.px, 18.px)
-                                backgroundColor(Color("#e74c3c"))
-                                color(Color.white)
-                                border { width(0.px) }
-                                borderRadius(8.px)
-                                property("cursor", if (isDeleting) "not-allowed" else "pointer")
-                                property("backdrop-filter", "blur(4px)")
-                                property("transition", "all 0.2s ease")
-                                fontSize(14.px)
-                                property("font-weight", "500")
-                                property("opacity", if (isDeleting) "0.6" else "1")
-                            }
-                            onClick { 
-                                if (!isDeleting) {
-                                    scope.launch {
-                                        isDeleting = true
-                                        val userId = appState.currentUser?.id ?: return@launch
-                                        
-                                        selectedGroups.forEach { groupId ->
-                                            // 查找群组，判断是否是群主
-                                            val group = groups.find { it.id == groupId }
-                                            if (group != null && group.hostId == userId) {
-                                                // 群主删除群组
-                                                val response = ApiClient.deleteGroup(groupId, userId)
-                                                console.log("删除群组 $groupId: ${response.message}")
-                                            } else {
-                                                // 普通成员退出群组
-                                                val response = ApiClient.leaveGroup(groupId, userId)
-                                                console.log("退出群组 $groupId: ${response.message}")
-                                            }
-                                        }
-                                        
-                                        // 刷新群组列表
-                                        val response = ApiClient.getUserGroups(userId)
-                                        if (response.success) {
-                                            groups = response.groups ?: emptyList()
-                                        }
-                                        
-                                        isDeleting = false
-                                        isDeleteMode = false
-                                        selectedGroups = emptySet()
-                                    }
-                                }
-                            }
-                        }) {
-                            // 检查选中的群组中是否有群主身份的群
-                            val userId = appState.currentUser?.id ?: ""
-                            val hasHostGroups = selectedGroups.any { groupId -> 
-                                groups.find { it.id == groupId }?.hostId == userId 
-                            }
-                            val hasMemberGroups = selectedGroups.any { groupId -> 
-                                groups.find { it.id == groupId }?.hostId != userId 
-                            }
-                            
-                            val actionText = when {
-                                hasHostGroups && hasMemberGroups -> "删除/退出"
-                                hasHostGroups -> "删除"
-                                else -> "退出"
-                            }
-                            
-                            Text(if (isDeleting) strings.exiting else "${actionText} (${selectedGroups.size})")
-                        }
-                    }
-                } else {
-                    // ➖ 进入删除模式
-                    Button({
-                        style {
-                            padding(10.px, 18.px)
-                            backgroundColor(Color("rgba(255,255,255,0.2)"))
-                            color(Color.white)
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", "pointer")
-                            property("backdrop-filter", "blur(4px)")
-                            property("transition", "all 0.2s ease")
-                            fontSize(14.px)
-                            property("font-weight", "500")
-                        }
-                        onClick { isDeleteMode = true }
-                    }) {
-                        Text("➖ ${strings.exitButton}")
-                    }
-                    
-                    // 创建群组按钮
-                    Button({
-                        style {
-                            padding(10.px, 18.px)
-                            backgroundColor(Color("rgba(255,255,255,0.2)"))
-                            color(Color.white)
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", "pointer")
-                            property("backdrop-filter", "blur(4px)")
-                            property("transition", "all 0.2s ease")
-                            fontSize(14.px)
-                            property("font-weight", "500")
-                        }
-                        onClick { showCreateDialog = true }
-                    }) {
-                        Text("➕ ${strings.createButton}")
-                    }
-                }
-                
-                // 加入群组按钮
-                Button({
-                    style {
-                        padding(10.px, 18.px)
-                        backgroundColor(Color("rgba(255,255,255,0.2)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                        fontSize(14.px)
-                        property("font-weight", "500")
-                    }
-                    onClick { showJoinDialog = true }
-                }) {
-                    Text("🔗 ${strings.joinButton}")
-                }
-                
-                // 联系人按钮
-                Button({
-                    style {
-                        padding(10.px, 18.px)
-                        backgroundColor(Color("rgba(255,255,255,0.2)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                        fontSize(14.px)
-                        property("font-weight", "500")
-                    }
-                    onClick { appState.navigateTo(Scene.CONTACTS) }
-                }) {
-                    Text("👤 ${strings.contactsButton}")
-                }
-                
                 // 🤖 与 Silk 对话按钮
                 Button({
                     style {
-                        padding(10.px, 18.px)
+                        padding(8.px, 10.px)
                         backgroundColor(Color("#7BA8C9"))
                         color(Color.white)
                         border { width(0.px) }
                         borderRadius(8.px)
                         property("cursor", "pointer")
                         property("box-shadow", "0 2px 8px rgba(123, 168, 201, 0.4)")
-                        property("transition", "all 0.2s ease")
-                        fontSize(14.px)
-                        property("font-weight", "600")
+                        fontSize(18.px)
+                        property("flex-shrink", "0")
                     }
-                    onClick { 
+                    onClick {
                         scope.launch {
-                            val userId = appState.currentUser?.id ?: return@launch
-                            val response = ApiClient.startSilkPrivateChat(userId)
-                            if (response.success && response.group != null) {
-                                console.log("✅ 打开与 Silk 的对话: ${response.group!!.name}")
-                                appState.selectGroup(response.group!!)
-                            } else {
-                                console.log("❌ 打开 Silk 对话失败: ${response.message}")
-                            }
+                            val uid = appState.currentUser?.id ?: return@launch
+                            val r = ApiClient.startSilkPrivateChat(uid)
+                            if (r.success && r.group != null) appState.selectGroup(r.group!!)
                         }
                     }
-                }) {
-                    Text("🤖 ${strings.chatWithSilk}")
-                }
+                }) { Text("🤖") }
                 
-                // 设置按钮
-                Button({
+                // 下拉菜单
+                var showMenu by remember { mutableStateOf(false) }
+                Div({
                     style {
-                        padding(10.px, 18.px)
-                        backgroundColor(Color("rgba(255,255,255,0.2)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                        fontSize(14.px)
-                        property("font-weight", "500")
+                        position(Position.Relative)
                     }
-                    onClick { appState.navigateTo(Scene.SETTINGS) }
                 }) {
-                    Text("⚙️ ${strings.settingsButton}")
-                }
-                
-                // 登出按钮
-                Button({
-                    style {
-                        padding(10.px, 18.px)
-                        backgroundColor(Color("rgba(255,255,255,0.15)"))
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        property("backdrop-filter", "blur(4px)")
-                        property("transition", "all 0.2s ease")
-                        fontSize(14.px)
-                        property("font-weight", "500")
+                    Button({
+                        style {
+                            padding(8.px, 14.px)
+                            backgroundColor(Color("rgba(255,255,255,0.2)"))
+                            color(Color.white)
+                            border { width(0.px) }
+                            borderRadius(8.px)
+                            property("cursor", "pointer")
+                            property("backdrop-filter", "blur(4px)")
+                            fontSize(18.px)
+                        }
+                        onClick { showMenu = !showMenu }
+                    }) { Text("☰") }
+                    
+                    if (showMenu) {
+                        Div({
+                            style {
+                                position(Position.Fixed)
+                                top(0.px); left(0.px); right(0.px); bottom(0.px)
+                                property("z-index", "99")
+                            }
+                            onClick { showMenu = false }
+                        })
+                        
+                        Div({
+                            style {
+                                position(Position.Absolute)
+                                top(100.percent)
+                                right(0.px)
+                                property("z-index", "100")
+                                backgroundColor(Color("#2a2a2a"))
+                                borderRadius(10.px)
+                                property("box-shadow", "0 4px 20px rgba(0,0,0,0.3)")
+                                property("min-width", "160px")
+                                padding(6.px)
+                                marginTop(6.px)
+                            }
+                            onClick { showMenu = false }
+                        }) {
+                            if (isDeleteMode) {
+                                Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { isDeleteMode = false; selectedGroups = emptySet(); showMenu = false } }) { Text("🔙  ${strings.cancelButton}") }
+                                if (selectedGroups.isNotEmpty()) {
+                                    Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color("#e74c3c")); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { scope.launch { isDeleting = true; val userId = appState.currentUser?.id ?: ""; selectedGroups.forEach { groupId -> val group = groups.find { it.id == groupId }; if (group != null && group.hostId == userId) ApiClient.deleteGroup(groupId, userId) else ApiClient.leaveGroup(groupId, userId) }; val r2 = ApiClient.getUserGroups(userId); if (r2.success) { groups = r2.groups ?: emptyList() } else { /* keep existing groups on failure */ }; isDeleting = false; isDeleteMode = false; selectedGroups = emptySet(); showMenu = false } } }) { Text("🗑  ${strings.exitButton} (${selectedGroups.size})") }
+                                }
+                            } else {
+                                Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { isDeleteMode = true; showMenu = false } }) { Text("➖  ${strings.exitButton}") }
+                                Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { showCreateDialog = true; showMenu = false } }) { Text("➕  ${strings.createButton}") }
+                            }
+                            Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { showJoinDialog = true; showMenu = false } }) { Text("🔗  ${strings.joinButton}") }
+                            Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { appState.navigateTo(Scene.CONTACTS); showMenu = false } }) { Text("👤  ${strings.contactsButton}") }
+                            Div({ style { padding(10.px, 14.px); fontSize(14.px); color(Color.white); borderRadius(6.px); property("cursor", "pointer"); property("white-space", "nowrap") }; onClick { appState.logout(); showMenu = false } }) { Text("🚪  ${strings.logoutButton}") }
+                        }
                     }
-                    onClick { appState.logout() }
-                }) {
-                    Text(strings.logoutButton)
                 }
             }
         }
@@ -605,18 +474,28 @@ fun GroupListScene(appState: WebAppState) {
                         }
                     }
                     
-                    // 群组列表
-                    groups.forEach { group ->
+                    // 群组列表（Silk AI → CC-Connect → Silk Groups）
+                    val silkPrivateGroups = groups.filter { it.name.startsWith("[Silk]") }
+                    val ccGroups = groups.filter { ccConnectStatus.containsKey(it.id) }
+                    val silkNormalGroups = groups.filter {
+                        !it.name.startsWith("[Silk]") && !ccConnectStatus.containsKey(it.id)
+                    }
+
+                    @Composable
+                    fun renderGroupCard(group: Group) {
                         val isSelected = group.id in selectedGroups
                         val unreadCount = unreadCounts[group.id] ?: 0
+                        val ccInfo = ccConnectStatus[group.id]
+                        val isSilkPrivate = group.name.startsWith("[Silk]")
                         GroupCard(
                             group = group,
                             isHost = group.hostId == appState.currentUser?.id,
                             isDeleteMode = isDeleteMode,
                             isSelected = isSelected,
                             unreadCount = unreadCount,
+                            ccConnectInfo = ccInfo,
                             strings = strings,
-                            onClick = { 
+                            onClick = {
                                 if (isDeleteMode) {
                                     selectedGroups = if (isSelected) {
                                         selectedGroups - group.id
@@ -624,17 +503,16 @@ fun GroupListScene(appState: WebAppState) {
                                         selectedGroups + group.id
                                     }
                                 } else {
-                                    // 标记为已读并清除本地未读计数
                                     scope.launch {
                                         appState.currentUser?.let { user ->
                                             ApiClient.markGroupAsRead(user.id, group.id)
                                             unreadCounts = unreadCounts - group.id
                                         }
                                     }
-                                    appState.selectGroup(group) 
+                                    appState.selectGroup(group)
                                 }
                             },
-                            onMembersClick = {
+                            onMembersClick = ({
                                 selectedGroupForMembers = group
                                 scope.launch {
                                     isLoadingMembers = true
@@ -642,14 +520,109 @@ fun GroupListScene(appState: WebAppState) {
                                     val contactsResponse = ApiClient.getContacts(userId)
                                     contacts = contactsResponse.contacts ?: emptyList()
                                     val membersResponse = ApiClient.getGroupMembers(group.id)
-                                    // 将群主排在第一位
                                     val sortedMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
                                     groupMembers = sortedMembers
                                     isLoadingMembers = false
                                     showMembersDialog = true
                                 }
-                            }
+                                Unit
+                            } as (() -> Unit)?).takeIf { !isSilkPrivate }
                         )
+                    }
+
+                    // --- Section 1: Silk 专属对话 ---
+                    if (silkPrivateGroups.isNotEmpty()) {
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                property("gap", "8px")
+                                marginBottom(12.px)
+                            }
+                        }) {
+                            Span({
+                                style {
+                                    fontSize(12.px)
+                                    color(Color(SilkColors.primary))
+                                    property("font-weight", "700")
+                                    property("letter-spacing", "1px")
+                                    property("white-space", "nowrap")
+                                }
+                            }) { Text("Silk AI") }
+                            Div({
+                                style {
+                                    property("flex", "1")
+                                    height(1.px)
+                                    backgroundColor(Color(SilkColors.primary))
+                                    property("opacity", "0.3")
+                                }
+                            })
+                        }
+                        silkPrivateGroups.forEach { renderGroupCard(it) }
+                    }
+
+                    // --- Section 2: CC-Connect 群组 ---
+                    if (ccGroups.isNotEmpty()) {
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                property("gap", "8px")
+                                marginTop(if (silkPrivateGroups.isNotEmpty()) 16.px else 0.px)
+                                marginBottom(12.px)
+                            }
+                        }) {
+                            Span({
+                                style {
+                                    fontSize(12.px)
+                                    color(Color("#2E7D32"))
+                                    property("font-weight", "700")
+                                    property("letter-spacing", "1px")
+                                    property("white-space", "nowrap")
+                                }
+                            }) { Text("CC-Connect") }
+                            Div({
+                                style {
+                                    property("flex", "1")
+                                    height(1.px)
+                                    backgroundColor(Color("#4CAF50"))
+                                    property("opacity", "0.3")
+                                }
+                            })
+                        }
+                        ccGroups.forEach { renderGroupCard(it) }
+                    }
+
+                    // --- Section 3: Silk 普通群组 ---
+                    if (silkNormalGroups.isNotEmpty()) {
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                property("gap", "8px")
+                                marginTop(if (silkPrivateGroups.isNotEmpty() || ccGroups.isNotEmpty()) 16.px else 0.px)
+                                marginBottom(12.px)
+                            }
+                        }) {
+                            Span({
+                                style {
+                                    fontSize(12.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    property("font-weight", "700")
+                                    property("letter-spacing", "1px")
+                                    property("white-space", "nowrap")
+                                }
+                            }) { Text("Silk Groups") }
+                            Div({
+                                style {
+                                    property("flex", "1")
+                                    height(1.px)
+                                    backgroundColor(Color(SilkColors.textSecondary))
+                                    property("opacity", "0.2")
+                                }
+                            })
+                        }
+                        silkNormalGroups.forEach { renderGroupCard(it) }
                     }
                 }
             }
@@ -687,8 +660,8 @@ fun GroupListScene(appState: WebAppState) {
                 onDismiss = { showCreateDialog = false },
                 onGroupCreated = { newGroup ->
                     groups = groups + newGroup
-                    showCreateDialog = false
-                }
+                },
+                onComplete = { showCreateDialog = false }
             )
         }
         
@@ -750,18 +723,22 @@ fun GroupListScene(appState: WebAppState) {
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "UnusedParameter")
 @Composable
 fun GroupCard(
-    group: Group, 
+    group: Group,
     isHost: Boolean, 
     isDeleteMode: Boolean = false,
     isSelected: Boolean = false,
     unreadCount: Int = 0,
+    ccConnectInfo: CcConnectTokenInfo? = null,
     strings: Strings,
     onClick: () -> Unit,
     onMembersClick: (() -> Unit)? = null
 ) {
     val hasUnread = unreadCount > 0
+    val isCcConnect = ccConnectInfo != null
+    val ccConnected = ccConnectInfo?.connected == true
     
     Div({
         style {
@@ -837,7 +814,8 @@ fun GroupCard(
                     Text(group.name)
                 }
                 
-                // 邀请码（小字体）
+                // 邀请码（非 Silk 专属对话才显示）
+                if (!group.name.startsWith("[Silk]")) {
                 Span({
                     style {
                         fontSize(11.px)
@@ -846,6 +824,44 @@ fun GroupCard(
                     }
                 }) {
                     Text("[${group.invitationCode}]")
+                }
+                }
+                
+                // cc-connect status badge
+                if (isCcConnect) {
+                    val badgeName = run {
+                        val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
+                        when {
+                            raw.startsWith("claude") -> "claude"
+                            raw.startsWith("cursor") -> "cursor"
+                            raw.startsWith("gemini") -> "gemini"
+                            raw.startsWith("codex")  -> "codex"
+                            raw.startsWith("copilot") -> "copilot"
+                            raw.isBlank() -> "cc"
+                            else -> raw
+                        }
+                    }
+                    Span({
+                        style {
+                            fontSize(10.px)
+                            padding(2.px, 6.px)
+                            borderRadius(4.px)
+                            property("font-weight", "600")
+                            property("letter-spacing", "0.5px")
+                            if (ccConnected) {
+                                backgroundColor(Color("#E8F5E9"))
+                                color(Color("#2E7D32"))
+                            } else {
+                                backgroundColor(Color("#FFF3E0"))
+                                color(Color("#E65100"))
+                            }
+                        }
+                        if (ccConnected) {
+                            title("${ccConnectInfo?.agentType ?: "agent"} — ${ccConnectInfo?.project ?: ""}")
+                        }
+                    }) {
+                        Text(if (ccConnected) badgeName else "$badgeName (offline)")
+                    }
                 }
             }
             
@@ -914,25 +930,66 @@ fun GroupCard(
                 }
             }
         }
+
+        // cc-connect 工作目录（第二行）
+        val cwdText = ccConnectInfo?.cwd
+        if (isCcConnect && ccConnected && !cwdText.isNullOrBlank()) {
+            Div({
+                style {
+                    marginTop(4.px)
+                    property("padding-left", if (hasUnread && !isDeleteMode) "34px" else "0px")
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "4px")
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("opacity", "0.7")
+                    }
+                }) {
+                    Text("📁")
+                }
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("font-family", "monospace")
+                        property("overflow", "hidden")
+                        property("text-overflow", "ellipsis")
+                        property("white-space", "nowrap")
+                    }
+                    title(cwdText)
+                }) {
+                    Text(cwdText)
+                }
+            }
+        }
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught")
 @Composable
 fun CreateGroupDialog(
     appState: WebAppState,
     strings: Strings,
     onDismiss: () -> Unit,
-    onGroupCreated: (Group) -> Unit
+    onGroupCreated: (Group) -> Unit,
+    onComplete: () -> Unit = onDismiss,
 ) {
     val scope = rememberCoroutineScope()
     var groupName by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(false) }
+    var isCcConnect by remember { mutableStateOf(false) }
+    var generatedToken by remember { mutableStateOf<String?>(null) }
+    var tokenCopied by remember { mutableStateOf(false) }
     
     val userName = appState.currentUser?.fullName ?: ""
     val previewName = if (groupName.isNotBlank()) "$userName's $groupName" else ""
     
-    // 对话框遮罩
     Div({
         style {
             position(Position.Fixed)
@@ -947,7 +1004,7 @@ fun CreateGroupDialog(
             property("z-index", "1000")
             property("backdrop-filter", "blur(4px)")
         }
-        onClick { onDismiss() }
+        onClick { if (generatedToken == null) onDismiss() }
     }) {
         Div({
             style {
@@ -961,147 +1018,230 @@ fun CreateGroupDialog(
             }
             onClick { it.stopPropagation() }
         }) {
-            H3({ 
-                style { 
-                    marginTop(0.px)
-                    marginBottom(24.px)
-                    color(Color(SilkColors.textPrimary))
-                    property("font-weight", "600")
-                    property("letter-spacing", "1px")
-                } 
-            }) {
-                Text(strings.createGroupTitle)
-            }
-            
-            Div({ style { marginBottom(20.px) } }) {
-                Label { 
-                    Span({
-                        style {
-                            fontSize(13.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("letter-spacing", "0.5px")
-                        }
-                    }) {
-                        Text(strings.groupName)
-                    }
-                }
-                Input(InputType.Text) {
-                    value(groupName)
-                    onInput { groupName = it.value; errorMessage = "" }
-                    style {
-                        width(100.percent)
-                        padding(14.px)
-                        fontSize(14.px)
-                        marginTop(8.px)
-                        border { 
-                            width(1.px)
-                            style(LineStyle.Solid)
-                            color(Color(SilkColors.border)) 
-                        }
-                        borderRadius(8.px)
-                        property("box-sizing", "border-box")
-                        property("background", SilkColors.surface)
-                        property("color", SilkColors.textPrimary)
-                        fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
-                    }
-                }
-            }
-            
-            if (previewName.isNotEmpty()) {
-                Div({
-                    style {
-                        fontSize(13.px)
-                        color(Color(SilkColors.textSecondary))
-                        marginBottom(20.px)
-                        property("font-style", "italic")
-                    }
-                }) {
-                    Text("${strings.fullName}: $previewName")
-                }
-            }
-            
-            if (errorMessage.isNotEmpty()) {
-                Div({ 
+            if (generatedToken != null) {
+                // Token display phase
+                H3({ 
                     style { 
-                        color(Color(SilkColors.error))
-                        fontSize(13.px)
-                        marginBottom(20.px)
-                        padding(12.px)
-                        backgroundColor(Color("#FDF5F5"))
-                        borderRadius(8.px)
+                        marginTop(0.px); marginBottom(16.px)
+                        color(Color(SilkColors.textPrimary))
+                        property("font-weight", "600")
                     } 
-                }) {
-                    Text(errorMessage)
+                }) { Text("cc-connect Token") }
+
+                Div({ style {
+                    padding(16.px); borderRadius(8.px)
+                    property("background", SilkColors.surface)
+                    property("border", "1px solid ${SilkColors.border}")
+                    marginBottom(16.px)
+                    property("word-break", "break-all")
+                    fontFamily("monospace"); fontSize(14.px)
+                    color(Color(SilkColors.textPrimary))
+                } }) { Text(generatedToken!!) }
+
+                Div({ style {
+                    fontSize(13.px); color(Color(SilkColors.textSecondary))
+                    marginBottom(16.px); property("line-height", "1.6")
+                } }) {
+                    Text("Paste this token into cc-connect's config.toml:")
+                    Div({ style {
+                        fontSize(12.px); padding(12.px); borderRadius(6.px)
+                        property("background", SilkColors.surface)
+                        property("border", "1px solid ${SilkColors.border}")
+                        property("overflow-x", "auto")
+                        color(Color(SilkColors.textPrimary))
+                        fontFamily("monospace")
+                        property("white-space", "pre")
+                        marginTop(8.px)
+                    } }) {
+                        Text("""[[projects.platforms]]
+type = "silk"
+[projects.platforms.options]
+server = "wss://your-server:15003/ccconnect-bridge"
+token  = "${generatedToken}"
+""")
+                    }
                 }
-            }
-            
-            Div({
-                style {
+
+                Div({ style {
                     display(DisplayStyle.Flex)
                     justifyContent(JustifyContent.FlexEnd)
                     property("gap", "12px")
+                } }) {
+                    Button({
+                        style {
+                            padding(12.px, 20.px)
+                            backgroundColor(Color(if (tokenCopied) "#4CAF50" else SilkColors.secondary))
+                            color(Color(if (tokenCopied) "white" else SilkColors.textPrimary))
+                            border { width(0.px) }; borderRadius(8.px)
+                            property("cursor", "pointer"); fontSize(14.px)
+                        }
+                        onClick {
+                            kotlinx.browser.window.navigator.clipboard.writeText(generatedToken!!)
+                            tokenCopied = true
+                        }
+                    }) { Text(if (tokenCopied) "Copied!" else "Copy Token") }
+                    Button({
+                        style {
+                            padding(12.px, 20.px)
+                            property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                            color(Color.white); border { width(0.px) }; borderRadius(8.px)
+                            property("cursor", "pointer"); fontSize(14.px); property("font-weight", "600")
+                        }
+                        onClick { onComplete() }
+                    }) { Text("Done") }
                 }
-            }) {
-                Button({
-                    style {
-                        padding(12.px, 20.px)
-                        backgroundColor(Color(SilkColors.secondary))
+            } else {
+                // Creation form phase
+                H3({ 
+                    style { 
+                        marginTop(0.px); marginBottom(24.px)
                         color(Color(SilkColors.textPrimary))
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        fontSize(14.px)
-                        property("font-weight", "500")
+                        property("font-weight", "600")
+                        property("letter-spacing", "1px")
+                    } 
+                }) { Text(strings.createGroupTitle) }
+
+                // Group type selector
+                Div({ style { marginBottom(20.px) } }) {
+                    Span({ style { fontSize(13.px); color(Color(SilkColors.textSecondary)) } }) {
+                        Text("Type")
                     }
-                    onClick { onDismiss() }
-                }) {
-                    Text(strings.cancelButton)
+                    Div({ style { display(DisplayStyle.Flex); property("gap", "8px"); marginTop(8.px) } }) {
+                        Button({
+                            style {
+                                padding(8.px, 16.px); borderRadius(6.px); fontSize(13.px)
+                                property("cursor", "pointer")
+                                if (!isCcConnect) {
+                                    property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                                    color(Color.white); border { width(0.px) }
+                                } else {
+                                    backgroundColor(Color(SilkColors.surface))
+                                    color(Color(SilkColors.textPrimary))
+                                    property("border", "1px solid ${SilkColors.border}")
+                                }
+                            }
+                            onClick { isCcConnect = false }
+                        }) { Text("Normal") }
+                        Button({
+                            style {
+                                padding(8.px, 16.px); borderRadius(6.px); fontSize(13.px)
+                                property("cursor", "pointer")
+                                if (isCcConnect) {
+                                    property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                                    color(Color.white); border { width(0.px) }
+                                } else {
+                                    backgroundColor(Color(SilkColors.surface))
+                                    color(Color(SilkColors.textPrimary))
+                                    property("border", "1px solid ${SilkColors.border}")
+                                }
+                            }
+                            onClick { isCcConnect = true }
+                        }) { Text("cc-connect") }
+                    }
+                }
+
+                Div({ style { marginBottom(20.px) } }) {
+                    Label { 
+                        Span({ style { fontSize(13.px); color(Color(SilkColors.textSecondary)); property("letter-spacing", "0.5px") } }) {
+                            Text(strings.groupName)
+                        }
+                    }
+                    Input(InputType.Text) {
+                        value(groupName)
+                        onInput { groupName = it.value; errorMessage = "" }
+                        style {
+                            width(100.percent); padding(14.px); fontSize(14.px); marginTop(8.px)
+                            border { width(1.px); style(LineStyle.Solid); color(Color(SilkColors.border)) }
+                            borderRadius(8.px)
+                            property("box-sizing", "border-box")
+                            property("background", SilkColors.surface)
+                            property("color", SilkColors.textPrimary)
+                            fontFamily("'Noto Serif SC'", "'Cormorant Garamond'", "Georgia", "serif")
+                        }
+                    }
                 }
                 
-                Button({
-                    style {
-                        padding(12.px, 20.px)
-                        property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
-                        color(Color.white)
-                        border { width(0.px) }
-                        borderRadius(8.px)
-                        property("cursor", if (isLoading || groupName.isBlank()) "not-allowed" else "pointer")
-                        property("opacity", if (isLoading || groupName.isBlank()) "0.6" else "1")
-                        fontSize(14.px)
-                        property("font-weight", "600")
-                        property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.25)")
+                if (previewName.isNotEmpty() && !isCcConnect) {
+                    Div({ style { fontSize(13.px); color(Color(SilkColors.textSecondary)); marginBottom(20.px); property("font-style", "italic") } }) {
+                        Text("${strings.fullName}: $previewName")
                     }
-                    onClick {
-                        if (!isLoading && groupName.isNotBlank()) {
-                            scope.launch {
-                                isLoading = true
-                                try {
-                                    val response = appState.currentUser?.let { user ->
-                                        ApiClient.createGroup(user.id, groupName)
+                }
+
+                if (isCcConnect) {
+                    Div({ style {
+                        fontSize(12.px); color(Color(SilkColors.textSecondary))
+                        marginBottom(16.px); padding(12.px); borderRadius(8.px)
+                        property("background", SilkColors.surface)
+                        property("border", "1px solid ${SilkColors.border}")
+                        property("line-height", "1.5")
+                    } }) {
+                        Text("A token will be generated for connecting cc-connect to this group. Paste it into your cc-connect config.toml.")
+                    }
+                }
+                
+                if (errorMessage.isNotEmpty()) {
+                    Div({ style { 
+                        color(Color(SilkColors.error)); fontSize(13.px); marginBottom(20.px)
+                        padding(12.px); backgroundColor(Color("#FDF5F5")); borderRadius(8.px)
+                    } }) { Text(errorMessage) }
+                }
+                
+                Div({ style { display(DisplayStyle.Flex); justifyContent(JustifyContent.FlexEnd); property("gap", "12px") } }) {
+                    Button({
+                        style {
+                            padding(12.px, 20.px); backgroundColor(Color(SilkColors.secondary))
+                            color(Color(SilkColors.textPrimary)); border { width(0.px) }; borderRadius(8.px)
+                            property("cursor", "pointer"); fontSize(14.px); property("font-weight", "500")
+                        }
+                        onClick { onDismiss() }
+                    }) { Text(strings.cancelButton) }
+                    
+                    Button({
+                        style {
+                            padding(12.px, 20.px)
+                            property("background", "linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
+                            color(Color.white); border { width(0.px) }; borderRadius(8.px)
+                            property("cursor", if (isLoading || groupName.isBlank()) "not-allowed" else "pointer")
+                            property("opacity", if (isLoading || groupName.isBlank()) "0.6" else "1")
+                            fontSize(14.px); property("font-weight", "600")
+                            property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.25)")
+                        }
+                        onClick {
+                            if (!isLoading && groupName.isNotBlank()) {
+                                scope.launch {
+                                    isLoading = true
+                                    try {
+                                        val type = if (isCcConnect) "ccconnect" else null
+                                        val response = appState.currentUser?.let { user ->
+                                            ApiClient.createGroup(user.id, groupName, type)
+                                        }
+                                        
+                                        if (response != null && response.success && response.group != null) {
+                                            onGroupCreated(response.group)
+                                            if (isCcConnect && response.ccConnectToken != null) {
+                                                generatedToken = response.ccConnectToken
+                                            } else {
+                                                onComplete()
+                                            }
+                                        } else {
+                                            errorMessage = response?.message ?: "创建失败"
+                                        }
+                                    } catch (e: Exception) {
+                                        errorMessage = "创建失败: ${e.message}"
+                                    } finally {
+                                        isLoading = false
                                     }
-                                    
-                                    if (response != null && response.success && response.group != null) {
-                                        console.log("群组创建成功:", response.group.name)
-                                        onGroupCreated(response.group)
-                                    } else {
-                                        errorMessage = response?.message ?: "创建失败"
-                                    }
-                                } catch (e: Exception) {
-                                    errorMessage = "创建失败: ${e.message}"
-                                } finally {
-                                    isLoading = false
                                 }
                             }
                         }
-                    }
-                }) {
-                    Text(if (isLoading) strings.creating else strings.createButton)
+                    }) { Text(if (isLoading) strings.creating else strings.createButton) }
                 }
             }
         }
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught")
 @Composable
 fun JoinGroupDialog(
     appState: WebAppState,
@@ -1281,6 +1421,7 @@ fun JoinGroupDialog(
 /**
  * 群组成员列表对话框（在群列表页面使用）
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun GroupMembersListDialog(
     group: Group,

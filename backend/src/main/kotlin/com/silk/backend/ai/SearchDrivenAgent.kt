@@ -11,7 +11,11 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.floatOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.slf4j.LoggerFactory
 import java.net.URI
 import java.net.http.HttpClient
@@ -32,6 +36,7 @@ import java.time.Duration
  * 4. 分析用户意图和情绪
  * 5. 基于搜索结果生成回复
  */
+@Suppress("TooGenericExceptionCaught", "TooGenericExceptionThrown", "SwallowedException")
 class SearchDrivenAgent(
     private val apiKey: String = AIConfig.API_KEY,
     private val sessionId: String = "default",
@@ -436,35 +441,37 @@ $userInput
      */
     private fun analyzeIntentOffline(userInput: String): IntentAnalysis {
         val input = userInput.lowercase()
-        
-        val goal = when {
-            input.contains("如何") || input.contains("怎么") -> "寻求方法指导"
-            input.contains("为什么") -> "理解原因"
-            input.contains("什么是") || input.contains("是什么") -> "获取信息"
-            input.contains("帮") -> "请求帮助"
-            input.contains("?") || input.contains("？") -> "提出问题"
-            else -> "进行对话"
-        }
-        
-        val emotion = when {
-            input.contains("谢谢") || input.contains("感谢") || input.contains("棒") -> "积极"
-            input.contains("困难") || input.contains("问题") || input.contains("不行") -> "焦虑"
-            input.contains("不懂") || input.contains("迷惑") -> "困惑"
-            else -> "中性"
-        }
-        
-        val needsHelp = input.contains("?") || input.contains("？") || 
-                       input.contains("帮") || input.contains("如何") ||
-                       input.contains("怎么")
-        
+        val needsHelp = inferNeedsHelp(input)
+
         return IntentAnalysis(
-            goal = goal,
-            emotion = emotion,
+            goal = inferGoal(input),
+            emotion = inferEmotion(input),
             needsHelp = needsHelp,
             helpType = if (needsHelp) "信息查询" else "",
             confidence = 0.6f
         )
     }
+
+    private fun inferGoal(input: String): String = when {
+        input.contains("如何") || input.contains("怎么") -> "寻求方法指导"
+        input.contains("为什么") -> "理解原因"
+        input.contains("什么是") || input.contains("是什么") -> "获取信息"
+        input.contains("帮") -> "请求帮助"
+        input.contains("?") || input.contains("？") -> "提出问题"
+        else -> "进行对话"
+    }
+
+    private fun inferEmotion(input: String): String = when {
+        input.contains("谢谢") || input.contains("感谢") || input.contains("棒") -> "积极"
+        input.contains("困难") || input.contains("问题") || input.contains("不行") -> "焦虑"
+        input.contains("不懂") || input.contains("迷惑") -> "困惑"
+        else -> "中性"
+    }
+
+    private fun inferNeedsHelp(input: String): Boolean =
+        input.contains("?") || input.contains("？") ||
+            input.contains("帮") || input.contains("如何") ||
+            input.contains("怎么")
     
     
     /**
@@ -543,33 +550,46 @@ $userInput
         }
         
         val fullText = StringBuilder()
-        
+
         response.body().bufferedReader().use { reader ->
             var line: String?
             while (reader.readLine().also { line = it } != null) {
-                if (line!!.startsWith("data: ")) {
-                    val jsonData = line!!.substring(6).trim()
-                    if (jsonData == "[DONE]") break
-                    
-                    try {
-                        val streamResponse = json.decodeFromString<StreamResponse>(jsonData)
-                        val delta = streamResponse.choices.firstOrNull()?.delta
-                        val content = delta?.content ?: ""
-                        val reasoning = delta?.reasoning ?: ""
-                        val combinedText = content + reasoning
-
-                        if (combinedText.isNotEmpty()) {
-                            fullText.append(combinedText)
-                            onChunk(combinedText)
-                        }
-                    } catch (e: Exception) {
-                        // 忽略解析错误
-                    }
-                }
+                val stop = processStreamLine(line!!, fullText, onChunk)
+                if (stop) break
             }
         }
-        
+
         return fullText.toString()
+    }
+
+    /**
+     * 处理单行 SSE 数据：非 "data: " 行忽略；"[DONE]" 返回 true 表示应停止；
+     * 否则解析增量并追加/回调（解析错误忽略），返回 false 继续。与原内联逻辑等价。
+     */
+    private suspend fun processStreamLine(
+        line: String,
+        fullText: StringBuilder,
+        onChunk: suspend (String) -> Unit,
+    ): Boolean {
+        if (!line.startsWith("data: ")) return false
+        val jsonData = line.substring(6).trim()
+        if (jsonData == "[DONE]") return true
+
+        try {
+            val streamResponse = json.decodeFromString<StreamResponse>(jsonData)
+            val delta = streamResponse.choices.firstOrNull()?.delta
+            val content = delta?.content ?: ""
+            val reasoning = delta?.reasoning ?: ""
+            val combinedText = content + reasoning
+
+            if (combinedText.isNotEmpty()) {
+                fullText.append(combinedText)
+                onChunk(combinedText)
+            }
+        } catch (e: Exception) {
+            // 忽略解析错误
+        }
+        return false
     }
     
     /**

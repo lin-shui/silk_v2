@@ -19,7 +19,9 @@ export enum MessageCategory {
   TODO_LIST = 'TODO_LIST',     // 待办事项列表（低亮度）
   STEP_PROCESS = 'STEP_PROCESS', // 步骤执行过程（低亮度，可转发）
   FINAL_REPORT = 'FINAL_REPORT', // 最终诊断报告（高亮度）
-  AGENT_STATUS = 'AGENT_STATUS'  // Agent 工作状态（灰色，低亮度）
+  AGENT_STATUS = 'AGENT_STATUS',  // Agent 工作状态（灰色，低亮度）
+  AGENT_QUESTION = 'AGENT_QUESTION', // Agent 向用户提问（需要用户回答）
+  AGENT_PERMISSION = 'AGENT_PERMISSION' // Agent 工具权限确认（需要用户允许/拒绝）
 }
 
 /**
@@ -32,6 +34,26 @@ export interface Reference {
   url?: string;
   snippet?: string;
   path?: string;
+}
+
+/**
+ * 结构化 content block（对应 Anthropic Messages API 的 content block 概念）
+ */
+export interface ContentBlock {
+  index: number;
+  type: string;          // "thinking", "text", "tool_use"
+  content: string;
+  isComplete: boolean;
+  toolName: string;
+  toolId: string;
+}
+
+/**
+ * 交互式按钮选项（用于 cc-connect 提问）
+ */
+export interface InteractiveOption {
+  label: string;
+  value: string;
 }
 
 /**
@@ -51,11 +73,13 @@ export interface Message {
   category: MessageCategory; // 消息类别
   references?: Reference[];  // 引用来源列表（可选）
   footerContent?: string;    // AI 消息的耗时/轮次等元信息（渲染在消息底部）
+  contentBlocks?: ContentBlock[];       // 结构化 content block（流式 / 持久化回放）
+  interactiveOptions?: InteractiveOption[];  // 交互式按钮选项（用于 cc-connect 提问）
 }
 
-/** 判断某个 userId 是否属于 AI agent（所有 agent 的 userId 均以 _ai_agent 结尾）。 */
+/** 判断某个 userId 是否属于 AI agent（所有 agent 的 userId 均以 _ai_agent 结尾，或为 cc-connect）。 */
 export function isAgentUserId(userId: string): boolean {
-  return userId.endsWith('_ai_agent');
+  return userId.endsWith('_ai_agent') || userId === 'cc-connect';
 }
 
 /**
@@ -86,25 +110,29 @@ export function createMessage(
  * 解析 JSON 为 Message 对象
  */
 export function parseMessage(json: string): Message {
-  const obj = JSON.parse(json) as Message;
+  const obj = JSON.parse(json) as Record<string, Object>;
   const parsedType: MessageType = obj.type ? obj.type as MessageType : MessageType.TEXT;
   const parsedCategory: MessageCategory = obj.category ? obj.category as MessageCategory : MessageCategory.NORMAL;
-  const parsedIsTransient: boolean = obj.isTransient ? obj.isTransient : false;
-  const parsedIsIncremental: boolean = obj.isIncremental ? obj.isIncremental : false;
-  const parsedReferences: Reference[] = obj.references ? obj.references : [];
+  const parsedIsTransient: boolean = obj.isTransient ? obj.isTransient as boolean : false;
+  const parsedIsIncremental: boolean = obj.isIncremental ? obj.isIncremental as boolean : false;
+  const parsedReferences: Reference[] = obj.references ? obj.references as Reference[] : [];
+  const parsedContentBlocks: ContentBlock[] = obj.contentBlocks ? obj.contentBlocks as ContentBlock[] : [];
+  const parsedInteractiveOptions: InteractiveOption[] = obj.interactiveOptions ? obj.interactiveOptions as InteractiveOption[] : [];
   return {
-    id: obj.id,
-    userId: obj.userId,
-    userName: obj.userName,
-    content: obj.content,
-    timestamp: obj.timestamp,
+    id: obj.id as string,
+    userId: obj.userId as string,
+    userName: obj.userName as string,
+    content: obj.content as string,
+    timestamp: obj.timestamp as number,
     type: parsedType,
     isTransient: parsedIsTransient,
-    currentStep: obj.currentStep,
-    totalSteps: obj.totalSteps,
+    currentStep: obj.currentStep as number | undefined,
+    totalSteps: obj.totalSteps as number | undefined,
     isIncremental: parsedIsIncremental,
     category: parsedCategory,
-    references: parsedReferences
+    references: parsedReferences,
+    contentBlocks: parsedContentBlocks.length > 0 ? parsedContentBlocks : undefined,
+    interactiveOptions: parsedInteractiveOptions.length > 0 ? parsedInteractiveOptions : undefined,
   };
 }
 

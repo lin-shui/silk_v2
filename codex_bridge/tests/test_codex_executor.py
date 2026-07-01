@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -208,6 +209,135 @@ def test_reasoning_yields_text():
     }
 
 
+def test_reasoning_with_summary_array():
+    raw = {
+        "type": "item.completed",
+        "item": {
+            "id": "item_0",
+            "type": "reasoning",
+            "summary": [
+                {"type": "summary_text", "text": "Step 1"},
+                {"type": "summary_text", "text": "Step 2"},
+            ],
+        },
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev["kind"] == "reasoning"
+    assert "Step 1" in ev["text"]
+    assert "Step 2" in ev["text"]
+
+
+# ---- function_call ----
+
+def test_function_call_started():
+    raw = {
+        "type": "item.started",
+        "item": {
+            "id": "fc_1",
+            "type": "function_call",
+            "name": "my_tool",
+            "arguments": '{"key":"val"}',
+        },
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev == {
+        "kind": "function_call_started",
+        "tool_id": "fc_1",
+        "name": "my_tool",
+        "arguments": '{"key":"val"}',
+    }
+
+
+def test_function_call_completed():
+    raw = {
+        "type": "item.completed",
+        "item": {
+            "id": "fc_1",
+            "type": "function_call",
+            "name": "my_tool",
+            "status": "completed",
+            "output": "result",
+        },
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev == {
+        "kind": "function_call_completed",
+        "tool_id": "fc_1",
+        "name": "my_tool",
+        "status": "completed",
+        "output": "result",
+    }
+
+
+# ---- built-in tools (web_search, etc.) ----
+
+def test_web_search_started():
+    raw = {
+        "type": "item.started",
+        "item": {
+            "id": "ws_1",
+            "type": "web_search",
+            "action": {"queries": ["python docs"]},
+        },
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev == {
+        "kind": "tool_started",
+        "tool_id": "ws_1",
+        "tool_name": "WebSearch",
+        "input": "python docs",
+    }
+
+
+def test_web_search_completed():
+    raw = {
+        "type": "item.completed",
+        "item": {
+            "id": "ws_1",
+            "type": "web_search",
+            "query": "python docs",
+        },
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev == {
+        "kind": "tool_completed",
+        "tool_id": "ws_1",
+        "tool_name": "WebSearch",
+        "output": "python docs",
+    }
+
+
+# ---- turn.failed ----
+
+def test_turn_failed_extracts_error():
+    raw = {
+        "type": "turn.failed",
+        "error": {"message": "rate limit exceeded"},
+    }
+    ev = parse_jsonl_event(raw)
+    assert ev == {"kind": "turn_failed", "error": "rate limit exceeded"}
+
+
+def test_turn_failed_without_details():
+    raw = {"type": "turn.failed"}
+    ev = parse_jsonl_event(raw)
+    assert ev == {"kind": "turn_failed", "error": "turn failed (no details)"}
+
+
+# ---- error event ----
+
+def test_error_event_transient():
+    raw = {"type": "error", "message": "Reconnecting to server"}
+    ev = parse_jsonl_event(raw)
+    assert ev == {"kind": "error", "message": "Reconnecting to server", "transient": True}
+
+
+def test_error_event_non_transient():
+    raw = {"type": "error", "message": "API key invalid"}
+    ev = parse_jsonl_event(raw)
+    assert ev == {"kind": "error", "message": "API key invalid", "transient": False}
+
+
 def test_tool_use_fixture_round_trip():
     """Parse the captured tool_use fixture; ensure all expected kinds appear."""
     fixture = Path(__file__).parent / "fixtures" / "jsonl_tool_use.jsonl"
@@ -276,15 +406,25 @@ import signal
 class _FakeProcess:
     """Minimal stand-in for asyncio.subprocess.Process for cancel tests."""
 
-    def __init__(self, *, dies_on_sigint: bool, sigint_delay: float = 0.0) -> None:
+    def __init__(
+        self,
+        *,
+        dies_on_sigint: bool,
+        dies_on_sigkill: bool = True,
+        sigint_delay: float = 0.0,
+        sigkill_delay: float = 0.0,
+    ) -> None:
         self.dies_on_sigint = dies_on_sigint
+        self.dies_on_sigkill = dies_on_sigkill
         self.sigint_delay = sigint_delay
+        self.sigkill_delay = sigkill_delay
+        self.pid: int | None = None
         self.returncode: int | None = None
         self.signals_received: list[int] = []
         self._wait_future: asyncio.Future[int] | None = None
 
     def _ensure_future(self) -> asyncio.Future[int]:
-        if self._wait_future is None:
+        if self._wait_future is None or self._wait_future.cancelled():
             self._wait_future = asyncio.get_running_loop().create_future()
         return self._wait_future
 
@@ -302,10 +442,15 @@ class _FakeProcess:
 
     def kill(self) -> None:
         self.signals_received.append(signal.SIGKILL)
-        self.returncode = -9
-        fut = self._ensure_future()
-        if not fut.done():
-            fut.set_result(-9)
+        if self.dies_on_sigkill:
+            async def die() -> None:
+                if self.sigkill_delay:
+                    await asyncio.sleep(self.sigkill_delay)
+                self.returncode = -9
+                fut = self._ensure_future()
+                if not fut.done():
+                    fut.set_result(-9)
+            asyncio.create_task(die())
 
     async def wait(self) -> int:
         if self.returncode is not None:
@@ -346,3 +491,37 @@ def test_cancel_noop_when_proc_already_dead():
         return proc
     proc = asyncio.run(_go())
     assert proc.signals_received == []  # no signal sent to dead proc
+
+
+def test_cancel_gives_up_when_sigkill_still_does_not_exit(caplog):
+    from codex_bridge.codex_executor import cancel_process
+    async def _go():
+        proc = _FakeProcess(dies_on_sigint=False, dies_on_sigkill=False)
+        await cancel_process(
+            proc,
+            sigint_grace_seconds=0.01,
+            sigkill_grace_seconds=0.01,
+        )
+        return proc
+    with caplog.at_level(logging.WARNING):
+        proc = asyncio.run(_go())
+    assert signal.SIGINT in proc.signals_received
+    assert signal.SIGKILL in proc.signals_received
+    assert proc.returncode is None
+    assert "did not exit after SIGKILL during cancel" in caplog.text
+
+
+def test_drain_stderr_task_cancels_hung_reader(caplog):
+    from codex_bridge.codex_executor import _drain_stderr_task
+    async def _hung() -> bytes:
+        await asyncio.Event().wait()
+        return b""
+    async def _go():
+        task = asyncio.create_task(_hung())
+        result = await _drain_stderr_task(task, timeout=0.01, phase="unit-test")
+        return result, task.cancelled()
+    with caplog.at_level(logging.WARNING):
+        result, cancelled = asyncio.run(_go())
+    assert result == b""
+    assert cancelled
+    assert "timed out draining codex stderr" in caplog.text

@@ -3,7 +3,14 @@ package com.silk.android
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -96,6 +103,7 @@ class VersionChecker(
     /**
      * 立即检查更新
      */
+    @Suppress("TooGenericExceptionCaught", "PrintStackTrace")
     suspend fun checkForUpdate() {
         println("🔄 [VersionChecker] 开始版本检查...")
         println("🔄 [VersionChecker] 本地版本: $currentVersionName (code=$currentVersionCode)")
@@ -204,6 +212,7 @@ class VersionChecker(
     /**
      * 开始下载更新
      */
+    @Suppress("TooGenericExceptionCaught")
     fun startDownload() {
         // 记录正在下载的版本和时间，24小时内不再弹窗
         _newVersionAvailable.value?.let { version ->

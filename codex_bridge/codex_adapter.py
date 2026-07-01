@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """Codex Bridge Adapter — ACP server bridging Silk backend to Codex CLI.
 
-Connects to backend `/agent-bridge` via WebSocket, speaks ACP (JSON-RPC 2.0).
-Receives requests, delegates Codex CLI execution to :mod:`codex_executor`,
-pushes ``session/update`` notifications back during streaming.
+Connects to backend `/agent-bridge` via WebSocket, speaks ACP (JSON-RPC 2.0),
+delegates Codex CLI execution to :mod:`codex_executor`, and pushes
+``session/update`` notifications back during streaming.
 
-M1: text-only prompt/response. Tool-call mapping, /cancel, session resume,
-and `_silk/*` extensions are deferred to M2/M3.
+Supports prompt streaming, cancellation, session resume, and Silk-specific
+directory/session helpers exposed via `_silk/*`.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import time
 import json
 import logging
 import os
@@ -29,6 +30,7 @@ from websockets.exceptions import ConnectionClosed
 from codex_dispatcher import DispatcherState, dispatch_event
 from codex_executor import CodexExecutor, cancel_process
 from fs_listing import list_directory
+from git_ops import git_status, git_diff
 from codex_session_index import find_session_file, list_local_sessions, _parse_rollout_head
 
 logger = logging.getLogger("codex_bridge")
@@ -210,6 +212,10 @@ class AcpAgentServer:
                 await self._handle_silk_set_cwd(msg_id, params)
             elif method == "_silk/list_dir":
                 await self._handle_silk_list_dir(msg_id, params)
+            elif method == "_silk/git_status":
+                await self._handle_silk_git_status(msg_id, params)
+            elif method == "_silk/git_diff":
+                await self._handle_silk_git_diff(msg_id, params)
             else:
                 await self._send_error(msg_id, -32601, f"Method not found: {method}")
         except Exception as exc:
@@ -246,6 +252,8 @@ class AcpAgentServer:
                     "listLocalSessions": True,  # M3
                     "setCwd": True,             # M3
                     "listDir": True,            # M3
+                    "gitStatus": True,
+                    "gitDiff": True,
                 },
             },
         }
@@ -347,6 +355,7 @@ class AcpAgentServer:
 
     async def _handle_session_prompt(self, msg_id: Any, params: Any) -> None:
         """Run a Codex prompt and stream tool/message updates back."""
+        t0 = time.monotonic()
         acp_session_id = params.get("sessionId")
         prompt_blocks = params.get("prompt") or []
         sess = self.sessions.get(acp_session_id)
@@ -367,17 +376,17 @@ class AcpAgentServer:
         sess.proc_handle = None
         notify = self._make_notify_send(acp_session_id)
 
-        # M2: dispatcher state mirrors per-session mutable fields the
-        # dispatcher needs. accumulated / seen_tool_ids are kept in sync.
         dstate = DispatcherState(
             accumulated="",
-            seen_tool_ids=sess.seen_tool_ids,  # share the set so cancel can inspect it
+            seen_tool_ids=sess.seen_tool_ids,
             thread_id=sess.cli_session_id,
         )
 
         usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
         stop_reason = "end_turn"
         error_text: str | None = None
+        response_sent = False
+        proc_handle = None  # local ref to detect stale proc_handle in finally
 
         try:
             async for ev in self.executor.run(
@@ -387,49 +396,92 @@ class AcpAgentServer:
             ):
                 kind = ev.get("kind")
 
-                # Control events from executor (not parsed JSONL):
+                # Control event from executor:
                 if kind == "_proc":
-                    sess.proc_handle = ev["proc"]
-                    continue
-                if kind == "_done":
-                    if ev["exit_code"] != 0 and not sess.cancelled:
-                        error_text = (
-                            f"codex exec exited with code {ev['exit_code']}: "
-                            f"{ev['stderr'][:500]}"
-                        )
+                    proc_handle = ev["proc"]
+                    sess.proc_handle = proc_handle
                     continue
 
-                # Capture turn_completed usage before delegating (dispatcher
-                # returns [] for it but we still need the numbers for the
-                # final response):
+                # turn_completed: dispatch updates, then send response immediately
                 if kind == "turn_completed":
                     usage = {
                         "input_tokens": ev["input_tokens"],
                         "output_tokens": ev["output_tokens"],
                         "reasoning_tokens": ev["reasoning_tokens"],
                     }
+                    for update in dispatch_event(ev, dstate):
+                        await notify(update)
+                    sess.accumulated = dstate.accumulated
+                    if dstate.thread_id and not sess.cli_session_id:
+                        sess.cli_session_id = dstate.thread_id
 
-                # Delegate to dispatcher for ACP update mapping:
+                    # Send response right away — don't wait for process exit
+                    await self._send_prompt_response(msg_id, sess, usage, "end_turn",
+                                                     duration_ms=int((time.monotonic() - t0) * 1000))
+                    response_sent = True
+                    break
+
+                # turn_failed: dispatch updates, then send response immediately
+                if kind == "turn_failed":
+                    logger.warning("codex turn failed: %s", ev.get("error", ""))
+                    for update in dispatch_event(ev, dstate):
+                        await notify(update)
+                    sess.accumulated = dstate.accumulated
+                    if dstate.thread_id and not sess.cli_session_id:
+                        sess.cli_session_id = dstate.thread_id
+
+                    await self._send_prompt_response(msg_id, sess, usage, "end_turn",
+                                                     duration_ms=int((time.monotonic() - t0) * 1000))
+                    response_sent = True
+                    break
+
+                # All other events: delegate to dispatcher
                 for update in dispatch_event(ev, dstate):
                     await notify(update)
 
-                # Sync dispatcher's mutated state back into AcpSession:
                 sess.accumulated = dstate.accumulated
                 if dstate.thread_id and not sess.cli_session_id:
                     sess.cli_session_id = dstate.thread_id
+
         except Exception as exc:
             logger.exception("codex prompt loop failed: %s", exc)
             error_text = f"adapter error: {exc}"
         finally:
-            sess.proc_handle = None  # M2: clear handle once prompt finishes
+            # Only clear proc_handle if it still belongs to this invocation.
+            # A new prompt task may have already replaced it with a new process.
+            if sess.proc_handle is proc_handle:
+                sess.proc_handle = None
 
-        if error_text is not None:
-            await self._send_error(msg_id, -32000, error_text)
-            return
+        # Fallback: send response if not already sent
+        # (process exited without turn_completed/turn_failed, or exception)
+        if not response_sent:
+            # Flush any buffered messages before responding
+            if dstate.pending_messages:
+                logger.warning(
+                    "codex ended without turn end event, flushing %d pending messages",
+                    len(dstate.pending_messages),
+                )
+                for update in dispatch_event({"kind": "turn_completed"}, dstate):
+                    await notify(update)
+                sess.accumulated = dstate.accumulated
 
-        if sess.cancelled:
-            stop_reason = "cancelled"
+            if error_text is not None:
+                await self._send_error(msg_id, -32000, error_text)
+            else:
+                if sess.cancelled:
+                    stop_reason = "cancelled"
+                await self._send_prompt_response(msg_id, sess, usage, stop_reason,
+                                                 duration_ms=int((time.monotonic() - t0) * 1000))
 
+    def _send_prompt_response(
+        self,
+        msg_id: Any,
+        sess: AcpSession,
+        usage: dict[str, int],
+        stop_reason: str,
+        duration_ms: int = 0,
+    ):
+        """Build and send the session/prompt JSON-RPC response."""
         result = {
             "stopReason": stop_reason,
             "meta": {
@@ -437,9 +489,10 @@ class AcpAgentServer:
                 "inputTokens": usage["input_tokens"],
                 "outputTokens": usage["output_tokens"],
                 "reasoningTokens": usage["reasoning_tokens"],
+                "durationMs": duration_ms,
             },
         }
-        await self._send_response(msg_id, result)
+        return self._send_response(msg_id, result)
 
     def _make_notify_send(self, acp_session_id: str):
         """Build a callback that emits ACP `session/update` notifications."""
@@ -465,7 +518,7 @@ class AcpAgentServer:
         )
 
     # ------------------------------------------------------------------
-    # _silk/* extensions — M1: all return Method Not Found
+    # _silk/* extensions supported by the Codex bridge
     # ------------------------------------------------------------------
 
     async def _handle_silk_list_sessions(self, msg_id: Any, params: Any) -> None:
@@ -516,6 +569,39 @@ class AcpAgentServer:
         show_hidden = bool(p.get("showHidden", False))
         result = list_directory(path, show_hidden)
         logger.debug("[ACP] _silk/list_dir path=%s success=%s", path, result.get("success"))
+        await self._send_response(msg_id, result)
+
+    async def _handle_silk_git_status(self, msg_id: Any, params: Any) -> None:
+        sid = (params or {}).get("sessionId")
+        sess = self.sessions.get(sid) if sid else None
+        if sess is None:
+            await self._send_error(msg_id, -32602, f"Unknown session: {sid}")
+            return
+        try:
+            result = await git_status(sess.cwd)
+        except Exception as exc:
+            await self._send_error(msg_id, -32000, f"git_status failed: {exc}")
+            return
+        logger.debug("[ACP] _silk/git_status sid=%s files=%d", sid, len(result.get("files", [])))
+        await self._send_response(msg_id, result)
+
+    async def _handle_silk_git_diff(self, msg_id: Any, params: Any) -> None:
+        p = params or {}
+        sid = p.get("sessionId")
+        path = p.get("path")
+        sess = self.sessions.get(sid) if sid else None
+        if sess is None:
+            await self._send_error(msg_id, -32602, f"Unknown session: {sid}")
+            return
+        if not path:
+            await self._send_error(msg_id, -32602, "Missing path")
+            return
+        try:
+            result = await git_diff(sess.cwd, path)
+        except Exception as exc:
+            await self._send_error(msg_id, -32000, f"git_diff failed: {exc}")
+            return
+        logger.debug("[ACP] _silk/git_diff sid=%s path=%s", sid, path)
         await self._send_response(msg_id, result)
 
     async def _handle_silk_compact(self, msg_id: Any, params: Any) -> None:

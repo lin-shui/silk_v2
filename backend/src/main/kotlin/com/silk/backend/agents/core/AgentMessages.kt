@@ -4,9 +4,23 @@ package com.silk.backend.agents.core
 import com.silk.backend.Message
 import com.silk.backend.MessageCategory
 import com.silk.backend.MessageType
+import com.silk.backend.card.CardBuilder
+import com.silk.backend.card.ButtonType
 import java.util.UUID
 
 object AgentMessages {
+
+    /** 清理答案文本中的内部编码前缀，用于前端展示。 */
+    fun cleanAnswerText(raw: String): String = when {
+        raw.startsWith("__opt__") -> {
+            // "__opt__0__Python - 简洁易用" → "Python - 简洁易用"
+            val afterPrefix = raw.removePrefix("__opt__")
+            val idx = afterPrefix.indexOf("__")
+            if (idx >= 0) afterPrefix.substring(idx + 2) else raw
+        }
+        raw.startsWith("__custom__") -> "（自定义回答）"
+        else -> raw
+    }
 
     fun system(content: String, agentUserId: String, agentName: String) = Message(
         id = UUID.randomUUID().toString(),
@@ -79,15 +93,276 @@ object AgentMessages {
         category = MessageCategory.AGENT_QUESTION,
     )
 
-    /** 将问题列表格式化为展示文本。供 AcpUpdateMapper 和重连恢复共用。 */
-    fun formatQuestionText(questions: List<String>): String = buildString {
+    /**
+     * 构建 AskUserQuestion 的交互卡片消息。
+     *
+     * 多问题场景下按顺序逐题展示：
+     * - 已回答的：灰色文本展示答案
+     * - 当前题：交互式，每个 option 一个按钮 + 自定义输入框
+     * - 后续题：仅标题预览
+     *
+     * 单问题时直接展示。每次回答后通过 action="edit" 刷新同一张卡片。
+     */
+    fun questionCard(
+        questions: List<StructuredQuestion>,
+        requestId: String,
+        agentUserId: String,
+        agentName: String,
+        currentIndex: Int = 0,
+        answers: Map<Int, String> = emptyMap(),
+    ): Message {
+        val total = questions.size
+        val answeredCount = answers.size
+
+        // Title with progress for multi-question
+        val title = if (total > 1) {
+            "💬 $agentName 提问（${answeredCount + 1}/$total）"
+        } else {
+            "💬 $agentName 提问"
+        }
+        val builder = CardBuilder(title, template = "gold")
+
+        for ((qi, sq) in questions.withIndex()) {
+            val prefix = if (total > 1) "问题 ${qi + 1}/$total: " else ""
+
+            when {
+                qi in answers -> {
+                    // Already answered — gray display with full question
+                    val cleanAnswer = cleanAnswerText(answers[qi] ?: "")
+                    builder.addText("$prefix${sq.question}\n已选择: $cleanAnswer")
+                }
+                qi == currentIndex -> {
+                    // Current question — interactive
+                    val headerLine = if (sq.header.isNotEmpty()) "$prefix${sq.header}\n\n${sq.question}" else "$prefix${sq.question}"
+                    builder.addText(headerLine)
+
+                    // Option descriptions
+                    if (sq.options.isNotEmpty()) {
+                        val descLines = sq.options.map { opt ->
+                            if (opt.description.isNotEmpty()) "${opt.label}: ${opt.description}" else opt.label
+                        }
+                        builder.addText(descLines.joinToString("\n"))
+                    }
+
+                    builder.addDivider()
+
+                    // Per-option buttons
+                    sq.options.forEachIndexed { i, opt ->
+                        val answerDisplay = if (opt.description.isNotEmpty()) "${opt.label} - ${opt.description}" else opt.label
+                        val buttonValue = "__opt__${qi}__${answerDisplay}"
+                        builder.addButton(
+                            text = opt.label,
+                            value = buttonValue,
+                            type = if (i == 0) ButtonType.PRIMARY else ButtonType.DEFAULT,
+                        )
+                    }
+
+                    // Custom answer input
+                    builder.addDivider()
+                    builder.addTextInput("custom_answer_$qi", placeholder = "输入自定义回答...")
+                    builder.addButton("提交自定义回答", value = "__custom__$qi", type = ButtonType.DEFAULT)
+                }
+                else -> {
+                    // Future question — preview with full question
+                    builder.addText("$prefix${sq.question}\n待回答")
+                }
+            }
+
+            if (qi < total - 1) builder.addDivider()
+        }
+
+        return Message(
+            id = "agent_question_$requestId",
+            userId = agentUserId,
+            userName = agentName,
+            content = builder.build(),
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.CARD,
+            isTransient = false,
+            category = MessageCategory.AGENT_QUESTION,
+        )
+    }
+
+    /** 构建已完成的卡片（所有问题已回答）。 */
+    fun questionCardCompleted(
+        questions: List<StructuredQuestion>,
+        answers: Map<Int, String>,
+        requestId: String,
+        agentUserId: String,
+        agentName: String,
+    ): Message {
+        val builder = CardBuilder("✓ 已回答", template = "green")
+        questions.forEachIndexed { qi, sq ->
+            val rawAnswer = answers[qi] ?: "—"
+            val cleanAnswer = cleanAnswerText(rawAnswer)
+            val displayAnswer = if (cleanAnswer.length > 80) cleanAnswer.take(80) + "..." else cleanAnswer
+            builder.addText("${sq.question}\n回答: $displayAnswer")
+        }
+        return Message(
+            id = "agent_question_$requestId",
+            userId = agentUserId,
+            userName = agentName,
+            content = builder.buildDisabled(),
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.CARD,
+            action = "edit",
+        )
+    }
+
+    /**
+     * 构建工具权限确认卡片。
+     * 展示工具名和操作详情，提供 允许/拒绝 按钮和模式升级按钮。
+     */
+    fun permissionCard(
+        requestId: String,
+        toolName: String,
+        toolDetail: String,
+        agentUserId: String,
+        agentName: String,
+    ): Message {
+        val builder = CardBuilder("🔒 $agentName 请求权限", template = "orange")
+        builder.addText("**工具**: $toolName")
+        if (toolDetail.isNotBlank()) {
+            val truncated = if (toolDetail.length > 500) toolDetail.take(500) + "..." else toolDetail
+            builder.addText(truncated)
+        }
+        builder.addDivider()
+        builder.addButton("允许", "perm_allow_$requestId", type = ButtonType.PRIMARY)
+        builder.addButton("拒绝", "perm_deny_$requestId", type = ButtonType.DANGER)
+        builder.addButton("允许所有编辑", "perm_accept_edits_$requestId", type = ButtonType.DEFAULT)
+        builder.addButton("允许所有操作", "perm_bypass_$requestId", type = ButtonType.DEFAULT)
+
+        return Message(
+            id = "agent_perm_$requestId",
+            userId = agentUserId,
+            userName = agentName,
+            content = builder.build(),
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.CARD,
+            isTransient = false,
+            category = MessageCategory.AGENT_PERMISSION,
+        )
+    }
+
+    /** 构建已处理的权限卡片（禁用态）。 */
+    fun permissionCardResolved(
+        requestId: String,
+        toolName: String,
+        toolDetail: String,
+        decision: String,
+        approved: Boolean,
+        agentUserId: String,
+        agentName: String,
+    ): Message {
+        val template = if (approved) "green" else "red"
+        val title = if (approved) "✓ 已允许" else "✗ 已拒绝"
+        val builder = CardBuilder(title, template = template)
+        builder.addText("**工具**: $toolName")
+        if (toolDetail.isNotBlank()) {
+            val truncated = if (toolDetail.length > 500) toolDetail.take(500) + "..." else toolDetail
+            builder.addText(truncated)
+        }
+        builder.addText(decision)
+
+        return Message(
+            id = "agent_perm_$requestId",
+            userId = agentUserId,
+            userName = agentName,
+            content = builder.buildDisabled(),
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.CARD,
+            action = "edit",
+        )
+    }
+
+    /** 格式化工具调用的详情信息，用于权限卡片展示。 */
+    fun formatToolDetail(toolName: String, toolInput: Map<String, String?>): String = buildString {
+        when (toolName) {
+            "Bash" -> {
+                val cmd = toolInput["command"] ?: toolInput["cmd"]
+                if (cmd != null) appendLine("```\n$cmd\n```")
+            }
+            "Write", "Edit", "NotebookEdit" -> {
+                val path = toolInput["file_path"] ?: toolInput["notebook_path"]
+                if (path != null) appendLine("文件: $path")
+            }
+            else -> {
+                toolInput.entries.take(3).forEach { (k, v) ->
+                    if (!v.isNullOrBlank()) appendLine("$k: ${v.take(200)}")
+                }
+            }
+        }
+    }
+
+    /** 构建计划审批卡片（ExitPlanMode）。 */
+    fun planReviewCard(
+        requestId: String,
+        planContent: String,
+        agentUserId: String,
+        agentName: String,
+    ): Message {
+        val builder = CardBuilder("📋 $agentName 提交计划审批", template = "blue")
+        val truncated = if (planContent.length > 2000) planContent.take(2000) + "\n\n...(已截断)" else planContent
+        builder.addText(truncated)
+        builder.addDivider()
+        builder.addButton("批准执行", "plan_allow_$requestId", type = ButtonType.PRIMARY)
+        builder.addButton("拒绝", "plan_deny_$requestId", type = ButtonType.DANGER)
+        builder.addTextInput(
+            name = "plan_feedback_$requestId",
+            placeholder = "输入修改意见...",
+        )
+        builder.addButton("拒绝并反馈", "plan_deny_feedback_$requestId", type = ButtonType.DEFAULT)
+
+        return Message(
+            id = "agent_plan_review_$requestId",
+            userId = agentUserId,
+            userName = agentName,
+            content = builder.build(),
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.CARD,
+            isTransient = false,
+            category = MessageCategory.AGENT_PERMISSION,
+        )
+    }
+
+    /** 构建已处理的计划审批卡片（禁用态）。 */
+    fun planReviewCardResolved(
+        requestId: String,
+        decision: String,
+        approved: Boolean,
+        agentUserId: String,
+        agentName: String,
+    ): Message {
+        val template = if (approved) "green" else "red"
+        val title = if (approved) "✓ 计划已批准" else "✗ 计划已拒绝"
+        val builder = CardBuilder(title, template = template)
+        builder.addText(decision)
+
+        return Message(
+            id = "agent_plan_review_$requestId",
+            userId = agentUserId,
+            userName = agentName,
+            content = builder.buildDisabled(),
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.CARD,
+            action = "edit",
+        )
+    }
+
+    /** 将问题列表格式化为展示文本。供重连恢复等场景共用。 */
+    fun formatQuestionText(questions: List<StructuredQuestion>): String = buildString {
         appendLine("💬 Claude Code 想问你：")
         appendLine()
         if (questions.size == 1) {
-            appendLine(questions[0])
+            val sq = questions[0]
+            if (sq.header.isNotEmpty()) appendLine(sq.header)
+            appendLine(sq.question)
+            sq.options.forEachIndexed { i, opt ->
+                appendLine("  ${i + 1}. ${opt.label}${if (opt.description.isNotEmpty()) " — ${opt.description}" else ""}")
+            }
         } else {
-            questions.forEachIndexed { i, q ->
-                appendLine("${i + 1}. $q")
+            questions.forEachIndexed { i, sq ->
+                appendLine("问题 ${i + 1}/${questions.size}: ${sq.question}")
             }
         }
         appendLine()

@@ -15,6 +15,7 @@ import java.io.File
  * - SANDBOXED: 在沙箱/限制环境下执行（如路径限制）
  * - DISABLED: 禁用，不允许执行
  */
+@Suppress("TooGenericExceptionCaught", "SwallowedException")
 object ToolPolicyManager {
     private val logger = LoggerFactory.getLogger(ToolPolicyManager::class.java)
     
@@ -136,37 +137,43 @@ object ToolPolicyManager {
     private fun loadConfigFromFile() {
         val configPath = System.getenv("TOOL_POLICY_CONFIG") ?: "tool_policy.json"
         val configFile = File(configPath)
-        
-        if (configFile.exists()) {
-            try {
-                val json = Json { ignoreUnknownKeys = true }
-                val config = json.decodeFromString<PolicyConfig>(configFile.readText())
-                
-                for ((toolName, policyConfig) in config.policies) {
-                    val permission = try {
-                        ToolPermission.valueOf(policyConfig.permission.uppercase())
-                    } catch (e: Exception) {
-                        ToolPermission.DISABLED
-                    }
-                    
-                    policies = policies.toMutableMap().apply {
-                        put(toolName, ToolPolicy(
-                            name = toolName,
-                            permission = permission,
-                            allowedPaths = policyConfig.allowedPaths,
-                            deniedPaths = policyConfig.deniedPaths,
-                            safeCommands = policyConfig.safeCommands,
-                            description = defaultPolicies[toolName]?.description ?: "自定义工具"
-                        ))
-                    }
-                }
-                
-                logger.info("✅ 已从配置文件加载工具策略: ${config.policies.size} 个工具")
-            } catch (e: Exception) {
-                logger.warn("⚠️ 加载配置文件失败，使用默认策略: ${e.message}")
-            }
-        } else {
+
+        if (!configFile.exists()) {
             logger.info("📋 未找到配置文件，使用默认策略")
+            return
+        }
+
+        try {
+            val json = Json { ignoreUnknownKeys = true }
+            val config = json.decodeFromString<PolicyConfig>(configFile.readText())
+
+            for ((toolName, policyConfig) in config.policies) {
+                applyPolicyConfig(toolName, policyConfig)
+            }
+
+            logger.info("✅ 已从配置文件加载工具策略: ${config.policies.size} 个工具")
+        } catch (e: Exception) {
+            logger.warn("⚠️ 加载配置文件失败，使用默认策略: ${e.message}")
+        }
+    }
+
+    /** 将单个工具的配置合并进 policies（与原内联循环体等价）。 */
+    private fun applyPolicyConfig(toolName: String, policyConfig: ToolPolicyConfig) {
+        val permission = try {
+            ToolPermission.valueOf(policyConfig.permission.uppercase())
+        } catch (e: Exception) {
+            ToolPermission.DISABLED
+        }
+
+        policies = policies.toMutableMap().apply {
+            put(toolName, ToolPolicy(
+                name = toolName,
+                permission = permission,
+                allowedPaths = policyConfig.allowedPaths,
+                deniedPaths = policyConfig.deniedPaths,
+                safeCommands = policyConfig.safeCommands,
+                description = defaultPolicies[toolName]?.description ?: "自定义工具"
+            ))
         }
     }
     
@@ -197,43 +204,41 @@ object ToolPolicyManager {
     fun validateFilePath(path: String, policy: ToolPolicy): Pair<Boolean, String> {
         if (policy.permission == ToolPermission.ALLOWED) {
             // 无限制模式，只检查禁止路径
-            for (denied in policy.deniedPaths) {
-                if (pathContains(path, denied)) {
-                    return Pair(false, "⛔ 路径在禁止访问列表中: $path")
-                }
-            }
+            deniedPathViolation(path, policy.deniedPaths)?.let { return it }
             return Pair(true, "")
         }
-        
+
         if (policy.permission == ToolPermission.SANDBOXED) {
             // 沙箱模式，需要同时检查禁止和允许列表
-            
-            // 先检查禁止列表
-            for (denied in policy.deniedPaths) {
-                if (pathContains(path, denied)) {
-                    return Pair(false, "⛔ 路径在禁止访问列表中: $path")
-                }
-            }
-            
-            // 再检查允许列表
-            if (policy.allowedPaths.isNotEmpty()) {
-                var isAllowed = false
-                for (allowed in policy.allowedPaths) {
-                    if (pathContains(path, allowed)) {
-                        isAllowed = true
-                        break
-                    }
-                }
-                if (!isAllowed) {
-                    return Pair(false, "⛔ 路径不在允许访问的目录中。允许的目录: ${policy.allowedPaths}")
-                }
-            }
-            
+            deniedPathViolation(path, policy.deniedPaths)?.let { return it }
+            allowedPathViolation(path, policy.allowedPaths)?.let { return it }
             return Pair(true, "")
         }
-        
+
         // DISABLED 或其他情况
         return Pair(false, "⛔ 工具已被禁用")
+    }
+
+    /** 命中禁止路径时返回拒绝结果，否则返回 null（允许继续）。 */
+    private fun deniedPathViolation(path: String, deniedPaths: List<String>): Pair<Boolean, String>? {
+        return if (deniedPaths.any { pathContains(path, it) }) {
+            Pair(false, "⛔ 路径在禁止访问列表中: $path")
+        } else {
+            null
+        }
+    }
+
+    /**
+     * 当配置了允许列表且路径不在其中时返回拒绝结果，否则返回 null（允许继续）。
+     * 空允许列表视为不限制（与原逻辑等价）。
+     */
+    private fun allowedPathViolation(path: String, allowedPaths: List<String>): Pair<Boolean, String>? {
+        if (allowedPaths.isEmpty()) return null
+        return if (allowedPaths.none { pathContains(path, it) }) {
+            Pair(false, "⛔ 路径不在允许访问的目录中。允许的目录: $allowedPaths")
+        } else {
+            null
+        }
     }
     
     /**

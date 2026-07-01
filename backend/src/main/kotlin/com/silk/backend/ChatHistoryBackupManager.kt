@@ -1,6 +1,8 @@
 package com.silk.backend
 
-import com.silk.backend.models.*
+import com.silk.backend.models.BackupMetadata
+import com.silk.backend.models.ChatHistoryEntry
+import com.silk.backend.models.RecalledMessageBackup
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
@@ -20,6 +22,7 @@ import org.slf4j.LoggerFactory
  * 
  * 备份存储在 chat_history_backup/ 目录下，按日期和类型分类
  */
+@Suppress("TooGenericExceptionCaught")
 object ChatHistoryBackupManager {
     
     private val json = Json {
@@ -86,8 +89,7 @@ object ChatHistoryBackupManager {
             logger.info("   原因: {} - {}", backupType.name, reason)
             true
         } catch (e: Exception) {
-            logger.error("❌ 备份群组历史失败: {} - {}", groupId, e.message)
-            e.printStackTrace()
+            logger.error("❌ 备份群组历史失败: {} - {}", groupId, e.message, e)
             false
         }
     }
@@ -175,7 +177,7 @@ object ChatHistoryBackupManager {
                         val metadata = json.decodeFromString<BackupMetadata>(metadataFile.readText())
                         backups.add(metadata)
                     } catch (e: Exception) {
-                        logger.warn("⚠️ 解析备份元数据失败: {}", metadataFile.path)
+                        logger.warn("⚠️ 解析备份元数据失败: {}: {}", metadataFile.path, e.message)
                     }
                 }
         }
@@ -222,8 +224,7 @@ object ChatHistoryBackupManager {
             logger.info("✅ 已从备份恢复: {} <- {}", groupId, backupDir.absolutePath)
             true
         } catch (e: Exception) {
-            logger.error("❌ 恢复备份失败: {}", e.message)
-            e.printStackTrace()
+            logger.error("❌ 恢复备份失败: {}", e.message, e)
             false
         }
     }
@@ -246,7 +247,7 @@ object ChatHistoryBackupManager {
                         deletedCount++
                         logger.info("🗑️ 已删除过期备份: {}", dateDir.path)
                     } catch (e: Exception) {
-                        logger.warn("⚠️ 删除过期备份失败: {}", dateDir.path)
+                        logger.warn("⚠️ 删除过期备份失败: {}: {}", dateDir.path, e.message)
                     }
                 }
             }

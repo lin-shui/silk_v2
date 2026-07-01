@@ -53,6 +53,7 @@ import org.jetbrains.compose.web.dom.Input
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
 
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun ContactsScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
@@ -78,7 +79,7 @@ fun ContactsScene(appState: WebAppState) {
                     } else {
                         console.log("⚠️ ContactsScene: No user settings found, using default CHINESE")
                     }
-                } catch (e: Exception) {
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                     console.error("❌ ContactsScene: Failed to load user settings:", e)
                 }
             }
@@ -101,7 +102,7 @@ fun ContactsScene(appState: WebAppState) {
                     pendingRequests = response.pendingRequests ?: emptyList()
                     console.log("✅ 加载了${contacts.size}个联系人，${pendingRequests.size}个待处理请求")
                 }
-            } catch (e: Exception) {
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                 console.error("❌ 加载联系人失败:", e.message)
             } finally {
                 isLoading = false
@@ -561,6 +562,7 @@ fun PendingRequestCard(request: ContactRequest, strings: Strings, onClick: () ->
     }
 }
 
+@Suppress("UnusedParameter")
 @Composable
 fun AddContactDialog(
     appState: WebAppState,

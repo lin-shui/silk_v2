@@ -2,7 +2,16 @@ package com.silk.android
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -10,8 +19,31 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Divider
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -236,6 +268,7 @@ fun WorkflowScreen(appState: AppState) {
     }
 }
 
+@Suppress("CyclomaticComplexMethod")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CreateWorkflowDialog(
@@ -246,28 +279,54 @@ private fun CreateWorkflowDialog(
     val scope = rememberCoroutineScope()
     var newName by remember { mutableStateOf("") }
     var newInitialDir by remember { mutableStateOf("") }
-    var dirLoadError by remember { mutableStateOf<String?>(null) }
+    var availableAgents by remember { mutableStateOf<List<AgentInfo>>(emptyList()) }
+    var selectedAgentType by remember { mutableStateOf("") }
+    var selectedPermMode by remember { mutableStateOf("") }
+    var agentDropdownExpanded by remember { mutableStateOf(false) }
+    var permDropdownExpanded by remember { mutableStateOf(false) }
+    var bridgeConnected by remember { mutableStateOf(true) }
+    var dirWarning by remember { mutableStateOf<String?>(null) }
     var showFolderPicker by remember { mutableStateOf(false) }
     var showTrustConfirm by remember { mutableStateOf(false) }
     var trustBridgeId by remember { mutableStateOf<String?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
 
-    // 打开时拉一次 Bridge 默认目录
+    // 打开时检查 Bridge 连接状态、拉 agent 列表、拉默认目录
     LaunchedEffect(Unit) {
-        if (newInitialDir.isBlank()) {
-            dirLoadError = null
+        val agents = ApiClient.listAgents(userId)
+        availableAgents = agents
+        bridgeConnected = agents.any { it.connected }
+        if (selectedAgentType.isBlank()) {
+            val codexOk = agents.firstOrNull { it.agentType == "codex" && it.connected } != null
+            val ccOk = agents.firstOrNull { it.agentType == "claude_code" && it.connected } != null
+            selectedAgentType = when {
+                codexOk -> "codex"
+                ccOk -> "claude_code"
+                else -> "claude_code"
+            }
+        }
+        if (newInitialDir.isBlank() && bridgeConnected) {
+            dirWarning = null
             val resp = ApiClient.listCcDir(userId, null)
             if (resp.success && resp.path.isNotBlank()) {
                 newInitialDir = resp.path
             } else {
-                dirLoadError = resp.error ?: "无法获取默认目录"
+                dirWarning = resp.error ?: "无法获取默认目录"
             }
         }
     }
 
-    val canCreate = !submitting && dirLoadError == null &&
+    val canCreate = !submitting && bridgeConnected &&
                     newName.isNotBlank() && newInitialDir.isNotBlank()
+
+    val permModeLabel = { mode: String ->
+        when (mode) {
+            "ACCEPT_EDITS" -> "Accept Edits"
+            "BYPASS" -> "Bypass"
+            else -> "Interactive"
+        }
+    }
 
     AlertDialog(
         onDismissRequest = { if (!submitting) onDismiss() },
@@ -282,11 +341,79 @@ private fun CreateWorkflowDialog(
                     singleLine = true,
                 )
                 Spacer(Modifier.height(12.dp))
-                Text(
-                    "工作目录",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = SilkColors.textSecondary,
-                )
+
+                // Agent 选择
+                Text("Agent", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
+                Spacer(Modifier.height(4.dp))
+                Box {
+                    OutlinedTextField(
+                        value = availableAgents.firstOrNull { it.agentType == selectedAgentType }?.displayName ?: selectedAgentType,
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = { agentDropdownExpanded = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "选择")
+                            }
+                        },
+                    )
+                    DropdownMenu(
+                        expanded = agentDropdownExpanded,
+                        onDismissRequest = { agentDropdownExpanded = false },
+                    ) {
+                        availableAgents.forEach { agent ->
+                            DropdownMenuItem(
+                                text = {
+                                    val suffix = if (agent.connected) "" else "（未连接）"
+                                    Text("${agent.displayName}$suffix")
+                                },
+                                onClick = {
+                                    selectedAgentType = agent.agentType
+                                    agentDropdownExpanded = false
+                                },
+                                enabled = agent.connected,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+
+                // 权限模式
+                Text("权限模式", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
+                Spacer(Modifier.height(4.dp))
+                Box {
+                    OutlinedTextField(
+                        value = permModeLabel(selectedPermMode),
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = { permDropdownExpanded = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "选择")
+                            }
+                        },
+                    )
+                    DropdownMenu(
+                        expanded = permDropdownExpanded,
+                        onDismissRequest = { permDropdownExpanded = false },
+                    ) {
+                        listOf("" to "Interactive", "ACCEPT_EDITS" to "Accept Edits", "BYPASS" to "Bypass").forEach { (value, label) ->
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    selectedPermMode = value
+                                    permDropdownExpanded = false
+                                },
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+
+                // 工作目录
+                Text("工作目录", style = MaterialTheme.typography.bodySmall, color = SilkColors.textSecondary)
                 Spacer(Modifier.height(4.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -297,25 +424,35 @@ private fun CreateWorkflowDialog(
                         onValueChange = { newInitialDir = it },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        enabled = dirLoadError == null,
+                        enabled = bridgeConnected,
                         placeholder = {
                             Text(
-                                if (dirLoadError != null) "Bridge 未连接，请先启动 Bridge"
-                                else "加载默认目录中…",
+                                when {
+                                    !bridgeConnected -> "Bridge 未连接，请先启动 Bridge"
+                                    dirWarning != null -> "请输入或选择工作目录"
+                                    else -> "加载默认目录中…"
+                                },
                             )
                         },
                     )
                     TextButton(
                         onClick = { showFolderPicker = true },
-                        enabled = dirLoadError == null,
+                        enabled = bridgeConnected,
                     ) { Text("📂 选择") }
                 }
-                if (dirLoadError != null) {
+                if (!bridgeConnected) {
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "⚠ $dirLoadError。请先启动 Bridge Agent 再创建工作流。",
+                        "⚠ Bridge 未连接。请先启动 Bridge Agent 再创建工作流。",
                         style = MaterialTheme.typography.bodySmall,
                         color = SilkColors.error,
+                    )
+                } else if (dirWarning != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "⚠ $dirWarning，请手动输入或选择工作目录。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = SilkColors.warning,
                     )
                 }
             }
@@ -326,6 +463,8 @@ private fun CreateWorkflowDialog(
                     if (!canCreate) return@Button
                     val initDir = newInitialDir.trim()
                     val name = newName.trim()
+                    val agentType = selectedAgentType.ifBlank { "claude_code" }
+                    val permMode = selectedPermMode
                     submitting = true
                     scope.launch {
                         try {
@@ -347,7 +486,7 @@ private fun CreateWorkflowDialog(
                                 is TrustCheckResult.Trusted -> {} // 继续
                             }
                             // 2. 已信任：直接创建
-                            performCreate(userId, name, initDir, onCreated) { msg ->
+                            performCreate(userId, name, initDir, agentType, permMode, onCreated) { msg ->
                                 errorMessage = msg
                             }
                         } finally {
@@ -391,9 +530,11 @@ private fun CreateWorkflowDialog(
                         val added = ApiClient.addTrustedDir(userId, newInitialDir.trim())
                         showTrustConfirm = false
                         if (added) {
-                            performCreate(userId, newName.trim(), newInitialDir.trim(), onCreated) { msg ->
-                                errorMessage = msg
-                            }
+                            performCreate(
+                                userId, newName.trim(), newInitialDir.trim(),
+                                selectedAgentType.ifBlank { "claude_code" }, selectedPermMode,
+                                onCreated,
+                            ) { msg -> errorMessage = msg }
                         } else {
                             errorMessage = "添加信任记录失败，请重试。"
                         }
@@ -414,10 +555,12 @@ private suspend fun performCreate(
     userId: String,
     name: String,
     initialDir: String,
+    agentType: String,
+    permissionMode: String,
     onCreated: (WorkflowItem) -> Unit,
     onError: (String) -> Unit,
 ) {
-    when (val r = ApiClient.createWorkflow(name, "", userId, initialDir)) {
+    when (val r = ApiClient.createWorkflow(name, "", userId, initialDir, agentType, permissionMode)) {
         is CreateWorkflowResult.Ok -> onCreated(r.workflow)
         is CreateWorkflowResult.Err -> onError("创建工作流失败：${r.message}")
     }

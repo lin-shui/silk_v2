@@ -222,7 +222,7 @@ export class AppStore {
         createdBy: this._currentUser.id
       };
       const response = await this.apiClient.createGroup(request);
-      const group = response.data ? response.data : null;
+      const group: Group | null = response.group ? response.group : null;
       if (response.success && group) {
         const nextGroups: Group[] = this._groups.concat([group]);
         this._groups = nextGroups;

@@ -88,6 +88,16 @@ class DirectModelAgent(
         logger.info("📜 已注入 {} 条近期历史到 conversationHistory (session: {})", recent.size, sessionId)
     }
 
+    data class AvailableReferenceSeed(
+        val title: String,
+        val snippet: String? = null,
+        val path: String? = null,
+        val origin: String? = null,
+        val reason: String? = null,
+        val spaceId: String? = null,
+        val spaceLabel: String? = null,
+    )
+
     data class AgentResponse(
         val content: String,
         val references: List<com.silk.backend.models.MessageReference> = emptyList()
@@ -110,12 +120,39 @@ class DirectModelAgent(
         systemPrompt: String? = null,
         requestUserId: String = "",
         accessibleSessionIds: List<String> = listOf(sessionId),
+        availableReferences: List<AvailableReferenceSeed> = emptyList(),
+        additionalContext: String? = null,
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
     ): String {
         currentResponseReferences.clear()
         lastAgentResponse = null
 
-        val effectiveSystemPrompt = withCitationGuidelines(systemPrompt ?: "你是 Silk，一个智能助手。")
+        // 注册用户提供的本地知识库引用（用于 [available:N] 引用解析）
+        availableReferences.forEach { ref ->
+            registerReference(kind = "available", title = ref.title, snippet = ref.snippet, path = ref.path, origin = ref.origin, reason = ref.reason, spaceId = ref.spaceId, spaceLabel = ref.spaceLabel)
+        }
+
+        val now = java.time.LocalDateTime.now()
+        val chineseFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
+        val isoFormatter = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        
+        // 调试日志：每次调用均记录注入的时间，排查"时间停留"问题
+        logger.info("[processInput] 注入系统时间: {} (epochMs={})",
+            now.format(isoFormatter), java.time.Instant.now().toEpochMilli())
+
+        val effectiveSystemPrompt = buildString {
+            appendLine("## 当前日期和时间（系统精确注入）")
+            appendLine("当前日期：${now.format(chineseFormatter)}")
+            appendLine("ISO 格式：${now.format(isoFormatter)}")
+            appendLine("⚠️ 你必须使用上述精确时间回答所有时间/日期相关问题，不得自行推理、猜测或根据训练数据推断。如果用户问\"今天\"、\"现在\"、\"星期几\"等，必须以上述注入的时间为准。")
+            appendLine("⚠️ 注意：对话历史中你之前的回答可能包含旧的过期时间，那些时间已失效。每次都要以本系统提示开头的注入时间为准，不要引用自己之前回答中的时间。")
+            appendLine()
+            appendLine(withCitationGuidelines(systemPrompt ?: "你是 Silk，一个智能助手。"))
+            if (!additionalContext.isNullOrBlank()) {
+                appendLine()
+                appendLine(additionalContext)
+            }
+        }
 
         // 1. 添加用户消息到历史
         conversationHistory.add(Message(role = "user", content = userInput))
@@ -138,7 +175,7 @@ class DirectModelAgent(
                 callback(stepType, content, isComplete)
             }
         }
-        val rawResponse = chat(wrappedCallback)
+        val rawResponse = chat(wrappedCallback, accessibleSessionIds)
         if (lastAgentResponse == null) {
             val finalized = finalizeAgentResponse(rawResponse)
             lastAgentResponse = AgentResponse(content = finalized.content, references = finalized.references)
@@ -170,6 +207,15 @@ class DirectModelAgent(
             appendLine("- 每个重要观点都必须标注来源引用，不能遗漏")
             appendLine("- 禁止堆砌大量引用标记；只为对应观点添加必要引用")
             appendLine("- 如果你没有使用网络搜索，则不需要添加引用标记")
+            appendLine()
+            appendLine("## 参考来源列表（必须遵守）")
+            appendLine("当你使用了网络搜索，必须在回答末尾附上完整的参考来源列表，格式如下：")
+            appendLine("参考来源:")
+            appendLine("1. [来源标题](完整URL)")
+            appendLine("2. [来源标题](完整URL)")
+            appendLine("- 必须列出所有引用来源，编号与正文中的 [citation:数字] 一一对应")
+            appendLine("- URL 必须是完整的 https:// 链接，不能省略或截断")
+            appendLine("- 如果没有使用网络搜索，则不需要添加参考来源列表")
         }
     }
 
@@ -178,7 +224,11 @@ class DirectModelAgent(
         title: String,
         url: String? = null,
         snippet: String? = null,
-        path: String? = null
+        path: String? = null,
+        origin: String? = null,
+        reason: String? = null,
+        spaceId: String? = null,
+        spaceLabel: String? = null,
     ): Int {
         val index = currentResponseReferences.size + 1
         currentResponseReferences.add(
@@ -188,7 +238,11 @@ class DirectModelAgent(
                 title = title,
                 url = url,
                 snippet = snippet,
-                path = path
+                path = path,
+                origin = origin,
+                reason = reason,
+                spaceId = spaceId,
+                spaceLabel = spaceLabel,
             )
         )
         return index
@@ -199,7 +253,8 @@ class DirectModelAgent(
      * 将 conversationHistory 格式化为文本 prompt，包含 system + 对话轮次 + 当前消息。
      */
     private suspend fun chat(
-        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+        accessibleSessionIds: List<String> = listOf(sessionId)
     ): String {
         if (!::claudeProcessClient.isInitialized) {
             val fallback = "backend/chat_workspaces/$sessionId"
@@ -211,6 +266,9 @@ class DirectModelAgent(
         }
 
         callback("thinking", "🤔 思考中...", false)
+
+        // 如果是 Silk 专属对话（有多个 accessibleSession），写入其他群的历史供 AI 参考
+        writeOtherGroupsHistories(accessibleSessionIds)
 
         // 将对话历史写入 chat_history.md，供 Claude 的 Grep/Read 工具搜索
         val historyFile = java.io.File(workspaceDir, "chat_history.md")
@@ -229,7 +287,13 @@ class DirectModelAgent(
             }
         })
 
+        // 工作区文件同步：确保已解析的文件在工作区可用
+        syncExtractedFilesToWorkspace()
+
         // 构建工具/工作区上下文（两种路径共用）
+        val otherGroupsDir = java.io.File(workspaceDir, "other_groups")
+        val hasOtherGroups = otherGroupsDir.exists() && otherGroupsDir.listFiles()?.isNotEmpty() == true
+
         val toolContext = buildString {
             appendLine("## 可用工具")
             appendLine("你有以下工具可用：")
@@ -239,6 +303,27 @@ class DirectModelAgent(
             appendLine("- **glob**: 查找工作区文件")
             appendLine()
             appendLine("群聊历史已保存到 `chat_history.md`，你可以用 Grep 搜索历史消息。")
+
+            if (hasOtherGroups) {
+                appendLine()
+                appendLine("## 跨群聊访问权限")
+                appendLine("当前是 **Silk 专属对话**，你有权访问该用户**所有群聊**的历史记录。")
+                appendLine("其他群聊的聊天记录已分别保存到 `other_groups/` 目录下，文件名格式为 `chat_history_<群名>.md`。")
+                appendLine("你可以使用 `Grep` 或 `Read` 工具搜索或读取这些文件来获取其他群聊中的信息。")
+            }
+
+            val manifestFile = java.io.File(workspaceDir, "files_manifest.md")
+            if (manifestFile.exists()) {
+                appendLine()
+                appendLine("## 已上传的文件")
+                appendLine("工作区中有用户上传的文件，已自动提取为文本：")
+                appendLine("- 使用 `Read` 工具读取 `files_manifest.md` 查看文件清单")
+                appendLine("- 使用 `Read` 工具读取 `<文件名>.extracted.md` 查看具体文件内容")
+                appendLine("- 用户提到文件相关问题时，主动读取对应的 .extracted.md 文件")
+            }
+            // 追加日期提醒（扁平文本路径下冗余提醒，提高遵从率）
+            appendLine()
+            appendLine("⚠️ 再次提醒：当前真实日期和时间已在系统指令开头给出，回答时间/日期相关问题时必须使用该信息，不得自行猜测或推算。")
         }
 
         val response = try {
@@ -268,6 +353,77 @@ class DirectModelAgent(
         return response
     }
 
+    /**
+     * 将用户其他群聊的聊天历史写入工作区，供 AI 搜索参考。
+     * 每次调用都会重新写入，确保包含最新的消息。
+     */
+    private fun writeOtherGroupsHistories(accessibleSessionIds: List<String>) {
+        if (accessibleSessionIds.size <= 1) return // 仅当前会话，无需额外写入
+        if (workspaceDir.isBlank()) return
+
+        logger.info("📋 写入其他群聊历史: sessionId={}, accessibleCount={}, ids={}",
+            sessionId, accessibleSessionIds.size, accessibleSessionIds)
+
+        val otherGroupsDir = java.io.File(workspaceDir, "other_groups")
+        val chatHistoryBaseDir = System.getProperty("silk.chatHistoryDir")?.trim()?.takeIf { it.isNotEmpty() } ?: "chat_history"
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+        for (sessionName in accessibleSessionIds) {
+            if (sessionName == sessionId) continue // 跳过当前群
+
+            val groupId = sessionName.removePrefix("group_")
+            val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
+            val groupDisplayName = group?.name ?: groupId
+            // 中文等 Unicode 字符直接保留在文件名中，仅过滤 Windows 不安全字符
+            val safeFileName = groupDisplayName.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80)
+            val targetFile = java.io.File(otherGroupsDir, "chat_history_${safeFileName}.md")
+
+            // 读取 chat_history.json
+            val historyFile = java.io.File(java.io.File(chatHistoryBaseDir, sessionName), "chat_history.json")
+            if (!historyFile.exists()) continue
+
+            try {
+                val content = historyFile.readText()
+                if (content.isBlank()) continue
+
+                val chatHistory = json.decodeFromString<com.silk.backend.models.ChatHistory>(content)
+                if (chatHistory.messages.isEmpty()) continue
+
+                // 每次都重新写入，确保包含最新消息
+                targetFile.parentFile.mkdirs()
+                targetFile.writeText(buildString {
+                    appendLine("# 群聊记录：$groupDisplayName")
+                    appendLine()
+                    for (msg in chatHistory.messages.takeLast(50)) {
+                        if (msg.messageType != "TEXT") continue
+                        val ts = java.time.Instant.ofEpochMilli(msg.timestamp)
+                            .atZone(java.time.ZoneId.systemDefault())
+                            .toLocalDateTime()
+                            .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+                        appendLine("- **${msg.senderName}** ($ts): ${msg.content.replace('\n', ' ').take(500)}")
+                    }
+                })
+                logger.debug("已刷新其他群聊历史: {} ({} 条消息)", groupDisplayName, chatHistory.messages.size)
+            } catch (e: Exception) {
+                logger.warn("⚠️ 读取群聊历史失败 [{}]: {}", sessionName, e.message)
+            }
+        }
+    }
+
+    private fun syncExtractedFilesToWorkspace() {
+        if (workspaceDir.isBlank()) return
+        try {
+            val sessionName = if (sessionId.startsWith("group_")) sessionId else "group_$sessionId"
+            val chatHistoryDir = System.getProperty("silk.chatHistoryDir")?.trim()?.takeIf { it.isNotEmpty() } ?: "chat_history"
+            val uploadsDir = java.io.File(java.io.File(chatHistoryDir, sessionName), "uploads")
+            if (uploadsDir.exists()) {
+                FilePreprocessor.syncAllToWorkspace(uploadsDir, workspaceDir)
+            }
+        } catch (e: Exception) {
+            logger.warn("工作区文件同步失败: {}", e.message)
+        }
+    }
+
     private suspend fun chatViaClaudeProcess(
         toolContext: String,
         callback: suspend (String, String, Boolean) -> Unit
@@ -288,6 +444,12 @@ class DirectModelAgent(
                     }
                 }
             }
+            appendLine()
+            // 钉入当前时间：放在对话尾部 Assistant 前，确保 Claude 无论如何都看到
+            val tsNow = java.time.LocalDateTime.now()
+            val tsFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            appendLine("## 当前时间（尾部再次注入，必须以此为准）")
+            appendLine("现在时刻：${tsNow.format(tsFmt)}")
             appendLine()
             appendLine(toolContext)
             appendLine()
@@ -389,15 +551,89 @@ class DirectModelAgent(
         return "$cleaned $markers"
     }
 
+    private fun extractSourcesSection(content: String): Pair<String, List<com.silk.backend.models.MessageReference>> {
+        val sectionRegex = Regex("""\n*(Sources|参考来源):\s*\n[\s\S]*$""")
+        val match = sectionRegex.find(content) ?: return content to emptyList()
+
+        val sectionText = match.value
+        val cleanContent = content.substring(0, match.range.first).trimEnd()
+
+        val linkRegex = Regex("""\[([^\]]+)\]\(([^)]+)\)""")
+        val refs = linkRegex.findAll(sectionText).mapIndexed { index, linkMatch ->
+            com.silk.backend.models.MessageReference(
+                kind = "citation",
+                index = index + 1,
+                title = linkMatch.groupValues[1],
+                url = linkMatch.groupValues[2],
+                snippet = null,
+                path = null
+            )
+        }.toList()
+
+        return cleanContent to refs
+    }
+
     private fun finalizeAgentResponse(content: String): FinalCitationResult {
-        // Claude CLI 路径：无真实引用（空或全是占位），直接剥离标记
-        // 让 Sources: 部分（带真实链接）自然显示
-        if (currentResponseReferences.isEmpty() || currentResponseReferences.all { it.url == null && it.path == null }) {
-            val stripped = content.replace(Regex("\\[(citation|available):\\d+\\]"), "")
-            return FinalCitationResult(stripped, emptyList())
+        // 从正文末尾提取 "Sources:" / "参考来源:" 节，避免前端重复渲染
+        val (cleanedContent, sourcesRefs) = extractSourcesSection(content)
+        // 注册来源节中的 URL 引用（去重）
+        for (ref in sourcesRefs) {
+            if (currentResponseReferences.none { it.url == ref.url && it.title == ref.title }) {
+                currentResponseReferences.add(ref)
+            }
         }
-        val withMarkers = ensureCitationMarkers(content)
-        return normalizeCitedReferences(withMarkers)
+
+        // 回退：从全文提取 Markdown 链接作为备用 URL 来源（适用于模型未输出独立来源节的情况）
+        if (currentResponseReferences.none { it.url != null || it.path != null }) {
+            val bodyLinkRegex = Regex("""\[([^\]]+)\]\(([^)]+)\)""")
+            for (linkMatch in bodyLinkRegex.findAll(cleanedContent)) {
+                val title = linkMatch.groupValues[1]
+                val url = linkMatch.groupValues[2]
+                if (url.isNotBlank() && currentResponseReferences.none { it.url == url }) {
+                    currentResponseReferences.add(
+                        com.silk.backend.models.MessageReference(
+                            kind = "citation",
+                            index = currentResponseReferences.size + 1,
+                            title = title,
+                            url = url,
+                            snippet = null,
+                            path = null
+                        )
+                    )
+                }
+            }
+        }
+
+        val hasRefs = currentResponseReferences.isNotEmpty() && currentResponseReferences.any { it.url != null || it.path != null }
+        if (!hasRefs) {
+            val hasCitationMarkers = Regex("\\[citation:\\d+\\]").containsMatchIn(cleanedContent)
+            if (hasCitationMarkers) {
+                val result = normalizeCitedReferences(cleanedContent)
+                // 无 URL → 保留标记在正文中（前端渲染为可读的引用编号），引用列表不丢
+                //（stripCitationMarkers 仅在 references 有 URL 时才剥离，保证点击链接着陆页干净）
+                if (result.references.any { it.url != null || it.path != null }) {
+                    return FinalCitationResult(
+                        stripCitationMarkers(result.content),
+                        result.references
+                    )
+                }
+                return FinalCitationResult(result.content, result.references)
+            }
+            // 无任何引用标记 → 清理 available 标记后返回
+            val stripped = cleanedContent.replace(Regex("\\[(citation|available):\\d+\\]"), "")
+            return FinalCitationResult(stripped, currentResponseReferences.toList())
+        }
+        val withMarkers = ensureCitationMarkers(cleanedContent)
+        val result = normalizeCitedReferences(withMarkers)
+        // references 有 URL → 剥离标记，前端用引用列表渲染可点击链接
+        return FinalCitationResult(
+            stripCitationMarkers(result.content),
+            result.references
+        )
+    }
+
+    private fun stripCitationMarkers(content: String): String {
+        return content.replace(Regex("\\[(citation|available):\\d+\\]"), "")
     }
 
     private fun normalizeCitedReferences(content: String): FinalCitationResult {

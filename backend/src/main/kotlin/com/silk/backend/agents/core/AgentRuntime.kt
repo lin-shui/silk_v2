@@ -2,14 +2,21 @@
 package com.silk.backend.agents.core
 
 import com.silk.backend.Message
+import com.silk.backend.MessageType
 import com.silk.backend.SilkAgent
 import com.silk.backend.agents.acp.AcpClient
+import kotlinx.coroutines.sync.withLock
+import com.silk.backend.card.CardReplyRouter
+import com.silk.backend.card.CardReplyHandler
+import com.silk.backend.card.CardReplyPayload
+import com.silk.backend.card.CardBuilder
 import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.acp.ContentBlock
 import com.silk.backend.agents.acp.PermissionResponse
 import com.silk.backend.agents.acp.StopReason
 import com.silk.backend.agents.adapters.claudecode.ClaudeCodeDescriptor
 import com.silk.backend.agents.adapters.codex.CodexDescriptor
+import com.silk.backend.agents.adapters.cursor.CursorDescriptor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -31,6 +38,7 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * Agent 框架对外门面。
  */
+@Suppress("TooGenericExceptionCaught")
 object AgentRuntime {
 
     private val logger = LoggerFactory.getLogger(AgentRuntime::class.java)
@@ -39,6 +47,7 @@ object AgentRuntime {
     init {
         AgentRegistry.register(ClaudeCodeDescriptor)
         AgentRegistry.register(CodexDescriptor)
+        AgentRegistry.register(CursorDescriptor)
     }
 
     // ========== Workflow 持久化（Plan E2） ==========
@@ -60,6 +69,8 @@ object AgentRuntime {
             persistCliSession(rawGroupId, cliSessionId, sessionStarted)
         /** M4 Task 3: 持久化用户当前激活的 agent（dash form）。 */
         fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean = false
+        /** 持久化工具权限模式。 */
+        fun persistPermissionMode(rawGroupId: String, permissionMode: String): Boolean = false
         /** 启动 / 首次激活时根据 workflow record 提供 seed；返回 null 表示不是 workflow 或无值可 seed。 */
         fun loadSeed(rawGroupId: String): WorkflowSeed?
         /**
@@ -73,6 +84,7 @@ object AgentRuntime {
         val workingDir: String,
         val cliSessionId: String?,
         val sessionStarted: Boolean,
+        val permissionMode: String = "",
     )
 
     @Volatile
@@ -88,7 +100,7 @@ object AgentRuntime {
 
     /**
      * 把 ACP `session/prompt` response 里的 meta（adapter 携带的 cost/duration/turns/cliSessionId）
-     * 格式化成会话末尾的 "⏱ 费用: $X | 耗时: Xs | 轮次: N | 会话: XXXXXXXX..." 提示行。
+     * 格式化成会话末尾的 "⏱ 费用: $X | 耗时: Xs | 轮次: N | 会话: XXXXXXXXXXXXXXXX..." 提示行。
      * 字段缺失或为零值时跳过；都为空返回空串。
      */
     private fun formatPromptMeta(
@@ -104,7 +116,7 @@ object AgentRuntime {
         if (cost > 0) parts.add("费用: ${"$"}%.4f".format(cost))
         if (duration > 0) parts.add("耗时: %.1fs".format(duration / 1000.0))
         if (turns > 0) parts.add("轮次: $turns")
-        if (sid.isNotBlank()) parts.add("会话: ${sid.take(8)}...")
+        if (sid.isNotBlank()) parts.add("会话: ${sid.take(16)}...")
         val joined = parts.joinToString(" | ")
         return if (joined.isNotBlank()) "⏱ $joined" else ""
     }
@@ -127,6 +139,15 @@ object AgentRuntime {
         }
     }
 
+    /** 异步持久化工具权限模式。 */
+    private fun persistPermissionModeAsync(groupId: String, permissionMode: PermissionMode) {
+        val p = persistence ?: return
+        CoroutineScope(Dispatchers.IO).launch {
+            try { p.persistPermissionMode(stripGroupPrefix(groupId), permissionMode.name) }
+            catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 permissionMode 失败: {}", e.message) }
+        }
+    }
+
     /** 异步持久化用户当前激活的 agent（M4 Task 3）。 */
     private fun persistActiveAgentAsync(groupId: String, agentType: String) {
         val p = persistence ?: return
@@ -141,14 +162,21 @@ object AgentRuntime {
     /** 列出所有已注册的 agent descriptor。 */
     fun listRegisteredAgents(): List<AgentDescriptor> = AgentRegistry.list()
 
+    /** cc-connect 桥接代理的用户 ID（见 Routing.kt /ccconnect-bridge）。 */
+    const val CC_CONNECT_USER_ID = "cc-connect"
+
     /** 判断某条消息是否来自某个 agent（用于 WebSocketConfig 的 AGENT_ID 过滤）。 */
     fun isAgentMessage(msg: Message): Boolean {
-        return msg.userId == SilkAgent.AGENT_ID || AgentRegistry.list().any { it.agentUserId == msg.userId }
+        return msg.userId == SilkAgent.AGENT_ID
+            || msg.userId == CC_CONNECT_USER_ID
+            || AgentRegistry.list().any { it.agentUserId == msg.userId }
     }
 
     /** 判断某个 userId 是否属于已注册的 agent。 */
     fun isAgentUserId(userId: String): Boolean {
-        return userId == SilkAgent.AGENT_ID || AgentRegistry.list().any { it.agentUserId == userId }
+        return userId == SilkAgent.AGENT_ID
+            || userId == CC_CONNECT_USER_ID
+            || AgentRegistry.list().any { it.agentUserId == userId }
     }
 
     /**
@@ -237,6 +265,11 @@ object AgentRuntime {
             if (!seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
                 session.cliSessionId = seed.cliSessionId
             }
+            if (seed.permissionMode.isNotBlank()) {
+                try {
+                    session.permissionMode = PermissionMode.valueOf(seed.permissionMode)
+                } catch (_: IllegalArgumentException) { /* ignore invalid value */ }
+            }
         }
         logger.info(
             "[AgentRuntime] 工作流自动激活: userId={}, groupId={}, agentType={}, workingDir={}, cliSeed={}",
@@ -247,25 +280,37 @@ object AgentRuntime {
     /** Bridge 断线时由 Routing.kt 调用 */
     fun handleAgentDisconnect(userId: String, agentType: String) {
         for ((_, ctx) in contexts) {
-            if (ctx.userId != userId) continue
-            val session = ctx.sessions[agentType] ?: continue
-
-            // Clean up handlers before nulling acpSessionId
-            cleanupSessionHandlers(session)
-
-            if (session.running) {
-                session.promptJob?.cancel()
-                session.promptJob = null
-                session.running = false
-                session.cancelled = false
-                session.pendingQuestion = null
-                logger.info(
-                    "[AgentRuntime] Bridge 断线，agent 任务已终止: userId={}, groupId={}, agentType={}",
-                    userId, ctx.groupId, agentType
-                )
-            }
-            session.acpSessionId = null
+            disconnectAgentInContext(ctx, userId, agentType)
         }
+    }
+
+    /** 在单个 context 中处理某 agent 的断线清理；不匹配的 context 直接返回。 */
+    private fun disconnectAgentInContext(ctx: GroupAgentContext, userId: String, agentType: String) {
+        if (ctx.userId != userId) return
+        val session = ctx.sessions[agentType] ?: return
+
+        // Clean up handlers before nulling acpSessionId
+        cleanupSessionHandlers(session)
+
+        // Clean up any pending card reply handler to prevent memory leak
+        val pending = session.pendingQuestion
+        if (pending != null) {
+            CardReplyRouter.unregister("agent_question_${pending.requestId}")
+            session.pendingQuestion = null
+        }
+
+        if (session.running) {
+            session.promptJob?.cancel()
+            session.promptJob = null
+            session.running = false
+            session.cancelled = false
+            session.pendingQuestion = null
+            logger.info(
+                "[AgentRuntime] Bridge 断线，agent 任务已终止: userId={}, groupId={}, agentType={}",
+                userId, ctx.groupId, agentType
+            )
+        }
+        session.acpSessionId = null
     }
 
     // ========== 内部方法 ==========
@@ -382,224 +427,319 @@ object AgentRuntime {
         }
     }
 
+    /** 当前激活 agent 的命令目标（agentType + descriptor + session）。 */
+    private data class CommandTarget(
+        val agentType: String,
+        val descriptor: AgentDescriptor,
+        val session: AgentSession,
+    )
+
+    /** 解析当前激活 agent 的命令目标；无激活 agent 或未注册时返回 null。 */
+    private fun resolveActiveCommandTarget(ctx: GroupAgentContext): CommandTarget? {
+        val agentType = ctx.currentAgentType ?: return null
+        val descriptor = AgentRegistry.getByType(agentType) ?: return null
+        val session = ctx.getOrCreateSession(agentType)
+        return CommandTarget(agentType, descriptor, session)
+    }
+
     private suspend fun handleCommand(
         ctx: GroupAgentContext,
         cmd: SilkCommand,
         broadcastFn: suspend (Message) -> Unit,
     ) {
-        val agentType = ctx.currentAgentType ?: return
-        val descriptor = AgentRegistry.getByType(agentType) ?: return
-        val session = ctx.getOrCreateSession(agentType)
+        val resolved = resolveActiveCommandTarget(ctx) ?: return
+        val (agentType, descriptor, session) = resolved
 
         when (cmd) {
-            is SilkCommand.Exit -> {
-                // Clean up handlers before removing session
-                cleanupSessionHandlers(session)
-                ctx.removeSession(agentType)
-                if (ctx.sessions.isEmpty()) {
-                    ctx.currentAgentType = null
+            is SilkCommand.Exit -> handleExitCommand(ctx, agentType, descriptor, session, broadcastFn)
+            is SilkCommand.Cancel -> handleCancel(session, broadcastFn)
+            is SilkCommand.New -> handleNewCommand(ctx, agentType, descriptor, session, broadcastFn)
+            is SilkCommand.Cd -> handleCdCommand(ctx, cmd, descriptor, broadcastFn)
+            is SilkCommand.Status -> handleStatusCommand(ctx, descriptor, session, broadcastFn)
+            is SilkCommand.Queue -> handleQueueCommand(cmd, descriptor, session, broadcastFn)
+            is SilkCommand.Help -> handleHelpCommand(descriptor, broadcastFn)
+            is SilkCommand.Compact -> handleCompactCommand(agentType, descriptor, session, broadcastFn)
+            is SilkCommand.SessionList -> handleSessionListCommand(ctx, agentType, descriptor, session, broadcastFn)
+            is SilkCommand.SessionLoad -> handleSessionLoadCommand(ctx, cmd, agentType, descriptor, session, broadcastFn)
+            is SilkCommand.Unknown -> handleUnknownCommand(cmd, descriptor, broadcastFn)
+            else -> handleAdapterCommand(cmd, agentType, descriptor, session, broadcastFn)
+        }
+    }
+
+    private suspend fun handleCdCommand(
+        ctx: GroupAgentContext,
+        cmd: SilkCommand.Cd,
+        descriptor: AgentDescriptor,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        ctx.workingDir = cmd.path
+        broadcastFn(AgentMessages.system(
+            "工作目录已切换: ${cmd.path}",
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleUnknownCommand(
+        cmd: SilkCommand.Unknown,
+        descriptor: AgentDescriptor,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        broadcastFn(AgentMessages.system(
+            "未知命令: ${cmd.raw}",
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleExitCommand(
+        ctx: GroupAgentContext,
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        // Clean up handlers before removing session
+        cleanupSessionHandlers(session)
+        ctx.removeSession(agentType)
+        if (ctx.sessions.isEmpty()) {
+            ctx.currentAgentType = null
+        }
+        broadcastFn(AgentMessages.system(
+            "已退出 ${descriptor.displayName} 模式",
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleNewCommand(
+        ctx: GroupAgentContext,
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        cleanupSessionHandlers(session)
+        session.acpSessionId = null
+        session.cliSessionId = null
+        session.running = false
+        session.cancelled = false
+        session.messageQueue.clear()
+        // 清除已持久化的 cliSessionId，让重启后不会盲目 resume 一个废 session（与 cdSync 行为一致）
+        persistCliSessionAsync(ctx.groupId, agentType, "", false)
+        broadcastFn(AgentMessages.system(
+            "已开启新会话",
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleStatusCommand(
+        ctx: GroupAgentContext,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        val status = buildString {
+            appendLine("Agent: ${descriptor.displayName}")
+            appendLine("运行中: ${session.running}")
+            appendLine("队列: ${session.messageQueue.size} 条")
+            appendLine("工作目录: ${ctx.workingDir}")
+            appendLine("权限模式: ${session.permissionMode}")
+            append("ACP Session: ${session.acpSessionId ?: "未创建"}")
+        }
+        broadcastFn(AgentMessages.status(
+            status,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleQueueCommand(
+        cmd: SilkCommand.Queue,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        if (cmd.clear) {
+            session.messageQueue.clear()
+            broadcastFn(AgentMessages.system(
+                "队列已清空",
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+        } else {
+            val items = session.messageQueue.mapIndexed { i, q ->
+                "${i + 1}. ${q.text.take(40)}${if (q.text.length > 40) "..." else ""}"
+            }.joinToString("\n")
+            val msg = if (items.isEmpty()) "队列为空" else "队列 (${session.messageQueue.size} 条):\n$items"
+            broadcastFn(AgentMessages.status(
+                msg,
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+        }
+    }
+
+    private suspend fun handleHelpCommand(
+        descriptor: AgentDescriptor,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        val help = buildString {
+            appendLine("${descriptor.displayName} 命令:")
+            appendLine("/exit — 退出当前 agent")
+            appendLine("/cancel — 取消当前任务")
+            appendLine("/new — 开启新会话")
+            appendLine("/cd <path> — 切换工作目录")
+            appendLine("/session — 列出本地会话")
+            appendLine("/session <id> — 恢复会话")
+            appendLine("/status — 查看状态")
+            appendLine("/queue — 查看队列")
+            appendLine("/queue clear — 清空队列")
+            appendLine("/compact — 压缩当前会话")
+            appendLine("/help — 显示此帮助")
+            appendLine("@<agent> <text> — 向指定 agent 发送消息（不改当前 agent）")
+        }
+        broadcastFn(AgentMessages.system(
+            help,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+    }
+
+    private suspend fun handleCompactCommand(
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        val acp = getAcpClient(agentType, session.userId)
+        if (acp != null && session.acpSessionId != null) {
+            try {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.silk.backend.agents.core.AcpExtensions.compact(acp, session.acpSessionId!!)
                 }
                 broadcastFn(AgentMessages.system(
-                    "已退出 ${descriptor.displayName} 模式",
+                    "会话已压缩",
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
-            }
-            is SilkCommand.Cancel -> handleCancel(session, broadcastFn)
-            is SilkCommand.New -> {
-                cleanupSessionHandlers(session)
-                session.acpSessionId = null
-                session.cliSessionId = null
-                session.running = false
-                session.cancelled = false
-                session.messageQueue.clear()
-                // 清除已持久化的 cliSessionId，让重启后不会盲目 resume 一个废 session（与 cdSync 行为一致）
-                persistCliSessionAsync(ctx.groupId, agentType, "", false)
+            } catch (e: Exception) {
                 broadcastFn(AgentMessages.system(
-                    "已开启新会话",
+                    "压缩失败: ${e.message}",
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
             }
-            is SilkCommand.Cd -> {
-                ctx.workingDir = cmd.path
-                broadcastFn(AgentMessages.system(
-                    "工作目录已切换: ${cmd.path}",
-                    agentUserId = descriptor.agentUserId,
-                    agentName = descriptor.displayName,
-                ))
-            }
-            is SilkCommand.Status -> {
-                val status = buildString {
-                    appendLine("Agent: ${descriptor.displayName}")
-                    appendLine("运行中: ${session.running}")
-                    appendLine("队列: ${session.messageQueue.size} 条")
-                    appendLine("工作目录: ${ctx.workingDir}")
-                    append("ACP Session: ${session.acpSessionId ?: "未创建"}")
+        } else {
+            broadcastFn(AgentMessages.system(
+                "compact 需要 bridge 连接",
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+        }
+    }
+
+    private suspend fun handleSessionListCommand(
+        ctx: GroupAgentContext,
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        val acp = getAcpClient(agentType, session.userId)
+        if (acp != null) {
+            try {
+                val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.silk.backend.agents.core.AcpExtensions.listLocalSessions(acp, ctx.workingDir)
                 }
                 broadcastFn(AgentMessages.status(
-                    status,
+                    com.silk.backend.agents.core.AcpExtensions.formatLocalSessionsForDisplay(result),
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
+                ))
+            } catch (e: Exception) {
+                broadcastFn(AgentMessages.status(
+                    "获取会话列表失败: ${e.message}",
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
             }
-            is SilkCommand.Queue -> {
-                if (cmd.clear) {
-                    session.messageQueue.clear()
-                    broadcastFn(AgentMessages.system(
-                        "队列已清空",
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
-                } else {
-                    val items = session.messageQueue.mapIndexed { i, q ->
-                        "${i + 1}. ${q.text.take(40)}${if (q.text.length > 40) "..." else ""}"
-                    }.joinToString("\n")
-                    val msg = if (items.isEmpty()) "队列为空" else "队列 (${session.messageQueue.size} 条):\n$items"
-                    broadcastFn(AgentMessages.status(
-                        msg,
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
+        } else {
+            broadcastFn(AgentMessages.status(
+                "本地会话列表（待 bridge 连接后拉取）",
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+        }
+    }
+
+    private suspend fun handleSessionLoadCommand(
+        ctx: GroupAgentContext,
+        cmd: SilkCommand.SessionLoad,
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        val acp = getAcpClient(agentType, session.userId)
+        if (acp == null) {
+            broadcastFn(AgentMessages.system(
+                "${descriptor.displayName} 未连接，无法加载会话",
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+        } else {
+            // Clean up handlers for the old ACP session before overwriting
+            cleanupSessionHandlers(session)
+            try {
+                val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    acp.sessionLoad(cmd.sessionIdPrefix, ctx.workingDir)
                 }
-            }
-            is SilkCommand.Help -> {
-                val help = buildString {
-                    appendLine("${descriptor.displayName} 命令:")
-                    appendLine("/exit — 退出当前 agent")
-                    appendLine("/cancel — 取消当前任务")
-                    appendLine("/new — 开启新会话")
-                    appendLine("/cd <path> — 切换工作目录")
-                    appendLine("/session — 列出本地会话")
-                    appendLine("/session <id> — 恢复会话")
-                    appendLine("/status — 查看状态")
-                    appendLine("/queue — 查看队列")
-                    appendLine("/queue clear — 清空队列")
-                    appendLine("/compact — 压缩当前会话")
-                    appendLine("/help — 显示此帮助")
-                    appendLine("@<agent> <text> — 向指定 agent 发送消息（不改当前 agent）")
-                }
+                // adapter 返回的 ACP UUID 是后端用来发 session/prompt 的句柄；
+                // 用户输入的本地 session id（codex thread_id / claude session_id）走 cliSessionId
+                // 槽位，下次 prompt 时 adapter 会用它真正 resume 历史会话。
+                session.acpSessionId = result.sessionId
+                session.cliSessionId = cmd.sessionIdPrefix
                 broadcastFn(AgentMessages.system(
-                    help,
+                    "已加载会话: ${cmd.sessionIdPrefix.take(8)}...",
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
-            }
-            is SilkCommand.Compact -> {
-                val acp = getAcpClient(agentType, session.userId)
-                if (acp != null && session.acpSessionId != null) {
-                    try {
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            com.silk.backend.agents.core.AcpExtensions.compact(acp, session.acpSessionId!!)
-                        }
-                        broadcastFn(AgentMessages.system(
-                            "会话已压缩",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    } catch (e: Exception) {
-                        broadcastFn(AgentMessages.system(
-                            "压缩失败: ${e.message}",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    }
-                } else {
-                    broadcastFn(AgentMessages.system(
-                        "compact 需要 bridge 连接",
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
-                }
-            }
-            is SilkCommand.SessionList -> {
-                val acp = getAcpClient(agentType, session.userId)
-                if (acp != null) {
-                    try {
-                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            com.silk.backend.agents.core.AcpExtensions.listLocalSessions(acp, ctx.workingDir)
-                        }
-                        broadcastFn(AgentMessages.status(
-                            com.silk.backend.agents.core.AcpExtensions.formatLocalSessionsForDisplay(result),
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    } catch (e: Exception) {
-                        broadcastFn(AgentMessages.status(
-                            "获取会话列表失败: ${e.message}",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    }
-                } else {
-                    broadcastFn(AgentMessages.status(
-                        "本地会话列表（待 bridge 连接后拉取）",
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
-                }
-            }
-            is SilkCommand.SessionLoad -> {
-                val acp = getAcpClient(agentType, session.userId)
-                if (acp == null) {
-                    broadcastFn(AgentMessages.system(
-                        "${descriptor.displayName} 未连接，无法加载会话",
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
-                } else {
-                    // Clean up handlers for the old ACP session before overwriting
-                    cleanupSessionHandlers(session)
-                    try {
-                        val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            acp.sessionLoad(cmd.sessionIdPrefix, ctx.workingDir)
-                        }
-                        // adapter 返回的 ACP UUID 是后端用来发 session/prompt 的句柄；
-                        // 用户输入的本地 session id（codex thread_id / claude session_id）走 cliSessionId
-                        // 槽位，下次 prompt 时 adapter 会用它真正 resume 历史会话。
-                        session.acpSessionId = result.sessionId
-                        session.cliSessionId = cmd.sessionIdPrefix
-                        broadcastFn(AgentMessages.system(
-                            "已加载会话: ${cmd.sessionIdPrefix.take(8)}...",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    } catch (e: com.silk.backend.agents.acp.AcpRpcException) {
-                        broadcastFn(AgentMessages.system(
-                            "加载会话失败: ${e.rpcError.message}",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    } catch (e: Exception) {
-                        logger.warn("[AgentRuntime] sessionLoad 异常: {}", e.message)
-                        broadcastFn(AgentMessages.system(
-                            "加载会话异常: ${e.message}",
-                            agentUserId = descriptor.agentUserId,
-                            agentName = descriptor.displayName,
-                        ))
-                    }
-                }
-            }
-            is SilkCommand.Unknown -> {
+            } catch (e: com.silk.backend.agents.acp.AcpRpcException) {
                 broadcastFn(AgentMessages.system(
-                    "未知命令: ${cmd.raw}",
+                    "加载会话失败: ${e.rpcError.message}",
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
+                ))
+            } catch (e: Exception) {
+                logger.warn("[AgentRuntime] sessionLoad 异常: {}", e.message)
+                broadcastFn(AgentMessages.system(
+                    "加载会话异常: ${e.message}",
                     agentUserId = descriptor.agentUserId,
                     agentName = descriptor.displayName,
                 ))
             }
-            else -> {
-                // 尝试让 adapter 处理
-                val acp = getAcpClient(agentType, userId = session.userId) ?: return
-                val result = descriptor.handleSilkCommand(cmd, session, acp)
-                when (result) {
-                    is SilkCommandResult.Error -> broadcastFn(AgentMessages.system(
-                        result.message,
-                        agentUserId = descriptor.agentUserId,
-                        agentName = descriptor.displayName,
-                    ))
-                    else -> { /* Handled or Fallback, nothing to do */ }
-                }
-            }
+        }
+    }
+
+    private suspend fun handleAdapterCommand(
+        cmd: SilkCommand,
+        agentType: String,
+        descriptor: AgentDescriptor,
+        session: AgentSession,
+        broadcastFn: suspend (Message) -> Unit,
+    ) {
+        // 尝试让 adapter 处理
+        val acp = getAcpClient(agentType, userId = session.userId) ?: return
+        val result = descriptor.handleSilkCommand(cmd, session, acp)
+        when (result) {
+            is SilkCommandResult.Error -> broadcastFn(AgentMessages.system(
+                result.message,
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+            ))
+            else -> { /* Handled or Fallback, nothing to do */ }
         }
     }
 
@@ -628,7 +768,10 @@ object AgentRuntime {
                 "[AgentRuntime] User reply to question: requestId={}, answerLen={}",
                 pending.requestId.take(8), text.length,
             )
-            handleQuestionReply(session, pending, text, broadcastFn)
+            // Answer the current (first unanswered) question via text input
+            val currentIdx = (0 until pending.questions.size)
+                .firstOrNull { it !in pending.answers } ?: 0
+            handleQuestionReply(session, pending, currentIdx, text, broadcastFn)
             return
         }
 
@@ -697,7 +840,7 @@ object AgentRuntime {
                     return@launch
                 }
                 val accumulated = StringBuilder()
-                setupAcpHandlers(acp, acpSessionId, session, descriptor, broadcastFn, accumulated, ctx.scope)
+                setupAcpHandlers(acp, acpSessionId, session, descriptor, broadcastFn, accumulated, ctx.scope, ctx)
 
                 // 3. Execute prompt (executeSinglePrompt no longer does sessionNew)
                 executeSinglePrompt(ctx, acp, session, descriptor, text, broadcastFn, accumulated)
@@ -711,7 +854,7 @@ object AgentRuntime {
                     )
                     val drainSessionId = session.acpSessionId ?: break
                     val nextAccumulated = StringBuilder()
-                    setupAcpHandlers(acp, drainSessionId, session, descriptor, broadcastFn, nextAccumulated, ctx.scope)
+                    setupAcpHandlers(acp, drainSessionId, session, descriptor, broadcastFn, nextAccumulated, ctx.scope, ctx)
                     executeSinglePrompt(ctx, acp, session, descriptor, next.text, broadcastFn, nextAccumulated)
                     next = session.messageQueue.pollFirst()
                 }
@@ -855,18 +998,65 @@ object AgentRuntime {
         ))
     }
 
+    /**
+     * 处理单题回答（多问题逐题交互 or 单问题直接完成）。
+     *
+     * @param questionIndex 当前回答的问题索引
+     * @param answerText 用户的回答文本
+     */
     private suspend fun handleQuestionReply(
         session: AgentSession,
         pending: PendingQuestion,
+        questionIndex: Int,
         answerText: String,
         broadcastFn: suspend (Message) -> Unit,
     ) {
         val descriptor = AgentRegistry.getByType(session.agentType) ?: return
-        val acp = getAcpClient(session.agentType, session.userId)
 
-        // Clear pending state immediately
+        // Record this answer (strip internal encoding prefixes like __opt__0__)
+        pending.answers[questionIndex] = AgentMessages.cleanAnswerText(answerText)
+        val total = pending.questions.size
+
+        if (pending.answers.size < total) {
+            // Not all questions answered — refresh card for next question
+            val nextIndex = (0 until total).first { it !in pending.answers }
+            logger.info(
+                "[AgentRuntime] Question {}/{} answered, advancing to {}. requestId={}",
+                pending.answers.size, total, nextIndex + 1, pending.requestId.take(8),
+            )
+            broadcastFn(AgentMessages.questionCard(
+                questions = pending.questions,
+                requestId = pending.requestId,
+                agentUserId = descriptor.agentUserId,
+                agentName = descriptor.displayName,
+                currentIndex = nextIndex,
+                answers = pending.answers.toMap(),
+            ).copy(action = "edit"))
+            return
+        }
+
+        // All questions answered — resolve via ACP
+        val cardId = "agent_question_${pending.requestId}"
+        CardReplyRouter.unregister(cardId)
         session.pendingQuestion = null
 
+        // 构造 {问题文本 -> 答案} map，供 bridge 拼成 CLI 期望的 updatedInput.answers
+        // （清掉 __opt__/__custom__ 等内部前缀；key 必须与原始问题文本一致）
+        val cleanAnswer = { raw: String -> AgentMessages.cleanAnswerText(raw) }
+        val answersByQuestion = (0 until total).associate { qi ->
+            pending.questions[qi].question to cleanAnswer(pending.answers[qi] ?: "")
+        }
+
+        // Send completed card
+        broadcastFn(AgentMessages.questionCardCompleted(
+            questions = pending.questions,
+            answers = pending.answers.toMap(),
+            requestId = pending.requestId,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        ))
+
+        val acp = getAcpClient(session.agentType, session.userId)
         if (acp == null) {
             broadcastFn(AgentMessages.system(
                 "回答发送失败: Bridge 未连接",
@@ -877,10 +1067,10 @@ object AgentRuntime {
         }
 
         try {
-            AcpExtensions.resolveQuestion(acp, pending.requestId, answerText)
+            AcpExtensions.resolveQuestion(acp, pending.requestId, answersByQuestion)
             logger.info(
-                "[AgentRuntime] Question answered: requestId={}, answerLen={}",
-                pending.requestId.take(8), answerText.length,
+                "[AgentRuntime] All {}/{} questions answered: requestId={}",
+                total, total, pending.requestId.take(8),
             )
         } catch (e: Exception) {
             logger.error(
@@ -903,27 +1093,19 @@ object AgentRuntime {
         broadcastFn: suspend (Message) -> Unit,
         accumulated: StringBuilder,
         scope: CoroutineScope,
+        ctx: GroupAgentContext? = null,
     ) {
         acp.onSessionUpdate(acpSessionId) { notif ->
             // Check if this is an ask_user_question and set pending state
             val kind = notif.update["sessionUpdate"]?.let {
                 (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
             }
+            if (kind == "permission_request") {
+                handlePermissionUpdate(notif, session, descriptor, acp, broadcastFn, scope, ctx)
+                return@onSessionUpdate
+            }
             if (kind == "ask_user_question") {
-                val requestId = notif.update["requestId"]?.let {
-                    (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-                }
-                val questions = notif.update["questions"]?.jsonArray
-                    ?.mapNotNull { el ->
-                        (el as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
-                    }
-                if (requestId != null && !questions.isNullOrEmpty()) {
-                    session.pendingQuestion = PendingQuestion(requestId, questions)
-                    logger.info(
-                        "[AgentRuntime] pendingQuestion set: requestId={}, questionCount={}",
-                        requestId.take(8), questions.size,
-                    )
-                }
+                handleAskUserQuestionUpdate(notif, session)
             }
 
             val msg = AcpUpdateMapper.map(
@@ -950,6 +1132,257 @@ object AgentRuntime {
         }
     }
 
+    /**
+     * 处理 ask_user_question session update：解析结构化问题、设置 pendingQuestion 并注册卡片回复 handler。
+     */
+    private fun handleAskUserQuestionUpdate(
+        notif: com.silk.backend.agents.acp.SessionUpdateNotification,
+        session: AgentSession,
+    ) {
+        val requestId = notif.update["requestId"]?.let {
+            (it as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+        }
+        val rawQuestions = notif.update["questions"]?.jsonArray
+
+        // Parse structured questions (same logic as AcpUpdateMapper)
+        val structuredQuestions = parseStructuredQuestions(rawQuestions)
+
+        if (requestId != null && !structuredQuestions.isNullOrEmpty()) {
+            session.pendingQuestion = PendingQuestion(requestId, structuredQuestions)
+            logger.info(
+                "[AgentRuntime] pendingQuestion set: requestId={}, questionCount={}",
+                requestId.take(8), structuredQuestions.size,
+            )
+            // 注册卡片回复 handler
+            val cardId = "agent_question_$requestId"
+            CardReplyRouter.register(cardId, object : CardReplyHandler {
+                override suspend fun onCardReply(
+                    reply: CardReplyPayload,
+                    sessionName: String,
+                    broadcastFn: suspend (com.silk.backend.Message) -> Unit,
+                ) {
+                    val pending = session.pendingQuestion
+                    if (pending == null || pending.requestId != requestId) return
+
+                    // Parse button value to extract question index and answer
+                    val (questionIndex, answerText) = parseQuestionReplyAction(reply, pending)
+                    handleQuestionReply(session, pending, questionIndex, answerText, broadcastFn)
+                }
+            })
+        }
+    }
+
+    /**
+     * 解析 ACP ask_user_question 的 questions 数组为结构化问题（与 AcpUpdateMapper 同逻辑）。
+     */
+    private fun parseStructuredQuestions(
+        rawQuestions: kotlinx.serialization.json.JsonArray?,
+    ): List<StructuredQuestion>? {
+        return rawQuestions?.mapNotNull { el ->
+            when {
+                el is kotlinx.serialization.json.JsonObject -> {
+                    val q = el["question"]?.jsonPrimitive?.contentOrNull ?: ""
+                    val header = el["header"]?.jsonPrimitive?.contentOrNull ?: ""
+                    val options = el["options"]?.jsonArray?.mapNotNull { optEl ->
+                        (optEl as? kotlinx.serialization.json.JsonObject)?.let { obj ->
+                            QuestionOption(
+                                label = obj["label"]?.jsonPrimitive?.contentOrNull ?: "",
+                                description = obj["description"]?.jsonPrimitive?.contentOrNull ?: "",
+                            )
+                        }
+                    } ?: emptyList()
+                    StructuredQuestion(question = q, header = header, options = options)
+                }
+                el is kotlinx.serialization.json.JsonPrimitive -> {
+                    el.contentOrNull?.let { text -> StructuredQuestion(question = text) }
+                }
+                else -> null
+            }
+        }
+    }
+
+    /**
+     * 从卡片回复按钮值解析出 (问题下标, 答案文本)。
+     * 支持 __opt__{qi}__{answer} / __custom__{qi} 两种格式，其它视为对当前问题的回答。
+     */
+    private fun parseQuestionReplyAction(
+        reply: CardReplyPayload,
+        pending: PendingQuestion,
+    ): Pair<Int, String> {
+        val action = reply.action
+        return when {
+            action.startsWith("__opt__") -> {
+                // Format: __opt__{qi}__{answerDisplay}
+                val parts = action.removePrefix("__opt__").split("__", limit = 2)
+                val qi = parts.getOrNull(0)?.toIntOrNull() ?: 0
+                val answer = parts.getOrNull(1) ?: action
+                qi to answer
+            }
+            action.startsWith("__custom__") -> {
+                val qi = action.removePrefix("__custom__").toIntOrNull() ?: 0
+                val answer = reply.inputs["custom_answer_$qi"] ?: ""
+                qi to answer
+            }
+            else -> {
+                // Legacy fallback: treat as answer to current question
+                val currentIdx = (0 until pending.questions.size)
+                    .firstOrNull { it !in pending.answers } ?: 0
+                currentIdx to action
+            }
+        }
+    }
+
+    // ============== Permission Request Handling ==============
+
+    private val EDIT_TOOLS = setOf("Write", "Edit", "NotebookEdit")
+
+    private fun isWithinWorkingDir(filePath: String, workingDir: String): Boolean {
+        val absFile = java.io.File(filePath).canonicalPath
+        val absDir = java.io.File(workingDir).canonicalPath
+        return absFile.startsWith(absDir + java.io.File.separator) || absFile == absDir
+    }
+
+    private fun extractFilePath(toolInput: kotlinx.serialization.json.JsonObject): String? {
+        return toolInput["file_path"]?.jsonPrimitive?.contentOrNull
+            ?: toolInput["notebook_path"]?.jsonPrimitive?.contentOrNull
+    }
+
+    private fun extractToolInputMap(toolInput: kotlinx.serialization.json.JsonObject): Map<String, String?> {
+        return toolInput.entries.associate { (k, v) ->
+            k to (v as? kotlinx.serialization.json.JsonPrimitive)?.contentOrNull
+        }
+    }
+
+    private fun handlePermissionUpdate(
+        notif: com.silk.backend.agents.acp.SessionUpdateNotification,
+        session: AgentSession,
+        descriptor: AgentDescriptor,
+        acp: AcpClient,
+        broadcastFn: suspend (Message) -> Unit,
+        scope: CoroutineScope,
+        ctx: GroupAgentContext?,
+    ) {
+        val requestId = notif.update["requestId"]?.jsonPrimitive?.contentOrNull ?: return
+        val toolName = notif.update["toolName"]?.jsonPrimitive?.contentOrNull ?: "unknown"
+        val toolInput = notif.update["toolInput"]?.jsonObject ?: buildJsonObject {}
+
+        val mode = session.permissionMode
+        val workingDir = ctx?.workingDir ?: "/"
+
+        // Decision logic based on permission mode
+        val autoAllow = when (mode) {
+            PermissionMode.BYPASS -> true
+            PermissionMode.ACCEPT_EDITS -> {
+                if (toolName in EDIT_TOOLS) {
+                    val path = extractFilePath(toolInput)
+                    path != null && isWithinWorkingDir(path, workingDir)
+                } else {
+                    false
+                }
+            }
+            PermissionMode.INTERACTIVE -> false
+        }
+
+        if (autoAllow) {
+            scope.launch {
+                try {
+                    AcpExtensions.resolvePermission(acp, requestId, "allow")
+                    logger.info("[AgentRuntime] Permission auto-allow: tool={}, mode={}", toolName, mode)
+                } catch (e: Exception) {
+                    logger.error("[AgentRuntime] resolvePermission failed: {}", e.message)
+                }
+            }
+            return
+        }
+
+        // Show permission card and wait for user decision
+        val detail = AgentMessages.formatToolDetail(toolName, extractToolInputMap(toolInput))
+        val cardMsg = AgentMessages.permissionCard(
+            requestId = requestId,
+            toolName = toolName,
+            toolDetail = detail,
+            agentUserId = descriptor.agentUserId,
+            agentName = descriptor.displayName,
+        )
+        val cardId = "agent_perm_$requestId"
+
+        CardReplyRouter.register(cardId, object : CardReplyHandler {
+            override suspend fun onCardReply(
+                reply: CardReplyPayload,
+                sessionName: String,
+                broadcastFn: suspend (Message) -> Unit,
+            ) {
+                val action = reply.action
+                val (decision, modeSwitch) = when {
+                    action.startsWith("perm_allow_") -> "allow" to null
+                    action.startsWith("perm_deny_") -> "deny" to null
+                    action.startsWith("perm_accept_edits_") -> "allow" to PermissionMode.ACCEPT_EDITS
+                    action.startsWith("perm_bypass_") -> "allow" to PermissionMode.BYPASS
+                    else -> return
+                }
+
+                CardReplyRouter.unregister(cardId)
+
+                // Apply mode switch if requested
+                if (modeSwitch != null) {
+                    session.permissionMode = modeSwitch
+                    persistPermissionModeAsync(session.groupId, modeSwitch)
+                    logger.info("[AgentRuntime] Permission mode changed to {} for session {}",
+                        modeSwitch, session.groupId)
+                }
+
+                // Build decision display text
+                val decisionText = when {
+                    modeSwitch == PermissionMode.ACCEPT_EDITS -> "允许（已切换到 Accept Edits 模式）"
+                    modeSwitch == PermissionMode.BYPASS -> "允许（已切换到 Bypass 模式）"
+                    decision == "allow" -> "允许"
+                    else -> "拒绝"
+                }
+                val reason = if (decision == "deny") "用户拒绝了此操作" else ""
+
+                // Send resolved card
+                broadcastFn(AgentMessages.permissionCardResolved(
+                    requestId = requestId,
+                    toolName = toolName,
+                    toolDetail = detail,
+                    decision = decisionText,
+                    approved = (decision == "allow"),
+                    agentUserId = descriptor.agentUserId,
+                    agentName = descriptor.displayName,
+                ))
+
+                // 模式切换时额外广播一条系统消息，让前端 LaunchedEffect(messages.size) 能捕获
+                if (modeSwitch != null) {
+                    val modeLabel = when (modeSwitch) {
+                        PermissionMode.ACCEPT_EDITS -> "Accept Edits"
+                        PermissionMode.BYPASS -> "Bypass"
+                        else -> modeSwitch.name
+                    }
+                    broadcastFn(AgentMessages.system(
+                        "已切换到 $modeLabel 权限模式",
+                        agentUserId = descriptor.agentUserId,
+                        agentName = descriptor.displayName,
+                    ))
+                }
+
+                // Resolve via ACP
+                try {
+                    AcpExtensions.resolvePermission(acp, requestId, decision, reason)
+                    logger.info("[AgentRuntime] Permission resolved: tool={}, decision={}", toolName, decision)
+                } catch (e: Exception) {
+                    logger.error("[AgentRuntime] resolvePermission failed: {}", e.message)
+                    broadcastFn(AgentMessages.system(
+                        "权限决定发送失败: ${e.message}",
+                        agentUserId = descriptor.agentUserId,
+                        agentName = descriptor.displayName,
+                    ))
+                }
+            }
+        })
+
+        scope.launch { broadcastFn(cardMsg) }
+    }
+
     private fun getAcpClient(agentType: String, userId: String): AcpClient? {
         return AcpRegistry.get(userId, agentType)
     }
@@ -970,6 +1403,7 @@ object AgentRuntime {
         val running: Boolean,
         val workingDir: String,
         val agentType: String?,
+        val permissionMode: String = "",
     )
 
     fun snapshotState(userId: String, groupId: String): AgentStateSnapshot? {
@@ -981,14 +1415,102 @@ object AgentRuntime {
             running = session?.running ?: false,
             workingDir = ctx.workingDir,
             agentType = agentType,
+            permissionMode = session?.permissionMode?.name ?: "",
         )
+    }
+
+    /**
+     * 解析某 (user, group) 当前活动 agent 的 ACP 客户端与 sessionId，供只读 git 查询使用。
+     * agent 上下文按 sessionName "group_{groupId}" 建键（WebSocketConfig 传 groupId = sessionName），
+     * 前端可能传 raw 或已带前缀，两种 candidate 都试（对齐 /users/{userId}/cc-state/{groupId} 的 candidateIds）。
+     *
+     * 进入工作流即已设 currentAgentType/workingDir，但 acpSessionId 要到首个 prompt 才建；
+     * 这里在 bridge 已连时按需 sessionNew（bridge 端只登记 cwd、不启动 CLI），
+     * 让用户进入工作流后无需先发消息即可代码审查。
+     */
+    suspend fun ensureActiveAcpSession(userId: String, groupId: String): ActiveAcpSession? {
+        val candidates = listOf(
+            if (groupId.startsWith("group_")) groupId else "group_$groupId",
+            groupId,
+        ).distinct()
+        return candidates.firstNotNullOfOrNull { gid -> resolveOrCreateAcpSession(userId, gid) }
+    }
+
+    private suspend fun resolveOrCreateAcpSession(userId: String, groupId: String): ActiveAcpSession? {
+        val ctx = contexts[key(userId, groupId)] ?: return null
+        val agentType = ctx.currentAgentType ?: return null
+        val session = ctx.sessions[agentType] ?: return null
+        val client = AcpRegistry.get(userId, agentType) ?: return null
+        val sessionId = ensureAcpSessionId(session, client, ctx) ?: return null
+        return ActiveAcpSession(client, sessionId, ctx.workingDir, agentType)
+    }
+
+    /** 取（必要时按需创建）该 session 的 acpSessionId。加锁双检，避免并发重复 sessionNew。 */
+    private suspend fun ensureAcpSessionId(session: AgentSession, acp: AcpClient, ctx: GroupAgentContext): String? {
+        session.acpSessionId?.let { return it }
+        return session.acpSessionLock.withLock {
+            session.acpSessionId ?: try {
+                val result = acp.sessionNew(cwd = ctx.workingDir, cliSessionId = session.cliSessionId)
+                session.acpSessionId = result.sessionId
+                result.sessionId
+            } catch (e: Exception) {
+                logger.warn("[AgentRuntime] ensureAcpSessionId sessionNew 失败: {}", e.message)
+                null
+            }
+        }
+    }
+
+    data class ActiveAcpSession(
+        val client: AcpClient,
+        val sessionId: String,
+        val workingDir: String,
+        val agentType: String,
+    )
+
+    // ========== API-driven settings ==========
+
+    /**
+     * API-driven agent switch (like /use but without chat broadcast).
+     * Returns the descriptor on success, null if agentType not found.
+     */
+    fun switchAgent(userId: String, groupId: String, agentType: String): AgentDescriptor? {
+        val descriptor = AgentRegistry.getByType(agentType) ?: return null
+        val ctx = context(userId, groupId)
+        ctx.currentAgentType = agentType
+        val session = ctx.getOrCreateSession(agentType)
+        val seed = try {
+            persistence?.loadSeed(stripGroupPrefix(groupId), agentType)
+        } catch (e: Exception) {
+            logger.warn("[AgentRuntime] switchAgent {} loadSeed failed: {}", agentType, e.message)
+            null
+        }
+        if (seed != null && !seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
+            session.cliSessionId = seed.cliSessionId
+        }
+        persistActiveAgentAsync(groupId, agentType)
+        return descriptor
+    }
+
+    /**
+     * API-driven permission mode change.
+     * Returns true if the mode was set successfully.
+     */
+    fun setPermissionMode(userId: String, groupId: String, mode: String): Boolean {
+        val pm = try { PermissionMode.valueOf(mode) } catch (_: IllegalArgumentException) { return false }
+        val ctx = context(userId, groupId)
+        val agentType = ctx.currentAgentType ?: return false
+        val session = ctx.getOrCreateSession(agentType)
+        if (session.permissionMode == pm) return true // no-op
+        session.permissionMode = pm
+        persistPermissionModeAsync(groupId, pm)
+        return true
     }
 
     // ========== AskUserQuestion ==========
 
     data class PendingQuestionSnapshot(
         val requestId: String,
-        val questions: List<String>,
+        val questions: List<StructuredQuestion>,
         val agentUserId: String,
         val agentName: String,
     )
@@ -1102,6 +1624,12 @@ object AgentRuntime {
         val ctx = contexts.remove(key(userId, groupId)) ?: return
         for ((_, session) in ctx.sessions) {
             cleanupSessionHandlers(session)
+            // Clean up any pending card reply handler to prevent memory leak
+            val pending = session.pendingQuestion
+            if (pending != null) {
+                CardReplyRouter.unregister("agent_question_${pending.requestId}")
+                session.pendingQuestion = null
+            }
         }
         ctx.scope.cancel()
     }
@@ -1111,6 +1639,11 @@ object AgentRuntime {
         contexts.values.forEach { ctx ->
             for ((_, session) in ctx.sessions) {
                 cleanupSessionHandlers(session)
+                val pending = session.pendingQuestion
+                if (pending != null) {
+                    CardReplyRouter.unregister("agent_question_${pending.requestId}")
+                    session.pendingQuestion = null
+                }
             }
             ctx.scope.cancel()
         }

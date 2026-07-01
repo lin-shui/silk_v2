@@ -63,6 +63,14 @@ object AIConfig {
     // Audio Duplex (MiniCPM-o full-duplex conversation)
     val AUDIO_DUPLEX_URL: String get() = env("AUDIO_DUPLEX_URL") ?: "http://localhost:22700"
 
+    // ── 文件预处理管线 ─────────────────────────────────────────────
+    val FILE_PREPROCESS_ENABLED: Boolean get() = env("SILK_FILE_PREPROCESS_ENABLED")?.toBoolean() ?: true
+    val VISION_ENABLED: Boolean get() = env("SILK_VISION_ENABLED")?.toBoolean() ?: true
+    val VISION_MODEL: String get() = env("SILK_VISION_MODEL") ?: "claude-3-5-haiku-20241022"
+    val VISION_BASE_URL: String get() = env("SILK_VISION_BASE_URL") ?: ""
+    val VISION_API_KEY: String get() = env("SILK_VISION_API_KEY") ?: ""
+    val OCR_LANGUAGES: String get() = env("SILK_OCR_LANGUAGES") ?: "eng+chi_sim"
+
     // Weaviate 向量库地址（已弃用：改用 Claude 200K context + grep 搜索）
     val WEAVIATE_URL: String get() = env("WEAVIATE_URL") ?: ""
 
@@ -71,15 +79,15 @@ object AIConfig {
 
     /** 获取 Anhtropic API 地址，为空时抛错提示配置 .env */
     fun requireAnthropicApiBaseUrl(): String = ANTHROPIC_API_BASE_URL.trim().takeIf { it.isNotBlank() }
-        ?: throw IllegalStateException("请在项目根目录 .env 中配置 ANTHROPIC_API_BASE_URL")
+        ?: error("请在项目根目录 .env 中配置 ANTHROPIC_API_BASE_URL")
 
     @Deprecated("改用 requireAnthropicApiBaseUrl", replaceWith = ReplaceWith("requireAnthropicApiBaseUrl"))
     fun requireApiBaseUrl(): String = API_BASE_URL.trim().takeIf { it.isNotBlank() }
-        ?: throw IllegalStateException("请在项目根目录 .env 中配置 API_BASE_URL")
+        ?: error("请在项目根目录 .env 中配置 API_BASE_URL")
 
     /** 获取 Weaviate 地址，为空时抛错提示配置 .env */
     fun requireWeaviateUrl(): String = WEAVIATE_URL.trim().takeIf { it.isNotBlank() }
-        ?: throw IllegalStateException("请在项目根目录 .env 中配置 WEAVIATE_URL")
+        ?: error("请在项目根目录 .env 中配置 WEAVIATE_URL")
 
     // ── 外部搜索（已弃用：改用 Claude 原生 web_search 工具） ─────────
     val SERPAPI_KEY: String get() = env("SERPAPI_KEY") ?: ""
@@ -140,6 +148,15 @@ object AIConfig {
 - 每个观点通常只需引用2-3个最相关的来源
 - 禁止堆砌大量引用标记
 - 只能基于证据回答，不要凭空捏造来源编号
+
+【参考来源列表（必须遵守）】：
+当你使用了网络搜索，必须在回答末尾附上完整的参考来源列表：
+参考来源:
+1. [来源标题](完整URL)
+2. [来源标题](完整URL)
+- 必须列出所有引用来源，编号与正文中的 [citation:数字] 一一对应
+- URL 必须是完整的 https:// 链接，不能省略或截断
+- 如果没有使用网络搜索，则不需要添加参考来源列表
 
 【HarmonyOS 元服务能力】
 你在 HarmonyOS 系统上运行，支持调用系统元服务（免安装应用）：

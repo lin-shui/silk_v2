@@ -8,18 +8,47 @@ import android.os.Build
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -31,10 +60,46 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Divider
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +107,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
@@ -53,7 +119,6 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.Lifecycle
@@ -67,8 +132,11 @@ import com.silk.shared.models.SILK_AGENT_USER_ID
 import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import com.silk.shared.utils.formatMessageTimestamp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -94,6 +162,7 @@ fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsState(): State<T> {
     return state
 }
 
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException", "LoopWithTooManyJumpStatements")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(appState: AppState) {
@@ -132,7 +201,39 @@ fun ChatScreen(appState: AppState) {
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
-    
+    val ccMetadataJson by chatClient.ccMetadataJson.collectAsState()
+    val transientContentBlocks by chatClient.transientContentBlocks.collectAsState()
+    val interactiveOptions by chatClient.interactiveOptions.collectAsState()
+
+    // cc-connect status for this group
+    var ccConnectInfo by remember(group.id) { mutableStateOf<CcConnectTokenInfo?>(null) }
+    LaunchedEffect(group.id) {
+        val info = ApiClient.getCcConnectTokenInfo(group.id, user.id)
+        if (info != null && info.success) ccConnectInfo = info
+    }
+
+    // cc-connect mode/model dropdown state
+    var showModeDropdown by remember { mutableStateOf(false) }
+    var showModelDropdown by remember { mutableStateOf(false) }
+    var showCcConnectTokenDialog by remember { mutableStateOf(false) }
+    var tokenCopiedCc by remember { mutableStateOf(false) }
+
+    // Update ccConnectInfo when metadata arrives via WebSocket
+    LaunchedEffect(ccMetadataJson) {
+        val raw = ccMetadataJson ?: return@LaunchedEffect
+        try {
+            val parsed = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+                .decodeFromString<CcMetadataEvent>(raw)
+            val current = ccConnectInfo ?: return@LaunchedEffect
+            ccConnectInfo = current.copy(
+                mode = parsed.mode ?: current.mode,
+                model = parsed.model ?: current.model,
+                availableModes = if (parsed.availableModes.isNullOrEmpty()) current.availableModes else parsed.availableModes,
+                availableModels = if (parsed.availableModels.isNullOrEmpty()) current.availableModels else parsed.availableModels,
+            )
+        } catch (_: Exception) { }
+    }
+
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
     
@@ -170,7 +271,7 @@ fun ChatScreen(appState: AppState) {
             }
         }
     }
-    
+
     // 监控临时消息变化
     LaunchedEffect(transientMessage) {
         if (transientMessage != null) {
@@ -202,14 +303,14 @@ fun ChatScreen(appState: AppState) {
                     
                     val inputStream = context.contentResolver.openInputStream(selectedUri)
                     if (inputStream != null) {
-                        val success = uploadFile(
+                        val result = uploadFile(
                             inputStream = inputStream,
                             fileName = fileName,
                             sessionId = group.id,
                             userId = user.id,
                             onProgress = { progress -> uploadProgress = progress }
                         )
-                        if (success) {
+                        if (result != null) {
                             addLog("✅ 文件上传成功: $fileName")
                             // 发送上传成功消息
                             chatClient.sendMessage(user.id, user.fullName, "📎 已上传文件: $fileName")
@@ -254,14 +355,16 @@ fun ChatScreen(appState: AppState) {
     
     // 消息撤回相关状态
     var recallingMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }  // 正在撤回中的消息ID集合
-    var recallResult by remember { mutableStateOf<String?>(null) }  // 撤回结果提示
-    
+
     // 查看成员列表状态
     var showMembersDialog by remember { mutableStateOf(false) }
     var selectedMemberForInvite by remember { mutableStateOf<GroupMember?>(null) }
     var isInvitingMember by remember { mutableStateOf(false) }
     var inviteMemberResult by remember { mutableStateOf<String?>(null) }
     
+    // 顶部栏溢出菜单
+    var showOverflowMenu by remember { mutableStateOf(false) }
+
     // @ mention 功能状态（输入 @ 后弹出群成员/会话用户列表）
     var showMentionMenu by remember { mutableStateOf(false) }
     var mentionSearchText by remember { mutableStateOf("") }
@@ -299,16 +402,16 @@ fun ChatScreen(appState: AppState) {
     }
     
     val listState = rememberLazyListState()
-    
+
     // ✅ AI 消息展开状态管理 - 使用 Map 存储每个消息的展开状态
     val aiMessageExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
+    // 思考过程展开状态（默认折叠）
+    val thinkingExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
+    // 工具调用过程展开状态（默认折叠）
+    val toolsExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
     
-    // ✅ 当展开/收起 AI 消息时，滚动到该消息位置
     val scopeForScroll = rememberCoroutineScope()
-    fun onAIExpandChange(messageId: String, isExpanded: Boolean) {
-        aiMessageExpandedStates[messageId] = isExpanded
-        println("🤖 AI消息展开状态变化: messageId=$messageId, isExpanded=$isExpanded")
-    }
+    var expandScrollJob by remember { mutableStateOf<Job?>(null) }
     
     // 显示连接状态
     LaunchedEffect(connectionState) {
@@ -358,36 +461,62 @@ fun ChatScreen(appState: AppState) {
     // 历史消息加载状态：由 ChatClient 缓冲完成后一次性刷入
     val isHistoryLoading by chatClient.isLoadingHistory.collectAsState()
     var lastMessageCount by remember { mutableStateOf(0) }
+    // 用户是否手动上滑浏览历史（若用户滑走了，不自动滚底）
+    var userScrolledAway by remember { mutableStateOf(false) }
 
-    // 历史加载完成后跳转到底部（reverseLayout 下 index 0 = 最新）
-    LaunchedEffect(isHistoryLoading) {
-        if (!isHistoryLoading && messages.isNotEmpty()) {
-            listState.scrollToItem(0)
+    // 统一滚动到底部逻辑
+    // 注意：LazyColumn 没有 reverseLayout，所以 index 从 0（最旧）到 count-1（最新）
+    fun scrollToBottom(animated: Boolean) {
+        scopeForScroll.launch {
+            // 给布局一点点时间完成测量
+            kotlinx.coroutines.delay(80)
+            val count = listState.layoutInfo.totalItemsCount
+            if (count > 0) {
+                if (animated) {
+                    listState.animateScrollToItem(count - 1)
+                } else {
+                    listState.scrollToItem(count - 1)
+                }
+            }
         }
     }
 
-    // 新消息到达时动画滚动到底部
+    // 监听用户是否手动滚动 — 如果用户向上翻看历史，停止自动滚底
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .collect { firstVisible ->
+                val totalItems = listState.layoutInfo.totalItemsCount
+                // 如果首个可见 item 不是最新的几条，说明用户手动滑上去了
+                if (totalItems > 0 && firstVisible < totalItems - 3) {
+                    userScrolledAway = true
+                } else {
+                    userScrolledAway = false
+                }
+            }
+    }
+
+    // ① 历史加载完成 → 瞬时跳到底部
+    LaunchedEffect(isHistoryLoading) {
+        if (!isHistoryLoading && messages.isNotEmpty()) {
+            userScrolledAway = false
+            scrollToBottom(animated = false)
+        }
+    }
+
+    // ② 新普通消息到达 → 若用户未滑走，平滑滚到底部
     LaunchedEffect(messages.size) {
         if (!isHistoryLoading && messages.size > lastMessageCount && lastMessageCount > 0) {
-            listState.animateScrollToItem(0)
+            if (!userScrolledAway) {
+                scrollToBottom(animated = true)
+            }
         }
         lastMessageCount = messages.size
     }
-    
-    // 首次出现临时消息时，确保显示在底部
-    val hasTransient = transientMessage != null
-    LaunchedEffect(hasTransient) {
-        if (hasTransient && messages.isNotEmpty()) {
-            kotlinx.coroutines.delay(100)
-            listState.scrollToItem(0)
-        }
-    }
-    
-    // 等待 AI 响应时确保显示等待状态
-    LaunchedEffect(isWaitingForAI) {
-        if (isWaitingForAI) {
-            kotlinx.coroutines.delay(100)
-            listState.scrollToItem(0)
+
+    // ③ 临时消息 / content blocks / 交互按钮变化 → 若用户未滑走，瞬时定位到底部
+    LaunchedEffect(transientMessage, transientContentBlocks, interactiveOptions) {
+        if (!userScrolledAway) {
+            scrollToBottom(animated = false)
         }
     }
     
@@ -526,19 +655,45 @@ fun ChatScreen(appState: AppState) {
         topBar = {
             TopAppBar(
                 title = {
-                    Column(modifier = Modifier.fillMaxWidth()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = group.name,
                             style = MaterialTheme.typography.bodySmall,
                             maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            modifier = Modifier.weight(1f, fill = false),
+                            overflow = TextOverflow.Ellipsis
                         )
-                        Text(
-                            text = "${messages.size} 条消息",
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        if (ccConnectInfo != null) {
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                onClick = { showCcConnectTokenDialog = true },
+                                shape = RoundedCornerShape(4.dp),
+                                color = if (ccConnectInfo?.connected == true) Color(0xFFE8F5E9) else Color(0xFFFFF3E0)
+                            ) {
+                                Text(
+                                    text = if (ccConnectInfo?.connected == true) {
+                                        val raw = (ccConnectInfo?.agentType ?: "").lowercase().trim()
+                                        val agentName = when {
+                                            raw.startsWith("claude") -> "Claude"
+                                            raw.startsWith("cursor") -> "Cursor"
+                                            raw.startsWith("gemini") -> "Gemini"
+                                            raw.startsWith("codex") -> "Codex"
+                                            raw.startsWith("copilot") -> "Copilot"
+                                            raw.isBlank() -> "agent"
+                                            else -> raw
+                                        }
+                                        "cc-connect ($agentName)"
+                                    } else {
+                                        "cc-connect (offline)"
+                                    },
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (ccConnectInfo?.connected == true) Color(0xFF2E7D32) else Color(0xFFE65100),
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                    maxLines = 1
+                                )
+                            }
+                        }
                     }
                 },
                 scrollBehavior = scrollBehavior,
@@ -591,9 +746,9 @@ fun ChatScreen(appState: AppState) {
                                         .filter { selectedMessages.contains(it.id) }
                                         .sortedBy { it.timestamp }
                                         .joinToString("\n\n") { "${it.userName}:\n${it.content}" }
-                                    
+
                                     if (selectedContent.isNotEmpty()) {
-                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
+                                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                                             as android.content.ClipboardManager
                                         val clip = android.content.ClipData.newPlainText("消息", selectedContent)
                                         clipboard.setPrimaryClip(clip)
@@ -611,7 +766,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("📋复制", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // 💬 转发到其他 Silk 对话
                             TextButton(
                                 onClick = {
@@ -629,7 +784,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("💬转发", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // 👤 转发到联系人
                             TextButton(
                                 onClick = {
@@ -646,7 +801,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("👤私聊", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // 📤 分享到其他应用
                             TextButton(
                                 onClick = {
@@ -660,7 +815,7 @@ fun ChatScreen(appState: AppState) {
                                             )
                                             "[$time] ${msg.userName}:\n${msg.content}"
                                         }
-                                    
+
                                     if (selectedContent.isNotEmpty()) {
                                         val shareIntent = Intent(Intent.ACTION_SEND).apply {
                                             type = "text/plain"
@@ -676,7 +831,7 @@ fun ChatScreen(appState: AppState) {
                             ) {
                                 Text("📤分享", fontSize = 12.sp, color = Color.White)
                             }
-                            
+
                             // ✕ 取消选择
                             TextButton(
                                 onClick = {
@@ -689,99 +844,150 @@ fun ChatScreen(appState: AppState) {
                             }
                         }
                     } else {
-                        // 正常模式的按钮
-                        
-                        // ☑️ 选择模式按钮 - 点击进入选择模式
-                        IconButton(
-                            onClick = {
-                                isSelectionMode = true
-                                selectedMessages.clear()
-                                android.widget.Toast.makeText(
-                                    context,
-                                    "已进入选择模式，点击消息进行选择",
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        ) {
-                            Text("☑️", fontSize = 16.sp)
-                        }
-                        
-                        // 📁 文件夹浏览器按钮
-                        IconButton(
-                            onClick = { 
-                                showFolderExplorer = true
-                                isLoadingFiles = true
-                                // 加载文件列表和 URL 清单
-                                scope.launch {
-                                    try {
-                                        val result = loadGroupFilesAndUrls(group.id)
-                                        folderFiles = result.files
-                                        processedUrls = result.processedUrls
-                                    } catch (e: Exception) {
-                                        addLog("❌ 加载文件列表失败: ${e.message}")
-                                    } finally {
-                                        isLoadingFiles = false
-                                    }
-                                }
-                            }
-                        ) {
-                            Text("📁", fontSize = 16.sp)
-                        }
-                        
-                        // 📎 上传文件按钮
-                        IconButton(
-                            onClick = { 
-                                if (!isUploading) {
-                                    filePickerLauncher.launch("*/*")
-                                }
-                            },
-                            enabled = !isUploading
-                        ) {
-                            Text(
-                                text = if (isUploading) "⏳" else "📎", 
-                                fontSize = 16.sp
-                            )
-                        }
-                        
-                        // 邀请按钮
+                        // 邀请/分享（最常用，保持可见）
                         IconButton(onClick = { showInvitationDialog = true }) {
                             Icon(Icons.Default.Share, contentDescription = "邀请", modifier = Modifier.size(20.dp))
                         }
-                        
-                        // ➕ 添加成员按钮
-                        IconButton(
-                            onClick = {
-                                scope.launch {
-                                    isLoadingContacts = true
-                                    val contactsResponse = ApiClient.getContacts(user.id)
-                                    contacts = contactsResponse.contacts ?: emptyList()
-                                    val membersResponse = ApiClient.getGroupMembers(group.id)
-                                    // 将群主排在第一位
-                                    groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                                    isLoadingContacts = false
-                                    showAddMemberDialog = true
+
+                        // 溢出菜单
+                        Box {
+                            IconButton(onClick = { showOverflowMenu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "更多", modifier = Modifier.size(20.dp))
+                            }
+                            DropdownMenu(
+                                expanded = showOverflowMenu,
+                                onDismissRequest = { showOverflowMenu = false }
+                            ) {
+                                // 显示 cwd 信息（如果存在）
+                                if (ccConnectInfo?.connected == true && !ccConnectInfo?.cwd.isNullOrBlank()) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text(
+                                                    text = "工作目录",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                                Text(
+                                                    text = ccConnectInfo!!.cwd!!,
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        },
+                                        onClick = { showOverflowMenu = false },
+                                        enabled = false
+                                    )
+                                }
+
+                                // 消息计数
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = "${messages.size} 条消息",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    },
+                                    onClick = { showOverflowMenu = false },
+                                    enabled = false
+                                )
+
+                                Divider()
+
+                                // ☑️ 选择模式
+                                DropdownMenuItem(
+                                    text = { Text("选择消息") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        isSelectionMode = true
+                                        selectedMessages.clear()
+                                        android.widget.Toast.makeText(
+                                            context,
+                                            "已进入选择模式，点击消息进行选择",
+                                            android.widget.Toast.LENGTH_SHORT
+                                        ).show()
+                                    },
+                                    leadingIcon = { Text("☑️", fontSize = 14.sp) }
+                                )
+
+                                // 📁 文件夹浏览器
+                                DropdownMenuItem(
+                                    text = { Text("文件浏览器") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        showFolderExplorer = true
+                                        isLoadingFiles = true
+                                        scope.launch {
+                                            try {
+                                                val result = loadGroupFilesAndUrls(group.id)
+                                                folderFiles = result.files
+                                                processedUrls = result.processedUrls
+                                            } catch (e: Exception) {
+                                                addLog("❌ 加载文件列表失败: ${e.message}")
+                                            } finally {
+                                                isLoadingFiles = false
+                                            }
+                                        }
+                                    },
+                                    leadingIcon = { Text("📁", fontSize = 14.sp) }
+                                )
+
+                                // 📎 上传文件
+                                DropdownMenuItem(
+                                    text = { Text("上传文件") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        if (!isUploading) {
+                                            filePickerLauncher.launch("*/*")
+                                        }
+                                    },
+                                    leadingIcon = { Text("📎", fontSize = 14.sp) },
+                                    enabled = !isUploading
+                                )
+
+                                // ➕ 添加成员（Silk 专属对话不显示）
+                                if (!group.name.startsWith("[Silk]")) {
+                                    DropdownMenuItem(
+                                        text = { Text("添加成员") },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            scope.launch {
+                                                isLoadingContacts = true
+                                                val contactsResponse = ApiClient.getContacts(user.id)
+                                                contacts = contactsResponse.contacts ?: emptyList()
+                                                val membersResponse = ApiClient.getGroupMembers(group.id)
+                                                groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                                                isLoadingContacts = false
+                                                showAddMemberDialog = true
+                                            }
+                                        },
+                                        leadingIcon = { Text("➕", fontSize = 14.sp) }
+                                    )
+                                }
+
+                                // 👥 查看成员（Silk 专属对话不显示）
+                                if (!group.name.startsWith("[Silk]")) {
+                                    DropdownMenuItem(
+                                        text = { Text("群组成员") },
+                                        onClick = {
+                                            showOverflowMenu = false
+                                            scope.launch {
+                                                isLoadingContacts = true
+                                                val contactsResponse = ApiClient.getContacts(user.id)
+                                                contacts = contactsResponse.contacts ?: emptyList()
+                                                val membersResponse = ApiClient.getGroupMembers(group.id)
+                                                groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                                                isLoadingContacts = false
+                                                showMembersDialog = true
+                                            }
+                                        },
+                                        leadingIcon = { Text("👥", fontSize = 14.sp) }
+                                    )
                                 }
                             }
-                        ) {
-                            Text("➕", fontSize = 16.sp)
-                        }
-                        
-                        // 👥 查看成员按钮
-                        IconButton(
-                            onClick = {
-                                scope.launch {
-                                    isLoadingContacts = true
-                                    val contactsResponse = ApiClient.getContacts(user.id)
-                                    contacts = contactsResponse.contacts ?: emptyList()
-                                    val membersResponse = ApiClient.getGroupMembers(group.id)
-                                    // 将群主排在第一位
-                                    groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                                    isLoadingContacts = false
-                                    showMembersDialog = true
-                                }
-                            }
-                        ) {
-                            Text("👥", fontSize = 16.sp)
                         }
                     }
                 },
@@ -871,10 +1077,11 @@ fun ChatScreen(appState: AppState) {
                 modifier = Modifier
                     .fillMaxWidth(),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                reverseLayout = true  // 从底部开始显示，最新消息贴近输入框
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                if (messages.isEmpty() && transientMessage == null && statusMessages.isEmpty() && !isWaitingForAI) {
+                val isEmptyChat = messages.isEmpty() && transientMessage == null &&
+                    statusMessages.isEmpty() && !isWaitingForAI
+                if (isEmptyChat) {
                     item {
                         Box(
                             modifier = Modifier
@@ -889,27 +1096,11 @@ fun ChatScreen(appState: AppState) {
                         }
                     }
                 } else {
-                    // ✅ reverseLayout=true 时，第一个 item 显示在底部（靠近输入框）
-                    // 所以临时消息（流式回答）放在最前面显示在最底部，状态消息紧随其后显示在回答上方
+                    // 正常布局（与 Web 端一致）：从上到下排列
+                    // 1️⃣ 状态消息 → 2️⃣ 普通消息 → 3️⃣ 流式内容 → 4️⃣ 临时消息 → 5️⃣ 交互按钮
+                    val statusOffset = if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0
                     
-                    // 1️⃣ 临时消息（AI处理中）- 不支持选择
-                    transientMessage?.let { message ->
-                        item(key = "transient_message") {
-                            MessageItem(
-                                message = message,
-                                currentUserId = user.id,
-                                context = context,
-                                isTransient = true,
-                                isSelectionMode = false,
-                                isSelected = false,
-                                onToggleSelection = {},
-                                onUserNameClick = null
-                            )
-                        }
-                    }
-
-                    // 2️⃣ 状态消息（工具调用日志等）
-                    // 与 Web 端一致：显示在临时消息上方，由 ChatClient 在收到最终消息时统一清空
+                    // 1️⃣ 状态消息（工具调用日志等）
                     if (statusMessages.isNotEmpty() || isWaitingForAI) {
                         item(key = "status_messages") {
                             Column(
@@ -976,8 +1167,8 @@ fun ChatScreen(appState: AppState) {
                         }
                     }
                     
-                    // 3️⃣ 普通消息列表（反转顺序，最新的在第0位 = 显示在底部）
-                    items(messages.reversed(), key = { it.id }) { message ->
+                    // 2️⃣ 普通消息列表（按时间正序，最新在最底部）
+                    items(messages, key = { it.id }) { message ->
                         MessageItem(
                             message = message,
                             currentUserId = user.id,
@@ -1038,21 +1229,65 @@ fun ChatScreen(appState: AppState) {
                             // AI 消息展开状态（默认收起，只有长内容才需要展开/收起功能）
                             isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
                             onAIExpandChange = { messageId, isExpanded ->
-                                aiMessageExpandedStates[messageId] = isExpanded
-                                val idx = messages.reversed().indexOfFirst { it.id == messageId }
-                                if (idx >= 0) {
-                                    scopeForScroll.launch {
-                                        kotlinx.coroutines.delay(80)
-                                        listState.scrollToItem(idx)
+                                val idx = messages.indexOfFirst { it.id == messageId }
+                                val targetIdx = if (idx >= 0) statusOffset + idx else -1
+
+                                if (isExpanded) {
+                                    aiMessageExpandedStates[messageId] = true
+                                    if (targetIdx >= 0) {
+                                        expandScrollJob?.cancel()
+                                        expandScrollJob = scopeForScroll.launch {
+                                            kotlinx.coroutines.delay(80)
+                                            listState.scrollToItem(targetIdx, 0)
+
+                                            var prevSize = listState.layoutInfo.visibleItemsInfo
+                                                .firstOrNull { it.index == targetIdx }?.size ?: 0
+                                            snapshotFlow {
+                                                listState.layoutInfo.visibleItemsInfo
+                                                    .firstOrNull { it.index == targetIdx }?.size ?: 0
+                                            }
+                                            .distinctUntilChanged()
+                                            .collect { size ->
+                                                if (size > 0 && prevSize > 0 && size > prevSize) {
+                                                    listState.scroll { scrollBy((size - prevSize).toFloat()) }
+                                                }
+                                                if (size > 0) prevSize = size
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    expandScrollJob?.cancel()
+                                    expandScrollJob = null
+                                    if (targetIdx >= 0) {
+                                        scopeForScroll.launch {
+                                            // Reset scroll offset to 0 BEFORE collapsing,
+                                            // otherwise the large offset from expand compensation
+                                            // exceeds the collapsed item height, causing LazyColumn
+                                            // to jump to a different item.
+                                            listState.scrollToItem(targetIdx, 0)
+                                            aiMessageExpandedStates[messageId] = false
+                                        }
+                                    } else {
+                                        aiMessageExpandedStates[messageId] = false
                                     }
                                 }
                             },
+                            isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
+                            onThinkingExpandChange = { messageId, expanded ->
+                                thinkingExpandedStates[messageId] = expanded
+                            },
+                            isToolsExpanded = toolsExpandedStates[message.id] ?: false,
+                            onToolsExpandChange = { messageId, expanded ->
+                                if (expanded) toolsExpandedStates[messageId] = true
+                                else toolsExpandedStates[messageId] = false
+                            },
                             onLongContentCollapsed = { messageId ->
-                                val idx = messages.reversed().indexOfFirst { it.id == messageId }
+                                expandScrollJob?.cancel()
+                                val idx = messages.indexOfFirst { it.id == messageId }
                                 if (idx >= 0) {
                                     scopeForScroll.launch {
                                         kotlinx.coroutines.delay(80)
-                                        listState.scrollToItem(idx)
+                                        listState.scrollToItem(statusOffset + idx)
                                     }
                                 }
                             },
@@ -1079,6 +1314,104 @@ fun ChatScreen(appState: AppState) {
                         )
                     }
                 }
+
+                // 3️⃣ cc-connect 结构化内容块（流式 thinking/tool_use/text）
+                if (transientContentBlocks.isNotEmpty()) {
+                    item(key = "transient_content_blocks") {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp)
+                        ) {
+                            val tb = transientContentBlocks.firstOrNull { it.type == "thinking" }
+                            val toolBs = transientContentBlocks.filter { it.type == "tool_use" }
+                            val textB = transientContentBlocks.firstOrNull { it.type == "text" }
+
+                            if (tb != null) {
+                                ThinkingBlock(thinkingText = tb.content, isComplete = tb.isComplete, isExpanded = !tb.isComplete, onToggle = { })
+                            }
+                            for (tool in toolBs) {
+                                var tExp by remember { mutableStateOf(true) }
+                                val icon = getToolIcon(tool.toolName)
+                                val label = buildToolLabel(tool.toolName, tool.content)
+                                Column(modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)) {
+                                    Row(modifier = Modifier.fillMaxWidth().clickable { tExp = !tExp }.padding(horizontal = 4.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Text(icon, fontSize = 14.sp, modifier = Modifier.width(18.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF5A5048), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("✓", fontSize = 12.sp, color = Color(0xFF7DAE6C))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(if (tExp) "▾" else "▸", fontSize = 10.sp, color = Color(0xFFC0B0A0))
+                                    }
+                                    if (tExp && tool.content.isNotEmpty()) {
+                                        MarkdownWebView(content = tool.content, modifier = Modifier.padding(start = 26.dp, top = 4.dp, bottom = 4.dp))
+                                    }
+                                }
+                            }
+                            if (textB != null && textB.content.isNotEmpty()) {
+                                MarkdownWebView(content = textB.content)
+                            }
+                        }
+                    }
+                }
+
+                // 4️⃣ 临时消息（AI 流式回答，不支持选择）
+                transientMessage?.let { message ->
+                    item(key = "transient_message") {
+                        MessageItem(
+                            message = message, currentUserId = user.id, context = context,
+                            isTransient = true, isSelectionMode = false, isSelected = false,
+                            onToggleSelection = {}, onUserNameClick = null
+                        )
+                    }
+                }
+
+                // 5️⃣ cc-connect 交互式按钮（与 Web 端一致，渲染在消息列表底部）
+                if (interactiveOptions.isNotEmpty()) {
+                    item(key = "interactive_options") {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                for (opt in interactiveOptions) {
+                                    var isClicked by remember { mutableStateOf(false) }
+                                    OutlinedButton(
+                                        onClick = {
+                                            if (!isClicked) {
+                                                isClicked = true
+                                                scope.launch {
+                                                    chatClient.sendCcAnswer(opt.value)
+                                                }
+                                            }
+                                        },
+                                        enabled = !isClicked,
+                                        border = BorderStroke(
+                                            1.dp,
+                                            if (isClicked) SilkColors.primary else Color(0xFFD0D0D0)
+                                        ),
+                                        colors = ButtonDefaults.outlinedButtonColors(
+                                            containerColor = if (isClicked) Color(0xFFF5F0E6) else Color.White
+                                        ),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.padding(vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            opt.label,
+                                            fontSize = 14.sp,
+                                            color = Color(0xFF333333)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
                     }  // ✅ else 结束 - 历史加载完成后的内容
                 }  // ✅ Crossfade 结束
@@ -1095,37 +1428,152 @@ fun ChatScreen(appState: AppState) {
                             .fillMaxWidth()
                             .padding(8.dp)
                     ) {
-                        // @Silk 快捷按钮（在 Silk 私聊中隐藏）
+                        // cc-connect mode/model badges row (above input)
                         val isSilkPrivateChat = group.name.startsWith("[Silk]")
-                        if (!isSilkPrivateChat) {
-                            Surface(
-                                onClick = {
-                                    val prefix = "@Silk "
-                                    if (!messageText.text.startsWith(prefix)) {
-                                        val newText = prefix + messageText.text
-                                        val newSelection = TextRange(
-                                            start = (messageText.selection.start + prefix.length).coerceIn(0, newText.length),
-                                            end = (messageText.selection.end + prefix.length).coerceIn(0, newText.length)
-                                        )
-                                        messageText = messageText.copy(
-                                            text = newText,
-                                            selection = newSelection
-                                        )
+                        val isCcConnectGroup = ccConnectInfo != null
+                        if (isCcConnectGroup && ccConnectInfo?.connected == true) {
+                            val modeKey = ccConnectInfo?.mode ?: ""
+                            val modelName = ccConnectInfo?.model ?: ""
+                            val hasModeInfo = modeKey.isNotBlank() || modelName.isNotBlank() ||
+                                !ccConnectInfo?.availableModes.isNullOrEmpty() ||
+                                !ccConnectInfo?.availableModels.isNullOrEmpty()
+                            if (hasModeInfo) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.padding(bottom = 6.dp)
+                                ) {
+                                    // Mode badge
+                                    if (modeKey.isNotBlank() || !ccConnectInfo?.availableModes.isNullOrEmpty()) {
+                                        val mn = ccConnectInfo?.availableModes?.find { it.key == modeKey }?.name ?: modeKey
+                                        Box {
+                                            Surface(
+                                                onClick = { showModeDropdown = !showModeDropdown; showModelDropdown = false },
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = Color(0xFFF7F7F7),
+                                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE0E0E0))
+                                            ) {
+                                                Text(
+                                                    text = "⚙ ${mn.ifBlank { "mode" }}",
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Medium,
+                                                    color = Color(0xFF555555)
+                                                )
+                                            }
+                                            // Mode dropdown
+                                            if (showModeDropdown && !ccConnectInfo?.availableModes.isNullOrEmpty()) {
+                                                Card(
+                                                    modifier = Modifier
+                                                        .offset(y = (-6).dp)
+                                                        .width(180.dp),
+                                                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                                                ) {
+                                                    Column(modifier = Modifier.padding(4.dp)) {
+                                                        ccConnectInfo?.availableModes?.forEach { opt ->
+                                                            val isCurrent = opt.key == modeKey
+                                                            Surface(
+                                                                onClick = {
+                                                                    showModeDropdown = false
+                                                                    if (!isCurrent) chatClient.sendCcCommand(user.id, "/mode ${opt.key}")
+                                                                },
+                                                                color = if (isCurrent) Color(0xFFF0F4FF) else Color.Transparent,
+                                                                shape = MaterialTheme.shapes.small,
+                                                                modifier = Modifier.fillMaxWidth()
+                                                            ) {
+                                                                Text(
+                                                                    text = if (isCurrent) "✓ ${opt.name}" else "  ${opt.name}",
+                                                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                                                    fontSize = 14.sp,
+                                                                    fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                                                                    color = if (isCurrent) Color(0xFF1565C0) else Color.Unspecified
+                                                                )
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
-                                },
-                                color = SilkColors.primary.copy(alpha = 0.15f),
-                                shape = MaterialTheme.shapes.small
-                            ) {
-                                Text(
-                                    text = "@Silk",
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = SilkColors.primary
-                                )
+                                    // Model badge
+                                    if (modelName.isNotBlank() || !ccConnectInfo?.availableModels.isNullOrEmpty()) {
+                                        val badgeModel = when {
+                                            modelName.startsWith("claude-sonnet-4-6") -> "Sonnet 4.6"
+                                            modelName.startsWith("claude-opus-4-6") -> "Opus 4.6"
+                                            modelName.startsWith("claude-haiku-4-5") -> "Haiku 4.5"
+                                            modelName.contains("sonnet") -> "Sonnet"
+                                            modelName.contains("opus") -> "Opus"
+                                            modelName.contains("haiku") -> "Haiku"
+                                            modelName.isNotBlank() -> modelName.split("/").lastOrNull()?.take(18) ?: modelName
+                                            else -> "model"
+                                        }
+                                        Box {
+                                            Surface(
+                                                onClick = { showModelDropdown = !showModelDropdown; showModeDropdown = false },
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = Color(0xFFF3E5F5),
+                                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFCE93D8))
+                                            ) {
+                                                Text(
+                                                    text = "🤖 $badgeModel",
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.Medium,
+                                                    color = Color(0xFF6A1B9A)
+                                                )
+                                            }
+                                            // Model dropdown
+                                            if (showModelDropdown && !ccConnectInfo?.availableModels.isNullOrEmpty()) {
+                                                Card(
+                                                    modifier = Modifier
+                                                        .offset(y = (-6).dp)
+                                                        .width(240.dp),
+                                                    elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
+                                                ) {
+                                                    Column(modifier = Modifier.padding(4.dp)) {
+                                                        Text(
+                                                            text = "MODELS",
+                                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.SemiBold,
+                                                            color = Color(0xFF999999)
+                                                        )
+                                                        ccConnectInfo?.availableModels?.forEach { opt ->
+                                                            val isCurrent = opt.name == modelName
+                                                            Surface(
+                                                                onClick = {
+                                                                    showModelDropdown = false
+                                                                    if (!isCurrent) chatClient.sendCcCommand(user.id, "/model switch ${opt.name}")
+                                                                },
+                                                                color = if (isCurrent) Color(0xFFF3E5F5) else Color.Transparent,
+                                                                shape = MaterialTheme.shapes.small,
+                                                                modifier = Modifier.fillMaxWidth()
+                                                            ) {
+                                                                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                                                                    Text(
+                                                                        text = if (isCurrent) "✓ ${opt.name}" else "  ${opt.name}",
+                                                                        fontSize = 14.sp,
+                                                                        fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                                                                        color = if (isCurrent) Color(0xFF6A1B9A) else Color.Unspecified
+                                                                    )
+                                                                    if (opt.desc.isNotBlank()) {
+                                                                        Text(
+                                                                            text = "  ${opt.desc}",
+                                                                            fontSize = 11.sp,
+                                                                            color = Color(0xFF999999)
+                                                                        )
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
-
-                        Spacer(modifier = Modifier.height(8.dp))
                         
                         // 输入框容器（用于 @ 提及下拉）
                         Box(modifier = Modifier.fillMaxWidth()) {
@@ -1204,8 +1652,8 @@ fun ChatScreen(appState: AppState) {
                                                 isTranscribing = true
                                                 val recorder = mediaRecorderRef.value
                                                 val filePath = audioFilePathRef.value
-                                                try { recorder?.stop() } catch (_: Exception) {}
-                                                try { recorder?.release() } catch (_: Exception) {}
+                                                try { recorder?.stop() } catch (_: Exception) { /* stop may throw if not recording */ }
+                                                try { recorder?.release() } catch (_: Exception) { /* release may throw on bad state */ }
                                                 mediaRecorderRef.value = null
                                                 scope.launch {
                                                     try {
@@ -1253,8 +1701,60 @@ fun ChatScreen(appState: AppState) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
+                                    // @cc or @Silk trigger button (inline with input)
+                                    if (isCcConnectGroup && groupMembers.size >= 2) {
+                                        val ccPrefix = "@cc"
+                                        Surface(
+                                            onClick = {
+                                                val prefix = "$ccPrefix "
+                                                if (!messageText.text.startsWith(prefix)) {
+                                                    val newText = prefix + messageText.text
+                                                    messageText = TextFieldValue(newText, TextRange(newText.length))
+                                                }
+                                            },
+                                            color = Color(0x1F4CAF50),
+                                            shape = MaterialTheme.shapes.small
+                                        ) {
+                                            Text(
+                                                text = ccPrefix,
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = Color(0xFF4CAF50),
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    } else if (!isSilkPrivateChat && !isCcConnectGroup) {
+                                        Surface(
+                                            onClick = {
+                                                val prefix = "@Silk "
+                                                if (!messageText.text.startsWith(prefix)) {
+                                                    val newText = prefix + messageText.text
+                                                    val newSelection = TextRange(
+                                                        start = (messageText.selection.start + prefix.length).coerceIn(0, newText.length),
+                                                        end = (messageText.selection.end + prefix.length).coerceIn(0, newText.length)
+                                                    )
+                                                    messageText = messageText.copy(
+                                                        text = newText,
+                                                        selection = newSelection
+                                                    )
+                                                }
+                                            },
+                                            color = SilkColors.primary.copy(alpha = 0.15f),
+                                            shape = MaterialTheme.shapes.small
+                                        ) {
+                                            Text(
+                                                text = "@Silk",
+                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = SilkColors.primary,
+                                                fontSize = 13.sp
+                                            )
+                                        }
+                                    }
+
                                     OutlinedTextField(
                                         value = messageText,
                                         onValueChange = { newValue ->
@@ -1287,7 +1787,6 @@ fun ChatScreen(appState: AppState) {
                                             }
                                         },
                                         modifier = Modifier.weight(1f),
-                                        placeholder = { Text(if (group.name.startsWith("[Silk]")) "直接输入消息与 Silk 对话..." else "输入消息... @ 提及成员 / @silk 提问AI") },
                                         maxLines = 3
                                     )
 
@@ -1318,12 +1817,13 @@ fun ChatScreen(appState: AppState) {
                                                 addLog("无法启动录音: ${e.message}")
                                             }
                                         },
-                                        modifier = Modifier.size(48.dp)
+                                        modifier = Modifier.size(36.dp)
                                     ) {
                                         Icon(
                                             Icons.Default.Mic,
                                             contentDescription = "语音输入",
-                                            tint = Color.Gray
+                                            tint = Color.Gray,
+                                            modifier = Modifier.size(20.dp)
                                         )
                                     }
                                     
@@ -1337,9 +1837,10 @@ fun ChatScreen(appState: AppState) {
                                             colors = ButtonDefaults.buttonColors(
                                                 containerColor = Color(0xFFFF4D4F)
                                             ),
-                                            modifier = Modifier.height(56.dp)
+                                            modifier = Modifier.height(36.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                                         ) {
-                                            Text("停止", color = Color.White)
+                                            Text("停止", color = Color.White, fontSize = 13.sp)
                                         }
                                     } else {
                                         Button(
@@ -1364,9 +1865,14 @@ fun ChatScreen(appState: AppState) {
                                             colors = ButtonDefaults.buttonColors(
                                                 containerColor = SilkColors.primary
                                             ),
-                                            modifier = Modifier.height(56.dp)
+                                            modifier = Modifier.height(36.dp),
+                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
                                         ) {
-                                            Icon(Icons.Default.Send, contentDescription = "发送")
+                                            Icon(
+                                                Icons.Default.Send,
+                                                contentDescription = "发送",
+                                                modifier = Modifier.size(18.dp)
+                                            )
                                         }
                                     }
                                 }
@@ -1506,7 +2012,7 @@ fun ChatScreen(appState: AppState) {
                         // 先断开当前WebSocket
                         try {
                             chatClient.disconnect()
-                        } catch (e: Exception) { }
+                        } catch (e: Exception) { /* ignore disconnect errors */ }
                         
                         // 调用API获取或创建与该联系人的对话
                         val response = ApiClient.startPrivateChat(user.id, member.id)
@@ -1840,9 +2346,262 @@ fun ChatScreen(appState: AppState) {
             result = forwardResult
         )
     }
+
+    // ==================== cc-connect token info dialog ====================
+    if (showCcConnectTokenDialog && ccConnectInfo != null) {
+        CcConnectTokenDialog(
+            groupId = group.id,
+            userId = user.id,
+            tokenInfo = ccConnectInfo!!,
+            onTokenRegenerated = { updated ->
+                ccConnectInfo = updated
+            },
+            onDismiss = { showCcConnectTokenDialog = false; tokenCopiedCc = false }
+        )
+    }
+}
+
+// ==================== cc-connect Token 信息对话框 ====================
+@Composable
+fun CcConnectTokenDialog(
+    groupId: String,
+    userId: String,
+    tokenInfo: CcConnectTokenInfo,
+    onTokenRegenerated: (CcConnectTokenInfo) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var tokenCopied by remember { mutableStateOf(false) }
+    var isRegenerating by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            modifier = Modifier
+                .width(360.dp)
+                .wrapContentHeight(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(24.dp)) {
+                // Title
+                Text(
+                    text = "cc-connect Token",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Connection status
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(
+                                color = if (tokenInfo.connected) Color(0xFF4CAF50) else Color(0xFFFF9800),
+                                shape = CircleShape
+                            )
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (tokenInfo.connected) {
+                            "Connected — ${tokenInfo.agentType ?: "agent"}${if (tokenInfo.project != null) " / ${tokenInfo.project}" else ""}"
+                        } else {
+                            "Offline — waiting for cc-connect to connect"
+                        },
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Token display
+                if (tokenInfo.token != null) {
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ) {
+                        Text(
+                            text = tokenInfo.token!!,
+                            modifier = Modifier.padding(16.dp),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 14.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // config.toml snippet
+                    Text(
+                        text = "Paste this token into cc-connect's config.toml:",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    ) {
+                        Text(
+                            text = """[[projects.platforms]]
+type = "silk"
+[projects.platforms.options]
+server = "wss://your-server:15003/ccconnect-bridge"
+token  = "${tokenInfo.token ?: ""}"
+""",
+                            modifier = Modifier.padding(12.dp),
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            lineHeight = 18.sp
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                // Action buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (tokenInfo.token != null) {
+                        // Regenerate button
+                        TextButton(
+                            onClick = {
+                                if (!isRegenerating) {
+                                    scope.launch {
+                                        isRegenerating = true
+                                        val newToken = ApiClient.regenerateCcConnectToken(groupId, userId)
+                                        if (newToken != null) {
+                                            onTokenRegenerated(tokenInfo.copy(token = newToken))
+                                            tokenCopied = false
+                                        }
+                                        isRegenerating = false
+                                    }
+                                }
+                            },
+                            enabled = !isRegenerating
+                        ) {
+                            Text(if (isRegenerating) "Regenerating..." else "Regenerate", fontSize = 13.sp)
+                        }
+
+                        // Copy Token button
+                        Button(
+                            onClick = {
+                                tokenInfo.token?.let { token ->
+                                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                        as android.content.ClipboardManager
+                                    val clip = android.content.ClipData.newPlainText("cc-connect token", token)
+                                    clipboard.setPrimaryClip(clip)
+                                    tokenCopied = true
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (tokenCopied) Color(0xFF4CAF50) else MaterialTheme.colorScheme.secondary
+                            )
+                        ) {
+                            Text(if (tokenCopied) "Copied!" else "Copy Token", fontSize = 13.sp)
+                        }
+                    }
+
+                    // Done button
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier.padding(start = 8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        )
+                    ) {
+                        Text("Done", fontSize = 13.sp)
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ==================== AI 消息卡片组件 ====================
+
+/**
+ * 思考过程组件（含计时器）— 对应 Web 端 ChatRenderer.kt 的 ThinkingBlock。
+ * 在思考进行中显示 "Thinking Xs..."，完成后显示 "Thought for Xs"。
+ */
+@Composable
+fun ThinkingBlock(
+    thinkingText: String,
+    isComplete: Boolean = false,
+    isExpanded: Boolean = false,
+    onToggle: () -> Unit = {}
+) {
+    var elapsedSeconds by remember { mutableLongStateOf(0L) }
+    val startEpochMs = remember { System.currentTimeMillis() }
+    val show = isExpanded || !isComplete
+
+    LaunchedEffect(isComplete) {
+        if (isComplete) {
+            elapsedSeconds = (System.currentTimeMillis() - startEpochMs) / 1000
+        } else {
+            elapsedSeconds = 0
+            while (true) {
+                kotlinx.coroutines.delay(1000)
+                elapsedSeconds = (System.currentTimeMillis() - startEpochMs) / 1000
+            }
+        }
+    }
+
+    val label = if (isComplete) {
+        val secs = elapsedSeconds
+        if (secs < 1) "Thought for <1s" else "Thought for ${secs}s"
+    } else {
+        "Thinking ${elapsedSeconds}s..."
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .background(color = Color(0xFFFAF8F4), shape = RoundedCornerShape(8.dp))
+            .border(1.dp, Color(0xFFE8E0D4), RoundedCornerShape(8.dp))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onToggle() }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = "\uD83D\uDCAD", fontSize = 14.sp)
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = label,
+                fontSize = 12.sp,
+                fontWeight = if (!isComplete) FontWeight.Medium else FontWeight.Normal,
+                color = if (!isComplete) Color(0xFFC9A86C) else Color(0xFF8B7355)
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = if (isExpanded && isComplete) "▲" else "▼",
+                fontSize = 10.sp,
+                color = Color(0xFFC0B0A0)
+            )
+        }
+        if (show) {
+            Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+            Text(
+                text = thinkingText,
+                fontSize = 12.sp,
+                color = Color(0xFF8B7355),
+                lineHeight = 18.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp)
+            )
+        }
+    }
+}
 
 /**
  * AI 消息卡片 - 专门用于 Silk AI 回复的卡片样式
@@ -1850,6 +2609,7 @@ fun ChatScreen(appState: AppState) {
  * @param isExpanded 外部控制的展开状态（由父组件管理）
  * @param onExpandChange 展开/收起状态变化回调
  */
+@Suppress("CyclomaticComplexMethod", "NestedBlockDepth", "UnusedParameter")
 @Composable
 fun AIMessageCardAndroid(
     message: Message,
@@ -1857,31 +2617,280 @@ fun AIMessageCardAndroid(
     isTransient: Boolean = false,
     isExpanded: Boolean = true,
     onExpandChange: (Boolean) -> Unit = {},
+    isThinkingExpanded: Boolean = false,
+    onThinkingExpandChange: (Boolean) -> Unit = {},
+    isToolsExpanded: Boolean = false,
+    onToolsExpandChange: (Boolean) -> Unit = {},
     onCopy: (String) -> Unit = {},
     onForward: (Message) -> Unit = {}
 ) {
-    val isLongContent = message.content.length > 500
+    // ── 优先使用结构化 contentBlocks 渲染（与 Web 端一致）──
+    val blocks = message.contentBlocks
+    if (!blocks.isNullOrEmpty()) {
+        val thinkingBlock = blocks.firstOrNull { it.type == "thinking" }
+        val textBlock = blocks.firstOrNull { it.type == "text" }
+        val toolBlocks = blocks.filter { it.type == "tool_use" }
+        val bodyContent = textBlock?.content ?: ""
+
+        val isLongContent = bodyContent.length > 500
+        val effectiveExpanded = if (isTransient) true else isExpanded
+        val aiPreview = if (bodyContent.length > 220) bodyContent.take(220) + "..." else bodyContent
+
+        Card(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFF8F6F0)),
+            shape = RoundedCornerShape(16.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Box(modifier = Modifier.size(32.dp).background(
+                        Brush.linearGradient(colors = listOf(Color(0xFFC9A86C), Color(0xFFA8894D))), CircleShape
+                    ), contentAlignment = Alignment.Center) { Text("🤖", fontSize = 16.sp) }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = message.userName.trimStart().removePrefix("\uD83E\uDD16").trim()
+                            .let { if (it.isBlank() || it == "Silk") "Silk AI" else it },
+                        style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = Color(0xFFC9A86C)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = timeString, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (isLongContent && !isTransient) {
+                        Spacer(modifier = Modifier.weight(1f))
+                        Box(modifier = Modifier.background(
+                            color = if (effectiveExpanded) Color.Transparent else Color(0x1AC9A86C), shape = RoundedCornerShape(4.dp)
+                        ).clickable { onExpandChange(!effectiveExpanded) }.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                            Text(if (effectiveExpanded) "▼ 收起" else "▶ 展开", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Divider(color = Color(0xFFE8E0D4), thickness = 1.dp)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 思考过程（带计时器）
+                if (thinkingBlock != null) {
+                    ThinkingBlock(
+                        thinkingText = thinkingBlock.content,
+                        isComplete = thinkingBlock.isComplete,
+                        isExpanded = isThinkingExpanded || !thinkingBlock.isComplete,
+                        onToggle = { onThinkingExpandChange(!isThinkingExpanded) }
+                    )
+                }
+
+                // 工具调用（与 Web 端一致：每个工具独立显示，带图标和状态指示）
+                for (tool in toolBlocks) {
+                    var cbToolExpanded by remember { mutableStateOf(false) }
+                    val icon = getToolIcon(tool.toolName)
+                    val label = buildToolLabel(tool.toolName, tool.content)
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { cbToolExpanded = !cbToolExpanded }
+                                .padding(horizontal = 4.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(icon, fontSize = 14.sp, modifier = Modifier.width(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = label,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF5A5048),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("✓", fontSize = 12.sp, color = Color(0xFF7DAE6C))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (cbToolExpanded) "▾" else "▸",
+                                fontSize = 10.sp,
+                                color = Color(0xFFC0B0A0)
+                            )
+                        }
+                        if (cbToolExpanded && tool.content.isNotEmpty()) {
+                            MarkdownWebView(
+                                content = tool.content,
+                                modifier = Modifier.padding(start = 26.dp, top = 4.dp, bottom = 4.dp)
+                            )
+                        }
+                    }
+                }
+
+                // 正文
+                if (bodyContent.isNotEmpty()) {
+                    when {
+                        !isLongContent || isTransient -> MarkdownWebView(bodyContent)
+                        !effectiveExpanded -> Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(aiPreview, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 8, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+                            Row(modifier = Modifier.fillMaxWidth().padding(top = 10.dp).clickable { onExpandChange(true) }.padding(vertical = 6.dp),
+                                horizontalArrangement = Arrangement.Center) {
+                                Text("查看全文", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = SilkColors.primary)
+                                Text("  ▼", fontSize = 12.sp, color = SilkColors.primary)
+                            }
+                        }
+                        else -> Column(modifier = Modifier.fillMaxWidth()) {
+                            MarkdownWebView(bodyContent)
+                            Row(modifier = Modifier.fillMaxWidth().padding(top = 10.dp).clickable { onExpandChange(false) }.padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.Center) {
+                                Text("▲ 收起", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = SilkColors.primary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    // ── 回退：标记解析路径（无 contentBlocks 时）──
+    // 支持两种标记格式：
+    // 1. Claude PTY: <!--THINKING_END--> (单标记) + <!--TOOLS_END-->
+    // 2. Claude Native: <!--THINKING-->...<!--END_THINKING--> + <!--TOOL name="..."-->...<!--END_TOOL-->
+    val ccClean = message.content
+        .replace("<!--CC_TURN-->\n", "")
+        .replace("<!--CC_TURN-->", "")
+
+    // Try Claude Native format first (paired markers with richer structure)
+    val hasPairedThinking = ccClean.contains("<!--THINKING-->") || ccClean.contains("<!--END_THINKING-->")
+    val hasPairedTools = ccClean.contains("<!--TOOL ") || ccClean.contains("<!--END_TOOL-->")
+
+    var thinkingText = ""
+    var parsedToolBlocks = emptyList<ParsedToolBlock>()
+    var bodyContent = ""
+
+    if (hasPairedThinking || hasPairedTools) {
+        // Claude Native format: extract thinking blocks, tool blocks, and body text
+        val thinkingBlocks = mutableListOf<String>()
+        val toolBlocks = mutableListOf<ParsedToolBlock>()
+        var remaining = ccClean
+
+        while (remaining.isNotEmpty()) {
+            val ti = remaining.indexOf("<!--THINKING-->")
+            val te = remaining.indexOf("<!--TOOL ")
+            val et = remaining.indexOf("<!--END_THINKING-->")
+            val eto = remaining.indexOf("<!--END_TOOL-->")
+
+            val noMoreMarkers = ti < 0 && te < 0 && et < 0 && eto < 0
+            if (noMoreMarkers) {
+                val trimmed = remaining.trim()
+                if (trimmed.isNotEmpty()) bodyContent = trimmed
+                break
+            }
+
+            val candidates = mutableListOf<Pair<Int, String>>()
+            if (ti >= 0) candidates.add(ti to "THINKING_OPEN")
+            if (te >= 0) candidates.add(te to "TOOL_OPEN")
+            if (et >= 0) candidates.add(et to "THINKING_CLOSE")
+            if (eto >= 0) candidates.add(eto to "TOOL_CLOSE")
+            candidates.sortBy { it.first }
+
+            val (pos, marker) = candidates.first()
+
+            when (marker) {
+                "THINKING_OPEN" -> {
+                    val endPos = remaining.indexOf("<!--END_THINKING-->", pos)
+                    if (endPos >= 0) {
+                        val content = remaining.substring(pos + "<!--THINKING-->".length, endPos).trim()
+                        if (content.isNotEmpty()) thinkingBlocks.add(content)
+                        remaining = remaining.substring(endPos + "<!--END_THINKING-->".length)
+                    } else {
+                        remaining = remaining.substring(pos + "<!--THINKING-->".length)
+                    }
+                }
+                "THINKING_CLOSE" -> {
+                    val content = remaining.substring(0, pos).trim()
+                    if (content.isNotEmpty()) thinkingBlocks.add(content)
+                    remaining = remaining.substring(pos + "<!--END_THINKING-->".length)
+                }
+                "TOOL_OPEN" -> {
+                    val closeTag = "-->"
+                    val closeIdx = remaining.indexOf(closeTag, pos + "<!--TOOL".length)
+                    if (closeIdx >= 0) {
+                        val attrs = remaining.substring(pos + "<!--TOOL".length, closeIdx).trim()
+                        var toolName = extractAttr(attrs, "name")
+                        val endTool = remaining.indexOf("<!--END_TOOL-->", closeIdx)
+                        if (endTool >= 0) {
+                            var content = remaining.substring(closeIdx + closeTag.length, endTool).trim()
+                            val tsRegex = Regex("""<!--TOOL_SUMMARY\s*:\s*([^>]+)-->""")
+                            tsRegex.find(content)?.let { content = content.replace(tsRegex, "").trim() }
+                            if (content.isNotEmpty()) toolBlocks.add(ParsedToolBlock(toolName, content))
+                            remaining = remaining.substring(endTool + "<!--END_TOOL-->".length)
+                        } else {
+                            remaining = remaining.substring(closeIdx + closeTag.length)
+                        }
+                    } else {
+                        remaining = remaining.substring(pos + "<!--TOOL".length)
+                    }
+                }
+                "TOOL_CLOSE" -> {
+                    remaining = remaining.substring(pos + "<!--END_TOOL-->".length)
+                }
+            }
+        }
+
+        thinkingText = thinkingBlocks.joinToString("\n\n")
+        parsedToolBlocks = toolBlocks
+        if (bodyContent.isEmpty() && thinkingBlocks.isEmpty() && toolBlocks.isEmpty()) {
+            bodyContent = ccClean.trim()
+        }
+    } else {
+        // Claude PTY / cc-connect format: single marker per section
+        val thinkingMarker = "<!--THINKING_END-->"
+        val hasThinkingPty = ccClean.contains(thinkingMarker)
+        thinkingText = if (hasThinkingPty) ccClean.substringBefore(thinkingMarker).trim() else ""
+
+        val afterThinking = if (hasThinkingPty) ccClean.substringAfter(thinkingMarker).trim() else ccClean
+
+        val toolsMarker = "<!--TOOLS_END-->"
+        val hasToolsPty = afterThinking.contains(toolsMarker)
+        val rawToolsText = if (hasToolsPty) afterThinking.substringBefore(toolsMarker).trim() else ""
+        bodyContent = if (hasToolsPty) afterThinking.substringAfter(toolsMarker).trim() else afterThinking
+
+        // Fallback: if <!--TOOLS_END--> is at the end, rawToolsText includes body. Split at --- separator.
+        val toolsSep = "\n\n---\n\n"
+        val hasPtyToolsWithBody = hasToolsPty && rawToolsText.isNotEmpty() &&
+            bodyContent.isEmpty() && rawToolsText.contains(toolsSep)
+        if (hasPtyToolsWithBody) {
+            val ptyToolsText = rawToolsText.substringBefore(toolsSep).trim()
+            bodyContent = rawToolsText.substringAfter(toolsSep).trim()
+            // PTY format doesn't have per-tool names, use generic
+            parsedToolBlocks = listOf(ParsedToolBlock("", ptyToolsText))
+        } else if (rawToolsText.isNotEmpty()) {
+            parsedToolBlocks = listOf(ParsedToolBlock("", rawToolsText))
+        }
+    }
+    val isLongContent = bodyContent.length > 500
     val effectiveExpanded = if (isTransient) true else isExpanded
     val aiPreview =
-        if (message.content.length > 220) message.content.take(220) + "..."
-        else message.content
+        if (bodyContent.length > 220) bodyContent.take(220) + "..."
+        else bodyContent
     
     // 调试日志
     LaunchedEffect(message.id, isExpanded) {
-        println("🤖 AIMessageCardAndroid: messageId=${message.id}, contentLength=${message.content.length}, isLongContent=$isLongContent, isExpanded=$isExpanded")
+        println("🤖 AIMessageCardAndroid: messageId=${message.id}, bodyLength=${bodyContent.length}, isLongContent=$isLongContent, isExpanded=$isExpanded")
     }
     
     Card(
         modifier = Modifier
-            .fillMaxWidth(0.95f)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp),
         colors = CardDefaults.cardColors(
             containerColor = Color(0xFFF8F6F0)  // 温暖的奶白色背景
         ),
         shape = RoundedCornerShape(16.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
             // 顶部标识栏
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -1954,11 +2963,75 @@ fun AIMessageCardAndroid(
             )
             
             Spacer(modifier = Modifier.height(12.dp))
-            
+
+            // 思考过程（与 Web 端一致：带计时器 ThinkingBlock）
+            if (thinkingText.isNotEmpty()) {
+                ThinkingBlock(
+                    thinkingText = thinkingText,
+                    isComplete = true,
+                    isExpanded = isThinkingExpanded,
+                    onToggle = { onThinkingExpandChange(!isThinkingExpanded) }
+                )
+            }
+
+            // 工具调用（与 Web 端一致：每个工具独立显示，带图标和状态指示）
+            for (tool in parsedToolBlocks) {
+                var toolExpanded by remember { mutableStateOf(false) }
+                val icon = getToolIcon(tool.name)
+                val label = buildToolLabel(tool.name, tool.content)
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 6.dp)
+                ) {
+                    // Clickable header row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { toolExpanded = !toolExpanded }
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Icon
+                        Text(icon, fontSize = 14.sp, modifier = Modifier.width(18.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        // Tool label
+                        Text(
+                            text = label,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = Color(0xFF5A5048),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        // Green check mark
+                        Text("✓", fontSize = 12.sp, color = Color(0xFF7DAE6C))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        // Expand arrow
+                        Text(
+                            text = if (toolExpanded) "▾" else "▸",
+                            fontSize = 10.sp,
+                            color = Color(0xFFC0B0A0)
+                        )
+                    }
+
+                    // Expanded content
+                    if (toolExpanded && tool.content.isNotEmpty()) {
+                        MarkdownWebView(
+                            content = tool.content,
+                            modifier = Modifier.padding(start = 26.dp, top = 4.dp, bottom = 4.dp)
+                        )
+                    }
+                }
+            }
+
             // 内容区域（与 Harmony：长文折叠时底部「查看全文」，展开后底部「收起」）
             when {
                 !isLongContent || isTransient -> {
-                    MarkdownWebView(message.content)
+                    MarkdownWebView(bodyContent)
                 }
                 !effectiveExpanded -> {
                     Column(modifier = Modifier.fillMaxWidth()) {
@@ -1991,7 +3064,7 @@ fun AIMessageCardAndroid(
                 }
                 else -> {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        MarkdownWebView(message.content)
+                        MarkdownWebView(bodyContent)
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -2076,6 +3149,87 @@ fun AIMessageCardAndroid(
 }
 
 // ==================== 代码语法高亮颜色配置 ====================
+
+// ==================== Tool Block Utilities (matching Web ChatRenderer.kt) ====================
+
+@Suppress("CyclomaticComplexMethod")
+private fun getToolIcon(name: String): String {
+    val n = name.lowercase()
+    return when {
+        n.contains("bash") || n.contains("command") || n.contains("shell") -> "\uD83D\uDCBB"
+        n.contains("read") || n.contains("ls") || n.contains("glob") -> "\uD83D\uDCD6"
+        n.contains("write") || n.contains("edit") || n.contains("apply") || n.contains("patch") -> "\u270F\uFE0F"
+        n.contains("grep") || n.contains("search") || n.contains("find") -> "\uD83D\uDD0D"
+        n.contains("web") || n.contains("fetch") || n.contains("url") -> "\uD83C\uDF10"
+        n.contains("todo") || n.contains("task") -> "\u2705"
+        n.contains("think") || n.contains("reason") -> "\uD83D\uDCAD"
+        n.contains("ask") || n.contains("question") -> "\u2753"
+        n.contains("plan") -> "\uD83D\uDCCB"
+        n.contains("diff") -> "\uD83D\uDD27"
+        n.contains("notebook") || n.contains("jupyter") -> "\uD83D\uDCD8"
+        else -> "\uD83D\uDD27"
+    }
+}
+
+@Suppress("CyclomaticComplexMethod")
+private fun extractToolSummary(name: String, content: String): String {
+    val flat = content.replace("\n", " ").replace("\r", " ").replace(Regex("\\s+"), " ")
+
+    val fileRe = Regex(""""file_path"\s*:\s*"([^"]+)"""")
+    val fileMatch = fileRe.find(flat)
+    if (fileMatch != null) {
+        val path = fileMatch.groupValues[1]
+        val idx = path.lastIndexOf("/")
+        return if (idx >= 0) path.substring(idx + 1) else path
+    }
+    val cmdRe = Regex(""""command"\s*:\s*"([^"]+)"""")
+    val cmdMatch = cmdRe.find(flat)
+    if (cmdMatch != null) {
+        val cmd = cmdMatch.groupValues[1]
+        return if (cmd.length > 60) cmd.substring(0, 60) + "..." else cmd
+    }
+    val queryRe = Regex(""""query"\s*:\s*"([^"]+)"""")
+    val queryMatch = queryRe.find(flat)
+    if (queryMatch != null) {
+        val q = queryMatch.groupValues[1]
+        return if (q.length > 60) q.substring(0, 60) + "..." else q
+    }
+    val patRe = Regex(""""pattern"\s*:\s*"([^"]+)"""")
+    val patMatch = patRe.find(flat)
+    if (patMatch != null) return patMatch.groupValues[1]
+
+    fun firstMeaningfulLine(text: String): String {
+        for (line in text.lineSequence()) {
+            val t = line.trim()
+            if (t.isNotEmpty() && !t.startsWith("```")) return t
+        }
+        return ""
+    }
+
+    if (name.equals("Bash", true) || name.equals("ExecuteCommand", true)) {
+        val cmd = firstMeaningfulLine(content.trimStart()).take(60)
+        if (cmd.isNotEmpty()) return cmd + if (cmd.length >= 60) "..." else ""
+    }
+    return ""
+}
+
+private fun buildToolLabel(name: String, content: String): String {
+    val shortName = when {
+        name.equals("Read", true) || name.equals("Write", true) || name.equals("Edit", true) -> name
+        name.equals("Bash", true) || name.equals("ExecuteCommand", true) -> name
+        else -> name
+    }
+    if (content.isEmpty()) return shortName
+    val summary = extractToolSummary(name, content)
+    return if (summary.isNotEmpty()) "$shortName: $summary" else shortName
+}
+
+private data class ParsedToolBlock(val name: String, val content: String)
+
+private fun extractAttr(s: String, key: String): String {
+    val r = Regex("""${key}\s*=\s*"([^"]*)"""")
+    return r.find(s)?.groupValues?.getOrElse(1) { "" } ?: ""
+}
 private val codeColors = mapOf(
     // 关键字
     "keyword" to Color(0xFFCF8E6D),      // 橙色
@@ -2136,6 +3290,7 @@ private fun highlightCode(code: String, language: String): AnnotatedString {
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "NestedBlockDepth", "ComplexCondition", "LoopWithTooManyJumpStatements")
 private fun AnnotatedString.Builder.highlightLine(line: String, language: String) {
     var i = 0
     val lang = language.lowercase()
@@ -2174,7 +3329,8 @@ private fun AnnotatedString.Builder.highlightLine(line: String, language: String
         }
         
         // 数字
-        if (line[i].isDigit() || (line[i] == '-' && i + 1 < line.length && line[i + 1].isDigit())) {
+        val isNumberStart = line[i].isDigit() || (line[i] == '-' && i + 1 < line.length && line[i + 1].isDigit())
+        if (isNumberStart) {
             val start = i
             if (line[i] == '-') i++
             while (i < line.length && (line[i].isDigit() || line[i] == '.' || line[i] == 'x' || line[i] == 'X')) {
@@ -2445,6 +3601,7 @@ private fun processMathFormula(formula: String): String {
 /**
  * Markdown 表格组件
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun MarkdownTableAndroid(lines: List<String>) {
     if (lines.isEmpty()) return
@@ -2600,6 +3757,7 @@ fun TaskListItemAndroid(content: String, isChecked: Boolean, onToggle: (() -> Un
  * 
  * 支持表格、数学公式、代码高亮、任务列表、链接
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun MarkdownContentAndroid(content: String) {
     val context = LocalContext.current
@@ -2940,6 +4098,7 @@ fun CodeBlockAndroid(code: String, language: String) {
 /**
  * 行内 Markdown 渲染 - 支持链接点击和行内公式
  */
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException", "LoopWithTooManyJumpStatements")
 @Composable
 fun InlineMarkdownAndroid(text: String, context: Context? = null) {
     val localContext = context ?: LocalContext.current
@@ -3112,6 +4271,7 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
     )
 }
 
+@Suppress("CyclomaticComplexMethod")
 @Composable
 private fun ForwardedMessageBubble(
     parts: ForwardedMessageParts,
@@ -3285,6 +4445,7 @@ private fun ForwardedMessageBubble(
     }
 }
 
+@Suppress("CyclomaticComplexMethod", "UnusedParameter", "TooGenericExceptionCaught", "SwallowedException", "LoopWithTooManyJumpStatements")
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageItem(
@@ -3303,6 +4464,12 @@ fun MessageItem(
     // AI 消息展开状态相关参数
     isAIExpanded: Boolean = true,
     onAIExpandChange: (String, Boolean) -> Unit = { _, _ -> },
+    // AI 思考过程展开状态相关参数
+    isThinkingExpanded: Boolean = false,
+    onThinkingExpandChange: (String, Boolean) -> Unit = { _, _ -> },
+    // 工具调用过程展开状态相关参数
+    isToolsExpanded: Boolean = false,
+    onToolsExpandChange: (String, Boolean) -> Unit = { _, _ -> },
     /** 长文本/转发全文收起后由列表滚回该条，与 Harmony onLongContentCollapsed 一致 */
     onLongContentCollapsed: (String) -> Unit = {},
     // 复制和转发功能相关参数
@@ -3324,11 +4491,8 @@ fun MessageItem(
     // 检测PDF下载链接
     val isPdfMessage = message.content.contains("/download/report/") && message.content.contains(".pdf")
     
-    // ✅ 是否显示上下文菜单（非临时消息、非系统消息、文本消息）
-    val canShowContextMenu = !isTransient && !isSystemMessage && message.type == MessageType.TEXT
-    
-    // ✅ AI 消息特殊处理 - 使用专用卡片
-    val isAIMessage = isAgentUserId(message.userId)
+    // ✅ AI 消息特殊处理 - 使用专用卡片（含 cc-connect 代理回复）
+    val isAIMessage = isAgentUserId(message.userId) || message.userId == "cc-connect"
     if (isAIMessage && message.type == MessageType.TEXT && 
         message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS) {
         AIMessageCardAndroid(
@@ -3337,6 +4501,10 @@ fun MessageItem(
             isTransient = isTransient,
             isExpanded = isAIExpanded,
             onExpandChange = { newExpanded -> onAIExpandChange(message.id, newExpanded) },
+            isThinkingExpanded = isThinkingExpanded,
+            onThinkingExpandChange = { newExpanded -> onThinkingExpandChange(message.id, newExpanded) },
+            isToolsExpanded = isToolsExpanded,
+            onToolsExpandChange = { newExpanded -> onToolsExpandChange(message.id, newExpanded) },
             onCopy = onCopy,
             onForward = onForward
         )
@@ -3643,7 +4811,7 @@ fun MessageItem(
                     tonalElevation = if (isTransient) 0.5.dp else 1.dp  // ✅ 统一阴影
                 ) {
                     Column(
-                        modifier = Modifier.padding(if (useForwardedBubble) 0.dp else 12.dp)
+                        modifier = Modifier.padding(if (useForwardedBubble) 0.dp else 8.dp)
                     ) {
                         if (isPdfMessage) {
                         // PDF下载消息特殊处理
@@ -3893,6 +5061,7 @@ data class FileItem(
 /**
  * 文件夹浏览对话框
  */
+@Suppress("UnusedParameter")
 @Composable
 fun FolderExplorerDialog(
     groupId: String,
@@ -4108,6 +5277,7 @@ fun UrlItemCard(
 /**
  * 文件项卡片
  */
+@Suppress("CyclomaticComplexMethod")
 @Composable
 fun FileItemCard(
     file: FileItem,
@@ -4172,6 +5342,7 @@ fun FileItemCard(
 /**
  * 从 Uri 获取文件名
  */
+@Suppress("NestedBlockDepth")
 fun getFileName(context: android.content.Context, uri: Uri): String {
     var result: String? = null
     if (uri.scheme == "content") {
@@ -4200,18 +5371,19 @@ fun getFileName(context: android.content.Context, uri: Uri): String {
  * 后端 API: POST /api/files/upload
  * 表单字段: sessionId, userId, file
  */
+@Suppress("TooGenericExceptionCaught")
 suspend fun uploadFile(
     inputStream: InputStream,
     fileName: String,
     sessionId: String,
     userId: String,
     onProgress: (String) -> Unit
-): Boolean = withContext(Dispatchers.IO) {
+): String? = withContext(Dispatchers.IO) {
     try {
         val boundary = "===" + System.currentTimeMillis() + "==="
         val url = URL("${BackendUrlHolder.getBaseUrl()}/api/files/upload")
         val connection = AndroidHttpCompat.openConnection(url)
-        
+
         connection.requestMethod = "POST"
         connection.doOutput = true
         connection.doInput = true
@@ -4220,29 +5392,29 @@ suspend fun uploadFile(
         connection.setRequestProperty("Connection", "Keep-Alive")
         connection.connectTimeout = 30000
         connection.readTimeout = 60000
-        
+
         val outputStream = connection.outputStream
         val writer = java.io.PrintWriter(java.io.OutputStreamWriter(outputStream, "UTF-8"), true)
-        
+
         // 写入 sessionId 字段
         writer.append("--$boundary").append("\r\n")
         writer.append("Content-Disposition: form-data; name=\"sessionId\"").append("\r\n")
         writer.append("\r\n")
         writer.append(sessionId).append("\r\n")
-        
+
         // 写入 userId 字段
         writer.append("--$boundary").append("\r\n")
         writer.append("Content-Disposition: form-data; name=\"userId\"").append("\r\n")
         writer.append("\r\n")
         writer.append(userId).append("\r\n")
-        
+
         // 写入文件部分
         writer.append("--$boundary").append("\r\n")
         writer.append("Content-Disposition: form-data; name=\"file\"; filename=\"$fileName\"").append("\r\n")
         writer.append("Content-Type: application/octet-stream").append("\r\n")
         writer.append("\r\n")
         writer.flush()
-        
+
         // 写入文件内容
         val buffer = ByteArray(4096)
         var bytesRead: Int
@@ -4254,20 +5426,32 @@ suspend fun uploadFile(
         }
         outputStream.flush()
         inputStream.close()
-        
+
         // 写入结束边界
         writer.append("\r\n")
         writer.append("--$boundary--").append("\r\n")
         writer.flush()
         writer.close()
-        
+
         val responseCode = connection.responseCode
-        connection.disconnect()
-        
-        responseCode == 200 || responseCode == 201
+        if (responseCode == 200 || responseCode == 201) {
+            try {
+                val responseBody = connection.inputStream.bufferedReader().readText()
+                connection.disconnect()
+                // Parse JSON to extract downloadUrl
+                val json = org.json.JSONObject(responseBody)
+                json.optString("downloadUrl", null)
+            } catch (_: Exception) {
+                connection.disconnect()
+                null
+            }
+        } else {
+            connection.disconnect()
+            null
+        }
     } catch (e: Exception) {
         e.printStackTrace()
-        false
+        null
     }
 }
 
@@ -4282,6 +5466,7 @@ data class FilesAndUrls(
 /**
  * 加载群组文件列表和已处理的 URL
  */
+@Suppress("TooGenericExceptionCaught")
 suspend fun loadGroupFilesAndUrls(groupId: String): FilesAndUrls = withContext(Dispatchers.IO) {
     try {
         val url = URL("${BackendUrlHolder.getBaseUrl()}/api/files/list/$groupId")
@@ -4347,6 +5532,7 @@ fun formatTimeHMS(timestamp: Long): String {
 /**
  * 添加成员对话框
  */
+@Suppress("UnusedParameter")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddMemberDialog(
@@ -4487,6 +5673,7 @@ fun AddMemberDialog(
 /**
  * 群组成员列表对话框
  */
+@Suppress("CyclomaticComplexMethod")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MembersDialog(
@@ -4660,6 +5847,7 @@ fun MembersDialog(
 /**
  * 转发到群组对话框
  */
+@Suppress("UnusedParameter")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ForwardToGroupDialog(
@@ -4823,6 +6011,7 @@ fun ForwardToGroupDialog(
 /**
  * 转发到联系人对话框
  */
+@Suppress("UnusedParameter")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ForwardToContactDialog(
@@ -5011,6 +6200,7 @@ fun ForwardToContactDialog(
  * 支持 $...$ 和 \(...\) 格式
  * 返回处理后的文本和数学公式的位置列表
  */
+@Suppress("CyclomaticComplexMethod", "ComplexCondition")
 private fun extractInlineMath(text: String): Pair<String, List<Pair<Int, String>>> {
     val mathSegments = mutableListOf<Pair<Int, String>>()
     val result = StringBuilder()

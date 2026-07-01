@@ -6,7 +6,20 @@ import com.silk.backend.pdf.PDFReportGenerator
 import kotlinx.coroutines.delay
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.addJsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import org.slf4j.LoggerFactory
 import java.net.URI
 import java.net.http.HttpClient
@@ -18,6 +31,7 @@ import java.time.Duration
  * AI 逐步执行代理
  * 类似于 MoxiTreat 的 DeepSeekDiagnosis.stepwise_diagnosis
  */
+@Suppress("TooGenericExceptionCaught", "TooGenericExceptionThrown", "SwallowedException")
 class AIStepwiseAgent(
     private val apiKey: String = AIConfig.API_KEY,
     private val sessionName: String = "default_room"
@@ -425,7 +439,6 @@ $taskPrompt
             }
             
             // ✅ 移除日志输出以提升性能
-            val finalLength = fullTextBuffer.length
             // if (finalLength > 0) {
             //     val avgCharsPerSend = if (sendCount > 0) finalLength / sendCount else 0
             //     logger.info("✅ [$taskName] 流式输出完成: $finalLength 字符, 发送 $sendCount 次, 平均 $avgCharsPerSend 字符/次")
@@ -483,6 +496,7 @@ $conclusion
     /**
      * 从完整结果中提取关键结论
      */
+    @Suppress("UnusedParameter")
     private fun extractConclusion(taskName: String, fullResult: String): String {
         // 如果结果太长，截取关键部分
         return if (fullResult.length > 300) {
@@ -547,6 +561,7 @@ $conclusion
      * @param onChunk 每接收到一个文本块时的回调函数（用于实时显示）
      * @return 完整的响应文本
      */
+    @Suppress("ThrowsCount")
     private suspend fun callAIApiStreaming(
         prompt: String,
         onChunk: suspend (String) -> Unit
@@ -599,104 +614,26 @@ $conclusion
         }
         
         val fullText = StringBuilder()
-        var lastDataTime = System.currentTimeMillis()
         val idleTimeoutMs = 30000L  // 30秒空闲超时
-        var dataChunkCount = 0  // 数据块计数
-        
+
         // 移除日志输出以提升性能
         // logger.info("📖 开始读取流式响应...")
-        
+
         // 使用 withTimeout 包裹整个读取过程，防止永久挂起
         try {
             kotlinx.coroutines.withTimeout(AIConfig.TIMEOUT + 10000) {  // 总超时：70秒
                 // 逐行读取 SSE（Server-Sent Events）数据
                 response.body().bufferedReader().use { reader ->
-                    var line: String?
-                    var emptyLineCount = 0  // 连续空行计数
-                    var lineCount = 0
-                    
-                    while (true) {
-                        // 检查空闲超时
-                        val idleTime = System.currentTimeMillis() - lastDataTime
-                        if (idleTime > idleTimeoutMs) {
-                            // 移除详细日志输出
-                            // logger.warn("⚠️ 流式读取空闲超时（${idleTime}ms 无新数据），主动中断")
-                            // logger.warn("   已接收数据: ${fullText.length} 字符, ${dataChunkCount} 个数据块")
-                            break
+                    val state = StreamReadState(lastDataTime = System.currentTimeMillis(), idleTimeoutMs = idleTimeoutMs)
+                    var keepReading = true
+                    while (keepReading) {
+                        val outcome = readAndProcessStreamLine(reader, state, fullText, onChunk)
+                        when (outcome) {
+                            StreamLineOutcome.STOP -> keepReading = false
+                            StreamLineOutcome.SKIP -> Unit  // 空行：立即继续，不让出 CPU（与原 continue 一致）
+                            // 处理完一行内容后短暂让出 CPU，避免 CPU 100%
+                            StreamLineOutcome.PROCEED -> kotlinx.coroutines.delay(1)
                         }
-                        
-                        // 移除心跳日志以提升性能
-                        // if (idleTime > 0 && idleTime % 10000 < 100) {
-                        //     logger.info("💓 流式读取中... (已等待 ${idleTime/1000}秒, 已接收 ${fullText.length} 字符)")
-                        // }
-                        
-                        // 非阻塞式读取一行
-                        line = try {
-                            reader.readLine()
-                        } catch (e: Exception) {
-                            logger.warn("⚠️ 读取行失败: ${e.message}", e)
-                            break
-                        }
-                        
-                        lineCount++
-                        
-                        // 流结束
-                        if (line == null) {
-                            // 移除日志输出以提升性能
-                            // logger.info("✅ 流正常结束（收到 null）")
-                            // logger.info("   共读取 $lineCount 行, 接收 ${fullText.length} 字符")
-                            break
-                        }
-                        
-                        // 跟踪空行（连续多个空行可能表示流结束）
-                        if (line.trim().isEmpty()) {
-                            emptyLineCount++
-                            if (emptyLineCount > 5) {
-                                logger.warn("⚠️ 检测到连续 $emptyLineCount 个空行，可能流已结束")
-                                break
-                            }
-                            continue
-                        } else {
-                            emptyLineCount = 0
-                        }
-                        
-                        // SSE 格式：data: {"choices":[{"delta":{"content":"文本"},...}]}
-                        if (line.startsWith("data: ")) {
-                            lastDataTime = System.currentTimeMillis()  // 更新最后接收数据时间
-                            dataChunkCount++
-                            
-                            val jsonData = line.substring(6).trim()
-                            
-                            // 跳过特殊标记
-                            if (jsonData == "[DONE]") {
-                                // 移除日志输出以提升性能
-                                // logger.info("✅ 收到 [DONE] 标记，流正常结束 - 共接收 $dataChunkCount 个数据块, ${fullText.length} 字符")
-                                break
-                            }
-                            
-                            try {
-                                // 解析流式响应
-                                val streamResponse = json.decodeFromString<StreamResponse>(jsonData)
-                                val content = streamResponse.choices.firstOrNull()?.delta?.content
-                                
-                                if (content != null) {
-                                    fullText.append(content)
-                                    // 实时回调，发送到前端
-                                    onChunk(content)
-                                    
-                                    // 移除日志输出以提升性能
-                                    // if (dataChunkCount % 200 == 0) {
-                                    //     logger.info("📊 AI模型流式输出进度: $dataChunkCount 数据块, ${fullText.length} 字符")
-                                    // }
-                                }
-                            } catch (e: Exception) {
-                                // 移除详细日志输出
-                                // logger.warn("⚠️ 解析流式数据失败 (行$lineCount): ${line.take(100)}...")
-                            }
-                        }
-                        
-                        // 短暂让出 CPU，避免 CPU 100%
-                        kotlinx.coroutines.delay(1)
                     }
                 }
             }
@@ -707,10 +644,97 @@ $conclusion
             logger.error("❌ 流式读取异常: ${e.message}", e)
             throw e
         }
-        
+
         return fullText.toString()
     }
-    
+
+    /** 流式逐行读取的可变状态。 */
+    private class StreamReadState(
+        var lastDataTime: Long,
+        val idleTimeoutMs: Long,
+        var emptyLineCount: Int = 0,
+        var dataChunkCount: Int = 0
+    )
+
+    /** 单行处理结果：STOP=终止读取；SKIP=立即读下一行（不让出 CPU）；PROCEED=正常处理完一行。 */
+    private enum class StreamLineOutcome { STOP, SKIP, PROCEED }
+
+    /**
+     * 读取并处理一行 SSE 数据；保持原 while 循环的中断/跳过语义。
+     */
+    private suspend fun readAndProcessStreamLine(
+        reader: java.io.BufferedReader,
+        state: StreamReadState,
+        fullText: StringBuilder,
+        onChunk: suspend (String) -> Unit
+    ): StreamLineOutcome {
+        // 检查空闲超时
+        val idleTime = System.currentTimeMillis() - state.lastDataTime
+        if (idleTime > state.idleTimeoutMs) {
+            return StreamLineOutcome.STOP
+        }
+
+        // 非阻塞式读取一行
+        val line = try {
+            reader.readLine()
+        } catch (e: Exception) {
+            logger.warn("⚠️ 读取行失败: ${e.message}", e)
+            return StreamLineOutcome.STOP
+        }
+
+        // 流结束
+        if (line == null) {
+            return StreamLineOutcome.STOP
+        }
+
+        // 跟踪空行（连续多个空行可能表示流结束）
+        if (line.trim().isEmpty()) {
+            state.emptyLineCount++
+            if (state.emptyLineCount > 5) {
+                logger.warn("⚠️ 检测到连续 ${state.emptyLineCount} 个空行，可能流已结束")
+                return StreamLineOutcome.STOP
+            }
+            return StreamLineOutcome.SKIP
+        }
+        state.emptyLineCount = 0
+
+        // SSE 格式：data: {"choices":[{"delta":{"content":"文本"},...}]}
+        if (line.startsWith("data: ")) {
+            state.lastDataTime = System.currentTimeMillis()  // 更新最后接收数据时间
+            state.dataChunkCount++
+
+            val jsonData = line.substring(6).trim()
+
+            // 跳过特殊标记
+            if (jsonData == "[DONE]") {
+                return StreamLineOutcome.STOP
+            }
+
+            appendSseContent(jsonData, fullText, onChunk)
+        }
+
+        return StreamLineOutcome.PROCEED
+    }
+
+    /** 解析一段 SSE data JSON，追加正文并回调；解析失败静默忽略（与原逻辑一致）。 */
+    private suspend fun appendSseContent(
+        jsonData: String,
+        fullText: StringBuilder,
+        onChunk: suspend (String) -> Unit
+    ) {
+        try {
+            val streamResponse = json.decodeFromString<StreamResponse>(jsonData)
+            val content = streamResponse.choices.firstOrNull()?.delta?.content
+            if (content != null) {
+                fullText.append(content)
+                // 实时回调，发送到前端
+                onChunk(content)
+            }
+        } catch (e: Exception) {
+            // 移除详细日志输出：解析流式数据失败静默忽略
+        }
+    }
+
     /**
      * 生成完整的总结报告
      */
@@ -796,113 +820,65 @@ $rawReport
     /**
      * 生成备用格式的总结报告（当AI不可用时）
      */
+    /** 若某步骤存在且执行成功，则追加其结果正文。 */
+    private fun StringBuilder.appendStepResult(stepResults: Map<String, StepResult>, taskName: String) {
+        val step = stepResults[taskName]
+        if (step != null && step.success) {
+            append("${step.result}\n\n")
+        }
+    }
+
     private fun generateFallbackReport(
         stepResults: Map<String, StepResult>,
         allSuccess: Boolean
     ): String {
         val report = buildString {
             append("##承山堂中医诊断总结报告##\n\n")
-            
+
             append("###诊断执行状态###\n")
             append("执行结果: ${if (allSuccess) "✓ 全部成功" else "⚠ 部分失败"}\n")
             append("完成步骤: ${stepResults.count { it.value.success }}/${stepResults.size}\n\n")
-            
+
             // 按章节组织内容
             append("##一、中西医诊断##\n\n")
-            val diagnosis = stepResults["中西医疾病的诊断"]
-            if (diagnosis != null && diagnosis.success) {
-                append("${diagnosis.result}\n\n")
-            }
-            
+            appendStepResult(stepResults, "中西医疾病的诊断")
+
             append("##二、辨证分型与病因病机##\n\n")
-            
+
             append("###1. 辨证分型###\n")
-            val dialectics = stepResults["中医辨证分型"]
-            if (dialectics != null && dialectics.success) {
-                append("${dialectics.result}\n\n")
-            }
-            
+            appendStepResult(stepResults, "中医辨证分型")
+
             append("###2. 病因病机###\n")
-            val pathogenesis = stepResults["中医的病因病机分析"]
-            if (pathogenesis != null && pathogenesis.success) {
-                append("${pathogenesis.result}\n\n")
-            }
-            
+            appendStepResult(stepResults, "中医的病因病机分析")
+
             append("##三、体质诊断##\n\n")
-            val constitution = stepResults["中医体质诊断"]
-            if (constitution != null && constitution.success) {
-                append("${constitution.result}\n\n")
-            }
-            
+            appendStepResult(stepResults, "中医体质诊断")
+
             append("##四、综合分析##\n\n")
-            val analysis = stepResults["分析汇总"]
-            if (analysis != null && analysis.success) {
-                append("${analysis.result}\n\n")
-            }
-            
+            appendStepResult(stepResults, "分析汇总")
+
             append("##五、治疗方案##\n\n")
-            
+
             append("###1. 中药处方###\n")
-            val prescription = stepResults["中医处方建议"]
-            if (prescription != null && prescription.success) {
-                append("${prescription.result}\n\n")
-            }
-            
+            appendStepResult(stepResults, "中医处方建议")
+
             append("###2. 中成药推荐###\n")
-            val patent = stepResults["推荐中成药"]
-            if (patent != null && patent.success) {
-                append("${patent.result}\n\n")
-            }
-            
+            appendStepResult(stepResults, "推荐中成药")
+
             append("###3. 针灸治疗###\n")
-            val acupuncture = stepResults["针灸处方及针灸方法"]
-            if (acupuncture != null && acupuncture.success) {
-                append("${acupuncture.result}\n\n")
-            }
-            
+            appendStepResult(stepResults, "针灸处方及针灸方法")
+
             append("###4. 艾灸治疗###\n")
-            val moxibustion = stepResults["艾灸选穴及艾灸方法"]
-            if (moxibustion != null && moxibustion.success) {
-                append("${moxibustion.result}\n\n")
-            }
-            
+            appendStepResult(stepResults, "艾灸选穴及艾灸方法")
+
             append("###5. 生活调养###\n")
-            val lifestyle = stepResults["饮食运动起居调养方案"]
-            if (lifestyle != null && lifestyle.success) {
-                append("${lifestyle.result}\n\n")
-            }
-            
+            appendStepResult(stepResults, "饮食运动起居调养方案")
+
             append("##六、预后说明##\n\n")
-            val prognosis = stepResults["预后说明"]
-            if (prognosis != null && prognosis.success) {
-                append("${prognosis.result}\n\n")
-            }
+            appendStepResult(stepResults, "预后说明")
         }
-        
+
         return report.toString()
-    }
-    
-    /**
-     * 提取关键摘要
-     */
-    private fun extractKeySummary(fullText: String): String {
-        // 提取前3个要点或前150字
-        val lines = fullText.split("\n").filter { it.trim().isNotEmpty() }
-        val keyLines = lines.filter { line ->
-            line.trim().matches(Regex("^[0-9]+\\..*")) || // 数字列表
-            line.contains("需求") ||
-            line.contains("问题") ||
-            line.contains("建议") ||
-            line.contains("结论")
-        }
-        
-        return if (keyLines.isNotEmpty()) {
-            keyLines.take(3).joinToString("\n   ")
-        } else if (fullText.length > 150) {
-            fullText.take(150) + "..."
-        } else {
-            fullText
-        }
     }
     
     /**
@@ -1089,75 +1065,6 @@ $rawReport
         return symptoms
     }
     
-    // 辅助方法：从上下文中提取最后的用户输入
-    private fun extractLastUserInput(context: String): String {
-        val userMessagePattern = Regex("\\[用户\\][^:]+: (.+)")
-        val matches = userMessagePattern.findAll(context).toList()
-        return matches.lastOrNull()?.groupValues?.get(1)?.take(50) ?: "（暂无）"
-    }
-    
-    // 分析用户意图
-    private fun analyzeUserIntent(input: String): String {
-        return when {
-            input.contains("学习") || input.contains("了解") -> "学习知识或技能"
-            input.contains("问题") || input.contains("错误") -> "解决问题"
-            input.contains("你好") || input.contains("hello") -> "建立对话"
-            input.contains("帮助") || input.contains("help") -> "寻求帮助"
-            else -> "进行对话交流"
-        }
-    }
-    
-    // 识别主要问题
-    private fun identifyMainIssue(input: String): String {
-        return when {
-            input.contains("如何") || input.contains("怎么") -> "寻求方法指导"
-            input.contains("为什么") -> "理解原理或原因"
-            input.contains("什么") -> "获取信息和知识"
-            input.isEmpty() -> "尚未明确"
-            else -> "需要进一步沟通了解"
-        }
-    }
-    
-    // 提取讨论主题
-    private fun extractTopics(context: String): String {
-        return when {
-            context.contains("编程") || context.contains("代码") -> "编程和技术"
-            context.contains("学习") -> "学习和教育"
-            context.contains("Kotlin") -> "Kotlin 编程语言"
-            context.contains("项目") -> "项目开发"
-            else -> "日常对话"
-        }
-    }
-    
-    // 分析用户情绪
-    private fun analyzeUserSentiment(context: String): String {
-        return when {
-            context.contains("谢谢") || context.contains("感谢") -> "积极感激"
-            context.contains("困难") || context.contains("问题") -> "遇到挑战，需要帮助"
-            context.contains("好") || context.contains("棒") -> "积极正面"
-            else -> "中性，开放沟通"
-        }
-    }
-    
-    // 识别未解决的问题
-    private fun identifyOpenQuestions(input: String): String {
-        return when {
-            input.contains("？") || input.contains("?") -> "存在明确的疑问"
-            input.contains("如何") || input.contains("怎么") -> "需要具体的方法指导"
-            else -> "待用户进一步表达"
-        }
-    }
-    
-    // 生成建议
-    private fun generateRecommendations(input: String): String {
-        return when {
-            input.contains("学习") -> "提供学习资源和循序渐进的学习路径"
-            input.contains("问题") -> "定位问题根源，提供解决方案"
-            input.contains("Kotlin") -> "推荐 Kotlin 官方文档和实践项目"
-            else -> "根据用户具体需求提供个性化建议"
-        }
-    }
-    
     /**
      * 处理医生诊断更新（Host角色的额外诊断）
      * 整合之前的诊断结果，添加医生医嘱，重新生成完整报告
@@ -1254,54 +1161,83 @@ $doctorMessage
         // 5. 调用AI模型（使用Streaming方式）
         callback("processing", "🩺 AI正在快速整合诊断信息...", null, 3)
         delay(100)  // ✅ 减少延迟
-        
-        val updatedDiagnosis = try {
-            // 使用streaming方式调用AI
-            val response = StringBuilder()
-            var lastSentContent = ""
-            var lastSentTime = System.currentTimeMillis()
-            
-            generateQuickResponse(systemPrompt) { content, isComplete ->
-                response.clear()
-                response.append(content)
-                
-                if (!isComplete) {
-                    // 计算增量内容（只发送新增的部分）
-                    val newContent = if (content.length > lastSentContent.length) {
-                        content.substring(lastSentContent.length)
-                    } else {
-                        ""
-                    }
-                    
-                    // ✅ 改进更新条件：每3行或每2秒更新一次
-                    val currentTime = System.currentTimeMillis()
-                    val timeSinceLastSend = currentTime - lastSentTime
-                    val newlineCount = content.substring(lastSentContent.length).count { it == '\n' }
-                    
-                    if (newContent.isNotEmpty() && (newlineCount >= 3 || timeSinceLastSend >= 2000)) {
-                        // ✅ 每3行或每2秒发送增量内容
-                        callback("streaming_incremental", newContent, 1, 3)
-                        lastSentContent = content
-                        lastSentTime = currentTime
-                    }
-                }
-            }
-            
-            response.toString()
-        } catch (e: Exception) {
-            logger.error("❌ AI调用失败: ${e.message}", e)
-            "⚠️ AI模型调用失败，无法更新诊断"
-        }
-        
+
+        val updatedDiagnosis = generateUpdatedDiagnosis(systemPrompt, callback)
+
         // 6. 发送AI的诊断更新结果（最终消息）
         callback("doctor_update", updatedDiagnosis, 2, 3)
         delay(500)
-        
+
         // 7. 整合所有步骤并重新生成PDF报告
+        buildAndSaveUpdatedReport(
+            doctorMessage = doctorMessage,
+            previousDiagnosisResults = previousDiagnosisResults,
+            updatedDiagnosis = updatedDiagnosis,
+            patientContext = patientContext,
+            sessionName = sessionName,
+            userName = userName,
+            groupDisplayName = groupDisplayName,
+            callback = callback
+        )
+    }
+
+    /** 以流式方式生成更新后的诊断文本，并按节流规则向前端推送增量。 */
+    private suspend fun generateUpdatedDiagnosis(
+        systemPrompt: String,
+        callback: suspend (stepType: String, message: String, currentStep: Int?, totalSteps: Int?) -> Unit
+    ): String = try {
+        // 使用streaming方式调用AI
+        val response = StringBuilder()
+        var lastSentContent = ""
+        var lastSentTime = System.currentTimeMillis()
+
+        generateQuickResponse(systemPrompt) { content, isComplete ->
+            response.clear()
+            response.append(content)
+
+            if (!isComplete) {
+                // 计算增量内容（只发送新增的部分）
+                val newContent = if (content.length > lastSentContent.length) {
+                    content.substring(lastSentContent.length)
+                } else {
+                    ""
+                }
+
+                // ✅ 改进更新条件：每3行或每2秒更新一次
+                val currentTime = System.currentTimeMillis()
+                val timeSinceLastSend = currentTime - lastSentTime
+                val newlineCount = content.substring(lastSentContent.length).count { it == '\n' }
+
+                if (newContent.isNotEmpty() && (newlineCount >= 3 || timeSinceLastSend >= 2000)) {
+                    // ✅ 每3行或每2秒发送增量内容
+                    callback("streaming_incremental", newContent, 1, 3)
+                    lastSentContent = content
+                    lastSentTime = currentTime
+                }
+            }
+        }
+
+        response.toString()
+    } catch (e: Exception) {
+        logger.error("❌ AI调用失败: ${e.message}", e)
+        "⚠️ AI模型调用失败，无法更新诊断"
+    }
+
+    /** 整合医嘱、历史诊断与更新结果，生成 PDF 报告并落盘。失败时记录日志不抛出。 */
+    private suspend fun buildAndSaveUpdatedReport(
+        doctorMessage: String,
+        previousDiagnosisResults: Map<String, StepResult>?,
+        updatedDiagnosis: String,
+        patientContext: String,
+        sessionName: String,
+        userName: String,
+        groupDisplayName: String?,
+        callback: suspend (stepType: String, message: String, currentStep: Int?, totalSteps: Int?) -> Unit
+    ) {
         try {
             // 构建完整的步骤结果（医生医嘱 + 之前的诊断步骤）
             val stepResults = mutableMapOf<String, StepResult>()
-            
+
             // 第一步：添加医生诊断更新（放在最前面）
             stepResults["医生诊断意见"] = StepResult(
                 stepName = "医生诊断意见",
@@ -1314,25 +1250,25 @@ $doctorMessage
                 """.trimIndent(),
                 success = true
             )
-            
+
             // 整合之前的诊断步骤（如果有）
             if (previousDiagnosisResults != null) {
                 stepResults.putAll(previousDiagnosisResults)
             }
-            
+
             // 添加AI更新诊断步骤
             stepResults["AI综合诊断（更新）"] = StepResult(
                 stepName = "AI综合诊断（更新）",
                 result = updatedDiagnosis,
                 success = true
             )
-            
+
             val diagnosisResult = DiagnosisResult(
                 patientContext = patientContext,
                 stepResults = stepResults,
                 allSuccess = true
             )
-            
+
             // 生成PDF（文件名和标题使用当前时间）
             val (pdfPath, downloadUrl) = pdfGenerator.generateDiagnosisReportPDF(
                 diagnosisResult = diagnosisResult,
@@ -1342,7 +1278,7 @@ $doctorMessage
                 summaryReportText = updatedDiagnosis,
                 groupDisplayName = groupDisplayName
             )
-            
+
             val pdfMessage = buildString {
                 append("📄 诊断更新报告已生成\n\n")
                 append("文件名：${pdfPath.substringAfterLast("/")}\n\n")
@@ -1353,12 +1289,11 @@ $doctorMessage
                 append("💡 基于医生的专业意见，诊断已更新\n")
                 append("   报告包含：医生医嘱 + 之前诊断 + 综合更新")
             }
-            
+
             callback("PDF报告", pdfMessage, null, null)
-            
+
             // 保存当前诊断结果供下次使用
             saveDiagnosisResults(stepResults)
-            
         } catch (e: Exception) {
             logger.error("❌ 生成更新PDF失败: ${e.message}", e)
         }
@@ -1522,63 +1457,9 @@ $doctorMessage
             
             // Streaming响应处理
             val response = httpClient.send(request, HttpResponse.BodyHandlers.ofLines())
-            
+
             if (response.statusCode() == 200) {
-                val lines = response.body().toList()
-                val accumulatedContent = StringBuilder()
-                var lastSentContent = ""  // ✅ 记录上次发送的内容
-                var isDone = false  // ✅ 标记是否已完成
-                
-                for (line in lines) {
-                    if (line.startsWith("data: ")) {
-                        val data = line.removePrefix("data: ").trim()
-                        
-                        if (data == "[DONE]") {
-                            isDone = true
-                            break
-                        }
-                        
-                        try {
-                            val streamResponse = json.decodeFromString<StreamResponse>(data)
-                            val delta = streamResponse.choices.firstOrNull()?.delta
-                            
-                            // ✅ GLM-5 模型：content 字段是乱码，reasoning 字段才是真正的中文回答
-                            // 只读取 reasoning 字段，忽略 content
-                            val content = delta?.reasoning ?: ""
-                            
-                            if (content.isNotEmpty()) {
-                                accumulatedContent.append(content)
-                                
-                                // ✅ 累积3行后发送一次临时消息（更频繁更新）
-                                val newlineCount = accumulatedContent.count { it == '\n' }
-                                if (newlineCount >= 3 && accumulatedContent.length > lastSentContent.length) {
-                                    // ✅ 发送增量内容（只发送新增的部分）
-                                    val incrementalContent = accumulatedContent.substring(lastSentContent.length)
-                                    callback(incrementalContent, false)
-                                    lastSentContent = accumulatedContent.toString()
-                                    delay(50)  // 减少延迟，提升响应速度
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // 忽略解析错误，继续处理下一行
-                        }
-                    }
-                }
-                
-                // 确保发送最后的增量内容（如果有）
-                if (accumulatedContent.length > lastSentContent.length) {
-                    val finalIncrement = accumulatedContent.substring(lastSentContent.length)
-                    if (finalIncrement.isNotEmpty()) {
-                        // 先发送最后的增量内容
-                        callback(finalIncrement, false)
-                        delay(50)
-                    }
-                }
-                
-                // ✅ 只发送一次完成标记（包含完整内容）
-                if (isDone) {
-                    callback(accumulatedContent.toString(), true)
-                }
+                streamQuickResponse(response.body().toList(), callback)
             } else {
                 logger.error("❌ AI API返回错误: ${response.statusCode()}")
                 callback("⚠️ AI暂时无法回答，请稍后重试", true)
@@ -1588,11 +1469,83 @@ $doctorMessage
             callback("⚠️ AI暂时无法回答，请稍后重试", true)
         }
     }
+
+    /** 快速响应流式累积状态。 */
+    private class QuickResponseState {
+        val accumulatedContent = StringBuilder()
+        var lastSentContent = ""  // ✅ 记录上次发送的内容
+        var isDone = false        // ✅ 标记是否已完成
+    }
+
+    /** 处理 200 响应的 SSE 行集合：逐行累积、节流推送增量、收尾并在完成时回调完整内容。 */
+    private suspend fun streamQuickResponse(
+        lines: List<String>,
+        callback: suspend (content: String, isComplete: Boolean) -> Unit
+    ) {
+        val state = QuickResponseState()
+        for (line in lines) {
+            if (line.startsWith("data: ")) {
+                val data = line.removePrefix("data: ").trim()
+                if (data == "[DONE]") {
+                    state.isDone = true
+                    break
+                }
+                accumulateQuickResponseData(data, state, callback)
+            }
+        }
+
+        // 确保发送最后的增量内容（如果有）
+        if (state.accumulatedContent.length > state.lastSentContent.length) {
+            val finalIncrement = state.accumulatedContent.substring(state.lastSentContent.length)
+            if (finalIncrement.isNotEmpty()) {
+                // 先发送最后的增量内容
+                callback(finalIncrement, false)
+                delay(50)
+            }
+        }
+
+        // ✅ 只发送一次完成标记（包含完整内容）
+        if (state.isDone) {
+            callback(state.accumulatedContent.toString(), true)
+        }
+    }
+
+    /** 解析单个 SSE data 负载，累积 reasoning 文本并按累计 3 行的节流规则推送增量。 */
+    private suspend fun accumulateQuickResponseData(
+        data: String,
+        state: QuickResponseState,
+        callback: suspend (content: String, isComplete: Boolean) -> Unit
+    ) {
+        try {
+            val streamResponse = json.decodeFromString<StreamResponse>(data)
+            val delta = streamResponse.choices.firstOrNull()?.delta
+
+            // ✅ GLM-5 模型：content 字段是乱码，reasoning 字段才是真正的中文回答
+            // 只读取 reasoning 字段，忽略 content
+            val content = delta?.reasoning ?: ""
+            if (content.isEmpty()) return
+
+            state.accumulatedContent.append(content)
+
+            // ✅ 累积3行后发送一次临时消息（更频繁更新）
+            val newlineCount = state.accumulatedContent.count { it == '\n' }
+            if (newlineCount >= 3 && state.accumulatedContent.length > state.lastSentContent.length) {
+                // ✅ 发送增量内容（只发送新增的部分）
+                val incrementalContent = state.accumulatedContent.substring(state.lastSentContent.length)
+                callback(incrementalContent, false)
+                state.lastSentContent = state.accumulatedContent.toString()
+                delay(50)  // 减少延迟，提升响应速度
+            }
+        } catch (e: Exception) {
+            // 忽略解析错误，继续处理下一行
+        }
+    }
 }
 
 /**
  * API 请求模型
  */
+@Suppress("ConstructorParameterNaming")
 @Serializable
 data class ApiRequest(
     val model: String,
@@ -1634,6 +1587,7 @@ data class StreamResponse(
     val choices: List<StreamChoice>
 )
 
+@Suppress("ConstructorParameterNaming")
 @Serializable
 data class StreamChoice(
     val delta: StreamDelta,

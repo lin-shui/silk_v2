@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonObject
  * 提取为独立文件，避免交叉依赖。
  */
 
+@Suppress("ConstructorParameterNaming")
 @Serializable
 data class Message(
     val role: String,
@@ -41,4 +42,18 @@ data class ToolDefinition(
     val name: String,
     val description: String,
     val parameters: JsonObject
+)
+
+/**
+ * 结构化 content block，用于流式传输 thinking/text/tool_use 内容。
+ * 对应 Anthropic Messages API 的 content block 概念。
+ */
+@Serializable
+data class ContentBlock(
+    val index: Int,
+    val type: String,          // "thinking", "text", "tool_use"
+    val content: String = "",
+    val isComplete: Boolean = false,
+    val toolName: String = "",
+    val toolId: String = ""
 )

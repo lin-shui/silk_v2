@@ -1,6 +1,11 @@
 package com.silk.backend.database
 
-import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.ResultRow
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.deleteWhere
+import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.select
+import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
 import java.util.UUID
@@ -8,6 +13,7 @@ import java.util.UUID
 /**
  * 用户数据访问层
  */
+@Suppress("TooGenericExceptionCaught")
 object UserRepository {
     private val logger = LoggerFactory.getLogger(UserRepository::class.java)
     
@@ -40,6 +46,23 @@ object UserRepository {
         }
     }
     
+    /**
+     * 更新用户显示昵称
+     */
+    fun updateFullName(userId: String, newFullName: String): User? {
+        return try {
+            transaction {
+                Users.update({ Users.id eq userId }) {
+                    it[fullName] = newFullName
+                }
+                findUserById(userId)
+            }
+        } catch (e: Exception) {
+            logger.error("❌ 更新用户昵称失败: {}", e.message)
+            null
+        }
+    }
+
     /**
      * 根据ID查找用户
      */
@@ -115,6 +138,57 @@ object UserRepository {
         }
     }
     
+    /**
+     * 删除用户及其所有关联数据（注销账号）
+     */
+    fun deleteUser(userId: String): Boolean {
+        return try {
+            transaction {
+                // 按外键依赖顺序删除
+
+                // 1. 删除华为账号绑定
+                HuaweiAccounts.deleteWhere { HuaweiAccounts.userId eq userId }
+                WechatAccounts.deleteWhere { WechatAccounts.userId eq userId }
+
+                // 2. 删除群组成员关系
+                GroupMembers.deleteWhere { GroupMembers.userId eq userId }
+
+                // 3. 删除联系人关系（双向）
+                Contacts.deleteWhere { Contacts.userId eq userId }
+                Contacts.deleteWhere { Contacts.contactId eq userId }
+
+                // 4. 删除联系人请求（双向）
+                ContactRequests.deleteWhere { ContactRequests.fromUserId eq userId }
+                ContactRequests.deleteWhere { ContactRequests.toUserId eq userId }
+
+                // 5. 删除用户设置
+                UserSettingsTable.deleteWhere { UserSettingsTable.userId eq userId }
+
+                // 6. 撤销所有 Refresh Token
+                RefreshTokensTable.deleteWhere { RefreshTokensTable.userId eq userId }
+
+                // 7. 删除用户拥有的群组（级联删除相关数据）
+                val ownedGroups = Groups.select { Groups.hostId eq userId }.map { it[Groups.id] }
+                for (groupId in ownedGroups) {
+                    // 删除群组成员
+                    GroupMembers.deleteWhere { GroupMembers.groupId eq groupId }
+                    // 删除 cc-connect token
+                    CcConnectTokens.deleteWhere { CcConnectTokens.groupId eq groupId }
+                }
+                Groups.deleteWhere { Groups.hostId eq userId }
+
+                // 8. 最后删除用户本身
+                Users.deleteWhere { Users.id eq userId }
+
+                logger.info("✅ 用户注销成功: userId={}", userId)
+                true
+            }
+        } catch (e: Exception) {
+            logger.error("❌ 用户注销失败: {}", e.message)
+            false
+        }
+    }
+
     /**
      * 将数据库行转换为User对象
      */

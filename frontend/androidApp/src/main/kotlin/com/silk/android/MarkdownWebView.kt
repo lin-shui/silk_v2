@@ -1,15 +1,22 @@
 package com.silk.android
 
+import android.util.Base64
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import androidx.compose.foundation.layout.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import java.io.ByteArrayInputStream
 
 /**
  * 使用 WebView + KaTeX 渲染 Markdown 内容
@@ -80,7 +87,7 @@ private fun encodeToJsString(s: String): String {
             else -> {
                 if (c.code < 32 || c.code > 127) {
                     sb.append("\\u")
-                    sb.append(String.format("%04x", c.code))
+                    sb.append(String.format(java.util.Locale.ROOT, "%04x", c.code))
                 } else {
                     sb.append(c)
                 }
@@ -123,11 +130,18 @@ private fun generateMarkdownHtml(content: String): String {
     </style>
 </head>
 <body>
+    <div id="top"></div>
     <div id="content" class="markdown-body"></div>
     <script>
     (function() {
+        function scrollToTop() {
+            var topEl = document.getElementById('top');
+            if (topEl) { topEl.scrollIntoView(true); }
+            window.scrollTo(0, 0);
+        }
+
         var hljsReady = typeof hljs !== 'undefined';
-        
+
         function renderContent() {
             try {
                 if (typeof marked === 'undefined') { setTimeout(renderContent, 50); return; }
@@ -195,7 +209,15 @@ private fun generateMarkdownHtml(content: String): String {
                     link.setAttribute('target', '_blank');
                     link.setAttribute('rel', 'noopener noreferrer');
                 });
-                
+
+                // Aggressive scroll-to-top: immediate + retries with delays
+                // to handle async rendering (KaTeX, highlight.js) that changes DOM height
+                scrollToTop();
+                setTimeout(scrollToTop, 100);
+                setTimeout(scrollToTop, 300);
+                setTimeout(scrollToTop, 700);
+                setTimeout(scrollToTop, 1500);
+
             } catch(e) {
                 console.error('Render error:', e);
                 document.getElementById('content').textContent = 'Error: ' + e.message;
@@ -219,13 +241,18 @@ fun MarkdownWebView(
 ) {
     val htmlContent = remember(content) { generateMarkdownHtml(content) }
     
+    // 确保 WebView 从顶部开始显示，不自动滚动到尾部
+    fun WebView.ensureScrollToTop() {
+        scrollTo(0, 0)
+        evaluateJavascript("window.scrollTo(0,0);", null)
+        evaluateJavascript("scrollToTop();", null)
+    }
+
     AndroidView(
         factory = { context ->
             WebView(context).apply {
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
                 settings.setSupportZoom(false)
                 settings.builtInZoomControls = false
                 settings.displayZoomControls = false
@@ -233,9 +260,51 @@ fun MarkdownWebView(
                 settings.blockNetworkLoads = false
                 settings.loadsImagesAutomatically = true
                 settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                
+
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                
+
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView, url: String) {
+                        view.ensureScrollToTop()
+                        view.postDelayed({ view.scrollTo(0, 0) }, 200)
+                        view.postDelayed({ view.scrollTo(0, 0) }, 600)
+                    }
+
+                    // Handle data: URIs for images — some Android versions
+                    // block data URIs when loaded via loadDataWithBaseURL.
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: WebResourceRequest
+                    ): WebResourceResponse? {
+                        val url = request.url.toString()
+                        if (!url.startsWith("data:")) return super.shouldInterceptRequest(view, request)
+
+                        return try {
+                            val dataStart = url.indexOf(",")
+                            if (dataStart < 0) return super.shouldInterceptRequest(view, request)
+                            val header = url.substring(5, dataStart)
+                            val isBase64 = header.endsWith("base64")
+                            val mime = if (isBase64) {
+                                header.substring(0, maxOf(0, header.length - 7)).trim()
+                            } else {
+                                header.split(";")[0].trim()
+                            }
+                            val rawData = url.substring(dataStart + 1)
+                            val bytes = if (isBase64) {
+                                Base64.decode(rawData, Base64.DEFAULT)
+                            } else {
+                                try { rawData.toByteArray() } catch (_: Exception) { rawData.toByteArray() }
+                            }
+                            WebResourceResponse(
+                                mime.ifBlank { "image/png" }, "UTF-8",
+                                ByteArrayInputStream(bytes)
+                            )
+                        } catch (_: Exception) {
+                            super.shouldInterceptRequest(view, request)
+                        }
+                    }
+                }
+
                 loadDataWithBaseURL(
                     "https://cdn.jsdelivr.net",
                     htmlContent,
@@ -253,6 +322,10 @@ fun MarkdownWebView(
                 "UTF-8",
                 null
             )
+            webView.ensureScrollToTop()
+            // Retry scroll after layout to handle async rendering height changes
+            webView.postDelayed({ webView.scrollTo(0, 0) }, 200)
+            webView.postDelayed({ webView.scrollTo(0, 0) }, 600)
         },
         modifier = modifier
             .fillMaxWidth()

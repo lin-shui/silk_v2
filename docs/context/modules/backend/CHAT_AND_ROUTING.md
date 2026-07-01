@@ -11,8 +11,13 @@
   - 大多数 HTTP 路由仍在这里
   - 还挂载了 `fileRoutes()` 与 `asrRoutes()`
 - `WebSocketConfig.kt`:
-  - 定义 `Message` / `MessageType` / `MessageCategory`
+  - 定义 `Message` / `MessageType`（含 `CARD`、`CARD_REPLY`）/ `MessageCategory`
+  - `Message.action` 字段支持消息替换（`"edit"` = 覆盖同 ID 消息）
   - 定义 `ChatServer`
+- `card/` 目录：
+  - `CardModels.kt` — 交互卡片 JSON schema 数据类
+  - `CardBuilder.kt` — 卡片构造 Builder API
+  - `CardReplyRouter.kt` — 卡片回复路由注册表
 
 ## HTTP Route Groups
 
@@ -66,7 +71,8 @@
 5. 广播到所有 session
 7. 对普通文本异步触发 URL/PDF 处理
 8. Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
-9. Silk AI / `DirectModelAgent` 响应
+9. `/recall` 命令交给 `UserHistoryAgent`，在 per-user hardlink workspace 中只读检索历史会话
+10. Silk AI / `DirectModelAgent` 响应
 
 ## Contracts Visible To Clients
 
@@ -74,6 +80,7 @@
   - 后端 `WebSocketConfig.kt`
   - 共享前端 `frontend/shared/.../models/Message.kt`
 - HTTP 响应/请求 DTO 中的 CC 模块（`CcStateResponse` / `DirEntry` / `DirListingResponse`）只在 `frontend/shared/.../models/UserSettings.kt` 一处定义；backend 通过 `implementation(project(":frontend:shared"))` 直接 import。新增字段改一处即可。
+- WebSocket `blocks_state` 消息：后端流式发送完整 content block 列表（含 type/content/isComplete），前端替换前一次列表。类型包括 `thinking`（ThinkingBlock 折叠渲染）、`text`（MarkdownContent）、`tool_use`（ToolCallBlock）。
 - 文件消息 payload 同时影响：
   - `routes/FileRoutes.kt`
   - `backend/BackendFileContractTest.kt`

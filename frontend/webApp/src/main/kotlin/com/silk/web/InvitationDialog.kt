@@ -61,7 +61,7 @@ fun InvitationDialog(
 ━━━━━━━━━━━━━━━━━
 
 📱 下载/访问 Silk：
-• Android APK: ${window.location.origin}/api/files/download-apk
+• Android APK: ${backendHttpOrigin()}/api/files/download-apk
 • Web 网页版: ${window.location.origin}
 
 🚀 如何加入：

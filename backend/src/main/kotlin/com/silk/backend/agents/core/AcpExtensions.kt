@@ -44,11 +44,50 @@ object AcpExtensions {
         })
     }
 
-    /** AskUserQuestion 回答传回 bridge */
-    suspend fun resolveQuestion(acp: AcpClient, requestId: String, answer: String): JsonElement {
+    /**
+     * AskUserQuestion 回答传回 bridge。
+     * answersByQuestion: {问题文本 -> 答案}，bridge 会合并进原始 tool_input 的 updatedInput.answers
+     * （对齐 Claude Code CLI 期望格式，见 cc-connect buildAskQuestionResponse）。
+     */
+    suspend fun resolveQuestion(
+        acp: AcpClient,
+        requestId: String,
+        answersByQuestion: Map<String, String>,
+    ): JsonElement {
         return acp.callExtension("_silk/resolve_question", buildJsonObject {
             put("requestId", requestId)
-            put("answer", answer)
+            put("answers", buildJsonObject {
+                answersByQuestion.forEach { (question, answer) -> put(question, answer) }
+            })
+        })
+    }
+
+    /** 工具权限决定传回 bridge */
+    suspend fun resolvePermission(
+        acp: AcpClient,
+        requestId: String,
+        decision: String,
+        reason: String = "",
+    ): JsonElement {
+        return acp.callExtension("_silk/resolve_permission", buildJsonObject {
+            put("requestId", requestId)
+            put("decision", decision)
+            put("reason", reason)
+        })
+    }
+
+    /** Source Control：工作树 vs HEAD 的文件状态 */
+    suspend fun gitStatus(acp: AcpClient, sessionId: String): JsonElement {
+        return acp.callExtension("_silk/git_status", buildJsonObject {
+            put("sessionId", sessionId)
+        })
+    }
+
+    /** Source Control：单文件 unified diff */
+    suspend fun gitDiff(acp: AcpClient, sessionId: String, path: String): JsonElement {
+        return acp.callExtension("_silk/git_diff", buildJsonObject {
+            put("sessionId", sessionId)
+            put("path", path)
         })
     }
 

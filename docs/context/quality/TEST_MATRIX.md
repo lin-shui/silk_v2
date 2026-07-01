@@ -83,6 +83,9 @@
 - Coverage:
   - detekt checks Kotlin source across `backend` and Gradle frontends
   - `silkScriptLint` checks `silk.sh` with `bash -n`
+- Use:
+  - before commit / push / PR when Kotlin, Gradle, or `silk.sh` changed
+  - before blaming CI for fast-validation lint failures, because the same `silkLint` entrypoint runs in CI
 - Maintenance:
   - `./gradlew silkLintBaseline` regenerates `config/lint/detekt/` baselines for intentionally accepted existing findings
 

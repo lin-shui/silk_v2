@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap
  * - 同一 userId 同时仅允许一个刷新任务在跑
  * - 记录最近一次开始/结束/错误，供前端轮询状态
  */
+@Suppress("TooGenericExceptionCaught")
 object UserTodoRefreshAsyncManager {
     private data class RefreshState(
         val running: Boolean = false,

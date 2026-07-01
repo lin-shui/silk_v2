@@ -28,6 +28,7 @@ import java.time.format.DateTimeFormatter
  * 使用 iText 库生成格式化的诊断报告 PDF
  * 支持中文字体
  */
+@Suppress("TooGenericExceptionCaught", "TooGenericExceptionThrown", "SwallowedException")
 class PDFReportGenerator {
 
     private val logger = LoggerFactory.getLogger(PDFReportGenerator::class.java)
@@ -36,39 +37,7 @@ class PDFReportGenerator {
     private fun primaryColor() = DeviceRgb(25, 118, 210)      // 蓝色
     private fun secondaryColor() = DeviceRgb(76, 175, 80)     // 绿色
     private fun headerBgColor() = DeviceRgb(245, 245, 245)    // 浅灰色
-    private fun successColor() = DeviceRgb(76, 175, 80)       // 绿色
-    private fun errorColor() = DeviceRgb(244, 67, 54)         // 红色
-    
-    // 中文字体路径（静态配置）- 优先使用对中英文都支持好的字体
-    private val chineseFontPath: String? by lazy {
-        // macOS 系统自带的字体，优先选择对中英文都支持好的
-        val fontPaths = listOf(
-            "/Library/Fonts/Arial Unicode.ttf",               // ✅ Arial Unicode MS - 对中英文都支持好
-            "/System/Library/Fonts/PingFang.ttc,0",           // PingFang SC Regular
-            "/System/Library/Fonts/STHeiti Light.ttc,0",      // 华文黑体
-            "/System/Library/Fonts/Supplemental/Songti.ttc,0" // 宋体
-        )
-        
-        // 尝试找到第一个可用的字体
-        for (fontPath in fontPaths) {
-            try {
-                val file = java.io.File(fontPath.split(",")[0])
-                if (file.exists()) {
-                    logger.info("✅ 找到中文字体: {}", fontPath)
-                    return@lazy fontPath
-                }
-            } catch (e: Exception) {
-                // 尝试下一个字体
-                continue
-            }
-        }
-        
-        // 如果都失败，返回 null（使用内置字体）
-        logger.warn("⚠️ 未找到系统字体，将使用内置字体")
-        null
-    }
-    
-    /**
+/**
      * 为每个 PDF 文档创建独立的中文字体对象
      * ✅ 使用正确的策略：内置CJK字体不需要embed
      */
@@ -106,6 +75,7 @@ class PDFReportGenerator {
      * 简化方案：使用Arial Unicode或PingFang等对中英文都支持好的字体
      * 增加字符间距以避免字符重叠
      */
+    @Suppress("UnusedParameter")
     private fun createMixedFontParagraph(text: String, chineseFont: PdfFont, englishFont: PdfFont, fontSize: Float = 9f): Paragraph {
         // ✅ 简化方案：只使用中文字体（选用的字体对英文也有良好支持）
         // 避免混合字体导致的字符宽度、间距问题
@@ -343,10 +313,11 @@ class PDFReportGenerator {
     /**
      * 添加患者信息
      */
+    @Suppress("UnusedParameter")
     private fun addPatientInfo(
-        document: Document, 
-        patientInfo: String, 
-        userName: String, 
+        document: Document,
+        patientInfo: String,
+        userName: String,
         sessionName: String,
         diagnosisResult: AIStepwiseAgent.DiagnosisResult,
         chineseFont: PdfFont,
@@ -496,84 +467,104 @@ class PDFReportGenerator {
     /**
      * 从诊断结果中提取中西医疾病诊断的简要摘要
      */
+    private enum class DiagnosisSection { NONE, WESTERN, CHINESE }
+
     private fun extractDiagnosisSummary(diagnosisResult: AIStepwiseAgent.DiagnosisResult): String {
         val diagnosisStep = diagnosisResult.stepResults["中西医疾病的诊断"]
-        
+
         if (diagnosisStep == null || !diagnosisStep.success) {
             return ""
         }
-        
+
         val fullText = diagnosisStep.result
-        val lines = fullText.split("\n")
-        val summary = mutableListOf<String>()
-        
-        // 提取西医诊断和中医诊断的关键信息
-        var inWesternDiagnosis = false
-        var inChineseDiagnosis = false
         val westernDiseases = mutableListOf<String>()
         val chineseDiseases = mutableListOf<String>()
-        
-        for (line in lines) {
+
+        // 提取西医诊断和中医诊断的关键信息
+        var currentSection = DiagnosisSection.NONE
+        for (line in fullText.split("\n")) {
             val trimmed = line.trim()
-            
-            when {
-                trimmed.contains("西医诊断") || trimmed.contains("【西医") -> {
-                    inWesternDiagnosis = true
-                    inChineseDiagnosis = false
-                }
-                trimmed.contains("中医诊断") || trimmed.contains("【中医") -> {
-                    inChineseDiagnosis = true
-                    inWesternDiagnosis = false
-                }
-                inWesternDiagnosis && trimmed.isNotEmpty() -> {
-                    // 提取疾病名称（通常包含"、"或数字编号）
-                    if (trimmed.matches(Regex(".*[：:].+")) || 
-                        trimmed.matches(Regex("\\d+[.、].*")) ||
-                        trimmed.contains("可能") ||
-                        trimmed.contains("考虑")) {
-                        westernDiseases.add(trimmed.replace(Regex("^\\d+[.、]\\s*"), ""))
-                    }
-                }
-                inChineseDiagnosis && trimmed.isNotEmpty() -> {
-                    // 提取中医病名
-                    if (trimmed.matches(Regex(".*[：:].+")) || 
-                        trimmed.matches(Regex("\\d+[.、].*")) ||
-                        trimmed.contains("不寐") ||
-                        trimmed.contains("虚劳") ||
-                        trimmed.contains("头痛")) {
-                        chineseDiseases.add(trimmed.replace(Regex("^\\d+[.、]\\s*"), ""))
-                    }
-                }
+            // 与原始 when 语义一致：section 标题行只切换分区，不参与病名收集
+            if (isSectionHeaderLine(trimmed)) {
+                currentSection = detectDiagnosisSection(trimmed, currentSection)
+                continue
+            }
+            collectDiagnosisLine(trimmed, currentSection, westernDiseases, chineseDiseases)
+        }
+
+        return buildDiagnosisSummary(fullText, westernDiseases, chineseDiseases)
+    }
+
+    private fun isSectionHeaderLine(trimmed: String): Boolean =
+        trimmed.contains("西医诊断") || trimmed.contains("【西医") ||
+            trimmed.contains("中医诊断") || trimmed.contains("【中医")
+
+    private fun detectDiagnosisSection(
+        trimmed: String,
+        currentSection: DiagnosisSection
+    ): DiagnosisSection = when {
+        trimmed.contains("西医诊断") || trimmed.contains("【西医") -> DiagnosisSection.WESTERN
+        trimmed.contains("中医诊断") || trimmed.contains("【中医") -> DiagnosisSection.CHINESE
+        else -> currentSection
+    }
+
+    private fun collectDiagnosisLine(
+        trimmed: String,
+        currentSection: DiagnosisSection,
+        westernDiseases: MutableList<String>,
+        chineseDiseases: MutableList<String>
+    ) {
+        if (trimmed.isEmpty()) return
+
+        when {
+            currentSection == DiagnosisSection.WESTERN && shouldCollectWesternDiagnosis(trimmed) ->
+                westernDiseases.add(trimmed.replace(Regex("^\\d+[.、]\\s*"), ""))
+            currentSection == DiagnosisSection.CHINESE && shouldCollectChineseDiagnosis(trimmed) ->
+                chineseDiseases.add(trimmed.replace(Regex("^\\d+[.、]\\s*"), ""))
+        }
+    }
+
+    private fun hasDiagnosisLead(trimmed: String): Boolean =
+        trimmed.matches(Regex(".*[：:].+")) || trimmed.matches(Regex("\\d+[.、].*"))
+
+    // 提取疾病名称（通常包含"、"或数字编号）
+    private fun shouldCollectWesternDiagnosis(trimmed: String): Boolean =
+        hasDiagnosisLead(trimmed) || trimmed.contains("可能") || trimmed.contains("考虑")
+
+    // 提取中医病名
+    private fun shouldCollectChineseDiagnosis(trimmed: String): Boolean =
+        hasDiagnosisLead(trimmed) ||
+            trimmed.contains("不寐") ||
+            trimmed.contains("虚劳") ||
+            trimmed.contains("头痛")
+
+    private fun buildDiagnosisSummary(
+        fullText: String,
+        westernDiseases: List<String>,
+        chineseDiseases: List<String>
+    ): String = buildString {
+        if (westernDiseases.isNotEmpty()) {
+            append("【西医】")
+            append(westernDiseases.take(2).joinToString("；").take(100))
+            if (westernDiseases.size > 2 || westernDiseases.joinToString().length > 100) {
+                append("...")
             }
         }
-        
-        // 构建简要诊断摘要
-        val result = buildString {
-            if (westernDiseases.isNotEmpty()) {
-                append("【西医】")
-                append(westernDiseases.take(2).joinToString("；").take(100))
-                if (westernDiseases.size > 2 || westernDiseases.joinToString().length > 100) {
-                    append("...")
-                }
-            }
-            
-            if (chineseDiseases.isNotEmpty()) {
-                if (westernDiseases.isNotEmpty()) append("\n")
-                append("【中医】")
-                append(chineseDiseases.take(2).joinToString("；").take(100))
-                if (chineseDiseases.size > 2 || chineseDiseases.joinToString().length > 100) {
-                    append("...")
-                }
-            }
-            
-            // 如果提取失败，使用简化的完整文本前150字
-            if (isEmpty()) {
-                append(fullText.replace(Regex("\\s+"), " ").take(150))
-                if (fullText.length > 150) append("...")
+
+        if (chineseDiseases.isNotEmpty()) {
+            if (westernDiseases.isNotEmpty()) append("\n")
+            append("【中医】")
+            append(chineseDiseases.take(2).joinToString("；").take(100))
+            if (chineseDiseases.size > 2 || chineseDiseases.joinToString().length > 100) {
+                append("...")
             }
         }
-        
-        return result.toString()
+
+        // 如果提取失败，使用简化的完整文本前150字
+        if (isEmpty()) {
+            append(fullText.replace(Regex("\\s+"), " ").take(150))
+            if (fullText.length > 150) append("...")
+        }
     }
     
     /**
@@ -619,56 +610,6 @@ class PDFReportGenerator {
             "提取症状失败"
         }
     }
-    
-    /**
-     * 添加执行摘要
-     */
-    private fun addExecutionSummary(document: Document, result: AIStepwiseAgent.DiagnosisResult, chineseFont: PdfFont) {
-        val sectionTitle = Paragraph("诊断执行摘要")
-            .setFont(chineseFont)
-            .setFontSize(16f)
-            .setBold()
-            .setFontColor(primaryColor())
-            .setMarginTop(15f)
-            .setMarginBottom(10f)
-        
-        // ✅ 添加字符间距
-        try {
-            sectionTitle.setCharacterSpacing(1.2f)
-        } catch (e: Exception) {
-            // 忽略错误
-        }
-        
-        document.add(sectionTitle)
-        
-        // 摘要表格
-        val table = Table(UnitValue.createPercentArray(floatArrayOf(30f, 70f)))
-            .useAllAvailableWidth()
-            .setMarginBottom(15f)
-        
-        table.addHeaderCell(createHeaderCell("统计项", chineseFont))
-        table.addHeaderCell(createHeaderCell("数值", chineseFont))
-        
-        table.addCell(createCell("诊断步骤总数", chineseFont = chineseFont))
-        table.addCell(createCell("${result.stepResults.size} 步", chineseFont = chineseFont))
-        
-        table.addCell(createCell("成功完成", chineseFont = chineseFont))
-        table.addCell(createCell("${result.stepResults.count { it.value.success }} 步", 
-            if (result.allSuccess) successColor() else errorColor(), chineseFont))
-        
-        table.addCell(createCell("执行状态", chineseFont = chineseFont))
-        table.addCell(createCell(
-            if (result.allSuccess) "✓ 全部成功" else "⚠ 部分失败",
-            if (result.allSuccess) successColor() else errorColor(),
-            chineseFont
-        ))
-        
-        table.addCell(createCell("报告生成时间", chineseFont = chineseFont))
-        table.addCell(createCell(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")), chineseFont = chineseFont))
-        
-        document.add(table)
-    }
-    
     /**
      * 添加诊断步骤表格（每个步骤一行，排除总结报告）
      */
@@ -789,6 +730,13 @@ class PDFReportGenerator {
         addDisclaimer(document, chineseFont, englishFont)
     }
     
+    // 跳过空行和分隔线
+    private fun shouldSkipFormattedSummaryLine(trimmed: String): Boolean =
+        trimmed.isEmpty() ||
+            trimmed.startsWith("═") ||
+            trimmed.startsWith("─") ||
+            trimmed.contains("Silk AI Agent")
+
     /**
      * 解析并渲染格式化的文本
      * 支持标记：##主标题##, ###副标题###, ####要点####
@@ -800,10 +748,7 @@ class PDFReportGenerator {
             val trimmed = line.trim()
             
             // 跳过空行和分隔线
-            if (trimmed.isEmpty() || 
-                trimmed.startsWith("═") || 
-                trimmed.startsWith("─") ||
-                trimmed.contains("Silk AI Agent")) {
+            if (shouldSkipFormattedSummaryLine(trimmed)) {
                 continue
             }
             
@@ -1002,36 +947,6 @@ class PDFReportGenerator {
             .add(paragraph)
             .setTextAlignment(TextAlignment.CENTER)
             .setPadding(8f)
-    }
-    
-    /**
-     * 格式化结果文本用于 PDF 显示
-     * 确保人类可读，去除 JSON 等技术格式
-     */
-    private fun formatResultForPDF(text: String): String {
-        // 检查是否是 JSON 格式
-        if (text.trim().startsWith("{") || text.trim().startsWith("[")) {
-            return "【系统信息】\n内容格式需要优化，请查看聊天室中的文字版总结报告。"
-        }
-        
-        // 移除过多的空行和特殊字符
-        val cleaned = text.split("\n")
-            .filter { line ->
-                val trimmed = line.trim()
-                trimmed.isNotEmpty() && 
-                !trimmed.startsWith("{") && 
-                !trimmed.startsWith("[") &&
-                !trimmed.contains("\"content\"") &&
-                !trimmed.contains("\"isTransient\"")
-            }
-            .joinToString("\n")
-        
-        // 限制长度（每个单元格最多1000字）
-        return if (cleaned.length > 1000) {
-            cleaned.take(997) + "..."
-        } else {
-            cleaned
-        }
     }
     
     /**
