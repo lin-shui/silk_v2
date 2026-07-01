@@ -6,6 +6,7 @@ import android.app.Activity
 import android.content.Context
 import android.os.Build
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -126,11 +127,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
 import com.silk.shared.models.Message
+import com.silk.shared.models.MessageCategory
 import com.silk.shared.models.MessageType
 import com.silk.shared.models.isAgentUserId
 import com.silk.shared.models.SILK_AGENT_USER_ID
 import com.silk.shared.models.SILK_AGENT_DISPLAY_NAME
 import com.silk.shared.utils.formatMessageTimestamp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -147,6 +150,7 @@ import android.content.pm.PackageManager
 import android.media.MediaRecorder
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.activity.result.ActivityResultLauncher
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.viewinterop.AndroidView
@@ -168,34 +172,29 @@ fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsState(): State<T> {
 fun ChatScreen(appState: AppState) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    
+
     val user = appState.currentUser ?: return
     val group = appState.selectedGroup ?: return
-    
-    // WebSocket URL - 与 BackendUrlHolder 一致（应用内设置或构建时默认）
+
     val baseUrl = BackendUrlHolder.getBaseUrl()
     val wsUrl = baseUrl.replaceFirst("http", "ws")
-    
-    // 收集调试日志（只保留最后32行）
     val debugLogs = remember { mutableStateListOf<String>() }
-    
-    // 添加日志函数（自动限制到最后32行）
+
     fun addLog(message: String) {
         debugLogs.add(message)
-        // 只保留最后32行
         while (debugLogs.size > 32) {
             debugLogs.removeAt(0)
         }
         println(message)
     }
-    
-    val chatClient = remember { 
+
+    val chatClient = remember {
         addLog("🔧 创建 ChatClient，URL: $wsUrl")
         ChatClient(wsUrl) { logMessage ->
             addLog(logMessage)
         }
     }
-    
+
     val messages by chatClient.messages.collectAsState()
     val transientMessage by chatClient.transientMessage.collectAsState()
     val statusMessages by chatClient.statusMessages.collectAsState()
@@ -236,16 +235,12 @@ fun ChatScreen(appState: AppState) {
 
     // Track if we've sent the default instruction for this session
     var hasSentDefaultInstruction by remember { mutableStateOf(false) }
-    
     var messageText by remember { mutableStateOf(TextFieldValue("")) }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isExiting by remember { mutableStateOf(false) }
     var showDebugInfo by remember { mutableStateOf(false) }
-    
-    // AI 响应等待状态 - 必须在 LaunchedEffect 之前定义
     var isWaitingForAI by remember { mutableStateOf(false) }
 
-    // ASR 语音输入状态
     var isVoiceRecording by remember { mutableStateOf(false) }
     var isTranscribing by remember { mutableStateOf(false) }
     val mediaRecorderRef = remember { mutableStateOf<MediaRecorder?>(null) }
@@ -330,23 +325,18 @@ fun ChatScreen(appState: AppState) {
     
     // 消息选择模式
     var isSelectionMode by remember { mutableStateOf(false) }
-    val selectedMessages = remember { mutableStateListOf<String>() }  // 存储选中消息的ID
-    
-    // ✅ 转发对话框状态
+    val selectedMessages = remember { mutableStateListOf<String>() }
     var showForwardToGroupDialog by remember { mutableStateOf(false) }
     var showForwardToContactDialog by remember { mutableStateOf(false) }
     var userGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
     var isLoadingGroups by remember { mutableStateOf(false) }
     var forwardResult by remember { mutableStateOf<String?>(null) }
-    // ✅ 单条消息转发状态（用于 AI 消息等直接点击转发按钮的情况）
     var messageToForward by remember { mutableStateOf<Message?>(null) }
-    
-    // 添加联系人对话框状态
+
     var showAddContactConfirm by remember { mutableStateOf<Message?>(null) }
     var isAddingContact by remember { mutableStateOf(false) }
     var addContactResult by remember { mutableStateOf<String?>(null) }
-    
-    // 添加成员到群组状态
+
     var showAddMemberDialog by remember { mutableStateOf(false) }
     var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
     var groupMembers by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
@@ -369,30 +359,282 @@ fun ChatScreen(appState: AppState) {
     var showMentionMenu by remember { mutableStateOf(false) }
     var mentionSearchText by remember { mutableStateOf("") }
     var mentionStartIndex by remember { mutableStateOf(-1) }
-    
-    // 从消息历史和群组成员列表中提取用户列表（去重），用于 @ 提及下拉
-    // 优先使用 groupMembers（包含所有群组成员），同时合并消息历史中的用户
-    val sessionUsers = remember(messages, groupMembers) {
-        val users = mutableSetOf<Pair<String, String>>() // (id, name)
-        // 始终添加 Silk AI
-        users.add(SILK_AGENT_USER_ID to "🤖 $SILK_AGENT_DISPLAY_NAME")
-        // 添加当前用户
-        users.add(user.id to user.fullName)
-        // 从群组成员列表添加所有成员
-        groupMembers.forEach { member ->
-            if (!isAgentUserId(member.id) && member.id != user.id) {
-                users.add(member.id to member.fullName)
+
+    val filePickerLauncher = rememberChatFilePickerLauncher(
+        context = context,
+        group = group,
+        user = user,
+        scope = scope,
+        chatClient = chatClient,
+        addLog = ::addLog,
+        onUploadingChange = { isUploading = it },
+        onUploadProgressChange = { uploadProgress = it },
+    )
+
+    val sessionUsers = rememberChatSessionUsers(messages, groupMembers, user)
+    val listState = rememberLazyListState()
+    val aiMessageExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
+    val thinkingExpandedStates = remember { mutableStateMapOf<String, Boolean>() }
+    var expandScrollJob by remember { mutableStateOf<Job?>(null) }
+    val isHistoryLoading by chatClient.isLoadingHistory.collectAsState()
+
+    ChatScreenEffects(
+        user = user,
+        group = group,
+        wsUrl = wsUrl,
+        baseUrl = baseUrl,
+        chatClient = chatClient,
+        messages = messages,
+        transientMessage = transientMessage,
+        connectionState = connectionState,
+        isWaitingForAI = isWaitingForAI,
+        isHistoryLoading = isHistoryLoading,
+        listState = listState,
+        addLog = ::addLog,
+        onGroupMembersLoaded = { groupMembers = it },
+        onHasSentDefaultInstructionChange = { hasSentDefaultInstruction = it },
+        onWaitingForAiChange = { isWaitingForAI = it },
+    )
+
+    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
+    ChatScreenScaffoldContent(
+        appState = appState,
+        user = user,
+        group = group,
+        context = context,
+        chatClient = chatClient,
+        scrollBehavior = scrollBehavior,
+        messages = messages,
+        transientMessage = transientMessage,
+        statusMessages = statusMessages,
+        connectionState = connectionState,
+        isHistoryLoading = isHistoryLoading,
+        isGenerating = isGenerating,
+        isWaitingForAI = isWaitingForAI,
+        isSelectionMode = isSelectionMode,
+        selectedMessages = selectedMessages,
+        isExiting = isExiting,
+        isUploading = isUploading,
+        uploadProgress = uploadProgress,
+        messageText = messageText,
+        listState = listState,
+        aiMessageExpandedStates = aiMessageExpandedStates,
+        thinkingExpandedStates = thinkingExpandedStates,
+        expandScrollJob = expandScrollJob,
+        sessionUsers = sessionUsers,
+        showMentionMenu = showMentionMenu,
+        mentionSearchText = mentionSearchText,
+        mentionStartIndex = mentionStartIndex,
+        isVoiceRecording = isVoiceRecording,
+        isTranscribing = isTranscribing,
+        micPermissionGranted = micPermissionGranted.value,
+        recallingMessageIds = recallingMessageIds,
+        filePickerLauncher = filePickerLauncher,
+        onExitingChange = { isExiting = it },
+        onSelectionModeChange = { isSelectionMode = it },
+        onClearSelectedMessages = { selectedMessages.clear() },
+        onMessageSelected = { messageId ->
+            if (selectedMessages.contains(messageId)) selectedMessages.remove(messageId) else selectedMessages.add(messageId)
+        },
+        onWaitingForAiChange = { isWaitingForAI = it },
+        onShowForwardToGroupDialog = { showForwardToGroupDialog = it },
+        onShowForwardToContactDialog = { showForwardToContactDialog = it },
+        onShowInvitationDialog = { showInvitationDialog = it },
+        onShowFolderExplorer = { showFolderExplorer = it },
+        onFolderFilesLoaded = { files, urls ->
+            folderFiles = files
+            processedUrls = urls
+        },
+        onLoadingFilesChange = { isLoadingFiles = it },
+        onShowAddMemberDialog = { showAddMemberDialog = it },
+        onShowMembersDialog = { showMembersDialog = it },
+        onContactsLoaded = { contacts = it },
+        onGroupMembersLoaded = { groupMembers = it },
+        onMessageTextChange = { messageText = it },
+        onMentionMenuChange = { showMentionMenu = it },
+        onMentionSearchTextChange = { mentionSearchText = it },
+        onMentionStartIndexChange = { mentionStartIndex = it },
+        onVoiceRecordingChange = { isVoiceRecording = it },
+        onTranscribingChange = { isTranscribing = it },
+        onShowAddContactConfirm = { showAddContactConfirm = it },
+        onMessageToForward = { messageToForward = it },
+        onLoadingGroupsChange = { isLoadingGroups = it },
+        onUserGroupsLoaded = { userGroups = it },
+        onExpandScrollJobChange = { expandScrollJob = it },
+        onRecallingMessageIdsChange = { recallingMessageIds = it },
+        mediaRecorderRef = mediaRecorderRef,
+        audioFilePathRef = audioFilePathRef,
+        micPermissionLauncher = micPermissionLauncher,
+        addLog = ::addLog,
+    )
+
+    ChatScreenDialogsHost(
+        appState = appState,
+        user = user,
+        group = group,
+        context = context,
+        chatClient = chatClient,
+        messages = messages,
+        debugLogs = debugLogs,
+        connectionState = connectionState,
+        showDebugInfo = showDebugInfo,
+        showInvitationDialog = showInvitationDialog,
+        showAddMemberDialog = showAddMemberDialog,
+        contacts = contacts,
+        groupMembers = groupMembers,
+        isLoadingContacts = isLoadingContacts,
+        addMemberResult = addMemberResult,
+        showMembersDialog = showMembersDialog,
+        selectedMemberForInvite = selectedMemberForInvite,
+        isInvitingMember = isInvitingMember,
+        inviteMemberResult = inviteMemberResult,
+        showFolderExplorer = showFolderExplorer,
+        folderFiles = folderFiles,
+        processedUrls = processedUrls,
+        isLoadingFiles = isLoadingFiles,
+        showAddContactConfirm = showAddContactConfirm,
+        isAddingContact = isAddingContact,
+        addContactResult = addContactResult,
+        showForwardToGroupDialog = showForwardToGroupDialog,
+        showForwardToContactDialog = showForwardToContactDialog,
+        userGroups = userGroups,
+        isLoadingGroups = isLoadingGroups,
+        selectedMessages = selectedMessages,
+        messageToForward = messageToForward,
+        forwardResult = forwardResult,
+        onShowDebugInfo = { showDebugInfo = it },
+        onShowInvitationDialog = { showInvitationDialog = it },
+        onShowAddMemberDialog = { showAddMemberDialog = it },
+        onAddMemberResult = { addMemberResult = it },
+        onShowMembersDialog = { showMembersDialog = it },
+        onSelectedMemberForInvite = { selectedMemberForInvite = it },
+        onInvitingMemberChange = { isInvitingMember = it },
+        onInviteMemberResult = { inviteMemberResult = it },
+        onShowFolderExplorer = { showFolderExplorer = it },
+        onShowAddContactConfirm = { showAddContactConfirm = it },
+        onAddingContactChange = { isAddingContact = it },
+        onAddContactResult = { addContactResult = it },
+        onShowForwardToGroupDialog = { showForwardToGroupDialog = it },
+        onShowForwardToContactDialog = { showForwardToContactDialog = it },
+        onMessageToForward = { messageToForward = it },
+        onForwardResult = { forwardResult = it },
+        onSelectionModeChange = { isSelectionMode = it },
+        onClearSelectedMessages = { selectedMessages.clear() },
+        onGroupMembersLoaded = { groupMembers = it },
+        addLog = ::addLog,
+    )
+}
+
+@Composable
+private fun rememberChatFilePickerLauncher(
+    context: Context,
+    group: Group,
+    user: User,
+    scope: kotlinx.coroutines.CoroutineScope,
+    chatClient: ChatClient,
+    addLog: (String) -> Unit,
+    onUploadingChange: (Boolean) -> Unit,
+    onUploadProgressChange: (String) -> Unit,
+): ActivityResultLauncher<String> =
+    rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { selectedUri ->
+            scope.launch {
+                onUploadingChange(true)
+                onUploadProgressChange("正在上传...")
+                try {
+                    runLoggedSuspendAction("❌ 上传异常", addLog) {
+                        val fileName = getFileName(context, selectedUri)
+                        addLog("📎 开始上传文件: $fileName")
+                        val inputStream = context.contentResolver.openInputStream(selectedUri)
+                        if (inputStream != null) {
+                            val success = uploadFile(
+                                inputStream = inputStream,
+                                fileName = fileName,
+                                sessionId = group.id,
+                                userId = user.id,
+                                onProgress = onUploadProgressChange,
+                            )
+                            if (success) {
+                                addLog("✅ 文件上传成功: $fileName")
+                                chatClient.sendMessage(user.id, user.fullName, "📎 已上传文件: $fileName")
+                            } else {
+                                addLog("❌ 文件上传失败")
+                            }
+                        }
+                    }
+                } finally {
+                    onUploadingChange(false)
+                    onUploadProgressChange("")
+                }
             }
         }
-        // 从消息中提取其他用户（作为补充，以防成员列表不完整）
-        messages.forEach { msg ->
-            if (!isAgentUserId(msg.userId) && msg.userId != user.id) {
-                users.add(msg.userId to msg.userName)
-            }
-        }
-        users.toList()
     }
-    
+
+@Composable
+private fun rememberChatSessionUsers(
+    messages: List<Message>,
+    groupMembers: List<GroupMember>,
+    user: User,
+): List<Pair<String, String>> = remember(messages, groupMembers, user.id, user.fullName) {
+    val users = mutableSetOf<Pair<String, String>>()
+    users.add(SILK_AGENT_USER_ID to "🤖 $SILK_AGENT_DISPLAY_NAME")
+    users.add(user.id to user.fullName)
+    groupMembers.forEach { member ->
+        if (!isAgentUserId(member.id) && member.id != user.id) {
+            users.add(member.id to member.fullName)
+        }
+    }
+    messages.forEach { msg ->
+        if (!isAgentUserId(msg.userId) && msg.userId != user.id) {
+            users.add(msg.userId to msg.userName)
+        }
+    }
+    users.toList()
+}
+
+@Composable
+@Suppress("CyclomaticComplexMethod")
+private fun ChatScreenEffects(
+    user: User,
+    group: Group,
+    wsUrl: String,
+    baseUrl: String,
+    chatClient: ChatClient,
+    messages: List<Message>,
+    transientMessage: Message?,
+    connectionState: ConnectionState,
+    isWaitingForAI: Boolean,
+    isHistoryLoading: Boolean,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    addLog: (String) -> Unit,
+    onGroupMembersLoaded: (List<GroupMember>) -> Unit,
+    onHasSentDefaultInstructionChange: (Boolean) -> Unit,
+    onWaitingForAiChange: (Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            val last = messages.last()
+            addLog("📊 消息列表+1: 总共${messages.size}条")
+            addLog("   最新: ${last.userName}: ${last.content.take(20)}...")
+            if (isAgentUserId(last.userId) && isWaitingForAI) {
+                onWaitingForAiChange(false)
+                addLog("✅ AI 响应已收到，清除等待状态")
+            }
+        }
+    }
+
+    LaunchedEffect(transientMessage) {
+        if (transientMessage != null) {
+            addLog("⏳ 临时消息: ${transientMessage.content.take(20)}... (${transientMessage.content.length}字)")
+        } else {
+            addLog("🗑️ 临时消息已清除")
+        }
+    }
+
     LaunchedEffect(Unit) {
         addLog("📱 应用版本: 1.0.12-robust-reconnect (Build 12)")
         addLog("📱 Android版本: ${android.os.Build.VERSION.RELEASE}")
@@ -417,12 +659,9 @@ fun ChatScreen(appState: AppState) {
     LaunchedEffect(connectionState) {
         addLog("📊 连接状态变化: $connectionState")
     }
-    
-    // 连接WebSocket（在后台协程中保持连接）
+
     LaunchedEffect(group.id) {
-        // Reset flag when group changes
-        hasSentDefaultInstruction = false
-        
+        onHasSentDefaultInstructionChange(false)
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
         addLog("🔌 开始连接WebSocket...")
         addLog("   URL: $wsUrl")
@@ -431,26 +670,20 @@ fun ChatScreen(appState: AppState) {
         addLog("   群组: ${group.name}")
         addLog("   群组ID: ${group.id}")
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
-        
-        // 并行：加载群成员 + 建立 WebSocket，互不阻塞
         launch {
-            try {
-                val membersResponse = ApiClient.getGroupMembers(group.id)
-                groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                addLog("✅ 群成员列表已加载，共 ${groupMembers.size} 人")
-            } catch (e: Exception) {
-                addLog("❌ 加载群成员列表失败: ${e.message}")
+            val membersResponse = ApiClient.getGroupMembers(group.id)
+            if (membersResponse.success) {
+                onGroupMembersLoaded(membersResponse.members.sortedByDescending { it.id == group.hostId })
+                addLog("✅ 群成员列表已加载，共 ${membersResponse.members.size} 人")
+            } else {
+                addLog("❌ 加载群成员列表失败")
             }
         }
-        
         launch {
-            try {
+            runLoggedSuspendAction("❌ connect() 抛出异常", addLog) {
                 addLog("⏳ 启动 chatClient.connect()...")
                 chatClient.connect(user.id, user.fullName, group.id)
                 addLog("⚠️ connect() 返回了（连接已关闭）")
-            } catch (e: Exception) {
-                addLog("❌ connect() 抛出异常: ${e.message}")
-                e.printStackTrace()
             }
         }
         addLog("━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -519,22 +752,14 @@ fun ChatScreen(appState: AppState) {
             scrollToBottom(animated = false)
         }
     }
-    
-    // ✅ 使用前台服务保持 WebSocket 连接活跃
-    // 前台服务会在应用切换到后台时保持连接，避免显示"连接已断开"
+
     val lifecycleOwner = LocalLifecycleOwner.current
-    var connectionJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    
-    // 跟踪是否需要重连
-    var needReconnect by remember { mutableStateOf(false) }
-    var lastConnectionTime by remember { mutableStateOf(0L) }
-    
-    // 启动前台服务
+    var connectionJob by remember { mutableStateOf<Job?>(null) }
     LaunchedEffect(Unit) {
         WebSocketForegroundService.start(context, group.name)
         addLog("🚀 [前台服务] 已启动 WebSocket 保活服务")
     }
-    
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -542,41 +767,25 @@ fun ChatScreen(appState: AppState) {
                     scope.launch {
                         addLog("🔄 [生命周期] 应用返回前台")
                         addLog("   当前连接状态: $connectionState")
-                        
-                        // ✅ 如果连接已断开或正在连接中，才尝试重连
                         if (connectionState != ConnectionState.CONNECTED) {
                             addLog("🔄 [生命周期] 连接未就绪，检查是否需要重连...")
-                            
-                            // 等待一小段时间，让连接状态稳定
                             kotlinx.coroutines.delay(500)
-                            
                             if (connectionState == ConnectionState.DISCONNECTED) {
                                 addLog("🔌 [生命周期] 连接已断开，尝试重新连接...")
-                                needReconnect = true
-                                
-                                // 取消旧的连接协程
                                 connectionJob?.cancel()
                                 kotlinx.coroutines.delay(300)
-                                
-                                // 启动新的连接
                                 connectionJob = scope.launch {
-                                    try {
+                                    runLoggedSuspendAction("❌ 重新连接失败", addLog) {
                                         addLog("🔌 建立新的WebSocket连接...")
                                         chatClient.connect(user.id, user.fullName, group.id)
-                                        
-                                        // 等待连接建立
                                         var attempts = 0
                                         while (connectionState != ConnectionState.CONNECTED && attempts < 10) {
                                             kotlinx.coroutines.delay(500)
                                             attempts++
                                             addLog("⏳ 等待连接建立... (${attempts}/10)")
                                         }
-                                        
                                         if (connectionState == ConnectionState.CONNECTED) {
                                             addLog("✅ WebSocket重新连接成功！")
-                                            lastConnectionTime = System.currentTimeMillis()
-                                            
-                                            // 连接成功后滚动到最新消息
                                             kotlinx.coroutines.delay(300)
                                             if (messages.isNotEmpty()) {
                                                 listState.scrollToItem(0)
@@ -584,8 +793,6 @@ fun ChatScreen(appState: AppState) {
                                         } else {
                                             addLog("❌ WebSocket重新连接超时")
                                         }
-                                    } catch (e: Exception) {
-                                        addLog("❌ 重新连接失败: ${e.message}")
                                     }
                                 }
                             } else if (connectionState == ConnectionState.CONNECTING) {
@@ -593,63 +800,113 @@ fun ChatScreen(appState: AppState) {
                             }
                         } else {
                             addLog("✅ [生命周期] 连接正常，无需重连")
-                            // 确保前台服务正在运行
                             WebSocketForegroundService.start(context, group.name)
                         }
-                        
-                        needReconnect = false
                     }
                 }
                 Lifecycle.Event.ON_PAUSE -> {
-                    // ✅ 进入后台时保持连接不断开
-                    // 前台服务会维持连接活跃
                     scope.launch {
                         addLog("⏸️ [生命周期] 应用进入后台 - 保持连接（前台服务保活）")
                         addLog("   当前连接状态: $connectionState")
                     }
                 }
                 Lifecycle.Event.ON_STOP -> {
-                    // ✅ 即使在 onStop 也不断开连接
-                    // 前台服务会确保连接保持活跃
                     scope.launch {
                         addLog("⏹️ [生命周期] 应用停止 - 前台服务保活中")
                         addLog("   当前连接状态: $connectionState")
                     }
                 }
-                else -> {}
+                else -> Unit
             }
         }
-        
         lifecycleOwner.lifecycle.addObserver(observer)
-        
         onDispose {
             scope.launch {
                 addLog("🔌 [生命周期] 离开聊天界面，清理资源...")
-                
-                // 停止前台服务
                 WebSocketForegroundService.stop(context)
                 addLog("🛑 [前台服务] 已停止 WebSocket 保活服务")
-                
-                // 断开连接
                 chatClient.disconnect()
-                
-                // 标记已读
                 kotlinx.coroutines.delay(300)
-                appState.currentUser?.let { user ->
-                    try {
-                        ApiClient.markGroupAsRead(user.id, group.id)
-                        addLog("✅ 已标记群组为已读")
-                    } catch (e: Exception) {
-                        addLog("⚠️ 标记已读失败: ${e.message}")
-                    }
+                if (ApiClient.markGroupAsRead(user.id, group.id)) {
+                    addLog("✅ 已标记群组为已读")
+                } else {
+                    addLog("⚠️ 标记已读失败")
                 }
             }
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
-    
-    val scrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
-    
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Suppress("CyclomaticComplexMethod")
+@Composable
+private fun ChatScreenScaffoldContent(
+    appState: AppState,
+    user: User,
+    group: Group,
+    context: Context,
+    chatClient: ChatClient,
+    scrollBehavior: androidx.compose.material3.TopAppBarScrollBehavior,
+    messages: List<Message>,
+    transientMessage: Message?,
+    statusMessages: List<Message>,
+    connectionState: ConnectionState,
+    isHistoryLoading: Boolean,
+    isGenerating: Boolean,
+    isWaitingForAI: Boolean,
+    isSelectionMode: Boolean,
+    selectedMessages: SnapshotStateList<String>,
+    isExiting: Boolean,
+    isUploading: Boolean,
+    uploadProgress: String,
+    messageText: TextFieldValue,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    aiMessageExpandedStates: MutableMap<String, Boolean>,
+    thinkingExpandedStates: MutableMap<String, Boolean>,
+    expandScrollJob: Job?,
+    sessionUsers: List<Pair<String, String>>,
+    showMentionMenu: Boolean,
+    mentionSearchText: String,
+    mentionStartIndex: Int,
+    isVoiceRecording: Boolean,
+    isTranscribing: Boolean,
+    micPermissionGranted: Boolean,
+    recallingMessageIds: Set<String>,
+    filePickerLauncher: ActivityResultLauncher<String>,
+    onExitingChange: (Boolean) -> Unit,
+    onSelectionModeChange: (Boolean) -> Unit,
+    onClearSelectedMessages: () -> Unit,
+    onMessageSelected: (String) -> Unit,
+    onWaitingForAiChange: (Boolean) -> Unit,
+    onShowForwardToGroupDialog: (Boolean) -> Unit,
+    onShowForwardToContactDialog: (Boolean) -> Unit,
+    onShowInvitationDialog: (Boolean) -> Unit,
+    onShowFolderExplorer: (Boolean) -> Unit,
+    onFolderFilesLoaded: (List<FileItem>, List<String>) -> Unit,
+    onLoadingFilesChange: (Boolean) -> Unit,
+    onShowAddMemberDialog: (Boolean) -> Unit,
+    onShowMembersDialog: (Boolean) -> Unit,
+    onContactsLoaded: (List<Contact>) -> Unit,
+    onGroupMembersLoaded: (List<GroupMember>) -> Unit,
+    onMessageTextChange: (TextFieldValue) -> Unit,
+    onMentionMenuChange: (Boolean) -> Unit,
+    onMentionSearchTextChange: (String) -> Unit,
+    onMentionStartIndexChange: (Int) -> Unit,
+    onVoiceRecordingChange: (Boolean) -> Unit,
+    onTranscribingChange: (Boolean) -> Unit,
+    onShowAddContactConfirm: (Message?) -> Unit,
+    onMessageToForward: (Message?) -> Unit,
+    onLoadingGroupsChange: (Boolean) -> Unit,
+    onUserGroupsLoaded: (List<Group>) -> Unit,
+    onExpandScrollJobChange: (Job?) -> Unit,
+    onRecallingMessageIdsChange: (Set<String>) -> Unit,
+    mediaRecorderRef: MutableState<MediaRecorder?>,
+    audioFilePathRef: MutableState<String>,
+    micPermissionLauncher: ActivityResultLauncher<String>,
+    addLog: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
@@ -700,46 +957,28 @@ fun ChatScreen(appState: AppState) {
                 navigationIcon = {
                     IconButton(
                         onClick = {
-                            if (!isExiting) {
-                                isExiting = true
-                                scope.launch {
-                                    // 先断开连接，确保所有消息处理完成
-                                    chatClient.disconnect()
-                                    chatClient.clearMessages()
-                                    
-                                    // 等待服务器完成所有消息处理
-                                    kotlinx.coroutines.delay(500)
-                                    
-                                    // 最后标记已读 - 在断开连接之后调用
-                                    // 这样可以确保用户发送的消息已被服务器处理
-                                    // 标记时间会晚于所有消息的时间戳
-                                    appState.currentUser?.let { user ->
-                                        try {
-                                            ApiClient.markGroupAsRead(user.id, group.id)
-                                            println("✅ 已标记群组 ${group.id} 为已读")
-                                        } catch (e: Exception) {
-                                            println("⚠️ 标记已读失败: ${e.message}")
-                                        }
-                                    }
-                                    
-                                    appState.navigateBack()
-                                }
+                            scope.launch {
+                                handleChatBackNavigation(
+                                    appState = appState,
+                                    group = group,
+                                    user = user,
+                                    chatClient = chatClient,
+                                    isExiting = isExiting,
+                                    onExitingChange = onExitingChange,
+                                )
                             }
                         },
-                        enabled = !isExiting
+                        enabled = !isExiting,
                     ) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
-                    // 如果在选择模式，显示操作按钮
                     if (isSelectionMode) {
-                        // 使用水平滚动以适应更多按钮 - 使用 TextButton 替代 IconButton 避免圆形裁切
                         Row(
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            horizontalArrangement = Arrangement.spacedBy(2.dp),
                         ) {
-                            // 📋 复制到剪贴板
                             TextButton(
                                 onClick = {
                                     val selectedContent = messages
@@ -758,11 +997,11 @@ fun ChatScreen(appState: AppState) {
                                             android.widget.Toast.LENGTH_SHORT
                                         ).show()
                                     }
-                                    isSelectionMode = false
-                                    selectedMessages.clear()
+                                    onSelectionModeChange(false)
+                                    onClearSelectedMessages()
                                 },
                                 enabled = selectedMessages.isNotEmpty(),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text("📋复制", fontSize = 12.sp, color = Color.White)
                             }
@@ -770,17 +1009,16 @@ fun ChatScreen(appState: AppState) {
                             // 💬 转发到其他 Silk 对话
                             TextButton(
                                 onClick = {
-                                    // 加载用户的群组列表
                                     scope.launch {
-                                        isLoadingGroups = true
+                                        onLoadingGroupsChange(true)
                                         val response = ApiClient.getUserGroups(user.id)
-                                        userGroups = response.groups?.filter { it.id != group.id } ?: emptyList()
-                                        isLoadingGroups = false
-                                        showForwardToGroupDialog = true
+                                        onUserGroupsLoaded(response.groups?.filter { it.id != group.id } ?: emptyList())
+                                        onLoadingGroupsChange(false)
+                                        onShowForwardToGroupDialog(true)
                                     }
                                 },
                                 enabled = selectedMessages.isNotEmpty(),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text("💬转发", fontSize = 12.sp, color = Color.White)
                             }
@@ -789,15 +1027,15 @@ fun ChatScreen(appState: AppState) {
                             TextButton(
                                 onClick = {
                                     scope.launch {
-                                        isLoadingContacts = true
+                                        onLoadingFilesChange(true)
                                         val contactsResponse = ApiClient.getContacts(user.id)
-                                        contacts = contactsResponse.contacts ?: emptyList()
-                                        isLoadingContacts = false
-                                        showForwardToContactDialog = true
+                                        onContactsLoaded(contactsResponse.contacts ?: emptyList())
+                                        onLoadingFilesChange(false)
+                                        onShowForwardToContactDialog(true)
                                     }
                                 },
                                 enabled = selectedMessages.isNotEmpty(),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text("👤私聊", fontSize = 12.sp, color = Color.White)
                             }
@@ -809,10 +1047,7 @@ fun ChatScreen(appState: AppState) {
                                         .filter { selectedMessages.contains(it.id) }
                                         .sortedBy { it.timestamp }
                                         .joinToString("\n\n") { msg ->
-                                            val time = formatMessageTimestamp(
-                                                timestamp = msg.timestamp,
-                                                includeSeconds = false
-                                            )
+                                            val time = formatMessageTimestamp(timestamp = msg.timestamp, includeSeconds = false)
                                             "[$time] ${msg.userName}:\n${msg.content}"
                                         }
 
@@ -823,11 +1058,11 @@ fun ChatScreen(appState: AppState) {
                                         }
                                         context.startActivity(Intent.createChooser(shareIntent, "分享到"))
                                     }
-                                    isSelectionMode = false
-                                    selectedMessages.clear()
+                                    onSelectionModeChange(false)
+                                    onClearSelectedMessages()
                                 },
                                 enabled = selectedMessages.isNotEmpty(),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text("📤分享", fontSize = 12.sp, color = Color.White)
                             }
@@ -835,10 +1070,10 @@ fun ChatScreen(appState: AppState) {
                             // ✕ 取消选择
                             TextButton(
                                 onClick = {
-                                    isSelectionMode = false
-                                    selectedMessages.clear()
+                                    onSelectionModeChange(false)
+                                    onClearSelectedMessages()
                                 },
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                             ) {
                                 Text("✕取消", fontSize = 12.sp, color = Color.White)
                             }
@@ -993,8 +1228,8 @@ fun ChatScreen(appState: AppState) {
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary
-                )
+                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                ),
             )
         }
     ) { padding ->
@@ -1002,44 +1237,23 @@ fun ChatScreen(appState: AppState) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .imePadding()  // ✅ 键盘弹出时自动调整内容，避免历史消息被遮挡
+                .imePadding()
         ) {
-            // 连接状态指示器
             if (connectionState == ConnectionState.CONNECTING) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Text(
-                        text = "正在连接...",
-                        modifier = Modifier.padding(8.dp),
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.secondaryContainer) {
+                    Text("正在连接...", modifier = Modifier.padding(8.dp), style = MaterialTheme.typography.bodySmall)
                 }
             }
-            
-            // 上传状态显示（浅灰色）
             if (isUploading && uploadProgress.isNotEmpty()) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = Color.LightGray.copy(alpha = 0.3f)
-                ) {
+                Surface(modifier = Modifier.fillMaxWidth(), color = Color.LightGray.copy(alpha = 0.3f)) {
                     Row(
                         modifier = Modifier.padding(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = Color.Gray
-                        )
-                        Text(
-                            text = "📎 $uploadProgress",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color.Gray
-                        )
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.Gray)
+                        Text("📎 $uploadProgress", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                     }
                 }
             }
@@ -1882,37 +2096,551 @@ fun ChatScreen(appState: AppState) {
                     }
                 }
             } else {
-                Surface(
+                LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.errorContainer
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    reverseLayout = true,
                 ) {
-                    Text(
-                        text = "连接已断开，正在重新连接...",
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
+                    if (shouldShowEmptyChatState(messages, transientMessage, statusMessages, isWaitingForAI)) {
+                        item {
+                            Box(modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
+                                Text("暂无消息，开始聊天吧！", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    } else {
+                        transientMessage?.let { message ->
+                            item(key = "transient_message") {
+                                MessageItem(
+                                    message = message,
+                                    currentUserId = currentUserId,
+                                    context = context,
+                                    isTransient = true,
+                                    isSelectionMode = false,
+                                    isSelected = false,
+                                    onToggleSelection = {},
+                                    onUserNameClick = null,
+                                )
+                            }
+                        }
+                        if (statusMessages.isNotEmpty() || isWaitingForAI) {
+                            item(key = "status_messages") {
+                                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+                                    if (statusMessages.isNotEmpty() && isWaitingForAI) {
+                                        LaunchedEffect(statusMessages) { onWaitingForAiChange(false) }
+                                    }
+                                    statusMessages.reversed().forEach { statusMsg ->
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                                            val content = statusMsg.content
+                                            val hasToolIcon = content.isNotEmpty() && !Character.isLetterOrDigit(content.codePointAt(0))
+                                            if (!hasToolIcon) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(12.dp),
+                                                    strokeWidth = 1.5.dp,
+                                                    color = Color.Gray.copy(alpha = 0.6f),
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                            }
+                                            Text(
+                                                text = content,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = Color.Gray.copy(alpha = 0.7f),
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    }
+                                    if (isWaitingForAI && statusMessages.isEmpty()) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 2.dp)) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(14.dp),
+                                                strokeWidth = 2.dp,
+                                                color = Color.Gray.copy(alpha = 0.7f),
+                                            )
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text("🤔 Silk 正在思考...", style = MaterialTheme.typography.bodySmall, color = Color.Gray.copy(alpha = 0.7f))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        items(messages.reversed(), key = { it.id }) { message ->
+                            MessageItem(
+                                message = message,
+                                currentUserId = currentUserId,
+                                context = context,
+                                isTransient = false,
+                                isSelectionMode = isSelectionMode,
+                                isSelected = selectedMessages.contains(message.id),
+                                onToggleSelection = onMessageSelected,
+                                onLongPress = { messageId ->
+                                    if (!isSelectionMode) {
+                                        onSelectionModeChange(true)
+                                        onClearSelectedMessages()
+                                        onMessageSelected(messageId)
+                                        android.os.Build.VERSION.SDK_INT.let {
+                                            if (it >= android.os.Build.VERSION_CODES.O) {
+                                                (context.getSystemService(android.content.Context.VIBRATOR_SERVICE) as? android.os.Vibrator)
+                                                    ?.vibrate(android.os.VibrationEffect.createOneShot(50, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                                            }
+                                        }
+                                    }
+                                },
+                                onUserNameClick = { clickedMessage ->
+                                    if (clickedMessage.userId != user.id) onShowAddContactConfirm(clickedMessage)
+                                },
+                                isRecalling = message.id in recallingMessageIds,
+                                onRecall = { messageId ->
+                                    if (messageId !in recallingMessageIds) {
+                                        onRecallingMessageIdsChange(recallingMessageIds + messageId)
+                                        scope.launch {
+                                            try {
+                                                val response = ApiClient.recallMessage(group.id, messageId, user.id)
+                                                if (!response.success) {
+                                                    android.widget.Toast.makeText(context, "撤回失败: ${response.message}", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                            } finally {
+                                                onRecallingMessageIdsChange(recallingMessageIds - messageId)
+                                            }
+                                        }
+                                    }
+                                },
+                                isAIExpanded = aiMessageExpandedStates[message.id] ?: false,
+                                onAIExpandChange = { messageId, isExpanded ->
+                                    val reversedMessages = messages.reversed()
+                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                    val itemOffset = (if (transientMessage != null) 1 else 0) + (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                    val targetIdx = if (idx >= 0) itemOffset + idx else -1
+                                    if (isExpanded) {
+                                        aiMessageExpandedStates[messageId] = true
+                                        if (targetIdx >= 0) {
+                                            expandScrollJob?.cancel()
+                                            onExpandScrollJobChange(scope.launch {
+                                                kotlinx.coroutines.delay(80)
+                                                listState.scrollToItem(targetIdx, 0)
+                                                var prevSize = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIdx }?.size ?: 0
+                                                snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIdx }?.size ?: 0 }
+                                                    .distinctUntilChanged()
+                                                    .collect { size ->
+                                                        if (size > 0 && prevSize > 0 && size > prevSize) {
+                                                            listState.scroll { scrollBy((size - prevSize).toFloat()) }
+                                                        }
+                                                        if (size > 0) prevSize = size
+                                                    }
+                                            })
+                                        }
+                                    } else {
+                                        expandScrollJob?.cancel()
+                                        onExpandScrollJobChange(null)
+                                        if (targetIdx >= 0) {
+                                            scope.launch {
+                                                listState.scrollToItem(targetIdx, 0)
+                                                aiMessageExpandedStates[messageId] = false
+                                            }
+                                        } else {
+                                            aiMessageExpandedStates[messageId] = false
+                                        }
+                                    }
+                                },
+                                isThinkingExpanded = thinkingExpandedStates[message.id] ?: false,
+                                onThinkingExpandChange = { messageId, expanded ->
+                                    val reversedMessages = messages.reversed()
+                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                    val itemOffset = (if (transientMessage != null) 1 else 0) + (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                    val targetIdx = if (idx >= 0) itemOffset + idx else -1
+                                    if (expanded) {
+                                        thinkingExpandedStates[messageId] = true
+                                        if (targetIdx >= 0) {
+                                            expandScrollJob?.cancel()
+                                            onExpandScrollJobChange(scope.launch {
+                                                kotlinx.coroutines.delay(80)
+                                                listState.scrollToItem(targetIdx, 0)
+                                                var prevSize = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIdx }?.size ?: 0
+                                                withTimeoutOrNull(3000L) {
+                                                    snapshotFlow { listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == targetIdx }?.size ?: 0 }
+                                                        .distinctUntilChanged()
+                                                        .collect { size ->
+                                                            if (size > 0 && prevSize > 0 && size > prevSize) {
+                                                                listState.scroll { scrollBy((size - prevSize).toFloat()) }
+                                                            }
+                                                            if (size > 0) prevSize = size
+                                                        }
+                                                }
+                                            })
+                                        }
+                                    } else {
+                                        expandScrollJob?.cancel()
+                                        onExpandScrollJobChange(null)
+                                        if (targetIdx >= 0) {
+                                            scope.launch {
+                                                listState.scrollToItem(targetIdx, 0)
+                                                thinkingExpandedStates[messageId] = false
+                                            }
+                                        } else {
+                                            thinkingExpandedStates[messageId] = false
+                                        }
+                                    }
+                                },
+                                onLongContentCollapsed = { messageId ->
+                                    expandScrollJob?.cancel()
+                                    val reversedMessages = messages.reversed()
+                                    val idx = reversedMessages.indexOfFirst { it.id == messageId }
+                                    if (idx >= 0) {
+                                        scope.launch {
+                                            kotlinx.coroutines.delay(80)
+                                            val itemOffset = (if (transientMessage != null) 1 else 0) + (if (statusMessages.isNotEmpty() || isWaitingForAI) 1 else 0)
+                                            listState.scrollToItem(itemOffset + idx)
+                                        }
+                                    }
+                                },
+                                onCopy = { content ->
+                                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("消息", content))
+                                    android.widget.Toast.makeText(context, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                                },
+                                onForward = { msg ->
+                                    onMessageToForward(msg)
+                                    scope.launch {
+                                        onLoadingGroupsChange(true)
+                                        val response = ApiClient.getUserGroups(user.id)
+                                        onUserGroupsLoaded(response.groups?.filter { it.id != group.id } ?: emptyList())
+                                        onLoadingGroupsChange(false)
+                                        onShowForwardToGroupDialog(true)
+                                    }
+                                },
+                            )
+                        }
+                    }
                 }
             }
         }
     }
-    
-    // 调试信息对话框
+}
+
+@Composable
+@Suppress("CyclomaticComplexMethod")
+private fun ChatScreenInputPane(
+    context: Context,
+    user: User,
+    group: Group,
+    chatClient: ChatClient,
+    messageText: TextFieldValue,
+    isGenerating: Boolean,
+    isWaitingForAI: Boolean,
+    isVoiceRecording: Boolean,
+    isTranscribing: Boolean,
+    micPermissionGranted: Boolean,
+    sessionUsers: List<Pair<String, String>>,
+    showMentionMenu: Boolean,
+    mentionSearchText: String,
+    mentionStartIndex: Int,
+    mediaRecorderRef: MutableState<MediaRecorder?>,
+    audioFilePathRef: MutableState<String>,
+    micPermissionLauncher: ActivityResultLauncher<String>,
+    onMessageTextChange: (TextFieldValue) -> Unit,
+    onMentionMenuChange: (Boolean) -> Unit,
+    onMentionSearchTextChange: (String) -> Unit,
+    onMentionStartIndexChange: (Int) -> Unit,
+    onVoiceRecordingChange: (Boolean) -> Unit,
+    onTranscribingChange: (Boolean) -> Unit,
+    onWaitingForAiChange: (Boolean) -> Unit,
+    addLog: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    if (connectionStateOf(chatClient) == ConnectionState.CONNECTED) {
+        Surface(modifier = Modifier.fillMaxWidth(), shadowElevation = 8.dp) {
+            Column(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
+                val isSilkPrivateChat = group.name.startsWith("[Silk]")
+                if (!isSilkPrivateChat) {
+                    Surface(
+                        onClick = {
+                            val prefix = "@Silk "
+                            if (!messageText.text.startsWith(prefix)) {
+                                val newText = prefix + messageText.text
+                                val newSelection = TextRange(
+                                    start = (messageText.selection.start + prefix.length).coerceIn(0, newText.length),
+                                    end = (messageText.selection.end + prefix.length).coerceIn(0, newText.length),
+                                )
+                                onMessageTextChange(messageText.copy(text = newText, selection = newSelection))
+                            }
+                        },
+                        color = SilkColors.primary.copy(alpha = 0.15f),
+                        shape = MaterialTheme.shapes.small,
+                    ) {
+                        Text("@Silk", modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp), style = MaterialTheme.typography.bodyMedium, color = SilkColors.primary)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        if (showMentionMenu) {
+                            val filteredUsers = sessionUsers.filter { (_, name) ->
+                                mentionSearchText.isEmpty() || name.lowercase().contains(mentionSearchText.lowercase())
+                            }
+                            Card(
+                                modifier = Modifier.fillMaxWidth().heightIn(max = 200.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                shape = RoundedCornerShape(8.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+                            ) {
+                                if (filteredUsers.isEmpty()) {
+                                    Text("无匹配用户", modifier = Modifier.padding(12.dp, 16.dp), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                } else {
+                                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                                        items(filteredUsers.size) { index ->
+                                            val (userId, userName) = filteredUsers[index]
+                                            val displayName = if (isAgentUserId(userId)) "Silk" else userName
+                                            Surface(
+                                                onClick = {
+                                                    val beforeAt = messageText.text.substring(0, mentionStartIndex.coerceAtLeast(0))
+                                                    val newText = "$beforeAt@$displayName "
+                                                    onMessageTextChange(TextFieldValue(text = newText, selection = TextRange(newText.length)))
+                                                    onMentionMenuChange(false)
+                                                    onMentionStartIndexChange(-1)
+                                                },
+                                                modifier = Modifier.fillMaxWidth(),
+                                            ) {
+                                                Text(
+                                                    text = userName,
+                                                    modifier = Modifier.padding(10.dp, 12.dp),
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = if (isAgentUserId(userId)) FontWeight.SemiBold else FontWeight.Normal,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                        }
+                        if (isVoiceRecording) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text("录音中...", color = Color(0xFFFF4D4F), fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                                Button(
+                                    onClick = {
+                                        onVoiceRecordingChange(false)
+                                        onTranscribingChange(true)
+                                        val recorder = mediaRecorderRef.value
+                                        val filePath = audioFilePathRef.value
+                                        try { recorder?.stop() } catch (_: Exception) {}
+                                        try { recorder?.release() } catch (_: Exception) {}
+                                        mediaRecorderRef.value = null
+                                        scope.launch {
+                                            try {
+                                                runLoggedSuspendAction("语音识别出错", addLog) {
+                                                    val file = java.io.File(filePath)
+                                                    if (file.exists()) {
+                                                        val bytes = file.readBytes()
+                                                        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                                                        val result = ApiClient.transcribeAudio(base64, "m4a")
+                                                        if (result.success && result.text.isNotBlank()) {
+                                                            val current = messageText.text
+                                                            val newText = if (current.isNotBlank()) "$current ${result.text}" else result.text
+                                                            onMessageTextChange(TextFieldValue(newText, TextRange(newText.length)))
+                                                        } else {
+                                                            addLog("ASR 失败: ${result.error ?: "未知错误"}")
+                                                        }
+                                                        file.delete()
+                                                    }
+                                                }
+                                            } finally {
+                                                onTranscribingChange(false)
+                                            }
+                                        }
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4D4F)),
+                                    modifier = Modifier.height(56.dp),
+                                ) {
+                                    Icon(Icons.Default.Stop, contentDescription = "停止录音", tint = Color.White)
+                                }
+                            }
+                        } else if (isTranscribing) {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = SilkColors.primary)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("识别中...", color = Color.Gray)
+                            }
+                        } else {
+                            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedTextField(
+                                    value = messageText,
+                                    onValueChange = { newValue ->
+                                        val oldText = messageText.text
+                                        onMessageTextChange(newValue)
+                                        val newText = newValue.text
+                                        if (newText.length > oldText.length && newText.lastOrNull() == '@') {
+                                            onMentionMenuChange(true)
+                                            onMentionStartIndexChange(newText.length - 1)
+                                            onMentionSearchTextChange("")
+                                            return@OutlinedTextField
+                                        }
+                                        if (showMentionMenu && mentionStartIndex >= 0) {
+                                            if (mentionStartIndex >= newText.length || newText.getOrNull(mentionStartIndex) != '@') {
+                                                onMentionMenuChange(false)
+                                                onMentionStartIndexChange(-1)
+                                            } else {
+                                                val textAfterAt = newText.substring(mentionStartIndex + 1)
+                                                val spaceIndex = textAfterAt.indexOf(' ')
+                                                if (spaceIndex >= 0) {
+                                                    onMentionMenuChange(false)
+                                                    onMentionStartIndexChange(-1)
+                                                } else {
+                                                    onMentionSearchTextChange(textAfterAt)
+                                                }
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    placeholder = { Text(if (group.name.startsWith("[Silk]")) "直接输入消息与 Silk 对话..." else "输入消息... @ 提及成员 / @silk 提问AI") },
+                                    maxLines = 3,
+                                )
+                                IconButton(
+                                    onClick = {
+                                        if (!micPermissionGranted) {
+                                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                            return@IconButton
+                                        }
+                                        runCatching {
+                                            val filePath = "${context.cacheDir.absolutePath}/silk_voice_${System.currentTimeMillis()}.m4a"
+                                            audioFilePathRef.value = filePath
+                                            @Suppress("DEPRECATION")
+                                            val recorder = MediaRecorder().apply {
+                                                setAudioSource(MediaRecorder.AudioSource.MIC)
+                                                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                                                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                                                setAudioSamplingRate(16000)
+                                                setAudioChannels(1)
+                                                setOutputFile(filePath)
+                                                prepare()
+                                                start()
+                                            }
+                                            mediaRecorderRef.value = recorder
+                                            onVoiceRecordingChange(true)
+                                        }.onFailure { error ->
+                                            if (error is CancellationException) throw error
+                                            addLog("无法启动录音: ${error.message}")
+                                        }
+                                    },
+                                    modifier = Modifier.size(48.dp),
+                                ) {
+                                    Icon(Icons.Default.Mic, contentDescription = "语音输入", tint = Color.Gray)
+                                }
+                                val showStopButton = isGenerating || isWaitingForAI
+                                if (showStopButton) {
+                                    Button(
+                                        onClick = {
+                                            chatClient.stopGeneration(user.id, user.fullName)
+                                            onWaitingForAiChange(false)
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4D4F)),
+                                        modifier = Modifier.height(56.dp),
+                                    ) {
+                                        Text("停止", color = Color.White)
+                                    }
+                                } else {
+                                    Button(
+                                        onClick = {
+                                            if (messageText.text.isNotBlank()) {
+                                                val msgContent = messageText.text
+                                                addLog("📤 发送消息: ${msgContent.take(20)}...")
+                                                if (msgContent.lowercase().startsWith("@silk") || isSilkPrivateChat) {
+                                                    onWaitingForAiChange(true)
+                                                    addLog("⏳ 开始等待 AI 响应...")
+                                                }
+                                                scope.launch {
+                                                    chatClient.sendMessage(user.id, user.fullName, msgContent)
+                                                    addLog("✅ 消息已发送")
+                                                    onMessageTextChange(TextFieldValue(""))
+                                                }
+                                            }
+                                        },
+                                        enabled = messageText.text.isNotBlank(),
+                                        colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+                                        modifier = Modifier.height(56.dp),
+                                    ) {
+                                        Icon(Icons.Default.Send, contentDescription = "发送")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        Surface(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.errorContainer) {
+            Text("连接已断开，正在重新连接...", modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer)
+        }
+    }
+}
+
+@Composable
+@Suppress("CyclomaticComplexMethod")
+private fun ChatScreenDialogsHost(
+    appState: AppState,
+    user: User,
+    group: Group,
+    context: Context,
+    chatClient: ChatClient,
+    messages: List<Message>,
+    debugLogs: SnapshotStateList<String>,
+    connectionState: ConnectionState,
+    showDebugInfo: Boolean,
+    showInvitationDialog: Boolean,
+    showAddMemberDialog: Boolean,
+    contacts: List<Contact>,
+    groupMembers: List<GroupMember>,
+    isLoadingContacts: Boolean,
+    addMemberResult: String?,
+    showMembersDialog: Boolean,
+    selectedMemberForInvite: GroupMember?,
+    isInvitingMember: Boolean,
+    inviteMemberResult: String?,
+    showFolderExplorer: Boolean,
+    folderFiles: List<FileItem>,
+    processedUrls: List<String>,
+    isLoadingFiles: Boolean,
+    showAddContactConfirm: Message?,
+    isAddingContact: Boolean,
+    addContactResult: String?,
+    showForwardToGroupDialog: Boolean,
+    showForwardToContactDialog: Boolean,
+    userGroups: List<Group>,
+    isLoadingGroups: Boolean,
+    selectedMessages: SnapshotStateList<String>,
+    messageToForward: Message?,
+    forwardResult: String?,
+    onShowDebugInfo: (Boolean) -> Unit,
+    onShowInvitationDialog: (Boolean) -> Unit,
+    onShowAddMemberDialog: (Boolean) -> Unit,
+    onAddMemberResult: (String?) -> Unit,
+    onShowMembersDialog: (Boolean) -> Unit,
+    onSelectedMemberForInvite: (GroupMember?) -> Unit,
+    onInvitingMemberChange: (Boolean) -> Unit,
+    onInviteMemberResult: (String?) -> Unit,
+    onShowFolderExplorer: (Boolean) -> Unit,
+    onShowAddContactConfirm: (Message?) -> Unit,
+    onAddingContactChange: (Boolean) -> Unit,
+    onAddContactResult: (String?) -> Unit,
+    onShowForwardToGroupDialog: (Boolean) -> Unit,
+    onShowForwardToContactDialog: (Boolean) -> Unit,
+    onMessageToForward: (Message?) -> Unit,
+    onForwardResult: (String?) -> Unit,
+    onSelectionModeChange: (Boolean) -> Unit,
+    onClearSelectedMessages: () -> Unit,
+    onGroupMembersLoaded: (List<GroupMember>) -> Unit,
+    addLog: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
     if (showDebugInfo) {
         AlertDialog(
-            onDismissRequest = { showDebugInfo = false },
+            onDismissRequest = { onShowDebugInfo(false) },
             title = { Text("🐛 调试信息") },
             text = {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 400.dp)
-                ) {
+                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp)) {
                     items(debugLogs.size) { index ->
-                        Text(
-                            text = debugLogs[index],
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(vertical = 2.dp)
-                        )
+                        Text(text = debugLogs[index], style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 2.dp))
                     }
                     item {
                         Divider(modifier = Modifier.padding(vertical = 8.dp))
@@ -1924,78 +2652,52 @@ fun ChatScreen(appState: AppState) {
                                 ConnectionState.CONNECTED -> MaterialTheme.colorScheme.primary
                                 ConnectionState.CONNECTING -> MaterialTheme.colorScheme.secondary
                                 ConnectionState.DISCONNECTED -> MaterialTheme.colorScheme.error
-                            }
+                            },
                         )
                     }
                 }
             },
-            confirmButton = {
-                Button(onClick = { showDebugInfo = false }) {
-                    Text("关闭")
-                }
-            },
+            confirmButton = { Button(onClick = { onShowDebugInfo(false) }) { Text("关闭") } },
             dismissButton = {
                 TextButton(
                     onClick = {
-                        // 复制日志到剪贴板
-                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) 
-                            as android.content.ClipboardManager
-                        val clip = android.content.ClipData.newPlainText(
-                            "调试日志",
-                            debugLogs.joinToString("\n")
-                        )
-                        clipboard.setPrimaryClip(clip)
-                        android.widget.Toast.makeText(
-                            context,
-                            "日志已复制到剪贴板",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("调试日志", debugLogs.joinToString("\n")))
+                        android.widget.Toast.makeText(context, "日志已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
                     }
-                ) {
-                    Text("复制日志")
-                }
-            }
+                ) { Text("复制日志") }
+            },
         )
     }
-    
-    // 邀请对话框
     if (showInvitationDialog) {
-        InvitationDialog(
-            group = group,
-            onDismiss = { showInvitationDialog = false }
-        )
+        InvitationDialog(group = group, onDismiss = { onShowInvitationDialog(false) })
     }
-    
-    // 添加成员对话框
     if (showAddMemberDialog) {
         AddMemberDialog(
             contacts = contacts,
             groupMembers = groupMembers,
-            groupId = group.id,
             isLoading = isLoadingContacts,
             result = addMemberResult,
             onAddMember = { contact ->
                 scope.launch {
                     val response = ApiClient.addMemberToGroup(group.id, contact.contactId)
-                    addMemberResult = if (response.success) {
-                        // 刷新成员列表
-                        val membersResponse = ApiClient.getGroupMembers(group.id)
-                        // 将群主排在第一位
-                        groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                        "✅ 已添加 ${contact.contactName}"
-                    } else {
-                        "❌ ${response.message}"
-                    }
+                    onAddMemberResult(
+                        if (response.success) {
+                            val membersResponse = ApiClient.getGroupMembers(group.id)
+                            onGroupMembersLoaded(membersResponse.members.sortedByDescending { it.id == group.hostId })
+                            "✅ 已添加 ${contact.contactName}"
+                        } else {
+                            "❌ ${response.message}"
+                        }
+                    )
                 }
             },
-            onDismiss = { 
-                showAddMemberDialog = false
-                addMemberResult = null
-            }
+            onDismiss = {
+                onShowAddMemberDialog(false)
+                onAddMemberResult(null)
+            },
         )
     }
-    
-    // 查看成员对话框
     if (showMembersDialog) {
         MembersDialog(
             members = groupMembers,
@@ -2003,10 +2705,8 @@ fun ChatScreen(appState: AppState) {
             currentUserId = user.id,
             isLoading = isLoadingContacts,
             onMemberClick = { member ->
-                // 检查是否是联系人
                 val isContact = contacts.any { it.contactId == member.id }
                 if (isContact) {
-                    // 是联系人，跳转到与该联系人的对话
                     scope.launch {
                         showMembersDialog = false
                         // 先断开当前WebSocket
@@ -2017,58 +2717,38 @@ fun ChatScreen(appState: AppState) {
                         // 调用API获取或创建与该联系人的对话
                         val response = ApiClient.startPrivateChat(user.id, member.id)
                         if (response.success && response.group != null) {
-                            // 导航到新的对话
                             appState.selectGroup(response.group!!)
                         } else {
-                            android.widget.Toast.makeText(
-                                context,
-                                "无法创建对话: ${response.message}",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
+                            android.widget.Toast.makeText(context, "无法创建对话: ${response.message}", android.widget.Toast.LENGTH_SHORT).show()
                         }
                     }
                 } else {
-                    // 不是联系人，弹出邀请确认
-                    selectedMemberForInvite = member
+                    onSelectedMemberForInvite(member)
                 }
             },
-            onDismiss = { 
-                showMembersDialog = false
-                selectedMemberForInvite = null
-                inviteMemberResult = null
-            }
+            onDismiss = {
+                onShowMembersDialog(false)
+                onSelectedMemberForInvite(null)
+                onInviteMemberResult(null)
+            },
         )
     }
-    
-    // 邀请成员加入联系人确认对话框
     selectedMemberForInvite?.let { member ->
         AlertDialog(
-            onDismissRequest = { 
-                selectedMemberForInvite = null 
-                inviteMemberResult = null
+            onDismissRequest = {
+                onSelectedMemberForInvite(null)
+                onInviteMemberResult(null)
             },
-            title = { 
-                Text(
-                    "添加联系人",
-                    fontWeight = FontWeight.Bold,
-                    color = SilkColors.primary
-                )
-            },
+            title = { Text("添加联系人", fontWeight = FontWeight.Bold, color = SilkColors.primary) },
             text = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                     Text("${member.fullName} 不在您的联系人列表中。")
                     Text("是否发送联系人请求？")
-                    
-                    if (inviteMemberResult != null) {
+                    inviteMemberResult?.let { result ->
                         Text(
-                            text = inviteMemberResult!!,
-                            color = if (inviteMemberResult!!.contains("成功") || inviteMemberResult!!.contains("已发送")) 
-                                SilkColors.success else SilkColors.error,
-                            style = MaterialTheme.typography.bodySmall
+                            text = result,
+                            color = if (result.contains("成功") || result.contains("已发送")) SilkColors.success else SilkColors.error,
+                            style = MaterialTheme.typography.bodySmall,
                         )
                     }
                 }
@@ -2077,109 +2757,66 @@ fun ChatScreen(appState: AppState) {
                 Button(
                     onClick = {
                         scope.launch {
-                            isInvitingMember = true
-                            inviteMemberResult = null
-                            
+                            onInvitingMemberChange(true)
+                            onInviteMemberResult(null)
                             val response = ApiClient.sendContactRequestById(user.id, member.id)
-                            inviteMemberResult = if (response.success) {
-                                "✅ 联系人请求已发送"
-                            } else {
-                                "❌ ${response.message}"
-                            }
-                            
-                            isInvitingMember = false
-                            
-                            // 成功后延迟关闭对话框
+                            onInviteMemberResult(if (response.success) "✅ 联系人请求已发送" else "❌ ${response.message}")
+                            onInvitingMemberChange(false)
                             if (response.success) {
                                 kotlinx.coroutines.delay(1500)
-                                selectedMemberForInvite = null
-                                inviteMemberResult = null
+                                onSelectedMemberForInvite(null)
+                                onInviteMemberResult(null)
                             }
                         }
                     },
                     enabled = !isInvitingMember && inviteMemberResult == null,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SilkColors.primary
-                    )
+                    colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
                 ) {
                     if (isInvitingMember) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                     } else {
                         Text("发送请求")
                     }
                 }
             },
             dismissButton = {
-                TextButton(
-                    onClick = { 
-                        selectedMemberForInvite = null 
-                        inviteMemberResult = null
-                    }
-                ) {
-                    Text("取消")
-                }
-            }
+                TextButton(onClick = {
+                    onSelectedMemberForInvite(null)
+                    onInviteMemberResult(null)
+                }) { Text("取消") }
+            },
         )
     }
-    
-    // 文件夹浏览对话框
     if (showFolderExplorer) {
         FolderExplorerDialog(
-            groupId = group.id,
             files = folderFiles,
             processedUrls = processedUrls,
             isLoading = isLoadingFiles,
-            onDismiss = { showFolderExplorer = false },
+            onDismiss = { onShowFolderExplorer(false) },
             onFileClick = { file ->
-                val relativeDownloadUrl = file.downloadUrl.ifEmpty {
-                    "/api/files/download/${Uri.encode(group.id)}/${Uri.encode(file.name)}"
-                }
-                val intent = Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse("${BackendUrlHolder.getBaseUrl()}$relativeDownloadUrl")
-                )
-                context.startActivity(intent)
+                val relativeDownloadUrl = file.downloadUrl.ifEmpty { "/api/files/download/${Uri.encode(group.id)}/${Uri.encode(file.name)}" }
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("${BackendUrlHolder.getBaseUrl()}$relativeDownloadUrl")))
             },
             onUrlClick = { url ->
-                // 打开原始 URL
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                context.startActivity(intent)
-            }
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+            },
         )
     }
-    
-    // 添加联系人确认对话框
     showAddContactConfirm?.let { clickedMessage ->
         AlertDialog(
-            onDismissRequest = { 
-                showAddContactConfirm = null 
-                addContactResult = null
+            onDismissRequest = {
+                onShowAddContactConfirm(null)
+                onAddContactResult(null)
             },
-            title = { 
-                Text(
-                    "添加联系人",
-                    fontWeight = FontWeight.Bold,
-                    color = SilkColors.primary
-                )
-            },
+            title = { Text("添加联系人", fontWeight = FontWeight.Bold, color = SilkColors.primary) },
             text = {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                     Text("是否将 ${clickedMessage.userName} 添加为联系人？")
-                    
-                    if (addContactResult != null) {
+                    addContactResult?.let { result ->
                         Text(
-                            text = addContactResult!!,
-                            color = if (addContactResult!!.contains("成功") || addContactResult!!.contains("已发送")) 
-                                SilkColors.success else SilkColors.error,
-                            style = MaterialTheme.typography.bodySmall
+                            text = result,
+                            color = if (result.contains("成功") || result.contains("已发送")) SilkColors.success else SilkColors.error,
+                            style = MaterialTheme.typography.bodySmall,
                         )
                     }
                 }
@@ -2188,162 +2825,107 @@ fun ChatScreen(appState: AppState) {
                 Button(
                     onClick = {
                         scope.launch {
-                            isAddingContact = true
-                            addContactResult = null
-                            
+                            onAddingContactChange(true)
+                            onAddContactResult(null)
                             val response = ApiClient.sendContactRequestById(user.id, clickedMessage.userId)
-                            addContactResult = if (response.success) {
-                                "联系人请求已发送"
-                            } else {
-                                response.message
-                            }
-                            
-                            isAddingContact = false
-                            
-                            // 成功后延迟关闭对话框
+                            onAddContactResult(if (response.success) "联系人请求已发送" else response.message)
+                            onAddingContactChange(false)
                             if (response.success) {
                                 kotlinx.coroutines.delay(1500)
-                                showAddContactConfirm = null
-                                addContactResult = null
+                                onShowAddContactConfirm(null)
+                                onAddContactResult(null)
                             }
                         }
                     },
                     enabled = !isAddingContact && addContactResult == null,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = SilkColors.primary
-                    )
+                    colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
                 ) {
                     if (isAddingContact) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp
-                        )
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
                     } else {
                         Text("发送请求")
                     }
                 }
             },
             dismissButton = {
-                TextButton(
-                    onClick = { 
-                        showAddContactConfirm = null 
-                        addContactResult = null
-                    }
-                ) {
-                    Text("取消")
-                }
-            }
+                TextButton(onClick = {
+                    onShowAddContactConfirm(null)
+                    onAddContactResult(null)
+                }) { Text("取消") }
+            },
         )
     }
-    
-    // ==================== 转发到群组对话框 ====================
     if (showForwardToGroupDialog) {
-        // 支持单条消息转发（AI消息）和多条消息转发（选择模式）
-        val messagesToForward = if (messageToForward != null) {
-            listOf(messageToForward!!)
-        } else {
-            messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
-        }
-        
+        val messagesToForward = if (messageToForward != null) listOf(messageToForward) else messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
         ForwardToGroupDialog(
             groups = userGroups,
             isLoading = isLoadingGroups,
-            selectedMessages = messagesToForward,
-            currentUser = user,
+            selectedMessages = messagesToForward.filterNotNull(),
             onForward = { targetGroup ->
                 scope.launch {
-                    forwardResult = null
-                    val forwardMessage =
-                        if (messageToForward != null) {
-                            buildForwardPayloadForSingle(group.name, messageToForward!!)
-                        } else {
-                            buildForwardPayloadForBatch(group.name, messagesToForward)
-                        }
-                    val success = ApiClient.sendMessageToGroup(
-                        groupId = targetGroup.id,
-                        userId = user.id,
-                        userName = user.fullName,
-                        content = forwardMessage
-                    )
-                    
+                    onForwardResult(null)
+                    val forwardMessage = if (messageToForward != null) buildForwardPayloadForSingle(group.name, messageToForward) else buildForwardPayloadForBatch(group.name, messagesToForward.filterNotNull())
+                    val success = ApiClient.sendMessageToGroup(targetGroup.id, user.id, user.fullName, forwardMessage)
                     if (success) {
-                        forwardResult = "✅ 已转发到 ${targetGroup.name}"
-                        android.widget.Toast.makeText(
-                            context,
-                            "已转发 ${messagesToForward.size} 条消息到 ${targetGroup.name}",
-                            android.widget.Toast.LENGTH_SHORT
-                        ).show()
+                        onForwardResult("✅ 已转发到 ${targetGroup.name}")
+                        android.widget.Toast.makeText(context, "已转发 ${messagesToForward.size} 条消息到 ${targetGroup.name}", android.widget.Toast.LENGTH_SHORT).show()
                         kotlinx.coroutines.delay(1000)
-                        showForwardToGroupDialog = false
-                        isSelectionMode = false
-                        selectedMessages.clear()
-                        messageToForward = null  // 清除单条消息转发状态
-                        forwardResult = null
+                        onShowForwardToGroupDialog(false)
+                        onSelectionModeChange(false)
+                        onClearSelectedMessages()
+                        onMessageToForward(null)
+                        onForwardResult(null)
                     } else {
-                        forwardResult = "❌ 转发失败"
+                        onForwardResult("❌ 转发失败")
                     }
                 }
             },
             onDismiss = {
-                showForwardToGroupDialog = false
-                messageToForward = null  // 清除单条消息转发状态
-                forwardResult = null
+                onShowForwardToGroupDialog(false)
+                onMessageToForward(null)
+                onForwardResult(null)
             },
-            result = forwardResult
+            result = forwardResult,
         )
     }
-    
-    // ==================== 转发到联系人对话框 ====================
     if (showForwardToContactDialog) {
-        val messagesToForwardContact =
-            messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
+        val messagesToForward = messages.filter { selectedMessages.contains(it.id) }.sortedBy { it.timestamp }
         ForwardToContactDialog(
             contacts = contacts,
             isLoading = isLoadingContacts,
-            selectedMessages = messagesToForwardContact,
-            currentUser = user,
+            selectedMessages = messagesToForward,
             onForward = { contact ->
                 scope.launch {
-                    forwardResult = null
-                    
-                    // 先获取或创建与联系人的私聊
+                    onForwardResult(null)
                     val chatResponse = ApiClient.startPrivateChat(user.id, contact.contactId)
                     if (chatResponse.success && chatResponse.group != null) {
-                        val forwardMessage =
-                            buildForwardPayloadForBatch(group.name, messagesToForwardContact)
                         val success = ApiClient.sendMessageToGroup(
                             groupId = chatResponse.group!!.id,
                             userId = user.id,
                             userName = user.fullName,
-                            content = forwardMessage
+                            content = buildForwardPayloadForBatch(group.name, messagesToForward),
                         )
-                        
                         if (success) {
-                            forwardResult = "✅ 已转发给 ${contact.contactName}"
-                            android.widget.Toast.makeText(
-                                context,
-                                "已转发 ${selectedMessages.size} 条消息给 ${contact.contactName}",
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
+                            onForwardResult("✅ 已转发给 ${contact.contactName}")
+                            android.widget.Toast.makeText(context, "已转发 ${selectedMessages.size} 条消息给 ${contact.contactName}", android.widget.Toast.LENGTH_SHORT).show()
                             kotlinx.coroutines.delay(1000)
-                            showForwardToContactDialog = false
-                            isSelectionMode = false
-                            selectedMessages.clear()
-                            forwardResult = null
+                            onShowForwardToContactDialog(false)
+                            onSelectionModeChange(false)
+                            onClearSelectedMessages()
+                            onForwardResult(null)
                         } else {
-                            forwardResult = "❌ 转发失败"
+                            onForwardResult("❌ 转发失败")
                         }
                     } else {
-                        forwardResult = "❌ 无法创建对话: ${chatResponse.message}"
+                        onForwardResult("❌ 无法创建对话: ${chatResponse.message}")
                     }
                 }
             },
             onDismiss = {
-                showForwardToContactDialog = false
-                forwardResult = null
+                onShowForwardToContactDialog(false)
+                onForwardResult(null)
             },
-            result = forwardResult
+            result = forwardResult,
         )
     }
 
@@ -2522,6 +3104,29 @@ token  = "${tokenInfo.token ?: ""}"
         }
     }
 }
+
+private suspend fun handleChatBackNavigation(
+    appState: AppState,
+    group: Group,
+    user: User,
+    chatClient: ChatClient,
+    isExiting: Boolean,
+    onExitingChange: (Boolean) -> Unit,
+) {
+    if (isExiting) return
+    onExitingChange(true)
+    chatClient.disconnect()
+    chatClient.clearMessages()
+    kotlinx.coroutines.delay(500)
+    if (ApiClient.markGroupAsRead(user.id, group.id)) {
+        println("✅ 已标记群组 ${group.id} 为已读")
+    } else {
+        println("⚠️ 标记已读失败")
+    }
+    appState.navigateBack()
+}
+
+private fun connectionStateOf(chatClient: ChatClient): ConnectionState = chatClient.connectionState.value
 
 // ==================== AI 消息卡片组件 ====================
 
@@ -2869,17 +3474,14 @@ fun AIMessageCardAndroid(
             parsedToolBlocks = listOf(ParsedToolBlock("", rawToolsText))
         }
     }
-    val isLongContent = bodyContent.length > 500
-    val effectiveExpanded = if (isTransient) true else isExpanded
-    val aiPreview =
-        if (bodyContent.length > 220) bodyContent.take(220) + "..."
-        else bodyContent
-    
-    // 调试日志
-    LaunchedEffect(message.id, isExpanded) {
-        println("🤖 AIMessageCardAndroid: messageId=${message.id}, bodyLength=${bodyContent.length}, isLongContent=$isLongContent, isExpanded=$isExpanded")
-    }
-    
+
+    LogAiMessageCardState(
+        messageId = message.id,
+        bodyLength = cardState.bodyContent.length,
+        isLongContent = cardState.isLongContent,
+        isExpanded = isExpanded,
+    )
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -2961,7 +3563,7 @@ fun AIMessageCardAndroid(
                 color = Color(0xFFE8E0D4),
                 thickness = 1.dp
             )
-            
+
             Spacer(modifier = Modifier.height(12.dp))
 
             // 思考过程（与 Web 端一致：带计时器 ThinkingBlock）
@@ -3097,54 +3699,162 @@ fun AIMessageCardAndroid(
                     color = Color(0xFFE8E0D4).copy(alpha = 0.5f),
                     thickness = 0.5.dp
                 )
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    // 复制按钮
-                    TextButton(
-                        onClick = { onCopy(message.content) },
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        Text("📋", fontSize = 14.sp)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("复制", style = MaterialTheme.typography.bodySmall)
-                    }
-                    
-                    // 转发按钮
-                    TextButton(
-                        onClick = { onForward(message) },
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    ) {
-                        Text("↗", fontSize = 14.sp)
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("转发", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-            
-            // 临时消息状态
-            if (isTransient) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "⏳",
-                        fontSize = 12.sp
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "生成中...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFE8B86C)
-                    )
-                }
             }
         }
+    }
+}
+
+@Composable
+private fun AIMessageCardBody(
+    state: AIMessageCardState,
+    onExpandChange: (Boolean) -> Unit,
+) {
+    when {
+        !state.isLongContent || state.isTransient -> MarkdownWebView(state.bodyContent)
+        !state.effectiveExpanded -> AIMessageCollapsedBody(
+            previewText = state.previewText,
+            onExpand = { onExpandChange(true) },
+        )
+        else -> AIMessageExpandedBody(
+            bodyContent = state.bodyContent,
+            onCollapse = { onExpandChange(false) },
+        )
+    }
+}
+
+@Composable
+private fun AIMessageCollapsedBody(
+    previewText: String,
+    onExpand: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = previewText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        AIMessageBodyToggle(
+            label = "查看全文",
+            arrow = "▼",
+            fontSize = 13.sp,
+            textColor = SilkColors.primary,
+            verticalPadding = 6.dp,
+            onClick = onExpand,
+        )
+    }
+}
+
+@Composable
+private fun AIMessageExpandedBody(
+    bodyContent: String,
+    onCollapse: () -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        MarkdownWebView(bodyContent)
+        AIMessageBodyToggle(
+            label = "收起",
+            arrow = "▲",
+            fontSize = 12.sp,
+            textColor = SilkColors.textSecondary,
+            verticalPadding = 4.dp,
+            onClick = onCollapse,
+        )
+    }
+}
+
+@Composable
+private fun AIMessageBodyToggle(
+    label: String,
+    arrow: String,
+    fontSize: TextUnit,
+    textColor: Color,
+    verticalPadding: Dp,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .clickable(onClick = onClick)
+            .padding(vertical = verticalPadding),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = label,
+            fontSize = fontSize,
+            fontWeight = if (label == "查看全文") FontWeight.Medium else FontWeight.Normal,
+            color = textColor,
+        )
+        Text("  $arrow", fontSize = if (label == "查看全文") 12.sp else 11.sp, color = textColor)
+    }
+}
+
+@Composable
+private fun AIMessageCardFooter(
+    isTransient: Boolean,
+    message: Message,
+    onCopy: (String) -> Unit,
+    onForward: (Message) -> Unit,
+) {
+    if (isTransient) {
+        AIMessageTransientStatus()
+        return
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+    Divider(
+        color = Color(0xFFE8E0D4).copy(alpha = 0.5f),
+        thickness = 0.5.dp,
+    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+    ) {
+        AIMessageActionButton(
+            icon = "📋",
+            label = "复制",
+            onClick = { onCopy(message.content) },
+        )
+        AIMessageActionButton(
+            icon = "↗",
+            label = "转发",
+            onClick = { onForward(message) },
+        )
+    }
+}
+
+@Composable
+private fun AIMessageActionButton(
+    icon: String,
+    label: String,
+    onClick: () -> Unit,
+) {
+    TextButton(
+        onClick = onClick,
+        modifier = Modifier.padding(horizontal = 4.dp),
+    ) {
+        Text(icon, fontSize = 14.sp)
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(label, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun AIMessageTransientStatus() {
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(text = "⏳", fontSize = 12.sp)
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            text = "生成中...",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(0xFFE8B86C),
+        )
     }
 }
 
@@ -3296,36 +4006,47 @@ private fun AnnotatedString.Builder.highlightLine(line: String, language: String
     val lang = language.lowercase()
     
     while (i < line.length) {
-        // 跳过空格
-        if (line[i].isWhitespace()) {
-            append(line[i])
-            i++
-            continue
-        }
-        
+        val currentChar = line[i]
+
         // 注释
-        if (line.substring(i).startsWith("//") || 
-            (lang == "python" && line[i] == '#')) {
-            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["comment"]!!)) {
-                append(line.substring(i))
-            }
+        if (line.startsCodeCommentAt(i, lang)) {
+            appendCodeToken("comment", line.substring(i))
             return
         }
-        
-        // 字符串字面量
-        if (line[i] == '"' || line[i] == '\'' || line[i] == '`') {
-            val quote = line[i]
-            val start = i
-            i++
-            while (i < line.length && line[i] != quote) {
-                if (line[i] == '\\' && i + 1 < line.length) i++
-                i++
+        i = when {
+            currentChar.isWhitespace() -> {
+                append(currentChar)
+                i + 1
             }
-            if (i < line.length) i++
-            withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors["string"]!!)) {
-                append(line.substring(start, i))
+            currentChar.isCodeStringDelimiter() -> {
+                val end = findQuotedTokenEnd(line, i)
+                appendCodeToken("string", line.substring(i, end))
+                end
             }
-            continue
+            line.isNumberTokenStartAt(i) -> {
+                val end = findNumberTokenEnd(line, i)
+                appendCodeToken("number", line.substring(i, end))
+                end
+            }
+            currentChar.isLetter() || currentChar == '_' -> {
+                val end = findIdentifierTokenEnd(line, i)
+                val word = line.substring(i, end)
+                appendCodeToken(classifyIdentifierColor(word, line, end), word)
+                end
+            }
+            currentChar.isCodeOperatorChar() -> {
+                val end = findOperatorTokenEnd(line, i)
+                appendCodeToken("operator", line.substring(i, end))
+                end
+            }
+            currentChar.isCodePunctuationChar() -> {
+                appendCodeToken("punctuation", currentChar.toString())
+                i + 1
+            }
+            else -> {
+                appendCodeToken("variable", currentChar.toString())
+                i + 1
+            }
         }
         
         // 数字
@@ -3604,28 +4325,8 @@ private fun processMathFormula(formula: String): String {
 @Suppress("CyclomaticComplexMethod")
 @Composable
 fun MarkdownTableAndroid(lines: List<String>) {
-    if (lines.isEmpty()) return
-    
-    val hasHeader = lines.size > 1 && lines[1].contains("|") && 
-                    lines[1].all { it == '|' || it == '-' || it == ' ' || it == ':' }
-    
-    val headerLine = if (hasHeader) lines[0] else ""
-    val dataLines = if (hasHeader) lines.drop(2) else lines
-    
-    val parseRow: (String) -> List<String> = { line ->
-        line.split("|")
-            .map { it.trim() }
-            .filter { it.isNotEmpty() }
-    }
-    
-    val headerCells = if (hasHeader) parseRow(headerLine) else emptyList()
-    val rows = dataLines.map { parseRow(it) }
-    
-    if (headerCells.isEmpty() && rows.isEmpty()) return
-    
-    val maxCols = maxOf(headerCells.size, rows.maxOfOrNull { it.size } ?: 0)
-    if (maxCols == 0) return
-    
+    val table = remember(lines) { parseMarkdownTable(lines) } ?: return
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -3635,61 +4336,21 @@ fun MarkdownTableAndroid(lines: List<String>) {
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFE2E8F0))
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            // 表头
-            if (headerCells.isNotEmpty()) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color(0xFFEFF6FF))
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                ) {
-                    headerCells.forEach { cell ->
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 4.dp)
-                        ) {
-                            Text(
-                                text = cell,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF1E3A5F)
-                            )
-                        }
-                    }
-                    // 补齐空列
-                    repeat(maxCols - headerCells.size) {
-                        Box(modifier = Modifier.weight(1f))
-                    }
-                }
+            if (table.headerCells.isNotEmpty()) {
+                MarkdownTableHeaderRow(
+                    headerCells = table.headerCells,
+                    maxCols = table.maxCols,
+                )
                 Divider(color = Color(0xFFE2E8F0), thickness = 1.dp)
             }
-            
-            // 数据行
-            rows.forEachIndexed { rowIndex, rowCells ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(if (rowIndex % 2 == 0) Color.White else Color(0xFFFAFAFA))
-                        .padding(horizontal = 8.dp, vertical = 6.dp)
-                ) {
-                    rowCells.forEach { cell ->
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .padding(horizontal = 4.dp)
-                        ) {
-                            InlineMarkdownAndroid(cell)
-                        }
-                    }
-                    // 补齐空列
-                    repeat(maxCols - rowCells.size) {
-                        Box(modifier = Modifier.weight(1f))
-                    }
-                }
-                if (rowIndex < rows.size - 1) {
-                    Divider(color = Color(0xFFF0F0F0), thickness = 0.5.dp)
-                }
+
+            table.rows.forEachIndexed { rowIndex, rowCells ->
+                MarkdownTableDataRow(
+                    rowCells = rowCells,
+                    rowIndex = rowIndex,
+                    maxCols = table.maxCols,
+                    showDivider = rowIndex < table.rows.lastIndex,
+                )
             }
         }
     }
@@ -3761,270 +4422,11 @@ fun TaskListItemAndroid(content: String, isChecked: Boolean, onToggle: (() -> Un
 @Composable
 fun MarkdownContentAndroid(content: String) {
     val context = LocalContext.current
-    val lines = content.split("\n")
-    var inCodeBlock = false
-    var codeBlockContent = StringBuilder()
-    var codeLanguage = ""
-    var inTable = false
-    var tableLines = mutableListOf<String>()
-    var inMathBlock = false
-    var mathBlockContent = StringBuilder()
-    
-    Column(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        lines.forEachIndexed { index, line ->
-            when {
-                // 数学公式块 $$...$$ 或 \[...\]
-                (line.trim().startsWith("$$") || line.trim().startsWith("\\[")) && !inCodeBlock -> {
-                    if (inMathBlock) {
-                        // 结束数学块
-                        if (mathBlockContent.isNotEmpty()) {
-                            MathFormulaAndroid(mathBlockContent.toString().trim(), isBlock = true)
-                            mathBlockContent = StringBuilder()
-                        }
-                        inMathBlock = false
-                    } else {
-                        val trimmedLine = line.trim()
-                        val isDollar = trimmedLine.startsWith("$$")
-                        val endMarker = if (isDollar) "$$" else "\\]"
-                        val startMarker = if (isDollar) "$$" else "\\["
-                        
-                        // 检查是否是单行公式 $$...$$ 或 \[...\]
-                        if (trimmedLine.endsWith(endMarker) && trimmedLine.length > startMarker.length + endMarker.length) {
-                            // 单行公式
-                            val content = trimmedLine.removePrefix(startMarker).removeSuffix(endMarker).trim()
-                            MathFormulaAndroid(content, isBlock = true)
-                        } else {
-                            // 多行公式开始
-                            inMathBlock = true
-                            // 如果当前行有内容（不是纯粹的起始标记），加入内容
-                            val firstContent = trimmedLine.removePrefix(startMarker).trim()
-                            if (firstContent.isNotEmpty()) {
-                                mathBlockContent.append(firstContent).append("\n")
-                            }
-                        }
-                    }
-                }
-                // 结束标记 \] 或 $$（当在数学块中）
-                inMathBlock && (line.trim() == "$$" || line.trim() == "\\]") -> {
-                    // 结束数学块
-                    if (mathBlockContent.isNotEmpty()) {
-                        MathFormulaAndroid(mathBlockContent.toString().trim(), isBlock = true)
-                        mathBlockContent = StringBuilder()
-                    }
-                    inMathBlock = false
-                }
-                inMathBlock -> {
-                    mathBlockContent.append(line).append("\n")
-                }
-                // 代码块开始/结束
-                line.trim().startsWith("```") -> {
-                    if (inCodeBlock) {
-                        // 代码块结束
-                        if (codeBlockContent.isNotEmpty()) {
-                            CodeBlockAndroid(
-                                code = codeBlockContent.toString().trimEnd(),
-                                language = codeLanguage
-                            )
-                            codeBlockContent = StringBuilder()
-                        }
-                        inCodeBlock = false
-                    } else {
-                        // 代码块开始
-                        inCodeBlock = true
-                        codeLanguage = line.trim().removePrefix("```").trim()
-                    }
-                }
-                // 代码块内容
-                inCodeBlock -> {
-                    codeBlockContent.append(line).append("\n")
-                }
-                // 表格检测
-                line.trim().startsWith("|") && line.trim().endsWith("|") -> {
-                    if (!inTable) {
-                        inTable = true
-                        tableLines = mutableListOf()
-                    }
-                    tableLines.add(line)
-                }
-                // 表格结束
-                inTable && !line.trim().startsWith("|") -> {
-                    if (tableLines.isNotEmpty()) {
-                        MarkdownTableAndroid(tableLines)
-                        tableLines = mutableListOf()
-                    }
-                    inTable = false
-                    // 继续处理当前行
-                    when {
-                        line.startsWith("### ") -> {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = line.removePrefix("### "),
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFF4A4038)
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                        }
-                        line.startsWith("## ") -> {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Text(
-                                text = line.removePrefix("## "),
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFF4A4038)
-                            )
-                            Spacer(modifier = Modifier.height(6.dp))
-                        }
-                        line.startsWith("# ") -> {
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text(
-                                text = line.removePrefix("# "),
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFC9A86C)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                        line.isNotBlank() -> {
-                            InlineMarkdownAndroid(line, context)
-                            Spacer(modifier = Modifier.height(4.dp))
-                        }
-                    }
-                }
-                // 标题
-                line.startsWith("### ") -> {
-                    if (index > 0) Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = line.removePrefix("### "),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFF4A4038)
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                line.startsWith("## ") -> {
-                    if (index > 0) Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = line.removePrefix("## "),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFF4A4038)
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                }
-                line.startsWith("# ") -> {
-                    if (index > 0) Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = line.removePrefix("# "),
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = Color(0xFFC9A86C)  // 金色大标题
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                // 任务列表 - [ ] 或 [x]
-                line.trim().let { l ->
-                    l.startsWith("- [ ] ") || l.startsWith("- [x] ") || 
-                    l.startsWith("* [ ] ") || l.startsWith("* [x] ")
-                } -> {
-                    val isChecked = line.trim().contains("[x]")
-                    val content = line.trim()
-                        .removePrefix("- [ ] ").removePrefix("- [x] ")
-                        .removePrefix("* [ ] ").removePrefix("* [x] ")
-                    TaskListItemAndroid(content, isChecked)
-                }
-                // 无序列表
-                line.trim().startsWith("- ") || line.trim().startsWith("* ") -> {
-                    val content = line.trim().removePrefix("- ").removePrefix("* ")
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 16.dp, bottom = 4.dp)
-                    ) {
-                        Text(
-                            text = "•",
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFFC9A86C),
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                        InlineMarkdownAndroid(content, context)
-                    }
-                }
-                // 有序列表
-                line.trim().matches(Regex("^\\d+\\.\\s.*")) -> {
-                    val parts = line.trim().split(".", limit = 2)
-                    if (parts.size == 2) {
-                        val num = parts[0].trim()
-                        val listContent = parts[1].trim()
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 16.dp, bottom = 4.dp)
-                        ) {
-                            Text(
-                                text = "$num.",
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color(0xFFC9A86C),
-                                modifier = Modifier.padding(end = 8.dp)
-                            )
-                            InlineMarkdownAndroid(listContent, context)
-                        }
-                    }
-                }
-                // 分隔线
-                line.trim() == "---" || line.trim() == "***" -> {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Divider(
-                        color = Color(0xFFE8E0D4),
-                        thickness = 1.dp,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                }
-                // 引用块
-                line.startsWith("> ") -> {
-                    val quoteContent = line.removePrefix("> ")
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 8.dp, bottom = 8.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color(0xFFF0F0F0)
-                        ),
-                        shape = RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp, bottomStart = 8.dp)
-                    ) {
-                        Row(modifier = Modifier.padding(12.dp)) {
-                            Box(
-                                modifier = Modifier
-                                    .width(3.dp)
-                                    .height(20.dp)
-                                    .background(Color(0xFF7BA8C9))
-                            )
-                            Spacer(modifier = Modifier.width(12.dp))
-                            InlineMarkdownAndroid(quoteContent, context)
-                        }
-                    }
-                }
-                // 普通文本
-                line.isNotBlank() -> {
-                    InlineMarkdownAndroid(line, context)
-                    Spacer(modifier = Modifier.height(4.dp))
-                }
-                // 空行
-                else -> {
-                    if (index > 0 && lines.getOrNull(index - 1)?.isNotBlank() == true) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                }
-            }
-        }
-        
-        // 处理末尾的表格
-        if (inTable && tableLines.isNotEmpty()) {
-            MarkdownTableAndroid(tableLines)
+    val renderItems = remember(content) { parseMarkdownContent(content) }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        renderItems.forEach { item ->
+            RenderMarkdownContentItem(item = item, context = context)
         }
     }
 }
@@ -4102,152 +4504,33 @@ fun CodeBlockAndroid(code: String, language: String) {
 @Composable
 fun InlineMarkdownAndroid(text: String, context: Context? = null) {
     val localContext = context ?: LocalContext.current
-    
+
     // 处理行内数学公式
     val processedText = remember(text) { extractInlineMath(text) }
-    
+
     val annotatedText = buildAnnotatedString {
         var remaining = processedText.first
         val mathSegments = processedText.second
         var offset = 0
-        
+
         while (remaining.isNotEmpty()) {
-            // 检查当前位置是否有数学公式
-            val mathAtPos = mathSegments.find { it.first == offset }
-            if (mathAtPos != null) {
-                // 渲染数学公式
-                withStyle(androidx.compose.ui.text.SpanStyle(
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                    background = Color(0xFFF5F5F5)
-                )) {
-                    append(mathAtPos.second)
-                }
-                offset += mathAtPos.second.length
-                remaining = if (remaining.length > mathAtPos.second.length) remaining.substring(mathAtPos.second.length) else ""
-                continue
+            val match = findNextInlineMarkdownMatch(remaining, offset, mathSegments)
+            if (match == null) {
+                append(remaining)
+                break
             }
-            
-            // 处理链接 [text](url)
-            val linkStart = remaining.indexOf("[")
-            if (linkStart >= 0) {
-                val linkEnd = remaining.indexOf("]", linkStart)
-                if (linkEnd > linkStart) {
-                    val urlStart = remaining.indexOf("(", linkEnd)
-                    val urlEnd = remaining.indexOf(")", urlStart)
-                    if (urlStart == linkEnd + 1 && urlEnd > urlStart) {
-                        // 添加前面的普通文本
-                        if (linkStart > 0) {
-                            append(remaining.substring(0, linkStart))
-                        }
-                        
-                        val linkText = remaining.substring(linkStart + 1, linkEnd)
-                        val url = remaining.substring(urlStart + 1, urlEnd)
-                        
-                        // 添加可点击的链接
-                        pushStringAnnotation(tag = "URL", annotation = url)
-                        withStyle(androidx.compose.ui.text.SpanStyle(
-                            color = Color(0xFF1565C0),
-                            textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
-                        )) {
-                            append(linkText)
-                        }
-                        pop()
-                        
-                        remaining = remaining.substring(urlEnd + 1)
-                        continue
-                    }
-                }
+
+            if (match.startIndex > 0) {
+                append(remaining.substring(0, match.startIndex))
             }
-            
-            // 处理自动链接 URL
-            val urlPattern = Regex("""(https?://[^\s<>\[\]()]+)""")
-            val urlMatch = urlPattern.find(remaining)
-            if (urlMatch != null) {
-                val matchStart = urlMatch.range.first
-                if (matchStart > 0) {
-                    append(remaining.substring(0, matchStart))
-                }
-                
-                val url = urlMatch.value
-                pushStringAnnotation(tag = "URL", annotation = url)
-                withStyle(androidx.compose.ui.text.SpanStyle(
-                    color = Color(0xFF1565C0),
-                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline
-                )) {
-                    append(url)
-                }
-                pop()
-                
-                remaining = remaining.substring(urlMatch.range.last + 1)
-                continue
-            }
-            
-            // 处理粗体 **text**
-            val boldStart = remaining.indexOf("**")
-            if (boldStart >= 0) {
-                // 添加前面的普通文本
-                if (boldStart > 0) {
-                    append(remaining.substring(0, boldStart))
-                }
-                
-                val boldEnd = remaining.indexOf("**", boldStart + 2)
-                if (boldEnd > boldStart) {
-                    val boldText = remaining.substring(boldStart + 2, boldEnd)
-                    withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) {
-                        append(boldText)
-                    }
-                    remaining = remaining.substring(boldEnd + 2)
-                    continue
-                }
-            }
-            
-            // 处理斜体 *text*
-            val italicStart = remaining.indexOf("*")
-            if (italicStart >= 0 && (italicStart == 0 || remaining[italicStart - 1] != '*')) {
-                if (italicStart > 0) {
-                    append(remaining.substring(0, italicStart))
-                }
-                
-                val italicEnd = remaining.indexOf("*", italicStart + 1)
-                if (italicEnd > italicStart && (italicEnd == remaining.length - 1 || remaining[italicEnd + 1] != '*')) {
-                    val italicText = remaining.substring(italicStart + 1, italicEnd)
-                    withStyle(androidx.compose.ui.text.SpanStyle(fontStyle = androidx.compose.ui.text.font.FontStyle.Italic)) {
-                        append(italicText)
-                    }
-                    remaining = remaining.substring(italicEnd + 1)
-                    continue
-                }
-            }
-            
-            // 处理行内代码 `code`
-            val codeStart = remaining.indexOf("`")
-            if (codeStart >= 0) {
-                if (codeStart > 0) {
-                    append(remaining.substring(0, codeStart))
-                }
-                
-                val codeEnd = remaining.indexOf("`", codeStart + 1)
-                if (codeEnd > codeStart) {
-                    val codeText = remaining.substring(codeStart + 1, codeEnd)
-                    withStyle(
-                        androidx.compose.ui.text.SpanStyle(
-                            background = Color(0xFFF0F0F0),
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                    ) {
-                        append(" $codeText ")
-                    }
-                    remaining = remaining.substring(codeEnd + 1)
-                    continue
-                }
-            }
-            
-            // 没有特殊标记，添加剩余文本
-            append(remaining)
-            break
+            appendInlineMarkdownMatch(match)
+
+            val consumedLength = (match.startIndex + match.rawLength).coerceAtMost(remaining.length)
+            remaining = remaining.substring(consumedLength)
+            offset += consumedLength
         }
     }
-    
+
     // 渲染可点击的文本
     Text(
         text = annotatedText,
@@ -4260,11 +4543,11 @@ fun InlineMarkdownAndroid(text: String, context: Context? = null) {
             // 点击时检查是否点击了链接
             val annotations = annotatedText.getStringAnnotations("URL", 0, annotatedText.length)
             if (annotations.isNotEmpty()) {
-                try {
+                runCatching {
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(annotations.first().item))
                     localContext.startActivity(intent)
-                } catch (e: Exception) {
-                    // 忽略无法打开的链接
+                }.onFailure { error ->
+                    Log.w("ChatScreen", "无法打开链接: ${annotations.first().item}", error)
                 }
             }
         }
@@ -4280,31 +4563,7 @@ private fun ForwardedMessageBubble(
     onExpand: () -> Unit,
     onCollapse: () -> Unit,
 ) {
-    val batchItems = remember(parts.body, parts.isBatch) {
-        if (parts.isBatch) parseBatchForwardMarkdownBody(parts.body) else emptyList()
-    }
-    val useBatchLayout = batchItems.isNotEmpty()
-
-    fun previewSource(): String =
-        if (parts.isBatch && batchItems.isNotEmpty()) batchItems.first().content
-        else parts.body
-
-    fun bodyPreviewText(rawBody: String): String {
-        val b = rawBody.replace("\r", "").trim()
-        if (b.isEmpty()) return "（无正文）"
-        val firstLine = b.lineSequence().firstOrNull { it.isNotBlank() } ?: b
-        val line = firstLine.ifEmpty { b }
-        val maxLen = 96
-        return if (line.length <= maxLen) line else line.take(maxLen) + "…"
-    }
-
-    val bg = if (isOwn) Color(0xFFEDE4D4) else Color(0xFFFAF7F2)
-    val shape = RoundedCornerShape(
-        topStart = 12.dp,
-        topEnd = 12.dp,
-        bottomStart = if (isOwn) 12.dp else 4.dp,
-        bottomEnd = if (isOwn) 4.dp else 12.dp,
-    )
+    val bubbleState = remember(parts, isOwn) { buildForwardedBubbleState(parts, isOwn) }
 
     Row(
         modifier = Modifier
@@ -4320,126 +4579,23 @@ private fun ForwardedMessageBubble(
         Column(
             modifier = Modifier
                 .weight(1f)
-                .background(bg, shape)
+                .background(bubbleState.backgroundColor, bubbleState.shape)
                 .padding(12.dp)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("📨", fontSize = 14.sp)
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    if (parts.isBatch) "批量转发" else "转发",
-                    fontSize = 12.sp,
-                    color = Color(0xFF7A6B5A),
-                )
-                Text(
-                    " · 来自",
-                    fontSize = 12.sp,
-                    color = SilkColors.textLight,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
-                Text(
-                    parts.sourceName.ifEmpty { "未命名会话" },
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = SilkColors.primary,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            if (parts.senderName.isNotEmpty()) {
-                Text(
-                    parts.senderName,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = SilkColors.primary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp, bottom = 2.dp, start = 4.dp)
-                )
-            }
+            ForwardedMessageHeader(parts = parts)
+            ForwardedMessageSender(senderName = parts.senderName)
 
             if (!isExpanded) {
-                Column(Modifier.fillMaxWidth().padding(top = 10.dp)) {
-                    Text(
-                        text = bodyPreviewText(previewSource()),
-                        fontSize = 13.sp,
-                        color = SilkColors.textSecondary,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        lineHeight = 20.sp,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 10.dp)
-                            .clickable(onClick = onExpand)
-                            .padding(vertical = 6.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "查看转发全文",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = SilkColors.primary
-                        )
-                        Text("  ▼", fontSize = 12.sp, color = SilkColors.primary)
-                    }
-                }
+                ForwardedMessageCollapsedContent(
+                    previewText = bubbleState.previewText,
+                    onExpand = onExpand,
+                )
             } else {
-                if (useBatchLayout) {
-                    batchItems.forEachIndexed { index, item ->
-                        if (index > 0) {
-                            Spacer(Modifier.height(14.dp))
-                            Divider(color = Color(0xFFE0D8CC), thickness = 1.dp)
-                            Spacer(Modifier.height(2.dp))
-                        }
-                        Text(
-                            item.senderName.ifEmpty { "用户" },
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = SilkColors.primary,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(
-                                    top = if (index == 0) 10.dp else 14.dp,
-                                    bottom = 6.dp,
-                                    start = 4.dp
-                                )
-                        )
-                        MarkdownWebView(item.content)
-                    }
-                } else {
-                    Divider(
-                        color = Color(0xFFE0D8CC),
-                        thickness = 1.dp,
-                        modifier = Modifier.padding(top = 10.dp, bottom = 10.dp)
-                    )
-                    MarkdownWebView(parts.body)
-                }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 10.dp)
-                        .clickable(onClick = onCollapse)
-                        .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("收起", fontSize = 12.sp, color = SilkColors.textSecondary)
-                    Text("  ▲", fontSize = 11.sp, color = SilkColors.textSecondary)
-                }
+                ForwardedMessageExpandedContent(
+                    body = parts.body,
+                    batchItems = bubbleState.batchItems,
+                    onCollapse = onCollapse,
+                )
             }
         }
     }
@@ -4477,15 +4633,11 @@ fun MessageItem(
     onForward: (Message) -> Unit = {}
 ) {
     val isCurrentUser = message.userId == currentUserId
-    val isSystemMessage = message.type == MessageType.SYSTEM
-    val isFileMessage = message.type == MessageType.FILE
-    
-    // 是否可以撤回：只能撤回自己发送的消息，且不是 Silk 的消息，且不是系统消息
-    val canRecall = isCurrentUser && 
-                    !isAgentUserId(message.userId) &&
-                    !isSystemMessage && 
-                    !isTransient
-    
+    val renderMode = remember(message.userId, message.type, message.category) { messageRenderMode(message) }
+    val canRecall = isCurrentUser &&
+        !isAgentUserId(message.userId) &&
+        renderMode != MessageRenderMode.SYSTEM &&
+        !isTransient
     val timeString = formatMessageTimestamp(message.timestamp)
     
     // 检测PDF下载链接
@@ -4506,7 +4658,31 @@ fun MessageItem(
             isToolsExpanded = isToolsExpanded,
             onToolsExpandChange = { newExpanded -> onToolsExpandChange(message.id, newExpanded) },
             onCopy = onCopy,
-            onForward = onForward
+            onForward = onForward,
+        )
+        MessageRenderMode.FILE -> FileMessageItem(
+            message = message,
+            currentUserId = currentUserId,
+            timeString = timeString,
+            context = context,
+        )
+        MessageRenderMode.SYSTEM -> SystemMessageItem(message = message)
+        MessageRenderMode.REGULAR -> RegularMessageItem(
+            message = message,
+            currentUserId = currentUserId,
+            timeString = timeString,
+            context = context,
+            isTransient = isTransient,
+            isSelectionMode = isSelectionMode,
+            isSelected = isSelected,
+            onToggleSelection = onToggleSelection,
+            onLongPress = onLongPress,
+            onUserNameClick = onUserNameClick,
+            canRecall = canRecall,
+            isRecalling = isRecalling,
+            onRecall = onRecall,
+            onLongContentCollapsed = onLongContentCollapsed,
+            onForward = onForward,
         )
         return
     }
@@ -5064,7 +5240,6 @@ data class FileItem(
 @Suppress("UnusedParameter")
 @Composable
 fun FolderExplorerDialog(
-    groupId: String,
     files: List<FileItem>,
     processedUrls: List<String>,
     isLoading: Boolean,
@@ -5283,18 +5458,8 @@ fun FileItemCard(
     file: FileItem,
     onClick: () -> Unit
 ) {
-    val fileIcon = when {
-        file.name.endsWith(".pdf", ignoreCase = true) -> "📄"
-        file.name.endsWith(".doc", ignoreCase = true) || file.name.endsWith(".docx", ignoreCase = true) -> "📝"
-        file.name.endsWith(".xls", ignoreCase = true) || file.name.endsWith(".xlsx", ignoreCase = true) -> "📊"
-        file.name.endsWith(".jpg", ignoreCase = true) || file.name.endsWith(".png", ignoreCase = true) || 
-        file.name.endsWith(".gif", ignoreCase = true) -> "🖼️"
-        file.name.endsWith(".mp3", ignoreCase = true) || file.name.endsWith(".wav", ignoreCase = true) -> "🎵"
-        file.name.endsWith(".mp4", ignoreCase = true) || file.name.endsWith(".avi", ignoreCase = true) -> "🎬"
-        file.name.endsWith(".zip", ignoreCase = true) || file.name.endsWith(".rar", ignoreCase = true) -> "📦"
-        else -> "📎"
-    }
-    
+    val fileIcon = remember(file.name) { file.name.toFileCardIcon() }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -5339,31 +5504,22 @@ fun FileItemCard(
     }
 }
 
+private fun String.toFileCardIcon(): String {
+    val normalizedName = lowercase()
+    return fileCardIconMappings
+        .firstOrNull { (_, extensions) -> extensions.any(normalizedName::endsWith) }
+        ?.first
+        ?: "📎"
+}
+
 /**
  * 从 Uri 获取文件名
  */
 @Suppress("NestedBlockDepth")
 fun getFileName(context: android.content.Context, uri: Uri): String {
-    var result: String? = null
-    if (uri.scheme == "content") {
-        val cursor = context.contentResolver.query(uri, null, null, null, null)
-        cursor?.use {
-            if (it.moveToFirst()) {
-                val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (index >= 0) {
-                    result = it.getString(index)
-                }
-            }
-        }
-    }
-    if (result == null) {
-        result = uri.path
-        val cut = result?.lastIndexOf('/') ?: -1
-        if (cut != -1) {
-            result = result?.substring(cut + 1)
-        }
-    }
-    return result ?: "unknown_file"
+    return queryDisplayName(context, uri)
+        ?: uri.path?.substringAfterLast('/')
+        ?: "unknown_file"
 }
 
 /**
@@ -5468,7 +5624,7 @@ data class FilesAndUrls(
  */
 @Suppress("TooGenericExceptionCaught")
 suspend fun loadGroupFilesAndUrls(groupId: String): FilesAndUrls = withContext(Dispatchers.IO) {
-    try {
+    runCatching {
         val url = URL("${BackendUrlHolder.getBaseUrl()}/api/files/list/$groupId")
         val connection = AndroidHttpCompat.openConnection(url)
         connection.requestMethod = "GET"
@@ -5482,9 +5638,35 @@ suspend fun loadGroupFilesAndUrls(groupId: String): FilesAndUrls = withContext(D
         } else {
             FilesAndUrls(emptyList(), emptyList())
         }
-    } catch (e: Exception) {
-        e.printStackTrace()
+    }.getOrElse { error ->
+        if (error is CancellationException) throw error
+        Log.w("ChatScreen", "加载群组文件列表失败: $groupId", error)
         FilesAndUrls(emptyList(), emptyList())
+    }
+}
+
+private suspend fun runLoggedSuspendAction(
+    failurePrefix: String,
+    log: (String) -> Unit,
+    block: suspend () -> Unit,
+) {
+    runCatching {
+        block()
+    }.onFailure { error ->
+        if (error is CancellationException) throw error
+        log("$failurePrefix: ${error.message}")
+    }
+}
+
+private suspend fun disconnectChatClientQuietly(
+    chatClient: ChatClient,
+    log: (String) -> Unit,
+) {
+    runCatching {
+        chatClient.disconnect()
+    }.onFailure { error ->
+        if (error is CancellationException) throw error
+        log("⚠️ 切换会话前断开旧连接失败: ${error.message}")
     }
 }
 
@@ -5538,7 +5720,6 @@ fun formatTimeHMS(timestamp: Long): String {
 fun AddMemberDialog(
     contacts: List<Contact>,
     groupMembers: List<GroupMember>,
-    groupId: String,
     isLoading: Boolean,
     result: String?,
     onAddMember: (Contact) -> Unit,
@@ -5684,8 +5865,8 @@ fun MembersDialog(
     onMemberClick: (GroupMember) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val contactIds = contacts.map { it.contactId }.toSet()
-    
+    val contactIds = remember(contacts) { contacts.map(Contact::contactId).toSet() }
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
             modifier = Modifier
@@ -5698,139 +5879,14 @@ fun MembersDialog(
                     .fillMaxWidth()
                     .padding(20.dp)
             ) {
-                // 标题
-                Text(
-                    text = "👥 群组成员 (${members.size})",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(bottom = 16.dp)
+                MembersDialogHeader(memberCount = members.size)
+                MembersDialogBody(
+                    members = members,
+                    contactIds = contactIds,
+                    currentUserId = currentUserId,
+                    isLoading = isLoading,
+                    onMemberClick = onMemberClick,
                 )
-                
-                if (isLoading) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(20.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
-                } else if (members.isEmpty()) {
-                    Text(
-                        text = "暂无成员",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(20.dp)
-                    )
-                } else {
-                    // 成员列表
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f, fill = false),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        items(members) { member ->
-                            val isCurrentUser = member.id == currentUserId
-                            val isContact = member.id in contactIds
-                            val isSilkAI = isAgentUserId(member.id)
-                            
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .then(
-                                        if (!isCurrentUser && !isSilkAI) {
-                                            Modifier.clickable { onMemberClick(member) }
-                                        } else {
-                                            Modifier
-                                        }
-                                    ),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                )
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                    ) {
-                                        // 头像/图标
-                                        Surface(
-                                            modifier = Modifier.size(40.dp),
-                                            shape = MaterialTheme.shapes.medium,
-                                            color = when {
-                                                isSilkAI -> SilkColors.info
-                                                isCurrentUser -> SilkColors.primary
-                                                isContact -> SilkColors.success
-                                                else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                            }
-                                        ) {
-                                            Box(
-                                                contentAlignment = Alignment.Center,
-                                                modifier = Modifier.fillMaxSize()
-                                            ) {
-                                                Text(
-                                                    text = when {
-                                                        isSilkAI -> "🤖"
-                                                        isCurrentUser -> "👤"
-                                                        isContact -> "✓"
-                                                        else -> member.fullName.firstOrNull()?.toString() ?: "?"
-                                                    },
-                                                    color = Color.White,
-                                                    fontSize = 18.sp
-                                                )
-                                            }
-                                        }
-                                        
-                                        // 名字和状态
-                                        Column {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Text(
-                                                    text = member.fullName,
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    fontWeight = FontWeight.Medium
-                                                )
-                                                if (isCurrentUser) {
-                                                    Text(
-                                                        text = " (我)",
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
-                                                }
-                                            }
-                                            Text(
-                                                text = when {
-                                                    isSilkAI -> "AI 助手"
-                                                    isCurrentUser -> "当前用户"
-                                                    isContact -> "联系人 · 点击聊天"
-                                                    else -> "点击添加联系人"
-                                                },
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                    
-                                    // 右侧操作提示
-                                    if (!isCurrentUser && !isSilkAI) {
-                                        Text(
-                                            text = if (isContact) "💬" else "➕",
-                                            fontSize = 20.sp
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // 关闭按钮
                 TextButton(
                     onClick = onDismiss,
                     modifier = Modifier
@@ -5844,6 +5900,251 @@ fun MembersDialog(
     }
 }
 
+@Composable
+private fun MembersDialogHeader(memberCount: Int) {
+    Text(
+        text = "👥 群组成员 ($memberCount)",
+        style = MaterialTheme.typography.titleLarge,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(bottom = 16.dp),
+    )
+}
+
+@Composable
+private fun ColumnScope.MembersDialogBody(
+    members: List<GroupMember>,
+    contactIds: Set<String>,
+    currentUserId: String,
+    isLoading: Boolean,
+    onMemberClick: (GroupMember) -> Unit,
+) {
+    when {
+        isLoading -> MembersDialogLoadingState()
+        members.isEmpty() -> MembersDialogEmptyState()
+        else -> MembersDialogList(
+            members = members,
+            contactIds = contactIds,
+            currentUserId = currentUserId,
+            onMemberClick = onMemberClick,
+        )
+    }
+}
+
+@Composable
+private fun MembersDialogLoadingState() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(20.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator()
+    }
+}
+
+@Composable
+private fun MembersDialogEmptyState() {
+    Text(
+        text = "暂无成员",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(20.dp),
+    )
+}
+
+@Composable
+private fun ColumnScope.MembersDialogList(
+    members: List<GroupMember>,
+    contactIds: Set<String>,
+    currentUserId: String,
+    onMemberClick: (GroupMember) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .weight(1f, fill = false),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        items(members) { member ->
+            MembersDialogMemberRow(
+                state = member.toMembersDialogState(
+                    currentUserId = currentUserId,
+                    contactIds = contactIds,
+                ),
+                onClick = { onMemberClick(member) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MembersDialogMemberRow(
+    state: MembersDialogMemberState,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (state.isClickable) Modifier.clickable(onClick = onClick) else Modifier),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                MembersDialogMemberAvatar(state)
+                MembersDialogMemberDetails(state)
+            }
+            MembersDialogMemberAction(state)
+        }
+    }
+}
+
+@Composable
+private fun MembersDialogMemberAvatar(state: MembersDialogMemberState) {
+    Surface(
+        modifier = Modifier.size(40.dp),
+        shape = MaterialTheme.shapes.medium,
+        color = state.avatarColor,
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Text(
+                text = state.avatarText,
+                color = Color.White,
+                fontSize = 18.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun MembersDialogMemberDetails(state: MembersDialogMemberState) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = state.displayName,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+            )
+            if (state.isCurrentUser) {
+                Text(
+                    text = " (我)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Text(
+            text = state.statusText,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun MembersDialogMemberAction(state: MembersDialogMemberState) {
+    state.actionEmoji?.let { emoji ->
+        Text(
+            text = emoji,
+            fontSize = 20.sp,
+        )
+    }
+}
+
+@Composable
+private fun GroupMember.toMembersDialogState(
+    currentUserId: String,
+    contactIds: Set<String>,
+): MembersDialogMemberState {
+    val isCurrentUser = id == currentUserId
+    val isSilkAI = isAgentUserId(id)
+    val isContact = id in contactIds
+    return MembersDialogMemberState(
+        displayName = fullName,
+        isCurrentUser = isCurrentUser,
+        isClickable = !isCurrentUser && !isSilkAI,
+        statusText = membersDialogStatusText(
+            isSilkAI = isSilkAI,
+            isCurrentUser = isCurrentUser,
+            isContact = isContact,
+        ),
+        avatarText = membersDialogAvatarText(
+            displayName = fullName,
+            isSilkAI = isSilkAI,
+            isCurrentUser = isCurrentUser,
+            isContact = isContact,
+        ),
+        avatarColor = membersDialogAvatarColor(
+            isSilkAI = isSilkAI,
+            isCurrentUser = isCurrentUser,
+            isContact = isContact,
+        ),
+        actionEmoji = membersDialogActionEmoji(
+            isSilkAI = isSilkAI,
+            isCurrentUser = isCurrentUser,
+            isContact = isContact,
+        ),
+    )
+}
+
+private fun membersDialogStatusText(
+    isSilkAI: Boolean,
+    isCurrentUser: Boolean,
+    isContact: Boolean,
+): String = when {
+    isSilkAI -> "AI 助手"
+    isCurrentUser -> "当前用户"
+    isContact -> "联系人 · 点击聊天"
+    else -> "点击添加联系人"
+}
+
+private fun membersDialogAvatarText(
+    displayName: String,
+    isSilkAI: Boolean,
+    isCurrentUser: Boolean,
+    isContact: Boolean,
+): String = when {
+    isSilkAI -> "🤖"
+    isCurrentUser -> "👤"
+    isContact -> "✓"
+    else -> displayName.firstOrNull()?.toString() ?: "?"
+}
+
+@Composable
+private fun membersDialogAvatarColor(
+    isSilkAI: Boolean,
+    isCurrentUser: Boolean,
+    isContact: Boolean,
+): Color = when {
+    isSilkAI -> SilkColors.info
+    isCurrentUser -> SilkColors.primary
+    isContact -> SilkColors.success
+    else -> MaterialTheme.colorScheme.onSurfaceVariant
+}
+
+private fun membersDialogActionEmoji(
+    isSilkAI: Boolean,
+    isCurrentUser: Boolean,
+    isContact: Boolean,
+): String? = when {
+    isCurrentUser || isSilkAI -> null
+    isContact -> "💬"
+    else -> "➕"
+}
+
 /**
  * 转发到群组对话框
  */
@@ -5854,7 +6155,6 @@ fun ForwardToGroupDialog(
     groups: List<Group>,
     isLoading: Boolean,
     selectedMessages: List<Message>,
-    currentUser: User,
     onForward: (Group) -> Unit,
     onDismiss: () -> Unit,
     result: String?
@@ -6018,7 +6318,6 @@ fun ForwardToContactDialog(
     contacts: List<Contact>,
     isLoading: Boolean,
     selectedMessages: List<Message>,
-    currentUser: User,
     onForward: (Contact) -> Unit,
     onDismiss: () -> Unit,
     result: String?
@@ -6206,55 +6505,890 @@ private fun extractInlineMath(text: String): Pair<String, List<Pair<Int, String>
     val result = StringBuilder()
     var i = 0
     var offset = 0
-    
+
     while (i < text.length) {
-        // 检查是否是 \(...\) 格式的行内公式
-        if (i + 1 < text.length && text[i] == '\\' && text[i + 1] == '(') {
-            val start = i
-            i += 2  // 跳过 \(
-            // 找到结束的 \)
-            while (i + 1 < text.length && !(text[i] == '\\' && text[i + 1] == ')')) {
-                i++
-            }
-            if (i + 1 < text.length) {
-                val formula = text.substring(start + 2, i)
-                val processed = processMathFormula(formula)
-                mathSegments.add(Pair(offset, processed))
-                result.append(processed)
-                offset += processed.length
-                i += 2  // 跳过 \)
-            } else {
-                // 没有结束符，作为普通文本
-                result.append(text.substring(start))
-                offset += text.length - start
-            }
-        }
-        // 检查是否是行内公式 $...$ (不是 $$)
-        else if (text[i] == '$' && (i == 0 || text[i - 1] != '$') && (i + 1 >= text.length || text[i + 1] != '$')) {
-            val start = i
-            i++
-            // 找到结束的 $
-            while (i < text.length && text[i] != '$') {
-                i++
-            }
-            if (i < text.length) {
-                val formula = text.substring(start + 1, i)
-                val processed = processMathFormula(formula)
-                mathSegments.add(Pair(offset, processed))
-                result.append(processed)
-                offset += processed.length
-                i++
-            } else {
-                // 没有结束符，作为普通文本
-                result.append(text.substring(start))
-                offset += text.length - start
-            }
+        val mathMatch = findInlineMathMatch(text, i)
+        if (mathMatch != null) {
+            mathSegments.add(offset to mathMatch.processedText)
+            result.append(mathMatch.processedText)
+            offset += mathMatch.processedText.length
+            i += mathMatch.rawLength
         } else {
             result.append(text[i])
             offset++
             i++
         }
     }
-    
+
     return Pair(result.toString(), mathSegments)
 }
+
+private fun shouldShowEmptyChatState(
+    messages: List<Message>,
+    transientMessage: Message?,
+    statusMessages: List<Message>,
+    isWaitingForAI: Boolean,
+): Boolean {
+    if (messages.isNotEmpty()) return false
+    if (transientMessage != null) return false
+    if (statusMessages.isNotEmpty()) return false
+    return !isWaitingForAI
+}
+
+private fun AnnotatedString.Builder.appendCodeToken(
+    colorKey: String,
+    text: String,
+) {
+    withStyle(androidx.compose.ui.text.SpanStyle(color = codeColors.getValue(colorKey))) {
+        append(text)
+    }
+}
+
+private fun String.startsCodeCommentAt(index: Int, language: String): Boolean {
+    if (startsWith("//", startIndex = index)) return true
+    return language == "python" && this[index] == '#'
+}
+
+private fun Char.isCodeStringDelimiter(): Boolean = this == '"' || this == '\'' || this == '`'
+
+private fun String.isNumberTokenStartAt(index: Int): Boolean {
+    val current = this[index]
+    if (current.isDigit()) return true
+    if (current != '-') return false
+    val nextIndex = index + 1
+    return nextIndex < length && this[nextIndex].isDigit()
+}
+
+private fun Char.isNumberTokenChar(): Boolean = isDigit() || this == '.' || this == 'x' || this == 'X'
+
+private fun findQuotedTokenEnd(line: String, startIndex: Int): Int {
+    var index = startIndex + 1
+    val quote = line[startIndex]
+    while (index < line.length) {
+        val currentChar = line[index]
+        index += if (currentChar == '\\' && index + 1 < line.length) 2 else 1
+        if (currentChar == quote) {
+            break
+        }
+    }
+    return index
+}
+
+private fun findNumberTokenEnd(line: String, startIndex: Int): Int {
+    var index = if (line[startIndex] == '-') startIndex + 1 else startIndex
+    while (index < line.length && line[index].isNumberTokenChar()) {
+        index++
+    }
+    return index
+}
+
+private fun findIdentifierTokenEnd(line: String, startIndex: Int): Int {
+    var index = startIndex
+    while (index < line.length && (line[index].isLetterOrDigit() || line[index] == '_')) {
+        index++
+    }
+    return index
+}
+
+private fun classifyIdentifierColor(
+    word: String,
+    line: String,
+    endIndex: Int,
+): String = when {
+    keywordSet.contains(word) -> "keyword"
+    builtinSet.contains(word) -> "builtin"
+    line.hasFunctionCallAt(endIndex) -> "function"
+    word.first().isUpperCase() -> "type"
+    else -> "variable"
+}
+
+private fun String.hasFunctionCallAt(index: Int): Boolean = index < length && this[index] == '('
+
+private fun Char.isCodeOperatorChar(): Boolean = this in "+-*/=!<>&|^~?:"
+
+private fun findOperatorTokenEnd(line: String, startIndex: Int): Int {
+    var index = startIndex
+    while (index < line.length && line[index].isCodeOperatorChar()) {
+        index++
+    }
+    return index
+}
+
+private fun Char.isCodePunctuationChar(): Boolean = this in "(){}[],;."
+
+private fun queryDisplayName(context: android.content.Context, uri: Uri): String? {
+    if (uri.scheme != "content") return null
+    return context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+        if (!cursor.moveToFirst()) return@use null
+        val columnIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (columnIndex < 0) return@use null
+        cursor.getString(columnIndex)
+    }
+}
+
+private fun String.startsInlineDollarMathAt(index: Int): Boolean {
+    if (this[index] != '$') return false
+    if (index > 0 && this[index - 1] == '$') return false
+    return index + 1 >= length || this[index + 1] != '$'
+}
+
+private enum class InlineMarkdownMatchType {
+    Math,
+    Link,
+    Bold,
+    Italic,
+    Code,
+}
+
+private data class ForwardedMessageBubbleState(
+    val batchItems: List<BatchForwardItem>,
+    val previewText: String,
+    val backgroundColor: Color,
+    val shape: RoundedCornerShape,
+)
+
+private data class MembersDialogMemberState(
+    val displayName: String,
+    val isCurrentUser: Boolean,
+    val isClickable: Boolean,
+    val statusText: String,
+    val avatarText: String,
+    val avatarColor: Color,
+    val actionEmoji: String?,
+)
+
+private data class ParsedMarkdownTable(
+    val headerCells: List<String>,
+    val rows: List<List<String>>,
+    val maxCols: Int,
+)
+
+private sealed interface MarkdownContentItem
+
+private data class MarkdownHeadingItem(
+    val text: String,
+    val level: Int,
+    val topSpacingDp: Int,
+    val bottomSpacingDp: Int,
+) : MarkdownContentItem
+
+private data class MarkdownParagraphItem(
+    val text: String,
+) : MarkdownContentItem
+
+private data class MarkdownTaskListItem(
+    val text: String,
+    val isChecked: Boolean,
+) : MarkdownContentItem
+
+private data class MarkdownUnorderedListItem(
+    val text: String,
+) : MarkdownContentItem
+
+private data class MarkdownOrderedListItem(
+    val number: String,
+    val text: String,
+) : MarkdownContentItem
+
+private data object MarkdownDividerItem : MarkdownContentItem
+
+private data class MarkdownQuoteItem(
+    val text: String,
+) : MarkdownContentItem
+
+private data class MarkdownTableBlockItem(
+    val lines: List<String>,
+) : MarkdownContentItem
+
+private data class MarkdownCodeBlockItem(
+    val code: String,
+    val language: String,
+) : MarkdownContentItem
+
+private data class MarkdownMathBlockItem(
+    val text: String,
+) : MarkdownContentItem
+
+private data object MarkdownBlankLineItem : MarkdownContentItem
+
+private data class MarkdownParseState(
+    var inCodeBlock: Boolean = false,
+    val codeBlockContent: StringBuilder = StringBuilder(),
+    var codeLanguage: String = "",
+    var inTable: Boolean = false,
+    val tableLines: MutableList<String> = mutableListOf(),
+    var inMathBlock: Boolean = false,
+    val mathBlockContent: StringBuilder = StringBuilder(),
+)
+
+private data class InlineMarkdownMatch(
+    val startIndex: Int,
+    val rawLength: Int,
+    val displayText: String,
+    val type: InlineMarkdownMatchType,
+    val annotation: String? = null,
+)
+
+private data class InlineMathMatch(
+    val rawLength: Int,
+    val processedText: String,
+)
+
+private fun parseMarkdownContent(content: String): List<MarkdownContentItem> {
+    val lines = content.split("\n")
+    val items = mutableListOf<MarkdownContentItem>()
+    val state = MarkdownParseState()
+
+    lines.forEachIndexed { index, line ->
+        if (state.inTable && !line.trim().startsWith("|")) {
+            flushTrailingMarkdownTable(state, items)
+        }
+        if (consumeMarkdownMathLine(line, state, items)) return@forEachIndexed
+        if (consumeMarkdownCodeLine(line, state, items)) return@forEachIndexed
+        if (consumeMarkdownTableLine(line, state)) return@forEachIndexed
+
+        classifyMarkdownLine(
+            line = line,
+            index = index,
+            lines = lines,
+        )?.let(items::add)
+    }
+
+    flushTrailingMarkdownTable(state, items)
+    return items
+}
+
+private fun consumeMarkdownMathLine(
+    line: String,
+    state: MarkdownParseState,
+    items: MutableList<MarkdownContentItem>,
+): Boolean {
+    val trimmedLine = line.trim()
+    if (!state.inCodeBlock && trimmedLine.startsMarkdownMathBlock()) {
+        if (state.inMathBlock) {
+            flushMarkdownMathBlock(state, items)
+            state.inMathBlock = false
+        } else {
+            startMarkdownMathBlock(trimmedLine, state, items)
+        }
+        return true
+    }
+    if (state.inMathBlock && trimmedLine.isMarkdownMathBlockEndMarker()) {
+        flushMarkdownMathBlock(state, items)
+        state.inMathBlock = false
+        return true
+    }
+    if (state.inMathBlock) {
+        state.mathBlockContent.append(line).append("\n")
+        return true
+    }
+    return false
+}
+
+private fun startMarkdownMathBlock(
+    trimmedLine: String,
+    state: MarkdownParseState,
+    items: MutableList<MarkdownContentItem>,
+) {
+    val marker = markdownMathBlockMarker(trimmedLine)
+    val startMarker = marker.first
+    val endMarker = marker.second
+    if (trimmedLine.endsWith(endMarker) && trimmedLine.length > startMarker.length + endMarker.length) {
+        val mathContent = trimmedLine.removePrefix(startMarker).removeSuffix(endMarker).trim()
+        items += MarkdownMathBlockItem(mathContent)
+        return
+    }
+    state.inMathBlock = true
+    val firstContent = trimmedLine.removePrefix(startMarker).trim()
+    if (firstContent.isNotEmpty()) {
+        state.mathBlockContent.append(firstContent).append("\n")
+    }
+}
+
+private fun flushMarkdownMathBlock(
+    state: MarkdownParseState,
+    items: MutableList<MarkdownContentItem>,
+) {
+    if (state.mathBlockContent.isNotEmpty()) {
+        items += MarkdownMathBlockItem(state.mathBlockContent.toString().trim())
+        state.mathBlockContent.setLength(0)
+    }
+}
+
+private fun consumeMarkdownCodeLine(
+    line: String,
+    state: MarkdownParseState,
+    items: MutableList<MarkdownContentItem>,
+): Boolean {
+    val trimmedLine = line.trim()
+    if (!trimmedLine.startsWith("```")) {
+        if (state.inCodeBlock) {
+            state.codeBlockContent.append(line).append("\n")
+            return true
+        }
+        return false
+    }
+
+    if (state.inCodeBlock) {
+        if (state.codeBlockContent.isNotEmpty()) {
+            items += MarkdownCodeBlockItem(
+                code = state.codeBlockContent.toString().trimEnd(),
+                language = state.codeLanguage,
+            )
+            state.codeBlockContent.setLength(0)
+        }
+        state.inCodeBlock = false
+        state.codeLanguage = ""
+    } else {
+        state.inCodeBlock = true
+        state.codeLanguage = trimmedLine.removePrefix("```").trim()
+    }
+    return true
+}
+
+private fun consumeMarkdownTableLine(
+    line: String,
+    state: MarkdownParseState,
+): Boolean {
+    val trimmedLine = line.trim()
+    if (trimmedLine.startsWith("|") && trimmedLine.endsWith("|")) {
+        if (!state.inTable) {
+            state.inTable = true
+            state.tableLines.clear()
+        }
+        state.tableLines.add(line)
+        return true
+    }
+    return false
+}
+
+private fun flushTrailingMarkdownTable(
+    state: MarkdownParseState,
+    items: MutableList<MarkdownContentItem>,
+) {
+    if (state.inTable && state.tableLines.isNotEmpty()) {
+        items += MarkdownTableBlockItem(state.tableLines.toList())
+        state.tableLines.clear()
+    }
+    state.inTable = false
+}
+
+private fun classifyMarkdownLine(
+    line: String,
+    index: Int,
+    lines: List<String>,
+): MarkdownContentItem? =
+    parseMarkdownHeadingItem(line, index)
+        ?: parseMarkdownTaskListItem(line)
+        ?: parseMarkdownUnorderedListItem(line)
+        ?: parseMarkdownOrderedListItem(line)
+        ?: parseMarkdownDividerItem(line)
+        ?: parseMarkdownQuoteItem(line)
+        ?: parseMarkdownParagraphItem(line)
+        ?: parseMarkdownBlankLineItem(index, lines)
+
+private fun parseMarkdownHeadingItem(
+    line: String,
+    index: Int,
+): MarkdownHeadingItem? = when {
+    line.startsWith("### ") -> MarkdownHeadingItem(
+        text = line.removePrefix("### "),
+        level = 3,
+        topSpacingDp = if (index > 0) 8 else 0,
+        bottomSpacingDp = 4,
+    )
+
+    line.startsWith("## ") -> MarkdownHeadingItem(
+        text = line.removePrefix("## "),
+        level = 2,
+        topSpacingDp = if (index > 0) 12 else 0,
+        bottomSpacingDp = 6,
+    )
+
+    line.startsWith("# ") -> MarkdownHeadingItem(
+        text = line.removePrefix("# "),
+        level = 1,
+        topSpacingDp = if (index > 0) 16 else 0,
+        bottomSpacingDp = 8,
+    )
+
+    else -> null
+}
+
+private fun parseMarkdownTaskListItem(line: String): MarkdownTaskListItem? {
+    val trimmedLine = line.trim()
+    if (!trimmedLine.isMarkdownTaskListLine()) return null
+    return MarkdownTaskListItem(
+        text = trimmedLine
+            .removePrefix("- [ ] ").removePrefix("- [x] ")
+            .removePrefix("* [ ] ").removePrefix("* [x] "),
+        isChecked = trimmedLine.contains("[x]"),
+    )
+}
+
+private fun String.isMarkdownTaskListLine(): Boolean =
+    startsWith("- [ ] ") || startsWith("- [x] ") || startsWith("* [ ] ") || startsWith("* [x] ")
+
+private fun parseMarkdownUnorderedListItem(line: String): MarkdownUnorderedListItem? {
+    val trimmedLine = line.trim()
+    if (!trimmedLine.startsWith("- ") && !trimmedLine.startsWith("* ")) return null
+    return MarkdownUnorderedListItem(
+        text = trimmedLine.removePrefix("- ").removePrefix("* "),
+    )
+}
+
+private fun parseMarkdownOrderedListItem(line: String): MarkdownOrderedListItem? {
+    val match = markdownOrderedListPattern.matchEntire(line.trim()) ?: return null
+    return MarkdownOrderedListItem(
+        number = match.groupValues[1],
+        text = match.groupValues[2].trim(),
+    )
+}
+
+private fun parseMarkdownDividerItem(line: String): MarkdownContentItem? =
+    if (line.trim() == "---" || line.trim() == "***") MarkdownDividerItem else null
+
+private fun parseMarkdownQuoteItem(line: String): MarkdownQuoteItem? =
+    if (line.startsWith("> ")) MarkdownQuoteItem(line.removePrefix("> ")) else null
+
+private fun parseMarkdownParagraphItem(line: String): MarkdownParagraphItem? =
+    if (line.isNotBlank()) MarkdownParagraphItem(line) else null
+
+private fun parseMarkdownBlankLineItem(
+    index: Int,
+    lines: List<String>,
+): MarkdownContentItem? =
+    if (index > 0 && lines.getOrNull(index - 1)?.isNotBlank() == true) MarkdownBlankLineItem else null
+
+private fun String.startsMarkdownMathBlock(): Boolean = startsWith("$$") || startsWith("\\[")
+
+private fun String.isMarkdownMathBlockEndMarker(): Boolean = this == "$$" || this == "\\]"
+
+private fun markdownMathBlockMarker(trimmedLine: String): Pair<String, String> =
+    if (trimmedLine.startsWith("$$")) "$$" to "$$" else "\\[" to "\\]"
+
+@Composable
+private fun RenderMarkdownContentItem(
+    item: MarkdownContentItem,
+    context: Context,
+) {
+    when (item) {
+        is MarkdownHeadingItem -> MarkdownHeadingBlock(item)
+        is MarkdownParagraphItem -> MarkdownParagraphBlock(item.text, context)
+        is MarkdownTaskListItem -> TaskListItemAndroid(item.text, item.isChecked)
+        is MarkdownUnorderedListItem -> MarkdownUnorderedListBlock(item.text, context)
+        is MarkdownOrderedListItem -> MarkdownOrderedListBlock(item, context)
+        MarkdownDividerItem -> MarkdownDividerBlock()
+        is MarkdownQuoteItem -> MarkdownQuoteBlock(item.text, context)
+        is MarkdownTableBlockItem -> MarkdownTableAndroid(item.lines)
+        is MarkdownCodeBlockItem -> CodeBlockAndroid(item.code, item.language)
+        is MarkdownMathBlockItem -> MathFormulaAndroid(item.text, isBlock = true)
+        MarkdownBlankLineItem -> Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun MarkdownHeadingBlock(item: MarkdownHeadingItem) {
+    if (item.topSpacingDp > 0) {
+        Spacer(modifier = Modifier.height(item.topSpacingDp.dp))
+    }
+    Text(
+        text = item.text,
+        style = when (item.level) {
+            3 -> MaterialTheme.typography.titleSmall
+            2 -> MaterialTheme.typography.titleMedium
+            else -> MaterialTheme.typography.titleLarge
+        },
+        fontWeight = if (item.level == 3) FontWeight.SemiBold else FontWeight.Bold,
+        color = if (item.level == 1) Color(0xFFC9A86C) else Color(0xFF4A4038),
+    )
+    Spacer(modifier = Modifier.height(item.bottomSpacingDp.dp))
+}
+
+@Composable
+private fun MarkdownParagraphBlock(
+    text: String,
+    context: Context,
+) {
+    InlineMarkdownAndroid(text, context)
+    Spacer(modifier = Modifier.height(4.dp))
+}
+
+@Composable
+private fun MarkdownUnorderedListBlock(
+    text: String,
+    context: Context,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, bottom = 4.dp),
+    ) {
+        Text(
+            text = "•",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Bold,
+            color = Color(0xFFC9A86C),
+            modifier = Modifier.padding(end = 8.dp),
+        )
+        InlineMarkdownAndroid(text, context)
+    }
+}
+
+@Composable
+private fun MarkdownOrderedListBlock(
+    item: MarkdownOrderedListItem,
+    context: Context,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, bottom = 4.dp),
+    ) {
+        Text(
+            text = "${item.number}.",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = Color(0xFFC9A86C),
+            modifier = Modifier.padding(end = 8.dp),
+        )
+        InlineMarkdownAndroid(item.text, context)
+    }
+}
+
+@Composable
+private fun MarkdownDividerBlock() {
+    Spacer(modifier = Modifier.height(8.dp))
+    Divider(
+        color = Color(0xFFE8E0D4),
+        thickness = 1.dp,
+        modifier = Modifier.padding(vertical = 8.dp),
+    )
+}
+
+@Composable
+private fun MarkdownQuoteBlock(
+    text: String,
+    context: Context,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, bottom = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF0F0F0)),
+        shape = RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp, bottomStart = 8.dp),
+    ) {
+        Row(modifier = Modifier.padding(12.dp)) {
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(20.dp)
+                    .background(Color(0xFF7BA8C9)),
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            InlineMarkdownAndroid(text, context)
+        }
+    }
+}
+
+private fun parseMarkdownTable(lines: List<String>): ParsedMarkdownTable? {
+    if (lines.isEmpty()) return null
+    val hasHeader = lines.hasMarkdownTableHeader()
+    val headerCells = if (hasHeader) parseMarkdownTableRow(lines.first()) else emptyList()
+    val rows = lines.drop(if (hasHeader) 2 else 0).map(::parseMarkdownTableRow)
+    if (headerCells.isEmpty() && rows.isEmpty()) return null
+    val maxCols = maxOf(headerCells.size, rows.maxOfOrNull(List<String>::size) ?: 0)
+    if (maxCols == 0) return null
+    return ParsedMarkdownTable(
+        headerCells = headerCells,
+        rows = rows,
+        maxCols = maxCols,
+    )
+}
+
+private fun List<String>.hasMarkdownTableHeader(): Boolean {
+    if (size <= 1) return false
+    val separatorLine = this[1]
+    return separatorLine.contains("|") &&
+        separatorLine.all { it == '|' || it == '-' || it == ' ' || it == ':' }
+}
+
+private fun parseMarkdownTableRow(line: String): List<String> =
+    line.split("|")
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+
+@Composable
+private fun MarkdownTableHeaderRow(
+    headerCells: List<String>,
+    maxCols: Int,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFEFF6FF))
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        headerCells.forEach { cell ->
+            MarkdownTableCell {
+                Text(
+                    text = cell,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF1E3A5F),
+                )
+            }
+        }
+        MarkdownTableTrailingCells(maxCols - headerCells.size)
+    }
+}
+
+@Composable
+private fun MarkdownTableDataRow(
+    rowCells: List<String>,
+    rowIndex: Int,
+    maxCols: Int,
+    showDivider: Boolean,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(if (rowIndex % 2 == 0) Color.White else Color(0xFFFAFAFA))
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+        ) {
+            rowCells.forEach { cell ->
+                MarkdownTableCell { InlineMarkdownAndroid(cell) }
+            }
+            MarkdownTableTrailingCells(maxCols - rowCells.size)
+        }
+        if (showDivider) {
+            Divider(color = Color(0xFFF0F0F0), thickness = 0.5.dp)
+        }
+    }
+}
+
+@Composable
+private fun RowScope.MarkdownTableCell(
+    content: @Composable () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .padding(horizontal = 4.dp),
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun RowScope.MarkdownTableTrailingCells(count: Int) {
+    repeat(count.coerceAtLeast(0)) {
+        Box(modifier = Modifier.weight(1f))
+    }
+}
+
+private fun findNextInlineMarkdownMatch(
+    remaining: String,
+    offset: Int,
+    mathSegments: List<Pair<Int, String>>,
+): InlineMarkdownMatch? {
+    val candidates = listOfNotNull(
+        findInlineMathMarkdownMatch(offset, remaining.length, mathSegments),
+        findMarkdownLinkMatch(remaining),
+        findAutoUrlMatch(remaining),
+        findBoldMatch(remaining),
+        findItalicMatch(remaining),
+        findInlineCodeMatch(remaining),
+    )
+    return candidates.minByOrNull { it.startIndex }
+}
+
+private fun findInlineMathMarkdownMatch(
+    offset: Int,
+    remainingLength: Int,
+    mathSegments: List<Pair<Int, String>>,
+): InlineMarkdownMatch? {
+    val mathSegment = mathSegments.firstOrNull { it.first >= offset } ?: return null
+    val startIndex = mathSegment.first - offset
+    if (startIndex >= remainingLength) return null
+    return InlineMarkdownMatch(
+        startIndex = startIndex,
+        rawLength = mathSegment.second.length,
+        displayText = mathSegment.second,
+        type = InlineMarkdownMatchType.Math,
+    )
+}
+
+private fun findMarkdownLinkMatch(remaining: String): InlineMarkdownMatch? {
+    val linkStart = remaining.indexOf("[")
+    if (linkStart < 0) return null
+    val linkEnd = remaining.indexOf("]", linkStart)
+    if (linkEnd <= linkStart) return null
+    val urlStart = remaining.indexOf("(", linkEnd)
+    if (urlStart != linkEnd + 1) return null
+    val urlEnd = remaining.indexOf(")", urlStart)
+    if (urlEnd <= urlStart) return null
+    return InlineMarkdownMatch(
+        startIndex = linkStart,
+        rawLength = urlEnd + 1 - linkStart,
+        displayText = remaining.substring(linkStart + 1, linkEnd),
+        type = InlineMarkdownMatchType.Link,
+        annotation = remaining.substring(urlStart + 1, urlEnd),
+    )
+}
+
+private fun findAutoUrlMatch(remaining: String): InlineMarkdownMatch? {
+    val urlMatch = inlineMarkdownUrlPattern.find(remaining) ?: return null
+    return InlineMarkdownMatch(
+        startIndex = urlMatch.range.first,
+        rawLength = urlMatch.value.length,
+        displayText = urlMatch.value,
+        type = InlineMarkdownMatchType.Link,
+        annotation = urlMatch.value,
+    )
+}
+
+private fun findBoldMatch(remaining: String): InlineMarkdownMatch? {
+    val boldStart = remaining.indexOf("**")
+    if (boldStart < 0) return null
+    val boldEnd = remaining.indexOf("**", boldStart + 2)
+    if (boldEnd <= boldStart) return null
+    return InlineMarkdownMatch(
+        startIndex = boldStart,
+        rawLength = boldEnd + 2 - boldStart,
+        displayText = remaining.substring(boldStart + 2, boldEnd),
+        type = InlineMarkdownMatchType.Bold,
+    )
+}
+
+private fun findItalicMatch(remaining: String): InlineMarkdownMatch? {
+    val italicStart = remaining.indexOf("*")
+    if (italicStart < 0 || (italicStart > 0 && remaining[italicStart - 1] == '*')) return null
+    val italicEnd = remaining.indexOf("*", italicStart + 1)
+    if (italicEnd <= italicStart) return null
+    if (italicEnd < remaining.length - 1 && remaining[italicEnd + 1] == '*') return null
+    return InlineMarkdownMatch(
+        startIndex = italicStart,
+        rawLength = italicEnd + 1 - italicStart,
+        displayText = remaining.substring(italicStart + 1, italicEnd),
+        type = InlineMarkdownMatchType.Italic,
+    )
+}
+
+private fun findInlineCodeMatch(remaining: String): InlineMarkdownMatch? {
+    val codeStart = remaining.indexOf("`")
+    if (codeStart < 0) return null
+    val codeEnd = remaining.indexOf("`", codeStart + 1)
+    if (codeEnd <= codeStart) return null
+    return InlineMarkdownMatch(
+        startIndex = codeStart,
+        rawLength = codeEnd + 1 - codeStart,
+        displayText = remaining.substring(codeStart + 1, codeEnd),
+        type = InlineMarkdownMatchType.Code,
+    )
+}
+
+private fun AnnotatedString.Builder.appendInlineMarkdownMatch(match: InlineMarkdownMatch) {
+    when (match.type) {
+        InlineMarkdownMatchType.Math -> {
+            withStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                    background = Color(0xFFF5F5F5),
+                )
+            ) {
+                append(match.displayText)
+            }
+        }
+
+        InlineMarkdownMatchType.Link -> {
+            val url = match.annotation ?: return
+            pushStringAnnotation(tag = "URL", annotation = url)
+            withStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    color = Color(0xFF1565C0),
+                    textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline,
+                )
+            ) {
+                append(match.displayText)
+            }
+            pop()
+        }
+
+        InlineMarkdownMatchType.Bold -> {
+            withStyle(androidx.compose.ui.text.SpanStyle(fontWeight = FontWeight.Bold)) {
+                append(match.displayText)
+            }
+        }
+
+        InlineMarkdownMatchType.Italic -> {
+            withStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                )
+            ) {
+                append(match.displayText)
+            }
+        }
+
+        InlineMarkdownMatchType.Code -> {
+            withStyle(
+                androidx.compose.ui.text.SpanStyle(
+                    background = Color(0xFFF0F0F0),
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                )
+            ) {
+                append(" ${match.displayText} ")
+            }
+        }
+    }
+}
+
+private fun findInlineMathMatch(text: String, startIndex: Int): InlineMathMatch? =
+    findEscapedInlineMathMatch(text, startIndex) ?: findDollarInlineMathMatch(text, startIndex)
+
+private fun findEscapedInlineMathMatch(text: String, startIndex: Int): InlineMathMatch? {
+    if (startIndex + 1 >= text.length || text[startIndex] != '\\' || text[startIndex + 1] != '(') return null
+    val endIndex = findEscapedInlineMathEnd(text, startIndex + 2)
+    if (endIndex < 0) return null
+    val formula = text.substring(startIndex + 2, endIndex)
+    return InlineMathMatch(
+        rawLength = endIndex + 2 - startIndex,
+        processedText = processMathFormula(formula),
+    )
+}
+
+private fun findDollarInlineMathMatch(text: String, startIndex: Int): InlineMathMatch? {
+    if (!text.startsInlineDollarMathAt(startIndex)) return null
+    val endIndex = text.indexOf('$', startIndex + 1)
+    if (endIndex < 0) return null
+    val formula = text.substring(startIndex + 1, endIndex)
+    return InlineMathMatch(
+        rawLength = endIndex + 1 - startIndex,
+        processedText = processMathFormula(formula),
+    )
+}
+
+private fun findEscapedInlineMathEnd(text: String, startIndex: Int): Int {
+    var index = startIndex
+    while (index + 1 < text.length) {
+        if (text[index] == '\\' && text[index + 1] == ')') {
+            return index
+        }
+        index++
+    }
+    return -1
+}
+
+private val inlineMarkdownUrlPattern = Regex("""(https?://[^\s<>\[\]()]+)""")
+private val markdownOrderedListPattern = Regex("""^(\d+)\.\s+(.*)$""")
+private val fileCardIconMappings = listOf(
+    "📄" to setOf(".pdf"),
+    "📝" to setOf(".doc", ".docx"),
+    "📊" to setOf(".xls", ".xlsx"),
+    "🖼️" to setOf(".jpg", ".png", ".gif"),
+    "🎵" to setOf(".mp3", ".wav"),
+    "🎬" to setOf(".mp4", ".avi"),
+    "📦" to setOf(".zip", ".rar"),
+)

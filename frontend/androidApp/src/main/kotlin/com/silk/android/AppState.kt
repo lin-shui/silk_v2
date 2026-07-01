@@ -1,6 +1,7 @@
 package com.silk.android
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -95,6 +96,12 @@ class AppState(
         saveUserToStorage(user)
         navigateTo(Scene.GROUP_LIST)
     }
+
+    fun setAuthSession(user: User, token: String?) {
+        ApiClient.setAuthToken(token)
+        saveAuthTokenToStorage(token)
+        setUser(user)
+    }
     
     fun setHuaweiSession(user: User, accessToken: String, refreshToken: String, isNewUser: Boolean) {
         currentUser = user
@@ -170,6 +177,7 @@ class AppState(
     fun logout() {
         println("🚪 用户明确请求退出登录")
         explicitLogoutRequested = true
+        ApiClient.setAuthToken(null)
         currentUser = null
         selectedGroup = null
         sceneHistory.clear()
@@ -185,10 +193,7 @@ class AppState(
     fun checkAndRestoreSession(): Boolean {
         // 检查是否有保存的用户数据
         val prefs = context.getSharedPreferences("silk_prefs", Context.MODE_PRIVATE)
-        val savedUserId = prefs.getString("user_id", null)
-        val savedLoginName = prefs.getString("user_login_name", null)
-        val savedFullName = prefs.getString("user_full_name", null)
-        val savedPhoneNumber = prefs.getString("user_phone_number", null)
+        val storedUser = readStoredUser(prefs)
         
         // 如果用户明确请求了退出登录，不恢复
         if (explicitLogoutRequested) {
@@ -228,25 +233,26 @@ class AppState(
     suspend fun revalidateUser(): Pair<Boolean, Boolean> {
         isValidating = true
         return try {
-            val user = currentUser
-            if (user != null) {
-                val response = ApiClient.validateUser(user.id)
-                if (response.success && response.user != null) {
+            val user = currentUser ?: return Pair(false, false)
+            val response = ApiClient.validateUser(user.id)
+            when {
+                response.success && response.user != null -> {
+                    ApiClient.setAuthToken(response.token)
+                    saveAuthTokenToStorage(response.token)
                     currentUser = response.user
                     saveUserToStorage(response.user)
                     Pair(true, false)
-                } else {
+                }
+                response.isNetworkFailure() -> {
+                    println("⚠️ 用户验证失败（网络异常），保持登录状态: ${response.message}")
+                    Pair(false, true)
+                }
+                else -> {
                     // 服务器明确拒绝此用户（如用户被删除），才登出
                     logout()
                     Pair(false, false)
                 }
-            } else {
-                Pair(false, false)
             }
-        } catch (e: Exception) {
-            // 网络异常时，不登出，保留用户信息，允许离线使用
-            println("⚠️ 用户验证失败（网络异常），保持登录状态: ${e.message}")
-            Pair(false, true)
         } finally {
             isValidating = false
         }
@@ -254,10 +260,7 @@ class AppState(
     
     private fun loadUserFromStorage() {
         val prefs = context.getSharedPreferences("silk_prefs", Context.MODE_PRIVATE)
-        val userId = prefs.getString("user_id", null)
-        val loginName = prefs.getString("user_login_name", null)
-        val fullName = prefs.getString("user_full_name", null)
-        val phoneNumber = prefs.getString("user_phone_number", null)
+        val storedUser = readStoredUser(prefs)
         
         val hasStoredUser = userId != null && loginName != null && fullName != null && phoneNumber != null
         if (hasStoredUser) {
@@ -285,10 +288,34 @@ class AppState(
             apply()
         }
     }
+
+    private fun saveAuthTokenToStorage(token: String?) {
+        val prefs = context.getSharedPreferences("silk_prefs", Context.MODE_PRIVATE)
+        prefs.edit().apply {
+            if (token.isNullOrBlank()) remove("auth_token") else putString("auth_token", token)
+            apply()
+        }
+    }
     
     private fun clearUserFromStorage() {
         val prefs = context.getSharedPreferences("silk_prefs", Context.MODE_PRIVATE)
         prefs.edit().clear().apply()
     }
-}
 
+    private fun loadPackageInfoOrNull() = try {
+        context.packageManager.getPackageInfo(context.packageName, 0)
+    } catch (error: PackageManager.NameNotFoundException) {
+        println("⚠️ 无法读取应用版本信息: ${error.message}")
+        null
+    }
+
+    private fun readStoredUser(prefs: SharedPreferences): User? {
+        val userId = prefs.getString("user_id", null) ?: return null
+        val loginName = prefs.getString("user_login_name", null) ?: return null
+        val fullName = prefs.getString("user_full_name", null) ?: return null
+        val phoneNumber = prefs.getString("user_phone_number", null) ?: return null
+        return User(userId, loginName, fullName, phoneNumber)
+    }
+
+    private fun AuthResponse.isNetworkFailure(): Boolean = !success && message.startsWith("网络错误")
+}

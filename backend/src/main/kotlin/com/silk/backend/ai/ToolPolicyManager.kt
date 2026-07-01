@@ -1,9 +1,11 @@
 package com.silk.backend.ai
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.io.IOException
 
 /**
  * 工具权限控制系统
@@ -175,6 +177,13 @@ object ToolPolicyManager {
                 description = defaultPolicies[toolName]?.description ?: "自定义工具"
             ))
         }
+
+        runCatching { readPolicyConfig(configFile) }
+            .onSuccess { config ->
+                mergePolicies(config)
+                logger.info("✅ 已从配置文件加载工具策略: ${config.policies.size} 个工具")
+            }
+            .onFailure(::logPolicyLoadFailure)
     }
     
     /**
@@ -247,18 +256,83 @@ object ToolPolicyManager {
     private fun pathContains(path: String, pattern: String): Boolean {
         val normalizedPath = try {
             File(path).canonicalPath
-        } catch (e: Exception) {
+        } catch (_: IOException) {
+            path
+        } catch (_: SecurityException) {
             path
         }
         
         val normalizedPattern = try {
             File(pattern).canonicalPath
-        } catch (e: Exception) {
+        } catch (_: IOException) {
+            pattern
+        } catch (_: SecurityException) {
             pattern
         }
         
         return normalizedPath.contains(normalizedPattern, ignoreCase = true) ||
                normalizedPath.startsWith(normalizedPattern, ignoreCase = true)
+    }
+
+    private fun readPolicyConfig(configFile: File): PolicyConfig {
+        val json = Json { ignoreUnknownKeys = true }
+        return json.decodeFromString(configFile.readText())
+    }
+
+    private fun mergePolicies(config: PolicyConfig) {
+        val mergedPolicies = policies.toMutableMap()
+        for ((toolName, policyConfig) in config.policies) {
+            mergedPolicies[toolName] = policyFromConfig(toolName, policyConfig)
+        }
+        policies = mergedPolicies
+    }
+
+    private fun policyFromConfig(
+        toolName: String,
+        policyConfig: ToolPolicyConfig,
+    ): ToolPolicy = ToolPolicy(
+        name = toolName,
+        permission = parsePermission(policyConfig.permission),
+        allowedPaths = policyConfig.allowedPaths,
+        deniedPaths = policyConfig.deniedPaths,
+        safeCommands = policyConfig.safeCommands,
+        description = defaultPolicies[toolName]?.description ?: "自定义工具"
+    )
+
+    private fun parsePermission(permission: String): ToolPermission = try {
+        ToolPermission.valueOf(permission.uppercase())
+    } catch (_: IllegalArgumentException) {
+        ToolPermission.DISABLED
+    }
+
+    private fun logPolicyLoadFailure(error: Throwable) {
+        when (error) {
+            is SerializationException, is IOException, is SecurityException -> {
+                logger.warn("⚠️ 加载配置文件失败，使用默认策略: ${error.message}")
+            }
+            else -> throw error
+        }
+    }
+
+    private fun validateDeniedPaths(path: String, policy: ToolPolicy): Pair<Boolean, String> {
+        val deniedPath = policy.deniedPaths.firstOrNull { denied -> pathContains(path, denied) }
+        return if (deniedPath == null) {
+            Pair(true, "")
+        } else {
+            Pair(false, "⛔ 路径在禁止访问列表中: $path")
+        }
+    }
+
+    private fun validateAllowedPaths(path: String, policy: ToolPolicy): Pair<Boolean, String> {
+        if (policy.allowedPaths.isEmpty()) {
+            return Pair(true, "")
+        }
+        val isAllowed = policy.allowedPaths.any { allowed -> pathContains(path, allowed) }
+        return if (isAllowed) {
+            Pair(true, "")
+        } else {
+            Pair(false, "⛔ 路径不在允许访问的目录中。允许的目录: ${policy.allowedPaths}")
+        }
     }
     
     /**

@@ -1,27 +1,10 @@
 package com.silk.backend.todos
 
-import com.silk.backend.ChatHistoryManager
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.database.UserRepository
-import com.silk.backend.database.UserTodoItemDto
-import com.silk.backend.models.ChatHistory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.builtins.ListSerializer
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import java.io.File
-import java.net.URI
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -129,6 +112,41 @@ object GroupTodoExtractionService {
             recordSkipDiagnostics(userId, totalGroups = 0, note = "未配置 OPENAI_API_KEY")
             return@withContext
         }
+        val preparation = prepareRefreshPreparation(userId, apiKey) ?: return@withContext
+        val selection = selectRefreshDrafts(userId, preparation, apiKey)
+        applyRefreshDrafts(userId, selection)
+        compactAndDedupeStoredTodos(userId, apiKey)
+        diagnosticsByUser[userId] = buildRefreshDiagnostics(
+            userId = userId,
+            preparation = preparation,
+            selection = selection,
+        )
+    }
+
+    private fun recordRefreshSkip(
+        userId: String,
+        totalGroups: Int = 0,
+        note: String,
+    ) {
+        diagnosticsByUser[userId] = ExtractionDiagnostics(
+            userId = userId,
+            updatedAt = System.currentTimeMillis(),
+            source = "skip",
+            totalGroups = totalGroups,
+            transcriptChars = 0,
+            llmDraftCount = 0,
+            heuristicDraftCount = 0,
+            forcedRecurringCount = 0,
+            finalDraftCount = 0,
+            matchedRecurringLines = emptyList(),
+            note = note,
+        )
+    }
+
+    private fun prepareRefreshPreparation(
+        userId: String,
+        apiKey: String,
+    ): RefreshPreparation? {
         val user = UserRepository.findUserById(userId)
         val userName = user?.fullName?.ifBlank { user.loginName } ?: "用户"
         val groups = GroupRepository.getUserGroups(userId)
@@ -141,8 +159,7 @@ object GroupTodoExtractionService {
         val slices = collectGroupSlices(groups.map { it.id to it.name })
         if (slices.isEmpty()) {
             println(
-                "ℹ️ [GroupTodoExtractionService] 未读到任何群消息文件；已尝试目录: " +
-                    historyBaseDirs.joinToString()
+                "ℹ️ [GroupTodoExtractionService] 未读到任何群消息文件；已尝试目录: chat_history, backend/chat_history, ../chat_history"
             )
             recordSkipDiagnostics(userId, totalGroups = groups.size, note = "未读到群消息文件")
             compactStoredTodosForUser(userId, apiKey)
@@ -151,13 +168,35 @@ object GroupTodoExtractionService {
         }
 
         val transcript = buildTranscriptString(slices)
-        val heuristicDraftsPre = heuristicFromSlices(slices)
+        val heuristicDrafts = heuristicFromSlices(slices)
         val latestEvidenceTs = slices.asSequence()
             .flatMap { it.messages.asSequence() }
             .map { it.third }
             .maxOrNull() ?: System.currentTimeMillis()
         println(
-            "📋 [GroupTodoExtractionService] 摘录长度=${transcript.length}，群段=${slices.size}，启发式候选=${heuristicDraftsPre.size}"
+            "📋 [GroupTodoExtractionService] 摘录长度=${transcript.length}，群段=${slices.size}，启发式候选=${heuristicDrafts.size}"
+        )
+        return RefreshPreparation(
+            userName = userName,
+            sliceCount = slices.size,
+            slices = slices,
+            transcript = transcript,
+            heuristicDrafts = heuristicDrafts,
+            latestEvidenceTs = latestEvidenceTs,
+        )
+    }
+
+    private fun selectRefreshDrafts(
+        userId: String,
+        preparation: RefreshPreparation,
+        apiKey: String,
+    ): RefreshDraftSelection {
+        val raw = callLlmOrNull(
+            system = buildRefreshSystemPrompt(),
+            user = buildRefreshUserPrompt(preparation.userName, userId, preparation.transcript),
+            apiKey = apiKey,
+            temperature = 0.2,
+            failurePrefix = "❌ [GroupTodoExtractionService] LLM 调用失败"
         )
 
         val userPrompt = "用户显示名：$userName（userId=${userId.take(8)}…）\n\n$transcript"

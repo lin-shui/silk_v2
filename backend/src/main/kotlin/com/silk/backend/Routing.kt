@@ -126,6 +126,7 @@ import kotlinx.coroutines.channels.consumeEach
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import io.ktor.client.engine.cio.CIO
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -157,6 +158,75 @@ private val knowledgeBaseManager: KnowledgeBaseManager get() = KnowledgeBaseMana
 
 private fun sanitizeFileName(input: String): String =
     input.replace(Regex("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]"), "_").take(100)
+
+private fun ApplicationCall.resolveAuthenticatedUserId(): String? {
+    val authorization = request.headers[AUTHORIZATION_HEADER]?.trim().orEmpty()
+    if (!authorization.startsWith(BEARER_PREFIX, ignoreCase = true)) return null
+    val token = authorization.substring(BEARER_PREFIX.length).trim()
+    if (token.isEmpty()) return null
+    return UserSettingsRepository.findUserIdByAppAuthToken(token)
+}
+
+private fun resolveKbCallerUserId(call: ApplicationCall, fallbackUserId: String?): KbCallerResolution {
+    val bearerUserId = call.resolveAuthenticatedUserId()
+    val legacyAuthenticatedUserId = call.request.headers[KB_AUTHENTICATED_USER_ID_HEADER]?.trim()?.takeIf { it.isNotEmpty() }
+    val authenticatedUserId = bearerUserId ?: legacyAuthenticatedUserId
+    val requestUserId = fallbackUserId?.trim()?.takeIf { it.isNotEmpty() }
+    val bearerHeaderPresent = call.request.headers[AUTHORIZATION_HEADER]?.trim()?.startsWith(BEARER_PREFIX, ignoreCase = true) == true
+    return when {
+        bearerHeaderPresent && bearerUserId == null -> KbCallerResolution(userId = null, invalidToken = true)
+        authenticatedUserId != null && requestUserId != null && authenticatedUserId != requestUserId ->
+            KbCallerResolution(userId = authenticatedUserId, mismatch = true)
+        authenticatedUserId != null -> KbCallerResolution(userId = authenticatedUserId)
+        else -> KbCallerResolution(userId = requestUserId)
+    }
+}
+
+private suspend fun resolveKbCallerUserIdOrRespond(
+    call: ApplicationCall,
+    fallbackUserId: String?,
+): String? {
+    val resolution = resolveKbCallerUserId(call, fallbackUserId)
+    if (resolution.invalidToken) {
+        call.respondText(
+            """{"success":false,"message":"Invalid auth token"}""",
+            ContentType.Application.Json,
+            HttpStatusCode.Unauthorized,
+        )
+        return null
+    }
+    if (resolution.mismatch) {
+        call.respondText(
+            """{"success":false,"message":"Authenticated user mismatch"}""",
+            ContentType.Application.Json,
+            HttpStatusCode.Forbidden,
+        )
+        return null
+    }
+    return resolution.userId
+}
+
+private fun <T> Result<T>.rethrowRoutingCancellation(): Result<T> =
+    onFailure { error ->
+        if (error is CancellationException) {
+            throw error
+        }
+    }
+
+private sealed interface CcSettingsUpdateResult {
+    data class Ok(val agentSwitchMessage: String?) : CcSettingsUpdateResult
+    data class BadRequest(val error: String) : CcSettingsUpdateResult
+}
+
+private data class WorkflowCreateInput(
+    val userId: String,
+    val name: String,
+    val description: String,
+    val agentType: String,
+    val taskFocus: String,
+    val permissionMode: String,
+    val initialDir: String,
+)
 
 /**
  * 解析当前 user 对应的 bridgeId（用于 TrustedDirManager 的 scope key）。
@@ -193,6 +263,199 @@ private fun resolveActiveAgentType(userId: String): String? {
     val connected = AcpRegistry.listConnected(userId)
     if (connected.isEmpty()) return null
     return if (connected.contains("claude-code")) "claude-code" else connected.first()
+}
+
+private fun parseBridgeDirListing(raw: JsonObject): DirListingResponse =
+    DirListingResponse(
+        success = raw["success"]?.jsonPrimitive?.booleanOrNull ?: false,
+        path = raw["path"]?.jsonPrimitive?.contentOrNull ?: "",
+        parent = raw["parent"]?.jsonPrimitive?.contentOrNull,
+        segments = raw["segments"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
+        separator = raw["separator"]?.jsonPrimitive?.contentOrNull ?: "/",
+        entries = raw["entries"]?.jsonArray?.mapNotNull(::parseBridgeDirEntry) ?: emptyList(),
+        truncated = raw["truncated"]?.jsonPrimitive?.booleanOrNull ?: false,
+        error = raw["error"]?.jsonPrimitive?.contentOrNull,
+    )
+
+private fun parseBridgeDirEntry(element: kotlinx.serialization.json.JsonElement): DirEntry? {
+    val obj = element.jsonObject
+    val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return null
+    return DirEntry(
+        name = name,
+        isDir = obj["isDir"]?.jsonPrimitive?.booleanOrNull ?: true,
+    )
+}
+
+private suspend fun respondToSuccessfulCd(
+    call: ApplicationCall,
+    userId: String,
+    ccGroupId: String,
+    result: AgentRuntime.CdResult.Ok,
+) {
+    val snap = AgentRuntime.snapshotState(userId, ccGroupId)
+    val bridgeConnected = isAnyBridgeConnected(userId)
+    val rawGid = ccGroupId.removePrefix("group_")
+    val descriptor = snap?.agentType?.let { AgentRegistry.getByType(it) }
+    runCatching {
+        getGroupChatServer(rawGid).broadcast(
+            com.silk.backend.agents.core.AgentMessages.system(
+                "工作目录已切换至：${result.resolvedPath} 会话已重置",
+                agentUserId = descriptor?.agentUserId ?: SilkAgent.AGENT_ID,
+                agentName = descriptor?.displayName ?: SilkAgent.AGENT_NAME,
+            )
+        )
+    }.rethrowRoutingCancellation().onFailure { e ->
+        logger.warn("广播切目录提示失败: {}", e.message)
+    }
+    call.respond(
+        CcStateResponse(
+            success = true,
+            active = snap?.active ?: true,
+            running = snap?.running ?: false,
+            workingDir = result.resolvedPath,
+            sessionId = "",  // ACP 路径不暴露内部 sessionId
+            sessionStarted = snap?.active ?: false,
+            bridgeConnected = bridgeConnected,
+            agentType = snap?.agentType ?: "",
+            agentDisplayName = descriptor?.displayName ?: "",
+            permissionMode = snap?.permissionMode ?: "",
+        )
+    )
+}
+
+private fun applyCcSettingsUpdate(
+    userId: String,
+    groupId: String,
+    ccGroupId: String,
+    newAgent: String?,
+    newPermMode: String?,
+): CcSettingsUpdateResult {
+    var agentSwitchMsg: String? = null
+    if (!newAgent.isNullOrBlank()) {
+        val dashType = newAgent.replace('_', '-')
+        val descriptor = AgentRuntime.switchAgent(userId, ccGroupId, dashType)
+            ?: return CcSettingsUpdateResult.BadRequest("未知 agent: $newAgent")
+        workflowManager.updateActiveAgent(groupId, dashType)
+        agentSwitchMsg = "已切换到 ${descriptor.displayName}。"
+    }
+    if (!newPermMode.isNullOrBlank()) {
+        val ok = AgentRuntime.setPermissionMode(userId, ccGroupId, newPermMode)
+        if (!ok) {
+            return CcSettingsUpdateResult.BadRequest(
+                "无效权限模式: $newPermMode（INTERACTIVE / ACCEPT_EDITS / BYPASS）"
+            )
+        }
+        workflowManager.updatePermissionMode(groupId, newPermMode)
+    }
+    return CcSettingsUpdateResult.Ok(agentSwitchMsg)
+}
+
+private suspend fun broadcastAgentSwitchMessage(userId: String, ccGroupId: String, message: String?) {
+    if (message == null) return
+    val rawGid = ccGroupId.removePrefix("group_")
+    runCatching {
+        val snap = AgentRuntime.snapshotState(userId, ccGroupId)
+        val desc = snap?.agentType?.let { AgentRegistry.getByType(it) }
+        getGroupChatServer(rawGid).broadcast(
+            com.silk.backend.agents.core.AgentMessages.system(
+                message,
+                agentUserId = desc?.agentUserId ?: SilkAgent.AGENT_ID,
+                agentName = desc?.displayName ?: SilkAgent.AGENT_NAME,
+            )
+        )
+    }.rethrowRoutingCancellation().onFailure { e ->
+        logger.warn("广播 agent 切换提示失败: {}", e.message)
+    }
+}
+
+private suspend fun respondCcSettingsState(call: ApplicationCall, userId: String, ccGroupId: String) {
+    val snap = AgentRuntime.snapshotState(userId, ccGroupId)
+    val bridgeConnected = isAnyBridgeConnected(userId)
+    val descriptor = snap?.agentType?.let { AgentRegistry.getByType(it) }
+    call.respond(
+        CcStateResponse(
+            success = true,
+            active = snap?.active ?: false,
+            running = snap?.running ?: false,
+            workingDir = snap?.workingDir ?: "",
+            bridgeConnected = bridgeConnected,
+            agentType = snap?.agentType ?: "",
+            agentDisplayName = descriptor?.displayName ?: "",
+            permissionMode = snap?.permissionMode ?: "",
+        )
+    )
+}
+
+private fun parseWorkflowCreateInput(req: JsonObject): WorkflowCreateInput? {
+    val userId = req["userId"]?.jsonPrimitive?.content
+    val name = req["name"]?.jsonPrimitive?.content
+    if (userId.isNullOrBlank() || name.isNullOrBlank()) return null
+    return WorkflowCreateInput(
+        userId = userId,
+        name = name,
+        description = req["description"]?.jsonPrimitive?.content ?: "",
+        agentType = req["agentType"]?.jsonPrimitive?.contentOrNull ?: "claude_code",
+        taskFocus = req["taskFocus"]?.jsonPrimitive?.contentOrNull ?: "",
+        permissionMode = req["permissionMode"]?.jsonPrimitive?.contentOrNull ?: "",
+        initialDir = req["initialDir"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty(),
+    )
+}
+
+private suspend fun respondWorkflowCreateError(call: ApplicationCall, status: HttpStatusCode, message: String) {
+    val payload = buildJsonObject {
+        put("success", JsonPrimitive(false))
+        put("message", JsonPrimitive(message))
+    }
+    call.respondText(payload.toString(), ContentType.Application.Json, status)
+}
+
+private suspend fun activateWorkflowAgentIfNeeded(
+    groupChatServer: ChatServer,
+    userId: String,
+    groupId: String,
+) {
+    val workflow = workflowManager.getWorkflowByGroupId(groupId)
+    if (workflow == null || workflow.agentType == "silk_chat") return
+    val resolvedAgent = workflow.activeAgent.takeIf { it.isNotBlank() }
+        ?: when (workflow.agentType) {
+            "claude_code" -> "claude-code"
+            else -> workflow.agentType
+        }
+    AgentRuntime.autoActivateForWorkflow(userId, "group_$groupId", resolvedAgent)
+    rebroadcastPendingQuestion(groupChatServer, userId, groupId)
+}
+
+private suspend fun rebroadcastPendingQuestion(groupChatServer: ChatServer, userId: String, groupId: String) {
+    val pendingSnapshot = AgentRuntime.snapshotPendingQuestion(userId, "group_$groupId") ?: return
+    val questionMsg = com.silk.backend.agents.core.AgentMessages.question(
+        content = com.silk.backend.agents.core.AgentMessages.formatQuestionText(pendingSnapshot.questions),
+        requestId = pendingSnapshot.requestId,
+        agentUserId = pendingSnapshot.agentUserId,
+        agentName = pendingSnapshot.agentName,
+    )
+    groupChatServer.broadcast(questionMsg)
+}
+
+private suspend fun consumeIncomingChatFrames(
+    incoming: kotlinx.coroutines.channels.ReceiveChannel<Frame>,
+    groupChatServer: ChatServer,
+) {
+    incoming.consumeEach { frame ->
+        if (frame is Frame.Text) {
+            handleIncomingChatText(frame.readText(), groupChatServer)
+        }
+    }
+}
+
+private suspend fun handleIncomingChatText(receivedText: String, groupChatServer: ChatServer) {
+    try {
+        val message = Json.decodeFromString<Message>(receivedText)
+        groupChatServer.broadcast(message)
+    } catch (e: SerializationException) {
+        logger.warn("⚠️ 解析消息失败: payload 不是合法消息 JSON", e)
+    } catch (e: IllegalArgumentException) {
+        logger.warn("⚠️ 解析消息失败: payload 缺少必要字段", e)
+    }
 }
 
 /**
@@ -486,150 +749,203 @@ private fun Route.coreRoutes() {
                                 </div>
                             </div>
                         </div>
-                        
-                        <div class="endpoints">
-                            <h2>👥 群组管理</h2>
-                            <div class="endpoint">
-                                <span class="endpoint-method">POST</span>
-                                <div>
-                                    <div class="endpoint-path">/groups/create</div>
-                                    <div class="endpoint-desc">创建新群组</div>
-                                </div>
-                            </div>
-                            <div class="endpoint">
-                                <span class="endpoint-method">POST</span>
-                                <div>
-                                    <div class="endpoint-path">/groups/join</div>
-                                    <div class="endpoint-desc">加入群组（使用邀请码）</div>
-                                </div>
-                            </div>
-                            <div class="endpoint">
-                                <span class="endpoint-method">GET</span>
-                                <div>
-                                    <div class="endpoint-path">/groups/user/{userId}</div>
-                                    <div class="endpoint-desc">获取用户的所有群组</div>
-                                </div>
-                            </div>
-                            <div class="endpoint">
-                                <span class="endpoint-method">GET</span>
-                                <div>
-                                    <div class="endpoint-path">/groups/{groupId}</div>
-                                    <div class="endpoint-desc">获取群组详情</div>
-                                </div>
-                            </div>
-                            <div class="endpoint">
-                                <span class="endpoint-method">GET</span>
-                                <div>
-                                    <div class="endpoint-path">/groups/{groupId}/members</div>
-                                    <div class="endpoint-desc">获取群组成员列表</div>
-                                </div>
+                        <div class="endpoint">
+                            <span class="endpoint-method">POST</span>
+                            <div>
+                                <div class="endpoint-path">/auth/login</div>
+                                <div class="endpoint-desc">用户登录</div>
                             </div>
                         </div>
-                        
-                        <div class="endpoints">
-                            <h2>💬 聊天服务</h2>
-                            <div class="endpoint">
-                                <span class="endpoint-method ws">WS</span>
-                                <div>
-                                    <div class="endpoint-path">/chat?userId={userId}&userName={userName}&groupId={groupId}</div>
-                                    <div class="endpoint-desc">WebSocket 实时聊天连接</div>
-                                </div>
+                        <div class="endpoint">
+                            <span class="endpoint-method">GET</span>
+                            <div>
+                                <div class="endpoint-path">/auth/validate/{userId}</div>
+                                <div class="endpoint-desc">验证用户身份</div>
                             </div>
-                            <div class="endpoint">
-                                <span class="endpoint-method">GET</span>
-                                <div>
-                                    <div class="endpoint-path">/users</div>
-                                    <div class="endpoint-desc">获取在线用户列表</div>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="endpoints">
-                            <h2>📥 文件下载</h2>
-                            <div class="endpoint">
-                                <span class="endpoint-method">GET</span>
-                                <div>
-                                    <div class="endpoint-path">/download/report/{sessionName}/{fileName}</div>
-                                    <div class="endpoint-desc">下载 PDF 诊断报告</div>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="endpoints">
-                            <h2>🔧 系统监控</h2>
-                            <div class="endpoint">
-                                <span class="endpoint-method">GET</span>
-                                <div>
-                                    <div class="endpoint-path">/health</div>
-                                    <div class="endpoint-desc">健康检查</div>
-                                </div>
-                            </div>
-                            <div class="endpoint">
-                                <span class="endpoint-method">GET</span>
-                                <div>
-                                    <div class="endpoint-path">/api/info</div>
-                                    <div class="endpoint-desc">API 版本信息（JSON）</div>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="info-box">
-                            <strong>💡 提示：</strong>
-                            这是 Silk 的后端 API 服务器，不提供用户界面。
-                            请使用 <strong>Desktop UI</strong> 或 <strong>Web UI</strong> 客户端连接到此服务器。
-                        </div>
-                        
-                        <div class="info-box" style="background: #fef3c7; border-color: #f59e0b; margin-top: 15px;">
-                            <strong>🌐 Web UI 部署：</strong>
-                            如需在浏览器中使用，请部署 Web UI 前端应用并配置其连接到此后端地址。
                         </div>
                     </div>
-                </body>
-                </html>
-            """.trimIndent()
-            call.respondText(html, ContentType.Text.Html)
-        }
-        
-        // API 信息端点（JSON 格式，方便程序化访问）
-        get("/api/info") {
-            call.respondText("""
-                {
-                    "service": "Silk Chat Server",
-                    "version": "1.0.0",
-                    "status": "running",
-                    "endpoints": {
-                        "auth": [
-                            {"method": "POST", "path": "/auth/register", "description": "用户注册"},
-                            {"method": "POST", "path": "/auth/login", "description": "用户登录"},
-                            {"method": "GET", "path": "/auth/validate/{userId}", "description": "验证用户"}
-                        ],
-                        "groups": [
-                            {"method": "POST", "path": "/groups/create", "description": "创建群组"},
-                            {"method": "POST", "path": "/groups/join", "description": "加入群组"},
-                            {"method": "GET", "path": "/groups/user/{userId}", "description": "获取用户群组"},
-                            {"method": "GET", "path": "/groups/{groupId}", "description": "获取群组详情"},
-                            {"method": "GET", "path": "/groups/{groupId}/members", "description": "获取群组成员"}
-                        ],
-                        "chat": [
-                            {"method": "WS", "path": "/chat", "description": "WebSocket 聊天"},
-                            {"method": "GET", "path": "/users", "description": "在线用户"}
-                        ],
-                        "files": [
-                            {"method": "GET", "path": "/download/report/{sessionName}/{fileName}", "description": "下载报告"}
-                        ]
-                    },
-                    "cors": {
-                        "enabled": true,
-                        "allowCredentials": true,
-                        "allowedOrigins": "all"
-                    },
-                    "websocket": {
-                        "enabled": true,
-                        "endpoint": "/chat",
-                        "protocol": "ws/wss"
-                    }
+
+                    <div class="endpoints">
+                        <h2>👥 群组管理</h2>
+                        <div class="endpoint">
+                            <span class="endpoint-method">POST</span>
+                            <div>
+                                <div class="endpoint-path">/groups/create</div>
+                                <div class="endpoint-desc">创建新群组</div>
+                            </div>
+                        </div>
+                        <div class="endpoint">
+                            <span class="endpoint-method">POST</span>
+                            <div>
+                                <div class="endpoint-path">/groups/join</div>
+                                <div class="endpoint-desc">加入群组（使用邀请码）</div>
+                            </div>
+                        </div>
+                        <div class="endpoint">
+                            <span class="endpoint-method">GET</span>
+                            <div>
+                                <div class="endpoint-path">/groups/user/{userId}</div>
+                                <div class="endpoint-desc">获取用户的所有群组</div>
+                            </div>
+                        </div>
+                        <div class="endpoint">
+                            <span class="endpoint-method">GET</span>
+                            <div>
+                                <div class="endpoint-path">/groups/{groupId}</div>
+                                <div class="endpoint-desc">获取群组详情</div>
+                            </div>
+                        </div>
+                        <div class="endpoint">
+                            <span class="endpoint-method">GET</span>
+                            <div>
+                                <div class="endpoint-path">/groups/{groupId}/members</div>
+                                <div class="endpoint-desc">获取群组成员列表</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="endpoints">
+                        <h2>💬 聊天服务</h2>
+                        <div class="endpoint">
+                            <span class="endpoint-method ws">WS</span>
+                            <div>
+                                <div class="endpoint-path">/chat?userId={userId}&userName={userName}&groupId={groupId}</div>
+                                <div class="endpoint-desc">WebSocket 实时聊天连接</div>
+                            </div>
+                        </div>
+                        <div class="endpoint">
+                            <span class="endpoint-method">GET</span>
+                            <div>
+                                <div class="endpoint-path">/users</div>
+                                <div class="endpoint-desc">获取在线用户列表</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="endpoints">
+                        <h2>📥 文件下载</h2>
+                        <div class="endpoint">
+                            <span class="endpoint-method">GET</span>
+                            <div>
+                                <div class="endpoint-path">/download/report/{sessionName}/{fileName}</div>
+                                <div class="endpoint-desc">下载 PDF 诊断报告</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="endpoints">
+                        <h2>🔧 系统监控</h2>
+                        <div class="endpoint">
+                            <span class="endpoint-method">GET</span>
+                            <div>
+                                <div class="endpoint-path">/health</div>
+                                <div class="endpoint-desc">健康检查</div>
+                            </div>
+                        </div>
+                        <div class="endpoint">
+                            <span class="endpoint-method">GET</span>
+                            <div>
+                                <div class="endpoint-path">/api/info</div>
+                                <div class="endpoint-desc">API 版本信息（JSON）</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="info-box">
+                        <strong>💡 提示：</strong>
+                        这是 Silk 的后端 API 服务器，不提供用户界面。
+                        请使用 <strong>Desktop UI</strong> 或 <strong>Web UI</strong> 客户端连接到此服务器。
+                    </div>
+
+                    <div class="info-box" style="background: #fef3c7; border-color: #f59e0b; margin-top: 15px;">
+                        <strong>🌐 Web UI 部署：</strong>
+                        如需在浏览器中使用，请部署 Web UI 前端应用并配置其连接到此后端地址。
+                    </div>
+                </div>
+            </body>
+            </html>
+        """.trimIndent()
+        call.respondText(html, ContentType.Text.Html)
+    }
+}
+
+private fun Route.registerApiInfoGetRoute() {
+
+    // API 信息端点（JSON 格式，方便程序化访问）
+    get("/api/info") {
+        call.respondText("""
+            {
+                "service": "Silk Chat Server",
+                "version": "1.0.0",
+                "status": "running",
+                "endpoints": {
+                    "auth": [
+                        {"method": "POST", "path": "/auth/register", "description": "用户注册"},
+                        {"method": "POST", "path": "/auth/login", "description": "用户登录"},
+                        {"method": "GET", "path": "/auth/validate/{userId}", "description": "验证用户"}
+                    ],
+                    "groups": [
+                        {"method": "POST", "path": "/groups/create", "description": "创建群组"},
+                        {"method": "POST", "path": "/groups/join", "description": "加入群组"},
+                        {"method": "GET", "path": "/groups/user/{userId}", "description": "获取用户群组"},
+                        {"method": "GET", "path": "/groups/{groupId}", "description": "获取群组详情"},
+                        {"method": "GET", "path": "/groups/{groupId}/members", "description": "获取群组成员"}
+                    ],
+                    "chat": [
+                        {"method": "WS", "path": "/chat", "description": "WebSocket 聊天"},
+                        {"method": "GET", "path": "/users", "description": "在线用户"}
+                    ],
+                    "files": [
+                        {"method": "GET", "path": "/download/report/{sessionName}/{fileName}", "description": "下载报告"}
+                    ]
+                },
+                "cors": {
+                    "enabled": true,
+                    "allowCredentials": true,
+                    "allowedOrigins": "all"
+                },
+                "websocket": {
+                    "enabled": true,
+                    "endpoint": "/chat",
+                    "protocol": "ws/wss"
                 }
-            """.trimIndent(), ContentType.Application.Json)
+            }
+        """.trimIndent(), ContentType.Application.Json)
+    }
+}
+
+private fun Route.registerHealthGetRoute() {
+
+    get("/health") {
+        call.respondText(
+            """{"status":"ok","service":"silk","timestamp":${System.currentTimeMillis()}}""",
+            ContentType.Application.Json
+        )
+    }
+}
+
+private fun Route.registerUsersGetRoute() {
+
+    get("/users") {
+        val users = chatServer.getOnlineUsers()
+        call.respond(users)
+    }
+}
+
+private fun Route.registerUsersUserIdSettingsGetRoute() {
+
+    // ==================== 用户设置 API ====================
+
+    // 获取用户设置
+    get("/users/{userId}/settings") {
+        val userId = call.parameters["userId"] ?: ""
+
+        if (userId.isBlank()) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                UserSettingsResponse(false, "用户ID不能为空")
+            )
+            return@get
         }
         
         // 图片代理：通过后端转发 HTTP 图片，解决 Mixed Content 问题
@@ -659,132 +975,100 @@ private fun Route.coreRoutes() {
                 ContentType.Application.Json
             )
         }
-        
-        get("/users") {
-            val users = chatServer.getOnlineUsers()
-            call.respond(users)
+    }
+}
+
+private fun Route.registerUsersUserIdSettingsPutRoute() {
+
+    // 更新用户设置
+    put("/users/{userId}/settings") {
+        val userId = call.parameters["userId"] ?: ""
+
+        if (userId.isBlank()) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                UserSettingsResponse(false, "用户ID不能为空")
+            )
+            return@put
         }
-        
-        // ==================== 用户设置 API ====================
-        
-        // 获取用户设置
-        get("/users/{userId}/settings") {
-            val userId = call.parameters["userId"] ?: ""
-            
-            if (userId.isBlank()) {
+
+        runCatching {
+            val request = call.receive<UpdateUserSettingsRequest>()
+
+            // 验证userId匹配
+            if (request.userId != userId) {
                 call.respond(
                     HttpStatusCode.BadRequest,
-                    UserSettingsResponse(false, "用户ID不能为空")
-                )
-                return@get
-            }
-            
-            try {
-                val settings = UserSettingsRepository.getUserSettings(userId)
-                call.respond(UserSettingsResponse(true, "获取设置成功", settings))
-            } catch (e: Exception) {
-                logger.error("❌ 获取用户设置失败: {}", e.message)
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    UserSettingsResponse(false, "获取设置失败: ${e.message}")
-                )
-            }
-        }
-        
-        // 更新用户设置
-        put("/users/{userId}/settings") {
-            val userId = call.parameters["userId"] ?: ""
-            
-            if (userId.isBlank()) {
-                call.respond(
-                    HttpStatusCode.BadRequest,
-                    UserSettingsResponse(false, "用户ID不能为空")
+                    UserSettingsResponse(false, "用户ID不匹配")
                 )
                 return@put
             }
-            
-            try {
-                val request = call.receive<UpdateUserSettingsRequest>()
-                
-                // 验证userId匹配
-                if (request.userId != userId) {
-                    call.respond(
-                        HttpStatusCode.BadRequest,
-                        UserSettingsResponse(false, "用户ID不匹配")
-                    )
-                    return@put
-                }
-                
-                val settings = UserSettingsRepository.updateUserSettings(
-                    userId = userId,
-                    language = request.language,
-                    defaultAgentInstruction = request.defaultAgentInstruction
-                )
-                
-                call.respond(UserSettingsResponse(true, "设置更新成功", settings))
-            } catch (e: Exception) {
-                logger.error("❌ 更新用户设置失败: {}", e.message)
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    UserSettingsResponse(false, "更新设置失败: ${e.message}")
-                )
-            }
+
+            val settings = UserSettingsRepository.updateUserSettings(
+                userId = userId,
+                language = request.language,
+                defaultAgentInstruction = request.defaultAgentInstruction
+            )
+
+            call.respond(UserSettingsResponse(true, "设置更新成功", settings))
+        }.rethrowRoutingCancellation().onFailure { e ->
+            logger.error("❌ 更新用户设置失败: {}", e.message)
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                UserSettingsResponse(false, "更新设置失败: ${e.message}")
+            )
         }
+    }
+}
 
-        // ==================== CC 设置 API ====================
+private fun Route.registerUsersUserIdCcSettingsGetRoute() {
 
-        // 获取 CC 设置（token + bridge 状态）
-        get("/users/{userId}/cc-settings") {
-            val userId = call.parameters["userId"] ?: ""
-            if (userId.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
-                return@get
-            }
-            try {
-                val token = UserSettingsRepository.getBridgeToken(userId)
-                val connected = isAnyBridgeConnected(userId)
-                val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
-                call.respond(CcSettingsResponse(true, "ok", token, connected, bridgeIp))
-            } catch (e: Exception) {
-                logger.error("❌ 获取CC设置失败: {}", e.message)
-                call.respond(HttpStatusCode.InternalServerError, CcSettingsResponse(false, "获取失败: ${e.message}"))
-            }
+    // ==================== CC 设置 API ====================
+
+    // 获取 CC 设置（token + bridge 状态）
+    get("/users/{userId}/cc-settings") {
+        val userId = call.parameters["userId"] ?: ""
+        if (userId.isBlank()) {
+            call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
+            return@get
         }
-
-        // 生成/重新生成 Bridge Token
-        post("/users/{userId}/cc-settings/generate-token") {
-            val userId = call.parameters["userId"] ?: ""
-            if (userId.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
-                return@post
-            }
-            try {
-                val token = UserSettingsRepository.generateBridgeToken(userId)
-                // 踢掉用旧 token 认证的 ACP 连接
-                val acpClosed = AcpRegistry.disconnect(userId)
-                if (acpClosed > 0) {
-                    logger.info("🔌 Token 重生：关闭 {} 个 ACP 连接", acpClosed)
-                }
-                val connected = isAnyBridgeConnected(userId)
-                val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
-                call.respond(CcSettingsResponse(true, "Token 已生成", token, connected, bridgeIp))
-            } catch (e: Exception) {
-                logger.error("❌ 生成Bridge Token失败: {}", e.message)
-                call.respond(HttpStatusCode.InternalServerError, CcSettingsResponse(false, "生成失败: ${e.message}"))
-            }
+        runCatching {
+            val token = UserSettingsRepository.getBridgeToken(userId)
+            val connected = isAnyBridgeConnected(userId)
+            val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
+            call.respond(CcSettingsResponse(true, "ok", token, connected, bridgeIp))
+        }.rethrowRoutingCancellation().onFailure { e ->
+            logger.error("❌ 获取CC设置失败: {}", e.message)
+            call.respond(HttpStatusCode.InternalServerError, CcSettingsResponse(false, "获取失败: ${e.message}"))
         }
+    }
+}
 
-        // 查询 Bridge 在线状态
-        get("/users/{userId}/cc-settings/bridge-status") {
-            val userId = call.parameters["userId"] ?: ""
-            if (userId.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
-                return@get
+private fun Route.registerUsersUserIdCcSettingsGenerateTokenPostRoute() {
+
+    // 生成/重新生成 Bridge Token
+    post("/users/{userId}/cc-settings/generate-token") {
+        val userId = call.parameters["userId"] ?: ""
+        if (userId.isBlank()) {
+            call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
+            return@post
+        }
+        runCatching {
+            val token = UserSettingsRepository.generateBridgeToken(userId)
+            // 踢掉用旧 token 认证的 ACP 连接
+            val acpClosed = AcpRegistry.disconnect(userId)
+            if (acpClosed > 0) {
+                logger.info("🔌 Token 重生：关闭 {} 个 ACP 连接", acpClosed)
             }
             val connected = isAnyBridgeConnected(userId)
             val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
-            call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected, bridgeIp = bridgeIp))
+            call.respond(CcSettingsResponse(true, "Token 已生成", token, connected, bridgeIp))
+        }.rethrowRoutingCancellation().onFailure { e ->
+            logger.error("❌ 生成Bridge Token失败: {}", e.message)
+            call.respond(HttpStatusCode.InternalServerError, CcSettingsResponse(false, "生成失败: ${e.message}"))
         }
+    }
+}
 
         // 查询 user+group 的 CC 当前状态（含工作目录），供工作流前端显示
         get("/users/{userId}/cc-state/{groupId}") {
@@ -824,52 +1108,21 @@ private fun Route.coreRoutes() {
                 call.respond(CcStateResponse(success = true, bridgeConnected = bridgeConnected))
             }
         }
+        val connected = isAnyBridgeConnected(userId)
+        val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
+        call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected, bridgeIp = bridgeIp))
+    }
+}
 
-        // 列出 Bridge 所在机器上某路径下的子目录（用于工作流 Folder Picker）
-        // path 为空表示使用 bridge 当前 workingDir 起点
-        get("/users/{userId}/cc-fs/list") {
-            val userId = call.parameters["userId"] ?: ""
-            val path = call.request.queryParameters["path"]
-            val showHidden = call.request.queryParameters["showHidden"]?.toBoolean() ?: false
-            if (userId.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, DirListingResponse(success = false, error = "userId 为空"))
-                return@get
-            }
-            if (!isAnyBridgeConnected(userId)) {
-                call.respond(HttpStatusCode.Conflict, DirListingResponse(success = false, error = "Bridge 未连接"))
-                return@get
-            }
-            val raw = AgentRuntime.listDirectory(userId, path, showHidden, agentType = resolveActiveAgentType(userId) ?: "claude-code")
-            if (raw == null) {
-                call.respond(HttpStatusCode.GatewayTimeout, DirListingResponse(success = false, error = "Bridge 未响应或超时"))
-                return@get
-            }
-            try {
-                val resp = DirListingResponse(
-                    success = raw["success"]?.jsonPrimitive?.booleanOrNull ?: false,
-                    path = raw["path"]?.jsonPrimitive?.contentOrNull ?: "",
-                    parent = raw["parent"]?.jsonPrimitive?.contentOrNull,
-                    segments = raw["segments"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList(),
-                    separator = raw["separator"]?.jsonPrimitive?.contentOrNull ?: "/",
-                    entries = raw["entries"]?.jsonArray?.mapNotNull { el ->
-                        val obj = el.jsonObject
-                        val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                        DirEntry(
-                            name = name,
-                            isDir = obj["isDir"]?.jsonPrimitive?.booleanOrNull ?: true,
-                        )
-                    } ?: emptyList(),
-                    truncated = raw["truncated"]?.jsonPrimitive?.booleanOrNull ?: false,
-                    error = raw["error"]?.jsonPrimitive?.contentOrNull,
-                )
-                call.respond(resp)
-            } catch (e: Exception) {
-                logger.error("❌ 解析 Bridge dir_listing 失败: {}", e.message)
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    DirListingResponse(success = false, error = "解析响应失败: ${e.message}")
-                )
-            }
+private fun Route.registerUsersUserIdCcStateGroupIdGetRoute() {
+
+    // 查询 user+group 的 CC 当前状态（含工作目录），供工作流前端显示
+    get("/users/{userId}/cc-state/{groupId}") {
+        val userId = call.parameters["userId"] ?: ""
+        val rawGroupId = call.parameters["groupId"] ?: ""
+        if (userId.isBlank() || rawGroupId.isBlank()) {
+            call.respond(HttpStatusCode.BadRequest, CcStateResponse(success = false))
+            return@get
         }
 
         // 直接切换 user+group 的工作目录（不经过聊天消息流，避免 /cd 在聊天中显示气泡）。
@@ -2180,50 +2433,96 @@ private fun Route.unreadTodoMessageRoutes() {
             call.respond(
                 UserTodoExtractionDiagnosticsResponse(
                     success = true,
-                    message = "ok",
-                    userId = d.userId,
-                    updatedAt = d.updatedAt,
-                    source = d.source,
-                    totalGroups = d.totalGroups,
-                    transcriptChars = d.transcriptChars,
-                    llmDraftCount = d.llmDraftCount,
-                    heuristicDraftCount = d.heuristicDraftCount,
-                    forcedRecurringCount = d.forcedRecurringCount,
-                    finalDraftCount = d.finalDraftCount,
-                    matchedRecurringLines = d.matchedRecurringLines,
-                    note = d.note
+                    active = agentSnap.active,
+                    running = agentSnap.running,
+                    workingDir = agentSnap.workingDir,
+                    sessionId = "",
+                    sessionStarted = agentSnap.active,
+                    bridgeConnected = bridgeConnected,
+                    agentType = agentSnap.agentType ?: "",
+                    agentDisplayName = descriptor?.displayName ?: "",
+                    permissionMode = agentSnap.permissionMode,
                 )
             )
+        } else {
+            call.respond(CcStateResponse(success = true, bridgeConnected = bridgeConnected))
         }
+    }
+}
 
-        put("/api/user-todos/item") {
-            try {
-                val request = call.receive<UpdateUserTodoRequest>()
-                val ok = com.silk.backend.todos.UserTodoStore.updateItem(
-                    userId = request.userId,
-                    itemId = request.itemId,
-                    done = request.done,
-                    title = request.title,
-                    actionType = request.actionType,
-                    actionDetail = request.actionDetail,
-                    executedAt = request.executedAt,
-                    reminderId = request.reminderId,
-                    clearReminderId = request.clearReminderId,
-                    taskKind = request.taskKind,
-                    repeatRule = request.repeatRule,
-                    repeatAnchor = request.repeatAnchor,
-                    activeFrom = request.activeFrom,
-                    activeTo = request.activeTo,
-                    templateId = request.templateId,
-                    lifecycleState = request.lifecycleState,
-                    closedAt = request.closedAt,
-                    lastEvidenceAt = request.lastEvidenceAt,
-                    explicitIntent = request.explicitIntent,
-                    dateBucket = request.dateBucket,
-                    reopenCount = request.reopenCount
+private fun Route.registerUsersUserIdCcFsListGetRoute() {
+
+    // 列出 Bridge 所在机器上某路径下的子目录（用于工作流 Folder Picker）
+    // path 为空表示使用 bridge 当前 workingDir 起点
+    get("/users/{userId}/cc-fs/list") {
+        val userId = call.parameters["userId"] ?: ""
+        val path = call.request.queryParameters["path"]
+        val showHidden = call.request.queryParameters["showHidden"]?.toBoolean() ?: false
+        if (userId.isBlank()) {
+            call.respond(HttpStatusCode.BadRequest, DirListingResponse(success = false, error = "userId 为空"))
+            return@get
+        }
+        if (!isAnyBridgeConnected(userId)) {
+            call.respond(HttpStatusCode.Conflict, DirListingResponse(success = false, error = "Bridge 未连接"))
+            return@get
+        }
+        val raw = AgentRuntime.listDirectory(userId, path, showHidden, agentType = resolveActiveAgentType(userId) ?: "claude-code")
+        if (raw == null) {
+            call.respond(HttpStatusCode.GatewayTimeout, DirListingResponse(success = false, error = "Bridge 未响应或超时"))
+            return@get
+        }
+        runCatching {
+            call.respond(parseBridgeDirListing(raw))
+        }.rethrowRoutingCancellation().onFailure { e ->
+            logger.error("❌ 解析 Bridge dir_listing 失败: {}", e.message)
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                DirListingResponse(success = false, error = "解析响应失败: ${e.message}")
+            )
+        }
+    }
+}
+
+private fun Route.registerUsersUserIdCcFsCdPostRoute() {
+
+    // 直接切换 user+group 的工作目录（不经过聊天消息流，避免 /cd 在聊天中显示气泡）。
+    // 请求体（JSON）：{ "groupId": "...", "path": "..." }
+    post("/users/{userId}/cc-fs/cd") {
+        val userId = call.parameters["userId"] ?: ""
+        val reqJson = runCatching {
+            Json.parseToJsonElement(call.receiveText()).jsonObject
+        }.rethrowRoutingCancellation().getOrElse { e ->
+            call.respond(
+                HttpStatusCode.BadRequest,
+                CcStateResponse(success = false, error = "请求体非法 JSON: ${e.message}")
+            )
+            return@post
+        }
+        val groupId = reqJson["groupId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val rawPath = reqJson["path"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        if (userId.isBlank() || groupId.isBlank() || rawPath.isBlank()) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                CcStateResponse(success = false, error = "userId / groupId / path 不能为空")
+            )
+            return@post
+        }
+        // 信任目录检查（bridgeId 格式 "ip:<ip>" 兼容已有 trust 记录）
+        val bridgeId = resolveBridgeId(userId) ?: "unknown"
+        if (!trustedDirManager.isTrusted(userId, bridgeId, rawPath)) {
+            call.respond(
+                HttpStatusCode.BadRequest,
+                CcStateResponse(
+                    success = false,
+                    error = "目录 $rawPath 未被信任。请先确认信任该目录。",
                 )
-                val items = com.silk.backend.todos.UserTodoStore.load(request.userId)
-                    .sortedByDescending { it.updatedAt }
+            )
+            return@post
+        }
+        // 与 autoActivateForWorkflow 一致使用 "group_<id>" 形式作为 CC state key
+        val ccGroupId = if (groupId.startsWith("group_")) groupId else "group_$groupId"
+        when (val result = AgentRuntime.cdSync(userId, ccGroupId, rawPath, agentType = resolveActiveAgentType(userId) ?: "claude-code")) {
+            is AgentRuntime.CdResult.Err -> {
                 call.respond(
                     if (ok) UserTodosResponse(true, "已更新", items)
                     else UserTodosResponse(false, "待办不存在", items)

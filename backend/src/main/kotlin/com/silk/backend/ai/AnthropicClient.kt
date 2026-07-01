@@ -73,7 +73,7 @@ class AnthropicClient(
      * @param messages 内部 Message 列表（含 system 角色会被移入 systemPrompt）
      * @param tools 内部 Tool 定义（含 web_search 特殊处理）
      * @param callback 流式回调 (stepType, content, isComplete)
-     * @return 聚合后的最终文本 + tool_calls
+     * @return 聚合后的最终文本 + toolCalls
      */
     suspend fun streamCompletion(
         systemPrompt: String,
@@ -152,7 +152,7 @@ class AnthropicClient(
                 response.body().bufferedReader().readText().take(2000)
             } catch (_: Exception) { "" }
             logger.error("❌ [Anthropic] API 失败: ${response.statusCode()}, body=$errorBody")
-            throw Exception("Anthropic API 调用失败: ${response.statusCode()}")
+            error("Anthropic API 调用失败: ${response.statusCode()}")
         }
 
         // 5. 解析 SSE 流

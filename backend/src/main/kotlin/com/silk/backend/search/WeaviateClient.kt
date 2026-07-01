@@ -46,7 +46,6 @@ import org.slf4j.LoggerFactory
  * // 隔离搜索
  * val results = client.isolatedSearch(
  *     query = "身份验证",
- *     userId = "user_123",
  *     currentSessionId = "session_abc",
  *     mode = SearchMode.FOREGROUND_FIRST  // 优先当前会话
  * )
@@ -96,6 +95,16 @@ class WeaviateClient(
 
     private val logger = LoggerFactory.getLogger(WeaviateClient::class.java)
 
+    private inline fun <T> recoverWeaviateFailure(
+        onFailure: (Throwable) -> T,
+        block: () -> T,
+    ): T {
+        return runCatching(block).getOrElse { failure ->
+            if (failure is CancellationException) throw failure
+            onFailure(failure)
+        }
+    }
+
     /**
      * 检查 Weaviate 是否可用
      * 兼容原生 Weaviate 二进制（ready 端点可能返回空响应导致连接异常）和 Docker Weaviate
@@ -104,12 +113,14 @@ class WeaviateClient(
         logger.debug("🔍 [Weaviate] 检查连接: {}", baseUrl)
 
         // 先尝试 ready 端点（Docker Weaviate 返回 200 OK）
-        val readyOk = try {
+        val readyOk = recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.debug("🔍 [Weaviate] ready 端点异常 (常见于原生二进制): {}", failure.message)
+                false
+            }
+        ) {
             val response = httpClient.get("$baseUrl/v1/.well-known/ready")
             response.status == HttpStatusCode.OK
-        } catch (e: Exception) {
-            logger.debug("🔍 [Weaviate] ready 端点异常 (常见于原生二进制): {}", e.message)
-            false
         }
         if (readyOk) {
             logger.debug("🔍 [Weaviate] 连接状态: ✅ 可用 (ready)")
@@ -118,15 +129,17 @@ class WeaviateClient(
 
         // 某些原生 Weaviate 二进制版本中 ready 端点返回空响应，
         // 此时尝试调用 meta 端点作为备用检查
-        return try {
+        return recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ [Weaviate] 连接失败: {}", failure.message)
+                false
+            }
+        ) {
             logger.debug("🔍 [Weaviate] 尝试 meta 端点...")
             val metaResponse = httpClient.get("$baseUrl/v1/meta")
             val isOk = metaResponse.status == HttpStatusCode.OK
             logger.debug("🔍 [Weaviate] meta 端点状态: {}", if (isOk) "✅ 可用" else "❌ 不可用 (${metaResponse.status})")
             isOk
-        } catch (e: Exception) {
-            logger.error("❌ [Weaviate] 连接失败: {}", e.message)
-            false
         }
     }
     
@@ -136,28 +149,24 @@ class WeaviateClient(
      * 隔离搜索 - 核心搜索 API
      * 
      * @param query 搜索查询
-     * @param userId 当前用户 ID (用于权限过滤)
      * @param currentSessionId 当前会话 ID (用于 foreground/background 分离)
      * @param mode 搜索模式
      * @param foregroundLimit Foreground 结果数量限制
      * @param backgroundLimit Background 结果数量限制
-     * @param alpha 混合搜索参数 (0=关键词, 1=语义)
      */
     suspend fun isolatedSearch(
         query: String,
-        userId: String,
         currentSessionId: String,
         mode: SearchMode = SearchMode.FOREGROUND_FIRST,
         foregroundLimit: Int = 10,
-        backgroundLimit: Int = 5,
-        alpha: Float = 0.5f
+        backgroundLimit: Int = 5
     ): IsolatedSearchResults = coroutineScope {
         
         val startTime = System.currentTimeMillis()
         
         when (mode) {
             SearchMode.FOREGROUND_ONLY -> {
-                val foreground = foregroundSearch(query, userId, currentSessionId, foregroundLimit, alpha)
+                val foreground = foregroundSearch(query, currentSessionId, foregroundLimit)
                 IsolatedSearchResults(
                     foreground = foreground,
                     background = SearchResults(emptyList(), 0, 0, "background"),
@@ -167,7 +176,7 @@ class WeaviateClient(
             }
             
             SearchMode.BACKGROUND_ONLY -> {
-                val background = backgroundSearch(query, userId, currentSessionId, backgroundLimit, alpha)
+                val background = backgroundSearch(query, currentSessionId, backgroundLimit)
                 IsolatedSearchResults(
                     foreground = SearchResults(emptyList(), 0, 0, "foreground"),
                     background = background,
@@ -179,10 +188,10 @@ class WeaviateClient(
             SearchMode.FOREGROUND_FIRST -> {
                 // 并行执行 foreground 和 background 搜索
                 val foregroundDeferred = async { 
-                    foregroundSearch(query, userId, currentSessionId, foregroundLimit, alpha) 
+                    foregroundSearch(query, currentSessionId, foregroundLimit)
                 }
                 val backgroundDeferred = async { 
-                    backgroundSearch(query, userId, currentSessionId, backgroundLimit, alpha) 
+                    backgroundSearch(query, currentSessionId, backgroundLimit)
                 }
                 
                 IsolatedSearchResults(
@@ -196,10 +205,10 @@ class WeaviateClient(
             SearchMode.MERGED -> {
                 // 合并搜索，按分数排序
                 val foregroundDeferred = async { 
-                    foregroundSearch(query, userId, currentSessionId, foregroundLimit * 2, alpha) 
+                    foregroundSearch(query, currentSessionId, foregroundLimit * 2)
                 }
                 val backgroundDeferred = async { 
-                    backgroundSearch(query, userId, currentSessionId, backgroundLimit * 2, alpha) 
+                    backgroundSearch(query, currentSessionId, backgroundLimit * 2)
                 }
                 
                 val foreground = foregroundDeferred.await()
@@ -247,10 +256,8 @@ class WeaviateClient(
     @Suppress("UnusedParameter")
     suspend fun foregroundSearch(
         query: String,
-        userId: String,
         sessionId: String,
-        limit: Int = 10,
-        alpha: Float = 0.5f
+        limit: Int = 10
     ): SearchResults = withContext(Dispatchers.IO) {
         
         val startTime = System.currentTimeMillis()
@@ -265,7 +272,7 @@ class WeaviateClient(
         """.trimIndent()
         
         // 执行主要的 BM25 搜索
-        val mainResults = executeHybridSearch(query, whereFilter, limit, alpha, "foreground", startTime)
+        val mainResults = executeHybridSearch(query, whereFilter, limit, "foreground", startTime)
         
         // 额外搜索：从查询中提取英文关键词，搜索文件标题
         // 这解决了中文查询无法匹配英文文件名的问题（如 "介绍HersLaw" 无法找到 "HersLaw_Seminal.pdf"）
@@ -274,7 +281,7 @@ class WeaviateClient(
             val keywordQuery = englishKeywords.joinToString(" ")
             logger.debug("🔍 [Weaviate] 额外搜索英文关键词: {}", keywordQuery)
             
-            val titleResults = executeHybridSearch(keywordQuery, whereFilter, limit / 2, alpha, "foreground_title", startTime)
+            val titleResults = executeHybridSearch(keywordQuery, whereFilter, limit / 2, "foreground_title", startTime)
             
             // 合并结果，去重
             val existingIds = mainResults.documents.map { it.id }.toSet()
@@ -295,19 +302,6 @@ class WeaviateClient(
     }
     
     /**
-     * 从查询中提取英文关键词
-     * 用于搜索英文文件名（如 HersLaw、PDF 等）
-     */
-    private fun extractEnglishKeywords(query: String): List<String> {
-        // 匹配连续的英文字符（包括下划线）
-        val regex = Regex("[a-zA-Z_][a-zA-Z0-9_]*")
-        return regex.findAll(query)
-            .map { it.value }
-            .filter { it.length >= 3 }  // 至少3个字符
-            .toList()
-    }
-    
-    /**
      * Background 搜索 - 跨 session 搜索
      * 搜索其他 session 中的相关内容（排除当前 session）
      * 注：文件属于 session，不按 authorId 过滤
@@ -318,10 +312,8 @@ class WeaviateClient(
     @Suppress("UnusedParameter")
     suspend fun backgroundSearch(
         query: String,
-        userId: String,
         excludeSessionId: String,
-        limit: Int = 5,
-        alpha: Float = 0.5f
+        limit: Int = 5
     ): SearchResults = withContext(Dispatchers.IO) {
         
         val startTime = System.currentTimeMillis()
@@ -329,7 +321,7 @@ class WeaviateClient(
         logger.debug("🔍 [Background] 跨 session 搜索: excludeSession={}, limit={}", excludeSessionId, limit)
         
         // 由于 Weaviate BM25 + NotEqual 有 bug，先搜索更多结果，然后应用层过滤
-        val allResults = executeHybridSearchNoFilter(query, limit * 3, alpha, "background_raw", startTime)
+        val allResults = executeHybridSearchNoFilter(query, limit * 3, "background_raw", startTime)
         
         // 应用层过滤：排除当前 session
         val filteredDocs = allResults.documents.filter { it.sessionId != excludeSessionId }
@@ -348,53 +340,18 @@ class WeaviateClient(
      * 获取用户可访问的所有会话 ID
      */
     suspend fun getUserSessions(userId: String): List<SessionInfo> = withContext(Dispatchers.IO) {
-        val graphqlQuery = """
-        {
-            Get {
-                SilkSession(
-                    where: {
-                        path: ["participants"],
-                        operator: ContainsAny,
-                        valueTextArray: ["$userId"]
-                    }
-                    limit: 100
-                ) {
-                    sessionId
-                    sessionName
-                    participants
-                    ownerId
-                    lastActiveAt
-                    isArchived
-                    _additional { id }
-                }
+        recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ 获取用户会话失败: {}", failure.message)
+                emptyList()
             }
-        }
-        """.trimIndent()
-        
-        try {
+        ) {
             val response = httpClient.post("$baseUrl/v1/graphql") {
                 contentType(ContentType.Application.Json)
-                setBody(GraphQLRequest(query = graphqlQuery))
+                setBody(GraphQLRequest(query = buildUserSessionsQuery(userId)))
             }
-            
-            val result = json.decodeFromString<JsonObject>(response.bodyAsText())
-            val sessions = result["data"]?.jsonObject
-                ?.get("Get")?.jsonObject
-                ?.get("SilkSession")?.jsonArray
-            
-            sessions?.mapNotNull { obj ->
-                val sessionObj = obj.jsonObject
-                SessionInfo(
-                    sessionId = sessionObj["sessionId"]?.jsonPrimitive?.content ?: return@mapNotNull null,
-                    sessionName = sessionObj["sessionName"]?.jsonPrimitive?.content,
-                    participants = sessionObj["participants"]?.jsonArray?.map { it.jsonPrimitive.content } ?: emptyList(),
-                    ownerId = sessionObj["ownerId"]?.jsonPrimitive?.content,
-                    isArchived = sessionObj["isArchived"]?.jsonPrimitive?.booleanOrNull ?: false
-                )
-            } ?: emptyList()
-        } catch (e: Exception) {
-            logger.error("❌ 获取用户会话失败: {}", e.message)
-            emptyList()
+
+            parseUserSessions(json.decodeFromString(response.bodyAsText()))
         }
     }
     
@@ -404,7 +361,12 @@ class WeaviateClient(
      * 注册/更新会话
      */
     suspend fun upsertSession(session: SessionInfo): Boolean = withContext(Dispatchers.IO) {
-        try {
+        recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ 会话注册失败: {}", failure.message)
+                false
+            }
+        ) {
             val response = httpClient.post("$baseUrl/v1/objects") {
                 contentType(ContentType.Application.Json)
                 setBody(mapOf(
@@ -419,9 +381,6 @@ class WeaviateClient(
                 ))
             }
             response.status.isSuccess()
-        } catch (e: Exception) {
-            logger.error("❌ 会话注册失败: {}", e.message)
-            false
         }
     }
     
@@ -578,24 +537,11 @@ class WeaviateClient(
             val jsonBody = buildIndexDocumentJson(document, participants)
 
             logger.debug("📝 [Weaviate] JSON Body: {}...", jsonBody.take(200))
-            
             val response = httpClient.post("$baseUrl/v1/objects") {
                 contentType(ContentType.Application.Json)
                 setBody(jsonBody)
             }
-            
-            val success = response.status.isSuccess()
-            if (success) {
-                logger.info("✅ [Weaviate] 索引成功: {}", document.title)
-            } else {
-                val responseBody = response.bodyAsText()
-                logger.error("❌ [Weaviate] 索引失败: {} - {}", response.status, responseBody)
-            }
-            success
-        } catch (e: Exception) {
-            logger.error("❌ [Weaviate] 索引异常: {}", e.message)
-            e.printStackTrace()
-            false
+            logIndexDocumentResult(logger, document.title, response)
         }
     }
     
@@ -638,39 +584,18 @@ class WeaviateClient(
      * 通过 messageId + sessionId 查找 Weaviate 对象并删除
      */
     suspend fun deleteChatMessage(sessionId: String, messageId: String): Boolean = withContext(Dispatchers.IO) {
-        try {
-            // 1. GraphQL 查询找到 Weaviate 内部 UUID
-            val graphqlQuery = """
-            {
-                Get {
-                    SilkContext(
-                        where: {
-                            operator: And,
-                            operands: [
-                                { path: ["sessionId"], operator: Equal, valueText: "$sessionId" },
-                                { path: ["messageId"], operator: Equal, valueText: "$messageId" }
-                            ]
-                        }
-                        limit: 1
-                    ) {
-                        _additional { id }
-                    }
-                }
+        recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ [Weaviate] 删除向量异常: {}", failure.message)
+                false
             }
-            """.trimIndent()
-
+        ) {
             val response = httpClient.post("$baseUrl/v1/graphql") {
                 contentType(ContentType.Application.Json)
-                setBody(GraphQLRequest(query = graphqlQuery))
+                setBody(GraphQLRequest(query = buildDeleteMessageQuery(sessionId, messageId)))
             }
 
-            val result = json.decodeFromString<JsonObject>(response.bodyAsText())
-            val weaviateId = result["data"]?.jsonObject
-                ?.get("Get")?.jsonObject
-                ?.get("SilkContext")?.jsonArray
-                ?.firstOrNull()?.jsonObject
-                ?.get("_additional")?.jsonObject
-                ?.get("id")?.jsonPrimitive?.content
+            val weaviateId = parseWeaviateObjectId(json.decodeFromString(response.bodyAsText()))
 
             if (weaviateId == null) {
                 logger.warn("⚠️ [Weaviate] 未找到 messageId={} 的向量，可能尚未索引", messageId)
@@ -686,9 +611,6 @@ class WeaviateClient(
                 logger.error("❌ [Weaviate] 删除向量失败: {} - {}", deleteResponse.status, deleteResponse.bodyAsText())
             }
             success
-        } catch (e: Exception) {
-            logger.error("❌ [Weaviate] 删除向量异常: {}", e.message)
-            false
         }
     }
 
@@ -699,11 +621,15 @@ class WeaviateClient(
     suspend fun deleteChatMessages(sessionId: String, messageIds: List<String>): Int {
         var deleted = 0
         for (msgId in messageIds) {
-            try {
-                if (deleteChatMessage(sessionId, msgId)) deleted++
-            } catch (e: Exception) {
-                logger.warn("⚠️ [Weaviate] 批量删除消息 {} 失败: {}", msgId, e.message)
+            val removed = recoverWeaviateFailure(
+                onFailure = { failure ->
+                    logger.warn("⚠️ [Weaviate] 批量删除消息 {} 失败: {}", msgId, failure.message)
+                    false
+                }
+            ) {
+                deleteChatMessage(sessionId, msgId)
             }
+            if (removed) deleted++
         }
         return deleted
     }
@@ -715,114 +641,17 @@ class WeaviateClient(
         query: String,
         whereFilter: String,
         limit: Int,
-        alpha: Float,
         searchType: String,
         startTime: Long
-    ): SearchResults {
-        // 对查询进行中文分词，优化 BM25 匹配
-        val tokenizedQuery = tokenizeChineseQuery(query)
-        logger.debug("🔍 [Weaviate] 执行搜索: query='{}' -> tokenized='{}', type={}, limit={}", query, tokenizedQuery, searchType, limit)
-        
-        // 使用 BM25 搜索 + where 过滤
-        // 如果查询为空，则只使用 where 过滤
-        val graphqlQuery = if (tokenizedQuery.isNotBlank()) {
-            """
-        {
-            Get {
-                SilkContext(
-                    bm25: {
-                        query: "${escapeGraphQL(tokenizedQuery)}"
-                    }
-                    where: $whereFilter
-                    limit: $limit
-                ) {
-                    content
-                    title
-                    sourceType
-                    fileType
-                    sessionId
-                    filePath
-                    timestamp
-                    authorId
-                    authorName
-                    importance
-                    _additional {
-                        id
-                        score
-                    }
-                }
-            }
-        }
-        """.trimIndent()
-        } else {
-            """
-        {
-            Get {
-                SilkContext(
-                    where: $whereFilter
-                    limit: $limit
-                ) {
-                    content
-                    title
-                    sourceType
-                    fileType
-                    sessionId
-                    filePath
-                    timestamp
-                    authorId
-                    authorName
-                    importance
-                    _additional {
-                        id
-                    }
-                }
-            }
-        }
-        """.trimIndent()
-        }
-        
-        logger.debug("🔍 [Weaviate] GraphQL Query:\n{}", graphqlQuery)
-        
-        try {
-            val response = httpClient.post("$baseUrl/v1/graphql") {
-                contentType(ContentType.Application.Json)
-                setBody(GraphQLRequest(query = graphqlQuery))
-            }
-            
-            val responseText = response.bodyAsText()
-            logger.debug("🔍 [Weaviate] 响应: {}...", responseText.take(500))
-            
-            val result = json.decodeFromString<GraphQLResponse>(responseText)
-            
-            // 检查是否有错误
-            if (result.errors?.isNotEmpty() == true) {
-                logger.error("❌ [Weaviate] GraphQL 错误: {}", result.errors)
-            }
-
-            val rawDocuments = result.data?.get?.silkContext ?: emptyList()
-            logger.debug("🔍 [Weaviate] 原始结果数: {}", rawDocuments.size)
-            
-            // 返回搜索结果（使用 BM25 分数）
-            val documents = rawDocuments.map { obj ->
-                val content = obj.content ?: ""
-                
-                SearchDocument(
-                    id = obj.additional?.id ?: "",
-                    content = content,
-                    title = obj.title,
-                    sourceType = obj.sourceType ?: "UNKNOWN",
-                    fileType = obj.fileType,
-                    sessionId = obj.sessionId ?: "",
-                    filePath = obj.filePath,
-                    sourceUrl = obj.sourceUrl,
-                    timestamp = obj.timestamp,
-                    authorId = obj.authorId,
-                    authorName = obj.authorName,
-                    chunkIndex = obj.chunkIndex ?: 0,
-                    totalChunks = obj.totalChunks ?: 1,
-                    tags = obj.tags ?: emptyList(),
-                    score = obj.additional?.score ?: 1.0f,  // 使用 BM25 分数
-                    importance = obj.importance ?: 0.5f
+    ): SearchResults = recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ [Weaviate] 搜索失败 ({})", searchType, failure)
+                SearchResults(
+                    documents = emptyList(),
+                    totalCount = 0,
+                    queryTimeMs = System.currentTimeMillis() - startTime,
+                    searchType = searchType,
+                    error = failure.message
                 )
             }.take(limit)
             
@@ -844,7 +673,6 @@ class WeaviateClient(
                 error = e.message
             )
         }
-    }
     
     /**
      * 使用 BM25 搜索，不带 where 过滤（用于 background 搜索）
@@ -854,73 +682,17 @@ class WeaviateClient(
     private suspend fun executeHybridSearchNoFilter(
         query: String,
         limit: Int,
-        alpha: Float,
         searchType: String,
         startTime: Long
-    ): SearchResults {
-        // 对查询进行中文分词
-        val tokenizedQuery = tokenizeChineseQuery(query)
-        logger.debug("🔍 [Weaviate] BM25搜索 (无过滤): query='{}' -> tokenized='{}', limit={}", query, tokenizedQuery, limit)
-        
-        val graphqlQuery = """
-        {
-            Get {
-                SilkContext(
-                    bm25: {
-                        query: "${escapeGraphQL(tokenizedQuery)}"
-                    }
-                    limit: $limit
-                ) {
-                    content
-                    title
-                    sourceType
-                    fileType
-                    sessionId
-                    filePath
-                    timestamp
-                    authorId
-                    authorName
-                    importance
-                    _additional {
-                        id
-                        score
-                    }
-                }
-            }
-        }
-        """.trimIndent()
-        
-        try {
-            val response = httpClient.post("$baseUrl/v1/graphql") {
-                contentType(ContentType.Application.Json)
-                setBody(GraphQLRequest(query = graphqlQuery))
-            }
-            
-            val responseText = response.bodyAsText()
-            val result = json.decodeFromString<GraphQLResponse>(responseText)
-            
-            if (result.errors?.isNotEmpty() == true) {
-                logger.error("❌ [Weaviate] GraphQL 错误: {}", result.errors)
-            }
-            
-            val documents = result.data?.get?.silkContext?.map { obj ->
-                SearchDocument(
-                    id = obj.additional?.id ?: "",
-                    content = obj.content ?: "",
-                    title = obj.title,
-                    sourceType = obj.sourceType ?: "UNKNOWN",
-                    fileType = obj.fileType,
-                    sessionId = obj.sessionId ?: "",
-                    filePath = obj.filePath,
-                    sourceUrl = obj.sourceUrl,
-                    timestamp = obj.timestamp,
-                    authorId = obj.authorId,
-                    authorName = obj.authorName,
-                    chunkIndex = obj.chunkIndex ?: 0,
-                    totalChunks = obj.totalChunks ?: 1,
-                    tags = obj.tags ?: emptyList(),
-                    score = obj.additional?.score ?: 1.0f,
-                    importance = obj.importance ?: 0.5f
+    ): SearchResults = recoverWeaviateFailure(
+            onFailure = { failure ->
+                logger.error("❌ [Weaviate] BM25 搜索失败: query={}", query, failure)
+                SearchResults(
+                    documents = emptyList(),
+                    totalCount = 0,
+                    queryTimeMs = System.currentTimeMillis() - startTime,
+                    searchType = searchType,
+                    error = failure.message
                 )
             } ?: emptyList()
             
@@ -942,16 +714,6 @@ class WeaviateClient(
                 error = e.message
             )
         }
-    }
-    
-    private fun escapeGraphQL(text: String): String {
-        return text
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
-    }
     
     fun close() {
         httpClient.close()

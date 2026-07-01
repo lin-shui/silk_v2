@@ -77,4 +77,3 @@ data class ChatHistory(
     // @Silk 设置的角色提示，作为 AI 回复的 system prompt suffix
     var rolePrompt: String? = null
 )
-

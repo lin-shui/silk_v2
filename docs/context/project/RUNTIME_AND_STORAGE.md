@@ -45,6 +45,7 @@
 - 聊天文本消息持久化到 `session.json`
 - URL/PDF 链接经 `WebPageDownloader` 下载提取后可生成文件消息并持久化
 - AI 搜索由 `DirectModelAgent.searchContext()` 通过 grep 检索 `_text.txt` 和 `session.json`，受 accessibleSessionIds 隔离
+- KB 上下文由 `KnowledgeBaseManager.searchEntriesForContext()` 做服务端 lexical 检索，只会命中当前用户可读、且 `PUBLISHED` 的 entries；群聊场景会优先 boost 当前 group 对应的 team topics
 
 ## Cross-Client Contract Surface
 

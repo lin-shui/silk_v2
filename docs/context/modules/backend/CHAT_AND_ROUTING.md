@@ -33,6 +33,7 @@
 - `/api/messages/*`
 - `/api/workflows` (POST **requires directory trust**)
 - `/api/kb/*`
+  - `GET /api/kb/entries/{entryId}?userId=...` 供 UI 通过 entryId 深链定位单篇知识库文档
 - `/api/files/app-version`
 - `/api/files/hap-version`
 - `/api/files/download-hap`

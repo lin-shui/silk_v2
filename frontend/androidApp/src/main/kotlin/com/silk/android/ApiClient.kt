@@ -16,12 +16,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import java.net.HttpURLConnection
@@ -237,6 +237,23 @@ sealed class TrustCheckResult {
 object ApiClient {
     private val baseUrl: String get() = BackendUrlHolder.getBaseUrl()
     private val jsonParser = Json { ignoreUnknownKeys = true }
+    private var authToken: String? = null
+
+    fun setAuthToken(token: String?) {
+        authToken = token?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    private suspend inline fun <T> recoverApiCall(
+        logMessage: String? = null,
+        crossinline fallback: (Throwable) -> T,
+        crossinline block: () -> T,
+    ): T = withContext(Dispatchers.IO) {
+        runCatching(block).getOrElse { error ->
+            if (error is CancellationException) throw error
+            logMessage?.let { println("$it $error") }
+            fallback(error)
+        }
+    }
     
     /** 密码登录后保存的 JWT token，供后续需鉴权的 API 使用 */
     var accessToken: String? = null
@@ -246,26 +263,22 @@ object ApiClient {
         fullName: String,
         phoneNumber: String,
         password: String
-    ): AuthResponse = withContext(Dispatchers.IO) {
-        try {
+    ): AuthResponse = recoverApiCall(
+        logMessage = "注册失败:",
+        fallback = { error -> AuthResponse(false, "网络错误: ${error.message}") },
+    ) {
             val body = """{"loginName":"$loginName","fullName":"$fullName","phoneNumber":"$phoneNumber","password":"$password"}"""
             val response = post("/auth/register", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("注册失败: $e")
-            AuthResponse(false, "网络错误: ${e.message}")
-        }
     }
     
-    suspend fun login(loginName: String, password: String): AuthResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun login(loginName: String, password: String): AuthResponse = recoverApiCall(
+        logMessage = "登录失败:",
+        fallback = { AuthResponse(false, "网络错误") },
+    ) {
             val body = """{"loginName":"$loginName","password":"$password"}"""
             val response = post("/auth/login", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("登录失败: $e")
-            AuthResponse(false, "网络错误")
-        }
     }
     
     suspend fun huaweiLogin(idToken: String): HuaweiAuthResponse = withContext(Dispatchers.IO) {
@@ -318,46 +331,37 @@ object ApiClient {
         try {
             val response = get("/auth/validate/$userId")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            AuthResponse(false, "验证失败")
-        }
     }
     
-    suspend fun getUserGroups(userId: String): GroupResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun getUserGroups(userId: String): GroupResponse = recoverApiCall(
+        logMessage = "获取群组失败:",
+        fallback = { GroupResponse(false, "网络错误") },
+    ) {
             val response = get("/groups/user/$userId")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取群组失败: $e")
-            GroupResponse(false, "网络错误")
-        }
     }
     
     /**
      * 获取用户所有群组的未读消息数
      */
-    suspend fun getUnreadCounts(userId: String): UnreadCountResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun getUnreadCounts(userId: String): UnreadCountResponse = recoverApiCall(
+        logMessage = "获取未读数失败:",
+        fallback = { UnreadCountResponse(false) },
+    ) {
             val response = get("/api/unread/$userId")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取未读数失败: $e")
-            UnreadCountResponse(false)
-        }
     }
     
     /**
      * 标记群组消息为已读
      */
-    suspend fun markGroupAsRead(userId: String, groupId: String): Boolean = withContext(Dispatchers.IO) {
-        try {
+    suspend fun markGroupAsRead(userId: String, groupId: String): Boolean = recoverApiCall(
+        logMessage = "标记已读失败:",
+        fallback = { false },
+    ) {
             val body = """{"userId":"$userId","groupId":"$groupId"}"""
             val response = post("/api/unread/mark-read", body)
             response.contains("\"success\":true") || response.contains("\"success\": true")
-        } catch (e: Exception) {
-            println("标记已读失败: $e")
-            false
-        }
     }
     
     suspend fun createGroup(userId: String, groupName: String, type: String? = null): GroupResponse = withContext(Dispatchers.IO) {
@@ -369,21 +373,20 @@ object ApiClient {
             }
             val response = post("/groups/create", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("创建群组失败: $e")
-            GroupResponse(false, "网络错误")
-        }
+    }
+
+    private fun HttpURLConnection.applyAuthHeaders() {
+        setRequestProperty("Content-Type", "application/json")
+        authToken?.let { setRequestProperty("Authorization", "Bearer $it") }
     }
     
-    suspend fun joinGroup(userId: String, invitationCode: String): GroupResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun joinGroup(userId: String, invitationCode: String): GroupResponse = recoverApiCall(
+        logMessage = "加入群组失败:",
+        fallback = { GroupResponse(false, "网络错误") },
+    ) {
             val body = """{"userId":"$userId","invitationCode":"$invitationCode"}"""
             val response = post("/groups/join", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("加入群组失败: $e")
-            GroupResponse(false, "网络错误")
-        }
     }
     
     // ==================== 联系人相关 API ====================
@@ -391,138 +394,118 @@ object ApiClient {
     /**
      * 获取联系人列表（包含待处理请求）
      */
-    suspend fun getContacts(userId: String): ContactResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun getContacts(userId: String): ContactResponse = recoverApiCall(
+        logMessage = "获取联系人失败:",
+        fallback = { ContactResponse(false, "网络错误") },
+    ) {
             val response = get("/contacts/$userId")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取联系人失败: $e")
-            ContactResponse(false, "网络错误")
-        }
     }
     
     /**
      * 通过电话号码搜索用户
      */
-    suspend fun searchUserByPhone(phoneNumber: String): UserSearchResult = withContext(Dispatchers.IO) {
-        try {
+    suspend fun searchUserByPhone(phoneNumber: String): UserSearchResult = recoverApiCall(
+        logMessage = "搜索用户失败:",
+        fallback = { UserSearchResult(false, message = "网络错误") },
+    ) {
             val response = get("/users/search?phone=$phoneNumber")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("搜索用户失败: $e")
-            UserSearchResult(false, message = "网络错误")
-        }
     }
     
     /**
      * 发送联系人请求（通过电话号码）
      */
-    suspend fun sendContactRequest(fromUserId: String, toPhoneNumber: String): ContactResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun sendContactRequest(fromUserId: String, toPhoneNumber: String): ContactResponse = recoverApiCall(
+        logMessage = "发送联系人请求失败:",
+        fallback = { ContactResponse(false, "网络错误") },
+    ) {
             val body = """{"fromUserId":"$fromUserId","toPhoneNumber":"$toPhoneNumber"}"""
             val response = post("/contacts/request", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("发送联系人请求失败: $e")
-            ContactResponse(false, "网络错误")
-        }
     }
     
     /**
      * 发送联系人请求（通过用户ID）
      */
-    suspend fun sendContactRequestById(fromUserId: String, toUserId: String): ContactResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun sendContactRequestById(fromUserId: String, toUserId: String): ContactResponse = recoverApiCall(
+        logMessage = "发送联系人请求失败:",
+        fallback = { ContactResponse(false, "网络错误") },
+    ) {
             val body = """{"fromUserId":"$fromUserId","toUserId":"$toUserId"}"""
             val response = post("/contacts/request-by-id", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("发送联系人请求失败: $e")
-            ContactResponse(false, "网络错误")
-        }
     }
     
     /**
      * 处理联系人请求（接受/拒绝）
      */
-    suspend fun handleContactRequest(requestId: String, userId: String, accept: Boolean): ContactResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun handleContactRequest(requestId: String, userId: String, accept: Boolean): ContactResponse = recoverApiCall(
+        logMessage = "处理联系人请求失败:",
+        fallback = { ContactResponse(false, "网络错误") },
+    ) {
             val body = """{"requestId":"$requestId","userId":"$userId","accept":$accept}"""
             val response = post("/contacts/handle-request", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("处理联系人请求失败: $e")
-            ContactResponse(false, "网络错误")
-        }
     }
     
     /**
      * 开始/获取私聊会话
      */
-    suspend fun startPrivateChat(userId: String, contactId: String): PrivateChatResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun startPrivateChat(userId: String, contactId: String): PrivateChatResponse = recoverApiCall(
+        logMessage = "获取私聊会话失败:",
+        fallback = { PrivateChatResponse(false, "网络错误") },
+    ) {
             val body = """{"userId":"$userId","contactId":"$contactId"}"""
             val response = post("/contacts/private-chat", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取私聊会话失败: $e")
-            PrivateChatResponse(false, "网络错误")
-        }
     }
     
     /**
      * 开始/获取与 Silk AI 的专属私聊会话
      */
-    suspend fun startSilkPrivateChat(userId: String): PrivateChatResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun startSilkPrivateChat(userId: String): PrivateChatResponse = recoverApiCall(
+        logMessage = "获取Silk私聊会话失败:",
+        fallback = { PrivateChatResponse(false, "网络错误") },
+    ) {
             val body = """{"userId":"$userId"}"""
             val response = post("/api/silk-private-chat", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取Silk私聊会话失败: $e")
-            PrivateChatResponse(false, "网络错误")
-        }
     }
     
     /**
      * 获取群组成员列表
      */
-    suspend fun getGroupMembers(groupId: String): GroupMembersResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun getGroupMembers(groupId: String): GroupMembersResponse = recoverApiCall(
+        logMessage = "获取群组成员失败:",
+        fallback = { GroupMembersResponse(false, emptyList()) },
+    ) {
             val response = get("/groups/$groupId/members")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取群组成员失败: $e")
-            GroupMembersResponse(false, emptyList())
-        }
     }
     
     /**
      * 添加成员到群组
      */
-    suspend fun addMemberToGroup(groupId: String, userId: String): AddMemberResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun addMemberToGroup(groupId: String, userId: String): AddMemberResponse = recoverApiCall(
+        logMessage = "添加成员失败:",
+        fallback = { AddMemberResponse(false, "网络错误") },
+    ) {
             val body = """{"userId":"$userId"}"""
             val response = post("/groups/$groupId/add-member", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("添加成员失败: $e")
-            AddMemberResponse(false, "网络错误")
-        }
     }
     
     /**
      * 退出群组
      */
-    suspend fun leaveGroup(groupId: String, userId: String): LeaveGroupResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun leaveGroup(groupId: String, userId: String): LeaveGroupResponse = recoverApiCall(
+        logMessage = "退出群组失败:",
+        fallback = { LeaveGroupResponse(false, "网络错误") },
+    ) {
             val body = """{"userId":"$userId"}"""
             val response = post("/groups/$groupId/leave", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("退出群组失败: $e")
-            LeaveGroupResponse(false, "网络错误")
-        }
     }
     
     // ==================== 用户设置相关 API ====================
@@ -530,61 +513,51 @@ object ApiClient {
     /**
      * 获取用户设置
      */
-    suspend fun getUserSettings(userId: String): UserSettingsResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun getUserSettings(userId: String): UserSettingsResponse = recoverApiCall(
+        logMessage = "获取用户设置失败:",
+        fallback = { UserSettingsResponse(false, "网络错误") },
+    ) {
             val response = get("/users/$userId/settings")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取用户设置失败: $e")
-            UserSettingsResponse(false, "网络错误")
-        }
     }
     
     /**
      * 更新用户设置
      */
-    suspend fun updateUserSettings(userId: String, language: Language, defaultAgentInstruction: String): UserSettingsResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun updateUserSettings(userId: String, language: Language, defaultAgentInstruction: String): UserSettingsResponse = recoverApiCall(
+        logMessage = "更新用户设置失败:",
+        fallback = { UserSettingsResponse(false, "网络错误") },
+    ) {
             val request = UpdateUserSettingsRequest(userId, language, defaultAgentInstruction)
             val body = jsonParser.encodeToString(UpdateUserSettingsRequest.serializer(), request)
             val response = put("/users/$userId/settings", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("更新用户设置失败: $e")
-            UserSettingsResponse(false, "网络错误")
-        }
     }
     
     // ==================== CC Bridge 相关 API ====================
 
-    suspend fun getCcSettings(userId: String): CcSettingsResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun getCcSettings(userId: String): CcSettingsResponse = recoverApiCall(
+        logMessage = "获取CC设置失败:",
+        fallback = { CcSettingsResponse(false, "网络错误") },
+    ) {
             val response = get("/users/$userId/cc-settings")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取CC设置失败: $e")
-            CcSettingsResponse(false, "网络错误")
-        }
     }
 
-    suspend fun generateBridgeToken(userId: String): CcSettingsResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun generateBridgeToken(userId: String): CcSettingsResponse = recoverApiCall(
+        logMessage = "生成Bridge Token失败:",
+        fallback = { CcSettingsResponse(false, "网络错误") },
+    ) {
             val response = post("/users/$userId/cc-settings/generate-token", "{}")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("生成Bridge Token失败: $e")
-            CcSettingsResponse(false, "网络错误")
-        }
     }
 
-    suspend fun getBridgeStatus(userId: String): CcSettingsResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun getBridgeStatus(userId: String): CcSettingsResponse = recoverApiCall(
+        logMessage = "获取Bridge状态失败:",
+        fallback = { CcSettingsResponse(false, "网络错误") },
+    ) {
             val response = get("/users/$userId/cc-settings/bridge-status")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取Bridge状态失败: $e")
-            CcSettingsResponse(false, "网络错误")
-        }
     }
 
     // ==================== cc-connect Token / Status API ====================
@@ -621,8 +594,10 @@ object ApiClient {
         userId: String,
         userName: String,
         content: String
-    ): Boolean = withContext(Dispatchers.IO) {
-        try {
+    ): Boolean = recoverApiCall(
+        logMessage = "❌ 发送消息失败:",
+        fallback = { false },
+    ) {
             // 对 content 进行 JSON 转义
             val escapedContent = content
                 .replace("\\", "\\\\")
@@ -633,10 +608,6 @@ object ApiClient {
             val body = """{"groupId":"$groupId","userId":"$userId","userName":"$userName","content":"$escapedContent"}"""
             val response = post("/api/messages/send", body)
             response.contains("\"success\":true") || response.contains("\"success\": true")
-        } catch (e: Exception) {
-            println("❌ 发送消息失败: ${e.message}")
-            false
-        }
     }
     
     // ==================== 消息撤回相关 API ====================
@@ -647,15 +618,13 @@ object ApiClient {
      * @param messageId 要撤回的消息ID
      * @param userId 当前用户ID
      */
-    suspend fun recallMessage(groupId: String, messageId: String, userId: String): SimpleResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun recallMessage(groupId: String, messageId: String, userId: String): SimpleResponse = recoverApiCall(
+        logMessage = "❌ 撤回消息失败:",
+        fallback = { SimpleResponse(false, "网络错误") },
+    ) {
             val body = """{"groupId":"$groupId","messageId":"$messageId","userId":"$userId"}"""
             val response = post("/api/messages/recall", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("❌ 撤回消息失败: ${e.message}")
-            SimpleResponse(false, "网络错误")
-        }
     }
     
     // ==================== 版本检查相关 API ====================
@@ -663,19 +632,19 @@ object ApiClient {
     /**
      * 获取云端最新版本信息
      */
-    suspend fun getAppVersion(): AppVersionInfo? = withContext(Dispatchers.IO) {
-        println("📡 [ApiClient] 正在请求版本信息: $baseUrl/api/files/app-version")
-        try {
-            val response = get("/api/files/app-version")
-            println("📡 [ApiClient] 版本信息响应: $response")
-            val versionInfo = jsonParser.decodeFromString<AppVersionInfo>(response)
-            println("📡 [ApiClient] 解析成功: versionCode=${versionInfo.versionCode}, versionName=${versionInfo.versionName}")
-            versionInfo
-        } catch (e: Exception) {
-            println("❌ [ApiClient] 获取版本信息失败: ${e.message}")
-            e.printStackTrace()
+    suspend fun getAppVersion(): AppVersionInfo? = recoverApiCall(
+        logMessage = "❌ [ApiClient] 获取版本信息失败:",
+        fallback = { error ->
+            error.printStackTrace()
             null
-        }
+        },
+    ) {
+        println("📡 [ApiClient] 正在请求版本信息: $baseUrl/api/files/app-version")
+        val response = get("/api/files/app-version")
+        println("📡 [ApiClient] 版本信息响应: $response")
+        val versionInfo = jsonParser.decodeFromString<AppVersionInfo>(response)
+        println("📡 [ApiClient] 解析成功: versionCode=${versionInfo.versionCode}, versionName=${versionInfo.versionName}")
+        versionInfo
     }
     
     /**
@@ -719,7 +688,7 @@ object ApiClient {
             connection.apply {
                 requestMethod = "POST"
                 doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+                applyAuthHeaders()
                 connectTimeout = 10000
                 readTimeout = 10000
             }
@@ -757,7 +726,7 @@ object ApiClient {
             connection.apply {
                 requestMethod = "PUT"
                 doOutput = true
-                setRequestProperty("Content-Type", "application/json")
+                applyAuthHeaders()
                 connectTimeout = 10000
                 readTimeout = 10000
             }
@@ -779,6 +748,7 @@ object ApiClient {
         return try {
             connection.apply {
                 requestMethod = "GET"
+                applyAuthHeaders()
                 connectTimeout = 10000
                 readTimeout = 10000
             }
@@ -795,6 +765,7 @@ object ApiClient {
         return try {
             connection.apply {
                 requestMethod = "DELETE"
+                applyAuthHeaders()
                 connectTimeout = 10000
                 readTimeout = 10000
             }
@@ -804,14 +775,12 @@ object ApiClient {
         }
     }
 
-    suspend fun getWorkflows(userId: String): List<WorkflowItem> = withContext(Dispatchers.IO) {
-        try {
+    suspend fun getWorkflows(userId: String): List<WorkflowItem> = recoverApiCall(
+        logMessage = "获取工作流失败:",
+        fallback = { emptyList() },
+    ) {
             val response = get("/api/workflows?userId=$userId")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取工作流失败: $e")
-            emptyList()
-        }
     }
 
     @Suppress("TooGenericExceptionCaught", "InstanceOfCheckForException")
@@ -837,61 +806,45 @@ object ApiClient {
                 }
             }.toString()
             val response = post("/api/workflows", body)
-            val obj = jsonParser.parseToJsonElement(response).jsonObject
-            if (obj["success"]?.jsonPrimitive?.booleanOrNull == false) {
-                val msg = obj["message"]?.jsonPrimitive?.contentOrNull ?: "未知错误"
-                CreateWorkflowResult.Err(msg)
-            } else {
-                CreateWorkflowResult.Ok(jsonParser.decodeFromString(response))
-            }
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            CreateWorkflowResult.Err(e.message ?: "网络错误")
-        }
+            parseCreateWorkflowResponse(jsonParser, response)
     }
 
-    suspend fun deleteWorkflow(workflowId: String, userId: String): Boolean = withContext(Dispatchers.IO) {
-        try {
+    suspend fun deleteWorkflow(workflowId: String, userId: String): Boolean = recoverApiCall(
+        logMessage = "删除工作流失败:",
+        fallback = { false },
+    ) {
             delete("/api/workflows/$workflowId?userId=$userId")
             true
-        } catch (e: Exception) {
-            println("删除工作流失败: $e")
-            false
-        }
     }
 
-    suspend fun renameWorkflow(workflowId: String, userId: String, newName: String): WorkflowItem? = withContext(Dispatchers.IO) {
-        try {
+    suspend fun renameWorkflow(workflowId: String, userId: String, newName: String): WorkflowItem? = recoverApiCall(
+        logMessage = "重命名工作流失败:",
+        fallback = { null },
+    ) {
             val body = buildJsonObject {
                 put("userId", JsonPrimitive(userId))
                 put("name", JsonPrimitive(newName))
             }.toString()
             val response = put("/api/workflows/$workflowId", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            println("重命名工作流失败: $e")
-            null
-        }
     }
 
-    suspend fun getCcState(userId: String, groupId: String): CcStateResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun getCcState(userId: String, groupId: String): CcStateResponse = recoverApiCall(
+        logMessage = "获取 CC 状态失败:",
+        fallback = { error -> CcStateResponse(success = false, error = error.message) },
+    ) {
             val response = get("/users/$userId/cc-state/$groupId")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            println("获取 CC 状态失败: $e")
-            CcStateResponse(success = false, error = e.message)
-        }
     }
 
     suspend fun listCcDir(
         userId: String,
         path: String? = null,
         showHidden: Boolean = false,
-    ): DirListingResponse = withContext(Dispatchers.IO) {
-        try {
+    ): DirListingResponse = recoverApiCall(
+        logMessage = "列目录失败:",
+        fallback = { error -> DirListingResponse(success = false, error = error.message) },
+    ) {
             val params = buildString {
                 append("?showHidden=$showHidden")
                 if (!path.isNullOrBlank()) {
@@ -900,26 +853,18 @@ object ApiClient {
             }
             val response = get("/users/$userId/cc-fs/list$params")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            println("列目录失败: $e")
-            DirListingResponse(success = false, error = e.message)
-        }
     }
 
-    suspend fun cdCcDir(userId: String, groupId: String, path: String): CcStateResponse = withContext(Dispatchers.IO) {
-        try {
+    suspend fun cdCcDir(userId: String, groupId: String, path: String): CcStateResponse = recoverApiCall(
+        logMessage = "切换目录失败:",
+        fallback = { error -> CcStateResponse(success = false, error = error.message) },
+    ) {
             val body = buildJsonObject {
                 put("groupId", JsonPrimitive(groupId))
                 put("path", JsonPrimitive(path))
             }.toString()
             val response = post("/users/$userId/cc-fs/cd", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            println("切换目录失败: $e")
-            CcStateResponse(success = false, error = e.message)
-        }
     }
 
     /** 列出可用的 agent 选项。 */
@@ -974,37 +919,28 @@ object ApiClient {
                 trusted -> TrustCheckResult.Trusted(bridgeId)
                 else -> TrustCheckResult.NotTrusted(bridgeId)
             }
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            TrustCheckResult.Error(e.message ?: "网络错误")
-        }
     }
 
-    suspend fun addTrustedDir(userId: String, path: String): Boolean = withContext(Dispatchers.IO) {
-        try {
+    suspend fun addTrustedDir(userId: String, path: String): Boolean = recoverApiCall(
+        logMessage = "添加信任目录失败:",
+        fallback = { false },
+    ) {
             val body = buildJsonObject {
                 put("path", JsonPrimitive(path))
             }.toString()
             val response = post("/users/$userId/trusted-dirs", body)
             val obj = jsonParser.parseToJsonElement(response).jsonObject
             obj["success"]?.jsonPrimitive?.booleanOrNull ?: false
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            println("添加信任目录失败: $e")
-            false
-        }
     }
 
     // ==================== Knowledge Base API ====================
 
-    suspend fun getKBTopics(userId: String): List<KBTopicItem> = withContext(Dispatchers.IO) {
-        try {
+    suspend fun getKBTopics(userId: String): List<KBTopicItem> = recoverApiCall(
+        logMessage = "获取知识库主题失败:",
+        fallback = { emptyList() },
+    ) {
             val response = get("/api/kb/topics?userId=$userId")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取知识库主题失败: $e")
-            emptyList()
-        }
     }
 
     suspend fun createKBTopic(
@@ -1031,26 +967,22 @@ object ApiClient {
         }
     }
 
-    suspend fun getKBEntries(topicId: String, userId: String): List<KBEntryItem> = withContext(Dispatchers.IO) {
-        try {
+    suspend fun getKBEntries(topicId: String, userId: String): List<KBEntryItem> = recoverApiCall(
+        logMessage = "获取知识库条目失败:",
+        fallback = { emptyList() },
+    ) {
             val response = get("/api/kb/entries?topicId=$topicId&userId=$userId")
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("获取知识库条目失败: $e")
-            emptyList()
-        }
     }
 
-    suspend fun createKBEntry(topicId: String, title: String, content: String, tags: List<String>, userId: String): KBEntryItem? = withContext(Dispatchers.IO) {
-        try {
+    suspend fun createKBEntry(topicId: String, title: String, content: String, tags: List<String>, userId: String): KBEntryItem? = recoverApiCall(
+        logMessage = "创建知识库条目失败:",
+        fallback = { null },
+    ) {
             val tagsJson = tags.joinToString(",") { "\"$it\"" }
             val body = """{"userId":"$userId","topicId":"$topicId","title":"$title","content":"$content","tags":[$tagsJson]}"""
             val response = post("/api/kb/entries", body)
             jsonParser.decodeFromString(response)
-        } catch (e: Exception) {
-            println("创建知识库条目失败: $e")
-            null
-        }
     }
 
     suspend fun updateKBEntry(entryId: String, title: String?, content: String?, tags: List<String>?, userId: String, status: KBEntryStatus? = null): KBEntryItem? = withContext(Dispatchers.IO) {
@@ -1128,10 +1060,8 @@ object ApiClient {
             val error = json["error"]?.jsonPrimitive?.contentOrNull
             AsrResult(success, text, error)
         } catch (e: java.net.ConnectException) {
+            println("语音识别服务不可用: $e")
             AsrResult(false, "", "语音识别服务不可用，请确认 vLLM ASR 已启动")
-        } catch (e: Exception) {
-            println("语音识别请求失败: $e")
-            AsrResult(false, "", "语音识别失败: ${e.message}")
         }
     }
 }

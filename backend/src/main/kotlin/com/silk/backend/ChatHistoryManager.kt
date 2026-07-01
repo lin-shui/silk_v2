@@ -9,6 +9,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.concurrent.ConcurrentHashMap
@@ -86,7 +87,9 @@ class ChatHistoryManager(
         try {
             Files.copy(file.toPath(), backupFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
             logger.warn("⚠️ 已备份损坏文件: {} -> {} (原因: {})", file.name, backupFile.name, reason)
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            logger.error("❌ 备份损坏文件失败: {}", e.message)
+        } catch (e: SecurityException) {
             logger.error("❌ 备份损坏文件失败: {}", e.message)
         }
     }
@@ -102,7 +105,10 @@ class ChatHistoryManager(
             tempFile.writeText(content)
             // 原子重命名
             Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            if (tempFile.exists()) tempFile.delete()
+            throw e
+        } catch (e: SecurityException) {
             // 清理临时文件
             if (tempFile.exists()) tempFile.delete()
             throw e
@@ -202,9 +208,21 @@ class ChatHistoryManager(
                     return null
                 }
                 json.decodeFromString<SessionData>(content)
-            } catch (e: Exception) {
+            } catch (e: SerializationException) {
                 logger.error("❌ 加载会话数据失败: {}", e.message)
                 backupCorruptedFile(sessionFile, e.message ?: "JSON解析错误")
+                null
+            } catch (e: IllegalArgumentException) {
+                logger.error("❌ 加载会话数据失败: {}", e.message)
+                backupCorruptedFile(sessionFile, e.message ?: "JSON解析错误")
+                null
+            } catch (e: IOException) {
+                logger.error("❌ 加载会话数据失败: {}", e.message)
+                backupCorruptedFile(sessionFile, e.message ?: "I/O错误")
+                null
+            } catch (e: SecurityException) {
+                logger.error("❌ 加载会话数据失败: {}", e.message)
+                backupCorruptedFile(sessionFile, e.message ?: "权限错误")
                 null
             }
         } else {
@@ -223,7 +241,9 @@ class ChatHistoryManager(
         try {
             atomicWrite(sessionFile, json.encodeToString(sessionData))
             logger.debug("💾 会话数据已保存: {}", sessionName)
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            logger.error("❌ 保存会话数据失败: {}", e.message)
+        } catch (e: SecurityException) {
             logger.error("❌ 保存会话数据失败: {}", e.message)
         }
     }
@@ -249,9 +269,21 @@ class ChatHistoryManager(
                     return ChatHistory(sessionId = history.sessionId, messages = mutableListOf())
                 }
                 history
-            } catch (e: Exception) {
+            } catch (e: SerializationException) {
                 logger.error("❌ 加载聊天历史失败: {}", e.message)
                 backupCorruptedFile(historyFile, e.message ?: "JSON解析错误")
+                null
+            } catch (e: IllegalArgumentException) {
+                logger.error("❌ 加载聊天历史失败: {}", e.message)
+                backupCorruptedFile(historyFile, e.message ?: "JSON解析错误")
+                null
+            } catch (e: IOException) {
+                logger.error("❌ 加载聊天历史失败: {}", e.message)
+                backupCorruptedFile(historyFile, e.message ?: "I/O错误")
+                null
+            } catch (e: SecurityException) {
+                logger.error("❌ 加载聊天历史失败: {}", e.message)
+                backupCorruptedFile(historyFile, e.message ?: "权限错误")
                 null
             }
         } else {
@@ -270,7 +302,9 @@ class ChatHistoryManager(
         try {
             atomicWrite(historyFile, json.encodeToString(chatHistory))
             logger.debug("💾 聊天历史已保存: {} ({} 条消息)", sessionName, chatHistory.messages.size)
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            logger.error("❌ 保存聊天历史失败: {}", e.message)
+        } catch (e: SecurityException) {
             logger.error("❌ 保存聊天历史失败: {}", e.message)
         }
     }
@@ -550,6 +584,54 @@ class ChatHistoryManager(
         
         logger.debug("🔍 查找AI回复: 用户消息 {} -> 找到 {} 条AI回复", userMessageId, agentReplies.size)
         return agentReplies
+    }
+
+    private fun collectContiguousAgentReplies(
+        messages: List<ChatHistoryEntry>,
+        userMessageIndex: Int,
+        userSenderId: String,
+        isAgent: (String) -> Boolean,
+    ): List<String> {
+        return messages.asSequence()
+            .drop(userMessageIndex + 1)
+            .mapIndexed { offset, message -> offset to message }
+            .takeWhile { (offset, message) ->
+                shouldContinueAgentReplyScan(
+                    message = message,
+                    userSenderId = userSenderId,
+                    isAgent = isAgent,
+                ) && isReplyWithinAgentWindow(
+                    messages = messages,
+                    userMessageIndex = userMessageIndex,
+                    offset = offset,
+                    message = message,
+                    isAgent = isAgent,
+                )
+            }
+            .mapNotNull { (_, message) ->
+                message.takeIf { isAgent(it.senderId) }?.messageId
+            }
+            .toList()
+    }
+
+    private fun shouldContinueAgentReplyScan(
+        message: ChatHistoryEntry,
+        userSenderId: String,
+        isAgent: (String) -> Boolean,
+    ): Boolean {
+        return isAgent(message.senderId) || message.senderId == userSenderId
+    }
+
+    private fun isReplyWithinAgentWindow(
+        messages: List<ChatHistoryEntry>,
+        userMessageIndex: Int,
+        offset: Int,
+        message: ChatHistoryEntry,
+        isAgent: (String) -> Boolean,
+    ): Boolean {
+        if (!isAgent(message.senderId)) return true
+        val previousMessage = messages[userMessageIndex + offset]
+        return message.timestamp - previousMessage.timestamp < 5 * 60 * 1000
     }
     
     /**

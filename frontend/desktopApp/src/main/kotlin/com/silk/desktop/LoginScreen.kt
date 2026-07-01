@@ -54,6 +54,14 @@ fun LoginScreen(appState: AppState) {
     var isLoading by remember { mutableStateOf(false) }
     
     val scope = rememberCoroutineScope()
+    val canSubmit = canSubmitAuthForm(
+        isLogin = isLogin,
+        loginName = loginName,
+        password = password,
+        fullName = fullName,
+        phoneNumber = phoneNumber,
+        isLoading = isLoading
+    )
     
     Scaffold(
         topBar = {
@@ -78,133 +86,247 @@ fun LoginScreen(appState: AppState) {
                     .padding(16.dp),
                 elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    // 标题
-                    Text(
-                        text = if (isLogin) "登录" else "注册",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    
-                    // 登录名
-                    OutlinedTextField(
-                        value = loginName,
-                        onValueChange = { loginName = it; errorMessage = "" },
-                        label = { Text("登录名") },
-                        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        enabled = !isLoading
-                    )
-                    
-                    // 密码
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it; errorMessage = "" },
-                        label = { Text("密码") },
-                        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        enabled = !isLoading
-                    )
-                    
-                    // 注册时的额外字段
-                    if (!isLogin) {
-                        OutlinedTextField(
-                            value = fullName,
-                            onValueChange = { fullName = it; errorMessage = "" },
-                            label = { Text("姓名") },
-                            leadingIcon = { Icon(Icons.Default.AccountCircle, contentDescription = null) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            enabled = !isLoading
-                        )
-                        
-                        OutlinedTextField(
-                            value = phoneNumber,
-                            onValueChange = { phoneNumber = it; errorMessage = "" },
-                            label = { Text("手机号") },
-                            leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            enabled = !isLoading
-                        )
-                    }
-                    
-                    // 错误消息
-                    if (errorMessage.isNotEmpty()) {
-                        Text(
-                            text = errorMessage,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    
-                    // 登录/注册按钮
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                isLoading = true
-                                errorMessage = ""
-                                
-                                try {
-                                    val response = withContext(Dispatchers.IO) {
-                                        if (isLogin) {
-                                            ApiClient.login(loginName, password)
-                                        } else {
-                                            ApiClient.register(loginName, fullName, phoneNumber, password)
-                                        }
-                                    }
-                                    
-                                    if (response.success && response.user != null) {
-                                        println("✅ ${if (isLogin) "登录" else "注册"}成功: ${response.user.fullName}")
-                                        appState.setUser(response.user)
-                                    } else {
-                                        errorMessage = response.message
-                                    }
-                                } catch (e: Exception) {
-                                    errorMessage = "操作失败: ${e.message}"
-                                    println("❌ 操作异常: ${e.message}")
-                                    e.printStackTrace()
-                                } finally {
-                                    isLoading = false
-                                }
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !isLoading && loginName.isNotBlank() && password.isNotBlank() &&
-                                (isLogin || (fullName.isNotBlank() && phoneNumber.isNotBlank()))
-                    ) {
-                        if (isLoading) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                color = MaterialTheme.colorScheme.onPrimary
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                        }
-                        Text(if (isLogin) "登录" else "注册")
-                    }
-                    
-                    // 切换登录/注册
-                    TextButton(
-                        onClick = { 
-                            isLogin = !isLogin
+                LoginCardContent(
+                    isLogin = isLogin,
+                    loginName = loginName,
+                    password = password,
+                    fullName = fullName,
+                    phoneNumber = phoneNumber,
+                    errorMessage = errorMessage,
+                    isLoading = isLoading,
+                    canSubmit = canSubmit,
+                    onLoginNameChange = {
+                        loginName = it
+                        errorMessage = ""
+                    },
+                    onPasswordChange = {
+                        password = it
+                        errorMessage = ""
+                    },
+                    onFullNameChange = {
+                        fullName = it
+                        errorMessage = ""
+                    },
+                    onPhoneNumberChange = {
+                        phoneNumber = it
+                        errorMessage = ""
+                    },
+                    onSubmit = {
+                        scope.launch {
+                            isLoading = true
                             errorMessage = ""
-                        },
-                        enabled = !isLoading
-                    ) {
-                        Text(
-                            if (isLogin) "没有账号？点击注册" else "已有账号？点击登录"
-                        )
+                            val response = submitDesktopAuth(
+                                isLogin = isLogin,
+                                loginName = loginName,
+                                password = password,
+                                fullName = fullName,
+                                phoneNumber = phoneNumber
+                            )
+
+                            if (response.success && response.user != null) {
+                                println("✅ ${authActionLabel(isLogin)}成功: ${response.user.fullName}")
+                                appState.setUser(response.user)
+                            } else {
+                                errorMessage = response.message
+                            }
+                            isLoading = false
+                        }
+                    },
+                    onToggleMode = {
+                        isLogin = !isLogin
+                        errorMessage = ""
                     }
-                }
+                )
             }
         }
     }
 }
 
+@Composable
+private fun LoginCardContent(
+    isLogin: Boolean,
+    loginName: String,
+    password: String,
+    fullName: String,
+    phoneNumber: String,
+    errorMessage: String,
+    isLoading: Boolean,
+    canSubmit: Boolean,
+    onLoginNameChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onFullNameChange: (String) -> Unit,
+    onPhoneNumberChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onToggleMode: () -> Unit
+) {
+    Column(
+        modifier = Modifier.padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = authActionLabel(isLogin),
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary
+        )
+
+        CredentialFields(
+            loginName = loginName,
+            password = password,
+            isLoading = isLoading,
+            onLoginNameChange = onLoginNameChange,
+            onPasswordChange = onPasswordChange
+        )
+
+        if (!isLogin) {
+            RegistrationFields(
+                fullName = fullName,
+                phoneNumber = phoneNumber,
+                isLoading = isLoading,
+                onFullNameChange = onFullNameChange,
+                onPhoneNumberChange = onPhoneNumberChange
+            )
+        }
+
+        if (errorMessage.isNotEmpty()) {
+            Text(
+                text = errorMessage,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        AuthSubmitButton(
+            isLogin = isLogin,
+            isLoading = isLoading,
+            enabled = canSubmit,
+            onClick = onSubmit
+        )
+
+        TextButton(
+            onClick = onToggleMode,
+            enabled = !isLoading
+        ) {
+            Text(toggleAuthModeLabel(isLogin))
+        }
+    }
+}
+
+@Composable
+private fun CredentialFields(
+    loginName: String,
+    password: String,
+    isLoading: Boolean,
+    onLoginNameChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = loginName,
+        onValueChange = onLoginNameChange,
+        label = { Text("登录名") },
+        leadingIcon = { Icon(Icons.Default.Person, contentDescription = null) },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        enabled = !isLoading
+    )
+
+    OutlinedTextField(
+        value = password,
+        onValueChange = onPasswordChange,
+        label = { Text("密码") },
+        leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
+        visualTransformation = PasswordVisualTransformation(),
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        enabled = !isLoading
+    )
+}
+
+@Composable
+private fun RegistrationFields(
+    fullName: String,
+    phoneNumber: String,
+    isLoading: Boolean,
+    onFullNameChange: (String) -> Unit,
+    onPhoneNumberChange: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = fullName,
+        onValueChange = onFullNameChange,
+        label = { Text("姓名") },
+        leadingIcon = { Icon(Icons.Default.AccountCircle, contentDescription = null) },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        enabled = !isLoading
+    )
+
+    OutlinedTextField(
+        value = phoneNumber,
+        onValueChange = onPhoneNumberChange,
+        label = { Text("手机号") },
+        leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null) },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        enabled = !isLoading
+    )
+}
+
+@Composable
+private fun AuthSubmitButton(
+    isLogin: Boolean,
+    isLoading: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        enabled = enabled
+    ) {
+        if (isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                color = MaterialTheme.colorScheme.onPrimary
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+        Text(authActionLabel(isLogin))
+    }
+}
+
+private fun canSubmitAuthForm(
+    isLogin: Boolean,
+    loginName: String,
+    password: String,
+    fullName: String,
+    phoneNumber: String,
+    isLoading: Boolean
+): Boolean {
+    if (isLoading || loginName.isBlank() || password.isBlank()) {
+        return false
+    }
+
+    return isLogin || (fullName.isNotBlank() && phoneNumber.isNotBlank())
+}
+
+private suspend fun submitDesktopAuth(
+    isLogin: Boolean,
+    loginName: String,
+    password: String,
+    fullName: String,
+    phoneNumber: String
+): AuthResponse = withContext(Dispatchers.IO) {
+    if (isLogin) {
+        ApiClient.login(loginName, password)
+    } else {
+        ApiClient.register(loginName, fullName, phoneNumber, password)
+    }
+}
+
+private fun authActionLabel(isLogin: Boolean): String {
+    return if (isLogin) "登录" else "注册"
+}
+
+private fun toggleAuthModeLabel(isLogin: Boolean): String {
+    return if (isLogin) "没有账号？点击注册" else "已有账号？点击登录"
+}

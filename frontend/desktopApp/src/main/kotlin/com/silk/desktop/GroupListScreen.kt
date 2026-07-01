@@ -70,155 +70,213 @@ fun GroupListScreen(appState: AppState) {
     // Language and strings
     var userLanguage by remember { mutableStateOf<Language>(Language.CHINESE) }
     
-    // Load user language preference
     LaunchedEffect(appState.currentUser?.id) {
-        appState.currentUser?.let { user ->
-            scope.launch {
-                try {
-                    val response = withContext(Dispatchers.IO) {
-                        ApiClient.getUserSettings(user.id)
-                    }
-                    val settings = response.settings
-                    if (response.success && settings != null) {
-                        userLanguage = settings.language
-                    }
-                } catch (e: Exception) {
-                    println("Failed to load user settings: $e")
-                }
-            }
-        }
+        userLanguage = loadGroupListLanguage(appState.currentUser?.id)
     }
     
     val strings = getStrings(userLanguage)
     
-    // 加载群组列表（每次进入 GROUP_LIST 场景时刷新）
     LaunchedEffect(appState.currentScene) {
-        if (appState.currentScene == com.silk.desktop.Scene.GROUP_LIST) {
-            scope.launch {
-                isLoading = true
-                try {
-                    val response = withContext(Dispatchers.IO) {
-                        appState.currentUser?.let { user ->
-                            ApiClient.getUserGroups(user.id)
-                        }
-                    }
-                    
-                    if (response != null && response.success) {
-                        groups = response.groups ?: emptyList()
-                        println("✅ 加载了 ${groups.size} 个群组")
-                    } else {
-                        println("❌ 加载群组失败: ${response?.message}")
-                    }
-                } catch (e: Exception) {
-                    println("❌ 加载群组异常: ${e.message}")
-                } finally {
-                    isLoading = false
-                }
-            }
+        if (appState.currentScene != Scene.GROUP_LIST) {
+            return@LaunchedEffect
+        }
+
+        scope.launch {
+            isLoading = true
+            val result = loadGroupListData(appState.currentUser)
+            groups = result.groups
+            isLoading = false
         }
     }
     
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { 
-                    Column {
-                        Text("群组列表")
-                        Text(
-                            text = appState.currentUser?.fullName ?: "",
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                },
-                actions = {
-                    // 设置按钮
-                    IconButton(onClick = { appState.navigateTo(Scene.SETTINGS) }) {
-                        Icon(Icons.Default.Settings, contentDescription = "设置")
-                    }
-                    // 登出按钮
-                    IconButton(onClick = { appState.logout() }) {
-                        Icon(Icons.Default.ExitToApp, contentDescription = "登出")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary
-                )
+            GroupListTopBar(
+                currentUserName = appState.currentUser?.fullName.orEmpty(),
+                onOpenSettings = { appState.navigateTo(Scene.SETTINGS) },
+                onLogout = { appState.logout() }
             )
         },
         floatingActionButton = {
-            // 创建群组按钮
-            FloatingActionButton(
-                onClick = { showCreateDialog = true }
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "创建群组")
-            }
+            CreateGroupFab(onClick = { showCreateDialog = true })
         }
     ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            when {
-                isLoading -> {
-                    // 加载中
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-                groups.isEmpty() -> {
-                    // 空状态
-                    EmptyGroupState(
-                        onCreateClick = { showCreateDialog = true },
-                        onJoinClick = { showJoinDialog = true }
-                    )
-                }
-                else -> {
-                    // 群组列表
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(groups) { group ->
-                            GroupCard(
-                                group = group,
-                                isHost = group.hostId == appState.currentUser?.id,
-                                onClick = { appState.selectGroup(group) }
-                            )
-                        }
-                    }
-                }
+        GroupListContent(
+            padding = padding,
+            groups = groups,
+            isLoading = isLoading,
+            currentUserId = appState.currentUser?.id,
+            onCreateClick = { showCreateDialog = true },
+            onJoinClick = { showJoinDialog = true },
+            onSelectGroup = { appState.selectGroup(it) }
+        )
+    }
+
+    GroupListDialogs(
+        appState = appState,
+        strings = strings,
+        showCreateDialog = showCreateDialog,
+        showJoinDialog = showJoinDialog,
+        onDismissCreate = { showCreateDialog = false },
+        onDismissJoin = { showJoinDialog = false },
+        onGroupCreated = { newGroup ->
+            groups = groups + newGroup
+            showCreateDialog = false
+        },
+        onGroupJoined = { newGroup ->
+            groups = groups + newGroup
+            showJoinDialog = false
+        }
+    )
+}
+
+private data class GroupListLoadResult(
+    val groups: List<Group>
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GroupListTopBar(
+    currentUserName: String,
+    onOpenSettings: () -> Unit,
+    onLogout: () -> Unit
+) {
+    TopAppBar(
+        title = {
+            Column {
+                Text("群组列表")
+                Text(
+                    text = currentUserName,
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
+        },
+        actions = {
+            IconButton(onClick = onOpenSettings) {
+                Icon(Icons.Default.Settings, contentDescription = "设置")
+            }
+            IconButton(onClick = onLogout) {
+                Icon(Icons.Default.ExitToApp, contentDescription = "登出")
+            }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            titleContentColor = MaterialTheme.colorScheme.onPrimary,
+            actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+        )
+    )
+}
+
+@Composable
+private fun CreateGroupFab(onClick: () -> Unit) {
+    FloatingActionButton(onClick = onClick) {
+        Icon(Icons.Default.Add, contentDescription = "创建群组")
+    }
+}
+
+@Composable
+private fun GroupListContent(
+    padding: PaddingValues,
+    groups: List<Group>,
+    isLoading: Boolean,
+    currentUserId: String?,
+    onCreateClick: () -> Unit,
+    onJoinClick: () -> Unit,
+    onSelectGroup: (Group) -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+    ) {
+        when {
+            isLoading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+            groups.isEmpty() -> EmptyGroupState(
+                onCreateClick = onCreateClick,
+                onJoinClick = onJoinClick
+            )
+            else -> GroupList(groups, currentUserId, onSelectGroup)
         }
     }
-    
-    // 创建群组对话框
+}
+
+@Composable
+private fun GroupList(
+    groups: List<Group>,
+    currentUserId: String?,
+    onSelectGroup: (Group) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(groups) { group ->
+            GroupCard(
+                group = group,
+                isHost = group.hostId == currentUserId,
+                onClick = { onSelectGroup(group) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun GroupListDialogs(
+    appState: AppState,
+    strings: Strings,
+    showCreateDialog: Boolean,
+    showJoinDialog: Boolean,
+    onDismissCreate: () -> Unit,
+    onDismissJoin: () -> Unit,
+    onGroupCreated: (Group) -> Unit,
+    onGroupJoined: (Group) -> Unit
+) {
     if (showCreateDialog) {
         CreateGroupDialog(
             appState = appState,
             strings = strings,
-            onDismiss = { showCreateDialog = false },
-            onGroupCreated = { newGroup ->
-                groups = groups + newGroup
-                showCreateDialog = false
-            }
+            onDismiss = onDismissCreate,
+            onGroupCreated = onGroupCreated
         )
     }
-    
-    // 加入群组对话框
+
     if (showJoinDialog) {
         JoinGroupDialog(
             appState = appState,
             strings = strings,
-            onDismiss = { showJoinDialog = false },
-            onGroupJoined = { newGroup ->
-                groups = groups + newGroup
-                showJoinDialog = false
-            }
+            onDismiss = onDismissJoin,
+            onGroupJoined = onGroupJoined
         )
+    }
+}
+
+private suspend fun loadGroupListLanguage(userId: String?): Language {
+    if (userId == null) {
+        return Language.CHINESE
+    }
+
+    val response = withContext(Dispatchers.IO) {
+        ApiClient.getUserSettings(userId)
+    }
+    val settings = response.settings
+    return if (response.success && settings != null) settings.language else Language.CHINESE
+}
+
+private suspend fun loadGroupListData(currentUser: User?): GroupListLoadResult {
+    val response = withContext(Dispatchers.IO) {
+        currentUser?.let { user ->
+            ApiClient.getUserGroups(user.id)
+        }
+    }
+
+    return if (response != null && response.success) {
+        val groups = response.groups.orEmpty()
+        println("✅ 加载了 ${groups.size} 个群组")
+        GroupListLoadResult(groups = groups)
+    } else {
+        println("❌ 加载群组失败: ${response?.message}")
+        GroupListLoadResult(groups = emptyList())
     }
 }
 
@@ -389,26 +447,20 @@ fun CreateGroupDialog(
                     scope.launch {
                         isLoading = true
                         errorMessage = ""
-                        
-                        try {
-                            val response = withContext(Dispatchers.IO) {
-                                appState.currentUser?.let { user ->
-                                    ApiClient.createGroup(user.id, groupName)
-                                }
+
+                        val response = withContext(Dispatchers.IO) {
+                            appState.currentUser?.let { user ->
+                                ApiClient.createGroup(user.id, groupName)
                             }
-                            
-                            if (response != null && response.success && response.group != null) {
-                                println("✅ 群组创建成功: ${response.group.name}")
-                                onGroupCreated(response.group)
-                            } else {
-                                errorMessage = response?.message ?: "创建失败"
-                            }
-                        } catch (e: Exception) {
-                            errorMessage = "创建失败: ${e.message}"
-                            println("❌ 创建群组异常: ${e.message}")
-                        } finally {
-                            isLoading = false
                         }
+
+                        if (response != null && response.success && response.group != null) {
+                            println("✅ 群组创建成功: ${response.group.name}")
+                            onGroupCreated(response.group)
+                        } else {
+                            errorMessage = response?.message ?: "创建失败"
+                        }
+                        isLoading = false
                     }
                 },
                 enabled = !isLoading && groupName.isNotBlank()
@@ -479,26 +531,20 @@ fun JoinGroupDialog(
                     scope.launch {
                         isLoading = true
                         errorMessage = ""
-                        
-                        try {
-                            val response = withContext(Dispatchers.IO) {
-                                appState.currentUser?.let { user ->
-                                    ApiClient.joinGroup(user.id, invitationCode)
-                                }
+
+                        val response = withContext(Dispatchers.IO) {
+                            appState.currentUser?.let { user ->
+                                ApiClient.joinGroup(user.id, invitationCode)
                             }
-                            
-                            if (response != null && response.success && response.group != null) {
-                                println("✅ 加入群组成功: ${response.group.name}")
-                                onGroupJoined(response.group)
-                            } else {
-                                errorMessage = response?.message ?: "加入失败"
-                            }
-                        } catch (e: Exception) {
-                            errorMessage = "加入失败: ${e.message}"
-                            println("❌ 加入群组异常: ${e.message}")
-                        } finally {
-                            isLoading = false
                         }
+
+                        if (response != null && response.success && response.group != null) {
+                            println("✅ 加入群组成功: ${response.group.name}")
+                            onGroupJoined(response.group)
+                        } else {
+                            errorMessage = response?.message ?: "加入失败"
+                        }
+                        isLoading = false
                     }
                 },
                 enabled = !isLoading && invitationCode.length == 6

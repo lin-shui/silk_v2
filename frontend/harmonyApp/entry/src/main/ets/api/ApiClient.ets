@@ -160,6 +160,11 @@ export interface KBTopicApiItem {
   name: string;
   project: string;
   ownerId: string;
+  spaceType?: 'PERSONAL' | 'TEAM';
+  groupId?: string;
+  accessPolicy?: KBAccessPolicy;
+  createdBy?: string;
+  updatedBy?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -171,8 +176,28 @@ export interface KBEntryApiItem {
   content: string;
   tags: string[];
   ownerId: string;
+  status?: 'CANDIDATE' | 'PUBLISHED' | 'ARCHIVED' | 'DELETED';
+  source?: KBEntrySource;
+  createdBy?: string;
+  updatedBy?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface KBAccessPolicy {
+  readUserIds?: string[];
+  writeUserIds?: string[];
+  manageUserIds?: string[];
+  writeLocked?: boolean;
+  teamMembersCanWrite?: boolean;
+}
+
+export interface KBEntrySource {
+  sourceType?: 'MANUAL' | 'CHAT' | 'AI_RESPONSE' | 'WORKFLOW' | 'MEETING' | 'FILE' | 'URL';
+  sourceGroupId?: string;
+  workflowId?: string;
+  messageIds?: string[];
+  confidence?: number;
 }
 
 // ==================== CC/Bridge workflow interfaces ====================
@@ -396,12 +421,17 @@ interface ResponseEnvelope {
 export class ApiClient {
   private baseUrl: string = API_BASE_URL;
   private timeout: number = API_TIMEOUT;
+  private authToken: string = '';
 
   /**
    * 设置基础 URL
    */
   setBaseUrl(url: string): void {
     this.baseUrl = url;
+  }
+
+  setAuthToken(token?: string): void {
+    this.authToken = token ? token.trim() : '';
   }
 
   /**
@@ -468,9 +498,7 @@ export class ApiClient {
     try {
       const opts: http.HttpRequestOptions = {
         method: http.RequestMethod.GET,
-        header: {
-          'Content-Type': 'application/json'
-        },
+        header: this.buildJsonHeaders(),
         connectTimeout: this.timeout,
         readTimeout: this.timeout
       };
@@ -500,9 +528,7 @@ export class ApiClient {
     try {
       const opts: http.HttpRequestOptions = {
         method: http.RequestMethod.POST,
-        header: {
-          'Content-Type': 'application/json'
-        },
+        header: this.buildJsonHeaders(),
         extraData: body,
         connectTimeout: this.timeout,
         readTimeout: this.timeout
@@ -530,9 +556,7 @@ export class ApiClient {
     try {
       const opts: http.HttpRequestOptions = {
         method: http.RequestMethod.PUT,
-        header: {
-          'Content-Type': 'application/json'
-        },
+        header: this.buildJsonHeaders(),
         extraData: body,
         connectTimeout: this.timeout,
         readTimeout: this.timeout
@@ -792,7 +816,7 @@ export class ApiClient {
   private async getRaw(endpoint: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.GET, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.GET, header: this.buildJsonHeaders(), connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts
@@ -806,7 +830,7 @@ export class ApiClient {
   private async postRaw(endpoint: string, body: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.POST, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.POST, header: this.buildJsonHeaders(), extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts
@@ -820,7 +844,7 @@ export class ApiClient {
   private async putRaw(endpoint: string, body: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.PUT, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.PUT, header: this.buildJsonHeaders(), extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts
@@ -834,7 +858,7 @@ export class ApiClient {
   private async deleteRaw(endpoint: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.DELETE, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.DELETE, header: this.buildJsonHeaders(), connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts
@@ -852,6 +876,16 @@ export class ApiClient {
    */
   async getGroups(userId: string): Promise<ApiResponse<Group[]>> {
     return this.get<Group[]>(`/groups/user/${userId}`);
+  }
+
+  private buildJsonHeaders(): Object {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+    if (this.authToken.length > 0) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+    return headers;
   }
 
   /**
@@ -1498,9 +1532,15 @@ export class ApiClient {
     } catch (_) { return []; }
   }
 
-  async createKBTopic(name: string, project: string, userId: string): Promise<KBTopicApiItem | undefined> {
+  async createKBTopic(
+    name: string,
+    project: string,
+    userId: string,
+    spaceType: 'PERSONAL' | 'TEAM' = 'PERSONAL',
+    groupId?: string
+  ): Promise<KBTopicApiItem | undefined> {
     try {
-      const body = JSON.stringify({ userId, name, project });
+      const body = JSON.stringify({ userId, name, project, spaceType, groupId });
       const result = await this.postRaw('/api/kb/topics', body);
       return JSON.parse(result) as KBTopicApiItem;
     } catch (_) { return undefined; }
@@ -1519,21 +1559,32 @@ export class ApiClient {
     return JSON.parse(result) as KBEntryApiItem;
   }
 
-  async updateKBEntry(entryId: string, title: string | undefined, content: string | undefined, tags: string[] | undefined, userId: string): Promise<KBEntryApiItem | undefined> {
+  async captureKBEntry(
+    topicId: string,
+    title: string,
+    content: string,
+    tags: string[],
+    userId: string,
+    source: KBEntrySource,
+    status?: 'CANDIDATE' | 'PUBLISHED' | 'ARCHIVED' | 'DELETED'
+  ): Promise<KBEntryApiItem | undefined> {
     try {
-      const parts: string[] = [`"userId":"${userId}"`];
-      if (title !== undefined) {
-        parts.push(`"title":"${title.replace(/"/g, '\\"')}"`);
-      }
-      if (content !== undefined) {
-        const escaped = content.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-        parts.push(`"content":"${escaped}"`);
-      }
-      if (tags !== undefined) {
-        const tagsJson = tags.map((t: string) => `"${t}"`).join(',');
-        parts.push(`"tags":[${tagsJson}]`);
-      }
-      const body = `{${parts.join(',')}}`;
+      const body = JSON.stringify({ userId, topicId, title, content, tags, source, status });
+      const result = await this.postRaw('/api/kb/captures', body);
+      return JSON.parse(result) as KBEntryApiItem;
+    } catch (_) { return undefined; }
+  }
+
+  async updateKBEntry(
+    entryId: string,
+    title: string | undefined,
+    content: string | undefined,
+    tags: string[] | undefined,
+    userId: string,
+    status?: 'CANDIDATE' | 'PUBLISHED' | 'ARCHIVED' | 'DELETED'
+  ): Promise<KBEntryApiItem | undefined> {
+    try {
+      const body = JSON.stringify({ userId, title, content, tags, status });
       const result = await this.putRaw(`/api/kb/entries/${entryId}`, body);
       return JSON.parse(result) as KBEntryApiItem;
     } catch (_) { return undefined; }

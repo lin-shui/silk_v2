@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -69,20 +68,19 @@ import kotlinx.coroutines.launch
 @Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Suppress("CyclomaticComplexMethod")
 fun SettingsScreen(appState: AppState) {
     val scope = rememberCoroutineScope()
     val user = appState.currentUser ?: return
-    
+
     var settings by remember { mutableStateOf<UserSettings?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var isSaving by remember { mutableStateOf(false) }
     var saveMessage by remember { mutableStateOf<String?>(null) }
-    
-    // Local state for editing
-    var selectedLanguage by remember { mutableStateOf<Language>(Language.CHINESE) }
+
+    var selectedLanguage by remember { mutableStateOf(Language.CHINESE) }
     var defaultInstruction by remember { mutableStateOf("") }
 
-    // CC Bridge state
     var ccBridgeToken by remember { mutableStateOf<String?>(null) }
     var ccBridgeConnected by remember { mutableStateOf(false) }
     var ccBridgeIp by remember { mutableStateOf<String?>(null) }
@@ -95,7 +93,6 @@ fun SettingsScreen(appState: AppState) {
 
     val context = LocalContext.current
 
-    // Shared logic for generating/regenerating bridge token
     val doGenerateToken: () -> Unit = {
         if (!ccIsGenerating) {
             scope.launch {
@@ -110,8 +107,7 @@ fun SettingsScreen(appState: AppState) {
             }
         }
     }
-    
-    // Load settings on mount
+
     LaunchedEffect(Unit) {
         scope.launch {
             isLoading = true
@@ -122,82 +118,133 @@ fun SettingsScreen(appState: AppState) {
                     selectedLanguage = response.settings!!.language
                     defaultInstruction = response.settings!!.defaultAgentInstruction
                 } else {
-                    // Use defaults
+                    if (response.message.isNotBlank()) {
+                        println("加载设置失败: ${response.message}")
+                    }
                     selectedLanguage = Language.CHINESE
                     defaultInstruction = "You are a helpful technical research assistant. "
                 }
-                // Load CC Bridge settings
+
                 val ccResponse = ApiClient.getCcSettings(user.id)
                 if (ccResponse.success) {
                     ccBridgeToken = ccResponse.ccBridgeToken
                     ccBridgeConnected = ccResponse.bridgeConnected
                     ccBridgeIp = ccResponse.bridgeIp
+                } else if (ccResponse.message.isNotBlank()) {
+                    println("加载CC设置失败: ${ccResponse.message}")
                 }
-            } catch (e: Exception) {
-                println("加载设置失败: $e")
-                // Use defaults on error
-                selectedLanguage = Language.CHINESE
-                defaultInstruction = "You are a helpful technical research assistant. "
             } finally {
                 isLoading = false
             }
         }
     }
-    
-    // Get strings based on selected language
+
     val strings = getStrings(selectedLanguage)
-    
-    Scaffold(
-        topBar = {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = Color.Transparent
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            brush = Brush.horizontalGradient(
-                                colors = listOf(
-                                    SilkColors.primary,
-                                    SilkColors.primaryDark
-                                )
-                            )
-                        )
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(16.dp)
-                        ) {
-                            IconButton(
-                                onClick = { appState.navigateBack() },
-                                colors = IconButtonDefaults.iconButtonColors(
-                                    contentColor = Color.White
-                                )
-                            ) {
-                                Icon(Icons.Default.ArrowBack, contentDescription = "返回")
-                            }
-                            
-                            Text(
-                                text = strings.settingsTitle,
-                                style = MaterialTheme.typography.titleLarge.copy(
-                                    fontWeight = FontWeight.Bold,
-                                    letterSpacing = 2.sp
-                                ),
-                                color = Color.White
-                            )
-                        }
+    val bridgeState = CcBridgeState(
+        token = ccBridgeToken,
+        connected = ccBridgeConnected,
+        ip = ccBridgeIp,
+        tokenVisible = ccTokenVisible,
+        isGenerating = ccIsGenerating,
+        isTesting = ccIsTesting,
+        testResult = ccTestResult,
+    )
+
+    SettingsScreenContent(
+        strings = strings,
+        isLoading = isLoading,
+        selectedLanguage = selectedLanguage,
+        defaultInstruction = defaultInstruction,
+        bridgeState = bridgeState,
+        saveMessage = saveMessage,
+        isSaving = isSaving,
+        onBack = { appState.navigateBack() },
+        onLanguageChange = { selectedLanguage = it },
+        onDefaultInstructionChange = { defaultInstruction = it },
+        onGenerateToken = doGenerateToken,
+        onToggleTokenVisibility = { ccTokenVisible = !ccTokenVisible },
+        onCopyToken = {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("token", ccBridgeToken))
+            Toast.makeText(context, strings.ccTokenCopied, Toast.LENGTH_SHORT).show()
+        },
+        onRefreshBridgeStatus = {
+            if (!ccIsTesting) {
+                scope.launch {
+                    ccIsTesting = true
+                    ccTestResult = null
+                    val gen = ++ccTestGeneration
+                    val resp = ApiClient.getBridgeStatus(user.id)
+                    ccBridgeConnected = resp.bridgeConnected
+                    ccBridgeIp = resp.bridgeIp
+                    ccTestResult = if (resp.bridgeConnected) strings.ccTestSuccess else strings.ccTestFailed
+                    ccIsTesting = false
+                    delay(10_000)
+                    if (ccTestGeneration == gen) {
+                        ccTestResult = null
                     }
                 }
             }
-        }
-    ) { padding ->
+        },
+        showRegenerateDialog = ccShowRegenerateDialog,
+        onShowRegenerateDialog = { ccShowRegenerateDialog = true },
+        onDismissRegenerateDialog = { ccShowRegenerateDialog = false },
+        onConfirmRegenerateDialog = {
+            ccShowRegenerateDialog = false
+            doGenerateToken()
+        },
+        onSave = {
+            if (!isSaving) {
+                scope.launch {
+                    isSaving = true
+                    saveMessage = null
+                    try {
+                        val response = ApiClient.updateUserSettings(
+                            userId = user.id,
+                            language = selectedLanguage,
+                            defaultAgentInstruction = defaultInstruction,
+                        )
+                        if (response.success) {
+                            settings = response.settings
+                            saveMessage = strings.settingsSaved
+                        } else {
+                            if (response.message.isNotBlank()) {
+                                println("保存设置失败: ${response.message}")
+                            }
+                            saveMessage = strings.settingsSaveError
+                        }
+                    } finally {
+                        isSaving = false
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun SettingsScreenContent(
+    strings: Strings,
+    isLoading: Boolean,
+    selectedLanguage: Language,
+    defaultInstruction: String,
+    bridgeState: CcBridgeState,
+    saveMessage: String?,
+    isSaving: Boolean,
+    onBack: () -> Unit,
+    onLanguageChange: (Language) -> Unit,
+    onDefaultInstructionChange: (String) -> Unit,
+    onGenerateToken: () -> Unit,
+    onToggleTokenVisibility: () -> Unit,
+    onCopyToken: () -> Unit,
+    onRefreshBridgeStatus: () -> Unit,
+    showRegenerateDialog: Boolean,
+    onShowRegenerateDialog: () -> Unit,
+    onDismissRegenerateDialog: () -> Unit,
+    onConfirmRegenerateDialog: () -> Unit,
+    onSave: () -> Unit,
+) {
+    Scaffold(topBar = { SettingsTopBar(strings = strings, onBack = onBack) }) { padding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
@@ -206,17 +253,14 @@ fun SettingsScreen(appState: AppState) {
                         colors = listOf(
                             SilkColors.background,
                             SilkColors.secondary.copy(alpha = 0.2f),
-                            SilkColors.background
+                            SilkColors.background,
                         )
                     )
                 )
                 .padding(padding)
         ) {
             if (isLoading) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
             } else {
@@ -225,7 +269,7 @@ fun SettingsScreen(appState: AppState) {
                         .fillMaxSize()
                         .verticalScroll(rememberScrollState())
                         .padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(24.dp)
+                    verticalArrangement = Arrangement.spacedBy(24.dp),
                 ) {
                     // Language selector
                     Column(
@@ -742,6 +786,331 @@ fun SettingsScreen(appState: AppState) {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsTopBar(strings: Strings, onBack: () -> Unit) {
+    Surface(modifier = Modifier.fillMaxWidth(), color = Color.Transparent) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    brush = Brush.horizontalGradient(
+                        colors = listOf(SilkColors.primary, SilkColors.primaryDark),
+                    )
+                )
+                .padding(16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                IconButton(
+                    onClick = onBack,
+                    colors = IconButtonDefaults.iconButtonColors(contentColor = Color.White),
+                ) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                }
+                Text(
+                    text = strings.settingsTitle,
+                    style = MaterialTheme.typography.titleLarge.copy(
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 2.sp,
+                    ),
+                    color = Color.White,
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsLanguageSection(
+    strings: Strings,
+    selectedLanguage: Language,
+    onLanguageChange: (Language) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = strings.languageLabel,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = SilkColors.textPrimary,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            FilterChip(
+                selected = selectedLanguage == Language.ENGLISH,
+                onClick = { onLanguageChange(Language.ENGLISH) },
+                label = { Text(strings.languageEnglish) },
+                modifier = Modifier.weight(1f),
+            )
+            FilterChip(
+                selected = selectedLanguage == Language.CHINESE,
+                onClick = { onLanguageChange(Language.CHINESE) },
+                label = { Text(strings.languageChinese) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsInstructionSection(
+    strings: Strings,
+    defaultInstruction: String,
+    onDefaultInstructionChange: (String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = strings.defaultAgentInstructionLabel,
+            style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = SilkColors.textPrimary,
+        )
+        OutlinedTextField(
+            value = defaultInstruction,
+            onValueChange = onDefaultInstructionChange,
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 5,
+            maxLines = 10,
+            shape = RoundedCornerShape(12.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = SilkColors.primary,
+                unfocusedBorderColor = SilkColors.border,
+            ),
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SettingsCcBridgeCard(
+    strings: Strings,
+    bridgeState: CcBridgeState,
+    onGenerateToken: () -> Unit,
+    onToggleTokenVisibility: () -> Unit,
+    onCopyToken: () -> Unit,
+    onRefreshBridgeStatus: () -> Unit,
+    onShowRegenerateDialog: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = strings.ccSettingsTitle,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+                color = SilkColors.textPrimary,
+            )
+            if (bridgeState.token == null) {
+                Text(
+                    text = strings.ccBridgeNotConfigured,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.Gray,
+                )
+                Button(
+                    onClick = onGenerateToken,
+                    enabled = !bridgeState.isGenerating,
+                    colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+                ) {
+                    if (bridgeState.isGenerating) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                    }
+                    Text(strings.ccGenerateToken)
+                }
+            } else {
+                SettingsCcBridgeDetails(
+                    strings = strings,
+                    bridgeState = bridgeState,
+                    onToggleTokenVisibility = onToggleTokenVisibility,
+                    onCopyToken = onCopyToken,
+                    onRefreshBridgeStatus = onRefreshBridgeStatus,
+                    onShowRegenerateDialog = onShowRegenerateDialog,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsCcBridgeDetails(
+    strings: Strings,
+    bridgeState: CcBridgeState,
+    onToggleTokenVisibility: () -> Unit,
+    onCopyToken: () -> Unit,
+    onRefreshBridgeStatus: () -> Unit,
+    onShowRegenerateDialog: () -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(CircleShape)
+                .background(if (bridgeState.connected) Color(0xFF4CAF50) else Color.Gray)
+        )
+        Text(
+            text = if (bridgeState.connected) strings.ccBridgeConnected else strings.ccBridgeDisconnected,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (bridgeState.connected) Color(0xFF4CAF50) else Color.Gray,
+        )
+    }
+    if (bridgeState.connected && bridgeState.ip != null) {
+        Text(
+            text = "${strings.ccBridgeIpLabel} ${bridgeState.ip}",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.Gray,
+        )
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedButton(onClick = onRefreshBridgeStatus, enabled = !bridgeState.isTesting) {
+            if (bridgeState.isTesting) {
+                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                Spacer(modifier = Modifier.width(6.dp))
+            }
+            Text(if (bridgeState.isTesting) strings.ccRefreshingStatus else strings.ccRefreshStatus)
+        }
+        bridgeState.testResult?.let { result ->
+            Text(
+                text = result,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (result == strings.ccTestSuccess) Color(0xFF4CAF50) else Color(0xFFF44336),
+            )
+        }
+    }
+    Text(
+        text = strings.ccBridgeTokenLabel,
+        style = MaterialTheme.typography.labelMedium,
+        color = Color.Gray,
+    )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Text(
+            text = if (bridgeState.tokenVisible) bridgeState.token ?: "" else "••••••••••••••••",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier
+                .weight(1f)
+                .clickable(onClick = onToggleTokenVisibility),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        TextButton(onClick = onCopyToken) {
+            Text(strings.ccCopyToken)
+        }
+    }
+    OutlinedButton(
+        onClick = onShowRegenerateDialog,
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFF44336)),
+    ) {
+        Text(strings.ccRegenerateToken)
+    }
+    Text(
+        text = strings.ccBridgeHelp,
+        style = MaterialTheme.typography.bodySmall,
+        color = Color.Gray.copy(alpha = 0.7f),
+    )
+}
+
+@Composable
+private fun SettingsRegenerateDialog(
+    strings: Strings,
+    showDialog: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    if (!showDialog) return
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(strings.ccRegenerateToken) },
+        text = { Text(strings.ccRegenerateConfirm) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(strings.ccGenerateToken, color = Color(0xFFF44336))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(strings.cancelButton)
+            }
+        },
+    )
+}
+
+@Composable
+private fun SettingsSaveMessageCard(saveMessage: String?) {
+    if (saveMessage == null) return
+
+    val isSuccess = saveMessage.contains("成功") || saveMessage.contains("success")
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSuccess) Color(0xFFE8F5E9) else Color(0xFFFFEBEE),
+        ),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Text(
+            text = saveMessage,
+            modifier = Modifier.padding(16.dp),
+            color = if (isSuccess) Color(0xFF2E7D32) else Color(0xFFC62828),
+        )
+    }
+}
+
+@Composable
+private fun SettingsActionRow(
+    strings: Strings,
+    isSaving: Boolean,
+    onBack: () -> Unit,
+    onSave: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        OutlinedButton(
+            onClick = onBack,
+            modifier = Modifier.weight(1f),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = SilkColors.textPrimary),
+        ) {
+            Text(strings.cancelButton)
+        }
+        Button(
+            onClick = onSave,
+            modifier = Modifier.weight(1f),
+            enabled = !isSaving,
+            colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+        ) {
+            if (isSaving) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            Text(text = if (isSaving) "${strings.saveButton}中..." else strings.saveButton, color = Color.White)
         }
     }
 }

@@ -32,6 +32,7 @@
   - 路径拒绝与审计结果
 - `DirectModelAgentAutoCliTest` 锁定 AutoCLI 沙箱、白名单与可选集成执行
 - `DirectModelAgentCitationTest` 锁定 citation / available 引用标记、搜索证据格式化与引用重编号
+- `WebSocketConfig.kt` 会把聊天 / 工作流消息中的 `[[kb:entryId|标题]]` 解析成当前轮可用资料，并要求 `DirectModelAgent` 以 `[available:N]` 标注引用
 
 ## Search Stack
 

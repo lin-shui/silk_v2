@@ -69,13 +69,21 @@ import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageType
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.*
+import java.awt.FileDialog
+import java.awt.Frame
+import java.awt.HeadlessException
+import java.io.File
+import java.io.IOException
+import java.net.HttpURLConnection
+import java.net.URL
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 fun main() = application {
     Window(
@@ -360,130 +368,206 @@ fun MessageBubble(
             timeZone = java.util.TimeZone.getTimeZone("Asia/Shanghai")
         }.format(Date(message.timestamp))
     }
-    
     val pdfReportContent = remember(message.content) {
         parseDesktopPdfReportContent(message.content)
+    }
+    val bubbleColor = if (isCurrentUser) {
+        MaterialTheme.colorScheme.primaryContainer
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant
     }
     
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (isCurrentUser) Alignment.End else Alignment.Start
     ) {
-        // 发送者名称和时间
-        if (!isCurrentUser) {
-            Text(
-                text = "${message.userName} · $timeString",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-        }
-        
-        // 消息气泡（带右键菜单和文本选择）
+        MessageSenderHeader(
+            isCurrentUser = isCurrentUser,
+            userName = message.userName,
+            timeString = timeString
+        )
         MessageWithContextMenu(
             content = {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (isCurrentUser) 
-                        MaterialTheme.colorScheme.primaryContainer 
-                    else 
-                        MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.widthIn(max = 600.dp)
-                ) {
-                    when {
-                        message.type == MessageType.FILE -> FileDownloadMessage(message, scope)
-                        pdfReportContent != null -> PDFDownloadMessage(pdfReportContent, scope)
-                        else -> {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                // 临时消息标识
-                                if (isTransient) {
-                                    Text(
-                                        text = "AI 处理中...",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.secondary
-                                    )
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                }
-                                
-                                // 进度条（如果有）
-                                ProgressIndicator(
-                                    currentStep = message.currentStep,
-                                    totalSteps = message.totalSteps
-                                )
-                                if (message.currentStep != null && message.totalSteps != null) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                }
-                                
-                                // 检查是否包含诊断按钮提示，如果有则高亮图标
-                                if (message.content.contains("医院按钮") || message.content.contains("Silk按钮")) {
-                                    val content = message.content
-                                    
-                                    // 高亮🏥和🤖图标
-                                    Text(
-                                        text = buildAnnotatedString {
-                                            var i = 0
-                                            while (i < content.length) {
-                                                val remaining = content.substring(i)
-                                                
-                                                when {
-                                                    remaining.startsWith("🏥") -> {
-                                                        withStyle(
-                                                            style = SpanStyle(
-                                                                color = MaterialTheme.colorScheme.tertiary,
-                                                                fontWeight = FontWeight.Bold
-                                                            )
-                                                        ) {
-                                                            append("🏥")
-                                                        }
-                                                        i += "🏥".length
-                                                    }
-                                                    remaining.startsWith("🤖") -> {
-                                                        withStyle(
-                                                            style = SpanStyle(
-                                                                color = MaterialTheme.colorScheme.secondary,
-                                                                fontWeight = FontWeight.Bold
-                                                            )
-                                                        ) {
-                                                            append("🤖")
-                                                        }
-                                                        i += "🤖".length
-                                                    }
-                                                    else -> {
-                                                        append(content[i])
-                                                        i++
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                } else {
-                                    Text(
-                                        text = message.content,
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+                MessageBubbleSurface(
+                    message = message,
+                    scope = scope,
+                    pdfReportContent = pdfReportContent,
+                    bubbleColor = bubbleColor,
+                    isTransient = isTransient
+                )
             },
-            message = message,
-            onCopy = { println("✅ 消息已复制") },
-            onForwardToWeChat = { println("✅ 已转发到微信") },
-            onForwardToSMS = { println("✅ 已转发到SMS") }
+            message = message
         )
-        
-        // 当前用户的时间显示在右侧
-        if (isCurrentUser) {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = timeString,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+
+        MessageSenderFooter(
+            isCurrentUser = isCurrentUser,
+            timeString = timeString
+        )
+    }
+}
+
+@Composable
+private fun MessageSenderHeader(
+    isCurrentUser: Boolean,
+    userName: String,
+    timeString: String
+) {
+    if (isCurrentUser) {
+        return
+    }
+
+    Text(
+        text = "$userName · $timeString",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+}
+
+@Composable
+private fun MessageBubbleSurface(
+    message: Message,
+    scope: kotlinx.coroutines.CoroutineScope,
+    pdfReportContent: DesktopPdfReportContent?,
+    bubbleColor: androidx.compose.ui.graphics.Color,
+    isTransient: Boolean
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = bubbleColor,
+        modifier = Modifier.widthIn(max = 600.dp)
+    ) {
+        when {
+            message.type == MessageType.FILE -> FileDownloadMessage(message, scope)
+            pdfReportContent != null -> PDFDownloadMessage(pdfReportContent, scope)
+            else -> PlainMessageBubbleContent(message, isTransient)
         }
     }
+}
+
+@Composable
+private fun PlainMessageBubbleContent(
+    message: Message,
+    isTransient: Boolean
+) {
+    Column(modifier = Modifier.padding(12.dp)) {
+        TransientMessageIndicator(isTransient)
+        ProgressSection(
+            currentStep = message.currentStep,
+            totalSteps = message.totalSteps
+        )
+        DiagnosticAwareMessageText(content = message.content)
+    }
+}
+
+@Composable
+private fun TransientMessageIndicator(isTransient: Boolean) {
+    if (!isTransient) {
+        return
+    }
+
+    Text(
+        text = "AI 处理中...",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.secondary
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+}
+
+@Composable
+private fun ProgressSection(currentStep: Int?, totalSteps: Int?) {
+    ProgressIndicator(
+        currentStep = currentStep,
+        totalSteps = totalSteps
+    )
+    if (currentStep != null && totalSteps != null) {
+        Spacer(modifier = Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun DiagnosticAwareMessageText(content: String) {
+    if (!containsDiagnosticButtons(content)) {
+        Text(
+            text = content,
+            style = MaterialTheme.typography.bodyMedium
+        )
+        return
+    }
+
+    val tertiaryColor = MaterialTheme.colorScheme.tertiary
+    val secondaryColor = MaterialTheme.colorScheme.secondary
+    val annotatedContent = remember(content, tertiaryColor, secondaryColor) {
+        buildDiagnosticAnnotatedContent(
+            content = content,
+            tertiaryColor = tertiaryColor,
+            secondaryColor = secondaryColor
+        )
+    }
+    Text(
+        text = annotatedContent,
+        style = MaterialTheme.typography.bodyMedium
+    )
+}
+
+private fun containsDiagnosticButtons(content: String): Boolean {
+    return content.contains("医院按钮") || content.contains("Silk按钮")
+}
+
+private fun buildDiagnosticAnnotatedContent(
+    content: String,
+    tertiaryColor: androidx.compose.ui.graphics.Color,
+    secondaryColor: androidx.compose.ui.graphics.Color
+) = buildAnnotatedString {
+    var index = 0
+    while (index < content.length) {
+        val remaining = content.substring(index)
+        when {
+            remaining.startsWith("🏥") -> {
+                withStyle(
+                    style = SpanStyle(
+                        color = tertiaryColor,
+                        fontWeight = FontWeight.Bold
+                    )
+                ) {
+                    append("🏥")
+                }
+                index += "🏥".length
+            }
+            remaining.startsWith("🤖") -> {
+                withStyle(
+                    style = SpanStyle(
+                        color = secondaryColor,
+                        fontWeight = FontWeight.Bold
+                    )
+                ) {
+                    append("🤖")
+                }
+                index += "🤖".length
+            }
+            else -> {
+                append(content[index])
+                index++
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageSenderFooter(
+    isCurrentUser: Boolean,
+    timeString: String
+) {
+    if (!isCurrentUser) {
+        return
+    }
+
+    Spacer(modifier = Modifier.height(4.dp))
+    Text(
+        text = timeString,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
 }
 
 @Composable
@@ -647,6 +731,12 @@ enum class DownloadResult {
     FAILED      // 失败
 }
 
+private sealed interface SaveTargetSelection {
+    data class Selected(val file: File) : SaveTargetSelection
+    data object Cancelled : SaveTargetSelection
+    data object Failed : SaveTargetSelection
+}
+
 /**
  * 打开或下载远程文件
  */
@@ -657,129 +747,180 @@ suspend fun downloadRemoteFile(
     saveDialogTitle: String,
     requiredExtension: String? = null
 ): DownloadResult {
-    return try {
-        // 构建完整的下载URL
-        val fullUrl = "${BuildConfig.BACKEND_BASE_URL}$downloadUrl"
-        
-        println("📋 开始从服务器下载PDF文件:")
-        println("   下载URL: $fullUrl")
-        println("   文件名: $defaultFileName")
-        
-        // 从服务器下载PDF到临时文件
-        val tempFile = withContext(Dispatchers.IO) {
-            val tempSuffix = defaultFileName.substringAfterLast('.', "bin")
-                .takeIf { it.isNotBlank() }
-                ?.let { ".$it" }
-                ?: ".bin"
-            val tempFile = java.io.File.createTempFile("silk_download_", tempSuffix)
-            
-            println("⏳ 正在从服务器下载...")
-            
-            try {
-                val url = java.net.URL(fullUrl)
-                val connection = url.openConnection() as java.net.HttpURLConnection
-                connection.requestMethod = "GET"
-                connection.connectTimeout = 10000
-                connection.readTimeout = 30000
-                
-                val responseCode = connection.responseCode
-                if (responseCode == 200) {
-                    connection.inputStream.use { input ->
-                        tempFile.outputStream().use { output ->
-                            input.copyTo(output)
-                        }
-                    }
-                    println("✅ 文件下载完成，大小: ${tempFile.length()} bytes")
-                    tempFile
-                } else {
-                    println("❌ 服务器返回错误: HTTP $responseCode")
-                    null
-                }
-            } catch (e: Exception) {
-                println("❌ 下载失败: ${e.message}")
-                e.printStackTrace()
-                null
-            }
+    val fullUrl = "${BuildConfig.BACKEND_BASE_URL}$downloadUrl"
+
+    println("📋 开始从服务器下载PDF文件:")
+    println("   下载URL: $fullUrl")
+    println("   文件名: $defaultFileName")
+
+    val tempFile = downloadRemoteFileToTemp(fullUrl, defaultFileName) ?: return DownloadResult.FAILED
+    if (!tempFile.exists() || tempFile.length() == 0L) {
+        println("❌ 文件下载失败或文件为空")
+        deleteTempFile(tempFile, "空下载文件")
+        return DownloadResult.FAILED
+    }
+
+    println("✅ 文件准备就绪，大小: ${tempFile.length()} bytes")
+
+    return when (val selection = selectDownloadTarget(defaultFileName, saveDialogTitle)) {
+        is SaveTargetSelection.Selected -> {
+            val saved = saveDownloadedFile(
+                tempFile = tempFile,
+                selectedFile = selection.file,
+                defaultFileName = defaultFileName,
+                requiredExtension = requiredExtension
+            )
+            deleteTempFile(tempFile, "保存后清理临时文件")
+            if (saved) DownloadResult.SUCCESS else DownloadResult.FAILED
         }
-        
-        if (tempFile == null || !tempFile.exists() || tempFile.length() == 0L) {
-            println("❌ 文件下载失败或文件为空")
-            return DownloadResult.FAILED
-        }
-        
-        println("✅ 文件准备就绪，大小: ${tempFile.length()} bytes")
-        
-        // 在主线程显示文件选择器
-        // 使用 AWT FileDialog（macOS 原生对话框）而不是 JFileChooser
-        // 原生对话框对中文字符的显示支持更好
-        val selectedFile = withContext(Dispatchers.Main) {
-            val fileDialog = java.awt.FileDialog(null as java.awt.Frame?, saveDialogTitle, java.awt.FileDialog.SAVE)
-            
-            // 设置默认目录和文件名
-            val downloadsDir = java.io.File(System.getProperty("user.home"), "Downloads")
-            fileDialog.directory = downloadsDir.absolutePath
-            fileDialog.file = defaultFileName
-            
-            // 显示对话框
-            fileDialog.isVisible = true
-            
-            // 获取用户选择的文件
-            if (fileDialog.file != null) {
-                java.io.File(fileDialog.directory, fileDialog.file)
-            } else {
-                null
-            }
-        }
-        
-        if (selectedFile != null) {
-            // 用户选择了保存位置，在 IO 线程复制文件
-            try {
-                withContext(Dispatchers.IO) {
-                    val finalFile = java.io.File(
-                        resolveDownloadTargetFileName(
-                            selectedFilePath = selectedFile.absolutePath,
-                            defaultFileName = defaultFileName,
-                            requiredExtension = requiredExtension
-                        )
-                    )
-                    
-                    // 复制临时文件到目标位置
-                    Files.copy(
-                        tempFile.toPath(),
-                        finalFile.toPath(),
-                        StandardCopyOption.REPLACE_EXISTING
-                    )
-                    
-                    // 删除临时文件
-                    tempFile.delete()
-                    
-                    println("✅ PDF 已保存到: ${finalFile.absolutePath}")
-                }
-                DownloadResult.SUCCESS
-            } catch (e: Exception) {
-                println("❌ 文件复制失败: ${e.message}")
-                e.printStackTrace()
-                // 清理临时文件
-                try {
-                    tempFile.delete()
-                } catch (e2: Exception) {
-                    // 忽略
-                }
-                DownloadResult.FAILED
-            }
-        } else {
-            // 用户点击了取消，清理临时文件
+        SaveTargetSelection.Cancelled -> {
             println("ℹ️ 用户取消了保存")
-            try {
-                tempFile.delete()
-            } catch (e: Exception) {
-                // 忽略
-            }
+            deleteTempFile(tempFile, "取消保存后清理临时文件")
             DownloadResult.CANCELLED
         }
-    } catch (e: Exception) {
-        println("❌ 操作失败: ${e.message}")
-        e.printStackTrace()
-        DownloadResult.FAILED
+        SaveTargetSelection.Failed -> {
+            deleteTempFile(tempFile, "保存对话框失败后清理临时文件")
+            DownloadResult.FAILED
+        }
+    }
+}
+
+private suspend fun downloadRemoteFileToTemp(fullUrl: String, defaultFileName: String): File? = withContext(Dispatchers.IO) {
+    val tempFile = createTempDownloadFile(defaultFileName) ?: return@withContext null
+    println("⏳ 正在从服务器下载...")
+
+    var connection: HttpURLConnection? = null
+    try {
+        connection = openDownloadConnection(fullUrl)
+        val responseCode = connection.responseCode
+        if (responseCode != HttpURLConnection.HTTP_OK) {
+            println("❌ 服务器返回错误: HTTP $responseCode")
+            deleteTempFile(tempFile, "HTTP 下载失败")
+            return@withContext null
+        }
+
+        connection.inputStream.use { input ->
+            tempFile.outputStream().use { output ->
+                input.copyTo(output)
+            }
+        }
+        println("✅ 文件下载完成，大小: ${tempFile.length()} bytes")
+        tempFile
+    } catch (e: IOException) {
+        println("❌ 下载失败: ${e.message}")
+        deleteTempFile(tempFile, "下载失败")
+        null
+    } catch (e: SecurityException) {
+        println("❌ 下载失败: ${e.message}")
+        deleteTempFile(tempFile, "下载失败")
+        null
+    } catch (e: ClassCastException) {
+        println("❌ 下载失败: ${e.message}")
+        deleteTempFile(tempFile, "下载失败")
+        null
+    } finally {
+        connection?.disconnect()
+    }
+}
+
+private fun createTempDownloadFile(defaultFileName: String): File? {
+    val tempSuffix = defaultFileName.substringAfterLast('.', "bin")
+        .takeIf { it.isNotBlank() }
+        ?.let { ".$it" }
+        ?: ".bin"
+
+    return try {
+        File.createTempFile("silk_download_", tempSuffix)
+    } catch (e: IOException) {
+        println("❌ 创建临时文件失败: ${e.message}")
+        null
+    } catch (e: SecurityException) {
+        println("❌ 创建临时文件失败: ${e.message}")
+        null
+    }
+}
+
+private fun openDownloadConnection(fullUrl: String): HttpURLConnection {
+    return (URL(fullUrl).openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = 10_000
+        readTimeout = 30_000
+    }
+}
+
+private suspend fun selectDownloadTarget(
+    defaultFileName: String,
+    saveDialogTitle: String
+): SaveTargetSelection = withContext(Dispatchers.Main) {
+    try {
+        val fileDialog = FileDialog(null as Frame?, saveDialogTitle, FileDialog.SAVE)
+        val downloadsDir = File(System.getProperty("user.home"), "Downloads")
+        fileDialog.directory = downloadsDir.absolutePath
+        fileDialog.file = defaultFileName
+        fileDialog.isVisible = true
+
+        val selectedName = fileDialog.file
+        if (selectedName.isNullOrBlank()) {
+            SaveTargetSelection.Cancelled
+        } else {
+            val selectedDirectory = fileDialog.directory
+            val selectedPath = if (selectedDirectory.isNullOrBlank()) {
+                selectedName
+            } else {
+                File(selectedDirectory, selectedName).absolutePath
+            }
+            SaveTargetSelection.Selected(File(selectedPath))
+        }
+    } catch (e: HeadlessException) {
+        println("❌ 无法打开保存对话框: ${e.message}")
+        SaveTargetSelection.Failed
+    } catch (e: SecurityException) {
+        println("❌ 无法打开保存对话框: ${e.message}")
+        SaveTargetSelection.Failed
+    }
+}
+
+private suspend fun saveDownloadedFile(
+    tempFile: File,
+    selectedFile: File,
+    defaultFileName: String,
+    requiredExtension: String?
+): Boolean = withContext(Dispatchers.IO) {
+    val finalFile = File(
+        resolveDownloadTargetFileName(
+            selectedFilePath = selectedFile.absolutePath,
+            defaultFileName = defaultFileName,
+            requiredExtension = requiredExtension
+        )
+    )
+
+    try {
+        Files.copy(
+            tempFile.toPath(),
+            finalFile.toPath(),
+            StandardCopyOption.REPLACE_EXISTING
+        )
+        println("✅ PDF 已保存到: ${finalFile.absolutePath}")
+        true
+    } catch (e: IOException) {
+        println("❌ 文件复制失败: ${e.message}")
+        false
+    } catch (e: SecurityException) {
+        println("❌ 文件复制失败: ${e.message}")
+        false
+    }
+}
+
+private fun deleteTempFile(file: File, reason: String) {
+    if (!file.exists()) {
+        return
+    }
+
+    try {
+        if (!file.delete()) {
+            println("⚠️ 未能删除临时文件（$reason）: ${file.absolutePath}")
+        }
+    } catch (e: SecurityException) {
+        println("⚠️ 未能删除临时文件（$reason）: ${e.message}")
     }
 }

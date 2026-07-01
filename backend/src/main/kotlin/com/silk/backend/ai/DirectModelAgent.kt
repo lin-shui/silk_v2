@@ -2,8 +2,12 @@ package com.silk.backend.ai
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.*
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
+import java.io.File
 
 /**
  * 直接调用 Claude 的 Agent。
@@ -18,7 +22,38 @@ import org.slf4j.LoggerFactory
 class DirectModelAgent(
     private val sessionId: String = "default"
 ) {
+    data class AvailableReferenceSeed(
+        val title: String,
+        val snippet: String? = null,
+        val path: String? = null,
+        val origin: String? = null,
+        val reason: String? = null,
+        val spaceId: String? = null,
+        val spaceLabel: String? = null,
+    )
+
     private val logger = LoggerFactory.getLogger(DirectModelAgent::class.java)
+
+    /**
+     * 以 DEBUG 级别记录完整的 prompt 和 response。
+     * 平时不输出；需要调试时在 logback.xml 中将本类设为 DEBUG 即可。
+     */
+    private fun logPromptAndResponse(
+        path: String,
+        prompt: String,
+        response: String,
+        durationMs: Long
+    ) {
+        if (!logger.isDebugEnabled) return
+        logger.debug(
+            "[IO] session={}  path={}  duration={}ms\n" +
+            ">>> PROMPT ({} chars) >>>\n{}\n" +
+            "<<< RESPONSE ({} chars) <<<\n{}",
+            sessionId, path, durationMs,
+            prompt.length, prompt,
+            response.length, response
+        )
+    }
 
     /** Claude CLI 进程客户端 */
     private lateinit var claudeProcessClient: ClaudeProcessClient
@@ -202,7 +237,9 @@ class DirectModelAgent(
             appendLine("## 引用规则（必须遵守）")
             appendLine("当你使用网络搜索获取信息后，必须在回答中标注信息来源：")
             appendLine("- 引用网络搜索结果时，在相关内容末尾添加 [citation:数字]")
+            appendLine("- 引用用户明确提供的本地知识库/文档时，在相关内容末尾添加 [available:数字]")
             appendLine("- 第一个搜索结果的引用编号为 [citation:1]，第二个为 [citation:2]，以此类推")
+            appendLine("- 第一个本地资料的引用编号为 [available:1]，第二个为 [available:2]，以此类推")
             appendLine("- 引用标记必须放在相关内容的句末或段末")
             appendLine("- 每个重要观点都必须标注来源引用，不能遗漏")
             appendLine("- 禁止堆砌大量引用标记；只为对应观点添加必要引用")
@@ -230,7 +267,7 @@ class DirectModelAgent(
         spaceId: String? = null,
         spaceLabel: String? = null,
     ): Int {
-        val index = currentResponseReferences.size + 1
+        val index = currentResponseReferences.count { it.kind == kind } + 1
         currentResponseReferences.add(
             com.silk.backend.models.MessageReference(
                 kind = kind,
@@ -326,24 +363,15 @@ class DirectModelAgent(
             appendLine("⚠️ 再次提醒：当前真实日期和时间已在系统指令开头给出，回答时间/日期相关问题时必须使用该信息，不得自行猜测或推算。")
         }
 
-        val response = try {
+        val response = runCatching {
             // 优先使用 Claude CLI（内置 web_search、Grep、Read、glob 工具，原生支持 [citation:N] 引用）
-            try {
-                chatViaClaudeProcess(toolContext, callback)
-            } catch (e: Exception) {
-                logger.warn("⚠️ [DirectModelAgent] Claude CLI 调用失败，回退到 API 路径: ${e.message}")
-                val apiKey = AIConfig.ANTHROPIC_API_KEY
-                if (apiKey.isNotBlank()) {
-                    chatViaAnthropicApi(apiKey, toolContext, callback)
-                } else {
-                    throw e
-                }
+            runClaudeOrApi(toolContext, currentTurnContext, callback)
+        }.getOrElse { error ->
+            if (error is CancellationException) {
+                throw error
             }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.error("❌ [DirectModelAgent] AI 调用失败: ${e.message}")
-            callback("error", "❌ AI 调用失败: ${e.message}", true)
+            logger.error("❌ [DirectModelAgent] AI 调用失败: ${error.message}")
+            callback("error", "❌ AI 调用失败: ${error.message}", true)
             "抱歉，处理您的问题时发生了错误。"
         }
 
@@ -426,10 +454,12 @@ class DirectModelAgent(
 
     private suspend fun chatViaClaudeProcess(
         toolContext: String,
+        currentTurnContext: String?,
         callback: suspend (String, String, Boolean) -> Unit
     ): String {
+        val requestHistory = buildRequestHistory(currentTurnContext)
         val fullPrompt = buildString {
-            for (msg in conversationHistory) {
+            for (msg in requestHistory) {
                 when (msg.role) {
                     "system" -> {
                         appendLine(msg.content)
@@ -456,18 +486,23 @@ class DirectModelAgent(
             appendLine("Assistant:")
         }
 
-        return claudeProcessClient.streamCompletion(
+        val startTime = System.currentTimeMillis()
+        val result = claudeProcessClient.streamCompletion(
             fullPrompt = fullPrompt,
             callback = callback,
         )
+        logPromptAndResponse("claude-cli", fullPrompt, result, System.currentTimeMillis() - startTime)
+        return result
     }
 
     private suspend fun chatViaAnthropicApi(
         apiKey: String,
         toolContext: String,
+        currentTurnContext: String?,
         callback: suspend (String, String, Boolean) -> Unit
     ): String {
-        val systemMessages = conversationHistory.filter { it.role == "system" }.mapNotNull { it.content }
+        val requestHistory = buildRequestHistory(currentTurnContext)
+        val systemMessages = requestHistory.filter { it.role == "system" }.mapNotNull { it.content }
         val mergedSystem = buildString {
             if (systemMessages.isNotEmpty()) {
                 systemMessages.forEach { appendLine(it) }
@@ -475,7 +510,19 @@ class DirectModelAgent(
             }
             appendLine(toolContext)
         }
-        val nonSystemMessages = conversationHistory.filter { it.role != "system" }
+        val nonSystemMessages = requestHistory.filter { it.role != "system" }
+
+        val apiPromptForLog = buildString {
+            appendLine("[System]")
+            appendLine(mergedSystem)
+            appendLine()
+            for (msg in nonSystemMessages) {
+                appendLine("[${msg.role}]")
+                appendLine(msg.content)
+                appendLine()
+            }
+        }
+        val apiStartTime = System.currentTimeMillis()
 
         val client = AnthropicClient(apiKey = apiKey)
 
@@ -521,7 +568,29 @@ class DirectModelAgent(
                 result.content.take(300).replace('\n', ' '))
         }
 
+        logPromptAndResponse("anthropic-api", apiPromptForLog, result.content, System.currentTimeMillis() - apiStartTime)
         return result.content
+    }
+
+    private fun buildRequestHistory(currentTurnContext: String?): List<Message> {
+        if (currentTurnContext.isNullOrBlank()) {
+            return conversationHistory.toList()
+        }
+        val lastUserIndex = conversationHistory.indexOfLast { it.role == "user" }
+        if (lastUserIndex < 0) {
+            return conversationHistory.toList()
+        }
+        return conversationHistory.mapIndexed { index, message ->
+            if (index != lastUserIndex) {
+                message
+            } else {
+                message.copy(content = buildString {
+                    appendLine(message.content)
+                    appendLine()
+                    append(currentTurnContext)
+                })
+            }
+        }
     }
 
     // ── 引用处理 ──────────────────────────────────────────────────────
@@ -638,14 +707,7 @@ class DirectModelAgent(
 
     private fun normalizeCitedReferences(content: String): FinalCitationResult {
         val citedPattern = Regex("\\[(citation|available):(\\d+)\\]")
-        val citedKeys = citedPattern.findAll(content)
-            .mapNotNull { match ->
-                val kind = match.groupValues[1]
-                val idx = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
-                "$kind:$idx"
-            }
-            .distinct()
-            .toList()
+        val citedKeys = extractCitedKeys(content, citedPattern)
 
         if (citedKeys.isEmpty()) {
             // 文本中没有引用标记但有搜索结果的，仍然返回 references 供前端展示来源列表
@@ -655,19 +717,12 @@ class DirectModelAgent(
             return FinalCitationResult(content, emptyList())
         }
 
-        val citedRefs = citedKeys.mapNotNull { key ->
-            val kind = key.substringBefore(":")
-            val idx = key.substringAfter(":").toIntOrNull() ?: return@mapNotNull null
-            currentResponseReferences.find { it.kind == kind && it.index == idx }
-        }
-
         val reindexMap = mutableMapOf<String, Int>()
         val newRefs = mutableListOf<com.silk.backend.models.MessageReference>()
         var citationCounter = 0
         var availableCounter = 0
 
-        // 先处理有元数据的引用
-        for (ref in citedRefs) {
+        for (ref in resolveCitedReferences(citedKeys)) {
             val newIndex = if (ref.kind == "citation") {
                 ++citationCounter
             } else {
@@ -677,35 +732,87 @@ class DirectModelAgent(
             newRefs.add(ref.copy(index = newIndex))
         }
 
-        // 对文本中有标记但无对应元数据的（如 Claude CLI 输出的 [citation:N]），创建占位引用
-        for (key in citedKeys) {
-            if (reindexMap.containsKey(key)) continue
-            val kind = key.substringBefore(":")
-            val idx = key.substringAfter(":").toIntOrNull() ?: continue
-            val newIndex = if (kind == "citation" || kind == "available") {
-                if (kind == "citation") ++citationCounter else ++availableCounter
-            } else continue
-            reindexMap[key] = newIndex
-            newRefs.add(
-                com.silk.backend.models.MessageReference(
-                    kind = kind,
-                    index = newIndex,
-                    title = "${if (kind == "citation") "来源" else "资料"} $idx",
-                    snippet = null,
-                    url = null,
-                    path = null
-                )
-            )
+        newRefs += createPlaceholderReferences(
+            citedKeys = citedKeys,
+            reindexMap = reindexMap,
+            nextCitationIndex = { ++citationCounter },
+            nextAvailableIndex = { ++availableCounter },
+        )
+
+        val newContent = reindexContent(content, citedPattern, reindexMap)
+        return FinalCitationResult(newContent, newRefs)
+    }
+
+    private fun extractCitedKeys(content: String, citedPattern: Regex): List<String> =
+        citedPattern.findAll(content)
+            .mapNotNull { match ->
+                val kind = match.groupValues[1]
+                val idx = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+                "$kind:$idx"
+            }
+            .distinct()
+            .toList()
+
+    private fun resolveCitedReferences(
+        citedKeys: List<String>
+    ): List<com.silk.backend.models.MessageReference> =
+        citedKeys.mapNotNull { key ->
+            val (kind, idx) = parseCitationKey(key) ?: return@mapNotNull null
+            currentResponseReferences.find { it.kind == kind && it.index == idx }
         }
 
-        val newContent = citedPattern.replace(content) { match ->
+    private fun createPlaceholderReference(
+        key: String,
+        reindexMap: MutableMap<String, Int>,
+        nextCitationIndex: () -> Int,
+        nextAvailableIndex: () -> Int
+    ): com.silk.backend.models.MessageReference? {
+        if (reindexMap.containsKey(key)) return null
+        val (kind, idx) = parseCitationKey(key) ?: return null
+        val newIndex = when (kind) {
+            "citation" -> nextCitationIndex()
+            "available" -> nextAvailableIndex()
+            else -> return null
+        }
+        reindexMap[key] = newIndex
+        return com.silk.backend.models.MessageReference(
+            kind = kind,
+            index = newIndex,
+            title = "${if (kind == "citation") "来源" else "资料"} $idx",
+            snippet = null,
+            url = null,
+            path = null
+        )
+    }
+
+    private fun createPlaceholderReferences(
+        citedKeys: List<String>,
+        reindexMap: MutableMap<String, Int>,
+        nextCitationIndex: () -> Int,
+        nextAvailableIndex: () -> Int,
+    ): List<com.silk.backend.models.MessageReference> {
+        return citedKeys.mapNotNull { key ->
+            createPlaceholderReference(
+                key = key,
+                reindexMap = reindexMap,
+                nextCitationIndex = nextCitationIndex,
+                nextAvailableIndex = nextAvailableIndex,
+            )
+        }
+    }
+
+    private fun reindexContent(content: String, citedPattern: Regex, reindexMap: Map<String, Int>): String =
+        citedPattern.replace(content) { match ->
             val kind = match.groupValues[1]
             val oldIdx = match.groupValues[2].toInt()
             val newIdx = reindexMap["$kind:$oldIdx"] ?: oldIdx
             "[$kind:$newIdx]"
         }
 
-        return FinalCitationResult(newContent, newRefs)
+    private fun parseCitationKey(key: String): Pair<String, Int>? {
+        val kind = key.substringBefore(":")
+        val idx = key.substringAfter(":").toIntOrNull() ?: return null
+        return kind to idx
     }
 
     // ── 测试辅助 ──────────────────────────────────────────────────────
@@ -724,6 +831,9 @@ class DirectModelAgent(
 
     internal fun registerCitationForTest(title: String, url: String): Int =
         registerReference(kind = "citation", title = title, url = url)
+
+    internal fun registerAvailableForTest(title: String, path: String): Int =
+        registerReference(kind = "available", title = title, path = path)
 
     internal fun citedReferencesForTest(content: String): List<com.silk.backend.models.MessageReference> {
         val result = normalizeCitedReferences(content)

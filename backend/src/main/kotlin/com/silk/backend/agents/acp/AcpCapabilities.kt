@@ -1,6 +1,7 @@
 // backend/src/main/kotlin/com/silk/backend/agents/acp/AcpCapabilities.kt
 package com.silk.backend.agents.acp
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -28,7 +29,8 @@ data class AgentCapabilities(
     val loadSession: Boolean = false,
     val promptCapabilities: PromptCapabilities = PromptCapabilities(),
     /** silk 私有扩展能力声明，未声明的扩展按"不支持"处理。命名空间 `_silk`。 */
-    val _silk: SilkExtensions = SilkExtensions(),
+    @SerialName("_silk")
+    val silkExtensions: SilkExtensions = SilkExtensions(),
 )
 
 @Serializable

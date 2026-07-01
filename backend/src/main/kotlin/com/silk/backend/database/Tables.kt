@@ -77,7 +77,7 @@ object UserSettingsTable : Table("user_settings") {
     val appAuthToken = varchar("app_auth_token", 64).nullable() // App HTTP 认证 token（KB 等 API bearer 认证）
     val ccBridgeToken = varchar("cc_bridge_token", 64).nullable() // Bridge 认证 token
     val updatedAt = datetime("updated_at").default(LocalDateTime.now()) // 更新时间
-    
+
     override val primaryKey = PrimaryKey(userId)
 }
 

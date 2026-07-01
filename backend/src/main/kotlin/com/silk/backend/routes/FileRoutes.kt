@@ -11,7 +11,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import io.ktor.http.ContentDisposition
-import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
@@ -35,8 +34,18 @@ import org.slf4j.LoggerFactory
 import java.io.File
 import java.nio.file.Files
 import java.time.Instant
+import java.util.Locale
 
 private val logger = LoggerFactory.getLogger("FileRoutes")
+
+private val TEXT_FILE_EXTENSIONS = listOf(
+    ".txt", ".md", ".markdown", ".json", ".xml", ".html", ".htm",
+    ".css", ".js", ".kt", ".java", ".py", ".yaml", ".yml"
+)
+
+private const val DEFAULT_FILE_CHUNK_SIZE = 10000
+private const val DEFAULT_FILE_CHUNK_OVERLAP = 500
+private const val MAX_INDEX_KEYWORDS = 20
 
 private fun chatHistoryRootDir(): File =
     System.getProperty("silk.chatHistoryDir")
@@ -648,7 +657,148 @@ private suspend fun broadcastUploadUserMessageAndVision(
             )
         } catch (_: Exception) {}
     }
+
+    indexingResult.exceptionOrNull()?.let { error ->
+        error.rethrowIfCancellation()
+        logger.error("❌ 索引文件失败: ${error.message}", error)
+    }
+    indexingResult.getOrDefault(false)
 }
+
+private fun canIndexToWeaviate(originalFileName: String): Boolean {
+    if (AIConfig.WEAVIATE_URL.isBlank()) {
+        logger.info("⏭️ 未配置 Weaviate，跳过文件索引: {}", originalFileName)
+        return false
+    }
+    return true
+}
+
+private suspend fun isWeaviateReady(): Boolean {
+    val isReady = weaviateClient.isReady()
+    logger.info("🔍 Weaviate 状态: ${if (isReady) "✅ 可用" else "❌ 不可用"}")
+    if (!isReady) {
+        logger.warn("⚠️ Weaviate 不可用，跳过索引")
+    }
+    return isReady
+}
+
+private fun readIndexableFileContent(file: File, originalFileName: String, contentType: String?): String =
+    when {
+        isTextLikeFile(originalFileName, contentType) -> {
+            logger.info("📝 读取文本文件: $originalFileName")
+            file.readText()
+        }
+
+        isPdfFile(originalFileName, contentType) -> {
+            logger.info("📄 提取 PDF 文本...")
+            extractTextFromPdf(file) ?: "[PDF 文件: $originalFileName, 无法提取文本]"
+        }
+
+        else -> {
+            logger.info("📦 二进制文件，仅索引元数据: $originalFileName (contentType: $contentType)")
+            "[二进制文件: $originalFileName, 大小: ${file.length()} bytes]"
+        }
+    }
+
+private fun isTextLikeFile(originalFileName: String, contentType: String?): Boolean =
+    TEXT_FILE_EXTENSIONS.any { originalFileName.endsWith(it, ignoreCase = true) } ||
+        contentType?.startsWith("text/") == true
+
+private fun isPdfFile(originalFileName: String, contentType: String?): Boolean =
+    contentType == "application/pdf" || originalFileName.endsWith(".pdf", ignoreCase = true)
+
+private fun cleanContent(content: String): String {
+    logger.info("📊 内容长度: ${content.length} 字符")
+    val cleanedContent = content
+        .replace(Regex("[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]"), "")
+        .replace("\uFFFD", "")
+        .replace("\uFEFF", "")
+    logger.info("📊 清理后内容长度: ${cleanedContent.length} 字符")
+    return cleanedContent
+}
+
+private fun prepareChunks(cleanedContent: String): List<ChunkInfo> {
+    val chunks = if (cleanedContent.length > DEFAULT_FILE_CHUNK_SIZE) {
+        logger.info("📦 内容较长 (${cleanedContent.length} 字符)，进行分块处理...")
+        chunkText(cleanedContent, chunkSize = DEFAULT_FILE_CHUNK_SIZE, overlap = DEFAULT_FILE_CHUNK_OVERLAP)
+    } else {
+        listOf(ChunkInfo(cleanedContent, 0, 1))
+    }
+    logger.info("📦 共生成 ${chunks.size} 个块")
+    return chunks
+}
+
+private suspend fun indexChunks(
+    file: File,
+    sessionId: String,
+    userId: String,
+    originalFileName: String,
+    chunks: List<ChunkInfo>
+): Int {
+    val fileType = file.extension.uppercase()
+    val participants = listOf(userId)
+    val normalizedSessionId = normalizedSessionDir(sessionId)
+    val filenameKeywords = extractKeywordsFromFilename(originalFileName)
+    var successCount = 0
+
+    for (chunk in chunks) {
+        if (indexChunk(
+                chunk = chunk,
+                file = file,
+                fileType = fileType,
+                sessionId = normalizedSessionId,
+                userId = userId,
+                originalFileName = originalFileName,
+                filenameKeywords = filenameKeywords,
+                participants = participants
+            )
+        ) {
+            successCount++
+        }
+    }
+
+    return successCount
+}
+
+private suspend fun indexChunk(
+    chunk: ChunkInfo,
+    file: File,
+    fileType: String,
+    sessionId: String,
+    userId: String,
+    originalFileName: String,
+    filenameKeywords: List<String>,
+    participants: List<String>
+): Boolean {
+    val allKeywords = buildChunkKeywords(filenameKeywords, chunk)
+    val summary = generateChunkSummary(
+        chunk = chunk,
+        fileName = originalFileName,
+        fileType = fileType,
+        keywords = allKeywords
+    )
+
+    return weaviateClient.indexDocument(
+        document = IndexDocument(
+            content = chunk.content,
+            title = originalFileName,
+            summary = summary,
+            sourceType = "FILE",
+            fileType = fileType,
+            sessionId = sessionId,
+            authorId = userId,
+            filePath = file.absolutePath,
+            timestamp = Instant.now().toString(),
+            tags = allKeywords,
+            chunkIndex = chunk.chunkIndex,
+            totalChunks = chunk.totalChunks
+        ),
+        participants = participants
+    )
+}
+
+private fun buildChunkKeywords(filenameKeywords: List<String>, chunk: ChunkInfo): List<String> =
+    (filenameKeywords + extractKeywordsFromContent(chunk.content)).distinct().take(MAX_INDEX_KEYWORDS)
 
 /**
  * 上传文件的异步预处理：必要时广播 FILE 消息，运行 FilePreprocessor 生成 .extracted.md，
@@ -740,6 +890,26 @@ private suspend fun reportOcrExtraction(extractedTextFile: File, finalSessionId:
     } catch (e: Exception) {
         logger.warn("无法读取提取内容: ${e.message}")
     }
+}
+
+private fun resolveChunkEnd(text: String, start: Int, chunkSize: Int): Int {
+    val proposedEnd = (start + chunkSize).coerceAtMost(text.length)
+    if (proposedEnd >= text.length) return proposedEnd
+
+    val searchStart = (proposedEnd - chunkSize / 2).coerceAtLeast(start)
+    return findChunkBoundary(text, searchStart, proposedEnd) ?: proposedEnd
+}
+
+private fun findChunkBoundary(text: String, searchStart: Int, end: Int): Int? {
+    val searchWindow = text.substring(searchStart, end)
+    val separators = listOf("\n\n", "\n", "。", ". ", "! ", "? ")
+    for (separator in separators) {
+        val separatorPosition = searchWindow.lastIndexOf(separator)
+        if (separatorPosition >= 0) {
+            return searchStart + separatorPosition + separator.length
+        }
+    }
+    return null
 }
 
 /**

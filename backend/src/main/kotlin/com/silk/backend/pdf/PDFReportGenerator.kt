@@ -1,23 +1,11 @@
 package com.silk.backend.pdf
 
 import com.silk.backend.ai.AIStepwiseAgent
-import com.silk.backend.agents.core.AgentRuntime
-import com.silk.backend.ChatHistoryManager
-import com.itextpdf.io.font.PdfEncodings
-import com.itextpdf.kernel.colors.ColorConstants
-import com.itextpdf.kernel.colors.DeviceRgb
-import com.itextpdf.kernel.font.PdfFont
-import com.itextpdf.kernel.font.PdfFontFactory
 import com.itextpdf.kernel.pdf.PdfDocument
 import com.itextpdf.kernel.pdf.PdfWriter
 import com.itextpdf.layout.Document
 import com.itextpdf.layout.element.AreaBreak
-import com.itextpdf.layout.element.Cell
-import com.itextpdf.layout.element.Paragraph
-import com.itextpdf.layout.element.Table
 import com.itextpdf.layout.properties.AreaBreakType
-import com.itextpdf.layout.properties.TextAlignment
-import com.itextpdf.layout.properties.UnitValue
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.LocalDateTime
@@ -187,25 +175,21 @@ class PDFReportGenerator {
         
         val pdfPath = "${pdfDir.path}/$fileName"
         
-        // ✅ 增强错误处理：捕获PDF生成过程中的异常
-        var pdfDoc: PdfDocument? = null
         var document: Document? = null
-        
-        try {
+
+        val reportResult = runCatching {
             // 创建 PDF 文档
             val writer = PdfWriter(pdfPath)
-            pdfDoc = PdfDocument(writer)
-            document = Document(pdfDoc)
-            
+            val reportDocument = Document(PdfDocument(writer))
+            document = reportDocument
+
             // ✅ 设置页面边距，增加可用宽度（默认边距为36pt左右）
             // 将边距从默认36pt减少到20pt，增加页面可用宽度
-            document.setMargins(20f, 20f, 20f, 20f)  // 上、右、下、左
+            reportDocument.setMargins(20f, 20f, 20f, 20f)  // 上、右、下、左
             
             // ✅ 为此 PDF 文档创建独立的字体对象（避免跨文档重用）
             val chineseFont = createChineseFont()  // 中文字体
-            val englishFont = createEnglishFont()  // 英文字体
-            
-            logger.info("✅ 字体加载完成：中文字体 + 英文字体")
+            logger.info("✅ 字体加载完成：中文字体")
             
             // 生成报告标题（包含群组名称和生成时间）
             val reportGeneratedTime = LocalDateTime.now()
@@ -217,46 +201,40 @@ class PDFReportGenerator {
             logger.debug("📋 诊断步骤数: {}", diagnosisResult.stepResults.size)
             logger.debug("📋 总结报告长度: {}", summaryReportText.length)
             
-            addReportHeader(document, reportTitle, reportGeneratedTime, chineseFont, englishFont)
+            addReportHeader(reportDocument, reportTitle, reportGeneratedTime, chineseFont)
             
             // 第一部分：患者信息表格
-            addPatientInfo(document, patientInfo, userName, sessionName, diagnosisResult, chineseFont, englishFont)
+            addPatientInfo(reportDocument, patientInfo, userName, sessionName, diagnosisResult, chineseFont)
             
             // 分页：患者信息 → 诊断步骤
-            document.add(AreaBreak(AreaBreakType.NEXT_PAGE))
+            reportDocument.add(AreaBreak(AreaBreakType.NEXT_PAGE))
             
             // 第二部分：诊断步骤表格
-            addDiagnosisStepsTable(document, diagnosisResult, chineseFont, englishFont)
+            addDiagnosisStepsTable(reportDocument, diagnosisResult, chineseFont)
             
             // 分页：诊断步骤 → 总结报告
             if (summaryReportText.isNotEmpty() && summaryReportText.length > 100) {
-                document.add(AreaBreak(AreaBreakType.NEXT_PAGE))
+                reportDocument.add(AreaBreak(AreaBreakType.NEXT_PAGE))
                 
                 // 第三部分：格式化的总结报告
-                addSummaryReportSection(document, summaryReportText, chineseFont, englishFont)
+                addSummaryReportSection(reportDocument, summaryReportText, chineseFont)
             }
             
-            addReportFooter(document, chineseFont, englishFont)
+            addReportFooter(reportDocument, chineseFont)
             
             // ✅ 正常关闭文档
-            document.close()
+            reportDocument.close()
             logger.info("✅ PDF文档已正确关闭")
             logger.info("✅ PDF 报告已生成并保存: {}", pdfPath)
-            
-        } catch (e: Exception) {
-            logger.error("❌ PDF 生成失败: {}", e.message, e)
-            
-            // ✅ 即使生成失败，也尝试关闭文档避免资源泄漏
-            try {
-                document?.close()
-                logger.info("✅ 异常处理：文档已关闭")
-            } catch (closeEx: Exception) {
-                logger.warn("⚠️ 异常处理：关闭文档也失败: {}", closeEx.message)
-                // 忽略关闭错误
-            }
-            
-            // ✅ 重新抛出异常，让调用方知道PDF生成失败
-            throw RuntimeException("PDF 生成失败：${e.message}", e)
+
+            // 生成下载 URL（对文件名进行 URL 编码，处理中文和特殊字符）
+            // 使用 URLEncoder 但替换 '+' 为 '%20'，因为在 URL 路径中空格应该是 %20 而不是 +
+            val encodedFileName = java.net.URLEncoder.encode(fileName, "UTF-8")
+                .replace("+", "%20")  // URL 路径中空格应该是 %20
+                .replace("%2F", "/")  // 恢复斜杠（如果有的话）
+            val downloadUrl = "/download/report/$sessionName/$encodedFileName"
+
+            Pair(pdfPath, downloadUrl)
         }
         
         // 生成下载 URL（对文件名进行 URL 编码，处理中文和特殊字符）
@@ -961,4 +939,3 @@ class PDFReportGenerator {
         document.add(line)
     }
 }
-

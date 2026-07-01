@@ -5,12 +5,14 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 
 /**
  * APK 下载和安装工具
@@ -39,7 +41,7 @@ object ApkDownloader {
         context: Context,
         onProgress: (DownloadState) -> Unit
     ): File? = withContext(Dispatchers.IO) {
-        try {
+        runCatching {
             onProgress(DownloadState.Downloading(0, "正在连接服务器..."))
             
             val url = URL(apkUrl)
@@ -128,7 +130,6 @@ object ApkDownloader {
             e.printStackTrace()
             throw RuntimeException("启动安装失败: ${e.message}")
         }
-    }
     
     /**
      * 格式化文件大小
@@ -141,4 +142,3 @@ object ApkDownloader {
         }
     }
 }
-

@@ -122,7 +122,10 @@ object ChatHistoryBackupManager {
             
             logger.info("✅ 撤回消息已备份: {} -> {}", message.messageId, backupFile.name)
             true
-        } catch (e: Exception) {
+        } catch (e: IOException) {
+            logger.error("❌ 备份撤回消息失败: {} - {}", message.messageId, e.message)
+            false
+        } catch (e: SecurityException) {
             logger.error("❌ 备份撤回消息失败: {} - {}", message.messageId, e.message)
             false
         }

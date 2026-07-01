@@ -75,7 +75,15 @@ jobs:
         run: |
           test -f frontend/webApp/build/dist/js/productionExecutable/index.html
           test -f backend/static/index.html
-          cmp frontend/webApp/build/dist/js/productionExecutable/index.html backend/static/index.html
+          if grep -q '__BUILD_TIMESTAMP__' frontend/webApp/build/dist/js/productionExecutable/index.html; then
+            sed -E \
+              -e 's/(webApp\.js\?v=)[0-9]{14}/\1__BUILD_TIMESTAMP__/g' \
+              -e 's/(Silk App Version: )[0-9]{14}/\1__BUILD_TIMESTAMP__/g' \
+              backend/static/index.html > /tmp/silk-static-index.normalized.html
+            cmp frontend/webApp/build/dist/js/productionExecutable/index.html /tmp/silk-static-index.normalized.html
+          else
+            cmp frontend/webApp/build/dist/js/productionExecutable/index.html backend/static/index.html
+          fi
 
       - name: Upload Web script build outputs
         if: always()
@@ -223,7 +231,15 @@ jobs:
           esac
 
           test -f backend/static/index.html
-          cmp frontend/webApp/build/dist/js/productionExecutable/index.html backend/static/index.html
+          if grep -q '__BUILD_TIMESTAMP__' frontend/webApp/build/dist/js/productionExecutable/index.html; then
+            sed -E \
+              -e 's/(webApp\.js\?v=)[0-9]{14}/\1__BUILD_TIMESTAMP__/g' \
+              -e 's/(Silk App Version: )[0-9]{14}/\1__BUILD_TIMESTAMP__/g' \
+              backend/static/index.html > /tmp/silk-build-all-index.normalized.html
+            cmp frontend/webApp/build/dist/js/productionExecutable/index.html /tmp/silk-build-all-index.normalized.html
+          else
+            cmp frontend/webApp/build/dist/js/productionExecutable/index.html backend/static/index.html
+          fi
           test -f backend/static/silk-ci-smoke.apk
           test -f backend/static/files/androidApp-debug.apk
           test -L backend/static/silk.apk
@@ -583,7 +599,15 @@ jobs:
           esac
 
           test -f backend/static/index.html
-          cmp frontend/webApp/build/dist/js/productionExecutable/index.html backend/static/index.html
+          if grep -q '__BUILD_TIMESTAMP__' frontend/webApp/build/dist/js/productionExecutable/index.html; then
+            sed -E \
+              -e 's/(webApp\.js\?v=)[0-9]{14}/\1__BUILD_TIMESTAMP__/g' \
+              -e 's/(Silk App Version: )[0-9]{14}/\1__BUILD_TIMESTAMP__/g' \
+              backend/static/index.html > /tmp/silk-deploy-index.normalized.html
+            cmp frontend/webApp/build/dist/js/productionExecutable/index.html /tmp/silk-deploy-index.normalized.html
+          else
+            cmp frontend/webApp/build/dist/js/productionExecutable/index.html backend/static/index.html
+          fi
           test -f backend/static/silk-ci-deploy-smoke.apk
           test -f backend/static/files/androidApp-debug.apk
           test -L backend/static/silk.apk

@@ -1,13 +1,12 @@
 package com.silk.backend.todos
 
 import com.silk.backend.database.UserTodoItemDto
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
+import java.io.IOException
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -16,6 +15,20 @@ import java.util.concurrent.ConcurrentHashMap
 private data class UserTodoFilePayload(
     val userId: String,
     val items: List<UserTodoItemDto> = emptyList()
+)
+
+internal data class ResolvedTodoUpdate(
+    val done: Boolean,
+    val actionType: String?,
+    val actionDetail: String?,
+    val reminderId: Long?,
+    val taskKind: String,
+    val repeatRule: String?,
+    val repeatAnchor: String?,
+    val templateId: String?,
+    val lifecycleState: String,
+    val closedAt: Long?,
+    val dateBucket: String?,
 )
 
 /**
@@ -64,7 +77,16 @@ object UserTodoStore {
         return try {
             val text = f.readText()
             json.decodeFromString<UserTodoFilePayload>(text).items
-        } catch (e: Exception) {
+        } catch (e: SerializationException) {
+            println("⚠️ [UserTodoStore] 读取失败 user=${userId.take(8)}… : ${e.message}")
+            emptyList()
+        } catch (e: IllegalArgumentException) {
+            println("⚠️ [UserTodoStore] 读取失败 user=${userId.take(8)}… : ${e.message}")
+            emptyList()
+        } catch (e: IOException) {
+            println("⚠️ [UserTodoStore] 读取失败 user=${userId.take(8)}… : ${e.message}")
+            emptyList()
+        } catch (e: SecurityException) {
             println("⚠️ [UserTodoStore] 读取失败 user=${userId.take(8)}… : ${e.message}")
             emptyList()
         }
@@ -185,10 +207,12 @@ object UserTodoStore {
             existing.add(createShortInstanceItem(draft, title, actionType, actionDetail, evidenceAt, now))
             return
         }
+
         val cur = existing[idx]
         val state = normalizeLifecycleState(cur)
         val closeTs = cur.closedAt ?: cur.updatedAt
         val mergedEvidenceAt = maxOf(cur.lastEvidenceAt ?: 0L, evidenceAt)
+
         if (state == "active") {
             existing[idx] = mergeIntoActiveShortInstance(cur, draft, title, actionType, actionDetail, mergedEvidenceAt, now)
             return
@@ -451,7 +475,7 @@ object UserTodoStore {
             val resolvedDone = resolveUpdatedDone(cur, resolvedLifecycle, done)
             val resolvedClosedAt = resolveUpdatedClosedAt(cur, resolvedLifecycle, closedAt, now)
             items[idx] = cur.copy(
-                done = resolvedDone,
+                done = resolved.done,
                 title = title ?: cur.title,
                 actionType = normalizeLowercaseUpdate(actionType, cur.actionType),
                 actionDetail = normalizePlainUpdate(actionDetail, cur.actionDetail),
@@ -783,34 +807,7 @@ object UserTodoStore {
     }
 
     private fun mergeItemsByLogicalKey(items: List<UserTodoItemDto>): List<UserTodoItemDto> {
-        val byKey = items.groupBy {
-            logicalDedupKey(it.title, it.actionType, it.actionDetail, it.taskKind)
-        }
-        val now = System.currentTimeMillis()
-        return byKey.values.map { g ->
-            val sorted = g.sortedByDescending { it.updatedAt }
-            val newest = sorted.first()
-            val mergedRow = g.size > 1
-            val anyDone = g.any { it.done }
-            val bestDetail = g.mapNotNull { it.actionDetail?.trim()?.takeIf { x -> x.isNotEmpty() } }
-                .maxByOrNull { it.length }
-            val preferredType = g.mapNotNull { it.actionType?.trim()?.lowercase(Locale.getDefault())?.ifBlank { null } }
-                .firstOrNull { it == "alarm" || it == "calendar" }
-                ?: newest.actionType?.trim()?.lowercase(Locale.getDefault())?.ifBlank { null }
-            val shortTitle = g.map { it.title.trim() }.filter { it.isNotEmpty() }
-                .minByOrNull { it.length } ?: newest.title
-            val mergedExec = g.mapNotNull { it.executedAt }.minOrNull()
-            val mergedRem = sorted.firstOrNull { it.reminderId != null }?.reminderId
-            newest.copy(
-                title = shortTitle.take(500),
-                actionType = preferredType?.ifBlank { null },
-                actionDetail = (bestDetail ?: newest.actionDetail)?.trim()?.ifBlank { null },
-                done = anyDone,
-                executedAt = mergedExec,
-                reminderId = mergedRem,
-                updatedAt = if (mergedRow) now else newest.updatedAt
-            )
-        }
+        return mergeUserTodoItemsByLogicalKey(items)
     }
 }
 

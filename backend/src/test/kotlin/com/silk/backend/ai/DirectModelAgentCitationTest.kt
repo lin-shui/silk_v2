@@ -59,6 +59,22 @@ class DirectModelAgentCitationTest {
     }
 
     @Test
+    fun `citation verifier keeps mixed available and citation markers with per kind indexes`() {
+        val agent = DirectModelAgent(sessionId = "test_session")
+        agent.resetReferencesForTest()
+        agent.registerAvailableForTest("知识库文档", "kb://topic-1/entry-1")
+        agent.registerCitationForTest("网络来源", "https://example.com/valid")
+
+        val content = agent.ensureCitationMarkersForTest(
+            "本地资料 [available:1] 网络资料 [citation:1] 无效 [available:9]"
+        )
+
+        assertContains(content, "[available:1]")
+        assertContains(content, "[citation:1]")
+        assertTrue(!content.contains("[available:9]"))
+    }
+
+    @Test
     fun `final references only include sources cited by content`() {
         val agent = DirectModelAgent(sessionId = "test_session")
         agent.resetReferencesForTest()
@@ -87,6 +103,23 @@ class DirectModelAgentCitationTest {
         assertEquals(1, response.references.size)
         assertEquals(1, response.references.first().index)
         assertEquals("https://example.com/used", response.references.first().url)
+    }
+
+    @Test
+    fun `missing cited references become placeholders after registered ones`() {
+        val agent = DirectModelAgent(sessionId = "test_session")
+        agent.resetReferencesForTest()
+        agent.registerCitationForTest("已注册来源", "https://example.com/used")
+
+        val references = agent.citedReferencesForTest(
+            "先引用真实来源[citation:1]，再引用缺失来源[citation:3]。"
+        )
+
+        assertEquals(2, references.size)
+        assertEquals("https://example.com/used", references.first().url)
+        assertEquals("citation", references.last().kind)
+        assertEquals(2, references.last().index)
+        assertEquals("来源 3", references.last().title)
     }
 
     @Test

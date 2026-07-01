@@ -83,9 +83,11 @@ class WebAppState {
         try {
             localStorage.removeItem("silk_selected_group")
             localStorage.removeItem("silk_scene")
-        } catch (e: Exception) {
-            console.log("清理LocalStorage:", e.message)
-        }
+            },
+            recover = { error ->
+                console.log("清理LocalStorage:", error.message)
+            },
+        )
         
         // 尝试从LocalStorage加载用户（JWT 会话恢复）
         tryRestoreSession()
@@ -119,6 +121,12 @@ class WebAppState {
         currentUser = user
         JwtManager.setStoredUser(user)
         navigateTo(Scene.GROUP_LIST)
+    }
+
+    fun setAuthSession(user: User, token: String?) {
+        ApiClient.setAuthToken(token)
+        saveAuthTokenToStorage(token)
+        setUser(user)
     }
     
     fun selectGroup(group: Group) {
@@ -237,6 +245,7 @@ class WebAppState {
         }
         JwtManager.clearAll()
         explicitLogoutRequested = true
+        ApiClient.setAuthToken(null)
         currentUser = null
         selectedGroup = null
         knowledgeBaseNavigationTarget = null
@@ -319,4 +328,20 @@ class WebAppState {
             } catch (_: Exception) {}
         }
     }
+
+    private fun saveAuthTokenToStorage(token: String?) {
+        recoverNonCancellation(
+            block = {
+                if (token.isNullOrBlank()) {
+                    localStorage.removeItem("silk_auth_token")
+                } else {
+                    localStorage.setItem("silk_auth_token", token)
+                }
+            },
+            recover = { error ->
+                console.log("保存认证 token 失败:", error)
+            },
+        )
+    }
+
 }

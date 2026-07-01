@@ -51,13 +51,24 @@ actual class PlatformWebSocket actual constructor(
     @Suppress("CyclomaticComplexMethod")
     actual fun connect(token: String?, userId: String, userName: String, groupId: String) {
         val connectToken = connectionGen.incrementAndGet()
+        val previousSession = cleanupExistingConnection()
+        closePreviousSession(previousSession)
+        val fullUrl = buildChatUrl(userId, userName, groupId)
+        log("🔗 [WebSocket] 连接到: $fullUrl")
+        job = scope.launch {
+            openSocketConnection(fullUrl, connectToken)
+        }
+    }
 
-        // 切群时先让旧连接失效，避免旧协程 finally 把新连接状态清空。
+    private fun cleanupExistingConnection(): DefaultClientWebSocketSession? {
         val previousSession = session
         job?.cancel()
-        session = null
         job = null
+        session = null
+        return previousSession
+    }
 
+    private fun closePreviousSession(previousSession: DefaultClientWebSocketSession?) {
         previousSession?.let { oldSession ->
             scope.launch {
                 try {
@@ -71,65 +82,75 @@ actual class PlatformWebSocket actual constructor(
                 }
             }
         }
+    }
 
-        val safeUserName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")
-        val safeGroupId = groupId.replace(" ", "_").replace("&", "_").replace("=", "_")
-        val fullUrl = "$serverUrl/chat?userId=$userId&userName=$safeUserName&groupId=$safeGroupId"
-        
-        log("🔗 [WebSocket] 连接到: $fullUrl")
-        
-        job = scope.launch {
-            try {
-                client.webSocket(urlString = fullUrl) {
-                    if (connectionGen.get() != connectToken) {
-                        close(CloseReason(CloseReason.Codes.NORMAL, "Stale connection"))
-                        return@webSocket
-                    }
-                    session = this
-                    log("✅ [WebSocket] 连接已打开")
-                    onConnected()
-                    
-                    try {
-                        for (frame in incoming) {
-                            when (frame) {
-                                is Frame.Text -> {
-                                    val text = frame.readText()
-                                    onMessage(text)
-                                }
-                                else -> {}
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        rethrowCancellation(e)
-                    } catch (e: IOException) {
-                        if (connectionGen.get() == connectToken) {
-                            log("❌ [WebSocket] 接收错误: ${e.message}")
-                        }
-                    } catch (e: IllegalStateException) {
-                        if (connectionGen.get() == connectToken) {
-                            log("❌ [WebSocket] 接收错误: ${e.message}")
-                        }
-                    }
+    private fun buildChatUrl(userId: String, userName: String, groupId: String): String {
+        val safeUserName = sanitizeQueryValue(userName)
+        val safeGroupId = sanitizeQueryValue(groupId)
+        return "$serverUrl/chat?userId=$userId&userName=$safeUserName&groupId=$safeGroupId"
+    }
+
+    private fun sanitizeQueryValue(value: String): String {
+        return value.replace(" ", "_").replace("&", "_").replace("=", "_")
+    }
+
+    private suspend fun openSocketConnection(fullUrl: String, connectToken: Int) {
+        try {
+            client.webSocket(urlString = fullUrl) {
+                if (connectionGen.get() != connectToken) {
+                    close(CloseReason(CloseReason.Codes.NORMAL, "Stale connection"))
+                    return@webSocket
                 }
-            } catch (e: CancellationException) {
-                rethrowCancellation(e)
-            } catch (e: IOException) {
-                if (connectionGen.get() == connectToken) {
-                    log("❌ [WebSocket] 连接失败: ${e.message}")
-                    onError(e.message ?: "Unknown error")
-                }
-            } catch (e: IllegalStateException) {
-                if (connectionGen.get() == connectToken) {
-                    log("❌ [WebSocket] 连接失败: ${e.message}")
-                    onError(e.message ?: "Unknown error")
-                }
-            } finally {
-                if (connectionGen.get() == connectToken) {
-                    session = null
-                    job = null
-                    onDisconnected()
+                session = this
+                log("✅ [WebSocket] 连接已打开")
+                onConnected()
+                consumeIncomingFrames(connectToken)
+            }
+        } catch (e: CancellationException) {
+            rethrowCancellation(e)
+        } catch (e: IOException) {
+            handleConnectFailure(e, connectToken)
+        } catch (e: IllegalStateException) {
+            handleConnectFailure(e, connectToken)
+        } finally {
+            finalizeConnection(connectToken)
+        }
+    }
+
+    private suspend fun DefaultClientWebSocketSession.consumeIncomingFrames(connectToken: Int) {
+        try {
+            for (frame in incoming) {
+                if (frame is Frame.Text) {
+                    onMessage(frame.readText())
                 }
             }
+        } catch (e: CancellationException) {
+            rethrowCancellation(e)
+        } catch (e: IOException) {
+            handleReceiveFailure(e, connectToken)
+        } catch (e: IllegalStateException) {
+            handleReceiveFailure(e, connectToken)
+        }
+    }
+
+    private fun handleReceiveFailure(error: Exception, connectToken: Int) {
+        if (connectionGen.get() == connectToken) {
+            log("❌ [WebSocket] 接收错误: ${error.message}")
+        }
+    }
+
+    private fun handleConnectFailure(error: Exception, connectToken: Int) {
+        if (connectionGen.get() == connectToken) {
+            log("❌ [WebSocket] 连接失败: ${error.message}")
+            onError(error.message ?: "Unknown error")
+        }
+    }
+
+    private fun finalizeConnection(connectToken: Int) {
+        if (connectionGen.get() == connectToken) {
+            session = null
+            job = null
+            onDisconnected()
         }
     }
     

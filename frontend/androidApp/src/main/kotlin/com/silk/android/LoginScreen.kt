@@ -180,8 +180,102 @@ fun LoginScreen(appState: AppState) {
     // 升级相关状态
     var showUpgradeDialog by remember { mutableStateOf(false) }
     var downloadState by remember { mutableStateOf<ApkDownloader.DownloadState>(ApkDownloader.DownloadState.Idle) }
-    
-    // Silk 渐变背景
+
+    val formState = LoginFormState(
+        isLogin = isLogin,
+        loginName = loginName,
+        password = password,
+        fullName = fullName,
+        phoneNumber = phoneNumber,
+        errorMessage = errorMessage,
+        isLoading = isLoading,
+    )
+
+    LoginScreenContent(
+        formState = formState,
+        focusManager = focusManager,
+        onLoginNameChange = {
+            loginName = it
+            errorMessage = ""
+        },
+        onPasswordChange = {
+            password = it
+            errorMessage = ""
+        },
+        onFullNameChange = {
+            fullName = it
+            errorMessage = ""
+        },
+        onPhoneNumberChange = {
+            phoneNumber = it
+            errorMessage = ""
+        },
+        onSubmit = {
+            scope.launch {
+                isLoading = true
+                errorMessage = ""
+                try {
+                    val response = if (isLogin) {
+                        ApiClient.login(loginName, password)
+                    } else {
+                        ApiClient.register(loginName, fullName, phoneNumber, password)
+                    }
+                    if (response.success && response.user != null) {
+                        println("${if (isLogin) "登录" else "注册"}成功: ${response.user.fullName}")
+                        appState.setAuthSession(response.user, response.token)
+                    } else {
+                        errorMessage = response.message
+                    }
+                } finally {
+                    isLoading = false
+                }
+            }
+        },
+        onToggleMode = {
+            if (!isLoading) {
+                isLogin = !isLogin
+                errorMessage = ""
+            }
+        },
+        onShowUpgradeDialog = { showUpgradeDialog = true },
+    )
+
+    LoginUpgradeDialog(
+        showUpgradeDialog = showUpgradeDialog,
+        downloadState = downloadState,
+        onDismiss = {
+            if (downloadState !is ApkDownloader.DownloadState.Downloading) {
+                showUpgradeDialog = false
+                downloadState = ApkDownloader.DownloadState.Idle
+            }
+        },
+        onStartDownload = {
+            scope.launch {
+                ApkDownloader.downloadApk(context) { state ->
+                    downloadState = state
+                    if (state is ApkDownloader.DownloadState.Success) {
+                        ApkDownloader.installApk(context, state.file)?.let { message ->
+                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun LoginScreenContent(
+    formState: LoginFormState,
+    focusManager: androidx.compose.ui.focus.FocusManager,
+    onLoginNameChange: (String) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onFullNameChange: (String) -> Unit,
+    onPhoneNumberChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onToggleMode: () -> Unit,
+    onShowUpgradeDialog: () -> Unit,
+) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -190,7 +284,7 @@ fun LoginScreen(appState: AppState) {
                     colors = listOf(
                         SilkColors.background,
                         SilkColors.secondary.copy(alpha = 0.3f),
-                        SilkColors.background
+                        SilkColors.background,
                     )
                 )
             )
@@ -201,7 +295,7 @@ fun LoginScreen(appState: AppState) {
                 .verticalScroll(rememberScrollState())
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Center,
         ) {
             // Logo 区域
             Column(
@@ -422,56 +516,23 @@ fun LoginScreen(appState: AppState) {
             // 升级按钮
             Spacer(modifier = Modifier.height(24.dp))
             OutlinedButton(
-                onClick = { showUpgradeDialog = true },
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = SilkColors.success
-                ),
-                modifier = Modifier.fillMaxWidth(0.6f)
+                onClick = onShowUpgradeDialog,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = SilkColors.success),
+                modifier = Modifier.fillMaxWidth(0.6f),
             ) {
                 Icon(
-                    Icons.Default.SystemUpdate, 
-                    contentDescription = null, 
-                    modifier = Modifier.size(18.dp)
+                    Icons.Default.SystemUpdate,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("检查更新")
             }
-            
-            // 底部版权信息
             Spacer(modifier = Modifier.height(16.dp))
             Text(
                 text = "Silk © 2026",
                 style = MaterialTheme.typography.bodySmall,
-                color = SilkColors.textLight
-            )
-        }
-        
-        // 升级对话框
-        if (showUpgradeDialog) {
-            UpgradeDialog(
-                downloadState = downloadState,
-                onDismiss = { 
-                    if (downloadState !is ApkDownloader.DownloadState.Downloading) {
-                        showUpgradeDialog = false
-                        downloadState = ApkDownloader.DownloadState.Idle
-                    }
-                },
-                onStartDownload = {
-                    scope.launch {
-                        ApkDownloader.downloadApk(context) { state ->
-                            downloadState = state
-                            
-                            // 下载成功后自动安装
-                            if (state is ApkDownloader.DownloadState.Success) {
-                                try {
-                                    ApkDownloader.installApk(context, state.file)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "启动安装失败: ${e.message}", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    }
-                }
+                color = SilkColors.textLight,
             )
         }
         

@@ -8,6 +8,7 @@ import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.slf4j.LoggerFactory
+import java.sql.SQLException
 import java.util.UUID
 
 /**
@@ -40,7 +41,10 @@ object UserRepository {
                 
                 findUserById(userId)
             }
-        } catch (e: Exception) {
+        } catch (e: ExposedSQLException) {
+            logger.error("❌ 创建用户失败: {}", e.message)
+            null
+        } catch (e: SQLException) {
             logger.error("❌ 创建用户失败: {}", e.message)
             null
         }
@@ -202,4 +206,3 @@ object UserRepository {
         )
     }
 }
-

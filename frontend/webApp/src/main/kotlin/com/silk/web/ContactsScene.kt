@@ -55,8 +55,280 @@ import org.jetbrains.compose.web.dom.Text
 
 @Suppress("CyclomaticComplexMethod")
 @Composable
+private fun ContactsTopBar(appState: WebAppState, strings: Strings) {
+    Div({
+        style {
+            background("linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryLight} 100%)")
+            padding(16.px, 24.px)
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            justifyContent(JustifyContent.SpaceBetween)
+            property("box-shadow", "0 2px 12px rgba(169, 137, 77, 0.2)")
+        }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                gap(16.px)
+            }
+        }) {
+            Button({
+                style {
+                    backgroundColor(Color.transparent)
+                    color(Color.white)
+                    border { style(LineStyle.None) }
+                    padding(8.px, 12.px)
+                    borderRadius(8.px)
+                    property("cursor", "pointer")
+                    fontSize(14.px)
+                    property("transition", "background-color 0.2s")
+                }
+                onClick { appState.navigateTo(Scene.GROUP_LIST) }
+            }) {
+                Text(strings.backToGroups)
+            }
+
+            Span({
+                style {
+                    color(Color.white)
+                    fontSize(20.px)
+                    property("font-weight", "600")
+                    property("letter-spacing", "1px")
+                }
+            }) {
+                Text(strings.contactsTitle)
+            }
+        }
+
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                gap(16.px)
+            }
+        }) {
+            Span({
+                style {
+                    color(Color.white)
+                    fontSize(14.px)
+                    property("opacity", "0.9")
+                }
+            }) {
+                Text(appState.currentUser?.fullName ?: "")
+            }
+
+            Button({
+                style {
+                    backgroundColor(Color.transparent)
+                    color(Color.white)
+                    border {
+                        width(1.px)
+                        style(LineStyle.Solid)
+                        color(Color.white)
+                    }
+                    padding(6.px, 12.px)
+                    borderRadius(6.px)
+                    property("cursor", "pointer")
+                    fontSize(12.px)
+                }
+                onClick { appState.logout() }
+            }) {
+                Text(strings.logoutButton)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContactsLoadingState(strings: Strings) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            height(200.px)
+        }
+    }) {
+        Span({
+            style {
+                color(Color(SilkColors.textSecondary))
+                fontSize(16.px)
+            }
+        }) {
+            Text(strings.loading)
+        }
+    }
+}
+
+@Composable
+private fun PendingRequestsSection(
+    pendingRequests: List<ContactRequest>,
+    strings: Strings,
+    onRequestClick: (ContactRequest) -> Unit,
+) {
+    if (pendingRequests.isEmpty()) return
+
+    Div({
+        style {
+            marginBottom(24.px)
+        }
+    }) {
+        H3({
+            style {
+                color(Color(SilkColors.textPrimary))
+                fontSize(16.px)
+                marginBottom(12.px)
+                property("font-weight", "600")
+            }
+        }) {
+            Text(strings.pendingRequestsTitle.replace("{count}", pendingRequests.size.toString()))
+        }
+
+        pendingRequests.forEach { request ->
+            PendingRequestCard(
+                request = request,
+                strings = strings,
+                onClick = { onRequestClick(request) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun EmptyContactsState(strings: Strings, onAddContact: () -> Unit) {
+    Div({
+        style {
+            backgroundColor(Color(SilkColors.surfaceElevated))
+            borderRadius(12.px)
+            padding(40.px)
+            textAlign("center")
+            property("border", "1px solid ${SilkColors.border}")
+        }
+    }) {
+        Div({
+            style {
+                fontSize(48.px)
+                marginBottom(16.px)
+            }
+        }) {
+            Text("👤")
+        }
+
+        Div({
+            style {
+                color(Color(SilkColors.textSecondary))
+                fontSize(16.px)
+                marginBottom(20.px)
+            }
+        }) {
+            Text(strings.noContactsYet)
+        }
+
+        Button({
+            style {
+                backgroundColor(Color(SilkColors.primary))
+                color(Color.white)
+                border { style(LineStyle.None) }
+                padding(12.px, 24.px)
+                borderRadius(8.px)
+                property("cursor", "pointer")
+                fontSize(14.px)
+                property("font-weight", "500")
+            }
+            onClick { onAddContact() }
+        }) {
+            Text(strings.addFirstContact)
+        }
+    }
+}
+
+@Composable
+private fun ContactsSection(
+    contacts: List<Contact>,
+    strings: Strings,
+    onAddContact: () -> Unit,
+    onContactClick: (Contact) -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.SpaceBetween)
+            alignItems(AlignItems.Center)
+            marginBottom(16.px)
+        }
+    }) {
+        H3({
+            style {
+                color(Color(SilkColors.textPrimary))
+                fontSize(16.px)
+                property("font-weight", "600")
+            }
+        }) {
+            Text(strings.myContactsWithCount.replace("{count}", contacts.size.toString()))
+        }
+
+        Button({
+            style {
+                backgroundColor(Color(SilkColors.primary))
+                color(Color.white)
+                border { style(LineStyle.None) }
+                padding(10.px, 20.px)
+                borderRadius(8.px)
+                property("cursor", "pointer")
+                fontSize(14.px)
+                property("font-weight", "500")
+            }
+            onClick { onAddContact() }
+        }) {
+            Text(strings.addContactButton)
+        }
+    }
+
+    if (contacts.isEmpty()) {
+        EmptyContactsState(strings = strings, onAddContact = onAddContact)
+    } else {
+        contacts.forEach { contact ->
+            ContactCard(
+                contact = contact,
+                onClick = { onContactClick(contact) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ContactsContent(
+    isLoading: Boolean,
+    contacts: List<Contact>,
+    pendingRequests: List<ContactRequest>,
+    strings: Strings,
+    onAddContact: () -> Unit,
+    onRequestClick: (ContactRequest) -> Unit,
+    onContactClick: (Contact) -> Unit,
+) {
+    if (isLoading) {
+        ContactsLoadingState(strings)
+        return
+    }
+
+    PendingRequestsSection(
+        pendingRequests = pendingRequests,
+        strings = strings,
+        onRequestClick = onRequestClick,
+    )
+    ContactsSection(
+        contacts = contacts,
+        strings = strings,
+        onAddContact = onAddContact,
+        onContactClick = onContactClick,
+    )
+}
+
+@Composable
 fun ContactsScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
+    val user = appState.currentUser ?: return
     
     var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
     var pendingRequests by remember { mutableStateOf<List<ContactRequest>>(emptyList()) }
@@ -68,10 +340,10 @@ fun ContactsScene(appState: WebAppState) {
     var userLanguage by remember { mutableStateOf<Language>(Language.CHINESE) }
     
     // Load user language preference - load immediately when component mounts
-    LaunchedEffect(appState.currentUser?.id) {
-        appState.currentUser?.let { user ->
-            scope.launch {
-                try {
+    LaunchedEffect(user.id) {
+        scope.launch {
+            recoverSuspendNonCancellation(
+                block = {
                     val response = ApiClient.getUserSettings(user.id)
                     if (response.success && response.settings != null) {
                         userLanguage = response.settings!!.language
@@ -124,92 +396,7 @@ fun ContactsScene(appState: WebAppState) {
             flexDirection(FlexDirection.Column)
         }
     }) {
-        // 顶部导航栏
-        Div({
-            style {
-                background("linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryLight} 100%)")
-                padding(16.px, 24.px)
-                display(DisplayStyle.Flex)
-                alignItems(AlignItems.Center)
-                justifyContent(JustifyContent.SpaceBetween)
-                property("box-shadow", "0 2px 12px rgba(169, 137, 77, 0.2)")
-            }
-        }) {
-            // 左侧：返回和标题
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    gap(16.px)
-                }
-            }) {
-                // 返回按钮（切换到群组列表）
-                Button({
-                    style {
-                        backgroundColor(Color.transparent)
-                        color(Color.white)
-                        border { style(LineStyle.None) }
-                        padding(8.px, 12.px)
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        fontSize(14.px)
-                        property("transition", "background-color 0.2s")
-                    }
-                    onClick { appState.navigateTo(Scene.GROUP_LIST) }
-                }) {
-                    Text(strings.backToGroups)
-                }
-                
-                Span({
-                    style {
-                        color(Color.white)
-                        fontSize(20.px)
-                        property("font-weight", "600")
-                        property("letter-spacing", "1px")
-                    }
-                }) {
-                    Text(strings.contactsTitle)
-                }
-            }
-            
-            // 右侧：用户信息和退出
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    gap(16.px)
-                }
-            }) {
-                Span({
-                    style {
-                        color(Color.white)
-                        fontSize(14.px)
-                        property("opacity", "0.9")
-                    }
-                }) {
-                    Text(appState.currentUser?.fullName ?: "")
-                }
-                
-                Button({
-                    style {
-                        backgroundColor(Color.transparent)
-                        color(Color.white)
-                        border {
-                            width(1.px)
-                            style(LineStyle.Solid)
-                            color(Color.white)
-                        }
-                        padding(6.px, 12.px)
-                        borderRadius(6.px)
-                        property("cursor", "pointer")
-                        fontSize(12.px)
-                    }
-                    onClick { appState.logout() }
-                }) {
-                    Text(strings.logoutButton)
-                }
-            }
-        }
+        ContactsTopBar(appState = appState, strings = strings)
         
         // 内容区域
         Div({
@@ -221,163 +408,24 @@ fun ContactsScene(appState: WebAppState) {
                 property("margin", "0 auto")
             }
         }) {
-            when {
-                isLoading -> {
-                    // 加载中
-                    Div({
-                        style {
-                            display(DisplayStyle.Flex)
-                            justifyContent(JustifyContent.Center)
-                            alignItems(AlignItems.Center)
-                            height(200.px)
-                        }
-                    }) {
-                        Span({
-                            style {
-                                color(Color(SilkColors.textSecondary))
-                                fontSize(16.px)
-                            }
-                        }) {
-                            Text(strings.loading)
+            ContactsContent(
+                isLoading = isLoading,
+                contacts = contacts,
+                pendingRequests = pendingRequests,
+                strings = strings,
+                onAddContact = { showAddContactDialog = true },
+                onRequestClick = { showRequestDetailDialog = it },
+                onContactClick = { contact ->
+                    scope.launch {
+                        val response = ApiClient.startPrivateChat(user.id, contact.contactId)
+                        if (response.success && response.group != null) {
+                            appState.selectGroup(response.group)
+                        } else {
+                            console.error("创建私聊失败:", response.message)
                         }
                     }
-                }
-                else -> {
-                    // 待处理的联系人请求
-                    if (pendingRequests.isNotEmpty()) {
-                        Div({
-                            style {
-                                marginBottom(24.px)
-                            }
-                        }) {
-                            H3({
-                                style {
-                                    color(Color(SilkColors.textPrimary))
-                                    fontSize(16.px)
-                                    marginBottom(12.px)
-                                    property("font-weight", "600")
-                                }
-                            }) {
-                                Text(strings.pendingRequestsTitle.replace("{count}", pendingRequests.size.toString()))
-                            }
-                            
-                            pendingRequests.forEach { request ->
-                                PendingRequestCard(
-                                    request = request,
-                                    strings = strings,
-                                    onClick = { showRequestDetailDialog = request }
-                                )
-                            }
-                        }
-                    }
-                    
-                    // 联系人列表标题
-                    Div({
-                        style {
-                            display(DisplayStyle.Flex)
-                            justifyContent(JustifyContent.SpaceBetween)
-                            alignItems(AlignItems.Center)
-                            marginBottom(16.px)
-                        }
-                    }) {
-                        H3({
-                            style {
-                                color(Color(SilkColors.textPrimary))
-                                fontSize(16.px)
-                                property("font-weight", "600")
-                            }
-                        }) {
-                            Text(strings.myContactsWithCount.replace("{count}", contacts.size.toString()))
-                        }
-                        
-                        Button({
-                            style {
-                                backgroundColor(Color(SilkColors.primary))
-                                color(Color.white)
-                                border { style(LineStyle.None) }
-                                padding(10.px, 20.px)
-                                borderRadius(8.px)
-                                property("cursor", "pointer")
-                                fontSize(14.px)
-                                property("font-weight", "500")
-                            }
-                            onClick { showAddContactDialog = true }
-                        }) {
-                            Text(strings.addContactButton)
-                        }
-                    }
-                    
-                    // 联系人列表
-                    if (contacts.isEmpty()) {
-                        // 空状态
-                        Div({
-                            style {
-                                backgroundColor(Color(SilkColors.surfaceElevated))
-                                borderRadius(12.px)
-                                padding(40.px)
-                                textAlign("center")
-                                property("border", "1px solid ${SilkColors.border}")
-                            }
-                        }) {
-                            Div({
-                                style {
-                                    fontSize(48.px)
-                                    marginBottom(16.px)
-                                }
-                            }) {
-                                Text("👤")
-                            }
-                            
-                            Div({
-                                style {
-                                    color(Color(SilkColors.textSecondary))
-                                    fontSize(16.px)
-                                    marginBottom(20.px)
-                                }
-                            }) {
-                                Text(strings.noContactsYet)
-                            }
-                            
-                            Button({
-                                style {
-                                    backgroundColor(Color(SilkColors.primary))
-                                    color(Color.white)
-                                    border { style(LineStyle.None) }
-                                    padding(12.px, 24.px)
-                                    borderRadius(8.px)
-                                    property("cursor", "pointer")
-                                    fontSize(14.px)
-                                    property("font-weight", "500")
-                                }
-                                onClick { showAddContactDialog = true }
-                            }) {
-                                Text(strings.addFirstContact)
-                            }
-                        }
-                    } else {
-                        // 联系人卡片列表
-                        contacts.forEach { contact ->
-                            ContactCard(
-                                contact = contact,
-                                onClick = {
-                                    // 点击联系人，开始私聊
-                                    scope.launch {
-                                        val response = appState.currentUser?.let { user ->
-                                            ApiClient.startPrivateChat(user.id, contact.contactId)
-                                        }
-                                        
-                                        if (response != null && response.success && response.group != null) {
-                                            appState.selectGroup(response.group)
-                                        } else {
-                                            console.error("创建私聊失败:", response?.message)
-                                        }
-                                    }
-                                }
-                            )
-                        }
-                    }
-                }
-            }
+                },
+            )
         }
     }
     
@@ -386,11 +434,7 @@ fun ContactsScene(appState: WebAppState) {
         AddContactDialog(
             appState = appState,
             strings = strings,
-            onDismiss = { showAddContactDialog = false },
-            onContactAdded = {
-                showAddContactDialog = false
-                loadContacts()
-            }
+            onDismiss = { showAddContactDialog = false }
         )
     }
     
@@ -567,8 +611,7 @@ fun PendingRequestCard(request: ContactRequest, strings: Strings, onClick: () ->
 fun AddContactDialog(
     appState: WebAppState,
     strings: Strings,
-    onDismiss: () -> Unit,
-    onContactAdded: () -> Unit
+    onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     var phoneNumber by remember { mutableStateOf("") }

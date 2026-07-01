@@ -107,73 +107,67 @@ class VersionChecker(
     suspend fun checkForUpdate() {
         println("🔄 [VersionChecker] 开始版本检查...")
         println("🔄 [VersionChecker] 本地版本: $currentVersionName (code=$currentVersionCode)")
-        
-        try {
-            val remoteVersion = ApiClient.getAppVersion()
-            
-            if (remoteVersion == null) {
-                println("⚠️ [VersionChecker] 无法获取远程版本信息 (API返回null)")
-                return
-            }
-            
-            println("🔍 [VersionChecker] 远程版本: ${remoteVersion.versionName} (code=${remoteVersion.versionCode})")
-            println("🔍 [VersionChecker] 比较: 本地=$currentVersionCode vs 远程=${remoteVersion.versionCode}")
-            
-            // 获取用户已跳过的版本
-            val skippedVersion = prefs.getInt(KEY_SKIPPED_VERSION, 0)
-            println("🔍 [VersionChecker] 已跳过版本: $skippedVersion")
-            
-            // 检查是否正在下载此版本（用户已点击下载，24小时内不再弹窗）
-            val downloadingVersion = prefs.getInt(KEY_DOWNLOADING_VERSION, 0)
-            val downloadingTime = prefs.getLong(KEY_DOWNLOADING_TIME, 0)
-            val currentTime = System.currentTimeMillis()
-            val isInDownloadSilence = downloadingVersion == remoteVersion.versionCode && 
-                                      currentTime < downloadingTime + DOWNLOAD_SILENCE_MS
-            if (isInDownloadSilence) {
-                val remainingHours = (downloadingTime + DOWNLOAD_SILENCE_MS - currentTime) / 3_600_000
-                println("📥 [VersionChecker] 版本 ${remoteVersion.versionCode} 已点击下载，静默中（剩余 $remainingHours 小时）")
-                return
-            }
-            
-            // 检查"稍后提醒"的延迟时间
-            val remindLaterTime = prefs.getLong(KEY_REMIND_LATER_TIME, 0)
-            val remindLaterVersion = prefs.getInt(KEY_REMIND_LATER_VERSION, 0)
-            // 复用上面的 currentTime
-            val isInRemindLaterPeriod = remindLaterVersion == remoteVersion.versionCode && 
-                                        currentTime < remindLaterTime + REMIND_LATER_DELAY_MS
-            
-            if (isInRemindLaterPeriod) {
-                val remainingMinutes = (remindLaterTime + REMIND_LATER_DELAY_MS - currentTime) / 60_000
-                println("⏰ [VersionChecker] 在稍后提醒期间，还剩 $remainingMinutes 分钟")
-                return
-            }
-            
-            // 如果远程版本更新，且不是用户已跳过的版本
-            if (remoteVersion.versionCode > currentVersionCode && 
-                remoteVersion.versionCode != skippedVersion) {
-                println("🆕 [VersionChecker] ✅ 发现新版本! ${remoteVersion.versionName} (${remoteVersion.versionCode})")
-                println("🆕 [VersionChecker] 准备显示更新对话框...")
+        val remoteVersion = ApiClient.getAppVersion()
+
+        if (remoteVersion == null) {
+            println("⚠️ [VersionChecker] 无法获取远程版本信息 (API返回null)")
+            return
+        }
+
+        println("🔍 [VersionChecker] 远程版本: ${remoteVersion.versionName} (code=${remoteVersion.versionCode})")
+        println("🔍 [VersionChecker] 比较: 本地=$currentVersionCode vs 远程=${remoteVersion.versionCode}")
+
+        // 获取用户已跳过的版本
+        val skippedVersion = prefs.getInt(KEY_SKIPPED_VERSION, 0)
+        println("🔍 [VersionChecker] 已跳过版本: $skippedVersion")
+
+        // 检查是否正在下载此版本（用户已点击下载，24小时内不再弹窗）
+        val downloadingVersion = prefs.getInt(KEY_DOWNLOADING_VERSION, 0)
+        val downloadingTime = prefs.getLong(KEY_DOWNLOADING_TIME, 0)
+        val currentTime = System.currentTimeMillis()
+        val isInDownloadSilence = downloadingVersion == remoteVersion.versionCode &&
+            currentTime < downloadingTime + DOWNLOAD_SILENCE_MS
+        if (isInDownloadSilence) {
+            val remainingHours = (downloadingTime + DOWNLOAD_SILENCE_MS - currentTime) / 3_600_000
+            println("📥 [VersionChecker] 版本 ${remoteVersion.versionCode} 已点击下载，静默中（剩余 $remainingHours 小时）")
+            return
+        }
+
+        // 检查"稍后提醒"的延迟时间
+        val remindLaterTime = prefs.getLong(KEY_REMIND_LATER_TIME, 0)
+        val remindLaterVersion = prefs.getInt(KEY_REMIND_LATER_VERSION, 0)
+        // 复用上面的 currentTime
+        val isInRemindLaterPeriod = remindLaterVersion == remoteVersion.versionCode &&
+            currentTime < remindLaterTime + REMIND_LATER_DELAY_MS
+
+        if (isInRemindLaterPeriod) {
+            val remainingMinutes = (remindLaterTime + REMIND_LATER_DELAY_MS - currentTime) / 60_000
+            println("⏰ [VersionChecker] 在稍后提醒期间，还剩 $remainingMinutes 分钟")
+            return
+        }
+
+        // 如果远程版本更新，且不是用户已跳过的版本
+        if (remoteVersion.versionCode > currentVersionCode &&
+            remoteVersion.versionCode != skippedVersion) {
+            println("🆕 [VersionChecker] ✅ 发现新版本! ${remoteVersion.versionName} (${remoteVersion.versionCode})")
+            println("🆕 [VersionChecker] 准备显示更新对话框...")
+            _newVersionAvailable.value = remoteVersion
+            _showUpdateDialog.value = true
+            println("🆕 [VersionChecker] showUpdateDialog 已设置为 true")
+        } else if (remoteVersion.versionCode > skippedVersion && skippedVersion != 0) {
+            // 如果有更新的版本（比跳过的版本还新），重新提示
+            if (remoteVersion.versionCode > currentVersionCode) {
+                println("🆕 [VersionChecker] 发现比跳过版本更新的版本: ${remoteVersion.versionName}")
                 _newVersionAvailable.value = remoteVersion
                 _showUpdateDialog.value = true
-                println("🆕 [VersionChecker] showUpdateDialog 已设置为 true")
-            } else if (remoteVersion.versionCode > skippedVersion && skippedVersion != 0) {
-                // 如果有更新的版本（比跳过的版本还新），重新提示
-                if (remoteVersion.versionCode > currentVersionCode) {
-                    println("🆕 [VersionChecker] 发现比跳过版本更新的版本: ${remoteVersion.versionName}")
-                    _newVersionAvailable.value = remoteVersion
-                    _showUpdateDialog.value = true
-                }
-            } else {
-                // 没有新版本的原因
-                if (remoteVersion.versionCode <= currentVersionCode) {
-                    println("ℹ️ [VersionChecker] 无需更新: 本地版本($currentVersionCode) >= 远程版本(${remoteVersion.versionCode})")
-                } else if (remoteVersion.versionCode == skippedVersion) {
-                    println("ℹ️ [VersionChecker] 用户已跳过此版本: ${remoteVersion.versionCode}")
-                }
             }
-        } catch (e: Exception) {
-            println("❌ [VersionChecker] 版本检查失败: ${e.message}")
-            e.printStackTrace()
+        } else {
+            // 没有新版本的原因
+            if (remoteVersion.versionCode <= currentVersionCode) {
+                println("ℹ️ [VersionChecker] 无需更新: 本地版本($currentVersionCode) >= 远程版本(${remoteVersion.versionCode})")
+            } else if (remoteVersion.versionCode == skippedVersion) {
+                println("ℹ️ [VersionChecker] 用户已跳过此版本: ${remoteVersion.versionCode}")
+            }
         }
     }
     
@@ -235,12 +229,9 @@ class VersionChecker(
             }
             
             if (apkFile != null) {
-                // 下载成功，自动安装
-                try {
-                    ApkDownloader.installApk(context, apkFile)
-                } catch (e: Exception) {
-                    println("❌ 安装失败: ${e.message}")
-                    _downloadState.value = ApkDownloader.DownloadState.Error("安装失败: ${e.message}")
+                ApkDownloader.installApk(context, apkFile)?.let { message ->
+                    println("❌ 安装失败: $message")
+                    _downloadState.value = ApkDownloader.DownloadState.Error(message)
                 }
             }
         }
@@ -262,4 +253,3 @@ class VersionChecker(
         scope.cancel()
     }
 }
-

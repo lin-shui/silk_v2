@@ -9,7 +9,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.silk.shared.i18n.getStrings
 import com.silk.shared.models.Language
-import com.silk.shared.models.UserSettings
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.browser.document
@@ -63,7 +63,6 @@ fun SettingsScene(appState: WebAppState) {
     val scope = rememberCoroutineScope()
     val user = appState.currentUser ?: return
 
-    var settings by remember { mutableStateOf<UserSettings?>(null) }
     var isLoading by remember { mutableStateOf(true) }
     var isSaving by remember { mutableStateOf(false) }
     var saveMessage by remember { mutableStateOf<String?>(null) }
@@ -81,9 +80,8 @@ fun SettingsScene(appState: WebAppState) {
     var ccIsTesting by remember { mutableStateOf(false) }
     var ccTestResult by remember { mutableStateOf<String?>(null) }
     var ccTestGeneration by remember { mutableStateOf(0) }
-    
-    // Load settings on mount
-    LaunchedEffect(Unit) {
+
+    LaunchedEffect(user.id) {
         scope.launch {
             isLoading = true
             try {
@@ -118,14 +116,11 @@ fun SettingsScene(appState: WebAppState) {
             }
         }
     }
-    
-    // Get strings based on selected language
+
     val strings = getStrings(selectedLanguage)
-    
-    // Get English strings for the language dropdown (to show bilingual names)
     val englishStrings = getStrings(Language.ENGLISH)
     val chineseStrings = getStrings(Language.CHINESE)
-    
+
     Div({
         style {
             minHeight(100.vh)
@@ -135,54 +130,7 @@ fun SettingsScene(appState: WebAppState) {
             flexDirection(FlexDirection.Column)
         }
     }) {
-        // Header
-        Div({
-            style {
-                background("linear-gradient(135deg, ${SilkColors.primary} 0%, ${SilkColors.primaryDark} 100%)")
-                color(Color.white)
-                padding(16.px, 24.px)
-                display(DisplayStyle.Flex)
-                alignItems(AlignItems.Center)
-                justifyContent(JustifyContent.SpaceBetween)
-                property("box-shadow", "0 2px 12px rgba(169, 137, 77, 0.2)")
-            }
-        }) {
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    gap(16.px)
-                }
-            }) {
-                Button({
-                    style {
-                        backgroundColor(Color.transparent)
-                        color(Color.white)
-                        border { style(LineStyle.None) }
-                        padding(8.px, 12.px)
-                        borderRadius(8.px)
-                        property("cursor", "pointer")
-                        fontSize(14.px)
-                    }
-                    onClick { appState.navigateBack() }
-                }) {
-                    Text("← ${strings.backButton}")
-                }
-                
-                Span({
-                    style {
-                        color(Color.white)
-                        fontSize(20.px)
-                        property("font-weight", "600")
-                        property("letter-spacing", "1px")
-                    }
-                }) {
-                    Text(strings.settingsTitle)
-                }
-            }
-        }
-        
-        // Content
+        SettingsHeader(strings = strings, onBack = { appState.navigateBack() })
         Div({
             style {
                 flex(1)
@@ -195,15 +143,7 @@ fun SettingsScene(appState: WebAppState) {
             }
         }) {
             if (isLoading) {
-                Div({
-                    style {
-                        textAlign("center")
-                        padding(60.px)
-                        color(Color(SilkColors.textSecondary))
-                    }
-                }) {
-                    Text("加载中...")
-                }
+                SettingsLoadingState()
             } else {
                 // Language selector
                 Div({ style { marginBottom(32.px) } }) {

@@ -22,6 +22,8 @@ import com.silk.shared.models.UserSettings
 import com.silk.shared.models.isAgentUserId
 import com.silk.shared.models.ContentBlock
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.coroutines.await
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.browser.window
@@ -77,6 +79,8 @@ import org.jetbrains.compose.web.dom.Div
 import org.jetbrains.compose.web.dom.H3
 import org.jetbrains.compose.web.dom.Img
 import org.jetbrains.compose.web.dom.Input
+import org.jetbrains.compose.web.dom.Option
+import org.jetbrains.compose.web.dom.Select
 import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
 import org.jetbrains.compose.web.dom.TextArea
@@ -100,11 +104,11 @@ object SilkColors {
     const val primary = "#C9A86C"
     const val primaryDark = "#A8894D"
     const val primaryLight = "#E0CDA0"
-    
+
     // 次要色调 - 奶油丝绸
     const val secondary = "#E8D5B5"
     const val secondaryDark = "#D4C4A0"
-    
+
     // 背景色 - 温暖的奶白色
     const val background = "#FDF8F0"
     const val backgroundGradient = "linear-gradient(135deg, #FDF8F0 0%, #F5EDE0 50%, #EDE4D3 100%)"
@@ -457,15 +461,15 @@ fun main() {
     
     renderComposable(rootElementId = "root") {
         console.log("2️⃣ renderComposable 已调用")
-        
+
         Style(SilkStylesheet)
         SilkChatStyles.inject()
         console.log("3️⃣ Silk样式已加载")
-        
+
         SilkApp()
         console.log("4️⃣ 主应用组件已渲染")
     }
-    
+
     console.log("✅ Silk 启动完成")
 }
 
@@ -479,6 +483,16 @@ fun SilkApp() {
         val handled = handleOAuthCallback(appState)
         if (handled) {
             console.log("✅ OAuth 回调处理完成")
+        }
+    }
+
+    DisposableEffect(appState) {
+        val bridge: (String?, String) -> Unit = { topicId, entryId ->
+            appState.openKnowledgeBaseEntry(entryId = entryId, topicId = topicId)
+        }
+        window.asDynamic().__silkOpenKnowledgeBaseEntry = bridge
+        onDispose {
+            window.asDynamic().__silkOpenKnowledgeBaseEntry = null
         }
     }
 
@@ -650,7 +664,7 @@ fun SilkTabContent(appState: WebAppState) {
 @Composable
 fun ChatScene(appState: WebAppState) {
     console.log("🎬 ChatScene被调用")
-    
+
     val group = appState.selectedGroup
     val user = appState.currentUser
     val scope = rememberCoroutineScope()
@@ -667,15 +681,10 @@ fun ChatScene(appState: WebAppState) {
     
     console.log("   群组:", group?.name ?: "null")
     console.log("   用户:", user?.fullName ?: "null")
-    
+
     if (group == null || user == null) {
         console.log("⚠️ 群组或用户为空，显示错误页面")
-        Div({ style { padding(20.px) } }) {
-            Text("错误：缺少群组或用户信息")
-            Button({ onClick { appState.navigateBack() } }) {
-                Text("返回")
-            }
-        }
+        ChatSceneMissingContext(appState)
         return
     }
 
@@ -705,9 +714,13 @@ fun ChatScene(appState: WebAppState) {
         }
     }
 
-    LaunchedEffect(user.id, group.id) {
-        refreshSidebarGroups()
-    }
+    ChatSceneEffects(
+        user = user,
+        group = group,
+        setLoading = { isLoadingGroups = it },
+        onGroupsLoaded = { userGroups = it },
+        onUnreadCountsLoaded = { unreadCounts = it },
+    )
 
     // KB 内联引用：注册 window 桥，供聊天内 [[kb:...]] 链接点击跳转到知识库对应条目
     DisposableEffect(appState) {
@@ -1225,6 +1238,261 @@ fun ChatScene(appState: WebAppState) {
     }
 }
 
+@Composable
+private fun ChatSceneMissingContext(appState: WebAppState) {
+    Div({ style { padding(20.px) } }) {
+        Text("错误：缺少群组或用户信息")
+        Button({ onClick { appState.navigateBack() } }) {
+            Text("返回")
+        }
+    }
+}
+
+@Composable
+private fun ChatSceneEffects(
+    user: User,
+    group: Group,
+    setLoading: (Boolean) -> Unit,
+    onGroupsLoaded: (List<Group>) -> Unit,
+    onUnreadCountsLoaded: (Map<String, Int>) -> Unit,
+) {
+    LaunchedEffect(user.id, group.id) {
+        refreshChatSceneSidebar(user, setLoading, onGroupsLoaded, onUnreadCountsLoaded)
+    }
+
+    LaunchedEffect(user.id) {
+        pollChatSceneUnreadCounts(user, onUnreadCountsLoaded)
+    }
+}
+
+@Composable
+private fun ChatSceneSidebar(
+    currentGroup: Group,
+    userGroups: List<Group>,
+    unreadCounts: Map<String, Int>,
+    isLoadingGroups: Boolean,
+    onSelectGroup: (Group) -> Unit,
+) {
+    Div({
+        style {
+            width(320.px)
+            property("flex-shrink", "0")
+            property("border-right", "1px solid ${SilkColors.border}")
+            backgroundColor(Color("rgba(255,255,255,0.88)"))
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("overflow", "hidden")
+            property("backdrop-filter", "blur(6px)")
+        }
+    }) {
+        ChatSceneSidebarHeader()
+        ChatSceneSidebarContent(
+            currentGroup = currentGroup,
+            userGroups = userGroups,
+            unreadCounts = unreadCounts,
+            isLoadingGroups = isLoadingGroups,
+            onSelectGroup = onSelectGroup,
+        )
+    }
+}
+
+@Composable
+private fun ChatSceneSidebarHeader() {
+    Div({
+        style {
+            padding(16.px, 16.px, 12.px, 16.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            color(Color(SilkColors.textPrimary))
+            fontSize(16.px)
+            property("font-weight", "700")
+            property("letter-spacing", "1px")
+        }
+    }) {
+        Text("全部群组")
+    }
+}
+
+@Composable
+private fun ChatSceneSidebarContent(
+    currentGroup: Group,
+    userGroups: List<Group>,
+    unreadCounts: Map<String, Int>,
+    isLoadingGroups: Boolean,
+    onSelectGroup: (Group) -> Unit,
+) {
+    Div({
+        style {
+            property("flex", "1")
+            property("overflow-y", "auto")
+            padding(10.px)
+        }
+    }) {
+        when {
+            isLoadingGroups -> ChatSceneSidebarPlaceholder("加载群组中...")
+            userGroups.isEmpty() -> ChatSceneSidebarPlaceholder("暂无群组")
+            else -> {
+                userGroups.forEach { item ->
+                    ChatSceneSidebarGroupCard(
+                        item = item,
+                        isActive = item.id == currentGroup.id,
+                        unreadCount = unreadCounts[item.id] ?: 0,
+                        onClick = {
+                            if (item.id != currentGroup.id) {
+                                onSelectGroup(item)
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatSceneSidebarPlaceholder(text: String) {
+    Div({
+        style {
+            color(Color(SilkColors.textSecondary))
+            fontSize(13.px)
+            textAlign("center")
+            padding(18.px)
+        }
+    }) {
+        Text(text)
+    }
+}
+
+@Composable
+private fun ChatSceneSidebarGroupCard(
+    item: Group,
+    isActive: Boolean,
+    unreadCount: Int,
+    onClick: () -> Unit,
+) {
+    Div({
+        style {
+            padding(12.px, 14.px)
+            marginBottom(8.px)
+            borderRadius(8.px)
+            backgroundColor(
+                if (isActive) Color("rgba(201, 168, 108, 0.2)")
+                else Color(SilkColors.surfaceElevated)
+            )
+            property("border", if (isActive) "1px solid ${SilkColors.primary}" else "1px solid ${SilkColors.border}")
+            property("box-shadow", if (isActive) "0 2px 8px rgba(169, 137, 77, 0.22)" else "0 1px 4px rgba(169, 137, 77, 0.08)")
+            property("cursor", "pointer")
+            property("transition", "all 0.2s ease")
+        }
+        onClick { onClick() }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
+                alignItems(AlignItems.Center)
+                property("gap", "10px")
+            }
+        }) {
+            Span({
+                style {
+                    color(Color(SilkColors.textPrimary))
+                    fontSize(14.px)
+                    property("font-weight", if (isActive) "700" else "600")
+                    property("flex", "1")
+                    property("overflow", "hidden")
+                    property("text-overflow", "ellipsis")
+                    property("white-space", "nowrap")
+                }
+            }) {
+                Text(item.name)
+            }
+            ChatSceneUnreadBadge(unreadCount)
+        }
+        Div({
+            style {
+                color(Color(SilkColors.textSecondary))
+                fontSize(11.px)
+                marginTop(4.px)
+                property("letter-spacing", "1px")
+            }
+        }) {
+            Text("[${item.invitationCode}]")
+        }
+    }
+}
+
+@Composable
+private fun ChatSceneUnreadBadge(unreadCount: Int) {
+    if (unreadCount <= 0) {
+        return
+    }
+
+    Span({
+        style {
+            minWidth(22.px)
+            height(22.px)
+            padding(0.px, 6.px)
+            borderRadius(11.px)
+            backgroundColor(Color("#FF5722"))
+            color(Color.white)
+            fontSize(11.px)
+            property("font-weight", "700")
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+        }
+    }) {
+        Text(if (unreadCount > 99) "99+" else unreadCount.toString())
+    }
+}
+
+private suspend fun refreshChatSceneSidebar(
+    user: User,
+    setLoading: (Boolean) -> Unit,
+    onGroupsLoaded: (List<Group>) -> Unit,
+    onUnreadCountsLoaded: (Map<String, Int>) -> Unit,
+) {
+    setLoading(true)
+    try {
+        recoverSuspendNonCancellation(
+            block = {
+                val groupsResponse = ApiClient.getUserGroups(user.id)
+                if (groupsResponse.success) {
+                    onGroupsLoaded((groupsResponse.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") })
+                }
+                fetchChatSceneUnreadCounts(user.id)?.let(onUnreadCountsLoaded)
+            },
+            recover = { error ->
+                console.error("❌ 加载聊天室群组列表失败:", error)
+            },
+        )
+    } finally {
+        setLoading(false)
+    }
+}
+
+private suspend fun pollChatSceneUnreadCounts(
+    user: User,
+    onUnreadCountsLoaded: (Map<String, Int>) -> Unit,
+) {
+    while (true) {
+        kotlinx.coroutines.delay(30000)
+        recoverSuspendNonCancellation(
+            block = {
+                fetchChatSceneUnreadCounts(user.id)?.let(onUnreadCountsLoaded)
+            },
+            recover = { error ->
+                console.error("❌ 刷新未读消息失败:", error)
+            },
+        )
+    }
+}
+
+private suspend fun fetchChatSceneUnreadCounts(userId: String): Map<String, Int>? {
+    val unreadResponse = ApiClient.getUnreadCounts(userId)
+    return if (unreadResponse.success) unreadResponse.unreadCounts else null
+}
+
 // Silk样式表 - 丝滑温暖风格
 object SilkStylesheet : StyleSheet() {
     val container by style {
@@ -1616,6 +1884,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     val statusMessages by chatClient.statusMessages.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
+    val isHistoryLoading by chatClient.isLoadingHistory.collectAsState()
     val pendingQuestionId by chatClient.pendingQuestionId.collectAsState()
     val ccMetadataJson by chatClient.ccMetadataJson.collectAsState()
     val contentBlocks by chatClient.transientContentBlocks.collectAsState()
@@ -1691,11 +1960,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var isExportingMarkdown by remember { mutableStateOf(false) }
     var exportMarkdownHint by remember { mutableStateOf<String?>(null) }
     var showFolderExplorer by remember { mutableStateOf(false) }
-    var folderFiles by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var isLoadingFiles by remember { mutableStateOf(false) }
-    
-    // Drag-and-drop state
-    var isDraggingOver by remember { mutableStateOf(false) }
 
     // ASR 语音输入状态
     var isVoiceRecording by remember { mutableStateOf(false) }
@@ -1736,25 +2001,21 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var isSelectionMode by remember { mutableStateOf(false) }
     var selectedMessageIds by remember { mutableStateOf(setOf<String>()) }
     
-    // Escape 键退出选择模式
-    DisposableEffect(Unit) {
-        val handler: (org.w3c.dom.events.Event) -> Unit = { event ->
-            val key = event.asDynamic().key as? String
-            if (key == "Escape" && isSelectionMode) {
-                isSelectionMode = false
-                selectedMessageIds = emptySet()
-            }
-        }
-        window.addEventListener("keydown", handler)
-        onDispose { window.removeEventListener("keydown", handler) }
-    }
-    
     // 消息转发相关状态
     var showForwardDialog by remember { mutableStateOf(false) }
     var messageToForward by remember { mutableStateOf<Message?>(null) }
     var userGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
     var isLoadingGroups by remember { mutableStateOf(false) }
     var forwardResult by remember { mutableStateOf<String?>(null) }
+    var kbCaptureDraft by remember { mutableStateOf<KnowledgeCaptureDraft?>(null) }
+    var kbCaptureTopics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
+    var kbCaptureGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
+    var kbCaptureSelectedSpaceId by remember { mutableStateOf(PERSONAL_SPACE_ID) }
+    var kbCaptureSelectedTopicId by remember { mutableStateOf("") }
+    var kbCaptureTitle by remember { mutableStateOf("") }
+    var kbCaptureContent by remember { mutableStateOf("") }
+    var kbCaptureSaving by remember { mutableStateOf(false) }
+    var kbCaptureResult by remember { mutableStateOf<String?>(null) }
     
     // 从群组成员列表和消息历史中提取用户列表（去重）
     // 优先使用 groupMembers（包含所有成员），然后补充消息历史中的成员
@@ -1776,25 +2037,355 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
         users.toList()
     }
+
+    val resetKnowledgeCaptureDialog = {
+        kbCaptureDraft = null
+        kbCaptureTopics = emptyList()
+        kbCaptureGroups = emptyList()
+        kbCaptureSelectedSpaceId = PERSONAL_SPACE_ID
+        kbCaptureSelectedTopicId = ""
+        kbCaptureTitle = ""
+        kbCaptureContent = ""
+        kbCaptureSaving = false
+        kbCaptureResult = null
+    }
+
+    ChatAppEffects(
+        user = user,
+        group = group,
+        currentScene = appState.currentScene,
+        chatClient = chatClient,
+        isSelectionMode = isSelectionMode,
+        onSelectionCleared = {
+            isSelectionMode = false
+            selectedMessageIds = emptySet()
+        },
+        messagesSize = messages.size,
+        transientMessage = transientMessage,
+        statusMessagesSize = statusMessages.size,
+        onLanguageLoaded = { userLanguage = it },
+        onSessionReset = { hasSentDefaultInstruction = false },
+        onGroupMembersLoaded = { groupMembers = it },
+    )
+
+    LaunchedEffect(group.id) {
+        persistentKbExcludedSpaceIds = ApiClient.getKBContextPreferences(user.id).excludedSpaceIds
+    }
+
+    LaunchedEffect(group.id, isHistoryLoading, messages, persistentKbExcludedSpaceIds) {
+        val persistentExcludedSpaceIds = persistentKbExcludedSpaceIds
+        if (restoredKbContextSelection || isHistoryLoading || persistentExcludedSpaceIds == null) {
+            return@LaunchedEffect
+        }
+        kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+            restoredSelection = latestKnowledgeBaseContextSelection(messages, user.id),
+            persistentExcludedSpaceIds = persistentExcludedSpaceIds,
+        )
+        restoredKbContextSelection = true
+    }
+
+    HandlePendingChatNavigation(
+        groupId = group.id,
+        isHistoryLoading = isHistoryLoading,
+        messagesSize = messages.size,
+        navigationTarget = appState.chatNavigationTarget,
+        onConsumed = appState::consumeChatNavigationTarget,
+    )
+
+    Div({ classes(SilkStylesheet.container) }) {
+        ChatAppHeader(
+            scope = scope,
+            user = user,
+            group = group,
+            appState = appState,
+            chatClient = chatClient,
+            messages = messages,
+            strings = strings,
+            isSelectionMode = isSelectionMode,
+            selectedMessageIds = selectedMessageIds,
+            isExportingMarkdown = isExportingMarkdown,
+            exportMarkdownHint = exportMarkdownHint,
+            onSelectionModeChanged = { isSelectionMode = it },
+            onSelectedMessageIdsChanged = { selectedMessageIds = it },
+            onMessageForwardChanged = { messageToForward = it },
+            onGroupTargetsLoaded = { userGroups = it },
+            onGroupTargetsLoadingChanged = { isLoadingGroups = it },
+            onForwardDialogVisibilityChanged = { showForwardDialog = it },
+            onExportingChanged = { isExportingMarkdown = it },
+            onExportMarkdownHintChanged = { exportMarkdownHint = it },
+            onShowFolderExplorer = {
+                showFolderExplorer = true
+                isLoadingFiles = true
+            },
+            onShowInvitationDialog = { showInvitationDialog = true },
+            onContactsLoaded = { contacts = it },
+            onGroupMembersLoaded = { groupMembers = it },
+            onContactsLoadingChanged = { isLoadingContacts = it },
+            onShowAddMemberDialog = { showAddMemberDialog = true },
+            onShowMembersDialog = { showMembersDialog = true },
+        )
+
+        ChatAppConnectionBanner(
+            scope = scope,
+            connectionState = connectionState,
+            strings = strings,
+            chatClient = chatClient,
+            user = user,
+            group = group,
+        )
+
+        ChatAppMessagePane(
+            scope = scope,
+            user = user,
+            group = group,
+            messages = messages,
+            transientMessage = transientMessage,
+            statusMessages = statusMessages,
+            chatClient = chatClient,
+            recallingMessageIds = recallingMessageIds,
+            isSelectionMode = isSelectionMode,
+            selectedMessageIds = selectedMessageIds,
+            onRecallingMessageIdsChanged = { recallingMessageIds = it },
+            onMessageToForwardChanged = { messageToForward = it },
+            onGroupTargetsLoaded = { userGroups = it },
+            onGroupTargetsLoadingChanged = { isLoadingGroups = it },
+            onForwardDialogVisibilityChanged = { showForwardDialog = it },
+            onSelectionModeChanged = { isSelectionMode = it },
+            onSelectedMessageIdsChanged = { selectedMessageIds = it },
+            onCaptureToKnowledgeBase = { message ->
+                scope.launch {
+                    val context = loadKnowledgeCaptureContext(user.id)
+                    val preferredSpaceId = preferredKnowledgeCaptureSpaceId(group.id, context.topics)
+                    kbCaptureDraft = KnowledgeCaptureDraft(
+                        message = message,
+                        sourceType = messageKnowledgeCaptureSourceType(message, KBSourceType.CHAT),
+                        sourceGroupId = group.id,
+                        preferredSpaceId = preferredSpaceId,
+                    )
+                    kbCaptureTopics = context.topics
+                    kbCaptureGroups = context.groups
+                    kbCaptureSelectedSpaceId = preferredSpaceId
+                    kbCaptureSelectedTopicId = defaultKnowledgeCaptureTopicId(context.topics, preferredSpaceId).orEmpty()
+                    kbCaptureTitle = buildDefaultKnowledgeCaptureTitle(message.content)
+                    kbCaptureContent = message.content
+                    kbCaptureSaving = false
+                    kbCaptureResult = if (context.topics.isEmpty()) "还没有可用主题，请先去知识库创建主题。" else null
+                }
+            },
+        )
+
+        ChatAppDragAndDropEffect(group = group, user = user)
+
+        ChatAppInputSection(
+            scope = scope,
+            user = user,
+            group = group,
+            strings = strings,
+            connectionState = connectionState,
+            chatClient = chatClient,
+            statusMessages = statusMessages,
+            sessionUsers = sessionUsers,
+            pendingQuestionId = pendingQuestionId,
+            isGenerating = isGenerating,
+            isUploading = isUploading,
+            isVoiceRecording = isVoiceRecording,
+            isTranscribing = isTranscribing,
+            mediaRecorderJs = mediaRecorderJs,
+            audioChunksJs = audioChunksJs,
+            messageText = messageText,
+            kbContextSelection = kbContextSelection,
+            showMentionMenu = showMentionMenu,
+            mentionSearchText = mentionSearchText,
+            mentionStartIndex = mentionStartIndex,
+            mentionMenuPosition = mentionMenuPosition,
+            onMediaRecorderChanged = { mediaRecorderJs = it },
+            onAudioChunksChanged = { audioChunksJs = it },
+            onVoiceRecordingChanged = { isVoiceRecording = it },
+            onTranscribingChanged = { isTranscribing = it },
+            onMessageTextChanged = { messageText = it },
+            onKnowledgeBaseContextSelectionChanged = { nextSelection ->
+                kbContextSelection = nextSelection
+                if (persistentKbExcludedSpaceIds != nextSelection.excludedSpaceIds) {
+                    scope.launch {
+                        val updated = ApiClient.updateKBContextPreferences(user.id, nextSelection.excludedSpaceIds)
+                        persistentKbExcludedSpaceIds = updated.excludedSpaceIds
+                    }
+                }
+            },
+            onShowMentionMenuChanged = { showMentionMenu = it },
+            onMentionSearchTextChanged = { mentionSearchText = it },
+            onMentionStartIndexChanged = { mentionStartIndex = it },
+            onMentionMenuPositionChanged = { mentionMenuPosition = it },
+        )
+    }
+
+    kbCaptureDraft?.let { draft ->
+        KnowledgeBaseCaptureDialog(
+            draft = draft,
+            spaceOptions = buildKnowledgeSpaceOptions(kbCaptureGroups),
+            topics = kbCaptureTopics,
+            selectedSpaceId = kbCaptureSelectedSpaceId,
+            selectedTopicId = kbCaptureSelectedTopicId,
+            title = kbCaptureTitle,
+            content = kbCaptureContent,
+            isSaving = kbCaptureSaving,
+            resultMessage = kbCaptureResult,
+            onSelectedSpaceIdChange = { kbCaptureSelectedSpaceId = it },
+            onSelectedTopicIdChange = { kbCaptureSelectedTopicId = it },
+            onTitleChange = { kbCaptureTitle = it },
+            onContentChange = { kbCaptureContent = it },
+            onDismiss = resetKnowledgeCaptureDialog,
+            onConfirm = {
+                if (!canSubmitKnowledgeCapture(kbCaptureSaving, kbCaptureSelectedTopicId, kbCaptureTitle, kbCaptureContent)) {
+                    return@KnowledgeBaseCaptureDialog
+                }
+                scope.launch {
+                    kbCaptureSaving = true
+                    val created = ApiClient.captureKBEntry(
+                        topicId = kbCaptureSelectedTopicId,
+                        title = kbCaptureTitle.trim(),
+                        content = kbCaptureContent,
+                        tags = emptyList(),
+                        userId = user.id,
+                        source = KBEntrySource(
+                            sourceType = draft.sourceType,
+                            sourceGroupId = draft.sourceGroupId,
+                            workflowId = draft.workflowId,
+                            messageIds = listOf(draft.message.id),
+                        ),
+                    )
+                    kbCaptureSaving = false
+                    if (created == null) {
+                        kbCaptureResult = "保存失败，请确认目标主题仍可写。"
+                    } else {
+                        resetKnowledgeCaptureDialog()
+                        appState.openKnowledgeBaseEntry(created.id, created.topicId)
+                    }
+                }
+            },
+        )
+    }
     
+    ChatAppDialogsAndUploads(
+        scope = scope,
+        user = user,
+        group = group,
+        appState = appState,
+        chatClient = chatClient,
+        strings = strings,
+        showForwardDialog = showForwardDialog,
+        messageToForward = messageToForward,
+        userGroups = userGroups,
+        isLoadingGroups = isLoadingGroups,
+        forwardResult = forwardResult,
+        showInvitationDialog = showInvitationDialog,
+        showAddMemberDialog = showAddMemberDialog,
+        contacts = contacts,
+        groupMembers = groupMembers,
+        isLoadingContacts = isLoadingContacts,
+        addMemberResult = addMemberResult,
+        showMembersDialog = showMembersDialog,
+        selectedMemberForInvite = selectedMemberForInvite,
+        isInvitingMember = isInvitingMember,
+        inviteMemberResult = inviteMemberResult,
+        showFolderExplorer = showFolderExplorer,
+        onForwardDialogVisibilityChanged = { showForwardDialog = it },
+        onMessageToForwardChanged = { messageToForward = it },
+        onForwardResultChanged = { forwardResult = it },
+        onInvitationDialogVisibilityChanged = { showInvitationDialog = it },
+        onAddMemberDialogVisibilityChanged = { showAddMemberDialog = it },
+        onGroupMembersLoaded = { groupMembers = it },
+        onAddMemberResultChanged = { addMemberResult = it },
+        onMembersDialogVisibilityChanged = { showMembersDialog = it },
+        onSelectedMemberForInviteChanged = { selectedMemberForInvite = it },
+        onInvitingMemberChanged = { isInvitingMember = it },
+        onInviteMemberResultChanged = { inviteMemberResult = it },
+        onShowFolderExplorerChanged = { showFolderExplorer = it },
+    )
+}
+
+@Composable
+private fun HandlePendingChatNavigation(
+    groupId: String,
+    isHistoryLoading: Boolean,
+    messagesSize: Int,
+    navigationTarget: ChatNavigationTarget?,
+    onConsumed: (Long) -> Unit,
+) {
+    LaunchedEffect(groupId, isHistoryLoading, messagesSize, navigationTarget?.requestId) {
+        val target = navigationTarget ?: return@LaunchedEffect
+        if (target.groupId != groupId || isHistoryLoading) {
+            return@LaunchedEffect
+        }
+        val handled = target.messageId?.takeIf { it.isNotBlank() }?.let { messageId ->
+            scrollMessageIntoView(containerId = "messages", messageId = messageId)
+        } ?: true
+        if (handled) {
+            onConsumed(target.requestId)
+        }
+    }
+}
+
+@Composable
+private fun ChatAppEffects(
+    user: User,
+    group: Group,
+    currentScene: Scene,
+    chatClient: ChatClient,
+    isSelectionMode: Boolean,
+    onSelectionCleared: () -> Unit,
+    messagesSize: Int,
+    transientMessage: Message?,
+    statusMessagesSize: Int,
+    onLanguageLoaded: (com.silk.shared.models.Language) -> Unit,
+    onSessionReset: () -> Unit,
+    onGroupMembersLoaded: (List<GroupMember>) -> Unit,
+) {
+    LaunchedEffect(user.id, currentScene) {
+        if (currentScene == Scene.CHAT_ROOM) {
+            recoverSuspendNonCancellation(
+                block = {
+                    val response = ApiClient.getUserSettings(user.id)
+                    if (response.success) {
+                        response.settings?.language?.let(onLanguageLoaded)
+                    }
+                },
+                recover = { error ->
+                    console.error("Failed to load user settings:", error)
+                },
+            )
+        }
+    }
+
+    DisposableEffect(Unit) {
+        val handler: (org.w3c.dom.events.Event) -> Unit = { event ->
+            val key = event.asDynamic().key as? String
+            if (key == "Escape" && isSelectionMode) {
+                onSelectionCleared()
+            }
+        }
+        window.addEventListener("keydown", handler)
+        onDispose { window.removeEventListener("keydown", handler) }
+    }
+
     LaunchedEffect(group.id) {
         console.log("🔌 准备建立WebSocket连接...")
         console.log("   群组ID:", group.id, "群组名:", group.name)
-        
-        hasSentDefaultInstruction = false
+
+        onSessionReset()
         chatClient.clearMessages()
-        
-        // 并行：加载群成员 + 建立 WebSocket，互不阻塞
+
         launch {
             try {
                 val membersResponse = ApiClient.getGroupMembers(group.id)
-                groupMembers = membersResponse.members.sortedByDescending { it.id == group.hostId }
-                console.log("✅ 群成员列表已加载，共 ${groupMembers.size} 人")
+                val members = membersResponse.members.sortedByDescending { it.id == group.hostId }
+                onGroupMembersLoaded(members)
+                console.log("✅ 群成员列表已加载，共 ${members.size} 人")
             } catch (e: dynamic) {
                 console.error("❌ 加载群成员列表失败:", e.toString())
             }
         }
-        
+
         try {
             console.log("🔌 开始连接WebSocket...")
             val jwt = JwtManager.getAccessToken()
@@ -1804,18 +2395,17 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             console.error("❌ WebSocket连接失败:", e.toString())
         }
     }
-    
+
     DisposableEffect(group.id) {
         onDispose {
-            // connect() 内部会静默断开旧连接，此处只负责标记已读
-            try {
-                scope.launch {
-                    try {
-                        ApiClient.markGroupAsRead(user.id, group.id)
-                        console.log("✅ 清理：已标记群组为已读")
-                    } catch (_: dynamic) {}
+            kotlinx.coroutines.MainScope().launch {
+                try {
+                    ApiClient.markGroupAsRead(user.id, group.id)
+                    console.log("✅ 清理：已标记群组为已读")
+                } catch (error: dynamic) {
+                    console.warn("⚠️ 清理：标记群组已读失败:", error)
                 }
-            } catch (_: dynamic) {}
+            }
         }
     }
     
@@ -2415,16 +3005,24 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             classes(SilkStylesheet.messagesContainer)
             id("messages")
             style {
-                property("position", "relative")
+                padding(6.px, 12.px)
+                backgroundColor(Color("rgba(255,255,255,0.15)"))
+                color(Color.white)
+                border { width(0.px) }
+                borderRadius(8.px)
+                property("cursor", "pointer")
+                fontSize(16.px)
+                property("backdrop-filter", "blur(4px)")
                 property("transition", "all 0.2s ease")
             }
-        }) {
-            // Spacer: flex: 1 pushes all subsequent content to the visual bottom
-            Div({
-                style {
-                    property("flex", "1")
+            onClick {
+                scope.launch {
+                    handleChatAppBackNavigation(user, group, appState, chatClient)
                 }
-            }) {}
+            }
+        }) {
+            Text("←")
+        }
 
             // 显示系统状态消息（灰色）；KB 上下文状态条改由输入区上方的 KnowledgeBaseContextTray 展示
             val visibleStatusMessages = statusMessages.filterNot(::isKnowledgeBaseContextStatusMessage)
@@ -2454,6 +3052,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
                 }
             }
+        }) {
+            Text("↗转发")
+        }
 
             // 显示所有普通消息
             val lastMessageId = messages.lastOrNull()?.id
@@ -2483,6 +3084,124 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                     recallingMessageIds = recallingMessageIds - messageId
                                 }
                             }
+                        },
+                    )
+                }
+            }
+        }) {
+            Text("📂")
+        }
+    }
+}
+
+@Composable
+private fun ChatAppConnectionBanner(
+    scope: kotlinx.coroutines.CoroutineScope,
+    connectionState: ConnectionState,
+    strings: com.silk.shared.i18n.Strings,
+    chatClient: ChatClient,
+    user: User,
+    group: Group,
+) {
+    if (connectionState == ConnectionState.CONNECTED) {
+        return
+    }
+
+    Div({
+        classes(SilkStylesheet.statusBar)
+        style {
+            property("background", when (connectionState) {
+                ConnectionState.CONNECTED -> "linear-gradient(90deg, ${SilkColors.success}, #8DBE7C)"
+                ConnectionState.CONNECTING -> "linear-gradient(90deg, ${SilkColors.warning}, #ECC88C)"
+                ConnectionState.DISCONNECTED -> "linear-gradient(90deg, ${SilkColors.error}, #E99B9B)"
+            })
+            color(Color.white)
+        }
+    }) {
+        Span {
+            Text(when (connectionState) {
+                ConnectionState.CONNECTING -> "⟳ ${strings.connecting}"
+                ConnectionState.DISCONNECTED -> "✗ ${strings.disconnected}"
+                ConnectionState.CONNECTED -> ""
+            })
+        }
+
+        if (connectionState == ConnectionState.DISCONNECTED) {
+            Button({
+                classes(SilkStylesheet.button)
+                style {
+                    padding(8.px, 16.px)
+                    fontSize(12.px)
+                }
+                onClick {
+                    scope.launch {
+                        chatClient.connect(user.id, user.fullName, group.id)
+                    }
+                }
+            }) {
+                Text(strings.reconnecting)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatAppMessagePane(
+    scope: kotlinx.coroutines.CoroutineScope,
+    user: User,
+    group: Group,
+    messages: List<Message>,
+    transientMessage: Message?,
+    statusMessages: List<Message>,
+    chatClient: ChatClient,
+    recallingMessageIds: Set<String>,
+    isSelectionMode: Boolean,
+    selectedMessageIds: Set<String>,
+    onRecallingMessageIdsChanged: (Set<String>) -> Unit,
+    onMessageToForwardChanged: (Message?) -> Unit,
+    onGroupTargetsLoaded: (List<Group>) -> Unit,
+    onGroupTargetsLoadingChanged: (Boolean) -> Unit,
+    onForwardDialogVisibilityChanged: (Boolean) -> Unit,
+    onSelectionModeChanged: (Boolean) -> Unit,
+    onSelectedMessageIdsChanged: (Set<String>) -> Unit,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
+) {
+    val contextTrayStatus = statusMessages.lastOrNull(::isKnowledgeBaseContextStatusMessage)
+    val visibleStatusMessages = statusMessages.filterNot { it.id == contextTrayStatus?.id }
+
+    Div({
+        classes(SilkStylesheet.messagesContainer)
+        id("messages")
+        style {
+            property("position", "relative")
+            property("transition", "all 0.2s ease")
+        }
+    }) {
+        Div({
+            style {
+                property("flex", "1")
+            }
+        }) {}
+
+        if (visibleStatusMessages.isNotEmpty()) {
+            Div({
+                style {
+                    backgroundColor(Color("#F5F5F5"))
+                    borderRadius(8.px)
+                    padding(10.px, 14.px)
+                    marginBottom(8.px)
+                    property("border-left", "3px solid #9E9E9E")
+                }
+            }) {
+                visibleStatusMessages.forEach { status ->
+                    Div({
+                        style {
+                            color(Color("#757575"))
+                            fontSize(13.px)
+                            fontStyle("italic")
+                            marginBottom(4.px)
+                            property("white-space", "pre-wrap")
+                            property("word-break", "break-word")
                         }
                     },
                     onCopy = { content ->
@@ -2503,27 +3222,56 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     onDelete = { messageId ->
                         scope.launch {
                             try {
+                                recoverSuspendNonCancellation(
+                                    block = {
+                                        val response = ApiClient.recallMessage(group.id, messageId, user.id)
+                                        if (!response.success) {
+                                            window.alert("撤回失败: ${response.message}")
+                                        }
+                                    },
+                                    recover = { error ->
+                                        console.error("❌ 撤回消息失败:", error)
+                                        window.alert("撤回失败: ${error.message}")
+                                    },
+                                )
+                            } finally {
+                                onRecallingMessageIdsChanged(recallingMessageIds - messageId)
+                            }
+                        }
+                    }
+                },
+                onCopy = { content ->
+                    copyTextToClipboard(content)
+                    console.log("✅ 消息已复制到剪贴板")
+                },
+                onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
+                onForward = { msg ->
+                    onMessageToForwardChanged(msg)
+                    scope.launch {
+                        loadChatAppForwardTargets(
+                            user = user,
+                            currentGroupId = group.id,
+                            includeWorkflowGroups = false,
+                            onLoadingChanged = onGroupTargetsLoadingChanged,
+                            onGroupsLoaded = onGroupTargetsLoaded,
+                            onDialogVisibilityChanged = onForwardDialogVisibilityChanged,
+                        )
+                    }
+                },
+                onDelete = { messageId ->
+                    scope.launch {
+                        recoverSuspendNonCancellation(
+                            block = {
                                 val response = ApiClient.deleteMessage(group.id, messageId, user.id)
                                 if (!response.success) {
                                     window.alert("删除失败: ${response.message}")
                                 }
-                            } catch (e: Exception) {
-                                console.error("❌ 删除消息失败:", e)
-                                window.alert("删除失败: ${e.message}")
-                            }
-                        }
-                    },
-                    isSelectionMode = isSelectionMode,
-                    isSelected = message.id in selectedMessageIds,
-                    onToggleSelection = { id ->
-                        selectedMessageIds = if (id in selectedMessageIds)
-                            selectedMessageIds - id
-                        else
-                            selectedMessageIds + id
-                    },
-                    onEnterSelectionMode = { id ->
-                        isSelectionMode = true
-                        selectedMessageIds = setOf(id)
+                            },
+                            recover = { error ->
+                                console.error("❌ 删除消息失败:", error)
+                                window.alert("删除失败: ${error.message}")
+                            },
+                        )
                     }
                 )
             }
@@ -2557,9 +3305,43 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             }
                         }
                     )
-                } else {
-                    TransientMessageItem(message)
-                }
+                },
+                onEnterSelectionMode = { id ->
+                    onSelectionModeChanged(true)
+                    onSelectedMessageIdsChanged(setOf(id))
+                },
+            )
+        }
+
+        transientMessage?.let { message ->
+            if (shouldRenderInlineTransientMessage(message)) {
+                MessageItem(
+                    message = message.copy(category = com.silk.shared.models.MessageCategory.NORMAL),
+                    isTransient = true,
+                    currentUserId = user.id,
+                    currentUserName = user.fullName,
+                    chatClient = chatClient,
+                    onCopy = { content ->
+                        copyTextToClipboard(content)
+                        console.log("✅ 消息已复制到剪贴板")
+                    },
+                    onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
+                    onForward = { msg ->
+                        onMessageToForwardChanged(msg)
+                        scope.launch {
+                            loadChatAppForwardTargets(
+                                user = user,
+                                currentGroupId = group.id,
+                                includeWorkflowGroups = false,
+                                onLoadingChanged = onGroupTargetsLoadingChanged,
+                                onGroupsLoaded = onGroupTargetsLoaded,
+                                onDialogVisibilityChanged = onForwardDialogVisibilityChanged,
+                            )
+                        }
+                    },
+                )
+            } else {
+                TransientMessageItem(message)
             }
 
             // 显示流式 content blocks（thinking / tool_use / text 结构化渲染）
@@ -2615,11 +3397,50 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         console.error('❌ Drag-and-drop: messages container not found');
                         return;
                     }
-                    
-                    console.log('✅ Drag-and-drop: messages container found');
-                    
-                    // Clean up existing handlers if any
-                    if (container._dragHandlers) {
+                    var file = dataTransfer.files[0];
+                    console.log('📁 拖放文件: ' + file.name + ', 大小: ' + file.size);
+                    var formData = new FormData();
+                    formData.append('sessionId', sessionId);
+                    formData.append('userId', userId);
+                    formData.append('file', file);
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('POST', uploadUrl, true);
+                    xhr.onload = function() {
+                        if (xhr.status === 200) {
+                            var response = JSON.parse(xhr.responseText);
+                            console.log('✅ 上传成功: ' + response.fileName);
+                            window.alert('文件上传成功: ' + response.fileName);
+                        } else {
+                            console.log('❌ 上传失败: ' + xhr.statusText);
+                            window.alert('文件上传失败: ' + xhr.statusText);
+                        }
+                    };
+                    xhr.onerror = function() {
+                        console.log('❌ 上传错误');
+                        window.alert('文件上传失败，请检查网络连接');
+                    };
+                    xhr.send(formData);
+                };
+                container.addEventListener('dragenter', handleDragEnter);
+                container.addEventListener('dragover', handleDragOver);
+                container.addEventListener('dragleave', handleDragLeave);
+                container.addEventListener('drop', handleDrop);
+                container._dragHandlers = {
+                    dragenter: handleDragEnter,
+                    dragover: handleDragOver,
+                    dragleave: handleDragLeave,
+                    drop: handleDrop,
+                    overlay: overlay
+                };
+                console.log('✅ Drag-and-drop: handlers attached');
+            }, 200);
+        """)
+
+        onDispose {
+            js("""
+                (function() {
+                    var container = document.getElementById('messages');
+                    if (container && container._dragHandlers) {
                         container.removeEventListener('dragenter', container._dragHandlers.dragenter);
                         container.removeEventListener('dragover', container._dragHandlers.dragover);
                         container.removeEventListener('dragleave', container._dragHandlers.dragleave);
@@ -2629,160 +3450,305 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                         delete container._dragHandlers;
                     }
-                    
-                    var sessionId = window.tempDragDropSessionId;
-                    var userId = window.tempDragDropUserId;
-                    var uploadUrl = window.tempDragDropUploadUrl;
-                    var primaryColor = window.tempDragDropPrimaryColor;
-                    
-                    // Create overlay element for drag feedback
-                    var overlay = document.createElement('div');
-                    overlay.id = 'drag-drop-overlay';
-                    overlay.style.cssText = 'position: absolute; top: 0; left: 0; right: 0; bottom: 0; ' +
-                        'background: rgba(201, 168, 108, 0.1); display: none; ' +
-                        'align-items: center; justify-content: center; z-index: 100; pointer-events: none; ' +
-                        'border-radius: 8px;';
-                    
-                    var overlayContent = document.createElement('div');
-                    overlayContent.style.cssText = 'background: #FFFFFF; padding: 32px 48px; ' +
-                        'border-radius: 16px; box-shadow: 0 8px 32px rgba(169, 137, 77, 0.3); ' +
-                        'border: 2px solid ' + primaryColor + '; text-align: center;';
-                    
-                    overlayContent.innerHTML = '<div style="font-size: 48px; margin-bottom: 16px;">📎</div>' +
-                        '<div style="font-size: 18px; color: ' + primaryColor + '; font-weight: 600; margin-bottom: 8px;">拖放文件到此区域上传</div>' +
-                        '<div style="font-size: 14px; color: #8A7B6A;">释放文件即可上传</div>';
-                    
-                    overlay.appendChild(overlayContent);
-                    container.appendChild(overlay);
-                    
-                    var dragEnterCount = 0;
-                    
-                    var handleDragEnter = function(event) {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        dragEnterCount++;
-                        console.log('📎 Drag enter, count:', dragEnterCount);
-                        container.style.border = '3px dashed ' + primaryColor;
-                        container.style.background = 'linear-gradient(135deg, rgba(224, 205, 160, 0.4) 0%, rgba(232, 213, 181, 0.4) 100%)';
-                        container.style.boxShadow = 'inset 0 0 20px rgba(224, 205, 160, 0.6)';
-                        overlay.style.display = 'flex';
-                        overlay.style.alignItems = 'center';
-                        overlay.style.justifyContent = 'center';
-                    };
-                    
-                    var handleDragOver = function(event) {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        if (event.dataTransfer) {
-                            event.dataTransfer.dropEffect = 'copy';
-                        }
-                    };
-                    
-                    var handleDragLeave = function(event) {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        dragEnterCount--;
-                        if (dragEnterCount <= 0) {
-                            dragEnterCount = 0;
-                            container.style.border = '';
-                            container.style.background = '';
-                            container.style.boxShadow = '';
-                            overlay.style.display = 'none';
-                        }
-                    };
-                    
-                    var handleDrop = function(event) {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        dragEnterCount = 0;
-                        container.style.border = '';
-                        container.style.background = '';
-                        container.style.boxShadow = '';
-                        overlay.style.display = 'none';
-                        
-                        var dataTransfer = event.dataTransfer;
-                        if (!dataTransfer || !dataTransfer.files || dataTransfer.files.length === 0) {
-                            return;
-                        }
-                        
-                        var file = dataTransfer.files[0];
-                        console.log('📁 拖放文件: ' + file.name + ', 大小: ' + file.size);
-                        
-                        var formData = new FormData();
-                        formData.append('sessionId', sessionId);
-                        formData.append('userId', userId);
-                        formData.append('file', file);
-                        
-                        var xhr = new XMLHttpRequest();
-                        xhr.open('POST', uploadUrl, true);
-                        
-                        xhr.onload = function() {
-                            if (xhr.status === 200) {
-                                var response = JSON.parse(xhr.responseText);
-                                console.log('✅ 上传成功: ' + response.fileName);
-                                window.alert('文件上传成功: ' + response.fileName);
-                            } else {
-                                console.log('❌ 上传失败: ' + xhr.statusText);
-                                window.alert('文件上传失败: ' + xhr.statusText);
-                            }
-                        };
-                        
-                        xhr.onerror = function() {
-                            console.log('❌ 上传错误');
-                            window.alert('文件上传失败，请检查网络连接');
-                        };
-                        
-                        xhr.send(formData);
-                    };
-                    
-                    container.addEventListener('dragenter', handleDragEnter);
-                    container.addEventListener('dragover', handleDragOver);
-                    container.addEventListener('dragleave', handleDragLeave);
-                    container.addEventListener('drop', handleDrop);
-                    
-                    // Store handlers for cleanup
-                    container._dragHandlers = {
-                        dragenter: handleDragEnter,
-                        dragover: handleDragOver,
-                        dragleave: handleDragLeave,
-                        drop: handleDrop,
-                        overlay: overlay
-                    };
-                    console.log('✅ Drag-and-drop: handlers attached');
-                }, 200);
+                })();
             """)
-            
-            onDispose {
-                js("""
-                    (function() {
-                        var container = document.getElementById('messages');
-                        if (container && container._dragHandlers) {
-                            container.removeEventListener('dragenter', container._dragHandlers.dragenter);
-                            container.removeEventListener('dragover', container._dragHandlers.dragover);
-                            container.removeEventListener('dragleave', container._dragHandlers.dragleave);
-                            container.removeEventListener('drop', container._dragHandlers.drop);
-                            if (container._dragHandlers.overlay && container._dragHandlers.overlay.parentNode) {
-                                container._dragHandlers.overlay.parentNode.removeChild(container._dragHandlers.overlay);
-                            }
-                            delete container._dragHandlers;
-                        }
-                    })();
-                """)
-                window.asDynamic().tempDragDropSessionId = undefined
-                window.asDynamic().tempDragDropUserId = undefined
-                window.asDynamic().tempDragDropUploadUrl = undefined
-                window.asDynamic().tempDragDropPrimaryColor = undefined
+            window.asDynamic().tempDragDropSessionId = undefined
+            window.asDynamic().tempDragDropUserId = undefined
+            window.asDynamic().tempDragDropUploadUrl = undefined
+            window.asDynamic().tempDragDropPrimaryColor = undefined
+        }
+    }
+}
+
+@Composable
+private fun ChatAppInputSection(
+    scope: kotlinx.coroutines.CoroutineScope,
+    user: User,
+    group: Group,
+    strings: com.silk.shared.i18n.Strings,
+    connectionState: ConnectionState,
+    chatClient: ChatClient,
+    statusMessages: List<Message>,
+    sessionUsers: List<Pair<String, String>>,
+    pendingQuestionId: String?,
+    isGenerating: Boolean,
+    isUploading: Boolean,
+    isVoiceRecording: Boolean,
+    isTranscribing: Boolean,
+    mediaRecorderJs: dynamic,
+    audioChunksJs: dynamic,
+    messageText: String,
+    kbContextSelection: KnowledgeBaseContextSelection,
+    showMentionMenu: Boolean,
+    mentionSearchText: String,
+    mentionStartIndex: Int,
+    mentionMenuPosition: Pair<Double, Double>,
+    onMediaRecorderChanged: (dynamic) -> Unit,
+    onAudioChunksChanged: (dynamic) -> Unit,
+    onVoiceRecordingChanged: (Boolean) -> Unit,
+    onTranscribingChanged: (Boolean) -> Unit,
+    onMessageTextChanged: (String) -> Unit,
+    onKnowledgeBaseContextSelectionChanged: (KnowledgeBaseContextSelection) -> Unit,
+    onShowMentionMenuChanged: (Boolean) -> Unit,
+    onMentionSearchTextChanged: (String) -> Unit,
+    onMentionStartIndexChanged: (Int) -> Unit,
+    onMentionMenuPositionChanged: (Pair<Double, Double>) -> Unit,
+) {
+    if (connectionState != ConnectionState.CONNECTED) {
+        return
+    }
+
+    val sendMessage = {
+        if (messageText.isNotBlank()) {
+            val msg = messageText
+            onMessageTextChanged("")
+            scope.launch {
+                chatClient.sendMessage(
+                    user.id,
+                    user.fullName,
+                    msg,
+                    kbContextSelection,
+                )
             }
         }
-        
-        // Input区域（添加诊断按钮）- 丝滑风格
-        if (connectionState == ConnectionState.CONNECTED) {
-            Div({ 
-                classes(SilkStylesheet.inputContainer)
+    }
+
+    Div({
+        classes(SilkStylesheet.inputContainer)
+        style {
+            display(DisplayStyle.Flex)
+            property("flex-direction", "column")
+            property("gap", "12px")
+        }
+    }) {
+        KnowledgeBaseContextTray(
+            statusMessages = statusMessages,
+            selection = kbContextSelection,
+            onSelectionChange = onKnowledgeBaseContextSelectionChanged,
+        )
+        ChatAppSilkShortcut(group = group, messageText = messageText, onMessageTextChanged = onMessageTextChanged)
+        ChatAppTextInput(
+            group = group,
+            strings = strings,
+            sessionUsers = sessionUsers,
+            pendingQuestionId = pendingQuestionId,
+            messageText = messageText,
+            showMentionMenu = showMentionMenu,
+            mentionSearchText = mentionSearchText,
+            mentionStartIndex = mentionStartIndex,
+            mentionMenuPosition = mentionMenuPosition,
+            onMessageTextChanged = onMessageTextChanged,
+            onShowMentionMenuChanged = onShowMentionMenuChanged,
+            onMentionSearchTextChanged = onMentionSearchTextChanged,
+            onMentionStartIndexChanged = onMentionStartIndexChanged,
+            onMentionMenuPositionChanged = onMentionMenuPositionChanged,
+        )
+        ChatAppInputKeyHandler(messageText = messageText, onMessageTextChanged = onMessageTextChanged, sendMessage = sendMessage)
+        ChatAppInputActions(
+            scope = scope,
+            user = user,
+            strings = strings,
+            chatClient = chatClient,
+            isGenerating = isGenerating,
+            isUploading = isUploading,
+            isVoiceRecording = isVoiceRecording,
+            isTranscribing = isTranscribing,
+            mediaRecorderJs = mediaRecorderJs,
+            audioChunksJs = audioChunksJs,
+            messageText = messageText,
+            onMediaRecorderChanged = onMediaRecorderChanged,
+            onAudioChunksChanged = onAudioChunksChanged,
+            onVoiceRecordingChanged = onVoiceRecordingChanged,
+            onTranscribingChanged = onTranscribingChanged,
+            onMessageTextChanged = onMessageTextChanged,
+            sendMessage = sendMessage,
+        )
+    }
+}
+
+@Composable
+private fun ChatAppSilkShortcut(
+    group: Group,
+    messageText: String,
+    onMessageTextChanged: (String) -> Unit,
+) {
+    if (group.name.startsWith("[Silk]")) {
+        return
+    }
+
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            property("justify-content", "flex-start")
+            property("gap", "8px")
+            alignItems(AlignItems.Center)
+        }
+    }) {
+        Button({
+            style {
+                padding(6.px, 12.px)
+                backgroundColor(Color("rgba(201, 168, 108, 0.15)"))
+                color(Color(SilkColors.primary))
+                border {
+                    width(1.px)
+                    style(LineStyle.Solid)
+                    color(Color(SilkColors.primary))
+                }
+                borderRadius(16.px)
+                property("cursor", "pointer")
+                fontSize(13.px)
+                property("font-weight", "500")
+                property("transition", "all 0.2s ease")
+                property("white-space", "nowrap")
+            }
+            onClick {
+                val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLTextAreaElement
+                if (input != null) {
+                    val cursorPos = input.selectionStart ?: messageText.length
+                    val beforeCursor = messageText.substring(0, cursorPos)
+                    val afterCursor = messageText.substring(cursorPos)
+                    onMessageTextChanged("$beforeCursor@Silk $afterCursor")
+                    window.setTimeout({
+                        val newPos = cursorPos + 6
+                        input.setSelectionRange(newPos, newPos)
+                        input.focus()
+                    }, 0)
+                } else {
+                    onMessageTextChanged(
+                        if (messageText.isEmpty() || messageText.endsWith(" ")) "${messageText}@Silk "
+                        else "${messageText} @Silk "
+                    )
+                }
+            }
+        }) {
+            Text("@Silk")
+        }
+    }
+}
+
+@Composable
+private fun ChatAppTextInput(
+    group: Group,
+    strings: com.silk.shared.i18n.Strings,
+    sessionUsers: List<Pair<String, String>>,
+    pendingQuestionId: String?,
+    messageText: String,
+    showMentionMenu: Boolean,
+    mentionSearchText: String,
+    mentionStartIndex: Int,
+    mentionMenuPosition: Pair<Double, Double>,
+    onMessageTextChanged: (String) -> Unit,
+    onShowMentionMenuChanged: (Boolean) -> Unit,
+    onMentionSearchTextChanged: (String) -> Unit,
+    onMentionStartIndexChanged: (Int) -> Unit,
+    onMentionMenuPositionChanged: (Pair<Double, Double>) -> Unit,
+) {
+    Div({
+        style {
+            property("position", "relative")
+            width(100.percent)
+        }
+    }) {
+        TextArea {
+            classes(SilkStylesheet.input)
+            value(messageText)
+            onInput { event ->
+                val newValue = event.value
+                val oldValue = messageText
+                onMessageTextChanged(newValue)
+
+                if (newValue.length > oldValue.length && newValue.lastOrNull() == '@') {
+                    val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLElement
+                    if (input != null) {
+                        val rect = input.getBoundingClientRect()
+                        onMentionMenuPositionChanged(Pair(rect.left, window.innerHeight - rect.top + 4))
+                    }
+                    onShowMentionMenuChanged(true)
+                    onMentionStartIndexChanged(newValue.length - 1)
+                    onMentionSearchTextChanged("")
+                }
+
+                if (showMentionMenu && mentionStartIndex >= 0) {
+                    val textAfterAt = newValue.substring(mentionStartIndex + 1)
+                    val spaceIndex = textAfterAt.indexOf(' ')
+                    if (spaceIndex >= 0) {
+                        onShowMentionMenuChanged(false)
+                    } else {
+                        onMentionSearchTextChanged(textAfterAt)
+                    }
+                }
+            }
+            attr("placeholder", when {
+                pendingQuestionId != null -> "回答 Claude Code 的问题..."
+                group.name.startsWith("[Silk]") -> strings.silkChatInputPlaceholder
+                else -> strings.messageInputPlaceholder
+            })
+            attr("rows", "2")
+            attr("id", "chat-input")
+            style {
+                width(100.percent)
+                property("box-sizing", "border-box")
+                property("resize", "none")
+            }
+        }
+
+        if (showMentionMenu) {
+            ChatAppMentionMenu(
+                sessionUsers = sessionUsers,
+                mentionSearchText = mentionSearchText,
+                mentionStartIndex = mentionStartIndex,
+                mentionMenuPosition = mentionMenuPosition,
+                messageText = messageText,
+                onMessageTextChanged = onMessageTextChanged,
+                onShowMentionMenuChanged = onShowMentionMenuChanged,
+                onMentionStartIndexChanged = onMentionStartIndexChanged,
+                strings = strings,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ChatAppMentionMenu(
+    sessionUsers: List<Pair<String, String>>,
+    mentionSearchText: String,
+    mentionStartIndex: Int,
+    mentionMenuPosition: Pair<Double, Double>,
+    messageText: String,
+    onMessageTextChanged: (String) -> Unit,
+    onShowMentionMenuChanged: (Boolean) -> Unit,
+    onMentionStartIndexChanged: (Int) -> Unit,
+    strings: com.silk.shared.i18n.Strings,
+) {
+    Div({
+        style {
+            property("position", "fixed")
+            property("left", "${mentionMenuPosition.first}px")
+            property("bottom", "${mentionMenuPosition.second}px")
+            backgroundColor(Color(SilkColors.surface))
+            border {
+                width(1.px)
+                style(LineStyle.Solid)
+                color(Color(SilkColors.border))
+            }
+            borderRadius(8.px)
+            property("box-shadow", "0 4px 12px rgba(0,0,0,0.15)")
+            property("z-index", "9999")
+            property("max-height", "200px")
+            property("overflow-y", "auto")
+            property("min-width", "200px")
+        }
+    }) {
+        val filteredUsers = sessionUsers.filter { (_, name) ->
+            mentionSearchText.isEmpty() || name.lowercase().contains(mentionSearchText.lowercase())
+        }
+
+        if (filteredUsers.isEmpty()) {
+            Div({
                 style {
-                    display(DisplayStyle.Flex)
-                    property("flex-direction", "column")
-                    property("gap", "12px")
+                    padding(12.px, 16.px)
+                    color(Color(SilkColors.textSecondary))
+                    fontSize(14.px)
                 }
             }) {
                 val isSilkPrivateChat = group.name.startsWith("[Silk]")
@@ -2808,13 +3774,29 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 if (!isSilkPrivateChat && !isCcConnectGroup) {
                 Div({
                     style {
-                        display(DisplayStyle.Flex)
-                        property("justify-content", "flex-start")
-                        property("gap", "8px")
-                        alignItems(AlignItems.Center)
+                        padding(10.px, 16.px)
+                        property("cursor", "pointer")
+                        property("transition", "background-color 0.15s ease")
+                    }
+                    onClick {
+                        val beforeAt = messageText.substring(0, mentionStartIndex)
+                        val displayName = if (isAgentUserId(userId)) "Silk" else userName
+                        onMessageTextChanged("$beforeAt@$displayName ")
+                        onShowMentionMenuChanged(false)
+                        onMentionStartIndexChanged(-1)
+                        window.setTimeout({
+                            val input = document.getElementById("chat-input")
+                            input?.asDynamic()?.focus()
+                        }, 0)
+                    }
+                    onMouseEnter {
+                        (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = SilkColors.secondary
+                    }
+                    onMouseLeave {
+                        (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = "transparent"
                     }
                 }) {
-                    Button({
+                    Span({
                         style {
                             padding(6.px, 12.px)
                             backgroundColor(Color("rgba(201, 168, 108, 0.15)"))
@@ -3390,24 +4372,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             padding(12.px, 14.px)
                             backgroundColor(Color(SilkColors.secondary))
                             color(Color(SilkColors.textPrimary))
-                            border { width(0.px) }
-                            borderRadius(8.px)
-                            property("cursor", if (isUploading) "not-allowed" else "pointer")
-                            fontSize(18.px)
-                            property("transition", "all 0.2s ease")
-                            property("opacity", if (isUploading) "0.6" else "1")
-                        }
-                        attr("title", "上传整个目录")
-                        onClick {
-                            if (!isUploading) {
-                                js("""
-                                    var input = document.getElementById('folder-upload-input');
-                                    if (input) input.click();
-                                """)
+                            if (isAgentUserId(userId)) {
+                                property("font-weight", "600")
                             }
                         }
                     }) {
-                        Text(if (isUploading) "⏳" else "📁")
+                        Text(userName)
                     }
                     
                     // 📎 上传单文件按钮
@@ -3501,140 +4471,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     if (isTranscribing) {
                         Button({
                             style {
-                                padding(12.px, 14.px)
-                                backgroundColor(Color(SilkColors.secondary))
+                                fontSize(12.px)
                                 color(Color(SilkColors.textSecondary))
-                                border { width(0.px) }
-                                borderRadius(8.px)
-                                fontSize(14.px)
-                                property("cursor", "not-allowed")
-                                property("opacity", "0.7")
+                                marginLeft(8.px)
                             }
                         }) {
-                            Text("识别中...")
-                        }
-                    } else if (isVoiceRecording) {
-                        Button({
-                            style {
-                                padding(12.px, 14.px)
-                                backgroundColor(Color("#FF4D4F"))
-                                color(Color.white)
-                                border { width(0.px) }
-                                borderRadius(8.px)
-                                property("cursor", "pointer")
-                                fontSize(14.px)
-                                property("font-weight", "600")
-                                property("transition", "all 0.2s ease")
-                            }
-                            attr("title", "停止录音并识别")
-                            onClick {
-                                isVoiceRecording = false
-                                try {
-                                    val recorder = mediaRecorderJs
-                                    if (recorder != null) {
-                                        recorder.stop()
-                                    }
-                                } catch (e: dynamic) {
-                                    console.log("停止录音失败:", e)
-                                    isTranscribing = false
-                                }
-                            }
-                        }) {
-                            Text("⏹ 停止")
-                        }
-                    } else {
-                        Button({
-                            style {
-                                padding(12.px, 14.px)
-                                backgroundColor(Color(SilkColors.secondary))
-                                color(Color(SilkColors.textPrimary))
-                                border { width(0.px) }
-                                borderRadius(8.px)
-                                property("cursor", "pointer")
-                                fontSize(18.px)
-                                property("transition", "all 0.2s ease")
-                            }
-                            attr("title", "语音输入")
-                            onClick {
-                                scope.launch {
-                                    try {
-                                        console.log("[ASR] 请求麦克风...")
-                                        val stream = jsGetUserMedia()
-                                            .unsafeCast<kotlin.js.Promise<dynamic>>().await()
-                                        console.log("[ASR] 获取到音频流")
-                                        val chunks = jsNewArray()
-                                        audioChunksJs = chunks
-                                        val recorder = jsCreateRecorder(stream)
-                                        recorder.ondataavailable = { event: dynamic ->
-                                            chunks.push(event.data)
-                                            Unit
-                                        }
-                                        recorder.onstop = {
-                                            console.log("[ASR] 录音已停止，开始转写...")
-                                            isTranscribing = true
-                                            scope.launch {
-                                                try {
-                                                    val blob = jsCreateBlob(chunks)
-                                                    val arrayBuffer = jsBlobToArrayBuffer(blob)
-                                                        .unsafeCast<kotlin.js.Promise<dynamic>>().await()
-                                                    val base64 = jsArrayBufferToBase64(arrayBuffer) as String
-                                                    console.log("[ASR] base64 长度:", base64.length)
-                                                    val result = ApiClient.transcribeAudio(base64, "webm")
-                                                    console.log("[ASR] 结果: success=${result.success}, text=${result.text.take(50)}")
-                                                    if (result.success && result.text.isNotBlank()) {
-                                                        messageText = if (messageText.isNotBlank()) "$messageText ${result.text}" else result.text
-                                                    } else {
-                                                        console.log("[ASR] 失败:", result.error ?: "未知错误")
-                                                    }
-                                                } catch (t: Throwable) {
-                                                    console.log("[ASR] 识别出错:", t)
-                                                } finally {
-                                                    isTranscribing = false
-                                                    try { jsStopTracks(stream) } catch (_: dynamic) {}
-                                                    console.log("[ASR] 流程结束")
-                                                }
-                                            }
-                                            Unit
-                                        }
-                                        mediaRecorderJs = recorder
-                                        recorder.start()
-                                        isVoiceRecording = true
-                                        console.log("[ASR] 开始录音")
-                                    } catch (e: dynamic) {
-                                        console.log("[ASR] 无法启动录音:", e)
-                                    }
-                                }
-                            }
-                        }) {
-                            Text("🎤")
-                        }
-                    }
-                    
-                    if (isGenerating) {
-                        Button({
-                            style {
-                                padding(12.px, 24.px)
-                                backgroundColor(Color("#FF4D4F"))
-                                color(Color.white)
-                                border { width(0.px) }
-                                borderRadius(8.px)
-                                property("cursor", "pointer")
-                                fontSize(14.px)
-                                property("font-weight", "600")
-                                property("transition", "all 0.2s ease")
-                            }
-                            onClick {
-                                chatClient.stopGeneration(user.id, user.fullName)
-                            }
-                        }) {
-                            Text(strings.stopButton)
-                        }
-                    } else {
-                        Button({
-                            classes(SilkStylesheet.button)
-                            onClick { sendMessage() }
-                        }) {
-                            Text(strings.sendButton)
+                            Text("(设置AI角色)")
                         }
                     }
                 }
@@ -3692,109 +4534,205 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
 
     // 转发对话框
     if (showForwardDialog && messageToForward != null) {
+        ChatAppForwardDialog(
+            scope = scope,
+            user = user,
+            group = group,
+            messageToForward = messageToForward,
+            userGroups = userGroups,
+            isLoadingGroups = isLoadingGroups,
+            forwardResult = forwardResult,
+            onForwardDialogVisibilityChanged = onForwardDialogVisibilityChanged,
+            onMessageToForwardChanged = onMessageToForwardChanged,
+            onForwardResultChanged = onForwardResultChanged,
+        )
+    }
+
+    if (showInvitationDialog) {
+        InvitationDialog(
+            group = group,
+            strings = strings,
+            onDismiss = { onInvitationDialogVisibilityChanged(false) },
+        )
+    }
+
+    if (showAddMemberDialog) {
+        AddMemberDialog(
+            contacts = contacts,
+            groupMembers = groupMembers,
+            isLoading = isLoadingContacts,
+            result = addMemberResult,
+            strings = strings,
+            onAddMember = { contact ->
+                scope.launch {
+                    val response = ApiClient.addMemberToGroup(group.id, contact.contactId)
+                    onAddMemberResultChanged(
+                        if (response.success) {
+                            val membersResponse = ApiClient.getGroupMembers(group.id)
+                            onGroupMembersLoaded(membersResponse.members.sortedByDescending { it.id == group.hostId })
+                            strings.memberAdded.replace("{name}", contact.contactName)
+                        } else {
+                            "❌ ${response.message}"
+                        }
+                    )
+                }
+            },
+            onDismiss = {
+                onAddMemberDialogVisibilityChanged(false)
+                onAddMemberResultChanged(null)
+            },
+        )
+    }
+
+    if (showMembersDialog) {
+        MembersDialog(
+            members = groupMembers,
+            contacts = contacts,
+            currentUserId = user.id,
+            isLoading = isLoadingContacts,
+            strings = strings,
+            onMemberClick = { member ->
+                if (contacts.any { it.contactId == member.id }) {
+                    scope.launch {
+                        onMembersDialogVisibilityChanged(false)
+                        openPrivateChatFromChatMembers(user, member, appState, chatClient)
+                    }
+                } else {
+                    onSelectedMemberForInviteChanged(member)
+                }
+            },
+            onDismiss = {
+                onMembersDialogVisibilityChanged(false)
+                onSelectedMemberForInviteChanged(null)
+                onInviteMemberResultChanged(null)
+            },
+        )
+    }
+
+    selectedMemberForInvite?.let { member ->
+        ChatAppInviteContactDialog(
+            scope = scope,
+            user = user,
+            member = member,
+            strings = strings,
+            isInvitingMember = isInvitingMember,
+            inviteMemberResult = inviteMemberResult,
+            onSelectedMemberForInviteChanged = onSelectedMemberForInviteChanged,
+            onInvitingMemberChanged = onInvitingMemberChanged,
+            onInviteMemberResultChanged = onInviteMemberResultChanged,
+        )
+    }
+
+    ChatAppHiddenUploadInputs(group = group, user = user)
+
+    if (showFolderExplorer) {
+        FolderExplorerDialog(
+            groupId = group.id,
+            strings = strings,
+            onDismiss = { onShowFolderExplorerChanged(false) },
+        )
+    }
+}
+
+@Composable
+private fun ChatAppForwardDialog(
+    scope: kotlinx.coroutines.CoroutineScope,
+    user: User,
+    group: Group,
+    messageToForward: Message,
+    userGroups: List<Group>,
+    isLoadingGroups: Boolean,
+    forwardResult: String?,
+    onForwardDialogVisibilityChanged: (Boolean) -> Unit,
+    onMessageToForwardChanged: (Message?) -> Unit,
+    onForwardResultChanged: (String?) -> Unit,
+) {
+    Div({
+        style {
+            position(Position.Fixed)
+            top(0.px)
+            left(0.px)
+            width(100.percent)
+            height(100.vh)
+            backgroundColor(Color("rgba(74, 64, 56, 0.6)"))
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            property("z-index", "1100")
+            property("backdrop-filter", "blur(4px)")
+        }
+        onClick {
+            onForwardDialogVisibilityChanged(false)
+            onMessageToForwardChanged(null)
+            onForwardResultChanged(null)
+        }
+    }) {
         Div({
             style {
-                position(Position.Fixed)
-                top(0.px)
-                left(0.px)
-                width(100.percent)
-                height(100.vh)
-                backgroundColor(Color("rgba(74, 64, 56, 0.6)"))
-                display(DisplayStyle.Flex)
-                justifyContent(JustifyContent.Center)
-                alignItems(AlignItems.Center)
-                property("z-index", "1100")
-                property("backdrop-filter", "blur(4px)")
+                backgroundColor(Color(SilkColors.surfaceElevated))
+                borderRadius(16.px)
+                padding(28.px)
+                width(400.px)
+                maxWidth(90.vw)
+                property("max-height", "70vh")
+                property("overflow-y", "auto")
+                property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.2)")
             }
-            onClick { 
-                showForwardDialog = false
-                messageToForward = null
-                forwardResult = null
-            }
+            onClick { it.stopPropagation() }
         }) {
             Div({
                 style {
-                    backgroundColor(Color(SilkColors.surfaceElevated))
-                    borderRadius(16.px)
-                    padding(28.px)
-                    width(400.px)
-                    maxWidth(90.vw)
-                    property("max-height", "70vh")
-                    property("overflow-y", "auto")
-                    property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.2)")
+                    display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.SpaceBetween)
+                    alignItems(AlignItems.Center)
+                    marginBottom(16.px)
                 }
-                onClick { it.stopPropagation() }
             }) {
-                // 标题
-                Div({
+                Span({
                     style {
-                        display(DisplayStyle.Flex)
-                        justifyContent(JustifyContent.SpaceBetween)
-                        alignItems(AlignItems.Center)
-                        marginBottom(16.px)
+                        fontSize(18.px)
+                        property("font-weight", "bold")
+                        color(Color(SilkColors.primary))
                     }
-                }) {
-                    Span({
-                        style {
-                            fontSize(18.px)
-                            property("font-weight", "bold")
-                            color(Color(SilkColors.primary))
-                        }
-                    }) { Text("💬 转发到对话") }
-                    Span({
-                        style {
-                            fontSize(13.px)
-                            color(Color(SilkColors.textSecondary))
-                        }
-                    }) { Text("1 条消息") }
-                }
-                
-                // 消息预览
-                Div({
+                }) { Text("💬 转发到对话") }
+                Span({
                     style {
-                        backgroundColor(Color("#F5F5F5"))
-                        borderRadius(8.px)
-                        padding(12.px)
-                        marginBottom(16.px)
                         fontSize(13.px)
                         color(Color(SilkColors.textSecondary))
-                        property("max-height", "60px")
-                        property("overflow", "hidden")
                     }
-                }) {
-                    Text("${messageToForward!!.userName}: ${messageToForward!!.content.take(80)}${if (messageToForward!!.content.length > 80) "..." else ""}")
+                }) { Text("1 条消息") }
+            }
+
+            Div({
+                style {
+                    backgroundColor(Color("#F5F5F5"))
+                    borderRadius(8.px)
+                    padding(12.px)
+                    marginBottom(16.px)
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    property("max-height", "60px")
+                    property("overflow", "hidden")
                 }
-                
-                // 结果提示
-                forwardResult?.let { result ->
-                    Div({
-                        style {
-                            textAlign("center")
-                            marginBottom(12.px)
-                            fontSize(14.px)
-                            color(if (result.contains("✅")) Color("#10B981") else Color("#EF4444"))
-                        }
-                    }) { Text(result) }
-                }
-                
-                // 群组列表
-                if (isLoadingGroups) {
-                    Div({
-                        style {
-                            textAlign("center")
-                            padding(20.px)
-                            color(Color(SilkColors.textSecondary))
-                        }
-                    }) { Text("加载中...") }
-                } else if (userGroups.isEmpty()) {
-                    Div({
-                        style {
-                            textAlign("center")
-                            padding(20.px)
-                            color(Color(SilkColors.textSecondary))
-                        }
-                    }) { Text("没有其他对话可转发") }
-                } else {
+            }) {
+                Text("${messageToForward.userName}: ${messageToForward.content.take(80)}${if (messageToForward.content.length > 80) "..." else ""}")
+            }
+
+            forwardResult?.let { result ->
+                Div({
+                    style {
+                        textAlign("center")
+                        marginBottom(12.px)
+                        fontSize(14.px)
+                        color(if (result.contains("✅")) Color("#10B981") else Color("#EF4444"))
+                    }
+                }) { Text(result) }
+            }
+
+            when {
+                isLoadingGroups -> ChatAppForwardDialogPlaceholder("加载中...")
+                userGroups.isEmpty() -> ChatAppForwardDialogPlaceholder("没有其他对话可转发")
+                else -> {
                     userGroups.forEach { targetGroup ->
                         Div({
                             style {
@@ -3806,29 +4744,26 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 property("transition", "background-color 0.2s")
                             }
                             onClick {
-                                val msg = messageToForward ?: return@onClick
                                 scope.launch {
-                                    forwardResult = null
-                                    val forwardContent = "📨 转发自【${group.name}】:\n\n${msg.userName}: ${msg.content}"
+                                    onForwardResultChanged(null)
                                     val success = ApiClient.sendMessageToGroup(
                                         groupId = targetGroup.id,
                                         userId = user.id,
                                         userName = user.fullName,
-                                        content = forwardContent
+                                        content = "📨 转发自【${group.name}】:\n\n${messageToForward.userName}: ${messageToForward.content}",
                                     )
                                     if (success) {
-                                        forwardResult = "✅ 已转发到 ${targetGroup.name}"
+                                        onForwardResultChanged("✅ 已转发到 ${targetGroup.name}")
                                         kotlinx.coroutines.delay(1000)
-                                        showForwardDialog = false
-                                        messageToForward = null
-                                        forwardResult = null
+                                        onForwardDialogVisibilityChanged(false)
+                                        onMessageToForwardChanged(null)
+                                        onForwardResultChanged(null)
                                     } else {
-                                        forwardResult = "❌ 转发失败"
+                                        onForwardResultChanged("❌ 转发失败")
                                     }
                                 }
                             }
                         }) {
-                            // 群头像
                             Div({
                                 style {
                                     property("width", "40px")
@@ -3850,7 +4785,6 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                     }
                                 }) { Text(targetGroup.name.take(1)) }
                             }
-                            // 群名
                             Span({
                                 style {
                                     fontSize(15.px)
@@ -3860,30 +4794,29 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                         }
                     }
                 }
-                
-                // 取消按钮
-                Div({
-                    style {
-                        marginTop(16.px)
-                        textAlign("center")
-                    }
-                }) {
-                    Span({
-                        style {
-                            fontSize(14.px)
-                            color(Color(SilkColors.textSecondary))
-                            property("cursor", "pointer")
-                            padding(8.px, 24.px)
-                            borderRadius(8.px)
-                            backgroundColor(Color("#F5F5F5"))
-                        }
-                        onClick {
-                            showForwardDialog = false
-                            messageToForward = null
-                            forwardResult = null
-                        }
-                    }) { Text("取消") }
+            }
+
+            Div({
+                style {
+                    marginTop(16.px)
+                    textAlign("center")
                 }
+            }) {
+                Span({
+                    style {
+                        fontSize(14.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("cursor", "pointer")
+                        padding(8.px, 24.px)
+                        borderRadius(8.px)
+                        backgroundColor(Color("#F5F5F5"))
+                    }
+                    onClick {
+                        onForwardDialogVisibilityChanged(false)
+                        onMessageToForwardChanged(null)
+                        onForwardResultChanged(null)
+                    }
+                }) { Text("取消") }
             }
         }
     }
@@ -3992,173 +4925,148 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     selectedMemberForInvite?.let { member ->
         Div({
             style {
-                position(Position.Fixed)
-                top(0.px)
-                left(0.px)
-                width(100.percent)
-                height(100.vh)
-                backgroundColor(Color("rgba(74, 64, 56, 0.6)"))
-                display(DisplayStyle.Flex)
-                justifyContent(JustifyContent.Center)
-                alignItems(AlignItems.Center)
-                property("z-index", "1100")
-                property("backdrop-filter", "blur(4px)")
+                backgroundColor(Color(SilkColors.surfaceElevated))
+                borderRadius(16.px)
+                padding(28.px)
+                width(380.px)
+                maxWidth(90.vw)
+                property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.2)")
+                property("border", "1px solid ${SilkColors.border}")
             }
-            onClick { 
-                selectedMemberForInvite = null
-                inviteMemberResult = null
-            }
+            onClick { it.stopPropagation() }
         }) {
+            H3({
+                style {
+                    color(Color(SilkColors.primary))
+                    marginBottom(20.px)
+                    fontSize(18.px)
+                    property("font-weight", "600")
+                    textAlign("center")
+                }
+            }) {
+                Text(strings.addContact)
+            }
+
             Div({
                 style {
-                    backgroundColor(Color(SilkColors.surfaceElevated))
-                    borderRadius(16.px)
-                    padding(28.px)
-                    width(380.px)
-                    maxWidth(90.vw)
-                    property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.2)")
-                    property("border", "1px solid ${SilkColors.border}")
+                    textAlign("center")
+                    marginBottom(20.px)
+                    color(Color(SilkColors.textPrimary))
                 }
-                onClick { it.stopPropagation() }
             }) {
-                H3({
-                    style {
-                        color(Color(SilkColors.primary))
-                        marginBottom(20.px)
-                        fontSize(18.px)
-                        property("font-weight", "600")
-                        textAlign("center")
-                    }
-                }) {
-                    Text(strings.addContact)
-                }
-                
+                Text(strings.memberNotInContacts.replace("{name}", member.fullName))
+                Br()
+                Text(strings.sendContactRequestQuestion)
+            }
+
+            inviteMemberResult?.let { result ->
                 Div({
                     style {
                         textAlign("center")
-                        marginBottom(20.px)
-                        color(Color(SilkColors.textPrimary))
+                        marginBottom(16.px)
+                        color(
+                            if (result.contains(strings.contactRequestSent) || result.contains("✅")) Color("#10B981")
+                            else Color("#EF4444")
+                        )
+                        fontSize(14.px)
                     }
                 }) {
-                                Text(strings.memberNotInContacts.replace("{name}", member.fullName))
-                    Br()
-                    Text(strings.sendContactRequestQuestion)
+                    Text(result)
                 }
-                
-                // 显示结果消息
-                inviteMemberResult?.let { result ->
-                    Div({
-                        style {
-                            textAlign("center")
-                            marginBottom(16.px)
-                            color(if (result.contains(strings.contactRequestSent) || result.contains("✅")) 
-                                Color("#10B981") else Color("#EF4444"))
-                            fontSize(14.px)
-                        }
-                    }) {
-                        Text(result)
-                    }
+            }
+
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.Center)
+                    gap(12.px)
                 }
-                
-                // 按钮区域
-                Div({
+            }) {
+                Button({
                     style {
-                        display(DisplayStyle.Flex)
-                        justifyContent(JustifyContent.Center)
-                        gap(12.px)
+                        backgroundColor(Color(SilkColors.background))
+                        color(Color(SilkColors.textSecondary))
+                        border {
+                            width(1.px)
+                            style(LineStyle.Solid)
+                            color(Color(SilkColors.border))
+                        }
+                        padding(10.px, 20.px)
+                        borderRadius(8.px)
+                        property("cursor", "pointer")
+                        fontSize(14.px)
+                    }
+                    onClick {
+                        onSelectedMemberForInviteChanged(null)
+                        onInviteMemberResultChanged(null)
                     }
                 }) {
-                    Button({
-                        style {
-                            backgroundColor(Color(SilkColors.background))
-                            color(Color(SilkColors.textSecondary))
-                            border {
-                                width(1.px)
-                                style(LineStyle.Solid)
-                                color(Color(SilkColors.border))
-                            }
-                            padding(10.px, 20.px)
-                            borderRadius(8.px)
-                            property("cursor", "pointer")
-                            fontSize(14.px)
-                        }
-                        onClick { 
-                            selectedMemberForInvite = null
-                            inviteMemberResult = null
-                        }
-                    }) {
-                        Text(strings.cancelButton)
+                    Text(strings.cancelButton)
+                }
+
+                Button({
+                    style {
+                        backgroundColor(Color(SilkColors.primary))
+                        color(Color.white)
+                        border { style(LineStyle.None) }
+                        padding(10.px, 20.px)
+                        borderRadius(8.px)
+                        property("cursor", if (isInvitingMember) "not-allowed" else "pointer")
+                        property("opacity", if (isInvitingMember) "0.6" else "1")
+                        fontSize(14.px)
+                        property("font-weight", "500")
                     }
-                    
-                    Button({
-                        style {
-                            backgroundColor(Color(SilkColors.primary))
-                            color(Color.white)
-                            border { style(LineStyle.None) }
-                            padding(10.px, 20.px)
-                            borderRadius(8.px)
-                            property("cursor", if (isInvitingMember) "not-allowed" else "pointer")
-                            property("opacity", if (isInvitingMember) "0.6" else "1")
-                            fontSize(14.px)
-                            property("font-weight", "500")
-                        }
-                        onClick {
-                            if (!isInvitingMember && inviteMemberResult == null) {
-                                scope.launch {
-                                    isInvitingMember = true
-                                    val response = ApiClient.sendContactRequestById(user.id, member.id)
-                                    inviteMemberResult = if (response.success) {
-                                        "✅ ${strings.contactRequestSent}"
-                                    } else {
-                                        "❌ ${response.message}"
-                                    }
-                                    isInvitingMember = false
-                                    
-                                    // 成功后延迟关闭
-                                    if (response.success) {
-                                        kotlinx.coroutines.delay(1500)
-                                        selectedMemberForInvite = null
-                                        inviteMemberResult = null
-                                    }
+                    onClick {
+                        if (!isInvitingMember && inviteMemberResult == null) {
+                            scope.launch {
+                                onInvitingMemberChanged(true)
+                                val response = ApiClient.sendContactRequestById(user.id, member.id)
+                                onInviteMemberResultChanged(
+                                    if (response.success) "✅ ${strings.contactRequestSent}"
+                                    else "❌ ${response.message}"
+                                )
+                                onInvitingMemberChanged(false)
+
+                                if (response.success) {
+                                    kotlinx.coroutines.delay(1500)
+                                    onSelectedMemberForInviteChanged(null)
+                                    onInviteMemberResultChanged(null)
                                 }
                             }
                         }
-                    }) {
-                        Text(if (isInvitingMember) strings.sendingRequest else strings.sendRequest)
                     }
+                }) {
+                    Text(if (isInvitingMember) strings.sendingRequest else strings.sendRequest)
                 }
             }
         }
     }
-    
-    // 隐藏的单文件上传输入
+}
+
+@Composable
+private fun ChatAppHiddenUploadInputs(group: Group, user: User) {
     org.jetbrains.compose.web.dom.Input(org.jetbrains.compose.web.attributes.InputType.File) {
         id("file-upload-input")
-        style {
-            display(DisplayStyle.None)
-        }
+        style { display(DisplayStyle.None) }
         attr("accept", "*/*")
         attr("multiple", "false")
         onChange {
             val sessionId = group.id
             val userId = user.id
             val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
-            
+
             js("""
                 (function() {
                     var input = document.getElementById('file-upload-input');
                     if (input && input.files && input.files.length > 0) {
                         var file = input.files[0];
                         console.log('📁 选择文件: ' + file.name + ', 大小: ' + file.size);
-                        
                         var formData = new FormData();
                         formData.append('sessionId', sessionId);
                         formData.append('userId', userId);
                         formData.append('file', file);
-                        
                         var xhr = new XMLHttpRequest();
                         xhr.open('POST', uploadUrl, true);
-                        
                         xhr.onload = function() {
                             if (xhr.status === 200) {
                                 var response = JSON.parse(xhr.responseText);
@@ -4169,12 +5077,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 window.alert('文件上传失败: ' + xhr.statusText);
                             }
                         };
-                        
                         xhr.onerror = function() {
                             console.log('❌ 上传错误');
                             window.alert('文件上传失败，请检查网络连接');
                         };
-                        
                         xhr.send(formData);
                         input.value = '';
                     }
@@ -4182,13 +5088,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             """)
         }
     }
-    
-    // 隐藏的目录上传输入
+
     org.jetbrains.compose.web.dom.Input(org.jetbrains.compose.web.attributes.InputType.File) {
         id("folder-upload-input")
-        style {
-            display(DisplayStyle.None)
-        }
+        style { display(DisplayStyle.None) }
         attr("webkitdirectory", "true")
         attr("directory", "true")
         attr("multiple", "true")
@@ -4196,31 +5099,23 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             val sessionId = group.id
             val userId = user.id
             val uploadUrl = "${backendHttpOrigin()}/api/files/upload"
-            
+
             js("""
                 (function() {
                     var input = document.getElementById('folder-upload-input');
                     if (!input || !input.files || input.files.length === 0) return;
-                    
-                    // 支持的文件扩展名
                     var supportedExtensions = [
-                        // 文本文件
                         '.txt', '.md', '.markdown', '.json', '.xml', '.html', '.htm', '.css',
                         '.yaml', '.yml', '.csv', '.log', '.ini', '.conf', '.cfg',
-                        // 源代码
                         '.js', '.ts', '.jsx', '.tsx', '.kt', '.kts', '.java', '.py', '.pyw',
                         '.c', '.cpp', '.cc', '.h', '.hpp', '.cs', '.go', '.rs', '.rb',
                         '.php', '.swift', '.scala', '.groovy', '.lua', '.r', '.m', '.mm',
                         '.sh', '.bash', '.zsh', '.ps1', '.bat', '.cmd',
                         '.sql', '.graphql', '.proto',
-                        // 文档
                         '.pdf'
                     ];
-                    
                     var files = input.files;
                     var filesToUpload = [];
-                    
-                    // 筛选支持的文件
                     for (var i = 0; i < files.length; i++) {
                         var file = files[i];
                         var ext = '.' + file.name.split('.').pop().toLowerCase();
@@ -4228,38 +5123,29 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             filesToUpload.push(file);
                         }
                     }
-                    
                     if (filesToUpload.length === 0) {
                         window.alert('所选目录中没有支持的文件类型');
                         input.value = '';
                         return;
                     }
-                    
                     console.log('📁 准备上传 ' + filesToUpload.length + ' 个文件（共 ' + files.length + ' 个文件）');
                     window.alert('准备上传 ' + filesToUpload.length + ' 个文件...');
-                    
                     var uploaded = 0;
                     var failed = 0;
-                    
-                    // 逐一上传文件
                     function uploadNext(index) {
                         if (index >= filesToUpload.length) {
                             window.alert('上传完成！成功: ' + uploaded + ', 失败: ' + failed);
                             input.value = '';
                             return;
                         }
-                        
                         var file = filesToUpload[index];
                         console.log('📤 上传 (' + (index + 1) + '/' + filesToUpload.length + '): ' + file.name);
-                        
                         var formData = new FormData();
                         formData.append('sessionId', sessionId);
                         formData.append('userId', userId);
                         formData.append('file', file);
-                        
                         var xhr = new XMLHttpRequest();
                         xhr.open('POST', uploadUrl, true);
-                        
                         xhr.onload = function() {
                             if (xhr.status === 200) {
                                 uploaded++;
@@ -4270,29 +5156,112 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             }
                             uploadNext(index + 1);
                         };
-                        
                         xhr.onerror = function() {
                             failed++;
                             console.log('❌ 网络错误: ' + file.name);
                             uploadNext(index + 1);
                         };
-                        
                         xhr.send(formData);
                     }
-                    
                     uploadNext(0);
                 })();
             """)
         }
     }
-    
-    // 文件夹浏览对话框
-    if (showFolderExplorer) {
-        FolderExplorerDialog(
-            groupId = group.id,
-            strings = strings,
-            onDismiss = { showFolderExplorer = false }
+}
+
+private suspend fun handleChatAppBackNavigation(
+    user: User,
+    group: Group,
+    appState: WebAppState,
+    chatClient: ChatClient,
+) {
+    console.log("👈 用户点击返回按钮")
+    try {
+        console.log("🔌 正在断开WebSocket...")
+        chatClient.disconnect()
+        console.log("✅ WebSocket已断开")
+    } catch (e: dynamic) {
+        console.log("ℹ️ WebSocket断开失败（忽略错误）:", e)
+    }
+
+    kotlinx.coroutines.delay(300)
+
+    try {
+        ApiClient.markGroupAsRead(user.id, group.id)
+        console.log("✅ 已标记群组为已读")
+    } catch (e: dynamic) {
+        console.log("⚠️ 标记已读失败:", e)
+    }
+
+    console.log("📋 返回到群组列表")
+    appState.navigateBack()
+}
+
+private suspend fun exportChatAppMarkdown(
+    user: User,
+    group: Group,
+    onExportingChanged: (Boolean) -> Unit,
+    onHintChanged: (String?) -> Unit,
+) {
+    onExportingChanged(true)
+    onHintChanged("正在导出...")
+    try {
+        recoverSuspendNonCancellation(
+            block = {
+                var vaultHandle: dynamic = null
+                if (ObsidianVaultManager.isSupported()) {
+                    vaultHandle = ObsidianVaultManager.getCachedHandleIfValid()
+                    if (vaultHandle == null) {
+                        onHintChanged("请选择 Obsidian Vault 目录...")
+                        vaultHandle = ObsidianVaultManager.pickVaultDirectory()
+                    }
+                }
+
+                onHintChanged("正在获取聊天记录...")
+                val result = ApiClient.exportGroupMarkdown(group.id, user.id)
+                if (!result.success) {
+                    onHintChanged("导出失败：${result.message}")
+                    window.alert("导出失败：${result.message}")
+                    return@recoverSuspendNonCancellation
+                }
+                val fileName = result.fileName.ifBlank { "silk_group_${group.id}.md" }
+
+                if (vaultHandle != null) {
+                    onHintChanged("正在写入 Vault...")
+                    recoverSuspendNonCancellation(
+                        block = {
+                            val relativePath = ObsidianVaultManager.saveToVault(
+                                vaultHandle, group.name, result.markdown, fileName
+                            )
+                            console.log("✅ 已导出到 Obsidian Vault:", relativePath)
+                            onHintChanged("已导出: $relativePath")
+                        },
+                        recover = { error ->
+                            console.warn("Vault 写入失败，回退到下载:", error)
+                            downloadAsFile(result.markdown, fileName)
+                            onHintChanged("Vault写入失败，已下载：$fileName")
+                        },
+                    )
+                } else {
+                    downloadAsFile(result.markdown, fileName)
+                    console.log("✅ 聊天记录已导出:", fileName)
+                    onHintChanged("导出成功：$fileName")
+                }
+            },
+            recover = { error ->
+                val msg = error.message ?: error.toString()
+                if (msg.contains("abort", ignoreCase = true)) {
+                    onHintChanged("已取消")
+                } else {
+                    console.error("❌ 导出异常:", error)
+                    onHintChanged("导出异常: $msg")
+                    window.alert("导出失败: $msg")
+                }
+            },
         )
+    } finally {
+        onExportingChanged(false)
     }
 }
 
@@ -4919,10 +5888,10 @@ private fun ensureMarkdownAssetsLoaded() {
 }
 
 private fun ensureMarkdownStylesInjected() {
-    if (document.getElementById(markdownRuntimeStyleId) != null) return
+    if (document.getElementById(MARKDOWN_RUNTIME_STYLE_ID) != null) return
 
     val styleElement = document.createElement("style") as HTMLElement
-    styleElement.id = markdownRuntimeStyleId
+    styleElement.id = MARKDOWN_RUNTIME_STYLE_ID
     styleElement.textContent = silkMarkdownRuntimeCss
     document.head?.appendChild(styleElement)
 }
@@ -4941,6 +5910,11 @@ private data class MathDelimiter(
     val close: String
 )
 
+private data class MathBlockMatch(
+    val renderedBlock: String,
+    val nextCursor: Int,
+)
+
 private val mathDelimiters = listOf(
     MathDelimiter("$$", "$$"),
     MathDelimiter("\\[", "\\]"),
@@ -4953,29 +5927,13 @@ private fun normalizeMathBlocks(markdown: String): String {
     var cursor = 0
 
     while (cursor < markdown.length) {
-        var matched = false
-
-        for (delimiter in mathDelimiters) {
-            if (!markdown.startsWith(delimiter.open, cursor)) continue
-
-            val contentStart = cursor + delimiter.open.length
-            val closingIndex = markdown.indexOf(delimiter.close, contentStart)
-            if (closingIndex == -1) continue
-
-            val innerContent = markdown.substring(contentStart, closingIndex)
-                // markdown-it 会把数学环境中的 `\\` 吃成 `\`，这里先补一层转义。
-                .replace("\\\\", "\\\\\\\\")
-            output.append(delimiter.open)
-            output.append(innerContent)
-            output.append(delimiter.close)
-            cursor = closingIndex + delimiter.close.length
-            matched = true
-            break
-        }
-
-        if (!matched) {
+        val mathBlock = findMathBlockMatch(markdown, cursor)
+        if (mathBlock == null) {
             output.append(markdown[cursor])
             cursor += 1
+        } else {
+            output.append(mathBlock.renderedBlock)
+            cursor = mathBlock.nextCursor
         }
     }
 
@@ -5016,66 +5974,19 @@ private fun fixOrphanCodeFences(markdown: String): String {
 
     while (idx < lines.size) {
         val trimmed = lines[idx].trimStart()
+        val opener = codeFenceOpenerPattern.find(trimmed)
 
-        val opener = Regex("^(`{3,}|~{3,})(\\s*[\\w+#.-]*)?\\s*$").find(trimmed)
         if (opener != null) {
             val fenceStr = opener.groupValues[1]
-            val fenceLen = fenceStr.length
-            val fenceChar = fenceStr[0]
-            val closePattern = Regex("^\\s*${Regex.escape(fenceChar.toString())}{$fenceLen,}\\s*$")
+            val closerIdx = findClosingFence(lines, idx, fenceStr.length, fenceStr[0])
 
-            var closerIdx = -1
-            for (j in (idx + 1) until lines.size) {
-                if (closePattern.matches(lines[j])) {
-                    closerIdx = j
-                    break
-                }
-            }
-
-            if (closerIdx >= 0) {
-                // Closed fence — check if content is actually Markdown, not code.
-                // If no language tag and content contains headings + bold/lists,
-                // the model likely wrapped prose in backticks by mistake.
-                val langTag = (opener.groupValues[2]).trim()
-                val innerLines = if (closerIdx > idx + 1) lines.subList(idx + 1, closerIdx) else emptyList()
-                val innerText = innerLines.joinToString("\n")
-                val innerHasHeadings = innerText.contains(Regex("^#{1,6}\\s", RegexOption.MULTILINE))
-                val innerHasBold = innerText.contains(Regex("\\*\\*[^*]+\\*\\*"))
-                val innerHasLists = innerText.contains(Regex("^[-*+·•]\\s+", RegexOption.MULTILINE))
-                val innerHasTable = innerText.contains(Regex("^\\|.+\\|\\s*$", RegexOption.MULTILINE))
-                val markdownSignals = listOf(innerHasHeadings, innerHasBold, innerHasLists, innerHasTable).count { it }
-
-                val isLikelyNotCode = (langTag.isEmpty() || langTag == "text" || langTag == "markdown")
-                        && markdownSignals >= 2 && innerLines.size >= 3
-
-                if (isLikelyNotCode) {
-                    lines.removeAt(closerIdx)
-                    lines.removeAt(idx)
-                } else {
-                    idx = closerIdx + 1
-                }
+            idx = if (closerIdx >= 0) {
+                handleClosedFence(lines, idx, closerIdx, opener)
             } else {
-                val contentAfter = if (idx + 1 < lines.size) {
-                    lines.subList(idx + 1, lines.size).joinToString("\n")
-                } else ""
-
-                val hasMarkdownSyntax =
-                    contentAfter.contains(Regex("^#{1,6}[\\s]", RegexOption.MULTILINE)) ||
-                    contentAfter.contains(Regex("^\\|.+\\|\\s*$", RegexOption.MULTILINE)) ||
-                    contentAfter.contains(Regex("^[-*+]\\s+", RegexOption.MULTILINE)) ||
-                    contentAfter.contains(Regex("\\*\\*[^*]+\\*\\*"))
-
-                if (hasMarkdownSyntax || contentAfter.length > 500) {
-                    lines.removeAt(idx)
-                } else {
-                    lines.add("`".repeat(fenceLen))
-                    idx = lines.size
-                }
+                handleUnclosedFence(lines, idx, fenceStr.length)
             }
         } else {
-            if (Regex("^(.+[^`\\s])`{3,}\\s*$").containsMatchIn(lines[idx])) {
-                lines[idx] = lines[idx].replace(Regex("`{3,}\\s*$"), "")
-            }
+            stripInlineDanglingFence(lines, idx)
             idx++
         }
     }
@@ -5094,13 +6005,13 @@ private fun highlightCode(code: String, language: String): String {
     val dataLang = if (normalizedLanguage.isNotBlank()) """ data-lang="${escapeHtml(normalizedLanguage)}"""" else ""
 
     return try {
-        val highlighted = if (normalizedLanguage.isNotBlank() && HighlightJs.getLanguage(normalizedLanguage) != null) {
+        val highlighted = if (normalizedLanguage.isNotBlank() && highlightJsGetLanguage(normalizedLanguage) != null) {
             val options = js("{}")
             options.language = normalizedLanguage
             options.ignoreIllegals = true
-            HighlightJs.highlight(code, options).value as String
+            highlightJsHighlight(code, options).value as String
         } else {
-            HighlightJs.highlightAuto(code).value as String
+            highlightJsHighlightAuto(code).value as String
         }
 
         val className = if (normalizedLanguage.isNotBlank()) "language-${escapeHtml(normalizedLanguage)}" else ""
@@ -5188,6 +6099,9 @@ private fun linkCitationMarkers(
             val label = if (kind == "citation") "来源 $idx" else "资料 $idx"
             if (ref.url != null) {
                 "<a href=\"${ref.url}\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"silk-citation-chip\">$label</a>"
+            } else if (parseKnowledgeBaseDeepLink(ref.path) != null) {
+                val kbLink = parseKnowledgeBaseDeepLink(ref.path)!!
+                "<a href=\"#\" class=\"silk-citation-chip silk-kb-link\" data-kb-entry-id=\"${kbLink.entryId}\">$label</a>"
             } else {
                 "<a href=\"#${anchorPrefix}ref-$idx\" class=\"silk-citation-chip silk-citation-nav\" data-idx=\"$idx\">$label</a>"
             }
@@ -5527,6 +6441,20 @@ fun ReferenceSourcesList(
                                         property("word-break", "break-all")
                                     }
                                 }) { Text(ref.title) }
+                            } else if (parseKnowledgeBaseDeepLink(ref.path) != null) {
+                                val kbLink = parseKnowledgeBaseDeepLink(ref.path)!!
+                                Span({
+                                    style {
+                                        fontSize(13.px)
+                                        color(Color("#2F80B7"))
+                                        property("text-decoration", "underline")
+                                        property("text-decoration-style", "dotted")
+                                        property("cursor", "pointer")
+                                        property("word-break", "break-all")
+                                    }
+                                    attr("title", "打开知识库文档")
+                                    onClick { openKnowledgeBaseEntryLink(entryId = kbLink.entryId, topicId = kbLink.topicId) }
+                                }) { Text(ref.title) }
                             } else {
                                 Span({
                                     style { fontSize(13.px); color(Color("#333")) }
@@ -5594,9 +6522,7 @@ Div({
             property("gap", "8px")
             if (isSelectionMode) property("cursor", "pointer")
         }
-        if (isSelectionMode) {
-            onClick { onToggleSelection(message.id) }
-        }
+        if (isSelectionMode) onClick { onToggleSelection(message.id) }
     }) {
         if (isSelectionMode) {
             Div({
@@ -5896,9 +6822,48 @@ Div({
                 Text("⏳")
                 Text("生成中...")
             }
+            if (isTransient) AITransientStatus()
         }
     }
-    } // close outer selection wrapper
+}
+
+/**
+ * 消息渲染模式 — 集中所有 type + category 的交叉判断，
+ * 避免在 MessageItem 中用多处提前拦截 + return 导致分支遗漏。
+ */
+private enum class MessageRenderMode {
+    AI_TEXT,          // AI 常规文本 → AIMessageCard
+    AGENT_STATUS,     // Agent 状态 → 灰色斜体
+    AGENT_QUESTION,   // Agent 文本提问 → 橙色背景
+    CARD,             // 交互卡片 → CardMessageRenderer
+    CARD_REPLY,       // 卡片回复 → 绿色摘要
+    NORMAL_TEXT,      // 普通用户消息气泡（含撤回/操作按钮）
+    FILE,             // 文件消息
+    SYSTEM_EVENT,     // JOIN / LEAVE / SYSTEM
+    NOOP,             // RECALL / STOP_GENERATE → 不渲染
+}
+
+/**
+ * 根据 message 的 type 和 category 决定渲染模式。
+ * 优先级：CARD/CARD_REPLY 类型 > category 特殊处理 > type 分支。
+ */
+private fun resolveRenderMode(message: Message): MessageRenderMode {
+    // 卡片类型最优先 — 不管 category 是什么
+    if (message.type == MessageType.CARD) return MessageRenderMode.CARD
+    if (message.type == MessageType.CARD_REPLY) return MessageRenderMode.NOOP
+
+    // category 特殊处理（只对非卡片消息生效）
+    if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) return MessageRenderMode.AGENT_STATUS
+    if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION) return MessageRenderMode.AGENT_QUESTION
+
+    // type 分支
+    return when (message.type) {
+        MessageType.TEXT -> if (isAgentUserId(message.userId)) MessageRenderMode.AI_TEXT else MessageRenderMode.NORMAL_TEXT
+        MessageType.FILE -> MessageRenderMode.FILE
+        MessageType.JOIN, MessageType.LEAVE, MessageType.SYSTEM -> MessageRenderMode.SYSTEM_EVENT
+        MessageType.RECALL, MessageType.STOP_GENERATE -> MessageRenderMode.NOOP
+        else -> MessageRenderMode.NORMAL_TEXT
+    }
 }
 
 @Suppress("CyclomaticComplexMethod", "NestedBlockDepth", "UnusedParameter")
@@ -5962,26 +6927,7 @@ fun MessageItem(
                       message.category != com.silk.shared.models.MessageCategory.AGENT_STATUS &&
                       message.category != com.silk.shared.models.MessageCategory.AGENT_QUESTION
 
-    // Agent 状态消息 - 灰色样式
-    if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) {
-        Div({
-            style {
-                padding(8.px, 16.px)
-                marginBottom(6.px)
-                backgroundColor(Color("#F5F5F5"))
-                borderRadius(8.px)
-                property("border-left", "3px solid #BDBDBD")
-                fontSize(13.px)
-                color(Color("#757575"))
-                property("font-style", "italic")
-                property("white-space", "pre-wrap")
-                property("word-break", "break-word")
-            }
-        }) {
-            Text(message.content)
-        }
-        return
-    }
+    val renderMode = resolveRenderMode(message)
 
     // Agent 提问消息 - 橙色警告样式
     // 注意：仅处理 cc-connect 的文本型提问（type=TEXT，按钮走底部 interactiveOptions）。
@@ -6004,7 +6950,52 @@ fun MessageItem(
         }) {
             Text(message.content)
         }
-        return
+        MessageRenderMode.AGENT_STATUS -> {
+            AgentStatusMessage(message.content)
+        }
+        MessageRenderMode.AGENT_QUESTION -> {
+            AgentQuestionMessage(message.content)
+        }
+        MessageRenderMode.NORMAL_TEXT -> {
+            UserTextMessageCard(
+                message = message,
+                timeString = timeString,
+                currentUserId = currentUserId,
+                isTransient = isTransient,
+                isRecalling = isRecalling,
+                onRecall = onRecall,
+                onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
+                onForward = onForward,
+                onDelete = onDelete,
+                isSelectionMode = isSelectionMode,
+                isSelected = isSelected,
+                onToggleSelection = onToggleSelection,
+                onEnterSelectionMode = onEnterSelectionMode
+            )
+        }
+        MessageRenderMode.FILE -> {
+            FileMessageCard(
+                message = message,
+                timeString = timeString,
+                isTransient = isTransient,
+                onForward = onForward,
+                onDelete = onDelete,
+                isSelectionMode = isSelectionMode,
+                isSelected = isSelected,
+                onToggleSelection = onToggleSelection,
+                onEnterSelectionMode = onEnterSelectionMode
+            )
+        }
+        MessageRenderMode.SYSTEM_EVENT -> {
+            SystemEventMessage(message.content, timeString)
+        }
+        MessageRenderMode.CARD -> {
+            CardMessageContent(message, chatClient, currentUserId, currentUserName)
+        }
+        MessageRenderMode.CARD_REPLY -> {
+            CardReplySummary(message.content)
+        }
+        MessageRenderMode.NOOP -> { }
     }
     
     when (message.type) {
@@ -6817,6 +7808,514 @@ fun MessageItem(
 }
 
 @Composable
+private fun FileMessageCard(
+    message: Message,
+    timeString: String,
+    isTransient: Boolean,
+    onForward: (Message) -> Unit,
+    onDelete: (String) -> Unit,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelection: (String) -> Unit,
+    onEnterSelectionMode: (String) -> Unit,
+) {
+    val fileInfo = remember(message.content) {
+        parseWebFileMessageContent(message.content)
+    }
+    val fileName = fileInfo.fileName
+    val fileSizeStr = formatWebFileSize(fileInfo.fileSize)
+    val fileExtLabel = fileName.substringAfterLast(".", "").uppercase().ifBlank { "FILE" }
+
+    StandardMessageCard(
+        message = message,
+        timeString = timeString,
+        isSelectionMode = isSelectionMode,
+        isSelected = isSelected,
+        onToggleSelection = onToggleSelection
+    ) {
+        FileDownloadCard(
+            fileName = fileName,
+            fileSizeStr = fileSizeStr,
+            fileExtLabel = fileExtLabel,
+            downloadUrl = fileInfo.downloadUrl
+        )
+        if (!isTransient && !isSelectionMode) {
+            FileMessageActions(
+                message = message,
+                onForward = onForward,
+                onDelete = onDelete,
+                onEnterSelectionMode = onEnterSelectionMode
+            )
+        }
+    }
+}
+
+@Composable
+private fun StandardMessageCard(
+    message: Message,
+    timeString: String,
+    isSelectionMode: Boolean,
+    isSelected: Boolean,
+    onToggleSelection: (String) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "8px")
+        }
+    }) {
+        if (isSelectionMode) {
+            StandardSelectionCheckbox(
+                isSelected = isSelected,
+                onClick = { onToggleSelection(message.id) }
+            )
+        }
+        Div({
+            classes(SilkStylesheet.messageCard)
+            attr("data-message-id", message.id)
+            style {
+                property("flex", "1")
+                property("min-width", "0")
+                if (isSelected) {
+                    backgroundColor(Color("rgba(76, 175, 80, 0.10)"))
+                    property("outline", "2px solid ${SilkColors.primary}")
+                }
+                if (isSelectionMode) {
+                    property("cursor", "pointer")
+                }
+            }
+            if (isSelectionMode) {
+                onClick { onToggleSelection(message.id) }
+            }
+        }) {
+            StandardMessageHeader(message.userName, timeString)
+            content()
+        }
+    }
+}
+
+@Composable
+private fun StandardSelectionCheckbox(isSelected: Boolean, onClick: () -> Unit) {
+    Div({
+        style {
+            width(24.px)
+            height(24.px)
+            borderRadius(4.px)
+            property("border", if (isSelected) "none" else "2px solid ${SilkColors.border}")
+            backgroundColor(Color(if (isSelected) SilkColors.primary else "transparent"))
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("justify-content", "center")
+            property("cursor", "pointer")
+            property("flex-shrink", "0")
+            property("transition", "all 0.15s ease")
+        }
+        onClick { onClick() }
+    }) {
+        if (isSelected) {
+            Span({ style { color(Color.white); fontSize(14.px); property("font-weight", "bold") } }) {
+                Text("\u2713")
+            }
+        }
+    }
+}
+
+@Composable
+private fun StandardMessageHeader(userName: String, timeString: String) {
+    Div({ classes(SilkStylesheet.messageHeader) }) {
+        Span({ classes(SilkStylesheet.userName) }) {
+            Text(userName)
+        }
+        Span({ classes(SilkStylesheet.timestamp) }) {
+            Text(timeString)
+        }
+    }
+}
+
+@Composable
+private fun StandardMessageBody(content: @Composable () -> Unit) {
+    Div({
+        style {
+            property("white-space", "pre-wrap")
+            property("word-wrap", "break-word")
+            property("line-height", "1.7")
+            property("color", SilkColors.textPrimary)
+        }
+    }) {
+        content()
+    }
+}
+
+private fun parsePdfReportMessage(content: String): PdfReportMessage? {
+    if (!content.contains("/download/report/") || !content.contains(".pdf")) return null
+
+    var downloadPath: String? = null
+    var fileName: String? = null
+    val bodyLines = mutableListOf<String>()
+
+    content.split("\n").forEach { line ->
+        val trimmedLine = line.trim()
+        if (trimmedLine.startsWith("/download/report/") && trimmedLine.contains(".pdf")) {
+            downloadPath = trimmedLine
+            fileName = decodeDownloadFileName(trimmedLine)
+        } else if (trimmedLine.isNotEmpty()) {
+            bodyLines += line
+        }
+    }
+
+    return PdfReportMessage(
+        bodyLines = bodyLines,
+        downloadPath = downloadPath,
+        fileName = fileName
+    )
+}
+
+private fun decodeDownloadFileName(downloadPath: String): String =
+    downloadPath.substringAfterLast("/").replace("%20", " ").replace("%27", "'")
+
+private fun startBrowserDownload(
+    fullUrl: String,
+    downloadFileName: String,
+    startLog: String,
+    successLog: String,
+    failureLog: String,
+) {
+    console.log("$startLog: $fullUrl, 文件名: $downloadFileName")
+
+    val browserWindow = js("window")
+    val browserDocument = js("document")
+
+    browserWindow.fetch(fullUrl)
+        .then({ response: dynamic ->
+            if (!response.ok) {
+                throw js("Error('下载失败: ' + response.status)")
+            }
+            response.blob()
+        })
+        .then({ blob: dynamic ->
+            val url = browserWindow.URL.createObjectURL(blob)
+            val link = browserDocument.createElement("a")
+            link.style.display = "none"
+            link.href = url
+            link.download = downloadFileName
+            browserDocument.body.appendChild(link)
+            link.click()
+            browserWindow.URL.revokeObjectURL(url)
+            browserDocument.body.removeChild(link)
+            console.log(successLog)
+        })
+        .catch({ error: dynamic ->
+            console.error(failureLog, error)
+            browserWindow.alert("$failureLog: " + error.message)
+        })
+}
+
+@Composable
+private fun PdfReportMessageBody(pdfReport: PdfReportMessage) {
+    pdfReport.bodyLines.forEach { line ->
+        Text(line)
+        Br()
+    }
+
+    val downloadPath = pdfReport.downloadPath
+    if (downloadPath != null) {
+        val fullUrl = "${backendHttpOrigin()}$downloadPath"
+        val downloadFileName = pdfReport.fileName ?: "diagnosis_report.pdf"
+
+        Div({
+            style {
+                marginTop(14.px)
+            }
+        }) {
+            Button({
+                style {
+                    property("background", "linear-gradient(135deg, ${SilkColors.success} 0%, #6A9D5B 100%)")
+                    color(Color.white)
+                    padding(12.px, 20.px)
+                    border {
+                        width(0.px)
+                    }
+                    borderRadius(8.px)
+                    fontSize(14.px)
+                    property("cursor", "pointer")
+                    property("font-weight", "600")
+                    property("display", "inline-flex")
+                    property("align-items", "center")
+                    property("gap", "8px")
+                    property("box-shadow", "0 2px 8px rgba(125, 174, 108, 0.3)")
+                    property("transition", "all 0.2s ease")
+                }
+                onClick { event ->
+                    event.preventDefault()
+                    startBrowserDownload(
+                        fullUrl = fullUrl,
+                        downloadFileName = downloadFileName,
+                        startLog = "开始下载PDF",
+                        successLog = "PDF下载成功",
+                        failureLog = "下载PDF失败"
+                    )
+                }
+            }) {
+                Text("📥 下载PDF报告")
+            }
+
+            if (pdfReport.fileName != null) {
+                Div({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textLight))
+                        marginTop(8.px)
+                        property("font-style", "italic")
+                    }
+                }) {
+                    Text("文件名：${pdfReport.fileName}")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TextMessageActions(
+    message: Message,
+    canRecall: Boolean,
+    isRecalling: Boolean,
+    onRecall: (String) -> Unit,
+    onCaptureToKnowledgeBase: (Message) -> Unit,
+    onForward: (Message) -> Unit,
+    onDelete: (String) -> Unit,
+    onEnterSelectionMode: (String) -> Unit,
+) {
+    MessageActionRow {
+        MessageAction("📋复制") { copyTextToClipboard(message.content) }
+        MessageAction("📚入库") { onCaptureToKnowledgeBase(message) }
+        MessageAction("↗转发") { onForward(message) }
+        if (canRecall && !isRecalling) {
+            MessageAction("↩撤回") {
+                if (window.confirm("确定要撤回这条消息吗？")) {
+                    onRecall(message.id)
+                }
+            }
+        }
+        MessageAction("🗑删除", color = "#E57373") {
+            if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
+                onDelete(message.id)
+            }
+        }
+        MessageAction("☑多选") { onEnterSelectionMode(message.id) }
+    }
+}
+
+@Composable
+private fun FileDownloadCard(
+    fileName: String,
+    fileSizeStr: String,
+    fileExtLabel: String,
+    downloadUrl: String,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "12px")
+            padding(12.px)
+            backgroundColor(Color(SilkColors.surfaceElevated))
+            borderRadius(8.px)
+            property("border", "1px solid ${SilkColors.border}")
+            property("cursor", "pointer")
+            property("transition", "all 0.2s ease")
+        }
+        onClick {
+            if (downloadUrl.isNotEmpty()) {
+                startBrowserDownload(
+                    fullUrl = "${backendHttpOrigin()}$downloadUrl",
+                    downloadFileName = fileName,
+                    startLog = "打开文件下载",
+                    successLog = "文件下载成功",
+                    failureLog = "下载文件失败"
+                )
+            }
+        }
+    }) {
+        Div({
+            style {
+                fontSize(32.px)
+                padding(8.px)
+                backgroundColor(Color(SilkColors.secondary))
+                borderRadius(8.px)
+            }
+        }) {
+            Text(webFileIconForName(fileName))
+        }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("gap", "4px")
+            }
+        }) {
+            Div({
+                style {
+                    fontSize(14.px)
+                    fontWeight("600")
+                    color(Color(SilkColors.textPrimary))
+                    property("max-width", "200px")
+                    property("overflow", "hidden")
+                    property("text-overflow", "ellipsis")
+                    property("white-space", "nowrap")
+                }
+            }) {
+                Text(fileName)
+            }
+            Div({
+                style {
+                    fontSize(12.px)
+                    color(Color(SilkColors.textSecondary))
+                }
+            }) {
+                Text("$fileSizeStr • $fileExtLabel")
+            }
+        }
+        Div({
+            style {
+                marginLeft(8.px)
+                fontSize(18.px)
+                color(Color(SilkColors.primary))
+            }
+        }) {
+            Text("⬇")
+        }
+    }
+}
+
+@Composable
+private fun FileMessageActions(
+    message: Message,
+    onForward: (Message) -> Unit,
+    onDelete: (String) -> Unit,
+    onEnterSelectionMode: (String) -> Unit,
+) {
+    MessageActionRow {
+        MessageAction("↗转发") { onForward(message) }
+        MessageAction("🗑删除", color = "#E57373") {
+            if (kotlinx.browser.window.confirm("确定要删除这条消息吗？")) {
+                onDelete(message.id)
+            }
+        }
+        MessageAction("☑多选") { onEnterSelectionMode(message.id) }
+    }
+}
+
+@Composable
+private fun MessageActionRow(content: @Composable () -> Unit) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            property("justify-content", "flex-end")
+            property("gap", "6px")
+            marginTop(8.px)
+            property("opacity", "0.5")
+            property("transition", "opacity 0.2s")
+        }
+    }) {
+        content()
+    }
+}
+
+@Composable
+private fun MessageAction(text: String, color: String = SilkColors.textSecondary, onClick: () -> Unit) {
+    Span({
+        style {
+            fontSize(11.px)
+            color(Color(color))
+            property("cursor", "pointer")
+            property("padding", "2px 6px")
+            property("border-radius", "4px")
+            property("transition", "all 0.2s")
+        }
+        onClick { onClick() }
+    }) {
+        Text(text)
+    }
+}
+
+@Composable
+private fun SystemEventMessage(content: String, timeString: String) {
+    Div({ classes(SilkStylesheet.systemMessage) }) {
+        Text("• $content ($timeString)")
+    }
+}
+
+@Composable
+private fun CardMessageContent(
+    message: Message,
+    chatClient: com.silk.shared.ChatClient?,
+    currentUserId: String,
+    currentUserName: String,
+) {
+    if (chatClient != null) {
+        CardMessageRenderer(
+            message = message,
+            chatClient = chatClient,
+            currentUserId = currentUserId,
+            userName = currentUserName,
+        )
+    } else {
+        Div({ style { padding(8.px); color(Color("#999")) } }) {
+            Text("[卡片消息]")
+        }
+    }
+}
+
+@Composable
+private fun CardReplySummary(content: String) {
+    Div({
+        style {
+            padding(6.px, 12.px)
+            marginBottom(6.px)
+            backgroundColor(Color("#F0F8F0"))
+            borderRadius(8.px)
+            fontSize(13.px)
+            color(Color("#4a7c59"))
+            property("font-style", "italic")
+        }
+    }) {
+        Text("\u2713 ${cardReplySummaryText(content)}")
+    }
+}
+
+private fun cardReplySummaryText(content: String): String =
+    try {
+        val payload = kotlinx.serialization.json.Json.parseToJsonElement(content).jsonObject
+        val action = payload["action"]?.jsonPrimitive?.content ?: "unknown"
+        when {
+            action.startsWith("__opt__") -> {
+                val afterPrefix = action.removePrefix("__opt__")
+                val idx = afterPrefix.indexOf("__")
+                val cleanText = if (idx >= 0) afterPrefix.substring(idx + 2) else action
+                "选择: $cleanText"
+            }
+            action.startsWith("__custom__") -> {
+                val questionIndex = action.removePrefix("__custom__")
+                val custom = payload["inputs"]?.jsonObject?.get("custom_answer_$questionIndex")
+                    ?.jsonPrimitive?.content ?: ""
+                if (custom.isNotBlank()) "回复: $custom" else "回复: (自定义)"
+            }
+            action.startsWith("perm_allow_") -> "允许"
+            action.startsWith("perm_deny_") -> "拒绝"
+            action.startsWith("perm_accept_edits_") -> "允许所有编辑"
+            action.startsWith("perm_bypass_") -> "允许所有操作"
+            else -> "选择: $action"
+        }
+    } catch (_: kotlinx.serialization.SerializationException) {
+        "卡片回复"
+    } catch (_: IllegalArgumentException) {
+        "卡片回复"
+    }
+
+@Composable
 fun TransientMessageItem(message: Message) {
     // 临时消息：丝滑风格 + 进度条动画
     val timeString = remember(message.timestamp) {
@@ -7419,23 +8918,147 @@ fun MembersDialog(
         }
         onClick { onDismiss() }
     }) {
-        Div({
-            style {
-                backgroundColor(Color(SilkColors.surfaceElevated))
-                borderRadius(16.px)
-                padding(28.px)
-                width(420.px)
-                maxWidth(90.vw)
-                maxHeight(70.vh)
-                property("overflow-y", "auto")
-                property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.15)")
+        content()
+    }
+}
+
+@Composable
+private fun MembersDialogSurface(
+    content: @Composable () -> Unit,
+) {
+    Div({
+        style {
+            backgroundColor(Color(SilkColors.surfaceElevated))
+            borderRadius(16.px)
+            padding(28.px)
+            width(420.px)
+            maxWidth(90.vw)
+            maxHeight(70.vh)
+            property("overflow-y", "auto")
+            property("box-shadow", "0 8px 32px rgba(169, 137, 77, 0.15)")
+        }
+        onClick { it.stopPropagation() }
+    }) {
+        content()
+    }
+}
+
+@Composable
+private fun MembersDialogTitle(strings: com.silk.shared.i18n.Strings, count: Int) {
+    H3({
+        style {
+            margin(0.px, 0.px, 20.px, 0.px)
+            color(Color(SilkColors.textPrimary))
+            fontSize(20.px)
+            property("font-weight", "600")
+            property("text-align", "center")
+        }
+    }) {
+        Text(strings.groupMembersTitleWithCount.replace("{count}", count.toString()))
+    }
+}
+
+@Composable
+private fun MembersDialogBody(
+    members: List<GroupMember>,
+    contactIds: Set<String>,
+    currentUserId: String,
+    isLoading: Boolean,
+    strings: com.silk.shared.i18n.Strings,
+    onMemberClick: (GroupMember) -> Unit,
+) {
+    when {
+        isLoading -> MembersDialogStateText(strings.loading)
+        members.isEmpty() -> MembersDialogStateText(strings.noMembers)
+        else -> MembersDialogMemberList(
+            members = members,
+            contactIds = contactIds,
+            currentUserId = currentUserId,
+            strings = strings,
+            onMemberClick = onMemberClick,
+        )
+    }
+}
+
+@Composable
+private fun MembersDialogStateText(text: String) {
+    Div({
+        style {
+            property("text-align", "center")
+            padding(20.px)
+            color(Color(SilkColors.textSecondary))
+        }
+    }) {
+        Text(text)
+    }
+}
+
+@Composable
+private fun MembersDialogMemberList(
+    members: List<GroupMember>,
+    contactIds: Set<String>,
+    currentUserId: String,
+    strings: com.silk.shared.i18n.Strings,
+    onMemberClick: (GroupMember) -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("gap", "10px")
+        }
+    }) {
+        members.forEach { member ->
+            MembersDialogMemberRow(
+                state = rememberMembersDialogMemberState(member, currentUserId, contactIds, strings),
+                onClick = { onMemberClick(member) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MembersDialogMemberRow(
+    state: MembersDialogMemberState,
+    onClick: () -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.SpaceBetween)
+            alignItems(AlignItems.Center)
+            padding(12.px, 16.px)
+            backgroundColor(Color(SilkColors.surface))
+            borderRadius(10.px)
+            property("box-shadow", "0 2px 4px rgba(0,0,0,0.05)")
+            if (state.isActionable) {
+                property("cursor", "pointer")
+                property("transition", "all 0.2s ease")
             }
-            onClick { it.stopPropagation() }
-        }) {
-            // 标题
-            H3({
+        }
+        if (state.isActionable) {
+            onClick { onClick() }
+        }
+    }) {
+        MembersDialogMemberSummary(state)
+        MembersDialogMemberActionIcon(state)
+    }
+}
+
+@Composable
+private fun MembersDialogMemberSummary(state: MembersDialogMemberState) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "12px")
+        }
+    }) {
+        MembersDialogAvatar(state)
+        Div {
+            Div({
                 style {
-                    margin(0.px, 0.px, 20.px, 0.px)
+                    fontSize(15.px)
                     color(Color(SilkColors.textPrimary))
                     fontSize(20.px)
                     property("font-weight", "600")
@@ -7678,12 +9301,138 @@ fun MembersDialog(
                     fontSize(14.px)
                     property("font-weight", "500")
                 }
-                onClick { onDismiss() }
             }) {
-                Text("关闭")
+                Text(state.member.fullName)
+                if (state.isCurrentUser) {
+                    Span({
+                        style {
+                            fontSize(12.px)
+                            color(Color(SilkColors.textSecondary))
+                            marginLeft(8.px)
+                        }
+                    }) {
+                        Text(state.strings.me)
+                    }
+                }
+            }
+            Div({
+                style {
+                    fontSize(12.px)
+                    color(Color(SilkColors.textSecondary))
+                    marginTop(2.px)
+                }
+            }) {
+                Text(state.statusText)
             }
         }
     }
+}
+
+@Composable
+private fun MembersDialogAvatar(state: MembersDialogMemberState) {
+    Div({
+        style {
+            width(40.px)
+            height(40.px)
+            borderRadius(20.px)
+            backgroundColor(Color(state.avatarBackground))
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            color(Color.white)
+            fontSize(18.px)
+        }
+    }) {
+        Text(state.avatarText)
+    }
+}
+
+@Composable
+private fun MembersDialogMemberActionIcon(state: MembersDialogMemberState) {
+    if (!state.isActionable) {
+        return
+    }
+
+    Div({
+        style {
+            fontSize(20.px)
+            color(Color(SilkColors.textLight))
+        }
+    }) {
+        Text(if (state.isContact) "💬" else "➕")
+    }
+}
+
+@Composable
+private fun MembersDialogCloseButton(onDismiss: () -> Unit) {
+    Button({
+        style {
+            width(100.percent)
+            marginTop(20.px)
+            backgroundColor(Color(SilkColors.textSecondary))
+            color(Color.white)
+            border { width(0.px) }
+            borderRadius(10.px)
+            padding(12.px)
+            property("cursor", "pointer")
+            fontSize(14.px)
+            property("font-weight", "500")
+        }
+        onClick { onDismiss() }
+    }) {
+        Text("关闭")
+    }
+}
+
+private data class MembersDialogMemberState(
+    val member: GroupMember,
+    val strings: com.silk.shared.i18n.Strings,
+    val isCurrentUser: Boolean,
+    val isContact: Boolean,
+    val isSilkAI: Boolean,
+    val avatarBackground: String,
+    val avatarText: String,
+    val statusText: String,
+) {
+    val isActionable: Boolean
+        get() = !isCurrentUser && !isSilkAI
+}
+
+private fun rememberMembersDialogMemberState(
+    member: GroupMember,
+    currentUserId: String,
+    contactIds: Set<String>,
+    strings: com.silk.shared.i18n.Strings,
+): MembersDialogMemberState {
+    val isCurrentUser = member.id == currentUserId
+    val isContact = member.id in contactIds
+    val isSilkAI = isAgentUserId(member.id)
+
+    return MembersDialogMemberState(
+        member = member,
+        strings = strings,
+        isCurrentUser = isCurrentUser,
+        isContact = isContact,
+        isSilkAI = isSilkAI,
+        avatarBackground = when {
+            isSilkAI -> SilkColors.info
+            isCurrentUser -> SilkColors.primary
+            isContact -> SilkColors.success
+            else -> SilkColors.textSecondary
+        },
+        avatarText = when {
+            isSilkAI -> "🤖"
+            isCurrentUser -> "👤"
+            isContact -> "✓"
+            else -> member.fullName.firstOrNull()?.toString() ?: "?"
+        },
+        statusText = when {
+            isSilkAI -> strings.aiAssistant
+            isCurrentUser -> strings.currentUser
+            isContact -> strings.contactClickToChat
+            else -> strings.clickToAddContact
+        },
+    )
 }
 
 /**

@@ -1,5 +1,6 @@
 package com.silk.backend.ai
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 
@@ -13,9 +14,12 @@ import kotlinx.serialization.json.JsonObject
 data class Message(
     val role: String,
     val content: String? = null,
-    val tool_calls: List<ToolCall>? = null,
-    val tool_call_id: String? = null,
-    val reasoning_content: String? = null
+    @SerialName("tool_calls")
+    val toolCalls: List<ToolCall>? = null,
+    @SerialName("tool_call_id")
+    val toolCallId: String? = null,
+    @SerialName("reasoning_content")
+    val reasoningContent: String? = null
 )
 
 @Serializable

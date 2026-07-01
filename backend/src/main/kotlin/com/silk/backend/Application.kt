@@ -18,6 +18,7 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.io.File
 import java.time.Instant
@@ -40,17 +41,17 @@ fun main() {
     DatabaseFactory.init()
 
     // 启动后同步所有群组到 Weaviate SilkSession
-    try {
+    runCatching {
         syncGroupsToWeaviate(logger)
-    } catch (e: Exception) {
-        logger.warn("⚠️ 启动时同步群组到 Weaviate 失败: {}", e.message)
+    }.onFailure { error ->
+        logger.warn("⚠️ 启动时同步群组到 Weaviate 失败: {}", error.message)
     }
 
     // 批量索引历史聊天记录到 Weaviate
-    try {
+    runCatching {
         bulkIndexChatHistoryToWeaviate(logger)
-    } catch (e: Exception) {
-        logger.warn("⚠️ 批量索引历史聊天记录到 Weaviate 失败: {}", e.message)
+    }.onFailure { error ->
+        logger.warn("⚠️ 批量索引历史聊天记录到 Weaviate 失败: {}", error.message)
     }
 
     // 添加关闭钩子，清理 Playwright 资源
@@ -95,8 +96,7 @@ private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger) {
 
     val sessionDirs = baseFolder.listFiles()
         ?.filter { it.isDirectory && it.name.startsWith("group_") }
-        ?: emptyList()
-
+        .orEmpty()
     if (sessionDirs.isEmpty()) {
         logger.info("ℹ️ 没有找到需要索引的会话目录")
         return
@@ -115,7 +115,7 @@ private fun bulkIndexChatHistoryToWeaviate(logger: org.slf4j.Logger) {
     }
 
     logger.info("✅ 历史聊天记录批量索引完成: 新索引 {} 条, 跳过 {} 条, 失败 {} 个会话",
-        totalIndexed, totalSkipped, totalFailed)
+        totals.indexedMessages, totals.skippedMessages, totals.failedSessions)
 }
 
 /** 单个会话目录的批量索引结果。 */
@@ -248,7 +248,7 @@ private fun syncGroupsToWeaviate(logger: org.slf4j.Logger) {
     var synced = 0
     var failed = 0
     for (group in groups) {
-        try {
+        runCatching {
             val members = GroupRepository.getGroupMembers(group.id)
             val participantIds = members.map { it.userId }
             runBlocking {
@@ -263,13 +263,128 @@ private fun syncGroupsToWeaviate(logger: org.slf4j.Logger) {
             }
             synced++
             logger.debug("✅ 已同步群组 {} ({}) - {} 名参与者", group.name, group.id, participantIds.size)
-        } catch (e: Exception) {
+        }.onFailure { error ->
             failed++
-            logger.warn("⚠️ 同步群组 {} 失败: {}", group.id, e.message)
+            logger.warn("⚠️ 同步群组 {} 失败: {}", group.id, error.message)
         }
     }
     logger.info("✅ 启动时群组同步完成: 成功 {} / 失败 {}", synced, failed)
 }
+
+private data class SessionIndexResult(
+    val indexedCount: Int = 0,
+    val skippedCount: Int = 0,
+)
+
+private data class SessionIndexTotals(
+    var indexedMessages: Int = 0,
+    var skippedMessages: Int = 0,
+    var failedSessions: Int = 0,
+) {
+    fun record(result: SessionIndexResult) {
+        indexedMessages += result.indexedCount
+        skippedMessages += result.skippedCount
+    }
+}
+
+private fun indexSessionHistory(
+    sessionDir: File,
+    historyFile: File,
+    json: Json,
+    weaviate: WeaviateClient,
+    logger: Logger,
+): Result<SessionIndexResult> = runCatching {
+    val sessionName = sessionDir.name
+    val messages = readHistoryMessages(historyFile, json)
+    if (messages.isEmpty()) {
+        return@runCatching SessionIndexResult()
+    }
+
+    val cursorFile = File(sessionDir, CURSOR_FILE_NAME)
+    val pendingMessages = pendingMessages(messages, cursorFile)
+    if (pendingMessages.isEmpty()) {
+        logger.debug("⏭️ 会话 {} 已全部索引 ({} 条)", sessionName, messages.size)
+        return@runCatching SessionIndexResult(skippedCount = messages.size)
+    }
+
+    val groupId = sessionName.removePrefix(GROUP_SESSION_PREFIX)
+    val participantIds = loadParticipantIds(groupId)
+    val indexedCount = indexMessagesInBatches(
+        weaviate = weaviate,
+        sessionId = "$GROUP_SESSION_PREFIX$groupId",
+        participantIds = participantIds,
+        messages = pendingMessages.map(::toWeaviateChatMessage)
+    )
+
+    cursorFile.writeText(pendingMessages.last().messageId)
+    logger.info("✅ 已索引会话 {}: {} 条新消息 (共 {} 条)", sessionName, indexedCount, messages.size)
+    SessionIndexResult(indexedCount = indexedCount)
+}
+
+private fun readHistoryMessages(
+    historyFile: File,
+    json: Json,
+): List<com.silk.backend.models.ChatHistoryEntry> {
+    val content = historyFile.readText()
+    if (content.isBlank()) {
+        return emptyList()
+    }
+    return json.decodeFromString<com.silk.backend.models.ChatHistory>(content).messages
+}
+
+private fun pendingMessages(
+    messages: List<com.silk.backend.models.ChatHistoryEntry>,
+    cursorFile: File,
+): List<com.silk.backend.models.ChatHistoryEntry> {
+    val lastIndexedId = cursorFile.takeIf(File::exists)?.readText()?.trim().orEmpty()
+    if (lastIndexedId.isEmpty()) {
+        return messages
+    }
+    val lastIndex = messages.indexOfLast { it.messageId == lastIndexedId }
+    return if (lastIndex in 0 until messages.lastIndex) {
+        messages.subList(lastIndex + 1, messages.size)
+    } else {
+        emptyList()
+    }
+}
+
+private fun loadParticipantIds(groupId: String): List<String> = runCatching {
+    GroupRepository.getGroupMembers(groupId)
+}.getOrElse {
+    emptyList()
+}.map { it.userId }
+    .distinct()
+
+private fun toWeaviateChatMessage(
+    message: com.silk.backend.models.ChatHistoryEntry,
+): com.silk.backend.search.ChatMessage = com.silk.backend.search.ChatMessage(
+    userId = message.senderId,
+    userName = message.senderName,
+    content = message.content,
+    timestamp = Instant.ofEpochMilli(message.timestamp).toString(),
+    isImportant = false,
+    messageId = message.messageId
+)
+
+private fun indexMessagesInBatches(
+    weaviate: WeaviateClient,
+    sessionId: String,
+    participantIds: List<String>,
+    messages: List<com.silk.backend.search.ChatMessage>,
+): Int = messages.chunked(WEAVIATE_BATCH_SIZE).sumOf { batch ->
+    runBlocking {
+        weaviate.indexChatMessages(
+            sessionId = sessionId,
+            participants = participantIds,
+            messages = batch
+        )
+    }
+}
+
+private const val CHAT_HISTORY_FILE_NAME = "chat_history.json"
+private const val CURSOR_FILE_NAME = ".weaviate_cursor"
+private const val GROUP_SESSION_PREFIX = "group_"
+private const val WEAVIATE_BATCH_SIZE = 50
 
 fun Application.module() {
     install(CallLogging)

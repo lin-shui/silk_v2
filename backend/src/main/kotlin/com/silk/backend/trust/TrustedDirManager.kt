@@ -5,8 +5,13 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.InvalidPathException
+import java.nio.file.NoSuchFileException
+import java.nio.file.Path
+import java.nio.file.AccessDeniedException
 
 @Serializable
 data class TrustedDirStore(
@@ -39,9 +44,12 @@ class TrustedDirManager(
     private fun load(): TrustedDirStore {
         return if (storeFile.exists()) {
             try {
-                json.decodeFromString(storeFile.readText())
-            } catch (e: Exception) {
-                logger.error("Failed to load trusted dirs store: {}", e.message)
+                json.decodeFromString<TrustedDirStore>(storeFile.readText())
+            } catch (e: kotlinx.serialization.SerializationException) {
+                logger.error("Failed to decode trusted dirs store: {}", e.message)
+                TrustedDirStore()
+            } catch (e: IOException) {
+                logger.error("Failed to read trusted dirs store: {}", e.message)
                 TrustedDirStore()
             }
         } else TrustedDirStore()
@@ -58,12 +66,7 @@ class TrustedDirManager(
     fun isTrusted(userId: String, bridgeId: String, path: String): Boolean {
         val store = load()
         val userEntries = store.entries[userId] ?: return false
-        val normalizedPath = try {
-            File(path).canonicalPath
-        } catch (e: Exception) {
-            logger.warn("canonicalPath failed for '{}', falling back to raw path: {}", path, e.message)
-            path.trimEnd('/')
-        }
+        val normalizedPath = normalizePathForLookup(path)
         return userEntries.any { record ->
             record.bridgeId == bridgeId && (
                 normalizedPath == record.path || normalizedPath.startsWith("${record.path}/")
@@ -110,6 +113,27 @@ class TrustedDirManager(
             userEntries.filter { it.bridgeId == bridgeId }
         } else {
             userEntries.toList()
+        }
+    }
+
+    private fun normalizePathForLookup(path: String): String {
+        return try {
+            Path.of(path).toFile().canonicalPath
+        } catch (e: InvalidPathException) {
+            logger.warn("Invalid trust path '{}', falling back to raw path: {}", path, e.message)
+            path.trimEnd('/')
+        } catch (e: NoSuchFileException) {
+            logger.warn("Path disappeared while checking trust '{}', falling back to raw path: {}", path, e.message)
+            path.trimEnd('/')
+        } catch (e: AccessDeniedException) {
+            logger.warn("Access denied while checking trust '{}', falling back to raw path: {}", path, e.message)
+            path.trimEnd('/')
+        } catch (e: SecurityException) {
+            logger.warn("Security manager rejected trust path '{}', falling back to raw path: {}", path, e.message)
+            path.trimEnd('/')
+        } catch (e: IOException) {
+            logger.warn("canonicalPath failed for '{}', falling back to raw path: {}", path, e.message)
+            path.trimEnd('/')
         }
     }
 }

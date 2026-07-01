@@ -83,8 +83,8 @@ object WebPageDownloader {
         
         synchronized(initLock) {
             if (playwrightInitialized) return playwrightAvailable
-            
-            try {
+
+            runCatching {
                 logger.debug("🎭 正在初始化 Playwright 无头浏览器...")
                 playwright = Playwright.create()
                 browser = playwright?.chromium()?.launch(
@@ -103,8 +103,8 @@ object WebPageDownloader {
                 } else {
                     logger.warn("⚠️ Playwright 浏览器启动失败")
                 }
-            } catch (e: Exception) {
-                logger.warn("⚠️ Playwright 初始化失败: {}，将使用简单 HTTP 模式", e.message)
+            }.onFailure { error ->
+                logger.warn("⚠️ Playwright 初始化失败: {}，将使用简单 HTTP 模式", error.message)
                 playwrightAvailable = false
             }
             playwrightInitialized = true
@@ -117,12 +117,12 @@ object WebPageDownloader {
      * 关闭 Playwright（应用退出时调用）
      */
     fun shutdown() {
-        try {
+        runCatching {
             browser?.close()
             playwright?.close()
             logger.debug("🎭 Playwright 已关闭")
-        } catch (e: Exception) {
-            logger.warn("⚠️ 关闭 Playwright 出错: {}", e.message)
+        }.onFailure { error ->
+            logger.warn("⚠️ 关闭 Playwright 出错: {}", error.message)
         }
     }
     
@@ -150,7 +150,7 @@ object WebPageDownloader {
      * 判断URL是否可以处理（网页或支持的文档）
      */
     private fun isWebPageUrl(url: String): Boolean {
-        return try {
+        return runCatching {
             val urlObj = URL(url)
             val path = urlObj.path.lowercase()
             val extension = path.substringAfterLast('.', "").lowercase()
@@ -166,7 +166,8 @@ object WebPageDownloader {
             }
             
             true
-        } catch (e: Exception) {
+        }.getOrElse { error ->
+            logUrlParseFallback(url, "非网页 URL 判定 false", error)
             false
         }
     }
@@ -175,11 +176,12 @@ object WebPageDownloader {
      * 判断URL是否是PDF文件
      */
     private fun isPdfUrl(url: String): Boolean {
-        return try {
+        return runCatching {
             val urlObj = URL(url)
             val path = urlObj.path.lowercase()
             path.endsWith(".pdf") || path.contains("/pdf/")
-        } catch (e: Exception) {
+        }.getOrElse { error ->
+            logUrlParseFallback(url, "PDF 判定 false", error)
             false
         }
     }
@@ -230,6 +232,207 @@ object WebPageDownloader {
             ?.trim()
             ?.toIntOrNull()
             ?.takeIf { it > 0 }
+
+    private fun createTrustAllManager(): Array<TrustManager> = arrayOf(
+        object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>?, authType: String?) = Unit
+
+            override fun checkServerTrusted(chain: Array<X509Certificate>?, authType: String?) = Unit
+
+            override fun getAcceptedIssuers(): Array<X509Certificate>? = null
+        }
+    )
+
+    private fun configureTrustAllSsl() {
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, createTrustAllManager(), java.security.SecureRandom())
+        HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.socketFactory)
+        HttpsURLConnection.setDefaultHostnameVerifier { _, _ -> true }
+    }
+
+    private fun openBrowserLikeConnection(
+        url: String,
+        connectTimeoutMillis: Int,
+        readTimeoutMillis: Int,
+    ): HttpURLConnection {
+        return (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = connectTimeoutMillis
+            readTimeout = readTimeoutMillis
+            setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+            setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
+            setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+            setRequestProperty("Accept-Encoding", "gzip, deflate, br")
+            setRequestProperty("Connection", "keep-alive")
+            setRequestProperty("Upgrade-Insecure-Requests", "1")
+            setRequestProperty("Sec-Fetch-Dest", "document")
+            setRequestProperty("Sec-Fetch-Mode", "navigate")
+            setRequestProperty("Sec-Fetch-Site", "none")
+            setRequestProperty("Sec-Fetch-User", "?1")
+            setRequestProperty("Cache-Control", "max-age=0")
+            instanceFollowRedirects = true
+        }
+    }
+
+    private fun isSuccessfulResponse(connection: HttpURLConnection, url: String): Boolean {
+        val responseCode = connection.responseCode
+        if (responseCode == HttpURLConnection.HTTP_OK) {
+            return true
+        }
+
+        logger.warn("⚠️ HTTP 下载失败，状态码: {}, URL: {}", responseCode, url)
+        connection.disconnect()
+        return false
+    }
+
+    private fun isSupportedHtmlContentType(contentType: String): Boolean =
+        contentType.contains("text/html") ||
+            contentType.contains("text/plain") ||
+            contentType.contains("application/xhtml")
+
+    private fun logUrlParseFallback(url: String, fallback: String, error: Throwable) {
+        logger.debug("🔗 URL 解析失败，回退到 {}: {}, reason={}", fallback, url, error.message)
+    }
+
+    private fun openDecodedInputStream(connection: HttpURLConnection): InputStream {
+        val contentEncoding = connection.contentEncoding?.lowercase().orEmpty()
+        return when {
+            contentEncoding.contains("gzip") -> GZIPInputStream(connection.inputStream)
+            contentEncoding.contains("deflate") -> InflaterInputStream(connection.inputStream)
+            else -> connection.inputStream
+        }
+    }
+
+    private fun readHtmlResponse(connection: HttpURLConnection, contentType: String): String {
+        val charset = extractCharset(contentType) ?: "UTF-8"
+        return try {
+            openDecodedInputStream(connection).bufferedReader(
+                charset = java.nio.charset.Charset.forName(charset)
+            ).use { it.readText() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun buildHtmlWebPageContent(url: String, htmlContent: String): WebPageContent {
+        val document = Jsoup.parse(htmlContent)
+        val title = document.title().ifBlank { extractTitleFromUrl(url) }
+        return buildHtmlWebPageContent(url, title, htmlContent, "HTTP")
+    }
+
+    private fun buildHtmlWebPageContent(
+        url: String,
+        title: String,
+        htmlContent: String,
+        sourceLabel: String,
+    ): WebPageContent {
+        val document = Jsoup.parse(htmlContent)
+        document.select("script, style, nav, header, footer, aside, noscript, iframe").remove()
+        val cleanedText = cleanText(document.body()?.text().orEmpty())
+        val fileName = generateFileName(title, "html")
+
+        logger.info("✅ {} 下载成功: {} ({} 字符)", sourceLabel, title, cleanedText.length)
+
+        return WebPageContent(
+            url = url,
+            title = title,
+            textContent = cleanedText,
+            fileName = fileName,
+            htmlContent = htmlContent,
+            isPdf = false
+        )
+    }
+
+    private fun createPlaywrightContext(): Browser.NewContextOptions =
+        Browser.NewContextOptions()
+            .setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36")
+            .setViewportSize(1920, 1080)
+            .setLocale("zh-CN")
+            .setExtraHTTPHeaders(
+                mapOf(
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                    "Accept-Language" to "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Accept-Encoding" to "gzip, deflate, br",
+                    "Connection" to "keep-alive",
+                    "Upgrade-Insecure-Requests" to "1",
+                    "Sec-Fetch-Dest" to "document",
+                    "Sec-Fetch-Mode" to "navigate",
+                    "Sec-Fetch-Site" to "none",
+                    "Sec-Fetch-User" to "?1"
+                )
+            )
+
+    private fun configurePlaywrightPage(page: Page) {
+        page.setDefaultTimeout(45000.0)
+    }
+
+    private fun navigateWithDomContentLoaded(page: Page, url: String): Response? {
+        return page.navigate(
+            url,
+            Page.NavigateOptions()
+                .setWaitUntil(com.microsoft.playwright.options.WaitUntilState.DOMCONTENTLOADED)
+                .setTimeout(60000.0)
+        )
+    }
+
+    private fun waitForPlaywrightStep(stepName: String, action: () -> Unit) {
+        runCatching {
+            action()
+        }.onFailure { error ->
+            logger.debug("⏱️ Playwright {} 未完成，继续尝试获取内容: {}", stepName, error.message)
+        }
+    }
+
+    private fun isChallengeStatus(statusCode: Int): Boolean =
+        statusCode == 403 || statusCode == 503
+
+    private fun shouldAbortAfterNavigation(response: Response?, statusCode: Int): Boolean =
+        response == null || (!response.ok() && statusCode != 0)
+
+    private fun handlePlaywrightNavigation(page: Page, response: Response?): Boolean {
+        val statusCode = response?.status() ?: 0
+        logger.debug("📊 初始响应状态: {}", statusCode)
+
+        if (isChallengeStatus(statusCode)) {
+            logger.debug("🔒 检测到安全挑战（可能是 Cloudflare），等待 JS 处理...")
+            waitForPlaywrightStep("安全挑战完成") {
+                page.waitForTimeout(8000.0)
+                page.waitForLoadState(
+                    com.microsoft.playwright.options.LoadState.NETWORKIDLE,
+                    Page.WaitForLoadStateOptions().setTimeout(15000.0)
+                )
+            }
+            return true
+        }
+
+        if (shouldAbortAfterNavigation(response, statusCode)) {
+            logger.warn("⚠️ 页面加载失败: {}", statusCode)
+            return false
+        }
+
+        return true
+    }
+
+    private fun waitForPlaywrightContent(page: Page) {
+        waitForPlaywrightStep("DOM 内容加载") {
+            page.waitForLoadState(com.microsoft.playwright.options.LoadState.DOMCONTENTLOADED)
+        }
+        waitForPlaywrightStep("动态内容渲染") {
+            page.waitForTimeout(3000.0)
+        }
+    }
+
+    private fun buildPlaywrightContent(page: Page, url: String): WebPageContent {
+        val title = page.title().ifBlank { extractTitleFromUrl(url) }
+        val htmlContent = page.content()
+        return buildHtmlWebPageContent(url, title, htmlContent, "Playwright")
+    }
+
+    private fun closePlaywrightResource(description: String, action: () -> Unit) {
+        runCatching(action).onFailure { error ->
+            logger.debug("🎭 关闭 {} 失败: {}", description, error.message)
+        }
+    }
     
     /**
      * 构造 Playwright 浏览器上下文选项
@@ -339,7 +542,7 @@ object WebPageDownloader {
      * 支持 JavaScript 渲染，可处理 SPA 和部分反爬虫
      */
     private fun downloadWithPlaywright(url: String): WebPageContent? {
-        return try {
+        return runCatching {
             logger.debug("🎭 使用 Playwright 下载: {}", url)
 
             val context = browser?.newContext(createPlaywrightContextOptions()) ?: return null
@@ -364,13 +567,12 @@ object WebPageDownloader {
 
                 buildPlaywrightContent(page, url)
             } finally {
-                page.close()
-                context.close()
+                closePlaywrightResource("Playwright page") { page.close() }
+                closePlaywrightResource("Playwright context") { context.close() }
             }
-        } catch (e: Exception) {
-            logger.error("❌ Playwright 下载失败: {}", e.message)
-            null
-        }
+        }.onFailure { error ->
+            logger.error("❌ Playwright 下载失败: {}", error.message)
+        }.getOrNull()
     }
     
     /**
@@ -465,16 +667,19 @@ object WebPageDownloader {
      * 使用简单 HTTP 下载网页（降级方案）
      */
     private fun downloadWithSimpleHttp(url: String): WebPageContent? {
-        return try {
+        return runCatching {
             logger.debug("📡 使用简单 HTTP 下载: {}", url)
 
             configureTrustAllSsl()
             val connection = openBrowserLikeConnection(url)
 
-            val responseCode = connection.responseCode
-            if (responseCode != HttpURLConnection.HTTP_OK) {
-                logger.warn("⚠️ HTTP 下载失败，状态码: {}, URL: {}", responseCode, url)
-                connection.disconnect()
+            configureTrustAllSsl()
+            val connection = openBrowserLikeConnection(
+                url = url,
+                connectTimeoutMillis = connectTimeoutMillis(DEFAULT_HTTP_CONNECT_TIMEOUT_MILLIS),
+                readTimeoutMillis = readTimeoutMillis(DEFAULT_HTTP_READ_TIMEOUT_MILLIS),
+            )
+            if (!isSuccessfulResponse(connection, url)) {
                 return null
             }
 
@@ -504,7 +709,7 @@ object WebPageDownloader {
      * 使用 HTTP 下载 PDF 文件
      */
     private fun downloadPdfWithHttp(url: String): WebPageContent? {
-        return try {
+        return runCatching {
             logger.debug("📕 下载 PDF: {}", url)
             
             // 配置SSL
@@ -523,77 +728,67 @@ object WebPageDownloader {
             connection.apply {
                 requestMethod = "GET"
                 connectTimeout = connectTimeoutMillis(DEFAULT_PDF_CONNECT_TIMEOUT_MILLIS)
-                readTimeout = readTimeoutMillis(DEFAULT_PDF_READ_TIMEOUT_MILLIS)  // PDF 可能较大
+                readTimeout = readTimeoutMillis(DEFAULT_PDF_READ_TIMEOUT_MILLIS)
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
                 instanceFollowRedirects = true
             }
-            
-            val responseCode = connection.responseCode
-            if (responseCode != HttpURLConnection.HTTP_OK) {
-                logger.warn("⚠️ PDF 下载失败，状态码: {}", responseCode)
+
+            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
+                logger.warn("⚠️ PDF 下载失败，状态码: {}", connection.responseCode)
                 connection.disconnect()
                 return null
             }
             
             downloadPdfFromConnection(url, connection)
-        } catch (e: Exception) {
-            logger.error("❌ PDF 下载失败: {}", e.message)
-            null
-        }
+        }.onFailure { error ->
+            logger.error("❌ PDF 下载失败: {}", error.message)
+        }.getOrNull()
     }
     
     /**
      * 从 HTTP 连接下载 PDF 并提取文本
      */
     private fun downloadPdfFromConnection(url: String, connection: HttpURLConnection): WebPageContent? {
-        return try {
-            // 读取PDF二进制内容
-            val inputStream = connection.inputStream
-            val buffer = ByteArrayOutputStream()
-            val data = ByteArray(8192)
-            var bytesRead: Int
-            var totalBytes = 0L
-            
-            while (inputStream.read(data, 0, data.size).also { bytesRead = it } != -1) {
-                buffer.write(data, 0, bytesRead)
-                totalBytes += bytesRead
+        return runCatching {
+            val pdfBytes = connection.inputStream.use { inputStream ->
+                ByteArrayOutputStream().use { buffer ->
+                    val data = ByteArray(8192)
+                    var bytesRead: Int
+                    while (inputStream.read(data, 0, data.size).also { bytesRead = it } != -1) {
+                        buffer.write(data, 0, bytesRead)
+                    }
+                    buffer.flush()
+                    buffer.toByteArray()
+                }
             }
-            buffer.flush()
-            inputStream.close()
-            connection.disconnect()
-            
-            val pdfBytes = buffer.toByteArray()
             logger.debug("📕 PDF 下载完成: {} KB", pdfBytes.size / 1024)
-            
-            // 使用 PDFBox 提取文本
-            val document = PDDocument.load(pdfBytes)
-            val stripper = PDFTextStripper()
-            val textContent = stripper.getText(document)
-            
-            val info = document.documentInformation
-            val title = info?.title?.takeIf { it.isNotBlank() } ?: extractTitleFromUrl(url)
-            val pageCount = document.numberOfPages
-            
-            document.close()
-            
-            val cleanedText = cleanText(textContent)
-            val fileName = generateFileName(url, title, "pdf")
-            
-            logger.info("✅ PDF 提取成功: {} ({} 页, {} 字符)", title, pageCount, cleanedText.length)
-            
-            WebPageContent(
-                url = url,
-                title = title,
-                textContent = cleanedText,
-                fileName = fileName,
-                htmlContent = "",
-                isPdf = true,
-                pdfBytes = pdfBytes
-            )
-        } catch (e: Exception) {
-            logger.error("❌ PDF 处理失败: {}", e.message)
-            null
-        }
+
+            PDDocument.load(pdfBytes).use { document ->
+                val stripper = PDFTextStripper()
+                val textContent = stripper.getText(document)
+                val info = document.documentInformation
+                val title = info?.title?.takeIf { it.isNotBlank() } ?: extractTitleFromUrl(url)
+                val pageCount = document.numberOfPages
+                val cleanedText = cleanText(textContent)
+                val fileName = generateFileName(title, "pdf")
+
+                logger.info("✅ PDF 提取成功: {} ({} 页, {} 字符)", title, pageCount, cleanedText.length)
+
+                WebPageContent(
+                    url = url,
+                    title = title,
+                    textContent = cleanedText,
+                    fileName = fileName,
+                    htmlContent = "",
+                    isPdf = true,
+                    pdfBytes = pdfBytes
+                )
+            }
+        }.onFailure { error ->
+            logger.error("❌ PDF 处理失败: {}", error.message)
+        }.also {
+            connection.disconnect()
+        }.getOrNull()
     }
     
     /**
@@ -609,7 +804,7 @@ object WebPageDownloader {
      * 从URL提取标题
      */
     private fun extractTitleFromUrl(url: String): String {
-        return try {
+        return runCatching {
             val urlObj = URL(url)
             val path = urlObj.path
             if (path.isNotBlank() && path != "/") {
@@ -617,7 +812,8 @@ object WebPageDownloader {
             } else {
                 urlObj.host
             }
-        } catch (e: Exception) {
+        }.getOrElse { error ->
+            logUrlParseFallback(url, "默认标题 webpage", error)
             "webpage"
         }
     }

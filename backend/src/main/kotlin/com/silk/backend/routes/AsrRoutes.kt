@@ -18,6 +18,7 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -25,6 +26,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
+import java.io.IOException
 import java.nio.file.Files
 import java.util.Base64
 import java.util.concurrent.TimeUnit
@@ -72,6 +74,7 @@ fun Route.asrRoutes() {
                 try {
                     audioBytes = Base64.getDecoder().decode(audioBase64)
                 } catch (e: IllegalArgumentException) {
+                    logger.info("ASR request rejected due to invalid base64 payload: {}", e.message)
                     call.respondText(
                         buildJsonObject { put("success", false); put("error", "Invalid base64 audio") }.toString(),
                         ContentType.Application.Json, HttpStatusCode.BadRequest
@@ -145,7 +148,19 @@ fun Route.asrRoutes() {
                     buildJsonObject { put("success", false); put("error", "语音识别服务不可用，请确认 vLLM ASR 已启动") }.toString(),
                     ContentType.Application.Json, HttpStatusCode.ServiceUnavailable
                 )
-            } catch (e: Exception) {
+            } catch (e: SerializationException) {
+                logger.info("ASR request rejected due to invalid json payload: {}", e.message)
+                call.respondText(
+                    buildJsonObject { put("success", false); put("error", "Invalid ASR request payload") }.toString(),
+                    ContentType.Application.Json, HttpStatusCode.BadRequest
+                )
+            } catch (e: IOException) {
+                logger.error("ASR transcribe failed", e)
+                call.respondText(
+                    buildJsonObject { put("success", false); put("error", "语音识别失败: ${e.message}") }.toString(),
+                    ContentType.Application.Json, HttpStatusCode.InternalServerError
+                )
+            } catch (e: SecurityException) {
                 logger.error("ASR transcribe failed", e)
                 call.respondText(
                     buildJsonObject { put("success", false); put("error", "语音识别失败: ${e.message}") }.toString(),
@@ -192,17 +207,22 @@ private fun transcodeToWavWithFfmpeg(input: ByteArray, format: String): ByteArra
             return null
         }
         Files.readAllBytes(outPath)
-    } catch (e: Exception) {
+    } catch (e: IOException) {
+        logger.warn("ffmpeg transcoding error: {}", e.message)
+        null
+    } catch (e: SecurityException) {
         logger.warn("ffmpeg transcoding error: {}", e.message)
         null
     } finally {
         try {
             inPath?.let { Files.deleteIfExists(it) }
-        } catch (_: Exception) {
+        } catch (_: IOException) {
+        } catch (_: SecurityException) {
         }
         try {
             outPath?.let { Files.deleteIfExists(it) }
-        } catch (_: Exception) {
+        } catch (_: IOException) {
+        } catch (_: SecurityException) {
         }
     }
 }

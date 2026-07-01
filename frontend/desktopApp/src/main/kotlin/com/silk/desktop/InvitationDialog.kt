@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import java.awt.HeadlessException
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 
@@ -191,7 +192,11 @@ private fun copyToClipboard(text: String) {
         val selection = StringSelection(text)
         clipboard.setContents(selection, null)
         println("✅ 已复制到剪贴板")
-    } catch (e: Exception) {
+    } catch (e: HeadlessException) {
+        println("❌ 复制失败: ${e.message}")
+    } catch (e: IllegalStateException) {
+        println("❌ 复制失败: ${e.message}")
+    } catch (e: SecurityException) {
         println("❌ 复制失败: ${e.message}")
     }
 }

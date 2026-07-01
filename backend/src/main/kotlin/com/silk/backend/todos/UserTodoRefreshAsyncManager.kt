@@ -1,10 +1,12 @@
 package com.silk.backend.todos
 
 import com.silk.backend.database.UserTodoRefreshStatusResponse
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -14,6 +16,8 @@ import java.util.concurrent.ConcurrentHashMap
  */
 @Suppress("TooGenericExceptionCaught")
 object UserTodoRefreshAsyncManager {
+    private val logger = LoggerFactory.getLogger(UserTodoRefreshAsyncManager::class.java)
+
     private data class RefreshState(
         val running: Boolean = false,
         val lastStartedAt: Long? = null,
@@ -49,23 +53,24 @@ object UserTodoRefreshAsyncManager {
         )
 
         scope.launch {
-            try {
+            runCatching {
                 GroupTodoExtractionService.refreshTodosForUser(userId)
+            }.onSuccess {
                 states[userId] = RefreshState(
                     running = false,
                     lastStartedAt = startAt,
                     lastFinishedAt = System.currentTimeMillis(),
                     lastError = null
                 )
-            } catch (e: Exception) {
+            }.onFailure { error ->
+                if (error is CancellationException) throw error
                 states[userId] = RefreshState(
                     running = false,
                     lastStartedAt = startAt,
                     lastFinishedAt = System.currentTimeMillis(),
-                    lastError = e.message?.take(200)
+                    lastError = error.message?.take(200)
                 )
-                println("❌ 异步待办刷新异常 userId=${userId.take(8)}…: ${e.message}")
-                e.printStackTrace()
+                logger.error("异步待办刷新异常 userId={}…", userId.take(8), error)
             }
         }
 

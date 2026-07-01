@@ -85,4 +85,3 @@ object AuthService {
         return UserRepository.findUserById(userId) != null
     }
 }
-

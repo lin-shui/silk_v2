@@ -143,4 +143,3 @@ object GroupService {
         return GroupRepository.getGroupMembers(groupId)
     }
 }
-

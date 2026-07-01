@@ -18,6 +18,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
    - 消息持久化
    - 未读计数
    - URL/PDF 下载提取
+  - 知识库上下文构建（手动 `[[kb:entryId|标题]]` 引用优先，支持消息级固定/排除条目与空间级自动召回开关，再叠加当前可访问 KB 的自动 lexical 候选 → 本轮 AI 上下文 + `[available:N]`）
    - Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
    - Silk AI / `DirectModelAgent` 响应
 5. Claude Code / Codex 通过 ACP 协议（JSON-RPC 2.0 over WebSocket）连接 `/agent-bridge` 端点；外部 `cc_bridge/acp_adapter.py` 和 `codex_bridge/codex_adapter.py` adapter 跑各自 CLI 并流式回传。
@@ -28,6 +29,7 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 ## Persistent State
 
 - SQLite：`./silk_database.db`（可用 `-Dsilk.databasePath=...` 覆盖）
+  - `user_settings` 现同时承载用户设置、`app_auth_token`（HTTP bearer caller）与 `cc_bridge_token`
 - 聊天历史：`chat_history/<session>/session.json`、`chat_history.json`
 - 上传文件：`chat_history/<session>/uploads/`
 - AI 工作区（跨群上下文）：`backend/chat_workspaces/<session>/other_groups/`

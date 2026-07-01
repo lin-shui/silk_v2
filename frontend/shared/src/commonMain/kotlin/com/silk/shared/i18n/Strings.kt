@@ -152,7 +152,7 @@ interface Strings {
  */
 fun getStrings(language: Language): Strings {
     return when (language) {
-        Language.ENGLISH -> Strings_EN
-        Language.CHINESE -> Strings_ZH
+        Language.ENGLISH -> StringsEn
+        Language.CHINESE -> StringsZh
     }
 }

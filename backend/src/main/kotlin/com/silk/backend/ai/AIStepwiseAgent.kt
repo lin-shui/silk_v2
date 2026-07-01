@@ -1,9 +1,10 @@
 package com.silk.backend.ai
 
-import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.models.ChatHistoryEntry
 import com.silk.backend.pdf.PDFReportGenerator
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -21,6 +22,7 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import org.slf4j.LoggerFactory
+import java.io.IOException
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -88,7 +90,7 @@ class AIStepwiseAgent(
         hostId: String? = null
     ): DiagnosisResult {
         // 1. 从聊天历史生成患者上下文（区分医生和病人）
-        val patientContext = generatePatientContext(chatHistory, hostId)
+        val patientContext = buildPatientContext(chatHistory, hostId)
         
         val totalSteps = AIConfig.TO_DO_LIST.size
         
@@ -152,7 +154,7 @@ class AIStepwiseAgent(
                     callback("step_complete", stepCompleteMessage, stepNumber, totalSteps)
                     
                     // 更新累积信息
-                    accumulatedInfo = updateAccumulatedInfo(
+                    accumulatedInfo = updateDiagnosisAccumulatedInfo(
                         accumulatedInfo,
                         taskName,
                         stepResult.result
@@ -170,26 +172,24 @@ class AIStepwiseAgent(
                 // 短暂延迟，避免 API 请求过快
                 delay(800)
                 
-            } catch (e: Exception) {
-                allSuccess = false
-                val errorResult = StepResult(
-                    stepName = taskName,
-                    result = "",
-                    success = false,
-                    error = e.message
-                )
-                stepResults[taskName] = errorResult
-                executionSummary.append("❌ [$stepNumber] $taskName - 异常\n\n")
-                
-                // 继续执行下一步
-                continue
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                allSuccess = recordDiagnosisStepFailure(stepResults, executionSummary, stepNumber, taskName, e)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                allSuccess = recordDiagnosisStepFailure(stepResults, executionSummary, stepNumber, taskName, e)
+            } catch (e: IllegalStateException) {
+                allSuccess = recordDiagnosisStepFailure(stepResults, executionSummary, stepNumber, taskName, e)
+            } catch (e: IllegalArgumentException) {
+                allSuccess = recordDiagnosisStepFailure(stepResults, executionSummary, stepNumber, taskName, e)
             }
         }
         
         // 3. 生成总结报告（✅ 不发送到chat，只用于PDF生成）
         delay(200)
         // ✅ 生成总结报告，但不发送到chat（避免超长消息）
-        val summaryReport = generateSummaryReport(stepResults, allSuccess)
+        val summaryReport = generateSummaryReport(stepResults, allSuccess, apiKey.isNotEmpty(), logger, ::formatReportWithAI)
         // ✅ 注释掉：不发送总结报告到chat，内容已在PDF中
         // callback("总结报告", summaryReport, null, null)
         
@@ -226,7 +226,18 @@ class AIStepwiseAgent(
             }
             
             callback("PDF报告", pdfMessage, null, null)
-        } catch (e: Exception) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            logger.error("⚠️ PDF 生成失败: ${e.message}", e)
+            callback("PDF报告", "⚠️ PDF 生成失败：${e.message}\n\n文字版总结报告已在上方显示。", null, null)
+        } catch (e: SecurityException) {
+            logger.error("⚠️ PDF 生成失败: ${e.message}", e)
+            callback("PDF报告", "⚠️ PDF 生成失败：${e.message}\n\n文字版总结报告已在上方显示。", null, null)
+        } catch (e: IllegalStateException) {
+            logger.error("⚠️ PDF 生成失败: ${e.message}", e)
+            callback("PDF报告", "⚠️ PDF 生成失败：${e.message}\n\n文字版总结报告已在上方显示。", null, null)
+        } catch (e: IllegalArgumentException) {
             logger.error("⚠️ PDF 生成失败: ${e.message}", e)
             callback("PDF报告", "⚠️ PDF 生成失败：${e.message}\n\n文字版总结报告已在上方显示。", null, null)
         }
@@ -240,7 +251,7 @@ class AIStepwiseAgent(
         }
         
         // 保存诊断结果供医生更新时使用
-        saveDiagnosisResults(stepResults)
+        saveDiagnosisResults(sessionName, stepResults, logger)
         
         return DiagnosisResult(
             patientContext = patientContext,
@@ -248,71 +259,7 @@ class AIStepwiseAgent(
             allSuccess = allSuccess
         )
     }
-    
-    /**
-     * 从聊天历史生成用户上下文
-     * @param chatHistory 聊天历史记录
-     * @param hostId Host用户ID，用于区分医生和病人
-     */
-    private fun generatePatientContext(chatHistory: List<ChatHistoryEntry>, hostId: String? = null): String {
-        if (chatHistory.isEmpty()) {
-            return "【聊天历史】\n暂无聊天记录。用户刚刚加入对话。"
-        }
-        
-        val contextBuilder = StringBuilder()
-        contextBuilder.append("【完整对话记录】\n")
-        contextBuilder.append("以下是去除AI回复后的完整对话，用于诊断参考：\n\n")
-        
-        // 只提取非Silk的消息（去除AI回复）
-        val userMessages = chatHistory
-            .filter { !AgentRuntime.isAgentUserId(it.senderId) }  // 排除AI消息
-            .filter { it.messageType == "TEXT" }  // 只要文本消息
-            .filter { !it.content.startsWith("@诊断") && !it.content.startsWith("@diagnosis") }  // 排除命令
-            .takeLast(50)  // 最近50条
-        
-        if (userMessages.isEmpty()) {
-            contextBuilder.append("暂无对话记录。\n")
-        } else {
-            contextBuilder.append("对话记录（共 ${userMessages.size} 条）：\n")
-            contextBuilder.append("═".repeat(50) + "\n\n")
-            
-            userMessages.forEach { entry ->
-                val timestamp = java.text.SimpleDateFormat("MM-dd HH:mm").format(java.util.Date(entry.timestamp))
-                
-                // 区分医生（Host）和病人（Guest）
-                val rolePrefix = if (hostId != null && entry.senderId == hostId) {
-                    "医生${entry.senderName}叙述"
-                } else {
-                    "病人${entry.senderName}叙述"
-                }
-                
-                contextBuilder.append("[$timestamp] $rolePrefix: ${entry.content}\n\n")
-            }
-            
-            contextBuilder.append("═".repeat(50) + "\n")
-        }
-        
-        // 添加统计信息
-        if (userMessages.isNotEmpty()) {
-            contextBuilder.append("\n【统计信息】\n")
-            contextBuilder.append("参与人数: ${userMessages.map { it.senderId }.distinct().size}\n")
-            contextBuilder.append("消息总数: ${userMessages.size}\n")
-            
-            if (hostId != null) {
-                val doctorMsgCount = userMessages.count { it.senderId == hostId }
-                val patientMsgCount = userMessages.size - doctorMsgCount
-                contextBuilder.append("医生消息: ${doctorMsgCount} 条\n")
-                contextBuilder.append("病人消息: ${patientMsgCount} 条\n")
-            }
-        }
-        
-        contextBuilder.append("\n【分析要求】\n")
-        contextBuilder.append("请仔细阅读以上完整的聊天历史，理解用户的需求、问题和讨论的上下文。\n")
-        contextBuilder.append("基于这些对话内容，进行专业的分析和建议。\n")
-        
-        return contextBuilder.toString()
-    }
-    
+
     /**
      * 执行单个诊断步骤
      * 
@@ -370,7 +317,7 @@ $taskPrompt
         if (apiKey.isEmpty()) {
             return StepResult(
                 stepName = taskName,
-                result = getOfflineResult(taskName, accumulatedInfo),
+                result = offlineDiagnosisResult(taskName, accumulatedInfo),
                 success = true
             )
         }
@@ -387,7 +334,7 @@ $taskPrompt
             var totalBytesSent = 0  // 统计总字节数
             
             // 使用流式API调用，带智能缓冲
-            result = callAIApiStreaming(fullPrompt) { chunk ->
+            result = callStreamingDiagnosisApi(httpClient, json, apiKey, fullPrompt, logger) { chunk ->
                 // 累积到完整文本
                 fullTextBuffer.append(chunk)
                 pendingChunks.append(chunk)
@@ -531,7 +478,7 @@ $conclusion
                 ApiMessage(role = "user", content = prompt)
             ),
             temperature = 0.7,
-            max_tokens = 65536,  // ✅ 提升到65536，允许生成超详细的诊断内容
+            maxTokens = 65536,  // ✅ 提升到65536，允许生成超详细的诊断内容
             stream = false
         )
         
@@ -550,7 +497,7 @@ $conclusion
             apiResponse.choices.firstOrNull()?.message?.content 
                 ?: "API 返回空结果"
         } else {
-            throw Exception("API 调用失败：${response.statusCode()} - ${response.body()}")
+            error("API 调用失败：${response.statusCode()} - ${response.body()}")
         }
     }
     
@@ -1087,57 +1034,21 @@ $rawReport
         delay(500)
         
         // 2. 生成患者上下文（暂时不区分医生病人，因为医生更新时已经在医嘱中）
-        val patientContext = generatePatientContext(chatHistory, null)
+        val patientContext = buildPatientContext(chatHistory, null)
         
         // 3. 尝试加载之前的诊断结果和时间戳
-        val previousDiagnosis = loadPreviousDiagnosisResults()
+        val previousDiagnosis = loadPreviousDiagnosisResults(sessionName, logger)
         val previousDiagnosisResults = previousDiagnosis?.first
         val lastDiagnosisTime = previousDiagnosis?.second ?: 0L
         
         // 4. 过滤聊天历史：只使用上次诊断之后的新消息
-        val newMessages = if (lastDiagnosisTime > 0) {
-            val filtered = chatHistory.filter { it.timestamp > lastDiagnosisTime }
-            val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                .format(java.util.Date(lastDiagnosisTime))
-            logger.info("📋 过滤消息:")
-            logger.info("   上次诊断时间: $dateTime")
-            logger.info("   总消息数: ${chatHistory.size}")
-            logger.info("   新消息数: ${filtered.size}")
-            filtered
-        } else {
-            logger.info("📋 无历史时间戳，使用所有消息")
-            chatHistory
-        }
+        val newMessages = filterMessagesAfterLastDiagnosis(chatHistory, lastDiagnosisTime, logger)
         
         // 5. 构建新消息的上下文
-        val newMessagesContext = if (newMessages.isNotEmpty()) {
-            buildString {
-                append("【上次诊断后的新对话】\n")
-                newMessages.forEach { entry ->
-                    val timestamp = java.text.SimpleDateFormat("MM-dd HH:mm")
-                        .format(java.util.Date(entry.timestamp))
-                    append("[$timestamp] ${entry.senderName}: ${entry.content}\n")
-                }
-            }
-        } else {
-            "【上次诊断后的新对话】\n暂无新对话"
-        }
+        val newMessagesContext = buildNewMessagesContext(newMessages)
         
         // 6. 构建之前诊断的摘要（✅ 优化：只取关键信息，减少token消耗）
-        val previousDiagnosisSummary = if (previousDiagnosisResults != null && previousDiagnosisResults.isNotEmpty()) {
-            buildString {
-                append("【之前的诊断记录（摘要）】\n")
-                // ✅ 只保留最重要的几个步骤，每个步骤最多100字
-                val keySteps = listOf("中医诊断", "西医诊断", "治疗方案")
-                previousDiagnosisResults.filter { (stepName, _) -> 
-                    keySteps.any { key -> stepName.contains(key) }
-                }.forEach { (stepName, stepResult) ->
-                    append("$stepName：${stepResult.result.take(100)}...\n")
-                }
-            }
-        } else {
-            "【之前的诊断记录】\n暂无之前的诊断记录"
-        }
+        val previousDiagnosisSummary = buildPreviousDiagnosisSummary(previousDiagnosisResults)
         
         // ✅ 优化Prompt：更简洁直接，减少生成时间
         val systemPrompt = """
@@ -1298,134 +1209,60 @@ $doctorMessage
             logger.error("❌ 生成更新PDF失败: ${e.message}", e)
         }
     }
-    
-    /**
-     * 加载之前的诊断结果
-     * @return Pair<诊断结果, 诊断时间戳>
-     */
-    private fun loadPreviousDiagnosisResults(): Pair<Map<String, StepResult>, Long>? {
-        return try {
-            // 尝试多个可能的路径
-            val possiblePaths = listOf(
-                "chat_history/$sessionName/last_diagnosis.json",
-                "backend/chat_history/$sessionName/last_diagnosis.json"
-            )
-            
-            val file = possiblePaths
-                .map { java.io.File(it) }
-                .firstOrNull { it.exists() }
-            
-            if (file != null && file.exists()) {
-                logger.info("📖 正在加载诊断历史:")
-                logger.info("   找到文件: ${file.absolutePath}")
-                logger.info("   大小: ${file.length()} bytes")
-                
-                val json = file.readText()
-                
-                // 使用kotlinx.serialization.json解析
-                val jsonElement = Json.parseToJsonElement(json)
-                val jsonObject = jsonElement.jsonObject
-                
-                val timestamp = jsonObject["timestamp"]?.jsonPrimitive?.long ?: 0L
-                val resultsObject = jsonObject["results"]?.jsonObject
-                
-                val results = mutableMapOf<String, StepResult>()
-                resultsObject?.forEach { (key, value) ->
-                    val obj = value.jsonObject
-                    val stepResult = StepResult(
-                        stepName = obj["stepName"]?.jsonPrimitive?.content ?: "",
-                        result = obj["result"]?.jsonPrimitive?.content?.replace("\\n", "\n") ?: "",
-                        success = obj["success"]?.jsonPrimitive?.boolean ?: false
-                    )
-                    results[key] = stepResult
-                }
-                
-                val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                    .format(java.util.Date(timestamp))
-                logger.info("✅ 加载成功")
-                logger.info("   诊断时间: $dateTime")
-                logger.info("   步骤数量: ${results.size}")
-                
-                Pair(results, timestamp)
-            } else {
-                logger.info("ℹ️ 所有路径都不存在历史诊断文件")
-                null
+
+    private suspend fun generateDoctorUpdateDiagnosis(
+        systemPrompt: String,
+        callback: suspend (stepType: String, message: String, currentStep: Int?, totalSteps: Int?) -> Unit
+    ): String = try {
+        val response = StringBuilder()
+        val streamState = DoctorUpdateStreamState()
+
+        generateQuickResponse(systemPrompt) { content, isComplete ->
+            response.clear()
+            response.append(content)
+
+            if (!isComplete) {
+                streamDoctorUpdateIncrement(content, streamState, callback)
             }
-        } catch (e: Exception) {
-            logger.error("❌ 加载诊断历史失败: ${e.message}", e)
-            null
         }
+
+        response.toString()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: IOException) {
+        logger.error("❌ AI调用失败: ${e.message}", e)
+        "⚠️ AI模型调用失败，无法更新诊断"
+    } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        logger.error("❌ AI调用失败: ${e.message}", e)
+        "⚠️ AI模型调用失败，无法更新诊断"
+    } catch (e: IllegalStateException) {
+        logger.error("❌ AI调用失败: ${e.message}", e)
+        "⚠️ AI模型调用失败，无法更新诊断"
+    } catch (e: IllegalArgumentException) {
+        logger.error("❌ AI调用失败: ${e.message}", e)
+        "⚠️ AI模型调用失败，无法更新诊断"
     }
-    
-    /**
-     * 保存诊断结果供下次使用
-     * 同时保存诊断时间戳，用于增量诊断时过滤消息
-     */
-    private fun saveDiagnosisResults(stepResults: Map<String, StepResult>) {
-        try {
-            // 统一使用backend/chat_history路径
-            val file = java.io.File("backend/chat_history/$sessionName/last_diagnosis.json")
-            
-            logger.info("💾 正在保存诊断结果:")
-            logger.info("   sessionName: $sessionName")
-            logger.info("   文件路径: ${file.absolutePath}")
-            logger.info("   步骤数量: ${stepResults.size}")
-            
-            // 确保父目录存在
-            val parentDir = file.parentFile
-            if (parentDir != null && !parentDir.exists()) {
-                val created = parentDir.mkdirs()
-                logger.info("   创建目录: ${if (created) "成功" else "失败"}")
-            } else {
-                logger.info("   目录已存在: ${parentDir?.absolutePath}")
-            }
-            
-            // 创建包含时间戳的诊断记录（使用简单的手动JSON格式）
-            val timestamp = System.currentTimeMillis()
-            
-            // 手动构建JSON以避免序列化问题
-            val json = buildString {
-                append("{\n")
-                append("  \"timestamp\": $timestamp,\n")
-                append("  \"results\": {\n")
-                
-                stepResults.entries.forEachIndexed { index, (key, value) ->
-                    append("    \"$key\": {\n")
-                    append("      \"stepName\": \"${value.stepName.replace("\"", "\\\"")}\",\n")
-                    append("      \"result\": \"${value.result.replace("\"", "\\\"").replace("\n", "\\n")}\",\n")
-                    append("      \"success\": ${value.success}\n")
-                    append("    }")
-                    if (index < stepResults.size - 1) append(",")
-                    append("\n")
-                }
-                
-                append("  }\n")
-                append("}")
-            }
-            
-            // 移除详细日志输出
-            // logger.info("   JSON大小: ${json.length} 字符")
-            // logger.info("   步骤列表: ${stepResults.keys.take(3).joinToString(", ")}...")
-            
-            // 写入文件
-            file.writeText(json)
-            
-            // 验证写入
-            if (file.exists()) {
-                val dateTime = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
-                    .format(java.util.Date(timestamp))
-                logger.info("✅ 诊断结果已成功保存")
-                logger.info("   诊断时间: $dateTime")
-                logger.info("   文件大小: ${file.length()} bytes")
-                logger.info("   包含步骤: ${stepResults.keys.joinToString(", ")}")
-            } else {
-                logger.error("❌ 文件保存后不存在！")
-            }
-        } catch (e: Exception) {
-            logger.error("❌ 保存诊断结果失败: ${e.message}", e)
+
+    private suspend fun streamDoctorUpdateIncrement(
+        content: String,
+        streamState: DoctorUpdateStreamState,
+        callback: suspend (stepType: String, message: String, currentStep: Int?, totalSteps: Int?) -> Unit
+    ) {
+        val newContent = content.safeIncrementFrom(streamState.lastSentContent)
+        val currentTime = System.currentTimeMillis()
+        val timeSinceLastSend = currentTime - streamState.lastSentTime
+        val newlineCount = newContent.count { it == '\n' }
+
+        if (newContent.isEmpty() || (newlineCount < 3 && timeSinceLastSend < 2000)) {
+            return
         }
+
+        callback("streaming_incremental", newContent, 1, 3)
+        streamState.lastSentContent = content
+        streamState.lastSentTime = currentTime
     }
-    
+
     /**
      * 生成快速响应（对话模式）
      * 使用streaming方式逐步输出
@@ -1437,14 +1274,9 @@ $doctorMessage
         callback: suspend (content: String, isComplete: Boolean) -> Unit
     ) {
         try {
-            val requestBody = ApiRequest(
-                model = AIConfig.MODEL,
-                messages = listOf(
-                    ApiMessage(role = "user", content = prompt)
-                ),
-                temperature = 0.7,
-                max_tokens = 4096,  // ✅ GLM-5 的 max_tokens 限制，避免 4K 超出导致截断
-                stream = true  // 启用streaming
+            val response = httpClient.send(
+                buildQuickResponseRequest(prompt),
+                HttpResponse.BodyHandlers.ofLines()
             )
             
             val request = HttpRequest.newBuilder()
@@ -1464,7 +1296,19 @@ $doctorMessage
                 logger.error("❌ AI API返回错误: ${response.statusCode()}")
                 callback("⚠️ AI暂时无法回答，请稍后重试", true)
             }
-        } catch (e: Exception) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: IOException) {
+            logger.error("❌ 调用AI API异常: ${e.message}", e)
+            callback("⚠️ AI暂时无法回答，请稍后重试", true)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            logger.error("❌ 调用AI API异常: ${e.message}", e)
+            callback("⚠️ AI暂时无法回答，请稍后重试", true)
+        } catch (e: IllegalStateException) {
+            logger.error("❌ 调用AI API异常: ${e.message}", e)
+            callback("⚠️ AI暂时无法回答，请稍后重试", true)
+        } catch (e: IllegalArgumentException) {
             logger.error("❌ 调用AI API异常: ${e.message}", e)
             callback("⚠️ AI暂时无法回答，请稍后重试", true)
         }
@@ -1551,7 +1395,8 @@ data class ApiRequest(
     val model: String,
     val messages: List<ApiMessage>,
     val temperature: Double = 0.7,
-    val max_tokens: Int = 65536,  // ✅ 默认值提升到65536，支持超详细的诊断报告
+    @SerialName("max_tokens")
+    val maxTokens: Int = 65536,  // ✅ 默认值提升到65536，支持超详细的诊断报告
     val stream: Boolean = false  // 支持流式输出
 )
 
@@ -1591,7 +1436,8 @@ data class StreamResponse(
 @Serializable
 data class StreamChoice(
     val delta: StreamDelta,
-    val finish_reason: String? = null
+    @SerialName("finish_reason")
+    val finishReason: String? = null
 )
 
 @Serializable
@@ -1600,4 +1446,3 @@ data class StreamDelta(
     val content: String? = null,
     val role: String? = null
 )
-

@@ -166,126 +166,194 @@ fun FolderPickerDialog(
             color = SilkColors.surface,
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                // Title row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("选择工作目录", style = MaterialTheme.typography.titleMedium)
-                    TextButton(onClick = onDismiss) { Text("×") }
-                }
+                FolderPickerHeader(onDismiss = onDismiss)
                 Divider(color = SilkColors.divider)
 
-                // Breadcrumb
                 val current = listing
-                if (current != null) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    ) {
-                        current.segments.forEachIndexed { idx, seg ->
-                            val isLast = idx == current.segments.size - 1
-                            Text(
-                                text = if (isLast) seg else "$seg ›",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (isLast) SilkColors.textPrimary else SilkColors.primary,
-                                modifier = if (!isLast) {
-                                    Modifier.clickable {
-                                        val target = buildBreadcrumbPath(current.segments, idx, current.separator)
-                                        requestLoad(target)
-                                    }
-                                } else Modifier,
-                            )
-                        }
-                    }
-                    Divider(color = SilkColors.divider)
-                }
+                FolderPickerBreadcrumb(
+                    listing = current,
+                    onNavigate = { path -> requestLoad(path) },
+                )
 
-                // Listing area
-                Box(modifier = Modifier.heightIn(min = 200.dp, max = 360.dp).fillMaxWidth()) {
-                    when {
-                        loading -> Box(
-                            modifier = Modifier.fillMaxWidth().padding(40.dp),
-                            contentAlignment = Alignment.Center,
-                        ) { CircularProgressIndicator() }
-
-                        errorMsg != null -> Text(
-                            "⚠ $errorMsg",
-                            color = SilkColors.error,
-                            modifier = Modifier.padding(16.dp),
-                        )
-
-                        current != null -> LazyColumn {
-                            if (current.parent != null) {
-                                item {
-                                    FolderRow(name = "..", subtle = true) {
-                                        requestLoad(current.parent)
-                                    }
-                                }
-                            }
-                            items(current.entries, key = { it.name }) { entry ->
-                                FolderRow(name = entry.name) {
-                                    val next = joinPath(current.path, entry.name, current.separator)
-                                    requestLoad(next)
-                                }
-                            }
-                            if (current.entries.isEmpty() && current.parent == null) {
-                                item {
-                                    Text(
-                                        "此目录下无子文件夹",
-                                        color = SilkColors.textSecondary,
-                                        modifier = Modifier.padding(16.dp),
-                                    )
-                                }
-                            }
-                            if (current.truncated) {
-                                item {
-                                    Text(
-                                        "目录项过多，仅显示前 500 个",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = SilkColors.textLight,
-                                        modifier = Modifier.padding(8.dp, 4.dp),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+                FolderPickerListingArea(
+                    listing = current,
+                    loading = loading,
+                    errorMsg = errorMsg,
+                    onNavigate = { path -> requestLoad(path) },
+                )
                 Divider(color = SilkColors.divider)
 
-                // Bottom: input + actions
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = manualInput,
-                        onValueChange = { manualInput = it },
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("路径") },
-                        singleLine = true,
-                    )
-                    TextButton(onClick = onDismiss) { Text("取消") }
-                    Button(
-                        onClick = {
-                            val path = listing?.path
-                            if (!path.isNullOrBlank()) onConfirm(path)
-                        },
-                        enabled = listing?.success == true,
-                        colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
-                    ) { Text("选择此目录") }
-                }
-                // Manual jump button (Android replacement for web's Enter-key handling)
-                if (manualInput.isNotBlank() && manualInput != listing?.path) {
-                    TextButton(
-                        onClick = { requestLoad(manualInput.trim()) },
-                        modifier = Modifier.padding(top = 4.dp),
-                    ) { Text("跳到 $manualInput") }
+                FolderPickerFooter(
+                    manualInput = manualInput,
+                    currentPath = listing?.path,
+                    canConfirm = listing?.success == true,
+                    onManualInputChange = { manualInput = it },
+                    onDismiss = onDismiss,
+                    onConfirm = {
+                        val path = listing?.path
+                        if (!path.isNullOrBlank()) onConfirm(path)
+                    },
+                    onJump = { requestLoad(manualInput.trim()) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderPickerHeader(onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("选择工作目录", style = MaterialTheme.typography.titleMedium)
+        TextButton(onClick = onDismiss) { Text("×") }
+    }
+}
+
+@Composable
+private fun FolderPickerBreadcrumb(
+    listing: DirListingResponse?,
+    onNavigate: (String?) -> Unit,
+) {
+    if (listing == null) return
+
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        listing.segments.forEachIndexed { idx, seg ->
+            val isLast = idx == listing.segments.lastIndex
+            Text(
+                text = if (isLast) seg else "$seg ›",
+                style = MaterialTheme.typography.bodySmall,
+                color = if (isLast) SilkColors.textPrimary else SilkColors.primary,
+                modifier = if (isLast) {
+                    Modifier
+                } else {
+                    Modifier.clickable {
+                        onNavigate(buildBreadcrumbPath(listing.segments, idx, listing.separator))
+                    }
+                },
+            )
+        }
+    }
+    Divider(color = SilkColors.divider)
+}
+
+@Composable
+private fun FolderPickerListingArea(
+    listing: DirListingResponse?,
+    loading: Boolean,
+    errorMsg: String?,
+    onNavigate: (String?) -> Unit,
+) {
+    Box(modifier = Modifier.heightIn(min = 200.dp, max = 360.dp).fillMaxWidth()) {
+        when {
+            loading -> FolderPickerLoadingState()
+            errorMsg != null -> FolderPickerErrorState(errorMsg = errorMsg)
+            listing != null -> FolderPickerEntriesList(
+                listing = listing,
+                onNavigate = onNavigate,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FolderPickerLoadingState() {
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(40.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator()
+    }
+}
+
+@Composable
+private fun FolderPickerErrorState(errorMsg: String) {
+    Text(
+        "⚠ $errorMsg",
+        color = SilkColors.error,
+        modifier = Modifier.padding(16.dp),
+    )
+}
+
+@Composable
+private fun FolderPickerEntriesList(
+    listing: DirListingResponse,
+    onNavigate: (String?) -> Unit,
+) {
+    LazyColumn {
+        if (listing.parent != null) {
+            item {
+                FolderRow(name = "..", subtle = true) {
+                    onNavigate(listing.parent)
                 }
             }
         }
+        items(listing.entries, key = { it.name }) { entry ->
+            FolderRow(name = entry.name) {
+                onNavigate(joinPath(listing.path, entry.name, listing.separator))
+            }
+        }
+        if (listing.entries.isEmpty() && listing.parent == null) {
+            item {
+                Text(
+                    "此目录下无子文件夹",
+                    color = SilkColors.textSecondary,
+                    modifier = Modifier.padding(16.dp),
+                )
+            }
+        }
+        if (listing.truncated) {
+            item {
+                Text(
+                    "目录项过多，仅显示前 500 个",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SilkColors.textLight,
+                    modifier = Modifier.padding(8.dp, 4.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FolderPickerFooter(
+    manualInput: String,
+    currentPath: String?,
+    canConfirm: Boolean,
+    onManualInputChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    onJump: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        OutlinedTextField(
+            value = manualInput,
+            onValueChange = onManualInputChange,
+            modifier = Modifier.weight(1f),
+            placeholder = { Text("路径") },
+            singleLine = true,
+        )
+        TextButton(onClick = onDismiss) { Text("取消") }
+        Button(
+            onClick = onConfirm,
+            enabled = canConfirm,
+            colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+        ) { Text("选择此目录") }
+    }
+    if (manualInput.isNotBlank() && manualInput != currentPath) {
+        TextButton(
+            onClick = onJump,
+            modifier = Modifier.padding(top = 4.dp),
+        ) { Text("跳到 $manualInput") }
     }
 }
 

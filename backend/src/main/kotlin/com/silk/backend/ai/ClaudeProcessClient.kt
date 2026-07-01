@@ -2,6 +2,7 @@ package com.silk.backend.ai
 
 import com.silk.backend.EnvLoader
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -28,6 +29,8 @@ class ClaudeProcessClient(
     private val groupId: String,
     /** 进程工作目录（群组隔离） */
     private val workspaceDir: String,
+    /** Claude CLI permission mode: null(默认), "bypassPermissions", "dontAsk" */
+    private val permissionMode: String? = null,
 ) {
     private val logger = LoggerFactory.getLogger(ClaudeProcessClient::class.java)
 
@@ -164,17 +167,129 @@ class ClaudeProcessClient(
                         watchdog.cancel()
                         stderrLogger.cancel()
                     }
+                    logger.error("[ClaudeProcessClient-{}] 异常: {}", callId, error.message)
+                    throw error
                 }
-            } catch (e: CancellationException) {
-                process.destroyForcibly()
-                throw e
-            } catch (e: Exception) {
-                process.destroyForcibly()
-                logger.error("[ClaudeProcessClient-{}] 异常: {}", callId, e.message)
-                throw e
             } finally {
                 promptFile.delete()
             }
+        }
+    }
+
+    private fun buildClaudeCommand(promptFile: File): List<String> = buildList {
+        add("python3")
+        add(ptyChatPath)
+        add(promptFile.absolutePath)
+        permissionMode?.let {
+            add("--permission-mode")
+            add(it)
+        }
+    }
+
+    private fun buildProcessEnvironment(): Map<String, String> {
+        val env = mutableMapOf("PYTHONUNBUFFERED" to "1")
+        proxyEnvironmentKeys.forEach { key ->
+            (System.getenv(key) ?: EnvLoader.get(key))
+                ?.takeIf { it.isNotBlank() }
+                ?.let { env[key] = it }
+        }
+        return env
+    }
+
+    private suspend fun runProcessWithWatchdog(
+        process: Process,
+        callId: String,
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+    ): String = coroutineScope {
+        val watchdog = launch {
+            delay(responseTimeoutMs)
+            logger.warn("[ClaudeProcessClient-{}] 响应超时 ({}ms)，强制关闭进程", callId, responseTimeoutMs)
+            process.destroyForcibly()
+        }
+
+        try {
+            val result = readProcessOutput(process, callback)
+            logProcessExit(callId, process.waitFor(), result)
+            result
+        } finally {
+            watchdog.cancel()
+        }
+    }
+
+    private suspend fun readProcessOutput(
+        process: Process,
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+    ): String {
+        val output = StringBuilder()
+        var lastSentLength = 0
+        var overflow = ByteArray(0)
+        val buf = ByteArray(256)
+
+        while (true) {
+            val bytesRead = process.inputStream.read(buf)
+            if (bytesRead == -1) break
+            currentCoroutineContext().ensureActive()
+
+            val merged = mergeOverflowBytes(overflow, buf, bytesRead)
+            val decoded = merged.decodeToString()
+            overflow = captureTrailingPartial(decoded, merged)
+
+            val cleaned = stripTerminalControlSequences(decoded)
+            if (cleaned.isNotBlank()) {
+                output.append(cleaned)
+                lastSentLength = sendIncrementalIfNeeded(output, lastSentLength, callback)
+            }
+        }
+
+        sendRemainingOutput(output, lastSentLength, callback)
+        return output.toString()
+    }
+
+    private fun mergeOverflowBytes(overflow: ByteArray, buf: ByteArray, bytesRead: Int): ByteArray {
+        if (overflow.isEmpty()) return buf.copyOfRange(0, bytesRead)
+        return ByteArray(overflow.size + bytesRead).apply {
+            overflow.copyInto(this)
+            buf.copyInto(this, overflow.size, 0, bytesRead)
+        }
+    }
+
+    private fun stripTerminalControlSequences(text: String): String {
+        return text
+            .replace("\r", "")
+            .replace(Regex("\\e\\[[\\d;?<>]*[a-zA-Z]"), "")
+            .replace(Regex("\\e\\][^\\e\\x07]*[\\e\\x07]"), "")
+            .replace(Regex("\\e[()][a-zA-Z]"), "")
+    }
+
+    private suspend fun sendIncrementalIfNeeded(
+        output: StringBuilder,
+        lastSentLength: Int,
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+    ): Int {
+        if (output.length - lastSentLength < sendThreshold) return lastSentLength
+        val delta = output.substring(lastSentLength)
+        callback("streaming_incremental", delta, false)
+        return output.length
+    }
+
+    private suspend fun sendRemainingOutput(
+        output: StringBuilder,
+        lastSentLength: Int,
+        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
+    ) {
+        if (output.length <= lastSentLength) return
+        val remaining = output.substring(lastSentLength)
+        if (remaining.isNotBlank()) {
+            callback("streaming_incremental", remaining, false)
+        }
+    }
+
+    private fun logProcessExit(callId: String, exitCode: Int, result: String) {
+        if (exitCode == 0) {
+            logger.info("[ClaudeProcessClient-{}] 完成: groupId={}, chars={}", callId, groupId, result.length)
+        } else {
+            logger.warn("[ClaudeProcessClient-{}] 退出码非零: exitCode={}, groupId={}, output={}",
+                callId, exitCode, groupId, result.take(500))
         }
     }
 
@@ -273,5 +388,18 @@ class ClaudeProcessClient(
         }
         if (i < 0 || (raw[i].toInt() and 0xC0) != 0xC0) return ByteArray(0)
         return raw.copyOfRange(i, raw.size)
+    }
+
+    private companion object {
+        val proxyEnvironmentKeys = listOf(
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "https_proxy",
+            "http_proxy",
+            "CLAUDE_HTTPS_PROXY",
+            "CLAUDE_HTTP_PROXY",
+            "NO_PROXY",
+            "no_proxy",
+        )
     }
 }

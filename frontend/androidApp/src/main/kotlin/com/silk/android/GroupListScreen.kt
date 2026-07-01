@@ -120,16 +120,7 @@ fun GroupListScreen(appState: AppState) {
     // Load user language preference
     LaunchedEffect(appState.currentUser?.id) {
         appState.currentUser?.let { user ->
-            scope.launch {
-                try {
-                    val response = ApiClient.getUserSettings(user.id)
-                    if (response.success && response.settings != null) {
-                        userLanguage = response.settings!!.language
-                    }
-                } catch (e: Exception) {
-                    println("Failed to load user settings: $e")
-                }
-            }
+            scope.launch { userLanguage = loadGroupListLanguage(user.id, userLanguage) }
         }
     }
     
@@ -184,10 +175,7 @@ fun GroupListScreen(appState: AppState) {
             while (true) {
                 kotlinx.coroutines.delay(30000)
                 appState.currentUser?.let { user ->
-                    val unreadResponse = ApiClient.getUnreadCounts(user.id)
-                    if (unreadResponse.success) {
-                        unreadCounts = unreadResponse.unreadCounts
-                    }
+                    unreadCounts = loadUnreadCounts(user.id, unreadCounts)
                 }
             }
         }
@@ -195,20 +183,28 @@ fun GroupListScreen(appState: AppState) {
     
     Scaffold(
         topBar = {
-            // Silk 风格顶部导航 - 金色渐变
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = Color.Transparent
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            brush = Brush.horizontalGradient(
-                                colors = listOf(
-                                    SilkColors.primary,
-                                    SilkColors.primaryDark
-                                )
+            GroupListTopBar(
+                userName = appState.currentUser?.fullName.orEmpty(),
+                isDeleteMode = isDeleteMode,
+                selectedCount = selectedGroups.size,
+                isDeleting = isDeleting,
+                onCancelDeleteMode = {
+                    isDeleteMode = false
+                    selectedGroups = emptySet()
+                },
+                onConfirmDelete = {
+                    if (!isDeleting) {
+                        scope.launch {
+                            exitSelectedGroups(
+                                userId = appState.currentUser?.id,
+                                selectedGroups = selectedGroups,
+                                onDeletingChange = { isDeleting = it },
+                                onGroupsLoaded = { groups = it },
+                                onDeleteModeChange = { isDeleteMode = it },
+                                onSelectedGroupsChange = { selectedGroups = it },
+                                onToast = { message ->
+                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                                },
                             )
                         )
                         .padding(16.dp)
@@ -349,24 +345,244 @@ fun GroupListScreen(appState: AppState) {
                             }
                         }
                     }
-                }
-            }
+                },
+                onEnterDeleteMode = { isDeleteMode = true },
+                onShowUpgrade = { showUpgradeDialog = true },
+                onShowCreate = { showCreateDialog = true },
+                onShowJoin = { showJoinDialog = true },
+                onOpenSilkChat = {
+                    scope.launch {
+                        openSilkChat(
+                            userId = appState.currentUser?.id,
+                            onGroupSelected = appState::selectGroup,
+                            onToast = { message ->
+                                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                            },
+                        )
+                    }
+                },
+                onOpenContacts = { appState.navigateTo(Scene.CONTACTS) },
+                onOpenSettings = { appState.navigateTo(Scene.SETTINGS) },
+                onLogout = appState::logout,
+            )
         }
     ) { padding ->
-        // Silk 风格背景
+        GroupListContent(
+            padding = padding,
+            isLoading = isLoading,
+            groups = groups,
+            isDeleteMode = isDeleteMode,
+            selectedGroups = selectedGroups,
+            unreadCounts = unreadCounts,
+            onShowCreate = { showCreateDialog = true },
+            onShowJoin = { showJoinDialog = true },
+            onGroupSelected = { group ->
+                scope.launch {
+                    if (isDeleteMode) {
+                        selectedGroups = toggleGroupSelection(selectedGroups, group.id)
+                    } else {
+                        appState.currentUser?.let { user ->
+                            ApiClient.markGroupAsRead(user.id, group.id)
+                            unreadCounts = unreadCounts - group.id
+                        }
+                        appState.selectGroup(group)
+                    }
+                }
+            },
+            onMembersClick = { group ->
+                selectedGroupForMembers = group
+                scope.launch {
+                    loadGroupMembersDialogData(
+                        userId = appState.currentUser?.id,
+                        group = group,
+                        onLoadingChange = { isLoadingMembers = it },
+                        onContactsLoaded = { contacts = it },
+                        onMembersLoaded = { groupMembers = it },
+                        onDialogVisibilityChange = { showMembersDialog = it },
+                    )
+                }
+            },
+        )
+
+        GroupListDialogs(
+            appState = appState,
+            strings = strings,
+            context = context,
+            scope = scope,
+            groups = groups,
+            showCreateDialog = showCreateDialog,
+            showJoinDialog = showJoinDialog,
+            showUpgradeDialog = showUpgradeDialog,
+            showMembersDialog = showMembersDialog,
+            selectedGroupForMembers = selectedGroupForMembers,
+            groupMembers = groupMembers,
+            contacts = contacts,
+            isLoadingMembers = isLoadingMembers,
+            downloadState = downloadState,
+            onGroupsChanged = { groups = it },
+            onDismissCreateDialog = { showCreateDialog = false },
+            onDismissJoinDialog = { showJoinDialog = false },
+            onShowUpgradeDialogChange = { showUpgradeDialog = it },
+            onDownloadStateChange = { downloadState = it },
+            onShowMembersDialogChange = { showMembersDialog = it },
+            onSelectedGroupForMembersChange = { selectedGroupForMembers = it },
+        )
+    }
+}
+
+private suspend fun loadGroupListLanguage(
+    userId: String,
+    fallback: Language,
+): Language {
+    val response = ApiClient.getUserSettings(userId)
+    return if (response.success && response.settings != null) {
+        response.settings!!.language
+    } else {
+        if (response.message.isNotBlank()) {
+            println("Failed to load user settings: ${response.message}")
+        }
+        fallback
+    }
+}
+
+private suspend fun refreshGroupList(
+    userId: String?,
+    onLoadingChange: (Boolean) -> Unit,
+    onGroupsLoaded: (List<Group>) -> Unit,
+    onUnreadCountsLoaded: (Map<String, Int>) -> Unit,
+) {
+    onLoadingChange(true)
+    try {
+        val id = userId ?: return
+        val response = ApiClient.getUserGroups(id)
+        if (response.success) {
+            val groups = (response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
+            onGroupsLoaded(groups)
+            println("✅ 加载了 ${groups.size} 个群组")
+            val unreadCounts = loadUnreadCounts(id, emptyMap())
+            onUnreadCountsLoaded(unreadCounts)
+            println("✅ 未读消息: $unreadCounts")
+        } else if (response.message.isNotBlank()) {
+            println("❌ 加载群组异常: ${response.message}")
+        }
+    } finally {
+        onLoadingChange(false)
+    }
+}
+
+private suspend fun loadUnreadCounts(
+    userId: String,
+    fallback: Map<String, Int>,
+): Map<String, Int> {
+    val unreadResponse = ApiClient.getUnreadCounts(userId)
+    return if (unreadResponse.success) unreadResponse.unreadCounts else fallback
+}
+
+private suspend fun exitSelectedGroups(
+    userId: String?,
+    selectedGroups: Set<String>,
+    onDeletingChange: (Boolean) -> Unit,
+    onGroupsLoaded: (List<Group>) -> Unit,
+    onDeleteModeChange: (Boolean) -> Unit,
+    onSelectedGroupsChange: (Set<String>) -> Unit,
+    onToast: (String) -> Unit,
+) {
+    val id = userId ?: return
+    onDeletingChange(true)
+    try {
+        val exitCount = selectedGroups.size
+        selectedGroups.forEach { groupId ->
+            val response = ApiClient.leaveGroup(groupId, id)
+            println("退出群组 $groupId: ${response.message}")
+        }
+        val response = ApiClient.getUserGroups(id)
+        if (response.success) {
+            onGroupsLoaded((response.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") })
+        }
+        onDeleteModeChange(false)
+        onSelectedGroupsChange(emptySet())
+        onToast("已退出 $exitCount 个群组")
+    } finally {
+        onDeletingChange(false)
+    }
+}
+
+private suspend fun openSilkChat(
+    userId: String?,
+    onGroupSelected: (Group) -> Unit,
+    onToast: (String) -> Unit,
+) {
+    val id = userId ?: return
+    val response = ApiClient.startSilkPrivateChat(id)
+    val group = response.group
+    if (response.success && group != null) {
+        println("✅ 打开与 Silk 的对话: ${group.name}")
+        onGroupSelected(group)
+    } else {
+        println("❌ 打开 Silk 对话失败: ${response.message}")
+        onToast(response.message)
+    }
+}
+
+private suspend fun loadGroupMembersDialogData(
+    userId: String?,
+    group: Group,
+    onLoadingChange: (Boolean) -> Unit,
+    onContactsLoaded: (List<Contact>) -> Unit,
+    onMembersLoaded: (List<GroupMember>) -> Unit,
+    onDialogVisibilityChange: (Boolean) -> Unit,
+) {
+    val id = userId ?: return
+    onLoadingChange(true)
+    try {
+        val contactsResponse = ApiClient.getContacts(id)
+        onContactsLoaded(contactsResponse.contacts ?: emptyList())
+        val membersResponse = ApiClient.getGroupMembers(group.id)
+        onMembersLoaded(membersResponse.members.sortedByDescending { it.id == group.hostId })
+        onDialogVisibilityChange(true)
+    } finally {
+        onLoadingChange(false)
+    }
+}
+
+private fun toggleGroupSelection(
+    selectedGroups: Set<String>,
+    groupId: String,
+): Set<String> = if (groupId in selectedGroups) selectedGroups - groupId else selectedGroups + groupId
+
+@Composable
+private fun GroupListTopBar(
+    userName: String,
+    isDeleteMode: Boolean,
+    selectedCount: Int,
+    isDeleting: Boolean,
+    onCancelDeleteMode: () -> Unit,
+    onConfirmDelete: () -> Unit,
+    onEnterDeleteMode: () -> Unit,
+    onShowUpgrade: () -> Unit,
+    onShowCreate: () -> Unit,
+    onShowJoin: () -> Unit,
+    onOpenSilkChat: () -> Unit,
+    onOpenContacts: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color.Transparent,
+    ) {
         Box(
             modifier = Modifier
-                .fillMaxSize()
+                .fillMaxWidth()
                 .background(
-                    brush = Brush.verticalGradient(
+                    brush = Brush.horizontalGradient(
                         colors = listOf(
-                            SilkColors.background,
-                            SilkColors.secondary.copy(alpha = 0.2f),
-                            SilkColors.background
-                        )
-                    )
+                            SilkColors.primary,
+                            SilkColors.primaryDark,
+                        ),
+                    ),
                 )
-                .padding(padding)
+                .padding(16.dp),
         ) {
             when {
                 isLoading -> {
@@ -602,90 +818,437 @@ fun GroupListScreen(appState: AppState) {
                 }
             )
         }
-        
-        // 加入群组对话框
-        if (showJoinDialog) {
-            JoinGroupDialog(
-                appState = appState,
-                strings = strings,
-                onDismiss = { showJoinDialog = false },
-                onGroupJoined = { newGroup ->
-                    groups = groups + newGroup
-                    showJoinDialog = false
-                }
+    }
+}
+
+@Composable
+private fun GroupDeleteModeActions(
+    selectedCount: Int,
+    isDeleting: Boolean,
+    onCancelDeleteMode: () -> Unit,
+    onConfirmDelete: () -> Unit,
+) {
+    GroupTopBarActionButton(
+        onClick = onCancelDeleteMode,
+        icon = Icons.Default.Close,
+        contentDescription = "取消",
+    )
+    if (selectedCount > 0) {
+        GroupConfirmDeleteButton(
+            isDeleting = isDeleting,
+            onConfirmDelete = onConfirmDelete,
+        )
+    }
+    Text(
+        text = "已选${selectedCount}个",
+        color = Color.White,
+        style = MaterialTheme.typography.bodyMedium,
+    )
+}
+
+@Composable
+private fun GroupConfirmDeleteButton(
+    isDeleting: Boolean,
+    onConfirmDelete: () -> Unit,
+) {
+    IconButton(
+        onClick = onConfirmDelete,
+        colors = IconButtonDefaults.iconButtonColors(
+            contentColor = if (isDeleting) Color.Gray else Color(0xFFe74c3c),
+        ),
+    ) {
+        if (isDeleting) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                color = Color.White,
+                strokeWidth = 2.dp,
+            )
+        } else {
+            Icon(
+                Icons.Default.Check,
+                contentDescription = "确认退出",
+                modifier = Modifier.size(22.dp),
             )
         }
-        
-        // 升级对话框
-        if (showUpgradeDialog) {
-            UpgradeDialog(
-                downloadState = downloadState,
-                onDismiss = { 
-                    if (downloadState !is ApkDownloader.DownloadState.Downloading) {
-                        showUpgradeDialog = false
-                        downloadState = ApkDownloader.DownloadState.Idle
-                    }
-                },
-                onStartDownload = {
-                    scope.launch {
-                        ApkDownloader.downloadApk(context) { state ->
-                            downloadState = state
-                            
-                            // 下载成功后自动安装
-                            if (state is ApkDownloader.DownloadState.Success) {
-                                try {
-                                    ApkDownloader.installApk(context, state.file)
-                                } catch (e: Exception) {
-                                    Toast.makeText(context, "启动安装失败: ${e.message}", Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        }
-                    }
-                }
+    }
+}
+
+@Composable
+private fun GroupNormalModeActions(
+    onEnterDeleteMode: () -> Unit,
+    onShowUpgrade: () -> Unit,
+    onShowCreate: () -> Unit,
+    onShowJoin: () -> Unit,
+    onOpenSilkChat: () -> Unit,
+    onOpenContacts: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    GroupTopBarActionButton(
+        onClick = onEnterDeleteMode,
+        icon = Icons.Default.Remove,
+        contentDescription = "退出群组",
+    )
+    GroupTopBarActionButton(
+        onClick = onShowUpgrade,
+        icon = Icons.Default.SystemUpdate,
+        contentDescription = "升级",
+    )
+    GroupTopBarActionButton(
+        onClick = onShowCreate,
+        icon = Icons.Default.Add,
+        contentDescription = "创建",
+    )
+    GroupTopBarActionButton(
+        onClick = onShowJoin,
+        icon = Icons.Default.GroupAdd,
+        contentDescription = "加入",
+    )
+    GroupTopBarActionButton(
+        onClick = onOpenSilkChat,
+        icon = Icons.Default.SmartToy,
+        contentDescription = "与 Silk 对话",
+        tint = Color(0xFF7BA8C9),
+    )
+    GroupTopBarActionButton(
+        onClick = onOpenContacts,
+        icon = Icons.Default.Contacts,
+        contentDescription = "联系人",
+    )
+    GroupTopBarActionButton(
+        onClick = onOpenSettings,
+        icon = Icons.Default.Settings,
+        contentDescription = "设置",
+    )
+    GroupTopBarActionButton(
+        onClick = onLogout,
+        icon = Icons.Default.Logout,
+        contentDescription = "登出",
+        tint = Color.White.copy(alpha = 0.8f),
+    )
+}
+
+@Composable
+private fun GroupTopBarActionButton(
+    onClick: () -> Unit,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    tint: Color = Color.White,
+) {
+    IconButton(
+        onClick = onClick,
+        colors = IconButtonDefaults.iconButtonColors(contentColor = tint),
+    ) {
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            modifier = Modifier.size(22.dp),
+        )
+    }
+}
+
+@Composable
+private fun GroupListContent(
+    padding: PaddingValues,
+    isLoading: Boolean,
+    groups: List<Group>,
+    isDeleteMode: Boolean,
+    selectedGroups: Set<String>,
+    unreadCounts: Map<String, Int>,
+    onShowCreate: () -> Unit,
+    onShowJoin: () -> Unit,
+    onGroupSelected: (Group) -> Unit,
+    onMembersClick: (Group) -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        SilkColors.background,
+                        SilkColors.secondary.copy(alpha = 0.2f),
+                        SilkColors.background,
+                    ),
+                ),
+            )
+            .padding(padding),
+    ) {
+        when {
+            isLoading -> GroupListLoadingState()
+            groups.isEmpty() -> GroupListEmptyState(onShowCreate = onShowCreate, onShowJoin = onShowJoin)
+            else -> GroupListGroupsContent(
+                groups = groups,
+                isDeleteMode = isDeleteMode,
+                selectedGroups = selectedGroups,
+                unreadCounts = unreadCounts,
+                onShowJoin = onShowJoin,
+                onGroupSelected = onGroupSelected,
+                onMembersClick = onMembersClick,
             )
         }
-        
-        // 成员列表对话框
-        if (showMembersDialog && selectedGroupForMembers != null) {
-            GroupMembersListDialog(
-                group = selectedGroupForMembers!!,
-                members = groupMembers,
-                contacts = contacts,
-                currentUserId = appState.currentUser?.id ?: "",
-                isLoading = isLoadingMembers,
-                onMemberClick = { member ->
-                    // 检查是否是联系人
-                    val isContact = contacts.any { it.contactId == member.id }
-                    if (isContact) {
-                        // 是联系人，跳转到与该联系人的对话
-                        scope.launch {
-                            showMembersDialog = false
-                            val userId = appState.currentUser?.id ?: return@launch
-                            val response = ApiClient.startPrivateChat(userId, member.id)
-                            if (response.success && response.group != null) {
-                                appState.selectGroup(response.group!!)
-                            } else {
-                                Toast.makeText(context, "无法创建对话: ${response.message}", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    } else {
-                        // 不是联系人，发送联系人请求
-                        scope.launch {
-                            val userId = appState.currentUser?.id ?: return@launch
-                            val response = ApiClient.sendContactRequestById(userId, member.id)
-                            if (response.success) {
-                                Toast.makeText(context, "联系人请求已发送给 ${member.fullName}", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "发送失败: ${response.message}", Toast.LENGTH_SHORT).show()
+    }
+}
+
+@Composable
+private fun GroupListLoadingState() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(color = SilkColors.primary)
+    }
+}
+
+@Composable
+private fun GroupListEmptyState(
+    onShowCreate: () -> Unit,
+    onShowJoin: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(48.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text = "🧵",
+            style = MaterialTheme.typography.displayLarge,
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = "您还没有加入任何群组",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = SilkColors.textPrimary,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+            text = "创建一个新群组或加入现有群组",
+            style = MaterialTheme.typography.bodyLarge,
+            color = SilkColors.textSecondary,
+        )
+        Spacer(modifier = Modifier.height(40.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Button(
+                onClick = onShowCreate,
+                colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("创建群组")
+            }
+            OutlinedButton(
+                onClick = onShowJoin,
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = SilkColors.primary),
+            ) {
+                Icon(Icons.Default.GroupAdd, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("加入群组")
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupListGroupsContent(
+    groups: List<Group>,
+    isDeleteMode: Boolean,
+    selectedGroups: Set<String>,
+    unreadCounts: Map<String, Int>,
+    onShowJoin: () -> Unit,
+    onGroupSelected: (Group) -> Unit,
+    onMembersClick: (Group) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (isDeleteMode) {
+            item { GroupDeleteModeHintCard() }
+        }
+        items(groups) { group ->
+            val isSelected = group.id in selectedGroups
+            GroupCard(
+                group = group,
+                isDeleteMode = isDeleteMode,
+                isSelected = isSelected,
+                unreadCount = unreadCounts[group.id] ?: 0,
+                onClick = { onGroupSelected(group) },
+                onMembersClick = { onMembersClick(group) },
+            )
+        }
+        if (!isDeleteMode) {
+            item { JoinMoreGroupsCard(onShowJoin = onShowJoin) }
+        }
+    }
+}
+
+@Composable
+private fun GroupDeleteModeHintCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+    ) {
+        Text(
+            text = "点击选择要退出的群组",
+            modifier = Modifier.padding(12.dp),
+            color = Color(0xFFE65100),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+@Composable
+private fun JoinMoreGroupsCard(onShowJoin: () -> Unit) {
+    OutlinedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onShowJoin() },
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "+ 加入其他群组",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+}
+
+@Composable
+private fun GroupListDialogs(
+    appState: AppState,
+    strings: com.silk.shared.i18n.Strings,
+    context: android.content.Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    groups: List<Group>,
+    showCreateDialog: Boolean,
+    showJoinDialog: Boolean,
+    showUpgradeDialog: Boolean,
+    showMembersDialog: Boolean,
+    selectedGroupForMembers: Group?,
+    groupMembers: List<GroupMember>,
+    contacts: List<Contact>,
+    isLoadingMembers: Boolean,
+    downloadState: ApkDownloader.DownloadState,
+    onGroupsChanged: (List<Group>) -> Unit,
+    onDismissCreateDialog: () -> Unit,
+    onDismissJoinDialog: () -> Unit,
+    onShowUpgradeDialogChange: (Boolean) -> Unit,
+    onDownloadStateChange: (ApkDownloader.DownloadState) -> Unit,
+    onShowMembersDialogChange: (Boolean) -> Unit,
+    onSelectedGroupForMembersChange: (Group?) -> Unit,
+) {
+    if (showCreateDialog) {
+        CreateGroupDialog(
+            appState = appState,
+            strings = strings,
+            onDismiss = onDismissCreateDialog,
+            onGroupCreated = { newGroup ->
+                onGroupsChanged(groups + newGroup)
+                onDismissCreateDialog()
+            },
+        )
+    }
+
+    if (showJoinDialog) {
+        JoinGroupDialog(
+            appState = appState,
+            strings = strings,
+            onDismiss = onDismissJoinDialog,
+            onGroupJoined = { newGroup ->
+                onGroupsChanged(groups + newGroup)
+                onDismissJoinDialog()
+            },
+        )
+    }
+
+    if (showUpgradeDialog) {
+        UpgradeDialog(
+            downloadState = downloadState,
+            onDismiss = {
+                if (downloadState !is ApkDownloader.DownloadState.Downloading) {
+                    onShowUpgradeDialogChange(false)
+                    onDownloadStateChange(ApkDownloader.DownloadState.Idle)
+                }
+            },
+            onStartDownload = {
+                scope.launch {
+                    ApkDownloader.downloadApk(context) { state ->
+                        onDownloadStateChange(state)
+                        if (state is ApkDownloader.DownloadState.Success) {
+                            ApkDownloader.installApk(context, state.file)?.let { message ->
+                                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                             }
                         }
                     }
-                },
-                onDismiss = { 
-                    showMembersDialog = false
-                    selectedGroupForMembers = null
                 }
-            )
+            },
+        )
+    }
+
+    if (showMembersDialog && selectedGroupForMembers != null) {
+        GroupMembersListDialog(
+            group = selectedGroupForMembers,
+            members = groupMembers,
+            contacts = contacts,
+            currentUserId = appState.currentUser?.id ?: "",
+            isLoading = isLoadingMembers,
+            onMemberClick = { member ->
+                scope.launch {
+                    handleGroupMemberClick(
+                        userId = appState.currentUser?.id,
+                        member = member,
+                        contacts = contacts,
+                        onDismiss = { onShowMembersDialogChange(false) },
+                        onOpenGroup = appState::selectGroup,
+                        onToast = { message ->
+                            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                        },
+                    )
+                }
+            },
+            onDismiss = {
+                onShowMembersDialogChange(false)
+                onSelectedGroupForMembersChange(null)
+            },
+        )
+    }
+}
+
+private suspend fun handleGroupMemberClick(
+    userId: String?,
+    member: GroupMember,
+    contacts: List<Contact>,
+    onDismiss: () -> Unit,
+    onOpenGroup: (Group) -> Unit,
+    onToast: (String) -> Unit,
+) {
+    val id = userId ?: return
+    if (contacts.any { it.contactId == member.id }) {
+        onDismiss()
+        val response = ApiClient.startPrivateChat(id, member.id)
+        val group = response.group
+        if (response.success && group != null) {
+            onOpenGroup(group)
+        } else {
+            onToast("无法创建对话: ${response.message}")
+        }
+    } else {
+        val response = ApiClient.sendContactRequestById(id, member.id)
+        if (response.success) {
+            onToast("联系人请求已发送给 ${member.fullName}")
+        } else {
+            onToast("发送失败: ${response.message}")
         }
     }
 }
@@ -694,7 +1257,6 @@ fun GroupListScreen(appState: AppState) {
 @Composable
 fun GroupCard(
     group: Group,
-    isHost: Boolean,
     isDeleteMode: Boolean = false,
     isSelected: Boolean = false,
     unreadCount: Int = 0,
@@ -885,6 +1447,32 @@ fun GroupCard(
                 }
             }
         }
+
+        if (isDeleteMode) {
+            GroupDeleteIndicator(isSelected)
+        }
+    }
+}
+
+@Composable
+private fun GroupDeleteIndicator(isSelected: Boolean) {
+    Box(
+        modifier = Modifier
+            .size(24.dp)
+            .background(
+                color = if (isSelected) Color(0xFFe74c3c) else Color.LightGray,
+                shape = androidx.compose.foundation.shape.CircleShape
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        if (isSelected) {
+            Icon(
+                Icons.Default.Check,
+                contentDescription = "已选择",
+                tint = Color.White,
+                modifier = Modifier.size(16.dp)
+            )
+        }
     }
 }
 
@@ -1013,6 +1601,14 @@ token  = "${generatedToken}"""",
                                 modifier = Modifier.padding(12.dp)
                             )
                         }
+
+                        if (response != null && response.success && response.group != null) {
+                            println("群组创建成功: ${response.group.name}")
+                            onGroupCreated(response.group)
+                        } else {
+                            errorMessage = response?.message ?: "创建失败"
+                        }
+                        isLoading = false
                     }
 
                     if (errorMessage.isNotEmpty()) {
@@ -1136,22 +1732,17 @@ fun JoinGroupDialog(
                 onClick = {
                     scope.launch {
                         isLoading = true
-                        try {
-                            val response = appState.currentUser?.let { user ->
-                                ApiClient.joinGroup(user.id, invitationCode)
-                            }
-                            
-                            if (response != null && response.success && response.group != null) {
-                                println("加入群组成功: ${response.group.name}")
-                                onGroupJoined(response.group)
-                            } else {
-                                errorMessage = response?.message ?: "加入失败"
-                            }
-                        } catch (e: Exception) {
-                            errorMessage = "加入失败: ${e.message}"
-                        } finally {
-                            isLoading = false
+                        val response = appState.currentUser?.let { user ->
+                            ApiClient.joinGroup(user.id, invitationCode)
                         }
+
+                        if (response != null && response.success && response.group != null) {
+                            println("加入群组成功: ${response.group.name}")
+                            onGroupJoined(response.group)
+                        } else {
+                            errorMessage = response?.message ?: "加入失败"
+                        }
+                        isLoading = false
                     }
                 },
                 enabled = !isLoading && invitationCode.length == 6
@@ -1284,141 +1875,19 @@ fun GroupMembersListDialog(
     onDismiss: () -> Unit
 ) {
     val contactIds = contacts.map { it.contactId }.toSet()
-    
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { 
-            Text(
-                "👥 ${group.name}",
-                fontWeight = FontWeight.Bold,
-                style = MaterialTheme.typography.titleMedium
-            ) 
-        },
+        title = { GroupMembersDialogTitle(groupName = group.name) },
         text = {
-            if (isLoading) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(100.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = SilkColors.primary)
-                }
-            } else if (members.isEmpty()) {
-                Text("暂无成员", color = SilkColors.textSecondary)
-            } else {
-                LazyColumn(
-                    modifier = Modifier.heightIn(max = 400.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(members) { member ->
-                        val isHost = member.id == group.hostId
-                        val isCurrentUser = member.id == currentUserId
-                        val isContact = member.id in contactIds
-                        val isSilkAI = isAgentUserId(member.id)
-                        
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .then(
-                                    if (!isCurrentUser && !isSilkAI) {
-                                        Modifier.clickable { onMemberClick(member) }
-                                    } else {
-                                        Modifier
-                                    }
-                                ),
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (isHost) SilkColors.primary.copy(alpha = 0.1f) 
-                                    else MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    // 头像
-                                    Surface(
-                                        modifier = Modifier.size(32.dp),
-                                        shape = MaterialTheme.shapes.small,
-                                        color = when {
-                                            isSilkAI -> SilkColors.info
-                                            isHost -> SilkColors.primary
-                                            isContact -> SilkColors.success
-                                            else -> SilkColors.textSecondary
-                                        }
-                                    ) {
-                                        Box(
-                                            contentAlignment = Alignment.Center,
-                                            modifier = Modifier.fillMaxSize()
-                                        ) {
-                                            Text(
-                                                text = when {
-                                                    isSilkAI -> "🤖"
-                                                    isHost -> "👑"
-                                                    isContact -> "✓"
-                                                    else -> member.fullName.firstOrNull()?.toString() ?: "?"
-                                                },
-                                                color = Color.White,
-                                                fontSize = 14.sp
-                                            )
-                                        }
-                                    }
-                                    
-                                    Column {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(
-                                                text = member.fullName,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontWeight = if (isHost) FontWeight.Bold else FontWeight.Normal
-                                            )
-                                            if (isHost) {
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text(
-                                                    text = "(群主)",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = SilkColors.primary
-                                                )
-                                            }
-                                            if (isCurrentUser) {
-                                                Spacer(modifier = Modifier.width(4.dp))
-                                                Text(
-                                                    text = "(我)",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = SilkColors.textSecondary
-                                                )
-                                            }
-                                        }
-                                        Text(
-                                            text = when {
-                                                isSilkAI -> "AI 助手"
-                                                isCurrentUser -> "当前用户"
-                                                isContact -> "联系人 · 点击聊天"
-                                                else -> "点击添加联系人"
-                                            },
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = SilkColors.textSecondary
-                                        )
-                                    }
-                                }
-                                
-                                if (!isCurrentUser && !isSilkAI) {
-                                    Text(
-                                        text = if (isContact) "💬" else "➕",
-                                        fontSize = 16.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            GroupMembersDialogContent(
+                group = group,
+                members = members,
+                contactIds = contactIds,
+                currentUserId = currentUserId,
+                isLoading = isLoading,
+                onMemberClick = onMemberClick,
+            )
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
@@ -1428,3 +1897,221 @@ fun GroupMembersListDialog(
     )
 }
 
+private data class GroupMemberRowState(
+    val isHost: Boolean,
+    val isCurrentUser: Boolean,
+    val isContact: Boolean,
+    val isSilkAI: Boolean,
+)
+
+@Composable
+private fun GroupMembersDialogTitle(groupName: String) {
+    Text(
+        "👥 $groupName",
+        fontWeight = FontWeight.Bold,
+        style = MaterialTheme.typography.titleMedium,
+    )
+}
+
+@Composable
+private fun GroupMembersDialogContent(
+    group: Group,
+    members: List<GroupMember>,
+    contactIds: Set<String>,
+    currentUserId: String,
+    isLoading: Boolean,
+    onMemberClick: (GroupMember) -> Unit,
+) {
+    when {
+        isLoading -> GroupMembersLoadingState()
+        members.isEmpty() -> GroupMembersEmptyState()
+        else -> GroupMembersList(
+            group = group,
+            members = members,
+            contactIds = contactIds,
+            currentUserId = currentUserId,
+            onMemberClick = onMemberClick,
+        )
+    }
+}
+
+@Composable
+private fun GroupMembersLoadingState() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(100.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(color = SilkColors.primary)
+    }
+}
+
+@Composable
+private fun GroupMembersEmptyState() {
+    Text("暂无成员", color = SilkColors.textSecondary)
+}
+
+@Composable
+private fun GroupMembersList(
+    group: Group,
+    members: List<GroupMember>,
+    contactIds: Set<String>,
+    currentUserId: String,
+    onMemberClick: (GroupMember) -> Unit,
+) {
+    LazyColumn(
+        modifier = Modifier.heightIn(max = 400.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        items(members) { member ->
+            GroupMemberRow(
+                member = member,
+                rowState = buildGroupMemberRowState(
+                    member = member,
+                    hostId = group.hostId,
+                    currentUserId = currentUserId,
+                    contactIds = contactIds,
+                ),
+                onClick = { onMemberClick(member) },
+            )
+        }
+    }
+}
+
+private fun buildGroupMemberRowState(
+    member: GroupMember,
+    hostId: String,
+    currentUserId: String,
+    contactIds: Set<String>,
+): GroupMemberRowState = GroupMemberRowState(
+    isHost = member.id == hostId,
+    isCurrentUser = member.id == currentUserId,
+    isContact = member.id in contactIds,
+    isSilkAI = isAgentUserId(member.id),
+)
+
+@Composable
+private fun GroupMemberRow(
+    member: GroupMember,
+    rowState: GroupMemberRowState,
+    onClick: () -> Unit,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (rowState.isCurrentUser || rowState.isSilkAI) Modifier
+                else Modifier.clickable { onClick() }
+            ),
+        colors = CardDefaults.cardColors(
+            containerColor = if (rowState.isHost) {
+                SilkColors.primary.copy(alpha = 0.1f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            }
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                GroupMemberAvatar(member = member, rowState = rowState)
+                GroupMemberTextBlock(member = member, rowState = rowState)
+            }
+            GroupMemberActionIndicator(rowState = rowState)
+        }
+    }
+}
+
+@Composable
+private fun GroupMemberAvatar(
+    member: GroupMember,
+    rowState: GroupMemberRowState,
+) {
+    Surface(
+        modifier = Modifier.size(32.dp),
+        shape = MaterialTheme.shapes.small,
+        color = when {
+            rowState.isSilkAI -> SilkColors.info
+            rowState.isHost -> SilkColors.primary
+            rowState.isContact -> SilkColors.success
+            else -> SilkColors.textSecondary
+        },
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            Text(
+                text = when {
+                    rowState.isSilkAI -> "🤖"
+                    rowState.isHost -> "👑"
+                    rowState.isContact -> "✓"
+                    else -> member.fullName.firstOrNull()?.toString() ?: "?"
+                },
+                color = Color.White,
+                fontSize = 14.sp,
+            )
+        }
+    }
+}
+
+@Composable
+private fun GroupMemberTextBlock(
+    member: GroupMember,
+    rowState: GroupMemberRowState,
+) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = member.fullName,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (rowState.isHost) FontWeight.Bold else FontWeight.Normal,
+            )
+            if (rowState.isHost) {
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "(群主)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SilkColors.primary,
+                )
+            }
+            if (rowState.isCurrentUser) {
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "(我)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SilkColors.textSecondary,
+                )
+            }
+        }
+        Text(
+            text = when {
+                rowState.isSilkAI -> "AI 助手"
+                rowState.isCurrentUser -> "当前用户"
+                rowState.isContact -> "联系人 · 点击聊天"
+                else -> "点击添加联系人"
+            },
+            style = MaterialTheme.typography.labelSmall,
+            color = SilkColors.textSecondary,
+        )
+    }
+}
+
+@Composable
+private fun GroupMemberActionIndicator(rowState: GroupMemberRowState) {
+    if (rowState.isCurrentUser || rowState.isSilkAI) return
+
+    Text(
+        text = if (rowState.isContact) "💬" else "➕",
+        fontSize = 16.sp,
+    )
+}

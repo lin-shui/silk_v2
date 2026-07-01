@@ -152,13 +152,12 @@ class AcpClient(
         val id = nextId.getAndIncrement()
         val deferred = CompletableDeferred<JsonRpcResponse>()
         pending[id] = deferred
-        try {
+        runCatching {
             val req = JsonRpcRequest(id = id, method = method, params = params)
             transport.send(json.encodeToString(JsonRpcRequest.serializer(), req))
-        } catch (e: Exception) {
+        }.onFailure {
             pending.remove(id)
-            throw e
-        }
+        }.getOrThrow()
         return try {
             if (timeoutMs == Long.MAX_VALUE) {
                 deferred.await()
@@ -179,11 +178,12 @@ class AcpClient(
 
     private suspend fun receiveLoop() {
         try {
-            transport.incoming.collect { line -> dispatch(line) }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.warn("[AcpClient] receive loop ended: {}", e.message)
+            runCatching {
+                transport.incoming.collect { line -> dispatch(line) }
+            }.onFailure { error ->
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                logger.warn("[AcpClient] receive loop ended: {}", error.message)
+            }
         } finally {
             // receive loop 终止（transport 关闭 / scope 取消 / 异常）：失败所有 pending
             val cause = IllegalStateException("receive loop terminated")
@@ -193,16 +193,16 @@ class AcpClient(
     }
 
     private suspend fun dispatch(line: String) {
-        val element = try {
+        val element = runCatching {
             json.parseToJsonElement(line).jsonObject
-        } catch (e: Exception) {
-            logger.warn("[AcpClient] malformed JSON: {}", e.message)
+        }.getOrElse { error ->
+            logger.warn("[AcpClient] malformed JSON: {}", error.message)
             return
         }
         val id = element["id"]?.jsonPrimitive?.longOrNull
         val method = element["method"]?.jsonPrimitive?.contentOrNull
 
-        try {
+        runCatching {
             when {
                 // 响应（有 id 但没有 method）
                 id != null && method == null -> {
@@ -215,11 +215,10 @@ class AcpClient(
                 id != null && method != null -> handleServerRequest(id, method, element["params"])
                 else -> logger.warn("[AcpClient] unrecognized message: {}", line)
             }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e
-        } catch (e: Exception) {
+        }.onFailure { error ->
+            if (error is kotlinx.coroutines.CancellationException) throw error
             // 单条消息处理失败不应杀死整个 receive loop（影响所有待响应的 RPC）
-            logger.warn("[AcpClient] dispatch failed for method={}, id={}: {}", method, id, e.message)
+            logger.warn("[AcpClient] dispatch failed for method={}, id={}: {}", method, id, error.message)
         }
     }
 
@@ -241,10 +240,10 @@ class AcpClient(
                     sendError(id, JsonRpcError(JsonRpcError.INVALID_PARAMS, "no params"))
                     return
                 }
-                val req = try {
+                val req = runCatching {
                     json.decodeFromJsonElement(PermissionRequestParams.serializer(), params)
-                } catch (e: Exception) {
-                    sendError(id, JsonRpcError(JsonRpcError.INVALID_PARAMS, "bad params: ${e.message}"))
+                }.getOrElse { error ->
+                    sendError(id, JsonRpcError(JsonRpcError.INVALID_PARAMS, "bad params: ${error.message}"))
                     return
                 }
                 val handler = permissionHandlers[req.sessionId]
@@ -252,14 +251,13 @@ class AcpClient(
                     sendError(id, JsonRpcError(JsonRpcError.METHOD_NOT_FOUND, "no permission handler for session ${req.sessionId}"))
                     return
                 }
-                try {
+                runCatching {
                     val resp = handler(req)
                     val result = json.encodeToJsonElement(PermissionResponse.serializer(), resp)
                     sendResponse(id, result)
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    sendError(id, JsonRpcError(JsonRpcError.INTERNAL_ERROR, e.message ?: "handler error"))
+                }.onFailure { error ->
+                    if (error is kotlinx.coroutines.CancellationException) throw error
+                    sendError(id, JsonRpcError(JsonRpcError.INTERNAL_ERROR, error.message ?: "handler error"))
                 }
             }
             else -> sendError(id, JsonRpcError(JsonRpcError.METHOD_NOT_FOUND, method))
