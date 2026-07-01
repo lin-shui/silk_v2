@@ -181,6 +181,39 @@ internal fun downloadAsFile(content: String, fileName: String) {
     windowJs.URL.revokeObjectURL(objectUrl)
 }
 
+internal fun scrollMessageIntoView(containerId: String, messageId: String): Boolean {
+    val container = document.getElementById(containerId) as? HTMLElement ?: return false
+    val escapedMessageId = messageId
+        .replace("\\", "\\\\")
+        .replace("'", "\\'")
+    val target = container
+        .querySelector("[data-message-id='$escapedMessageId']") as? HTMLElement
+        ?: return false
+
+    val containerRect = container.getBoundingClientRect()
+    val targetRect = target.getBoundingClientRect()
+    val targetScrollTop = (
+        container.scrollTop +
+            (targetRect.top - containerRect.top) -
+            ((container.clientHeight - targetRect.height) / 2.0)
+        ).coerceIn(0.0, (container.scrollHeight - container.clientHeight).toDouble())
+
+    val scrollOptions = js("({})")
+    scrollOptions.top = targetScrollTop
+    scrollOptions.behavior = "smooth"
+    container.asDynamic().scrollTo(scrollOptions)
+
+    val previousOutline = target.style.outline
+    val previousBoxShadow = target.style.boxShadow
+    target.style.outline = "2px solid ${SilkColors.primary}"
+    target.style.boxShadow = "0 0 0 4px rgba(201, 168, 108, 0.18)"
+    window.setTimeout({
+        target.style.outline = previousOutline
+        target.style.boxShadow = previousBoxShadow
+    }, 2200)
+    return true
+}
+
 @Suppress("UnusedPrivateMember")
 private fun parseFileNameFromContentDisposition(contentDisposition: String?): String? {
     if (contentDisposition.isNullOrBlank()) return null
@@ -6549,6 +6582,7 @@ Div({
     Div({
         classes(SilkStylesheet.aiMessageCard, "silk-ai-card")
         attr("id", "ai-msg-${message.id}")
+        attr("data-message-id", message.id)
         style {
             property("flex", "1")
             property("min-width", "0")
