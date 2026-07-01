@@ -1,5 +1,6 @@
 package com.silk.backend
 
+import com.silk.backend.auth.JwtProvider
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.models.KBAccessPolicy
@@ -80,6 +81,47 @@ class KnowledgeBaseRouteContractTest {
                     response.bodyAsText(),
                 )
                 assertEquals(listOf(topic.id), topics.map { it.id })
+            }
+        }
+    }
+
+    @Test
+    fun `kb routes accept jwt bearer tokens for topic listing and creation`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            manager.createTopic(name = "Existing Topic", project = "", userId = "owner")
+            val accessToken = JwtProvider.generateAccessToken("owner")
+
+            testApplication {
+                application { module() }
+
+                val listResponse = client.get("/api/kb/topics") {
+                    header("Authorization", "Bearer $accessToken")
+                }
+                assertEquals(HttpStatusCode.OK, listResponse.status)
+                val listedTopics = json.decodeFromString(
+                    ListSerializer(KBTopic.serializer()),
+                    listResponse.bodyAsText(),
+                )
+                assertEquals(listOf("Existing Topic"), listedTopics.map { it.name })
+
+                val createResponse = client.post("/api/kb/topics") {
+                    header("Authorization", "Bearer $accessToken")
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """
+                        {
+                          "userId":"owner",
+                          "name":"Created With Jwt",
+                          "project":"silk"
+                        }
+                        """.trimIndent()
+                    )
+                }
+                assertEquals(HttpStatusCode.Created, createResponse.status)
+                val created = json.decodeFromString(KBTopic.serializer(), createResponse.bodyAsText())
+                assertEquals("Created With Jwt", created.name)
+                assertEquals("silk", created.project)
             }
         }
     }
