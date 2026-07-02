@@ -141,6 +141,8 @@ class ChatServer(
     }
     // 直接调用模型的 Agent（简化流程：让模型自动使用 tool 能力）
     private val directModelAgent = com.silk.backend.ai.DirectModelAgent(sessionId = sessionName)
+    // 用户历史回忆 Agent（/recall 命令使用）
+    private val userHistoryAgent = com.silk.backend.ai.UserHistoryAgent()
     private var messagesSinceAgentResponse = 0
     private var isAgentJoined = false
 
@@ -363,11 +365,18 @@ class ChatServer(
             return
         }
 
+        // 🃏 卡片回复：路由到 CardReplyRouter，不触发 AI/Agent 流程
+        if (message.type == MessageType.CARD_REPLY) {
+            handleCardReply(message)
+            return
+        }
+
         // ✅ 添加调试日志
         logger.debug("📨 [broadcast] 收到消息: ID={}, User={}, IsTransient={}, Content={}...", message.id, message.userName, message.isTransient, message.content.take(30))
 
         // ✅ 防止重复处理：检查消息是否已经在历史中
-        if (!message.isTransient && messageHistory.any { it.id == message.id }) {
+        // 但 action="edit" 的消息故意要替换同 id 的消息，不应被视为重复
+        if (!message.isTransient && message.action != "edit" && messageHistory.any { it.id == message.id }) {
             logger.warn("⚠️ [broadcast] 忽略重复消息: {} from {}", message.id, message.userName)
             return
         }
@@ -727,6 +736,9 @@ class ChatServer(
                             activeAiJob = null
                         }
                     }
+                } else if (silkContent.startsWith("/recall ") || silkContent.startsWith("/recall\n")) {
+                    // /recall 命令处理
+                    handleRecallCommand(message, silkContent, isSilkPrivateChat)
                 } else {
 
                     // 普通问题 - 使用搜索 + AI 回复
@@ -2328,6 +2340,161 @@ class ChatServer(
 
     private fun generateId(): String {
         return System.currentTimeMillis().toString() + (0..999).random()
+    }
+
+    /**
+     * 发送消息到所有会话
+     */
+    private suspend fun sendMessageToAllSessions(message: Message) {
+        val messageJson = Json.encodeToString(message)
+        allSessions().forEach { session ->
+            try { session.send(Frame.Text(messageJson)) } catch (_: Exception) {}
+        }
+    }
+
+    /**
+     * 构建 Silk Agent 文本消息
+     */
+    private fun buildSilkTextMessage(
+        content: String,
+        isTransient: Boolean = false,
+        isIncremental: Boolean = false,
+    ): Message {
+        return Message(
+            id = generateId(),
+            userId = SilkAgent.AGENT_ID,
+            userName = SilkAgent.AGENT_NAME,
+            content = content,
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.TEXT,
+            isTransient = isTransient,
+            isIncremental = isIncremental
+        )
+    }
+
+    /**
+     * 🃏 卡片回复：持久化、广播并路由到 CardReplyRouter，不触发 AI/Agent 流程。
+     */
+    private suspend fun handleCardReply(message: Message) {
+        logger.info("🃏 [broadcast] 收到卡片回复: {} from {}", message.content.take(80), message.userName)
+        // 持久化卡片回复到历史
+        if (!message.isTransient) {
+            messageHistory.add(message)
+            historyManager.addMessage(sessionName, message)
+        }
+        // 广播给所有客户端
+        val messageJson = Json.encodeToString(message)
+        allSessions().forEach { session ->
+            try { session.send(Frame.Text(messageJson)) } catch (_: Exception) {}
+        }
+        // 路由到注册的 handler
+        try {
+            val reply = Json.decodeFromString<com.silk.backend.card.CardReplyPayload>(message.content)
+            val broadcastRef: suspend (Message) -> Unit = { msg -> broadcast(msg) }
+            val expired = com.silk.backend.card.CardReplyRouter.route(sessionName, reply, broadcastRef)
+            if (expired) {
+                // 兜底：卡片已过期，发系统提示并 disable 卡片
+                broadcast(Message(
+                    id = java.util.UUID.randomUUID().toString(),
+                    userId = "system",
+                    userName = "系统",
+                    content = "该卡片已过期，无法处理此操作。",
+                    timestamp = System.currentTimeMillis(),
+                    type = MessageType.SYSTEM,
+                    isTransient = false,
+                ))
+                broadcast(Message(
+                    id = reply.cardId,
+                    userId = "system",
+                    userName = "系统",
+                    content = com.silk.backend.card.CardBuilder("已过期", template = "red")
+                        .addText("该卡片已过期。")
+                        .buildDisabled(),
+                    timestamp = System.currentTimeMillis(),
+                    type = MessageType.CARD,
+                    action = "edit",
+                ))
+            }
+        } catch (e: Exception) {
+            logger.error("🃏 [broadcast] 卡片回复解析失败: {}", e.message)
+        }
+    }
+
+    /**
+     * /recall 命令：仅限 Silk 专属对话使用，触发历史会话搜索回复。
+     */
+    private suspend fun handleRecallCommand(message: Message, silkContent: String, isSilkPrivateChat: Boolean) {
+        // /recall 命令 - 仅限 Silk 专属对话使用（防止在群聊中泄露用户隐私）
+        if (!isSilkPrivateChat) {
+            sendMessageToAllSessions(buildSilkTextMessage("/recall 仅可在 Silk 专属对话中使用，请切换到专属对话后再试"))
+            return
+        }
+        val recallQuery = silkContent.removePrefix("/recall").trim()
+        logger.info("[/recall] userId={}, query={}...", message.userId, recallQuery.take(50))
+
+        activeAiJob?.cancel()
+        activeAiJob = CoroutineScope(Dispatchers.IO).launch {
+            try {
+                sendMessageToAllSessions(buildSilkTextMessage("正在搜索历史会话...", isTransient = true))
+                generateHistoryRecallResponse(recallQuery, message.userId)
+            } catch (e: CancellationException) {
+                logger.info("[/recall] 已被用户取消: {}", e.message)
+            } catch (e: Exception) {
+                logger.error("[/recall] 异常: {}", e.message, e)
+                sendAgentStatus("历史查询失败: ${e.message}")
+            } finally {
+                activeAiJob = null
+            }
+        }
+    }
+
+    /**
+     * 生成历史回忆响应（使用 UserHistoryAgent）
+     */
+    private suspend fun generateHistoryRecallResponse(query: String, userId: String) {
+        val callId = System.currentTimeMillis()
+        logger.info("[/recall-{}] userId={}, query={}...", callId, userId, query.take(50))
+
+        try {
+            val fullResponse = userHistoryAgent.queryWithHistory(
+                userId = userId,
+                userMessage = query,
+            ) { _, content, isComplete ->
+                sendHistoryRecallDelta(content, isComplete)
+            }
+
+            sendFinalHistoryRecallResponse(fullResponse)
+            logger.info("[/recall-{}] 完成, responseLen={}", callId, fullResponse.length)
+        } catch (e: CancellationException) {
+            logger.info("[/recall-{}] 已取消", callId)
+            throw e
+        } catch (e: Exception) {
+            logger.error("[/recall-{}] 失败: {}", callId, e.message)
+            sendMessageToAllSessions(buildSilkTextMessage("历史查询失败: ${e.message}"))
+        }
+    }
+
+    /**
+     * 发送历史回忆增量内容（流式）
+     */
+    private suspend fun sendHistoryRecallDelta(content: String, isComplete: Boolean) {
+        val message = buildSilkTextMessage(
+            content = content,
+            isTransient = !isComplete,
+            isIncremental = true,
+        )
+        sendMessageToAllSessions(message)
+    }
+
+    /**
+     * 发送历史回忆最终响应（持久化）
+     */
+    private suspend fun sendFinalHistoryRecallResponse(fullResponse: String) {
+        if (fullResponse.isBlank()) return
+        val finalMsg = buildSilkTextMessage(fullResponse)
+        messageHistory.add(finalMsg)
+        sendMessageToAllSessions(finalMsg)
+        historyManager.addMessage(sessionName, finalMsg)
     }
 }
 
