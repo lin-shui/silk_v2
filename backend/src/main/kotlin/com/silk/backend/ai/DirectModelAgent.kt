@@ -368,44 +368,64 @@ class DirectModelAgent(
 
         for (sessionName in accessibleSessionIds) {
             if (sessionName == sessionId) continue // 跳过当前群
-
-            val groupId = sessionName.removePrefix("group_")
-            val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
-            val groupDisplayName = group?.name ?: groupId
-            // 中文等 Unicode 字符直接保留在文件名中，仅过滤 Windows 不安全字符
-            val safeFileName = groupDisplayName.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80)
-            val targetFile = java.io.File(otherGroupsDir, "chat_history_${safeFileName}.md")
-
-            // 读取 chat_history.json
-            val historyFile = java.io.File(java.io.File(chatHistoryBaseDir, sessionName), "chat_history.json")
-            if (!historyFile.exists()) continue
-
-            try {
-                val content = historyFile.readText()
-                if (content.isBlank()) continue
-
-                val chatHistory = json.decodeFromString<com.silk.backend.models.ChatHistory>(content)
-                if (chatHistory.messages.isEmpty()) continue
-
-                // 每次都重新写入，确保包含最新消息
-                targetFile.parentFile.mkdirs()
-                targetFile.writeText(buildString {
-                    appendLine("# 群聊记录：$groupDisplayName")
-                    appendLine()
-                    for (msg in chatHistory.messages.takeLast(50)) {
-                        if (msg.messageType != "TEXT") continue
-                        val ts = java.time.Instant.ofEpochMilli(msg.timestamp)
-                            .atZone(java.time.ZoneId.systemDefault())
-                            .toLocalDateTime()
-                            .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
-                        appendLine("- **${msg.senderName}** ($ts): ${msg.content.replace('\n', ' ').take(500)}")
-                    }
-                })
-                logger.debug("已刷新其他群聊历史: {} ({} 条消息)", groupDisplayName, chatHistory.messages.size)
-            } catch (e: Exception) {
-                logger.warn("⚠️ 读取群聊历史失败 [{}]: {}", sessionName, e.message)
-            }
+            writeSingleGroupHistory(sessionName, otherGroupsDir, chatHistoryBaseDir, json)
         }
+    }
+
+    /**
+     * 写入单个群聊的历史记录
+     */
+    private fun writeSingleGroupHistory(
+        sessionName: String,
+        otherGroupsDir: java.io.File,
+        chatHistoryBaseDir: String,
+        json: kotlinx.serialization.json.Json
+    ) {
+        val groupId = sessionName.removePrefix("group_")
+        val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
+        val groupDisplayName = group?.name ?: groupId
+
+        val safeFileName = groupDisplayName.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(80)
+        val targetFile = java.io.File(otherGroupsDir, "chat_history_${safeFileName}.md")
+
+        val historyFile = java.io.File(java.io.File(chatHistoryBaseDir, sessionName), "chat_history.json")
+        if (!historyFile.exists()) return
+
+        try {
+            val content = historyFile.readText()
+            if (content.isBlank()) return
+
+            val chatHistory = json.decodeFromString<com.silk.backend.models.ChatHistory>(content)
+            if (chatHistory.messages.isEmpty()) return
+
+            writeGroupHistoryToFile(targetFile, groupDisplayName, chatHistory)
+            logger.debug("已刷新其他群聊历史: {} ({} 条消息)", groupDisplayName, chatHistory.messages.size)
+        } catch (e: Exception) {
+            logger.warn("⚠️ 读取群聊历史失败 [{}]: {}", sessionName, e.message)
+        }
+    }
+
+    /**
+     * 将群聊历史写入文件
+     */
+    private fun writeGroupHistoryToFile(
+        targetFile: java.io.File,
+        groupDisplayName: String,
+        chatHistory: com.silk.backend.models.ChatHistory
+    ) {
+        targetFile.parentFile.mkdirs()
+        targetFile.writeText(buildString {
+            appendLine("# 群聊记录：$groupDisplayName")
+            appendLine()
+            for (msg in chatHistory.messages.takeLast(50)) {
+                if (msg.messageType != "TEXT") continue
+                val ts = java.time.Instant.ofEpochMilli(msg.timestamp)
+                    .atZone(java.time.ZoneId.systemDefault())
+                    .toLocalDateTime()
+                    .format(java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm"))
+                appendLine("- **${msg.senderName}** ($ts): ${msg.content.replace('\n', ' ').take(500)}")
+            }
+        })
     }
 
     private fun syncExtractedFilesToWorkspace() {
@@ -571,6 +591,7 @@ class DirectModelAgent(
         return cleanContent to refs
     }
 
+    @Suppress("CyclomaticComplexMethod")
     private fun finalizeAgentResponse(content: String): FinalCitationResult {
         // 从正文末尾提取 "Sources:" / "参考来源:" 节，避免前端重复渲染
         val (cleanedContent, sourcesRefs) = extractSourcesSection(content)
@@ -636,7 +657,24 @@ class DirectModelAgent(
 
     private fun normalizeCitedReferences(content: String): FinalCitationResult {
         val citedPattern = Regex("\\[(citation|available):(\\d+)\\]")
-        val citedKeys = citedPattern.findAll(content)
+        val citedKeys = extractCitedKeys(content, citedPattern)
+
+        if (citedKeys.isEmpty()) {
+            return handleNoCitationsCase(content)
+        }
+
+        val citedRefs = findCitedReferences(citedKeys)
+        val (reindexMap, newRefs) = buildReindexedReferences(citedKeys, citedRefs)
+        val newContent = reindexCitationsInContent(content, citedPattern, reindexMap)
+
+        return FinalCitationResult(newContent, newRefs)
+    }
+
+    /**
+     * 提取内容中的所有引用标记键
+     */
+    private fun extractCitedKeys(content: String, citedPattern: Regex): List<String> {
+        return citedPattern.findAll(content)
             .mapNotNull { match ->
                 val kind = match.groupValues[1]
                 val idx = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
@@ -644,21 +682,36 @@ class DirectModelAgent(
             }
             .distinct()
             .toList()
+    }
 
-        if (citedKeys.isEmpty()) {
-            // 文本中没有引用标记但有搜索结果的，仍然返回 references 供前端展示来源列表
-            if (currentResponseReferences.isNotEmpty()) {
-                return FinalCitationResult(content, currentResponseReferences.toList())
-            }
-            return FinalCitationResult(content, emptyList())
+    /**
+     * 处理没有引用标记的情况
+     */
+    private fun handleNoCitationsCase(content: String): FinalCitationResult {
+        if (currentResponseReferences.isNotEmpty()) {
+            return FinalCitationResult(content, currentResponseReferences.toList())
         }
+        return FinalCitationResult(content, emptyList())
+    }
 
-        val citedRefs = citedKeys.mapNotNull { key ->
+    /**
+     * 查找被引用的引用对象
+     */
+    private fun findCitedReferences(citedKeys: List<String>): List<com.silk.backend.models.MessageReference> {
+        return citedKeys.mapNotNull { key ->
             val kind = key.substringBefore(":")
             val idx = key.substringAfter(":").toIntOrNull() ?: return@mapNotNull null
             currentResponseReferences.find { it.kind == kind && it.index == idx }
         }
+    }
 
+    /**
+     * 构建重新索引后的引用列表
+     */
+    private fun buildReindexedReferences(
+        citedKeys: List<String>,
+        citedRefs: List<com.silk.backend.models.MessageReference>
+    ): Pair<Map<String, Int>, List<com.silk.backend.models.MessageReference>> {
         val reindexMap = mutableMapOf<String, Int>()
         val newRefs = mutableListOf<com.silk.backend.models.MessageReference>()
         var citationCounter = 0
@@ -666,44 +719,50 @@ class DirectModelAgent(
 
         // 先处理有元数据的引用
         for (ref in citedRefs) {
-            val newIndex = if (ref.kind == "citation") {
-                ++citationCounter
-            } else {
-                ++availableCounter
-            }
+            val newIndex = if (ref.kind == "citation") ++citationCounter else ++availableCounter
             reindexMap["${ref.kind}:${ref.index}"] = newIndex
             newRefs.add(ref.copy(index = newIndex))
         }
 
-        // 对文本中有标记但无对应元数据的（如 Claude CLI 输出的 [citation:N]），创建占位引用
+        // 对文本中有标记但无对应元数据的，创建占位引用
         for (key in citedKeys) {
             if (reindexMap.containsKey(key)) continue
             val kind = key.substringBefore(":")
             val idx = key.substringAfter(":").toIntOrNull() ?: continue
-            val newIndex = if (kind == "citation" || kind == "available") {
-                if (kind == "citation") ++citationCounter else ++availableCounter
-            } else continue
+            if (kind != "citation" && kind != "available") continue
+
+            val newIndex = if (kind == "citation") ++citationCounter else ++availableCounter
             reindexMap[key] = newIndex
-            newRefs.add(
-                com.silk.backend.models.MessageReference(
-                    kind = kind,
-                    index = newIndex,
-                    title = "${if (kind == "citation") "来源" else "资料"} $idx",
-                    snippet = null,
-                    url = null,
-                    path = null
-                )
-            )
+            newRefs.add(createPlaceholderReference(kind, newIndex, idx))
         }
 
-        val newContent = citedPattern.replace(content) { match ->
+        return Pair(reindexMap, newRefs)
+    }
+
+    /**
+     * 创建占位引用
+     */
+    private fun createPlaceholderReference(kind: String, newIndex: Int, oldIdx: Int): com.silk.backend.models.MessageReference {
+        return com.silk.backend.models.MessageReference(
+            kind = kind,
+            index = newIndex,
+            title = "${if (kind == "citation") "来源" else "资料"} $oldIdx",
+            snippet = null,
+            url = null,
+            path = null
+        )
+    }
+
+    /**
+     * 在内容中重新索引引用标记
+     */
+    private fun reindexCitationsInContent(content: String, citedPattern: Regex, reindexMap: Map<String, Int>): String {
+        return citedPattern.replace(content) { match ->
             val kind = match.groupValues[1]
             val oldIdx = match.groupValues[2].toInt()
             val newIdx = reindexMap["$kind:$oldIdx"] ?: oldIdx
             "[$kind:$newIdx]"
         }
-
-        return FinalCitationResult(newContent, newRefs)
     }
 
     // ── 测试辅助 ──────────────────────────────────────────────────────
