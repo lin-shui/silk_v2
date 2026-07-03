@@ -401,7 +401,11 @@ private suspend fun handleFileList(call: ApplicationCall) {
     }
 
     val files = uploadsDir.listFiles()
-        ?.filter { it.name != "processed_urls.txt" }  // 排除 URL 清单文件
+        ?.filter { file ->
+            file.name != "processed_urls.txt" &&     // 排除 URL 清单文件
+            file.name != "file_registry.json" &&     // 排除文件预处理注册表
+            !file.name.endsWith(".extracted.md")     // 排除预处理生成的提取文件
+        }
         ?.map { file ->
             FileInfo(
                 fileId = file.name,
