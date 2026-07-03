@@ -226,10 +226,10 @@ suspend fun broadcastSystemStatus(groupId: String, status: String) {
  * 广播文件提取内容到指定群组 - 供 FileRoutes 使用
  * 预处理完成后，将 OCR/Vision 提取结果发送到聊天中
  */
-suspend fun broadcastExtractedContent(groupId: String, content: String, label: String, downloadUrl: String = "") {
+suspend fun broadcastExtractedContent(groupId: String, content: String, label: String) {
     val chatServer = groupChatServers[groupId]
     if (chatServer != null) {
-        chatServer.broadcastExtractedContent(content, label, downloadUrl)
+        chatServer.broadcastExtractedContent(content, label)
     } else {
         logger.warn("⚠️ [broadcastExtractedContent] 群组 {} 不存在", groupId)
     }

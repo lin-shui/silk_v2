@@ -175,8 +175,8 @@ class ChatServer(
                     }
                 }
                 logger.debug("📋 已从缓存恢复 {} 个已处理的URL", processedUrls.size)
-            } catch (e: Exception) {
-                logger.warn("⚠️ 读取URL缓存失败: {}", e.message)
+            } catch (e: java.io.IOException) {
+                logger.warn("⚠️ 读取URL缓存失败: {}", e.message, e)
             }
         }
 
@@ -193,23 +193,24 @@ class ChatServer(
                         timestamp = entry.timestamp,
                         type = try {
                             MessageType.valueOf(entry.messageType)
-                        } catch (e: Exception) {
+                        } catch (e: IllegalArgumentException) {
+                            logger.warn("⚠️ 无效的消息类型: {}, 使用默认值 TEXT", entry.messageType, e)
                             MessageType.TEXT
                         },
                         references = entry.references,
                         contentBlocks = entry.contentBlocksJson?.let {
                             try {
                                 historyJson.decodeFromString<List<com.silk.backend.ai.ContentBlock>>(it)
-                            } catch (e: Exception) {
-                                logger.warn("⚠️ 反序列化 contentBlocks 失败: {}", e.message)
+                            } catch (e: kotlinx.serialization.SerializationException) {
+                                logger.warn("⚠️ 反序列化 contentBlocks 失败: {}", e.message, e)
                                 null
                             }
                         },
                         interactiveOptions = entry.interactiveOptionsJson?.let {
                             try {
                                 historyJson.decodeFromString<List<InteractiveOption>>(it)
-                            } catch (e: Exception) {
-                                logger.warn("⚠️ 反序列化 interactiveOptions 失败: {}", e.message)
+                            } catch (e: kotlinx.serialization.SerializationException) {
+                                logger.warn("⚠️ 反序列化 interactiveOptions 失败: {}", e.message, e)
                                 null
                             }
                         },
@@ -218,8 +219,10 @@ class ChatServer(
                 }
                 logger.debug("📜 已从持久化加载 {} 条历史消息到内存 (session: {})", messageHistory.size, sessionName)
             }
-        } catch (e: Exception) {
-            logger.warn("⚠️ 加载历史消息到内存失败: {}", e.message)
+        } catch (e: java.io.IOException) {
+            logger.warn("⚠️ 加载历史消息到内存失败(IO错误): {}", e.message, e)
+        } catch (e: kotlinx.serialization.SerializationException) {
+            logger.warn("⚠️ 加载历史消息到内存失败(格式错误): {}", e.message, e)
         }
     }
 
@@ -250,8 +253,8 @@ class ChatServer(
     private fun saveProcessedUrl(url: String) {
         try {
             processedUrlsFile.appendText("$url\n")
-        } catch (e: Exception) {
-            logger.warn("⚠️ 保存URL缓存失败: {}", e.message)
+        } catch (e: java.io.IOException) {
+            logger.warn("⚠️ 保存URL缓存失败: {}", e.message, e)
         }
     }
 
@@ -358,7 +361,7 @@ class ChatServer(
                 if (members.isNotEmpty()) {
                     return members.map { it.userId }
                 }
-            } catch (e: Exception) {
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                 logger.warn("⚠️ 获取群组成员失败，回退到连接列表: {}", e.message)
             }
         }
@@ -713,7 +716,7 @@ class ChatServer(
         val downloadUrl = "/api/files/download/${sessionName.removePrefix("group_")}/${savedFile.name}"
         logger.info("📸 已保存 vision 图片: {} -> {}", savedFile.absolutePath, downloadUrl)
 
-        launchVisionProcessing(savedFile, base64Data, userText.trim(), downloadUrl, message.userId)
+        launchVisionProcessing(savedFile, userText.trim())
         return true
     }
 
@@ -751,15 +754,12 @@ class ChatServer(
      */
     private fun launchVisionProcessing(
         savedFile: java.io.File,
-        base64Data: String,
-        userText: String,
-        downloadUrl: String,
-        userId: String
+        userText: String
     ) {
         activeAiJob?.cancel()
         activeAiJob = CoroutineScope(Dispatchers.IO).launch {
             runChatCatching {
-                handleVisionImageAndText(savedFile, base64Data, userText, downloadUrl, userId)
+                handleVisionImageAndText(savedFile, userText)
             }.onFailure { e ->
                 when (e) {
                     is CancellationException -> logger.info("🛑 Vision 生成已被取消")
@@ -1119,7 +1119,7 @@ class ChatServer(
                 } else {
                     broadcastSystemStatus("⚠️ 无法下载: $url")
                 }
-            } catch (e: Exception) {
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                 logger.error("❌ 处理URL失败: {} - {}", url, e.message)
                 broadcastSystemStatus("❌ 处理链接失败: $url")
             }
@@ -1158,7 +1158,7 @@ class ChatServer(
     /**
      * 广播系统状态消息（灰色显示）- 公开方法，供其他模块调用
      */
-    suspend fun broadcastExtractedContent(content: String, label: String, downloadUrl: String = "") {
+    suspend fun broadcastExtractedContent(content: String, label: String) {
         logger.debug("📄 [提取内容广播] {} ({} 字符)", label, content.length)
         // 文件消息已有图片预览，提取内容不再重复加图片
         val combinedContent = content
@@ -1198,7 +1198,7 @@ class ChatServer(
             try {
                 session.send(Frame.Text(messageJson))
                 logger.info("   ✅ 状态已发送到一个连接")
-            } catch (e: Exception) {
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                 logger.error("   ❌ 状态发送失败: {}", e.message)
             }
         }
@@ -1298,7 +1298,6 @@ class ChatServer(
     }
 
     suspend fun broadcastCombinedVisionResult(
-        pendingImg: PendingImageState,
         text: String,
         callId: Long
     ) {
@@ -1334,7 +1333,6 @@ class ChatServer(
     suspend fun forwardImageToCcConnect(
         imageFile: java.io.File,
         userText: String,
-        downloadUrl: String,
         userId: String,
         userName: String,
         ccGroupId: String
@@ -1346,7 +1344,7 @@ class ChatServer(
         }
         if (!com.silk.backend.ccconnect.CcConnectRegistry.isConnected(ccGroupId)) {
             logger.warn("📸 [CcImage] cc-connect not connected, falling back to Silk vision")
-            handleVisionImageAndText(imageFile, "", userText, downloadUrl, userId)
+            handleVisionImageAndText(imageFile, userText)
             return
         }
 
@@ -1397,20 +1395,17 @@ class ChatServer(
                 com.silk.backend.ccconnect.CcConnectRegistry.forwardToAdapter(ccGroupId, userMsg)
             }
             logger.info("📸 [CcImage] image forwarded to cc-connect: {}", imageFile.name)
-        } catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error("📸 [CcImage] failed to forward image to cc-connect: {}", e.message, e)
             // Fallback to Silk vision on error
-            handleVisionImageAndText(imageFile, "", userText, downloadUrl, userId)
+            handleVisionImageAndText(imageFile, userText)
         }
     }
 
     @Suppress("CyclomaticComplexMethod")
     suspend fun handleVisionImageAndText(
         imageFile: java.io.File,
-        base64Data: String,
-        userText: String,
-        downloadUrl: String,
-        userId: String
+        userText: String
     ) {
         val callId = System.currentTimeMillis()
         logger.info("🤖 [VisionWS-{}] 开始处理 WebSocket 内嵌图片", callId)
@@ -1551,14 +1546,12 @@ class ChatServer(
 
             sendAgentStatus("CLEAR_STATUS")
 
-            // 用 PendingImageState 构造临时对象来复用 broadcastCombinedVisionResult
-            val tmpState = PendingImageState(userId, "", imageFile.name, imageFile, downloadUrl)
-            broadcastCombinedVisionResult(tmpState, visionText, callId)
+            broadcastCombinedVisionResult(visionText, callId)
             logger.info("✅ [VisionWS-{}] Vision 处理完成", callId)
 
         } catch (e: java.util.concurrent.CancellationException) {
             throw e
-        } catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error("❌ [VisionWS-{}] 处理失败: {}", callId, e.message, e)
             sendAgentStatus("❌ 图片分析失败: ${e.message}")
         }
@@ -1650,13 +1643,13 @@ class ChatServer(
                         ?.get("text")?.jsonPrimitive?.content ?: ""
 
                     sendAgentStatus("CLEAR_STATUS")
-                    broadcastCombinedVisionResult(pendingImg, text.ifEmpty { "抱歉，未能分析图片内容" }, callId)
+                    broadcastCombinedVisionResult(text.ifEmpty { "抱歉，未能分析图片内容" }, callId)
                 } else {
                     val errBody = response.body().take(200)
                     logger.warn("⚠️ [CombinedVision-{}] Vision API 返回 {}: {}", callId, response.statusCode(), errBody)
                     val errText = "⚠️ Vision API 返回 ${response.statusCode()}，请检查模型配置。\n\n**错误信息**: $errBody"
                     // 仍然广播带图片预览的 SYSTEM 消息，即使 API 失败
-                    broadcastCombinedVisionResult(pendingImg, errText, callId)
+                    broadcastCombinedVisionResult(errText, callId)
                 }
             } else if (com.silk.backend.ai.AIConfig.VISION_BASE_URL.isNotBlank()) {
                 // OpenAI 兼容 API
@@ -1711,25 +1704,25 @@ class ChatServer(
                         ?.get("content")?.jsonPrimitive?.content ?: ""
 
                     sendAgentStatus("CLEAR_STATUS")
-                    broadcastCombinedVisionResult(pendingImg, text.ifEmpty { "抱歉，未能分析图片内容" }, callId)
+                    broadcastCombinedVisionResult(text.ifEmpty { "抱歉，未能分析图片内容" }, callId)
                 } else {
                     val errBody = response.body().take(200)
                     logger.warn("⚠️ [CombinedVision-{}] Vision API 返回 {}: {}", callId, response.statusCode(), errBody)
                     val errText = "⚠️ Vision API 返回 ${response.statusCode()}，请检查模型配置。\n\n**错误信息**: $errBody"
-                    broadcastCombinedVisionResult(pendingImg, errText, callId)
+                    broadcastCombinedVisionResult(errText, callId)
                 }
             } else {
                 // 没有 vision 模型配置，fallback 到文字模型
                 logger.warn("⚠️ [CombinedVision-{}] 未配置 vision 模型，回退到文字模型", callId)
                 sendAgentStatus("⚠️ 未配置 Vision 模型，使用文字模型回答")
-                broadcastCombinedVisionResult(pendingImg, "⚠️ 未配置 Vision 模型。\n\n" + userText.ifBlank { "请用中文详细描述这张图片的内容" }, callId)
+                broadcastCombinedVisionResult("⚠️ 未配置 Vision 模型。\n\n" + userText.ifBlank { "请用中文详细描述这张图片的内容" }, callId)
             }
         } catch (e: java.util.concurrent.CancellationException) {
             throw e
-        } catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error("❌ [CombinedVision-{}] 处理失败: {}", callId, e.message, e)
             val errText = "❌ 图片分析失败: ${e.message}\n\n已使用文字模式回答，请稍后重试。"
-            broadcastCombinedVisionResult(pendingImg, errText, callId)
+            broadcastCombinedVisionResult(errText, callId)
             // 额外用文字模型再试一次
             try { generateIntelligentResponse(userText, userId) } catch (_: Exception) {}
         }
@@ -1868,7 +1861,6 @@ class ChatServer(
             val response = directModelAgent.processInput(
                 userInput = kbContext.resolvedUserInput,
                 systemPrompt = systemPrompt,
-                requestUserId = userId,
                 accessibleSessionIds = accessibleSessionIds,
                 availableReferences = kbContext.availableReferences,
                 additionalContext = kbContext.promptBlock,
@@ -1912,7 +1904,7 @@ class ChatServer(
                             allSessions().forEach { session ->
                                 try {
                                     session.send(Frame.Text(messageJson))
-                                } catch (e: Exception) {
+                                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                                     logger.error("📤 [流式-{}] 发送失败: {}", callId, e.message)
                                 }
                             }
@@ -1942,7 +1934,7 @@ class ChatServer(
                         allSessions().forEach { session ->
                             try {
                                 session.send(Frame.Text(messageJson))
-                            } catch (e: Exception) {
+                            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                                 logger.error("📤 [blocks_state-{}] 发送失败: {}", callId, e.message)
                             }
                         }
@@ -1994,7 +1986,7 @@ class ChatServer(
                         try {
                             session.send(Frame.Text(messageJson))
                             logger.info("   ✅ [智能回答-{}] 已发送到一个连接", callId)
-                        } catch (e: Exception) {
+                        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                             e.printStackTrace()
                         }
                     }
@@ -2011,7 +2003,7 @@ class ChatServer(
                 CoroutineScope(Dispatchers.IO).launch {
                     try {
                         GroupTodoExtractionService.refreshTodosForUser(userId)
-                    } catch (e: Exception) {
+                    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                         logger.warn("⚠️ 专属对话待办提取失败: {}", e.message)
                     }
                 }
@@ -2020,9 +2012,8 @@ class ChatServer(
         } catch (e: CancellationException) {
             logger.info("🛑 [generateIntelligentResponse-{}] 生成被取消", callId)
             throw e
-        } catch (e: Exception) {
-            logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败: {}", callId, e.message)
-            e.printStackTrace()
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            logger.error("❌ [generateIntelligentResponse-{}] 生成AI回答失败: {}", callId, e.message, e)
 
             // 发送错误消息
             val errorMessage = Message(
@@ -2040,241 +2031,8 @@ class ChatServer(
             allSessions().forEach { session ->
                 try {
                     session.send(Frame.Text(messageJson))
-                } catch (ex: Exception) {
+                } catch (@Suppress("TooGenericExceptionCaught") ex: Exception) {
                     ex.printStackTrace()
-                }
-            }
-        }
-    }
-
-    /**
-     * 执行智能诊断（根据历史决定完整诊断或快速更新）
-     */
-    private suspend fun executeSmartDiagnosis() {
-        // 检查是否有之前的诊断结果
-        val hasPreviousDiagnosis = checkPreviousDiagnosis()
-
-        if (hasPreviousDiagnosis) {
-            logger.debug("📋 发现历史诊断，执行快速更新流程")
-            // 执行快速诊断更新
-            executeQuickDiagnosisUpdate()
-        } else {
-            logger.debug("📋 无历史诊断，执行完整11步诊断")
-            // 执行完整诊断
-            executeStepwiseAITask()
-        }
-    }
-
-    /**
-     * 检查是否有之前的诊断结果
-     */
-    private fun checkPreviousDiagnosis(): Boolean {
-        return try {
-            logger.debug("🔍 检查历史诊断文件:")
-            logger.debug("   sessionName: {}", sessionName)
-
-            // 尝试多个可能的路径（因为工作目录可能不同）
-            val possiblePaths = listOf(
-                "chat_history/$sessionName/last_diagnosis.json",
-                "backend/chat_history/$sessionName/last_diagnosis.json",
-                "/Users/mac/Documents/Silk/backend/chat_history/$sessionName/last_diagnosis.json"
-            )
-
-            possiblePaths.forEachIndexed { index, path ->
-                val testFile = java.io.File(path)
-                logger.debug("   路径{}: {}", index + 1, testFile.absolutePath)
-                logger.debug("     存在: {}", testFile.exists())
-                if (testFile.exists()) {
-                    logger.debug("     大小: {} bytes", testFile.length())
-                }
-            }
-
-            val file = possiblePaths
-                .map { java.io.File(it) }
-                .firstOrNull { it.exists() && it.length() > 0 }
-
-            if (file != null) {
-                logger.info("✅ 找到历史诊断文件: {}", file.absolutePath)
-                logger.debug("   文件大小: {} bytes", file.length())
-                logger.debug("   将执行快速更新")
-                true
-            } else {
-                logger.debug("ℹ️ 无历史诊断文件")
-                logger.debug("   将执行完整11步诊断")
-                false
-            }
-        } catch (e: Exception) {
-            logger.warn("⚠️ 检查历史诊断失败: {}", e.message)
-            e.printStackTrace()
-            false
-        }
-    }
-
-    /**
-     * 执行快速诊断更新（基于之前的诊断）
-     */
-    private suspend fun executeQuickDiagnosisUpdate() {
-        val chatHistory = historyManager.loadChatHistory(sessionName)
-        val historyEntries = chatHistory?.messages ?: emptyList()
-
-        val latestUserName = historyEntries
-            .filter { !AgentRuntime.isAgentUserId(it.senderId) }
-            .lastOrNull()?.senderName ?: "用户"
-
-        val groupDisplayName = getGroupDisplayName(sessionName)
-
-        // 定义回调
-        val callback: suspend (String, String, Int?, Int?) -> Unit = { stepType, content, currentStep, totalSteps ->
-            val agentMessage = Message(
-                id = generateId(),
-                userId = SilkAgent.AGENT_ID,
-                userName = SilkAgent.AGENT_NAME,
-                content = content,
-                timestamp = System.currentTimeMillis(),
-                type = MessageType.TEXT,
-                isTransient = stepType != "PDF报告",
-                currentStep = currentStep,
-                totalSteps = totalSteps,
-                isIncremental = stepType == "streaming_incremental"
-            )
-
-            if (!agentMessage.isTransient) {
-                messageHistory.add(agentMessage)
-                historyManager.addMessage(sessionName, agentMessage)
-            }
-
-            val messageJson = Json.encodeToString(agentMessage)
-            allSessions().forEach { session ->
-                try {
-                    session.send(Frame.Text(messageJson))
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-
-            kotlinx.coroutines.delay(300)
-        }
-
-        // 执行快速诊断更新
-        val message = historyEntries
-            .filter { !AgentRuntime.isAgentUserId(it.senderId) }
-            .lastOrNull()?.content ?: ""
-
-        silkAgent.executeDoctorDiagnosisUpdate(
-            chatHistory = historyEntries,
-            doctorMessage = message,
-            callback = callback,
-            userName = latestUserName,
-            groupDisplayName = groupDisplayName
-        )
-    }
-
-    /**
-     * 执行多步骤 AI 任务
-     * 类似于 MoxiTreat 的 stepwise_diagnosis
-     */
-    @Suppress("CyclomaticComplexMethod")
-    private suspend fun executeStepwiseAITask() {
-        // 从持久化的历史中加载聊天记录
-        val chatHistory = historyManager.loadChatHistory(sessionName)
-        val historyEntries = chatHistory?.messages ?: emptyList()
-
-        // 提取最新的用户名（用于 PDF 文件命名）
-        val latestUserName = historyEntries
-            .filter { !AgentRuntime.isAgentUserId(it.senderId) }
-            .lastOrNull()?.senderName ?: "用户"
-
-        // 获取群组显示名称（用于PDF标题和文件名）
-        val groupDisplayName = getGroupDisplayName(sessionName)
-
-        // 获取Host用户ID（用于区分医生和病人）
-        val hostId = getGroupHostId(sessionName)
-
-        // ✅ 新的消息策略：
-        // - TODO list和步骤结果作为独立消息保留（isTransient=false）
-        // - streaming过程使用临时消息实时显示（isTransient=true）
-        // - 通过category区分显示亮度
-        val callback: suspend (String, String, Int?, Int?) -> Unit = { stepType, content, currentStep, totalSteps ->
-
-            // ✅ 判断是否为临时消息
-            val isTransient = when (stepType) {
-                "todo_list" -> false          // TODO列表保留
-                "step_complete" -> false      // ✅ 步骤完成结果保留
-                "总结报告" -> false            // 总结报告保留
-                "PDF报告" -> false             // PDF报告保留
-                "streaming_incremental" -> true  // ✅ 流式输出是临时的（实时显示）
-                else -> true                  // 其他都是临时的
-            }
-
-            // ✅ 根据stepType设置消息类别
-            val category = when (stepType) {
-                "todo_list" -> MessageCategory.TODO_LIST          // TODO列表（低亮度）
-                "step_complete" -> MessageCategory.STEP_PROCESS   // 步骤结果（低亮度，可转发）
-                "streaming_incremental" -> MessageCategory.STEP_PROCESS  // 流式输出（低亮度）
-                "总结报告" -> MessageCategory.FINAL_REPORT        // 最终报告（高亮度）
-                "PDF报告" -> MessageCategory.FINAL_REPORT         // PDF报告（高亮度）
-                else -> MessageCategory.STEP_PROCESS              // 其他（低亮度）
-            }
-
-            // ✅ 判断是否为增量消息
-            val isIncremental = stepType == "streaming_incremental"
-
-            val agentMessage = Message(
-                id = generateId(),
-                userId = SilkAgent.AGENT_ID,
-                userName = SilkAgent.AGENT_NAME,
-                content = content,
-                timestamp = System.currentTimeMillis(),
-                type = MessageType.TEXT,
-                isTransient = isTransient,
-                currentStep = currentStep,
-                totalSteps = totalSteps,
-                isIncremental = isIncremental,
-                category = category
-            )
-
-            // 所有非临时消息都保存到历史
-            if (!isTransient) {
-                messageHistory.add(agentMessage)
-                historyManager.addMessage(sessionName, agentMessage)
-            }
-
-            // 直接发送给所有连接的客户端（临时和普通消息都发送）
-            val messageJson = Json.encodeToString(agentMessage)
-            allSessions().forEach { session ->
-                try {
-                    session.send(Frame.Text(messageJson))
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-
-            // 短暂延迟，让消息按顺序显示
-            kotlinx.coroutines.delay(300)
-        }
-
-        // 执行多步骤任务（传递hostId以区分医生和病人）
-        try {
-            silkAgent.executeStepwiseTask(historyEntries, callback, latestUserName, groupDisplayName, hostId)
-        } catch (e: Exception) {
-            val errorMessage = Message(
-                id = generateId(),
-                userId = SilkAgent.AGENT_ID,
-                userName = SilkAgent.AGENT_NAME,
-                content = "❌ AI Agent 执行出错：${e.message}",
-                timestamp = System.currentTimeMillis(),
-                type = MessageType.SYSTEM
-            )
-
-            messageHistory.add(errorMessage)
-            historyManager.addMessage(sessionName, errorMessage)
-
-            val messageJson = Json.encodeToString(errorMessage)
-            allSessions().forEach { session ->
-                try {
-                    session.send(Frame.Text(messageJson))
-                } catch (e: Exception) {
-                    e.printStackTrace()
                 }
             }
         }
@@ -2289,28 +2047,6 @@ class ChatServer(
     /** 获取所有活跃的 WebSocket 会话（展平多连接） */
     private fun allSessions(): List<WebSocketSession> =
         connections.values.flatMap { it }
-
-    /**
-     * 检查用户是否是群组的Host（医生角色）
-     */
-    private fun checkIfUserIsHost(sessionName: String, userId: String): Boolean {
-        return if (sessionName.startsWith("group_")) {
-            val groupId = sessionName.removePrefix("group_")
-            try {
-                val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
-                val isHost = group?.hostId == userId
-                if (isHost) {
-                    logger.debug("🩺 确认用户是Host（医生）: {}", userId)
-                }
-                isHost
-            } catch (e: Exception) {
-                logger.warn("⚠️ 检查Host角色失败: {}", e.message)
-                false
-            }
-        } else {
-            false
-        }
-    }
 
     /**
      * 执行医生诊断更新（Host的消息）
@@ -2341,7 +2077,7 @@ class ChatServer(
             allSessions().forEach { session ->
                 try {
                     session.send(Frame.Text(messageJson))
-                } catch (e: Exception) {
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                     e.printStackTrace()
                 }
             }
@@ -2370,9 +2106,8 @@ class ChatServer(
                 userName = userName,
                 groupDisplayName = groupDisplayName
             )
-        } catch (e: Exception) {
-            logger.error("❌ 医生诊断更新失败: {}", e.message)
-            e.printStackTrace()
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            logger.error("❌ 医生诊断更新失败: {}", e.message, e)
         }
     }
 
@@ -2385,7 +2120,7 @@ class ChatServer(
             try {
                 val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
                 group?.hostId
-            } catch (e: Exception) {
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                 logger.warn("⚠️ 获取Host ID失败: {}", e.message)
                 null
             }
@@ -2414,9 +2149,8 @@ class ChatServer(
                     logger.warn("⚠️ 未找到群组：{}", groupId)
                     null
                 }
-            } catch (e: Exception) {
-                logger.warn("⚠️ 查询群组名称失败: {}", e.message)
-                e.printStackTrace()
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                logger.warn("⚠️ 查询群组名称失败: {}", e.message, e)
                 null
             }
         } else {
@@ -2477,7 +2211,7 @@ class ChatServer(
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     WeaviateClient.getInstance().deleteChatMessages(sessionName, allIds)
-                } catch (e: Exception) {
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                     logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败: {}", e.message)
                 }
             }
@@ -2492,7 +2226,7 @@ class ChatServer(
             CoroutineScope(Dispatchers.IO).launch {
                 try {
                     WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
-                } catch (e: Exception) {
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                     logger.warn("⚠️ [recallMessage] Weaviate 删除向量失败: {}", e.message)
                 }
             }
@@ -2539,7 +2273,7 @@ class ChatServer(
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
-            } catch (e: Exception) {
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                 logger.warn("⚠️ [deleteMessage] Weaviate 删除向量失败: {}", e.message)
             }
         }
@@ -2567,7 +2301,7 @@ class ChatServer(
         allSessions().forEach { session ->
             try {
                 session.send(Frame.Text(notificationJson))
-            } catch (e: Exception) {
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                 logger.error("❌ [broadcastRecallNotification] 发送失败: {}", e.message)
             }
         }
@@ -2651,7 +2385,7 @@ class ChatServer(
                     action = "edit",
                 ))
             }
-        } catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error("🃏 [broadcast] 卡片回复解析失败: {}", e.message)
         }
     }
@@ -2675,7 +2409,7 @@ class ChatServer(
                 generateHistoryRecallResponse(recallQuery, message.userId)
             } catch (e: CancellationException) {
                 logger.info("[/recall] 已被用户取消: {}", e.message)
-            } catch (e: Exception) {
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                 logger.error("[/recall] 异常: {}", e.message, e)
                 sendAgentStatus("历史查询失败: ${e.message}")
             } finally {
@@ -2704,7 +2438,7 @@ class ChatServer(
         } catch (e: CancellationException) {
             logger.info("[/recall-{}] 已取消", callId)
             throw e
-        } catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error("[/recall-{}] 失败: {}", callId, e.message)
             sendMessageToAllSessions(buildSilkTextMessage("历史查询失败: ${e.message}"))
         }

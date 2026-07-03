@@ -118,7 +118,6 @@ class DirectModelAgent(
     suspend fun processInput(
         userInput: String,
         systemPrompt: String? = null,
-        requestUserId: String = "",
         accessibleSessionIds: List<String> = listOf(sessionId),
         availableReferences: List<AvailableReferenceSeed> = emptyList(),
         additionalContext: String? = null,
@@ -328,7 +327,7 @@ class DirectModelAgent(
             // 优先使用 Claude CLI（内置 web_search、Grep、Read、glob 工具，原生支持 [citation:N] 引用）
             try {
                 chatViaClaudeProcess(toolContext, callback)
-            } catch (e: Exception) {
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
                 logger.warn("⚠️ [DirectModelAgent] Claude CLI 调用失败，回退到 API 路径: ${e.message}")
                 val apiKey = AIConfig.ANTHROPIC_API_KEY
                 if (apiKey.isNotBlank()) {
@@ -339,7 +338,7 @@ class DirectModelAgent(
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error("❌ [DirectModelAgent] AI 调用失败: ${e.message}")
             callback("error", "❌ AI 调用失败: ${e.message}", true)
             "抱歉，处理您的问题时发生了错误。"
@@ -400,7 +399,7 @@ class DirectModelAgent(
 
             writeGroupHistoryToFile(targetFile, groupDisplayName, chatHistory)
             logger.debug("已刷新其他群聊历史: {} ({} 条消息)", groupDisplayName, chatHistory.messages.size)
-        } catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.warn("⚠️ 读取群聊历史失败 [{}]: {}", sessionName, e.message)
         }
     }
@@ -437,7 +436,7 @@ class DirectModelAgent(
             if (uploadsDir.exists()) {
                 FilePreprocessor.syncAllToWorkspace(uploadsDir, workspaceDir)
             }
-        } catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.warn("工作区文件同步失败: {}", e.message)
         }
     }
@@ -725,16 +724,19 @@ class DirectModelAgent(
         }
 
         // 对文本中有标记但无对应元数据的，创建占位引用
-        for (key in citedKeys) {
-            if (reindexMap.containsKey(key)) continue
-            val kind = key.substringBefore(":")
-            val idx = key.substringAfter(":").toIntOrNull() ?: continue
-            if (kind != "citation" && kind != "available") continue
-
-            val newIndex = if (kind == "citation") ++citationCounter else ++availableCounter
-            reindexMap[key] = newIndex
-            newRefs.add(createPlaceholderReference(kind, newIndex, idx))
-        }
+        citedKeys
+            .filter { key -> !reindexMap.containsKey(key) }
+            .mapNotNull { key ->
+                val kind = key.substringBefore(":")
+                val idx = key.substringAfter(":").toIntOrNull() ?: return@mapNotNull null
+                if (kind != "citation" && kind != "available") return@mapNotNull null
+                Triple(key, kind, idx)
+            }
+            .forEach { (key, kind, idx) ->
+                val newIndex = if (kind == "citation") ++citationCounter else ++availableCounter
+                reindexMap[key] = newIndex
+                newRefs.add(createPlaceholderReference(kind, newIndex, idx))
+            }
 
         return Pair(reindexMap, newRefs)
     }
