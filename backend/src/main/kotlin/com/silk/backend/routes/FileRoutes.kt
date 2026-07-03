@@ -401,7 +401,11 @@ private suspend fun handleFileList(call: ApplicationCall) {
     }
 
     val files = uploadsDir.listFiles()
-        ?.filter { it.name != "processed_urls.txt" }  // 排除 URL 清单文件
+        ?.filter { file ->
+            file.name != "processed_urls.txt" &&     // 排除 URL 清单文件
+            file.name != "file_registry.json" &&     // 排除文件预处理注册表
+            !file.name.endsWith(".extracted.md")     // 排除预处理生成的提取文件
+        }
         ?.map { file ->
             FileInfo(
                 fileId = file.name,
@@ -630,10 +634,8 @@ private suspend fun broadcastUploadUserMessageAndVision(
                 finalSessionId = sessionId,
                 finalUserId = userId,
                 finalUserName = userName,
-                finalFileName = fileName,
                 finalUserText = userText,
                 targetFile = targetFile,
-                downloadUrl = downloadUrl,
                 isImageFile = isImageFile,
             )
         }
@@ -697,9 +699,8 @@ private suspend fun preprocessUploadedFile(
                 val chatSvr = getGroupChatServer(finalSessionId)
                 if (chatSvr != null && chatSvr.hasPendingImage(finalUserId)) {
                     // 待处理图片还在，说明 text 还没到，vision 正常广播
-                    val downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
                     broadcastSystemStatus(finalSessionId, "✅ 图片解析完成: $finalFileName")
-                    broadcastExtractedContent(finalSessionId, updatedContent, finalFileName, downloadUrl)
+                    broadcastExtractedContent(finalSessionId, updatedContent, finalFileName)
                 } else {
                     // 待处理图片已被 text 消费，不再广播冗余的 vision 结果
                     logger.debug("📸 Vision 异步结果已由 text 合并处理，跳过广播: {}", finalFileName)
@@ -752,10 +753,8 @@ private suspend fun processUploadedImageVision(
     finalSessionId: String,
     finalUserId: String,
     finalUserName: String,
-    finalFileName: String,
     finalUserText: String,
     targetFile: File,
-    downloadUrl: String,
     isImageFile: Boolean,
 ) {
     try {
@@ -777,20 +776,18 @@ private suspend fun processUploadedImageVision(
             chatSvr.forwardImageToCcConnect(
                 imageFile = targetFile,
                 userText = strippedText.trim(),
-                downloadUrl = downloadUrl,
                 userId = finalUserId,
                 userName = finalUserName,
                 ccGroupId = ccGroupId,
             )
         } else {
             chatSvr.handleVisionImageAndText(
-                targetFile, "", finalUserText, downloadUrl, finalUserId
+                targetFile, finalUserText
             )
         }
     } catch (e: Exception) {
         logger.error("❌ Vision 异步处理失败: {}", e.message, e)
         chatSvr.broadcastCombinedVisionResult(
-            com.silk.backend.PendingImageState(finalUserId, "", finalFileName, targetFile, downloadUrl),
             "⚠️ Vision 分析出错: ${e.message}",
             System.currentTimeMillis()
         )

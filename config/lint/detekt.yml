@@ -40,3 +40,10 @@ style:
     active: false
   ReturnCount:
     active: false
+  WildcardImport:
+    excludeImports:
+      - 'io.ktor.server.application.*'
+      - 'io.ktor.server.websocket.*'
+      - 'io.ktor.websocket.*'
+      - 'kotlinx.serialization.json.*'
+      - 'java.util.*'

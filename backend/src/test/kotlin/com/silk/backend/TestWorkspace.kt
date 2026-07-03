@@ -4,6 +4,7 @@ import com.silk.backend.database.ContactRequests
 import com.silk.backend.database.Contacts
 import com.silk.backend.database.GroupMembers
 import com.silk.backend.database.Groups
+import com.silk.backend.database.RefreshTokensTable
 import com.silk.backend.database.UserSettingsTable
 import com.silk.backend.database.Users
 import org.jetbrains.exposed.sql.Database
@@ -30,7 +31,7 @@ internal class TestWorkspace : AutoCloseable {
             driver = "org.sqlite.JDBC"
         )
         transaction(database) {
-            SchemaUtils.create(Users, Groups, GroupMembers, Contacts, ContactRequests, UserSettingsTable)
+            SchemaUtils.create(Users, Groups, GroupMembers, Contacts, ContactRequests, UserSettingsTable, RefreshTokensTable)
         }
     }
 
