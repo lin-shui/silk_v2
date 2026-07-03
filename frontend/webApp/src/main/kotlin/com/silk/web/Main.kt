@@ -1819,9 +1819,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
+    val activeChatNavigationTarget = appState.chatNavigationTarget?.takeIf { it.groupId == group.id }
+
     // 自动滚动到底部 — 包括 contentBlocks（cc-connect / Claudian 流式回复的主要通道）
     // 以及 interactiveOptions（交互式按钮出现在底部时）
-    LaunchedEffect(messages.size, transientMessage, statusMessages.size, contentBlocks, interactiveOptions) {
+    LaunchedEffect(messages.size, transientMessage, statusMessages.size, contentBlocks, interactiveOptions, activeChatNavigationTarget?.requestId) {
+        if (activeChatNavigationTarget?.messageId?.isNullOrBlank() == false) return@LaunchedEffect
         js("""
             setTimeout(function() {
                 var messagesContainer = document.getElementById('messages');
@@ -1830,6 +1833,19 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
             }, 100);
         """)
+    }
+
+    LaunchedEffect(activeChatNavigationTarget?.requestId, messages.size, transientMessage?.id) {
+        val target = activeChatNavigationTarget ?: return@LaunchedEffect
+        val messageId = target.messageId
+        if (messageId.isNullOrBlank()) {
+            appState.consumeChatNavigationTarget(target.requestId)
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(80)
+        if (scrollMessageIntoContainer(CHAT_MESSAGES_CONTAINER_ID, messageId)) {
+            appState.consumeChatNavigationTarget(target.requestId)
+        }
     }
     
     Div({ classes(SilkStylesheet.container) }) {
@@ -2413,7 +2429,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         // flex: 1 spacer pushes content to bottom; overflow-y: auto enables scroll
         Div({ 
             classes(SilkStylesheet.messagesContainer)
-            id("messages")
+            id(CHAT_MESSAGES_CONTAINER_ID)
             style {
                 property("position", "relative")
                 property("transition", "all 0.2s ease")
@@ -5622,7 +5638,8 @@ Div({
         
     Div({
         classes(SilkStylesheet.aiMessageCard, "silk-ai-card")
-        attr("id", "ai-msg-${message.id}")
+        attr("id", messageDomId(message.id))
+        attr("data-message-id", message.id)
         style {
             property("flex", "1")
             property("min-width", "0")
@@ -5668,7 +5685,7 @@ Div({
                         property("background", "rgba(201, 168, 108, 0.1)")
                     }
                     onClick {
-                        val msgEl = document.getElementById("ai-msg-${message.id}")
+                        val msgEl = document.getElementById(messageDomId(message.id))
                         if (msgEl != null) {
                             msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "none"
                             msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "block"
@@ -5694,7 +5711,7 @@ Div({
                         display(DisplayStyle.None)
                     }
                     onClick {
-                        val msgEl = document.getElementById("ai-msg-${message.id}")
+                        val msgEl = document.getElementById(messageDomId(message.id))
                         if (msgEl != null) {
                             msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "block"
                             msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "none"
@@ -5774,7 +5791,7 @@ Div({
                             property("background", "rgba(201, 168, 108, 0.1)")
                         }
                         onClick {
-                            val msgEl = document.getElementById("ai-msg-${message.id}")
+                            val msgEl = document.getElementById(messageDomId(message.id))
                             if (msgEl != null) {
                                 msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "block"
                                 msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "none"
@@ -5789,7 +5806,7 @@ Div({
             }
             // 最后一条消息默认展开，通过 DOM 操作设置初始状态（跟点击按钮同机制，避免 Compose 样式冲突）
             LaunchedEffect(message.id, isLastMessage) {
-                val msgEl = document.getElementById("ai-msg-${message.id}")
+                val msgEl = document.getElementById(messageDomId(message.id))
                 if (msgEl != null) {
                     if (isLastMessage) {
                         msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "none"
@@ -5965,6 +5982,8 @@ fun MessageItem(
     // Agent 状态消息 - 灰色样式
     if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) {
         Div({
+            attr("id", messageDomId(message.id))
+            attr("data-message-id", message.id)
             style {
                 padding(8.px, 16.px)
                 marginBottom(6.px)
@@ -5990,6 +6009,8 @@ fun MessageItem(
     if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION &&
         message.type != MessageType.CARD && message.type != MessageType.CARD_REPLY) {
         Div({
+            attr("id", messageDomId(message.id))
+            attr("data-message-id", message.id)
             style {
                 padding(12.px, 16.px)
                 marginBottom(8.px)
@@ -6045,6 +6066,8 @@ fun MessageItem(
                 }
             Div({
                 classes(SilkStylesheet.messageCard)
+                attr("id", messageDomId(message.id))
+                attr("data-message-id", message.id)
                 style {
                     property("flex", "1")
                     property("min-width", "0")
@@ -6339,6 +6362,8 @@ fun MessageItem(
                 }
             Div({
                 classes(SilkStylesheet.messageCard)
+                attr("id", messageDomId(message.id))
+                attr("data-message-id", message.id)
                 style {
                     property("flex", "1")
                     property("min-width", "0")
@@ -6556,7 +6581,11 @@ fun MessageItem(
             } // close selection wrapper Div
         }
         MessageType.JOIN, MessageType.LEAVE -> {
-            Div({ classes(SilkStylesheet.systemMessage) }) {
+            Div({
+                classes(SilkStylesheet.systemMessage)
+                attr("id", messageDomId(message.id))
+                attr("data-message-id", message.id)
+            }) {
                 Text("• ${message.content} ($timeString)")
             }
         }
@@ -6578,6 +6607,8 @@ fun MessageItem(
                     console.log("🖼 [PREVIEW] message.userId=$message.userId currentUserId=$currentUserId isOwn=$isOwnMessage")
                     Div({
                         classes(SilkStylesheet.messageCard)
+                        attr("id", messageDomId(message.id))
+                        attr("data-message-id", message.id)
                         style {
                             property("flex", "1")
                             property("min-width", "0")
@@ -6764,7 +6795,11 @@ fun MessageItem(
                         }
                     }
                 } else {
-                    Div({ classes(SilkStylesheet.systemMessage) }) {
+                    Div({
+                        classes(SilkStylesheet.systemMessage)
+                        attr("id", messageDomId(message.id))
+                        attr("data-message-id", message.id)
+                    }) {
                         Text("• ${content} ($timeString)")
                     }
                 }
@@ -6773,6 +6808,8 @@ fun MessageItem(
                 if (content.startsWith("# 图片:") || content.contains("## OCR")) {
                     Div({
                         classes(SilkStylesheet.messageCard)
+                        attr("id", messageDomId(message.id))
+                        attr("data-message-id", message.id)
                         style { property("flex", "1"); property("min-width", "0") }
                     }) {
                         Div({ classes(SilkStylesheet.messageHeader) }) {
@@ -6792,7 +6829,11 @@ fun MessageItem(
                         }
                     }
                 } else {
-                    Div({ classes(SilkStylesheet.systemMessage) }) {
+                    Div({
+                        classes(SilkStylesheet.systemMessage)
+                        attr("id", messageDomId(message.id))
+                        attr("data-message-id", message.id)
+                    }) {
                         Text("• ${content} ($timeString)")
                     }
                 }
@@ -6807,7 +6848,12 @@ fun MessageItem(
         MessageType.CARD -> {
             // ACP/Workflow agent 交互卡片（问题/权限/计划）→ CardMessageRenderer
             chatClient?.let {
-                CardMessageRenderer(message, it, currentUserId, currentUserName)
+                Div({
+                    attr("id", messageDomId(message.id))
+                    attr("data-message-id", message.id)
+                }) {
+                    CardMessageRenderer(message, it, currentUserId, currentUserName)
+                }
             }
         }
         MessageType.CARD_REPLY -> {
