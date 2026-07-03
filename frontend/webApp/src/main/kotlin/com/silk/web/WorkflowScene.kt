@@ -135,6 +135,19 @@ fun WorkflowScene(appState: WebAppState) {
         isLoading = false
     }
 
+    val activeWorkflowNavigationTarget = appState.workflowNavigationTarget
+    LaunchedEffect(user.id, workflows, activeWorkflowNavigationTarget?.requestId) {
+        val target = activeWorkflowNavigationTarget ?: return@LaunchedEffect
+        var resolvedWorkflow = workflows.find { it.id == target.workflowId }
+        if (resolvedWorkflow == null && !isLoading) {
+            workflows = ApiClient.getWorkflows(user.id)
+            resolvedWorkflow = workflows.find { it.id == target.workflowId }
+        }
+        if (resolvedWorkflow != null) {
+            selectedWorkflow = resolvedWorkflow
+        }
+    }
+
     Div({
         style {
             display(DisplayStyle.Flex)
@@ -1052,13 +1065,28 @@ private fun WorkflowChatPanel(
     }
 
     // Auto-scroll
-    LaunchedEffect(messages.size, transientMessage, statusMessages.size) {
+    val activeWorkflowNavigationTarget = appState.workflowNavigationTarget?.takeIf { it.workflowId == workflowId }
+    LaunchedEffect(messages.size, transientMessage, statusMessages.size, activeWorkflowNavigationTarget?.requestId) {
+        if (activeWorkflowNavigationTarget?.messageId?.isNullOrBlank() == false) return@LaunchedEffect
         js("""
             setTimeout(function() {
                 var c = document.getElementById('wf-messages');
                 if (c) c.scrollTop = c.scrollHeight;
             }, 100);
         """)
+    }
+
+    LaunchedEffect(activeWorkflowNavigationTarget?.requestId, messages.size, transientMessage?.id) {
+        val target = activeWorkflowNavigationTarget ?: return@LaunchedEffect
+        val messageId = target.messageId
+        if (messageId.isNullOrBlank()) {
+            appState.consumeWorkflowNavigationTarget(target.requestId)
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(80)
+        if (scrollMessageIntoContainer(WORKFLOW_MESSAGES_CONTAINER_ID, messageId)) {
+            appState.consumeWorkflowNavigationTarget(target.requestId)
+        }
     }
 
     // 代理回合结束（isGenerating → false）后去抖 ~0.5s bump 刷新信号，让源代码管理面板自动重拉状态
@@ -1193,7 +1221,7 @@ private fun WorkflowChatPanel(
 
     // Messages area
     Div({
-        id("wf-messages")
+        id(WORKFLOW_MESSAGES_CONTAINER_ID)
         style {
             property("flex", "1")
             property("min-height", "0")
