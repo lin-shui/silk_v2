@@ -298,7 +298,19 @@ class KnowledgeBaseSceneLogicTest {
     }
 
     @Test
-    fun editorModeCompactLabelsStayDistinct() {
+    fun editorModeSwitchPresentationAdaptsToWidth() {
+        assertEquals(
+            KnowledgeEditorModeSwitchPresentation.FULL,
+            knowledgeEditorModeSwitchPresentation(780.0),
+        )
+        assertEquals(
+            KnowledgeEditorModeSwitchPresentation.COMPACT,
+            knowledgeEditorModeSwitchPresentation(560.0),
+        )
+        assertEquals(
+            KnowledgeEditorModeSwitchPresentation.SELECT,
+            knowledgeEditorModeSwitchPresentation(420.0),
+        )
         assertEquals("编", KnowledgeEditorMode.EDIT.compactLabel)
         assertEquals("预", KnowledgeEditorMode.PREVIEW.compactLabel)
         assertEquals("双", KnowledgeEditorMode.SPLIT.compactLabel)

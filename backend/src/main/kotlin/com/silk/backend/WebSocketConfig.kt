@@ -21,11 +21,15 @@ import com.silk.backend.database.GroupRepository
 import com.silk.backend.database.MemberRole
 import com.silk.backend.todos.GroupTodoExtractionService
 import com.silk.backend.ai.AIConfig
+import com.silk.backend.ai.KnowledgeBaseWorkspaceEntry
 import com.silk.backend.search.WeaviateClient
 import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
 import com.silk.backend.kb.KnowledgeBasePromptContext
+import com.silk.backend.kb.KnowledgeBaseAiExecutionRequest
+import com.silk.backend.kb.KnowledgeBaseAiExecutionResult
+import com.silk.backend.kb.executeKnowledgeBaseAiActions
 import com.silk.backend.kb.resolveKnowledgeBasePromptContext
 import com.silk.backend.models.KnowledgeBaseContextSelection
 import org.slf4j.LoggerFactory
@@ -68,6 +72,71 @@ private fun buildKnowledgeBaseContextStatus(kbContext: KnowledgeBasePromptContex
         append("）")
     }
 }
+
+private fun buildKnowledgeBaseActionSummary(results: List<KnowledgeBaseAiExecutionResult>): String {
+    if (results.isEmpty()) return ""
+    return buildString {
+        appendLine()
+        appendLine()
+        appendLine("KB 执行结果:")
+        results.forEach { result ->
+            when (result) {
+                is KnowledgeBaseAiExecutionResult.Success -> appendLine("- ${result.message}")
+                is KnowledgeBaseAiExecutionResult.Failure -> appendLine("- 未执行：${result.message}")
+            }
+        }
+    }.trimEnd()
+}
+
+private fun knowledgeBaseWorkspaceSpaceLabel(topic: com.silk.backend.models.KBTopic): String {
+    return when (topic.spaceType) {
+        com.silk.backend.models.KnowledgeSpaceType.PERSONAL -> "个人"
+        com.silk.backend.models.KnowledgeSpaceType.TEAM -> topic.groupId?.let { groupId ->
+            GroupRepository.findGroupById(groupId)?.name?.let { "团队/$it" } ?: "团队/$groupId"
+        } ?: "团队"
+    }
+}
+
+private fun buildDirectModelSystemPrompt(rolePrompt: String?): String {
+    val now = java.time.LocalDateTime.now()
+    val chineseFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
+    val isoFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    LoggerFactory.getLogger("DirectModelSystemPrompt").info(
+        "🤖 [generateIntelligentResponse] 注入系统时间: {} (epochMs={})",
+        now.format(isoFmt),
+        java.time.Instant.now().toEpochMilli(),
+    )
+    val roleSection = if (rolePrompt != null) {
+        "你的角色设定：$rolePrompt\n\n请以上述角色身份回答问题。"
+    } else {
+        "你是 Silk，一个智能助手。"
+    }
+    return buildString {
+        appendLine("## 当前日期和时间（系统精确注入，以此为准）")
+        appendLine("当前日期：${now.format(chineseFmt)}")
+        appendLine("ISO 格式：${now.format(isoFmt)}")
+        appendLine("⚠️ 你必须使用上述精确时间回答所有时间/日期相关问题，不得自行推理或猜测。")
+        appendLine()
+        appendLine(roleSection)
+        appendLine()
+        appendLine("你可以使用互联网搜索工具来查找最新信息。")
+        appendLine("对于天气、新闻、实时数据等时效性信息，你必须使用互联网搜索获取最新结果，不能仅凭训练数据回答。")
+        appendLine()
+        appendLine("【HarmonyOS 元服务能力】")
+        appendLine("你在 HarmonyOS 系统上运行，支持调用系统元服务（免安装应用）：")
+        appendLine("- **出行/打车类请求**（如\"打车\"、\"叫车\"、\"去机场\"）→ 系统会自动在回复顶部显示 T3出行 快捷按钮和输入框，用户填写出发地/目的地后可直接跳转。")
+        appendLine("- **购物类请求**（如\"买手机\"、\"京东购物\"）→ 系统会自动在回复顶部显示对应的购物应用快捷按钮。")
+        appendLine("你无需在回复中模拟打开应用，只需正常回答用户问题。如果用户询问能否打车/买东西，确认可以并引导用户使用上方提供的按钮。")
+    }
+}
+
+private data class AgentStreamState(
+    var fullResponse: String = "",
+    var agentReferences: List<com.silk.backend.models.MessageReference> = emptyList(),
+    var lastBlocks: List<com.silk.backend.ai.ContentBlock> = emptyList(),
+    val streamingAccumulated: StringBuilder = StringBuilder(),
+    var hasStructuredBlocks: Boolean = false,
+)
 
 @Serializable
 data class Message(
@@ -1728,7 +1797,7 @@ class ChatServer(
         }
     }
 
-    @Suppress("CyclomaticComplexMethod")
+    @Suppress("CyclomaticComplexMethod", "NestedBlockDepth")
     private suspend fun generateIntelligentResponse(
         userMessage: String,
         userId: String = "",
@@ -1744,35 +1813,7 @@ class ChatServer(
         val rolePrompt = historyManager.getRolePrompt(sessionName)
 
         // 构建系统提示
-        val systemPrompt = buildString {
-            // 首先注入当前精确时间（皮带+吊带：此处与 DirectModelAgent.processInput 双重注入）
-            val now = java.time.LocalDateTime.now()
-            val chineseFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy年M月d日 EEEE HH:mm")
-            val isoFmt = java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-            logger.info("🤖 [generateIntelligentResponse] 注入系统时间: {} (epochMs={})",
-                now.format(isoFmt), java.time.Instant.now().toEpochMilli())
-            appendLine("## 当前日期和时间（系统精确注入，以此为准）")
-            appendLine("当前日期：${now.format(chineseFmt)}")
-            appendLine("ISO 格式：${now.format(isoFmt)}")
-            appendLine("⚠️ 你必须使用上述精确时间回答所有时间/日期相关问题，不得自行推理或猜测。")
-            appendLine()
-            if (rolePrompt != null) {
-                appendLine("你的角色设定：$rolePrompt")
-                appendLine()
-                appendLine("请以上述角色身份回答问题。")
-            } else {
-                appendLine("你是 Silk，一个智能助手。")
-            }
-            appendLine()
-            appendLine("你可以使用互联网搜索工具来查找最新信息。")
-            appendLine("对于天气、新闻、实时数据等时效性信息，你必须使用互联网搜索获取最新结果，不能仅凭训练数据回答。")
-            appendLine()
-            appendLine("【HarmonyOS 元服务能力】")
-            appendLine("你在 HarmonyOS 系统上运行，支持调用系统元服务（免安装应用）：")
-            appendLine("- **出行/打车类请求**（如\"打车\"、\"叫车\"、\"去机场\"）→ 系统会自动在回复顶部显示 T3出行 快捷按钮和输入框，用户填写出发地/目的地后可直接跳转。")
-            appendLine("- **购物类请求**（如\"买手机\"、\"京东购物\"）→ 系统会自动在回复顶部显示对应的购物应用快捷按钮。")
-            appendLine("你无需在回复中模拟打开应用，只需正常回答用户问题。如果用户询问能否打车/买东西，确认可以并引导用户使用上方提供的按钮。")
-        }
+        val systemPrompt = buildDirectModelSystemPrompt(rolePrompt)
 
         // 加载聊天历史并设置到 Agent（用于群组统计等功能 + 近期上下文）
         val chatHistory = historyManager.loadChatHistory(sessionName)
@@ -1789,26 +1830,14 @@ class ChatServer(
         }
 
         // 根据“群聊作用域 / 私聊跨群作用域”计算用户可访问的 sessionId 列表
-        val accessibleSessionIds: List<String> = if (sessionName.startsWith("group_") && userId.isNotBlank()) {
-            val groupId = sessionName.removePrefix("group_")
-            val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
-            if (isSilkPrivateChat) {
-                // 私聊：用户自己的所有群（包括专属 [Silk] 对话群本身）
-                GroupRepository.getUserGroups(userId).map { "group_${it.id}" }.distinct()
-            } else {
-                // 普通群聊：只允许访问当前群
-                if (GroupRepository.isUserInGroup(groupId, userId)) listOf(sessionName) else emptyList()
-            }
-        } else {
-            // 非 group session 或 userId 缺失：默认仅允许当前 session
-            listOf(sessionName)
-        }
+        val accessibleSessionIds = resolveAccessibleSessionIds(userId)
 
         // 使用 DirectModelAgent 直接调用模型
         // 初始化 claude CLI 进程客户端（设置群组隔离的工作目录）
         val workspaceDir = "${AIConfig.CLAUDE_CLI_WORKSPACE_ROOT}/$sessionName"
         java.io.File(workspaceDir).mkdirs()
         directModelAgent.initClaudeClient(workspaceDir)
+        syncKnowledgeBaseWorkspaceForUser(userId)
 
         // 解析知识库上下文（手动引用 [[kb:...]] + pinned/excluded + 自动检索 + space 级排除）
         val persistentSelection = buildPersistentKnowledgeBaseContextSelection(userId)
@@ -1848,15 +1877,7 @@ class ChatServer(
             )
         }
 
-        var fullResponse = ""
-        var agentReferences: List<com.silk.backend.models.MessageReference> = emptyList()
-        // Track last structured blocks from blocks_state / streaming_incremental
-        var lastBlocks: List<com.silk.backend.ai.ContentBlock> = emptyList()
-        var streamingAccumulated = StringBuilder()
-        // When Anthropic API produces structured blocks (thinking/tool_use/text),
-        // we rely on blocks_state for display and suppress competing streaming_incremental
-        // transient messages. CLI fallback path only emits streaming_incremental.
-        var hasStructuredBlocks = false
+        val streamState = AgentStreamState()
         try {
             val response = directModelAgent.processInput(
                 userInput = kbContext.resolvedUserInput,
@@ -1865,139 +1886,52 @@ class ChatServer(
                 availableReferences = kbContext.availableReferences,
                 additionalContext = kbContext.promptBlock,
             ) { stepType, content, isComplete ->
-                when (stepType) {
-                    "thinking" -> {
-                        // Structured path: thinking content comes via blocks_state
-                        // CLI fallback: brief thinking notification as status
-                        if (!hasStructuredBlocks) {
-                            sendAgentStatus(content)
-                        }
-                    }
-                    "tool" -> {
-                        // Structured path: tool content comes via blocks_state
-                        // CLI fallback: brief tool notification as status
-                        if (!hasStructuredBlocks) {
-                            sendAgentStatus(content)
-                        }
-                    }
-                    "streaming_incremental" -> {
-                        streamingAccumulated.append(content)
-                        val accumulated = streamingAccumulated.toString()
-                        if (!hasStructuredBlocks) {
-                            // CLI fallback: send transient text messages for progressive display.
-                            // The CLI produces <!--THINKING--> markers in content; we don't set
-                            // lastBlocks here so the final message falls back to contentBlocks=null,
-                            // letting the frontend's StructuredContent parse the markers into
-                            // collapsible thinking/tool sections (matching cc-connect display).
-                            val blockMessage = Message(
-                                id = "streaming_${System.currentTimeMillis()}",
-                                userId = SilkAgent.AGENT_ID,
-                                userName = SilkAgent.AGENT_NAME,
-                                content = accumulated,
-                                timestamp = System.currentTimeMillis(),
-                                type = MessageType.TEXT,
-                                isTransient = true,
-                                isIncremental = false,
-                            )
-                            logger.info("📤 [流式-{}] 增量 {}字符 -> {}个连接", callId, accumulated.length, allSessions().size)
-                            val messageJson = Json.encodeToString(blockMessage)
-                            allSessions().forEach { session ->
-                                try {
-                                    session.send(Frame.Text(messageJson))
-                                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                                    logger.error("📤 [流式-{}] 发送失败: {}", callId, e.message)
-                                }
-                            }
-                        }
-                        // Structured path: blocks_state drives display; don't send
-                        // competing text-only transient messages that would overwrite
-                        // the rich thinking/tool_use blocks in the frontend.
-                    }
-                    "blocks_state" -> {
-                        hasStructuredBlocks = true
-                        val blocks = Json.decodeFromString<List<com.silk.backend.ai.ContentBlock>>(content)
-                        lastBlocks = blocks
-                        // Populate content from the text block (matching cc-connect format)
-                        val textContent = blocks.firstOrNull { it.type == "text" }?.content ?: ""
-                        val blockMessage = Message(
-                            id = "streaming_${System.currentTimeMillis()}",
-                            userId = SilkAgent.AGENT_ID,
-                            userName = SilkAgent.AGENT_NAME,
-                            content = textContent,
-                            timestamp = System.currentTimeMillis(),
-                            type = MessageType.TEXT,
-                            isTransient = true,
-                            isIncremental = false,
-                            contentBlocks = blocks
-                        )
-                        val messageJson = Json.encodeToString(blockMessage)
-                        allSessions().forEach { session ->
-                            try {
-                                session.send(Frame.Text(messageJson))
-                            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                                logger.error("📤 [blocks_state-{}] 发送失败: {}", callId, e.message)
-                            }
-                        }
-                    }
-                    "complete" -> {
-                        fullResponse = ensureSilkReplyVisible(content)
-                        agentReferences = directModelAgent.lastAgentResponse?.references ?: emptyList()
-                    }
-                    "error" -> {
-                        sendAgentStatus("❌ $content")
-                    }
-                }
-
-                // 流式输出：发送增量消息
-                if (stepType == "complete" && isComplete) {
-                    // 发送最终消息
-                    logger.debug("📤 [智能回答-{}] 准备发送最终消息，内容长度: {}", callId, fullResponse.length)
-
-                    val messageId = generateId()
-                    logger.debug("📤 [智能回答-{}] 生成消息ID: {} (响应userId={})", callId, messageId, userId)
-
-                    val finalMessage = Message(
-                        id = messageId,
-                        userId = SilkAgent.AGENT_ID,
-                        userName = SilkAgent.AGENT_NAME,
-                        content = fullResponse,
-                        timestamp = System.currentTimeMillis(),
-                        type = MessageType.TEXT,
-                        isTransient = false,
-                        isIncremental = false,
-                        references = agentReferences,
-                        contentBlocks = lastBlocks.ifEmpty { null },
-                    )
-
-                    // 检查是否已经在历史中（防止重复）
-                    if (messageHistory.any { it.id == messageId }) {
-                        logger.warn("⚠️ [智能回答-{}] 消息ID已存在，跳过发送: {}", callId, messageId)
-                        return@processInput
-                    }
-
-                    messageHistory.add(finalMessage)
-                    historyManager.addMessage(sessionName, finalMessage)
-                    logger.debug("📤 [智能回答-{}] 已保存到历史，当前历史大小: {}", callId, messageHistory.size)
-
-                    // 发送最终消息
-                    val messageJson = Json.encodeToString(finalMessage)
-                    logger.debug("📤 [智能回答-{}] 发送最终消息到 {} 个连接", callId, allSessions().size)
-                    allSessions().forEach { session ->
-                        try {
-                            session.send(Frame.Text(messageJson))
-                            logger.info("   ✅ [智能回答-{}] 已发送到一个连接", callId)
-                        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                            e.printStackTrace()
-                        }
-                    }
-                    logger.debug("📤 [智能回答-{}] 最终消息发送完成 (messageId={})", callId, messageId)
-                }
+                handleAgentStepUpdate(callId, stepType, content, streamState)
             }
 
             val agentResponse = directModelAgent.lastAgentResponse
-            fullResponse = ensureSilkReplyVisible(agentResponse?.content ?: response)
-            agentReferences = agentResponse?.references ?: emptyList()
-            logger.debug("🏁 [generateIntelligentResponse-{}] 函数执行完成，响应长度: {}, 引用数: {}", callId, fullResponse.length, agentReferences.size)
+            streamState.fullResponse = ensureSilkReplyVisible(agentResponse?.content ?: response)
+            streamState.agentReferences = agentResponse?.references ?: emptyList()
+            val kbActionResults = executeKnowledgeBaseAiActions(
+                manager = knowledgeBaseManager,
+                request = KnowledgeBaseAiExecutionRequest(
+                    userId = userId,
+                    preferredGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") },
+                    sourceGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") },
+                    recentMessageIds = historyMessages.takeLast(8).map { it.messageId },
+                ),
+                actions = directModelAgent.lastKnowledgeBaseActions,
+            )
+            if (kbActionResults.isNotEmpty()) {
+                streamState.fullResponse = (streamState.fullResponse.trimEnd() + buildKnowledgeBaseActionSummary(kbActionResults)).trimEnd()
+            }
+            logger.debug("🏁 [generateIntelligentResponse-{}] 函数执行完成，响应长度: {}, 引用数: {}", callId, streamState.fullResponse.length, streamState.agentReferences.size)
+
+            val messageId = generateId()
+            val finalMessage = Message(
+                id = messageId,
+                userId = SilkAgent.AGENT_ID,
+                userName = SilkAgent.AGENT_NAME,
+                content = streamState.fullResponse,
+                timestamp = System.currentTimeMillis(),
+                type = MessageType.TEXT,
+                isTransient = false,
+                isIncremental = false,
+                references = streamState.agentReferences,
+                contentBlocks = streamState.lastBlocks.ifEmpty { null },
+            )
+            if (!messageHistory.any { it.id == messageId }) {
+                messageHistory.add(finalMessage)
+                historyManager.addMessage(sessionName, finalMessage)
+                val messageJson = Json.encodeToString(finalMessage)
+                allSessions().forEach { session ->
+                    try {
+                        session.send(Frame.Text(messageJson))
+                    } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                        logger.error("📤 [智能回答-{}] 发送最终消息失败: {}", callId, e.message)
+                    }
+                }
+            }
 
             if (userId.isNotBlank() && getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true) {
                 CoroutineScope(Dispatchers.IO).launch {
@@ -2034,6 +1968,126 @@ class ChatServer(
                 } catch (@Suppress("TooGenericExceptionCaught") ex: Exception) {
                     ex.printStackTrace()
                 }
+            }
+        }
+    }
+
+    private fun resolveAccessibleSessionIds(userId: String): List<String> {
+        if (!sessionName.startsWith("group_") || userId.isBlank()) {
+            return listOf(sessionName)
+        }
+        val groupId = sessionName.removePrefix("group_")
+        val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
+        if (isSilkPrivateChat) {
+            return GroupRepository.getUserGroups(userId).map { "group_${it.id}" }.distinct()
+        }
+        return if (GroupRepository.isUserInGroup(groupId, userId)) listOf(sessionName) else emptyList()
+    }
+
+    private fun syncKnowledgeBaseWorkspaceForUser(userId: String) {
+        if (userId.isBlank()) return
+        val kbWorkspaceEntries = knowledgeBaseManager.listTopics(userId)
+            .asSequence()
+            .flatMap { topic ->
+                knowledgeBaseManager.listEntries(topic.id, userId)
+                    .asSequence()
+                    .filter { it.status != com.silk.backend.models.KBEntryStatus.DELETED }
+                    .map { entry ->
+                        KnowledgeBaseWorkspaceEntry(
+                            topicId = topic.id,
+                            topicName = topic.name,
+                            topicProject = topic.project,
+                            entryId = entry.id,
+                            entryTitle = entry.title,
+                            content = entry.content,
+                            status = entry.status.name,
+                            spaceLabel = knowledgeBaseWorkspaceSpaceLabel(topic),
+                        )
+                    }
+            }
+            .toList()
+        directModelAgent.syncKnowledgeBaseWorkspace(kbWorkspaceEntries)
+    }
+
+    private suspend fun handleAgentStepUpdate(
+        callId: Long,
+        stepType: String,
+        content: String,
+        streamState: AgentStreamState,
+    ) {
+        when (stepType) {
+            "thinking", "tool" -> {
+                if (!streamState.hasStructuredBlocks) {
+                    sendAgentStatus(content)
+                }
+            }
+            "streaming_incremental" -> handleStreamingIncremental(callId, content, streamState)
+            "blocks_state" -> handleStructuredBlocksState(callId, content, streamState)
+            "complete" -> {
+                streamState.fullResponse = ensureSilkReplyVisible(content)
+                streamState.agentReferences = directModelAgent.lastAgentResponse?.references ?: emptyList()
+            }
+            "error" -> sendAgentStatus("❌ $content")
+        }
+    }
+
+    private suspend fun handleStreamingIncremental(
+        callId: Long,
+        content: String,
+        streamState: AgentStreamState,
+    ) {
+        streamState.streamingAccumulated.append(content)
+        if (streamState.hasStructuredBlocks) return
+
+        val accumulated = streamState.streamingAccumulated.toString()
+        val blockMessage = Message(
+            id = "streaming_${System.currentTimeMillis()}",
+            userId = SilkAgent.AGENT_ID,
+            userName = SilkAgent.AGENT_NAME,
+            content = accumulated,
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.TEXT,
+            isTransient = true,
+            isIncremental = false,
+        )
+        logger.info("📤 [流式-{}] 增量 {}字符 -> {}个连接", callId, accumulated.length, allSessions().size)
+        broadcastAgentTransientMessage("流式", callId, blockMessage)
+    }
+
+    private suspend fun handleStructuredBlocksState(
+        callId: Long,
+        content: String,
+        streamState: AgentStreamState,
+    ) {
+        streamState.hasStructuredBlocks = true
+        val blocks = Json.decodeFromString<List<com.silk.backend.ai.ContentBlock>>(content)
+        streamState.lastBlocks = blocks
+        val textContent = blocks.firstOrNull { it.type == "text" }?.content ?: ""
+        val blockMessage = Message(
+            id = "streaming_${System.currentTimeMillis()}",
+            userId = SilkAgent.AGENT_ID,
+            userName = SilkAgent.AGENT_NAME,
+            content = textContent,
+            timestamp = System.currentTimeMillis(),
+            type = MessageType.TEXT,
+            isTransient = true,
+            isIncremental = false,
+            contentBlocks = blocks,
+        )
+        broadcastAgentTransientMessage("blocks_state", callId, blockMessage)
+    }
+
+    private suspend fun broadcastAgentTransientMessage(
+        channel: String,
+        callId: Long,
+        message: Message,
+    ) {
+        val messageJson = Json.encodeToString(message)
+        allSessions().forEach { session ->
+            try {
+                session.send(Frame.Text(messageJson))
+            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                logger.error("📤 [{}-{}] 发送失败: {}", channel, callId, e.message)
             }
         }
     }
