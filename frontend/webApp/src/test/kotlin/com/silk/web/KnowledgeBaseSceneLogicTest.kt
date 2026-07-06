@@ -298,6 +298,13 @@ class KnowledgeBaseSceneLogicTest {
     }
 
     @Test
+    fun editorModeCompactLabelsStayDistinct() {
+        assertEquals("编", KnowledgeEditorMode.EDIT.compactLabel)
+        assertEquals("预", KnowledgeEditorMode.PREVIEW.compactLabel)
+        assertEquals("双", KnowledgeEditorMode.SPLIT.compactLabel)
+    }
+
+    @Test
     fun sourceMessageJumpPrefersWorkflowThenFallsBackToChat() {
         val workflowEntry = KBEntryItem(
             id = "entry-workflow",

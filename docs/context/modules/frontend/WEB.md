@@ -45,3 +45,5 @@
   - 聊天与 Workflow 文本消息操作栏支持"📚入库"：选目标 topic 后把消息存为 `candidate` 知识条目（`POST /api/kb/captures`），带 `CHAT` / `AI_RESPONSE` / `WORKFLOW` 来源元数据（AI 消息自动标记为 `AI_RESPONSE`），成功后跳到对应 KB 文档
   - 知识库条目侧栏：candidate inbox 过滤（全部/候选/已发布/已归档）+ 批量发布/归档/并入；会议入库入口（选空间/主题/标签/置信度，存为 candidate 或 published，写入 `MEETING` provenance）
   - M2 空间/权限：按"个人 + 我所在群组"切空间并过滤可访问 topic；topic/entry 编辑器展示空间/读写/状态/来源 badge；无写权限时禁用创建与保存、编辑区只读；owner/team host/topic manager 可在"权限"面板改名称、项目、`read/write/manage` grants、`writeLocked`、`teamMembersCanWrite`
+  - KB Web UX backlog 已继续回补：条目标题默认展示为静态标题，单击后才进入编辑态并复用现有保存链路；来源群组 / 工作流 / 来源消息字段本身可点击回跳，不再额外堆叠按钮；消息回跳优先在目标消息容器内按 `data-message-id` 定位并只滚动对应容器
+  - KB 编辑器右上角高频动作已收敛为模式切换、复制引用、保存和“菜单”入口；低频 move / merge / lifecycle / delete / export 走统一 menu，topic 权限/删除则移到左侧“知识空间”的管理态，不再混在单条 entry 工具栏里
