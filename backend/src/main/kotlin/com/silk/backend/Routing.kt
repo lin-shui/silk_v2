@@ -199,7 +199,7 @@ private fun resolveActiveAgentType(userId: String): String? {
  * 获取或创建指定群组的ChatServer
  */
 internal fun getGroupChatServer(groupId: String): ChatServer {
-    return groupChatServers.getOrPut(groupId) {
+    return groupChatServers.computeIfAbsent(groupId) {
         val sessionName = "group_$groupId"
         val wf = workflowManager.getWorkflowByGroupId(groupId)
         val isSilkChat = wf != null && wf.agentType == "silk_chat"

@@ -53,6 +53,8 @@
 ## Configuration Notes
 
 - `silk.sh` 会自动加载项目根 `.env`
+- `silk.sh` 在 Android 相关命令前会按以下顺序解析 JDK / Android SDK：已有环境变量（含 `.env`）→ `local.properties` → 系统默认安装路径；若解析成功，会同步 `sdk.dir` / `org.gradle.java.home` 到 `local.properties`
+- `silk.sh build` / `build-all` / `deploy` 若遇到 Kotlin/JS 的 `kotlinStoreYarnLock` 漂移，会自动执行 `kotlinUpgradeYarnLock` 刷新 `kotlin-js-store/yarn.lock` 后重试一次 Web production build
 - Web / Android / Desktop 的 build 脚本都会从 `.env` 注入后端地址
 - 未配置时端口默认并不完全一致：后端运行入口常回落到 `8003`，`silk.sh` 的 Web 前端静态服务器默认 `8005`，Web/Android `FRONTEND_PORT` 生成 fallback 仍是 `8004`；详见 `KNOWN_DRIFT.md`
 - 端口与公网/内网分离时，需要特别注意 `BACKEND_HTTP_PORT` 与 `BACKEND_INTERNAL_PORT`
