@@ -24,7 +24,10 @@ internal fun computeMessageNavigationScrollTop(
 
 internal fun scrollMessageIntoContainer(containerId: String, messageId: String): Boolean {
     val container = document.getElementById(containerId) as? HTMLElement ?: return false
-    val target = document.getElementById(messageDomId(messageId)) as? HTMLElement ?: return false
+    resetMessageNavigationViewport()
+    val target = (container.querySelector("[data-message-id=\"$messageId\"]") as? HTMLElement)
+        ?: (document.getElementById(messageDomId(messageId)) as? HTMLElement)
+        ?: return false
 
     val containerRect = container.getBoundingClientRect()
     val targetRect = target.getBoundingClientRect()
@@ -46,6 +49,14 @@ internal fun scrollMessageIntoContainer(containerId: String, messageId: String):
         target.classList.remove(MESSAGE_NAV_HIGHLIGHT_CLASS)
     }, MESSAGE_NAV_HIGHLIGHT_DURATION_MS)
     return true
+}
+
+internal fun resetMessageNavigationViewport() {
+    val root = document.documentElement as? HTMLElement
+    val body = document.body
+    root?.scrollTop = 0.0
+    body?.scrollTop = 0.0
+    window.scrollTo(0.0, 0.0)
 }
 
 private fun clearMessageNavigationHighlights(container: HTMLElement) {

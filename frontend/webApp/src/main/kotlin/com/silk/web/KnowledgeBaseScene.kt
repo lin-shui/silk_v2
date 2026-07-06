@@ -59,10 +59,10 @@ import org.w3c.dom.events.Event
 import org.w3c.dom.events.MouseEvent
 import kotlin.random.Random
 
-private enum class KnowledgeEditorMode(val label: String) {
-    EDIT("编辑"),
-    PREVIEW("预览"),
-    SPLIT("分栏"),
+internal enum class KnowledgeEditorMode(val label: String, val compactLabel: String) {
+    EDIT("编辑", "编"),
+    PREVIEW("预览", "预"),
+    SPLIT("分栏", "双"),
 }
 
 internal enum class KnowledgeEntryFilter(val label: String) {
@@ -99,6 +99,13 @@ internal fun parseStoredKnowledgeEditorSplitRatio(raw: String?, defaultRatio: Do
 private fun persistKnowledgePaneNumber(key: String, value: Double) {
     localStorage.setItem(key, value.toString())
 }
+
+private data class KnowledgeHeaderSecondaryAction(
+    val label: String,
+    val enabled: Boolean = true,
+    val background: String = SilkColors.textSecondary,
+    val onClick: () -> Unit,
+)
 
 private fun knowledgePercent(value: Double): String =
     "${((value * 1000).toInt() / 10.0)}%"
@@ -438,15 +445,20 @@ private fun TopicSidebar(
     selectedTopic: KBTopicItem?,
     userId: String,
     groups: List<Group>,
+    isManageMode: Boolean,
     activeDragPayload: KnowledgeEntryDragPayload?,
     activeDropTopicId: String?,
+    onToggleManageMode: () -> Unit,
     onCreateTopic: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onSpaceSelect: (KnowledgeSpaceOption) -> Unit,
     onTopicSelect: (KBTopicItem) -> Unit,
+    onManageTopic: (KBTopicItem) -> Unit,
+    onDeleteTopic: (KBTopicItem) -> Unit,
     onEntryDragHoverTopicChange: (String?) -> Unit,
     onEntryDropToTopic: (String) -> Unit,
 ) {
+    val hasManageableTopic = topics.any { canManageKnowledgeTopic(it, userId, groups) }
     Div({
         style {
             width(widthPx.px)
@@ -462,6 +474,15 @@ private fun TopicSidebar(
             title = "知识空间",
             actionLabel = "+",
             onAction = onCreateTopic,
+            secondaryAction = if (hasManageableTopic) {
+                KnowledgeHeaderSecondaryAction(
+                    label = if (isManageMode) "完成" else "管理",
+                    background = if (isManageMode) SilkColors.primaryDark else SilkColors.textSecondary,
+                    onClick = onToggleManageMode,
+                )
+            } else {
+                null
+            },
         )
         KnowledgeSpaceTabs(
             options = spaceOptions,
@@ -480,9 +501,12 @@ private fun TopicSidebar(
             searchQuery = searchQuery,
             userId = userId,
             groups = groups,
+            isManageMode = isManageMode,
             activeDragPayload = activeDragPayload,
             activeDropTopicId = activeDropTopicId,
             onTopicSelect = onTopicSelect,
+            onManageTopic = onManageTopic,
+            onDeleteTopic = onDeleteTopic,
             onEntryDragHoverTopicChange = onEntryDragHoverTopicChange,
             onEntryDropToTopic = onEntryDropToTopic,
         )
@@ -497,7 +521,10 @@ private fun TopicSidebarContent(
     searchQuery: String,
     userId: String,
     groups: List<Group>,
+    isManageMode: Boolean,
     onTopicSelect: (KBTopicItem) -> Unit,
+    onManageTopic: (KBTopicItem) -> Unit,
+    onDeleteTopic: (KBTopicItem) -> Unit,
     activeDragPayload: KnowledgeEntryDragPayload?,
     activeDropTopicId: String?,
     onEntryDragHoverTopicChange: (String?) -> Unit,
@@ -526,7 +553,10 @@ private fun TopicSidebarContent(
                     permissionLabel = topicPermissionLabel(topic, userId, groups),
                     isDropTarget = activeDropTopicId == topic.id,
                     canAcceptDrop = canAcceptDrop,
+                    showManageActions = isManageMode && canManageKnowledgeTopic(topic, userId, groups),
                     onClick = { onTopicSelect(topic) },
+                    onManageTopic = { onManageTopic(topic) },
+                    onDeleteTopic = { onDeleteTopic(topic) },
                 )
                 KnowledgeTopicDropTargetEffect(
                     elementId = knowledgeRowDomId("kb-topic-row", topic.id),
@@ -617,7 +647,10 @@ private fun TopicRow(
     permissionLabel: String,
     isDropTarget: Boolean,
     canAcceptDrop: Boolean,
+    showManageActions: Boolean,
     onClick: () -> Unit,
+    onManageTopic: () -> Unit,
+    onDeleteTopic: () -> Unit,
 ) {
     val rowDomId = remember(topic.id) { knowledgeRowDomId("kb-topic-row", topic.id) }
     Div({
@@ -646,6 +679,27 @@ private fun TopicRow(
                 fontWeight(if (isSelected) "600" else "400")
             }
         }) { Text(topic.name) }
+        if (showManageActions) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    property("gap", "6px")
+                    marginTop(8.px)
+                    property("flex-wrap", "wrap")
+                }
+            }) {
+                KnowledgeInlineActionButton(
+                    label = "权限",
+                    background = SilkColors.textSecondary,
+                    onClick = onManageTopic,
+                )
+                KnowledgeInlineActionButton(
+                    label = "删除",
+                    background = "#8F3D3A",
+                    onClick = onDeleteTopic,
+                )
+            }
+        }
         Div({
             style {
                 display(DisplayStyle.Flex)
@@ -1126,9 +1180,6 @@ private fun EntryRow(
         }) {
             KnowledgeBadge(entry.status.name.lowercase(), SilkColors.primaryDark)
             KnowledgeBadge(knowledgeSourceShortLabel(entry.source.sourceType), SilkColors.primary)
-            if (canDrag) {
-                KnowledgeBadge("可拖动", SilkColors.info)
-            }
         }
     }
     KnowledgeEntryDragSourceEffect(
@@ -1144,6 +1195,7 @@ private fun EntryRow(
 private fun KnowledgeEditorPane(
     selectedTopic: KBTopicItem?,
     selectedEntry: KBEntryItem?,
+    editorTitle: String,
     editorContent: String,
     isSaving: Boolean,
     saveMessage: String,
@@ -1151,7 +1203,7 @@ private fun KnowledgeEditorPane(
     editorSplitRatio: Double,
     availableEditorWidthPx: Double,
     canEdit: Boolean,
-    canManageTopic: Boolean,
+    savedTitle: String,
     spaceLabel: String?,
     permissionLabel: String?,
     currentUserId: String,
@@ -1159,13 +1211,13 @@ private fun KnowledgeEditorPane(
     onOpenSourceGroup: ((Group) -> Unit)?,
     onOpenSourceWorkflow: ((String) -> Unit)?,
     onOpenSourceMessage: ((KnowledgeSourceMessageJump) -> Unit)?,
+    onTitleChange: (String) -> Unit,
+    onResetTitle: () -> Unit,
     onContentChange: (String) -> Unit,
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onEditorSplitRatioChange: (Double) -> Unit,
-    onManageTopic: () -> Unit,
     onMoveEntry: (() -> Unit)?,
     onDeleteEntry: (() -> Unit)?,
-    onDeleteTopic: (() -> Unit)?,
     onSave: () -> Unit,
     onStatusAction: (() -> Unit)?,
     statusActionLabel: String?,
@@ -1186,17 +1238,18 @@ private fun KnowledgeEditorPane(
             EmptyEditorState()
         } else {
             KnowledgeEditorToolbar(
-                title = selectedEntry.title,
+                title = editorTitle,
+                savedTitle = savedTitle,
+                availableEditorWidthPx = availableEditorWidthPx,
                 isSaving = isSaving,
                 saveMessage = saveMessage,
                 editorMode = editorMode,
                 canEdit = canEdit,
-                canManageTopic = canManageTopic,
+                onTitleChange = onTitleChange,
+                onResetTitle = onResetTitle,
                 onEditorModeChange = onEditorModeChange,
-                onManageTopic = onManageTopic,
                 onMoveEntry = onMoveEntry,
                 onDeleteEntry = onDeleteEntry,
-                onDeleteTopic = onDeleteTopic,
                 onSave = onSave,
                 onStatusAction = onStatusAction,
                 statusActionLabel = statusActionLabel,
@@ -1248,6 +1301,8 @@ private fun KnowledgeMarkdownWorkspace(
             backgroundColor(Color(SilkColors.background))
             minWidth(0.px)
             property("min-height", "0")
+            property("overflow", "hidden")
+            position(Position.Relative)
         }
     }) {
         if (editorMode != KnowledgeEditorMode.PREVIEW) {
@@ -1258,8 +1313,11 @@ private fun KnowledgeMarkdownWorkspace(
                     } else {
                         flexGrow(1)
                     }
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
                     minWidth(240.px)
                     property("min-height", "0")
+                    property("overflow", "hidden")
                 }
             }) {
                 MarkdownSourcePane(
@@ -1285,8 +1343,11 @@ private fun KnowledgeMarkdownWorkspace(
                     } else {
                         flexGrow(1)
                     }
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
                     minWidth(240.px)
                     property("min-height", "0")
+                    property("overflow", "hidden")
                 }
             }) {
                 MarkdownPreviewPane(
@@ -1317,6 +1378,9 @@ private fun MarkdownSourcePane(
             display(DisplayStyle.Flex)
             flexDirection(FlexDirection.Column)
             property("min-height", "0")
+            property("overflow", "hidden")
+            position(Position.Relative)
+            property("z-index", "0")
             if (isSplit) {
                 property("border-right", "1px solid ${SilkColors.border}")
             }
@@ -1346,6 +1410,10 @@ private fun MarkdownSourcePane(
             style {
                 flexGrow(1)
                 minWidth(0.px)
+                property("min-height", "0")
+                width(100.percent)
+                height(100.percent)
+                display(DisplayStyle.Block)
                 border(0.px)
                 borderRadius(0.px)
                 padding(16.px)
@@ -1357,6 +1425,8 @@ private fun MarkdownSourcePane(
                 property("box-sizing", "border-box")
                 property("resize", "none")
                 property("outline", "none")
+                position(Position.Relative)
+                property("z-index", "1")
                 if (readOnly) {
                     property("cursor", "not-allowed")
                 }
@@ -1379,6 +1449,8 @@ private fun MarkdownPreviewPane(
             display(DisplayStyle.Flex)
             flexDirection(FlexDirection.Column)
             property("min-height", "0")
+            property("overflow", "hidden")
+            position(Position.Relative)
             backgroundColor(Color(SilkColors.surface))
         }
     }) {
@@ -1439,16 +1511,17 @@ private fun KnowledgePaneHeader(title: String, detail: String?) {
 @Composable
 private fun KnowledgeEditorToolbar(
     title: String,
+    savedTitle: String,
+    availableEditorWidthPx: Double,
     isSaving: Boolean,
     saveMessage: String,
     editorMode: KnowledgeEditorMode,
     canEdit: Boolean,
-    canManageTopic: Boolean,
+    onTitleChange: (String) -> Unit,
+    onResetTitle: () -> Unit,
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
-    onManageTopic: () -> Unit,
     onMoveEntry: (() -> Unit)?,
     onDeleteEntry: (() -> Unit)?,
-    onDeleteTopic: (() -> Unit)?,
     onSave: () -> Unit,
     onStatusAction: (() -> Unit)?,
     statusActionLabel: String?,
@@ -1456,6 +1529,8 @@ private fun KnowledgeEditorToolbar(
     onExport: () -> Unit,
     onCopyReference: () -> Unit,
 ) {
+    val useCompactModeSwitch = availableEditorWidthPx < 620.0
+    var isEditingTitle by remember(savedTitle, canEdit) { mutableStateOf(false) }
     Div({
         style {
             padding(8.px, 16.px)
@@ -1463,23 +1538,117 @@ private fun KnowledgeEditorToolbar(
             display(DisplayStyle.Flex)
             justifyContent(JustifyContent.SpaceBetween)
             alignItems(AlignItems.Center)
+            property("flex-wrap", "wrap")
+            property("gap", "12px")
             backgroundColor(Color(SilkColors.surfaceElevated))
         }
     }) {
-        Span({
-            style { fontSize(16.px); fontWeight("600"); color(Color(SilkColors.textPrimary)) }
-        }) { Text(title) }
+        if (isEditingTitle && canEdit) {
+            Div({
+                style {
+                    property("flex", "1 1 260px")
+                    minWidth(220.px)
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "8px")
+                    property("flex-wrap", "wrap")
+                }
+            }) {
+                Input(InputType.Text) {
+                    value(title)
+                    attr("placeholder", "条目标题")
+                    if (isSaving) {
+                        attr("disabled", "true")
+                    }
+                    onInput { onTitleChange(it.value) }
+                    onKeyDown { event ->
+                        when {
+                            event.key == "Enter" -> {
+                                event.preventDefault()
+                                isEditingTitle = false
+                            }
+                            event.key == "Escape" -> {
+                                event.preventDefault()
+                                onResetTitle()
+                                isEditingTitle = false
+                            }
+                        }
+                    }
+                    style {
+                        property("flex", "1 1 220px")
+                        minWidth(180.px)
+                        fontSize(16.px)
+                        fontWeight("600")
+                        color(Color(SilkColors.textPrimary))
+                        backgroundColor(Color("#FFFFFF"))
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(8.px)
+                        padding(8.px, 12.px)
+                        property("outline", "none")
+                    }
+                }
+                KnowledgeInlineActionButton(
+                    label = "完成",
+                    background = SilkColors.primaryDark,
+                    onClick = { isEditingTitle = false },
+                )
+                KnowledgeInlineActionButton(
+                    label = "取消",
+                    background = SilkColors.textSecondary,
+                    onClick = {
+                        onResetTitle()
+                        isEditingTitle = false
+                    },
+                )
+            }
+        } else {
+            val titleStatusText = when {
+                !canEdit -> "只读条目"
+                title != savedTitle -> "标题已修改，记得保存"
+                else -> null
+            }
+            Div({
+                style {
+                    property("flex", "1 1 260px")
+                    minWidth(180.px)
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "4px")
+                    property("cursor", if (canEdit) "text" else "default")
+                }
+                if (canEdit) {
+                    onClick { isEditingTitle = true }
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(18.px)
+                        fontWeight("600")
+                        color(Color(SilkColors.textPrimary))
+                    }
+                }) { Text(title.ifBlank { "未命名条目" }) }
+                titleStatusText?.let { statusText ->
+                    Span({
+                        style {
+                            fontSize(12.px)
+                            color(Color(if (title != savedTitle) SilkColors.warning else SilkColors.textLight))
+                        }
+                    }) {
+                        Text(statusText)
+                    }
+                }
+            }
+        }
         KnowledgeEditorToolbarActions(
+            title = title,
             isSaving = isSaving,
             saveMessage = saveMessage,
             editorMode = editorMode,
+            compactModeSwitch = useCompactModeSwitch,
             canEdit = canEdit,
-            canManageTopic = canManageTopic,
             onEditorModeChange = onEditorModeChange,
-            onManageTopic = onManageTopic,
             onMoveEntry = onMoveEntry,
             onDeleteEntry = onDeleteEntry,
-            onDeleteTopic = onDeleteTopic,
             onSave = onSave,
             onStatusAction = onStatusAction,
             statusActionLabel = statusActionLabel,
@@ -1492,16 +1661,15 @@ private fun KnowledgeEditorToolbar(
 
 @Composable
 private fun KnowledgeEditorToolbarActions(
+    title: String,
     isSaving: Boolean,
     saveMessage: String,
     editorMode: KnowledgeEditorMode,
+    compactModeSwitch: Boolean,
     canEdit: Boolean,
-    canManageTopic: Boolean,
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
-    onManageTopic: () -> Unit,
     onMoveEntry: (() -> Unit)?,
     onDeleteEntry: (() -> Unit)?,
-    onDeleteTopic: (() -> Unit)?,
     onSave: () -> Unit,
     onStatusAction: (() -> Unit)?,
     statusActionLabel: String?,
@@ -1509,30 +1677,24 @@ private fun KnowledgeEditorToolbarActions(
     onExport: () -> Unit,
     onCopyReference: () -> Unit,
 ) {
+    val canSave = canEdit && !isSaving && title.trim().isNotBlank()
     Div({
-        style { display(DisplayStyle.Flex); property("gap", "12px"); alignItems(AlignItems.Center) }
+        style {
+            display(DisplayStyle.Flex)
+            property("gap", "12px")
+            alignItems(AlignItems.Center)
+            property("flex", "1 1 360px")
+            justifyContent(JustifyContent.FlexEnd)
+            property("flex-wrap", "wrap")
+        }
     }) {
         KnowledgeEditorModeSwitch(
             selectedMode = editorMode,
+            compact = compactModeSwitch,
             onModeChange = onEditorModeChange,
         )
         if (saveMessage.isNotEmpty()) {
             Span({ style { fontSize(12.px); color(Color(SilkColors.success)) } }) { Text(saveMessage) }
-        }
-        if (canManageTopic) {
-            KnowledgeToolbarButton(
-                label = "权限",
-                background = SilkColors.textSecondary,
-                onClick = onManageTopic,
-            )
-        }
-        onMoveEntry?.let { moveEntry ->
-            KnowledgeToolbarButton(
-                label = "移动到主题",
-                background = SilkColors.info,
-                enabled = canEdit && !isSaving,
-                onClick = moveEntry,
-            )
         }
         KnowledgeToolbarButton(
             label = "复制引用",
@@ -1542,70 +1704,93 @@ private fun KnowledgeEditorToolbarActions(
         KnowledgeToolbarButton(
             label = if (!canEdit) "只读" else if (isSaving) "保存中..." else "保存",
             background = SilkColors.primary,
-            enabled = canEdit && !isSaving,
+            enabled = canSave,
             onClick = onSave,
         )
-        KnowledgeEditorSecondaryActions(
+        KnowledgeEditorActionMenu(
             isSaving = isSaving,
             canEdit = canEdit,
+            onMoveEntry = onMoveEntry,
             onMergeCandidate = onMergeCandidate,
             onStatusAction = onStatusAction,
             statusActionLabel = statusActionLabel,
             onDeleteEntry = onDeleteEntry,
-            onDeleteTopic = onDeleteTopic,
             onExport = onExport,
         )
     }
 }
 
 @Composable
-private fun KnowledgeEditorSecondaryActions(
+private fun KnowledgeEditorActionMenu(
     isSaving: Boolean,
     canEdit: Boolean,
+    onMoveEntry: (() -> Unit)?,
     onMergeCandidate: (() -> Unit)?,
     onStatusAction: (() -> Unit)?,
     statusActionLabel: String?,
     onDeleteEntry: (() -> Unit)?,
-    onDeleteTopic: (() -> Unit)?,
     onExport: () -> Unit,
 ) {
-    onMergeCandidate?.let { mergeCandidate ->
+    var showMenu by remember(onMoveEntry, onMergeCandidate, onStatusAction, onDeleteEntry) { mutableStateOf(false) }
+    Div({
+        style {
+            position(Position.Relative)
+        }
+    }) {
         KnowledgeToolbarButton(
-            label = "并入其他文档",
-            background = SilkColors.warning,
-            enabled = canEdit && !isSaving,
-            onClick = mergeCandidate,
+            label = if (showMenu) "收起菜单" else "菜单",
+            background = SilkColors.info,
+            onClick = { showMenu = !showMenu },
         )
+        if (showMenu) {
+            Div({
+                style {
+                    position(Position.Absolute)
+                    top(38.px)
+                    right(0.px)
+                    backgroundColor(Color("#FFFFFF"))
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    borderRadius(10.px)
+                    padding(6.px)
+                    property("min-width", "170px")
+                    property("box-shadow", "0 12px 32px rgba(0,0,0,0.12)")
+                    property("z-index", "20")
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "4px")
+                }
+            }) {
+                onMoveEntry?.let { moveEntry ->
+                    KnowledgeMenuActionRow("移动到主题", SilkColors.info, canEdit && !isSaving) {
+                        showMenu = false
+                        moveEntry()
+                    }
+                }
+                onMergeCandidate?.let { mergeCandidate ->
+                    KnowledgeMenuActionRow("并入其他文档", SilkColors.warning, canEdit && !isSaving) {
+                        showMenu = false
+                        mergeCandidate()
+                    }
+                }
+                if (statusActionLabel != null && onStatusAction != null) {
+                    KnowledgeMenuActionRow(statusActionLabel, SilkColors.success, canEdit && !isSaving) {
+                        showMenu = false
+                        onStatusAction()
+                    }
+                }
+                KnowledgeMenuActionRow("导出 Obsidian", SilkColors.info, true) {
+                    showMenu = false
+                    onExport()
+                }
+                onDeleteEntry?.let { deleteEntry ->
+                    KnowledgeMenuActionRow("删除条目", "#B94A48", !isSaving) {
+                        showMenu = false
+                        deleteEntry()
+                    }
+                }
+            }
+        }
     }
-    if (statusActionLabel != null && onStatusAction != null) {
-        KnowledgeToolbarButton(
-            label = statusActionLabel,
-            background = SilkColors.success,
-            enabled = canEdit && !isSaving,
-            onClick = onStatusAction,
-        )
-    }
-    onDeleteEntry?.let { deleteEntry ->
-        KnowledgeToolbarButton(
-            label = "删除条目",
-            background = "#B94A48",
-            enabled = !isSaving,
-            onClick = deleteEntry,
-        )
-    }
-    onDeleteTopic?.let { deleteTopic ->
-        KnowledgeToolbarButton(
-            label = "删除主题",
-            background = "#8F3D3A",
-            enabled = !isSaving,
-            onClick = deleteTopic,
-        )
-    }
-    KnowledgeToolbarButton(
-        label = "导出 Obsidian",
-        background = SilkColors.info,
-        onClick = onExport,
-    )
 }
 
 @Composable
@@ -1650,20 +1835,30 @@ private fun KnowledgeEntryMetaBar(
             }
             KnowledgeBadge(knowledgeSourceLabel(entry.source.sourceType), SilkColors.primary)
         }
-        KnowledgeSourceDetailChips(sourceDetails)
-        KnowledgeSourceActions(
-            sourceGroup = sourceGroup,
-            workflowId = entry.source.workflowId,
-            sourceMessageJump = sourceMessageJump,
-            onOpenSourceGroup = onOpenSourceGroup,
-            onOpenSourceWorkflow = onOpenSourceWorkflow,
-            onOpenSourceMessage = onOpenSourceMessage,
+        val chipActions = linkedMapOf<String, () -> Unit>()
+        if (sourceGroup != null && onOpenSourceGroup != null) {
+            chipActions["来源群组"] = { onOpenSourceGroup(sourceGroup) }
+        }
+        entry.source.workflowId?.takeIf { it.isNotBlank() }?.let { workflowId ->
+            if (onOpenSourceWorkflow != null) {
+                chipActions["工作流"] = { onOpenSourceWorkflow(workflowId) }
+            }
+        }
+        if (sourceMessageJump != null && onOpenSourceMessage != null) {
+            chipActions["来源消息"] = { onOpenSourceMessage(sourceMessageJump) }
+        }
+        KnowledgeSourceDetailChips(
+            sourceDetails = sourceDetails,
+            chipActions = chipActions,
         )
     }
 }
 
 @Composable
-private fun KnowledgeSourceDetailChips(sourceDetails: List<Pair<String, String>>) {
+private fun KnowledgeSourceDetailChips(
+    sourceDetails: List<Pair<String, String>>,
+    chipActions: Map<String, () -> Unit> = emptyMap(),
+) {
     if (sourceDetails.isEmpty()) return
     Div({
         style {
@@ -1673,6 +1868,7 @@ private fun KnowledgeSourceDetailChips(sourceDetails: List<Pair<String, String>>
         }
     }) {
         sourceDetails.forEach { (label, value) ->
+            val action = chipActions[label]
             Div({
                 style {
                     backgroundColor(Color("#FFFFFF"))
@@ -1683,6 +1879,11 @@ private fun KnowledgeSourceDetailChips(sourceDetails: List<Pair<String, String>>
                     property("gap", "6px")
                     alignItems(AlignItems.Center)
                     fontSize(12.px)
+                    property("cursor", if (action != null) "pointer" else "default")
+                }
+                if (action != null) {
+                    attr("title", value)
+                    onClick { action() }
                 }
             }) {
                 Span({
@@ -1692,76 +1893,16 @@ private fun KnowledgeSourceDetailChips(sourceDetails: List<Pair<String, String>>
                     }
                 }) { Text("$label:") }
                 Span({
-                    style { color(Color(SilkColors.textPrimary)) }
+                    style {
+                        color(Color(if (action != null) SilkColors.info else SilkColors.textPrimary))
+                        if (action != null) {
+                            property("text-decoration", "underline")
+                            fontWeight("600")
+                        }
+                    }
                 }) { Text(value) }
             }
         }
-    }
-}
-
-@Composable
-private fun KnowledgeSourceActions(
-    sourceGroup: Group?,
-    workflowId: String?,
-    sourceMessageJump: KnowledgeSourceMessageJump?,
-    onOpenSourceGroup: ((Group) -> Unit)?,
-    onOpenSourceWorkflow: ((String) -> Unit)?,
-    onOpenSourceMessage: ((KnowledgeSourceMessageJump) -> Unit)?,
-) {
-    val hasSourceActions = sourceGroup != null || !workflowId.isNullOrBlank() || sourceMessageJump != null
-    if (!hasSourceActions) return
-    Div({
-        style {
-            display(DisplayStyle.Flex)
-            property("gap", "8px")
-            property("flex-wrap", "wrap")
-        }
-    }) {
-        sourceGroup?.let { group ->
-            onOpenSourceGroup?.let { openGroup ->
-                KnowledgeMetaActionButton(
-                    label = "打开来源群聊",
-                    onClick = { openGroup(group) },
-                )
-            }
-        }
-        workflowId?.takeIf { it.isNotBlank() }?.let { nonBlankWorkflowId ->
-            onOpenSourceWorkflow?.let { openWorkflow ->
-                KnowledgeMetaActionButton(
-                    label = "打开工作流",
-                    onClick = { openWorkflow(nonBlankWorkflowId) },
-                )
-            }
-        }
-        sourceMessageJump?.let { jump ->
-            onOpenSourceMessage?.let { openMessage ->
-                KnowledgeMetaActionButton(
-                    label = "回到来源消息",
-                    onClick = { openMessage(jump) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun KnowledgeMetaActionButton(
-    label: String,
-    onClick: () -> Unit,
-) {
-    Button({
-        style {
-            backgroundColor(Color("#FFFFFF"))
-            border(1.px, LineStyle.Solid, Color(SilkColors.border))
-            borderRadius(999.px)
-            padding(6.px, 12.px)
-            fontSize(12.px)
-            color(Color(SilkColors.textPrimary))
-            property("cursor", "pointer")
-        }
-        onClick { onClick() }
-    }) {
-        Text(label)
     }
 }
 
@@ -1784,6 +1925,7 @@ private fun KnowledgeBadge(label: String, background: String) {
 @Composable
 private fun KnowledgeEditorModeSwitch(
     selectedMode: KnowledgeEditorMode,
+    compact: Boolean,
     onModeChange: (KnowledgeEditorMode) -> Unit,
 ) {
     Div({
@@ -1794,23 +1936,27 @@ private fun KnowledgeEditorModeSwitch(
             border(1.px, LineStyle.Solid, Color(SilkColors.border))
             borderRadius(7.px)
             backgroundColor(Color(SilkColors.surface))
+            property("flex", "1 1 180px")
+            property("min-width", "0")
         }
     }) {
         KnowledgeEditorMode.entries.forEach { mode ->
             Button({
+                attr("title", mode.label)
                 style {
                     backgroundColor(Color(if (selectedMode == mode) SilkColors.primary else SilkColors.surface))
                     color(Color(if (selectedMode == mode) "#FFFFFF" else SilkColors.textSecondary))
                     border(0.px)
                     borderRadius(0.px)
-                    padding(6.px, 12.px)
+                    padding(6.px, if (compact) 8.px else 12.px)
                     property("cursor", "pointer")
                     fontSize(12.px)
                     fontWeight(if (selectedMode == mode) "600" else "500")
-                    property("min-width", "52px")
+                    property("flex", "1 1 0")
+                    property("min-width", "0")
                 }
                 onClick { onModeChange(mode) }
-            }) { Text(mode.label) }
+            }) { Text(if (compact) mode.compactLabel else mode.label) }
         }
     }
 }
@@ -2102,7 +2248,13 @@ private fun ConfirmKnowledgeDeleteDialog(
 }
 
 @Composable
-private fun KnowledgeColumnHeader(title: String, actionLabel: String?, actionEnabled: Boolean = true, onAction: () -> Unit) {
+private fun KnowledgeColumnHeader(
+    title: String,
+    actionLabel: String?,
+    actionEnabled: Boolean = true,
+    secondaryAction: KnowledgeHeaderSecondaryAction? = null,
+    onAction: () -> Unit,
+) {
     Div({
         style {
             padding(12.px)
@@ -2115,28 +2267,86 @@ private fun KnowledgeColumnHeader(title: String, actionLabel: String?, actionEna
         Span({
             style { fontSize(16.px); fontWeight("bold"); color(Color(SilkColors.textPrimary)) }
         }) { Text(title) }
-        if (actionLabel != null) {
-            Button({
-                style {
-                    backgroundColor(Color(if (actionEnabled) SilkColors.primary else SilkColors.border))
-                    color(Color.white)
-                    border(0.px)
-                    borderRadius(6.px)
-                    padding(4.px, 10.px)
-                    property("cursor", if (actionEnabled) "pointer" else "not-allowed")
-                    fontSize(12.px)
-                }
-                if (!actionEnabled) {
-                    attr("disabled", "true")
-                }
-                onClick {
-                    if (actionEnabled) {
-                        onAction()
-                    }
-                }
-            }) { Text(actionLabel) }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                property("gap", "6px")
+                alignItems(AlignItems.Center)
+            }
+        }) {
+            secondaryAction?.let { action ->
+                KnowledgeInlineActionButton(
+                    label = action.label,
+                    background = action.background,
+                    enabled = action.enabled,
+                    onClick = action.onClick,
+                )
+            }
+            if (actionLabel != null) {
+                KnowledgeInlineActionButton(
+                    label = actionLabel,
+                    background = SilkColors.primary,
+                    enabled = actionEnabled,
+                    onClick = onAction,
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun KnowledgeInlineActionButton(
+    label: String,
+    background: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Button({
+        style {
+            backgroundColor(Color(if (enabled) background else SilkColors.border))
+            color(Color.white)
+            border(0.px)
+            borderRadius(6.px)
+            padding(4.px, 10.px)
+            property("cursor", if (enabled) "pointer" else "not-allowed")
+            fontSize(12.px)
+            property("white-space", "nowrap")
+        }
+        if (!enabled) {
+            attr("disabled", "true")
+        }
+        onClick {
+            it.stopPropagation()
+            if (enabled) {
+                onClick()
+            }
+        }
+    }) { Text(label) }
+}
+
+@Composable
+private fun KnowledgeMenuActionRow(
+    label: String,
+    color: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Div({
+        style {
+            padding(8.px, 10.px)
+            borderRadius(8.px)
+            property("cursor", if (enabled) "pointer" else "not-allowed")
+            color(Color(if (enabled) color else SilkColors.textLight))
+            fontSize(13.px)
+            fontWeight("600")
+            backgroundColor(Color(if (enabled) "rgba(255,253,248,0.96)" else "#F4F1EA"))
+        }
+        onClick {
+            if (enabled) {
+                onClick()
+            }
+        }
+    }) { Text(label) }
 }
 
 @Composable
@@ -2245,25 +2455,28 @@ private fun loadKnowledgeEntry(
 private suspend fun saveKnowledgeEntry(
     entry: KBEntryItem?,
     topic: KBTopicItem?,
+    editorTitle: String,
     editorContent: String,
     userId: String,
     onSavingChange: (Boolean) -> Unit,
     onSaveMessageChange: (String) -> Unit,
     onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEditorTitleChange: (String) -> Unit,
     onEntriesChange: (List<KBEntryItem>) -> Unit,
 ) {
-    if (entry == null || topic == null) return
+    if (entry == null || topic == null || editorTitle.trim().isBlank()) return
     onSavingChange(true)
     onSaveMessageChange("")
     val updated = ApiClient.updateKBEntry(
         entryId = entry.id,
-        title = null,
+        title = editorTitle.trim(),
         content = editorContent,
         tags = null,
         userId = userId,
     )
     if (updated != null) {
         onSelectedEntryChange(updated)
+        onEditorTitleChange(updated.title)
         onEntriesChange(ApiClient.getKBEntries(topic.id, userId))
         onSaveMessageChange("已保存")
     }
@@ -2773,6 +2986,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var isBatchMergeSaving by remember { mutableStateOf(false) }
     var activeDragPayload by remember { mutableStateOf<KnowledgeEntryDragPayload?>(null) }
     var activeDropTopicId by remember { mutableStateOf<String?>(null) }
+    var showTopicManageMode by remember(selectedSpaceId) { mutableStateOf(false) }
     var showMoveEntryDialog by remember { mutableStateOf(false) }
     var moveTargetTopicId by remember { mutableStateOf("") }
     var isMoveEntrySaving by remember { mutableStateOf(false) }
@@ -2790,6 +3004,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var editableTeamMembersCanWrite by remember { mutableStateOf(true) }
 
     var editorContent by remember { mutableStateOf("") }
+    var editorTitle by remember { mutableStateOf("") }
     var isSaving by remember { mutableStateOf(false) }
     var saveMessage by remember { mutableStateOf("") }
     var editorMode by remember { mutableStateOf(KnowledgeEditorMode.SPLIT) }
@@ -2866,9 +3081,14 @@ fun KnowledgeBaseScene(appState: WebAppState) {
         if (selectedTopic != null && filteredTopics.none { it.id == selectedTopic?.id }) {
             selectedTopic = null
             selectedEntry = null
+            editorTitle = ""
             entries = emptyList()
             editorContent = ""
         }
+    }
+
+    LaunchedEffect(selectedEntry?.id) {
+        editorTitle = selectedEntry?.title.orEmpty()
     }
 
     LaunchedEffect(entries, entryFilter, selectedTopic?.id) {
@@ -2935,16 +3155,33 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             topics = filteredTopics,
             isLoading = isLoading,
             selectedTopic = selectedTopic,
+            isManageMode = showTopicManageMode,
             onCreateTopic = {
                 newTopicSpaceId = selectedSpaceId
                 showCreateTopicDialog = true
             },
+            onToggleManageMode = { showTopicManageMode = !showTopicManageMode },
             onSearchQueryChange = { topicSearchQuery = it },
             onSpaceSelect = { selectedSpace ->
                 selectedSpaceId = selectedSpace.id
             },
             userId = user.id,
             groups = userGroups,
+            onManageTopic = { topic ->
+                editableTopicName = topic.name
+                editableTopicProject = topic.project
+                editableReadUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.readUserIds)
+                editableWriteUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.writeUserIds)
+                editableManageUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.manageUserIds)
+                editableWriteLocked = topic.accessPolicy.writeLocked
+                editableTeamMembersCanWrite = topic.accessPolicy.teamMembersCanWrite
+                selectedTopic = topic
+                showTopicAccessDialog = true
+            },
+            onDeleteTopic = { topic ->
+                selectedTopic = topic
+                showDeleteTopicDialog = true
+            },
             activeDragPayload = activeDragPayload,
             activeDropTopicId = activeDropTopicId,
             onTopicSelect = { topic ->
@@ -3097,6 +3334,8 @@ fun KnowledgeBaseScene(appState: WebAppState) {
         KnowledgeEditorPane(
             selectedTopic = selectedTopic,
             selectedEntry = selectedEntry,
+            editorTitle = editorTitle,
+            savedTitle = selectedEntry?.title.orEmpty(),
             editorContent = editorContent,
             isSaving = isSaving,
             saveMessage = saveMessage,
@@ -3104,7 +3343,6 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             editorSplitRatio = editorSplitRatio,
             availableEditorWidthPx = window.innerWidth.toDouble() - topicSidebarWidth - entrySidebarWidth - 20.0,
             canEdit = canEditSelectedTopic,
-            canManageTopic = canManageSelectedTopic,
             spaceLabel = selectedTopicSpaceLabel,
             permissionLabel = selectedTopicPermissionLabel,
             currentUserId = user.id,
@@ -3123,6 +3361,18 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                     }
                 }
             },
+            onTitleChange = {
+                editorTitle = it
+                if (saveMessage.isNotEmpty()) {
+                    saveMessage = ""
+                }
+            },
+            onResetTitle = {
+                editorTitle = selectedEntry?.title.orEmpty()
+                if (saveMessage.isNotEmpty()) {
+                    saveMessage = ""
+                }
+            },
             onContentChange = {
                 editorContent = it
                 if (saveMessage.isNotEmpty()) {
@@ -3133,17 +3383,6 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             onEditorSplitRatioChange = { nextRatio ->
                 editorSplitRatio = clampKnowledgeEditorSplitRatio(nextRatio)
                 persistKnowledgePaneNumber(KNOWLEDGE_EDITOR_SPLIT_RATIO_KEY, editorSplitRatio)
-            },
-            onManageTopic = {
-                val topic = selectedTopic ?: return@KnowledgeEditorPane
-                editableTopicName = topic.name
-                editableTopicProject = topic.project
-                editableReadUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.readUserIds)
-                editableWriteUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.writeUserIds)
-                editableManageUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.manageUserIds)
-                editableWriteLocked = topic.accessPolicy.writeLocked
-                editableTeamMembersCanWrite = topic.accessPolicy.teamMembersCanWrite
-                showTopicAccessDialog = true
             },
             onMoveEntry = selectedEntry
                 ?.takeIf { canEditSelectedTopic && moveTargetTopics.isNotEmpty() }
@@ -3156,19 +3395,18 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             onDeleteEntry = selectedEntry
                 ?.takeIf { canManageSelectedTopic }
                 ?.let { { showDeleteEntryDialog = true } },
-            onDeleteTopic = selectedTopic
-                ?.takeIf { canManageSelectedTopic }
-                ?.let { { showDeleteTopicDialog = true } },
             onSave = {
                 scope.launch {
                     saveKnowledgeEntry(
                         entry = selectedEntry,
                         topic = selectedTopic,
+                        editorTitle = editorTitle,
                         editorContent = editorContent,
                         userId = user.id,
                         onSavingChange = { isSaving = it },
                         onSaveMessageChange = { saveMessage = it },
                         onSelectedEntryChange = { selectedEntry = it },
+                        onEditorTitleChange = { editorTitle = it },
                         onEntriesChange = { entries = it },
                     )
                 }

@@ -2,6 +2,7 @@ package com.silk.web
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class MessageNavigationTest {
     @Test
@@ -42,5 +43,10 @@ class MessageNavigationTest {
                 scrollHeight = 1200.0,
             ),
         )
+    }
+
+    @Test
+    fun messageSelectorTargetsContainerScopedDataAttribute() {
+        assertTrue("[data-message-id=\"msg-42\"]".contains("msg-42"))
     }
 }
