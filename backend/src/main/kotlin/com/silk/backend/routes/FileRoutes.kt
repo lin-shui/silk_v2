@@ -17,6 +17,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
 import io.ktor.http.content.streamProvider
+import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
 import io.ktor.server.request.receiveMultipart
@@ -567,6 +568,7 @@ private suspend fun handleFileUpload(call: ApplicationCall) {
         val userTextForMsg = parts.userTextInput?.trim() ?: ""
 
         broadcastUploadUserMessageAndVision(
+            applicationScope = call.application,
             sessionId, userId, userName, fileName,
             targetFile, downloadUrl, fileSize, userTextForMsg, isImageFile
         )
@@ -584,7 +586,7 @@ private suspend fun handleFileUpload(call: ApplicationCall) {
         ))
 
         val hasUserText = parts.userTextInput?.trim().isNullOrBlank().not()
-        CoroutineScope(Dispatchers.IO).launch {
+        call.application.launch(Dispatchers.IO) {
             preprocessUploadedFile(
                 finalSessionId = sessionId,
                 finalUserId = userId,
@@ -611,6 +613,7 @@ private suspend fun handleFileUpload(call: ApplicationCall) {
  */
 @Suppress("TooGenericExceptionCaught", "LongParameterList")
 private suspend fun broadcastUploadUserMessageAndVision(
+    applicationScope: Application,
     sessionId: String,
     userId: String,
     userName: String,
@@ -628,7 +631,7 @@ private suspend fun broadcastUploadUserMessageAndVision(
         logger.info("📸 已广播用户合并消息: {} + {}", fileName, userText.take(50))
 
         // 在后端协程中处理 vision（不走 WebSocket）
-        CoroutineScope(Dispatchers.IO).launch {
+        applicationScope.launch(Dispatchers.IO) {
             processUploadedImageVision(
                 chatSvr = chatSvr,
                 finalSessionId = sessionId,
