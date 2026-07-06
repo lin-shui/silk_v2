@@ -1,6 +1,6 @@
 package com.silk.backend.kb
 
-import com.silk.backend.ai.DirectModelAgent
+import com.silk.backend.ai.AvailableReferenceSeed
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.models.KBEntry
 import com.silk.backend.models.KBEntryStatus
@@ -11,7 +11,7 @@ import com.silk.backend.models.KnowledgeSpaceType
 data class KnowledgeBasePromptContext(
     val resolvedUserInput: String,
     val promptBlock: String? = null,
-    val availableReferences: List<DirectModelAgent.AvailableReferenceSeed> = emptyList(),
+    val availableReferences: List<AvailableReferenceSeed> = emptyList(),
     val diagnostics: KnowledgeBaseContextDiagnostics = KnowledgeBaseContextDiagnostics(),
 )
 
@@ -206,9 +206,9 @@ private fun buildKnowledgeBaseReferenceSeeds(
     manualReferences: List<ResolvedKnowledgeBaseReference>,
     pinnedReferences: List<ResolvedKnowledgeBaseReference>,
     autoReferences: List<AutoKnowledgeBaseReference>,
-): List<DirectModelAgent.AvailableReferenceSeed> {
+): List<AvailableReferenceSeed> {
     return manualReferences.map { resolved ->
-        DirectModelAgent.AvailableReferenceSeed(
+        AvailableReferenceSeed(
             title = "${resolved.topic.name} / ${resolved.entry.title}",
             snippet = buildKnowledgeBaseSnippet(resolved.entry),
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
@@ -218,7 +218,7 @@ private fun buildKnowledgeBaseReferenceSeeds(
             spaceLabel = knowledgeBaseSpaceLabel(resolved.topic),
         )
     } + pinnedReferences.map { resolved ->
-        DirectModelAgent.AvailableReferenceSeed(
+        AvailableReferenceSeed(
             title = "${resolved.topic.name} / ${resolved.entry.title}",
             snippet = buildKnowledgeBaseSnippet(resolved.entry),
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
@@ -228,7 +228,7 @@ private fun buildKnowledgeBaseReferenceSeeds(
             spaceLabel = knowledgeBaseSpaceLabel(resolved.topic),
         )
     } + autoReferences.map { resolved ->
-        DirectModelAgent.AvailableReferenceSeed(
+        AvailableReferenceSeed(
             title = "${resolved.topic.name} / ${resolved.entry.title}",
             snippet = buildKnowledgeBaseSnippet(resolved.entry),
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),

@@ -56,6 +56,7 @@ import org.jetbrains.compose.web.dom.Span
 import org.jetbrains.compose.web.dom.Text
 import org.jetbrains.compose.web.dom.TextArea
 import org.w3c.dom.events.Event
+import org.w3c.dom.events.KeyboardEvent
 import org.w3c.dom.events.MouseEvent
 import kotlin.random.Random
 
@@ -63,6 +64,12 @@ internal enum class KnowledgeEditorMode(val label: String, val compactLabel: Str
     EDIT("编辑", "编"),
     PREVIEW("预览", "预"),
     SPLIT("分栏", "双"),
+}
+
+internal enum class KnowledgeEditorModeSwitchPresentation {
+    FULL,
+    COMPACT,
+    SELECT,
 }
 
 internal enum class KnowledgeEntryFilter(val label: String) {
@@ -95,6 +102,14 @@ internal fun parseStoredKnowledgeSidebarWidth(raw: String?, defaultWidth: Double
 
 internal fun parseStoredKnowledgeEditorSplitRatio(raw: String?, defaultRatio: Double): Double =
     raw?.toDoubleOrNull()?.let(::clampKnowledgeEditorSplitRatio) ?: defaultRatio
+
+internal fun knowledgeEditorModeSwitchPresentation(availableEditorWidthPx: Double): KnowledgeEditorModeSwitchPresentation {
+    return when {
+        availableEditorWidthPx < 460.0 -> KnowledgeEditorModeSwitchPresentation.SELECT
+        availableEditorWidthPx < 620.0 -> KnowledgeEditorModeSwitchPresentation.COMPACT
+        else -> KnowledgeEditorModeSwitchPresentation.FULL
+    }
+}
 
 private fun persistKnowledgePaneNumber(key: String, value: Double) {
     localStorage.setItem(key, value.toString())
@@ -1529,7 +1544,7 @@ private fun KnowledgeEditorToolbar(
     onExport: () -> Unit,
     onCopyReference: () -> Unit,
 ) {
-    val useCompactModeSwitch = availableEditorWidthPx < 620.0
+    val modeSwitchPresentation = knowledgeEditorModeSwitchPresentation(availableEditorWidthPx)
     var isEditingTitle by remember(savedTitle, canEdit) { mutableStateOf(false) }
     Div({
         style {
@@ -1644,7 +1659,7 @@ private fun KnowledgeEditorToolbar(
             isSaving = isSaving,
             saveMessage = saveMessage,
             editorMode = editorMode,
-            compactModeSwitch = useCompactModeSwitch,
+            modeSwitchPresentation = modeSwitchPresentation,
             canEdit = canEdit,
             onEditorModeChange = onEditorModeChange,
             onMoveEntry = onMoveEntry,
@@ -1665,7 +1680,7 @@ private fun KnowledgeEditorToolbarActions(
     isSaving: Boolean,
     saveMessage: String,
     editorMode: KnowledgeEditorMode,
-    compactModeSwitch: Boolean,
+    modeSwitchPresentation: KnowledgeEditorModeSwitchPresentation,
     canEdit: Boolean,
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onMoveEntry: (() -> Unit)?,
@@ -1690,7 +1705,7 @@ private fun KnowledgeEditorToolbarActions(
     }) {
         KnowledgeEditorModeSwitch(
             selectedMode = editorMode,
-            compact = compactModeSwitch,
+            presentation = modeSwitchPresentation,
             onModeChange = onEditorModeChange,
         )
         if (saveMessage.isNotEmpty()) {
@@ -1732,7 +1747,43 @@ private fun KnowledgeEditorActionMenu(
     onExport: () -> Unit,
 ) {
     var showMenu by remember(onMoveEntry, onMergeCandidate, onStatusAction, onDeleteEntry) { mutableStateOf(false) }
+    val menuAnchorId = remember { "kb-editor-menu-${Random.nextInt(1_000_000)}" }
+    val menuItems = remember(isSaving, canEdit, statusActionLabel, onMoveEntry, onMergeCandidate, onStatusAction, onDeleteEntry, onExport) {
+        buildKnowledgeEditorMenuItems(
+            isSaving = isSaving,
+            canEdit = canEdit,
+            statusActionLabel = statusActionLabel,
+            onMoveEntry = onMoveEntry,
+            onMergeCandidate = onMergeCandidate,
+            onStatusAction = onStatusAction,
+            onDeleteEntry = onDeleteEntry,
+            onExport = onExport,
+        )
+    }
+    if (showMenu) {
+        DisposableEffect(menuAnchorId) {
+            val mouseDownListener: (Event) -> Unit = mouseDownListener@{ event ->
+                val targetNode = event.target as? org.w3c.dom.Node ?: return@mouseDownListener
+                val menuRoot = document.getElementById(menuAnchorId)
+                if (menuRoot?.contains(targetNode) != true) {
+                    showMenu = false
+                }
+            }
+            val keyDownListener: (Event) -> Unit = { event ->
+                if ((event as? KeyboardEvent)?.key == "Escape") {
+                    showMenu = false
+                }
+            }
+            document.addEventListener("mousedown", mouseDownListener)
+            document.addEventListener("keydown", keyDownListener)
+            onDispose {
+                document.removeEventListener("mousedown", mouseDownListener)
+                document.removeEventListener("keydown", keyDownListener)
+            }
+        }
+    }
     Div({
+        attr("id", menuAnchorId)
         style {
             position(Position.Relative)
         }
@@ -1760,36 +1811,42 @@ private fun KnowledgeEditorActionMenu(
                     property("gap", "4px")
                 }
             }) {
-                onMoveEntry?.let { moveEntry ->
-                    KnowledgeMenuActionRow("移动到主题", SilkColors.info, canEdit && !isSaving) {
+                menuItems.forEach { item ->
+                    KnowledgeMenuActionRow(item.label, textColor = item.textColor, enabled = item.enabled) {
                         showMenu = false
-                        moveEntry()
-                    }
-                }
-                onMergeCandidate?.let { mergeCandidate ->
-                    KnowledgeMenuActionRow("并入其他文档", SilkColors.warning, canEdit && !isSaving) {
-                        showMenu = false
-                        mergeCandidate()
-                    }
-                }
-                if (statusActionLabel != null && onStatusAction != null) {
-                    KnowledgeMenuActionRow(statusActionLabel, SilkColors.success, canEdit && !isSaving) {
-                        showMenu = false
-                        onStatusAction()
-                    }
-                }
-                KnowledgeMenuActionRow("导出 Obsidian", SilkColors.info, true) {
-                    showMenu = false
-                    onExport()
-                }
-                onDeleteEntry?.let { deleteEntry ->
-                    KnowledgeMenuActionRow("删除条目", "#B94A48", !isSaving) {
-                        showMenu = false
-                        deleteEntry()
+                        item.onClick()
                     }
                 }
             }
         }
+    }
+}
+
+private data class KnowledgeEditorMenuItem(
+    val label: String,
+    val enabled: Boolean,
+    val textColor: String = "#1F2A36",
+    val onClick: () -> Unit,
+)
+
+private fun buildKnowledgeEditorMenuItems(
+    isSaving: Boolean,
+    canEdit: Boolean,
+    statusActionLabel: String?,
+    onMoveEntry: (() -> Unit)?,
+    onMergeCandidate: (() -> Unit)?,
+    onStatusAction: (() -> Unit)?,
+    onDeleteEntry: (() -> Unit)?,
+    onExport: () -> Unit,
+): List<KnowledgeEditorMenuItem> = buildList {
+    onMoveEntry?.let { add(KnowledgeEditorMenuItem("移动到主题", canEdit && !isSaving, onClick = it)) }
+    onMergeCandidate?.let { add(KnowledgeEditorMenuItem("并入其他文档", canEdit && !isSaving, onClick = it)) }
+    if (statusActionLabel != null && onStatusAction != null) {
+        add(KnowledgeEditorMenuItem(statusActionLabel, canEdit && !isSaving, onClick = onStatusAction))
+    }
+    add(KnowledgeEditorMenuItem("导出 Obsidian", enabled = true, onClick = onExport))
+    onDeleteEntry?.let {
+        add(KnowledgeEditorMenuItem("删除条目", enabled = !isSaving, textColor = "#B94A48", onClick = it))
     }
 }
 
@@ -1925,9 +1982,38 @@ private fun KnowledgeBadge(label: String, background: String) {
 @Composable
 private fun KnowledgeEditorModeSwitch(
     selectedMode: KnowledgeEditorMode,
-    compact: Boolean,
+    presentation: KnowledgeEditorModeSwitchPresentation,
     onModeChange: (KnowledgeEditorMode) -> Unit,
 ) {
+    if (presentation == KnowledgeEditorModeSwitchPresentation.SELECT) {
+        org.jetbrains.compose.web.dom.Select({
+            style {
+                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                borderRadius(7.px)
+                backgroundColor(Color(SilkColors.surface))
+                color(Color(SilkColors.textPrimary))
+                padding(6.px, 10.px)
+                fontSize(12.px)
+                property("flex", "0 0 108px")
+                property("min-width", "108px")
+                property("max-width", "108px")
+            }
+            attr("aria-label", "编辑器模式")
+            attr("value", selectedMode.name)
+            onChange { event ->
+                event.value?.let { selected ->
+                    KnowledgeEditorMode.entries.firstOrNull { it.name == selected }?.let(onModeChange)
+                }
+            }
+        }) {
+            KnowledgeEditorMode.entries.forEach { mode ->
+                org.jetbrains.compose.web.dom.Option(value = mode.name) {
+                    Text(mode.label)
+                }
+            }
+        }
+        return
+    }
     Div({
         style {
             display(DisplayStyle.Flex)
@@ -1948,15 +2034,24 @@ private fun KnowledgeEditorModeSwitch(
                     color(Color(if (selectedMode == mode) "#FFFFFF" else SilkColors.textSecondary))
                     border(0.px)
                     borderRadius(0.px)
-                    padding(6.px, if (compact) 8.px else 12.px)
+                    padding(6.px, if (presentation == KnowledgeEditorModeSwitchPresentation.COMPACT) 8.px else 12.px)
                     property("cursor", "pointer")
                     fontSize(12.px)
                     fontWeight(if (selectedMode == mode) "600" else "500")
                     property("flex", "1 1 0")
                     property("min-width", "0")
+                    property("white-space", "nowrap")
                 }
                 onClick { onModeChange(mode) }
-            }) { Text(if (compact) mode.compactLabel else mode.label) }
+            }) {
+                Text(
+                    if (presentation == KnowledgeEditorModeSwitchPresentation.COMPACT) {
+                        mode.compactLabel
+                    } else {
+                        mode.label
+                    }
+                )
+            }
         }
     }
 }
@@ -2327,7 +2422,7 @@ private fun KnowledgeInlineActionButton(
 @Composable
 private fun KnowledgeMenuActionRow(
     label: String,
-    color: String,
+    textColor: String = SilkColors.textPrimary,
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
@@ -2336,10 +2431,10 @@ private fun KnowledgeMenuActionRow(
             padding(8.px, 10.px)
             borderRadius(8.px)
             property("cursor", if (enabled) "pointer" else "not-allowed")
-            color(Color(if (enabled) color else SilkColors.textLight))
+            color(Color(if (enabled) textColor else SilkColors.textLight))
             fontSize(13.px)
             fontWeight("600")
-            backgroundColor(Color(if (enabled) "rgba(255,253,248,0.96)" else "#F4F1EA"))
+            backgroundColor(Color(if (enabled) SilkColors.surface else "#F4F1EA"))
         }
         onClick {
             if (enabled) {
