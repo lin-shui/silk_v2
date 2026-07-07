@@ -19,6 +19,7 @@ data class KnowledgeBaseContextDiagnostics(
     val manualReferenceCount: Int = 0,
     val pinnedReferenceCount: Int = 0,
     val autoCandidateCount: Int = 0,
+    val memoryReferenceCount: Int = 0,
     val excludedReferenceCount: Int = 0,
     val excludedSpaceCount: Int = 0,
 )
@@ -49,6 +50,8 @@ fun resolveKnowledgeBasePromptContext(
     knowledgeBaseManager: KnowledgeBaseManager,
     preferredGroupId: String? = null,
     autoCandidateLimit: Int = 3,
+    memoryCandidateLimit: Int = 5,
+    memoryEnabled: Boolean = true,
     selection: KnowledgeBaseContextSelection = KnowledgeBaseContextSelection(),
 ): KnowledgeBasePromptContext {
     val tokens = parseKnowledgeBaseReferenceTokens(rawInput)
@@ -76,18 +79,34 @@ fun resolveKnowledgeBasePromptContext(
         excludedEntryIds = manualEntryIds + pinnedReferences.map { it.entry.id } + excludedEntryIds,
         excludedSpaceIds = excludedSpaceIds,
     )
-    if (resolvedByEntryId.isEmpty() && pinnedReferences.isEmpty() && autoReferences.isEmpty()) {
+    val memoryReferences = if (memoryEnabled) {
+        resolveMemoryKnowledgeBaseReferences(
+            knowledgeBaseManager = knowledgeBaseManager,
+            userId = userId,
+            query = resolvedUserInput,
+            memoryCandidateLimit = memoryCandidateLimit,
+        )
+    } else {
+        emptyList()
+    }
+    val hasNoReferences = resolvedByEntryId.isEmpty() &&
+        pinnedReferences.isEmpty() &&
+        autoReferences.isEmpty() &&
+        memoryReferences.isEmpty()
+    if (hasNoReferences) {
         return KnowledgeBasePromptContext(resolvedUserInput = resolvedUserInput)
     }
     val references = buildKnowledgeBaseReferenceSeeds(
         manualReferences = resolvedByEntryId.values.toList(),
         pinnedReferences = pinnedReferences,
         autoReferences = autoReferences,
+        memoryReferences = memoryReferences,
     )
     val promptBlock = buildKnowledgeBasePromptBlock(
         manualReferences = resolvedByEntryId.values.toList(),
         pinnedReferences = pinnedReferences,
         autoReferences = autoReferences,
+        memoryReferences = memoryReferences,
     )
     return KnowledgeBasePromptContext(
         resolvedUserInput = resolvedUserInput,
@@ -97,6 +116,7 @@ fun resolveKnowledgeBasePromptContext(
             manualReferenceCount = resolvedByEntryId.size,
             pinnedReferenceCount = pinnedReferences.size,
             autoCandidateCount = autoReferences.size,
+            memoryReferenceCount = memoryReferences.size,
             excludedReferenceCount = excludedEntryIds.size,
             excludedSpaceCount = excludedSpaceIds.size,
         ),
@@ -202,10 +222,30 @@ private fun resolveAutoKnowledgeBaseReferences(
     }
 }
 
+private fun resolveMemoryKnowledgeBaseReferences(
+    knowledgeBaseManager: KnowledgeBaseManager,
+    userId: String,
+    query: String,
+    memoryCandidateLimit: Int,
+): List<ResolvedKnowledgeBaseReference> {
+    return knowledgeBaseManager.searchMemoryEntriesForContext(
+        userId = userId,
+        query = query,
+        limit = memoryCandidateLimit,
+    ).map { hit ->
+        ResolvedKnowledgeBaseReference(
+            entry = hit.entry,
+            topic = hit.topic,
+            label = hit.entry.title,
+        )
+    }
+}
+
 private fun buildKnowledgeBaseReferenceSeeds(
     manualReferences: List<ResolvedKnowledgeBaseReference>,
     pinnedReferences: List<ResolvedKnowledgeBaseReference>,
     autoReferences: List<AutoKnowledgeBaseReference>,
+    memoryReferences: List<ResolvedKnowledgeBaseReference>,
 ): List<AvailableReferenceSeed> {
     return manualReferences.map { resolved ->
         AvailableReferenceSeed(
@@ -237,6 +277,16 @@ private fun buildKnowledgeBaseReferenceSeeds(
             spaceId = knowledgeBaseSpaceId(resolved.topic),
             spaceLabel = knowledgeBaseSpaceLabel(resolved.topic),
         )
+    } + memoryReferences.map { resolved ->
+        AvailableReferenceSeed(
+            title = "Memory / ${resolved.entry.title}",
+            snippet = buildKnowledgeBaseSnippet(resolved.entry),
+            path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
+            origin = "memory",
+            reason = buildMemoryReason(resolved.entry),
+            spaceId = "memory:${resolved.entry.ownerId}",
+            spaceLabel = "长期记忆",
+        )
     }
 }
 
@@ -264,6 +314,7 @@ private fun buildKnowledgeBasePromptBlock(
     manualReferences: List<ResolvedKnowledgeBaseReference>,
     pinnedReferences: List<ResolvedKnowledgeBaseReference>,
     autoReferences: List<AutoKnowledgeBaseReference>,
+    memoryReferences: List<ResolvedKnowledgeBaseReference>,
 ): String = buildString {
     appendLine("## 知识库上下文")
     appendLine("以下知识库文档已进入本轮上下文。")
@@ -306,6 +357,20 @@ private fun buildKnowledgeBasePromptBlock(
                 topic = resolved.topic,
                 entry = resolved.entry,
                 reasons = resolved.reasons,
+            )
+        }
+    }
+
+    if (memoryReferences.isNotEmpty()) {
+        appendLine("### 用户长期记忆")
+        appendLine(MEMORY_PROMPT_HEADER)
+        memoryReferences.forEach { resolved ->
+            val marker = "[available:${nextIndex++}]"
+            appendReferenceBlock(
+                marker = marker,
+                topic = resolved.topic,
+                entry = resolved.entry,
+                reasons = listOf(buildMemoryReason(resolved.entry)),
             )
         }
     }
