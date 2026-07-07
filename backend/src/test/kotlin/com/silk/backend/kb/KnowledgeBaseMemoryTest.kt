@@ -28,6 +28,24 @@ class KnowledgeBaseMemoryTest {
     }
 
     @Test
+    fun `detect explicit memory captures natural chinese remember phrasing`() {
+        val capture = detectExplicitMemoryCapture("你要记住我叫张三")
+
+        assertNotNull(capture)
+        assertEquals("我叫张三", capture.content)
+        assertEquals(KBMemoryType.PROFILE, capture.type)
+    }
+
+    @Test
+    fun `detect explicit memory captures remember without separator`() {
+        val capture = detectExplicitMemoryCapture("记住我喜欢 Kotlin")
+
+        assertNotNull(capture)
+        assertEquals("我喜欢 Kotlin", capture.content)
+        assertEquals(KBMemoryType.PREFERENCE, capture.type)
+    }
+
+    @Test
     fun `auto memory capture upserts by key without overriding explicit memory`() {
         TestWorkspace().use { workspace ->
             val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
