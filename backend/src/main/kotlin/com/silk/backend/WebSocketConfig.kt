@@ -29,17 +29,20 @@ import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
 import com.silk.backend.kb.KnowledgeBasePromptContext
 import com.silk.backend.kb.KnowledgeBaseAiExecutionRequest
 import com.silk.backend.kb.KnowledgeBaseAiExecutionResult
+import com.silk.backend.kb.detectAutoMemoryCaptures
+import com.silk.backend.kb.detectExplicitMemoryCapture
 import com.silk.backend.kb.executeKnowledgeBaseAiActions
 import com.silk.backend.kb.resolveKnowledgeBasePromptContext
+import com.silk.backend.kb.buildMemoryKey
 import com.silk.backend.models.KnowledgeBaseContextSelection
 import org.slf4j.LoggerFactory
 
 private val knowledgeBaseManager: KnowledgeBaseManager get() = KnowledgeBaseManager()
 private val knowledgeBaseContextPreferenceStore: KnowledgeBaseContextPreferenceStore get() = KnowledgeBaseContextPreferenceStore()
 
-private fun buildPersistentKnowledgeBaseContextSelection(userId: String): KnowledgeBaseContextSelection {
-    if (userId.isBlank()) return KnowledgeBaseContextSelection()
-    val preferences = knowledgeBaseContextPreferenceStore.get(userId)
+private fun buildPersistentKnowledgeBaseContextSelection(
+    preferences: com.silk.backend.kb.KnowledgeBaseContextPreferences,
+): KnowledgeBaseContextSelection {
     return KnowledgeBaseContextSelection(excludedSpaceIds = preferences.excludedSpaceIds)
 }
 
@@ -59,14 +62,17 @@ private fun buildKnowledgeBaseContextStatus(kbContext: KnowledgeBasePromptContex
     val manual = kbContext.diagnostics.manualReferenceCount
     val pinned = kbContext.diagnostics.pinnedReferenceCount
     val auto = kbContext.diagnostics.autoCandidateCount
+    val memory = kbContext.diagnostics.memoryReferenceCount
     val excluded = kbContext.diagnostics.excludedReferenceCount
     return buildString {
         append("📚 本轮知识库上下文已准备")
         append("（共 $total 条")
-        if (manual > 0 || pinned > 0 || auto > 0) {
+        val hasReferenceBreakdown = manual > 0 || pinned > 0 || auto > 0 || memory > 0
+        if (hasReferenceBreakdown) {
             append("：手动 $manual")
             if (pinned > 0) append("，固定 $pinned")
             if (auto > 0) append("，自动 $auto")
+            if (memory > 0) append("，记忆 $memory")
         }
         if (excluded > 0) append("；排除 $excluded")
         append("）")
@@ -1839,13 +1845,54 @@ class ChatServer(
         directModelAgent.initClaudeClient(workspaceDir)
         syncKnowledgeBaseWorkspaceForUser(userId)
 
+        val kbPreferences = if (userId.isBlank()) {
+            com.silk.backend.kb.KnowledgeBaseContextPreferences(userId = "")
+        } else {
+            knowledgeBaseContextPreferenceStore.get(userId)
+        }
+        val explicitMemoryCapture = detectExplicitMemoryCapture(userMessage)
+        if (kbPreferences.memoryEnabled) {
+            explicitMemoryCapture?.let { capture ->
+                val saved = knowledgeBaseManager.captureExplicitMemory(
+                    userId = userId,
+                    content = capture.content,
+                    title = capture.title,
+                    type = capture.type,
+                    key = capture.key ?: buildMemoryKey(capture.type, capture.content),
+                )
+                broadcastSystemStatus(status = "🧠 已保存长期记忆：${saved.title}")
+            }
+            if (explicitMemoryCapture == null && kbPreferences.autoCaptureEnabled) {
+                val autoSaved = detectAutoMemoryCaptures(userMessage)
+                    .mapNotNull { capture ->
+                        knowledgeBaseManager.captureAutoMemory(
+                            userId = userId,
+                            content = capture.content,
+                            title = capture.title,
+                            type = capture.type,
+                            key = capture.key,
+                        )
+                    }
+                    .distinctBy { it.memory?.key ?: it.id }
+                if (autoSaved.isNotEmpty()) {
+                    val summary = autoSaved.joinToString("、") {
+                        it.title.removePrefix("Preference: ").removePrefix("Procedure: ")
+                    }
+                    broadcastSystemStatus(status = "🧠 已更新自动记忆：$summary")
+                }
+            }
+        } else if (explicitMemoryCapture != null) {
+            broadcastSystemStatus(status = "🧠 记忆功能已关闭，本轮不会保存长期记忆")
+        }
+
         // 解析知识库上下文（手动引用 [[kb:...]] + pinned/excluded + 自动检索 + space 级排除）
-        val persistentSelection = buildPersistentKnowledgeBaseContextSelection(userId)
+        val persistentSelection = buildPersistentKnowledgeBaseContextSelection(kbPreferences)
         val kbContext = resolveKnowledgeBasePromptContext(
             rawInput = userMessage,
             userId = userId,
             knowledgeBaseManager = knowledgeBaseManager,
             preferredGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") },
+            memoryEnabled = kbPreferences.memoryEnabled,
             selection = mergeKnowledgeBaseContextSelection(
                 persistentSelection,
                 kbContextSelection ?: KnowledgeBaseContextSelection(),
@@ -1853,11 +1900,12 @@ class ChatServer(
         )
         if (kbContext.availableReferences.isNotEmpty()) {
             logger.info(
-                "📚 [Agent-{}] 注入 {} 条知识库上下文（手动={}, 自动={}）",
+                "📚 [Agent-{}] 注入 {} 条知识库上下文（手动={}, 自动={}, 记忆={}）",
                 callId,
                 kbContext.availableReferences.size,
                 kbContext.diagnostics.manualReferenceCount,
                 kbContext.diagnostics.autoCandidateCount,
+                kbContext.diagnostics.memoryReferenceCount,
             )
             broadcastSystemStatus(
                 status = buildKnowledgeBaseContextStatus(kbContext),

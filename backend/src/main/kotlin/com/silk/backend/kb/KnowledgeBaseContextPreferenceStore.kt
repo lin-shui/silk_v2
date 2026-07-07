@@ -13,6 +13,9 @@ import java.nio.file.StandardCopyOption
 data class KnowledgeBaseContextPreferences(
     val userId: String,
     val excludedSpaceIds: List<String> = emptyList(),
+    val memoryEnabled: Boolean = true,
+    val autoCaptureEnabled: Boolean = false,
+    val ephemeralSessionEnabled: Boolean = false,
     val updatedAt: Long = 0L,
 )
 
@@ -45,23 +48,37 @@ class KnowledgeBaseContextPreferenceStore(
 
     @Synchronized
     fun updateExcludedSpaces(userId: String, excludedSpaceIds: List<String>): KnowledgeBaseContextPreferences {
+        return update(userId = userId, excludedSpaceIds = excludedSpaceIds)
+    }
+
+    @Synchronized
+    fun update(
+        userId: String,
+        excludedSpaceIds: List<String>? = null,
+        memoryEnabled: Boolean? = null,
+        autoCaptureEnabled: Boolean? = null,
+        ephemeralSessionEnabled: Boolean? = null,
+    ): KnowledgeBaseContextPreferences {
         val normalizedUserId = userId.trim()
         require(normalizedUserId.isNotEmpty()) { "userId must not be blank" }
-
-        val normalizedExcludedSpaceIds = normalizeExcludedSpaceIds(excludedSpaceIds)
         val store = load()
+        val existing = store.users[normalizedUserId] ?: KnowledgeBaseContextPreferences(userId = normalizedUserId)
+        val normalizedExcludedSpaceIds = normalizeExcludedSpaceIds(excludedSpaceIds ?: existing.excludedSpaceIds)
         val updated = KnowledgeBaseContextPreferences(
             userId = normalizedUserId,
             excludedSpaceIds = normalizedExcludedSpaceIds,
+            memoryEnabled = memoryEnabled ?: existing.memoryEnabled,
+            autoCaptureEnabled = autoCaptureEnabled ?: existing.autoCaptureEnabled,
+            ephemeralSessionEnabled = ephemeralSessionEnabled ?: existing.ephemeralSessionEnabled,
             updatedAt = System.currentTimeMillis(),
         )
-        if (normalizedExcludedSpaceIds.isEmpty()) {
+        if (shouldRemove(updated)) {
             store.users.remove(normalizedUserId)
         } else {
             store.users[normalizedUserId] = updated
         }
         save(store)
-        return if (normalizedExcludedSpaceIds.isEmpty()) {
+        return if (shouldRemove(updated)) {
             KnowledgeBaseContextPreferences(userId = normalizedUserId)
         } else {
             updated
@@ -74,6 +91,13 @@ class KnowledgeBaseContextPreferenceStore(
             .filter(String::isNotEmpty)
             .distinct()
             .toList()
+    }
+
+    private fun shouldRemove(preferences: KnowledgeBaseContextPreferences): Boolean {
+        return preferences.excludedSpaceIds.isEmpty() &&
+            preferences.memoryEnabled &&
+            !preferences.autoCaptureEnabled &&
+            !preferences.ephemeralSessionEnabled
     }
 
     @Synchronized

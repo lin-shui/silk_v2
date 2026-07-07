@@ -9,6 +9,12 @@ enum class KnowledgeSpaceType {
 }
 
 @Serializable
+enum class KBTopicPurpose {
+    GENERAL,
+    MEMORY,
+}
+
+@Serializable
 data class KBAccessPolicy(
     val readUserIds: List<String> = emptyList(),
     val writeUserIds: List<String> = emptyList(),
@@ -37,6 +43,14 @@ enum class KBSourceType {
 }
 
 @Serializable
+enum class KBMemoryType {
+    PROFILE,
+    PREFERENCE,
+    EPISODIC,
+    PROCEDURAL,
+}
+
+@Serializable
 data class KBEntrySource(
     val sourceType: KBSourceType = KBSourceType.MANUAL,
     val sourceGroupId: String? = null,
@@ -46,11 +60,20 @@ data class KBEntrySource(
 )
 
 @Serializable
+data class KBMemoryMetadata(
+    val type: KBMemoryType = KBMemoryType.EPISODIC,
+    val key: String? = null,
+    val explicit: Boolean = true,
+    val capturedAt: Long = 0L,
+)
+
+@Serializable
 data class KBTopic(
     val id: String,
     val name: String,
     val project: String = "",
     val ownerId: String,
+    val purpose: KBTopicPurpose = KBTopicPurpose.GENERAL,
     val spaceType: KnowledgeSpaceType = KnowledgeSpaceType.PERSONAL,
     val groupId: String? = null,
     val accessPolicy: KBAccessPolicy = KBAccessPolicy(),
@@ -70,6 +93,7 @@ data class KBEntry(
     val ownerId: String,
     val status: KBEntryStatus = KBEntryStatus.PUBLISHED,
     val source: KBEntrySource = KBEntrySource(),
+    val memory: KBMemoryMetadata? = null,
     val createdBy: String = "",
     val updatedBy: String = "",
     val createdAt: Long,
