@@ -7,6 +7,7 @@
 ## Active Execution Plans
 
 - [KB AI Operations](exec-plans/active/2026-07-06-kb-ai-operations.md)
+- [KB Memory Layer](exec-plans/active/2026-07-07-kb-memory-layer.md)
 - [Lint baseline reduction](exec-plans/active/lint-baseline-reduction.md)
 
 ## Usage

@@ -231,6 +231,26 @@ internal fun knowledgeSourceShortLabel(sourceType: KBSourceType): String {
     }
 }
 
+internal fun knowledgeMemoryTypeLabel(type: KBMemoryType): String {
+    return when (type) {
+        KBMemoryType.PROFILE -> "身份画像"
+        KBMemoryType.PREFERENCE -> "偏好"
+        KBMemoryType.EPISODIC -> "经历"
+        KBMemoryType.PROCEDURAL -> "做事方式"
+    }
+}
+
+internal fun sortKnowledgeMemoryEntries(entries: List<KBEntryItem>): List<KBEntryItem> {
+    return entries.sortedWith(
+        compareByDescending<KBEntryItem> { it.memory?.capturedAt ?: it.updatedAt }
+            .thenByDescending { it.updatedAt }
+    )
+}
+
+internal fun knowledgeMemoryStatusLabel(preferences: KnowledgeBaseContextPreferences): String {
+    return if (preferences.memoryEnabled) "长期记忆已启用" else "长期记忆已关闭"
+}
+
 private val opaqueKnowledgeIdRegex = Regex(
     pattern = """^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|msg[-_][a-z0-9-]+|wf[-_][a-z0-9-]+|group[-_][a-z0-9-]+)$""",
     option = RegexOption.IGNORE_CASE,
@@ -461,9 +481,11 @@ private fun TopicSidebar(
     userId: String,
     groups: List<Group>,
     isManageMode: Boolean,
+    memoryPreferences: KnowledgeBaseContextPreferences,
     activeDragPayload: KnowledgeEntryDragPayload?,
     activeDropTopicId: String?,
     onToggleManageMode: () -> Unit,
+    onManageMemory: () -> Unit,
     onCreateTopic: () -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onSpaceSelect: (KnowledgeSpaceOption) -> Unit,
@@ -504,6 +526,10 @@ private fun TopicSidebar(
             selectedSpaceId = selectedSpaceId,
             onSpaceSelect = onSpaceSelect,
         )
+        KnowledgeMemoryQuickPanel(
+            preferences = memoryPreferences,
+            onManageMemory = onManageMemory,
+        )
         KnowledgeSearchField(
             value = searchQuery,
             placeholder = "搜索主题 / 项目",
@@ -525,6 +551,72 @@ private fun TopicSidebar(
             onEntryDragHoverTopicChange = onEntryDragHoverTopicChange,
             onEntryDropToTopic = onEntryDropToTopic,
         )
+    }
+}
+
+@Composable
+private fun KnowledgeMemoryQuickPanel(
+    preferences: KnowledgeBaseContextPreferences,
+    onManageMemory: () -> Unit,
+) {
+    Div({
+        style {
+            padding(12.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("gap", "8px")
+            backgroundColor(Color("#FCF7EE"))
+        }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
+                alignItems(AlignItems.Center)
+                property("gap", "8px")
+            }
+        }) {
+            Div({
+                style {
+                    fontSize(13.px)
+                    fontWeight("600")
+                    color(Color(SilkColors.textPrimary))
+                }
+            }) { Text("KB Memory") }
+            KnowledgeInlineActionButton(
+                label = "管理",
+                background = SilkColors.primaryDark,
+                onClick = onManageMemory,
+            )
+        }
+        Div({
+            style {
+                fontSize(12.px)
+                color(Color(SilkColors.textSecondary))
+                property("line-height", "1.5")
+            }
+        }) {
+            Text(knowledgeMemoryStatusLabel(preferences))
+        }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                property("gap", "6px")
+                property("flex-wrap", "wrap")
+            }
+        }) {
+            KnowledgeBadge(
+                if (preferences.memoryEnabled) "注入开启" else "注入关闭",
+                if (preferences.memoryEnabled) SilkColors.success else SilkColors.warning,
+            )
+            if (preferences.autoCaptureEnabled) {
+                KnowledgeBadge("自动记忆", SilkColors.info)
+            }
+            if (preferences.ephemeralSessionEnabled) {
+                KnowledgeBadge("会话记忆", SilkColors.primary)
+            }
+        }
     }
 }
 
@@ -3054,6 +3146,15 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var selectedSpaceId by remember(user.id) { mutableStateOf(PERSONAL_SPACE_ID) }
     var topicSearchQuery by remember { mutableStateOf("") }
     var entrySearchQuery by remember(selectedTopic?.id) { mutableStateOf("") }
+    var memoryPreferences by remember(user.id) { mutableStateOf(KnowledgeBaseContextPreferences(userId = user.id)) }
+    var memoryEntries by remember(user.id) { mutableStateOf<List<KBEntryItem>>(emptyList()) }
+    var showMemoryDialog by remember { mutableStateOf(false) }
+    var isMemoryLoading by remember { mutableStateOf(false) }
+    var isMemorySaving by remember { mutableStateOf(false) }
+    var memoryDraftTitle by remember { mutableStateOf("") }
+    var memoryDraftContent by remember { mutableStateOf("") }
+    var memoryDraftType by remember { mutableStateOf(KBMemoryType.PREFERENCE) }
+    var memoryFeedback by remember { mutableStateOf("") }
 
     var showCreateTopicDialog by remember { mutableStateOf(false) }
     var newTopicName by remember { mutableStateOf("") }
@@ -3134,6 +3235,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
         val groupsResponse = ApiClient.getUserGroups(user.id)
         userGroups = (groupsResponse.groups ?: emptyList()).filterNot { it.name.startsWith("wf_") }
         topics = ApiClient.getKBTopics(user.id)
+        memoryPreferences = ApiClient.getKBContextPreferences(user.id)
         isLoading = false
     }
 
@@ -3251,11 +3353,22 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             isLoading = isLoading,
             selectedTopic = selectedTopic,
             isManageMode = showTopicManageMode,
+            memoryPreferences = memoryPreferences,
             onCreateTopic = {
                 newTopicSpaceId = selectedSpaceId
                 showCreateTopicDialog = true
             },
             onToggleManageMode = { showTopicManageMode = !showTopicManageMode },
+            onManageMemory = {
+                showMemoryDialog = true
+                scope.launch {
+                    isMemoryLoading = true
+                    memoryFeedback = ""
+                    memoryPreferences = ApiClient.getKBContextPreferences(user.id)
+                    memoryEntries = sortKnowledgeMemoryEntries(ApiClient.listKBMemoryEntries(user.id))
+                    isMemoryLoading = false
+                }
+            },
             onSearchQueryChange = { topicSearchQuery = it },
             onSpaceSelect = { selectedSpace ->
                 selectedSpaceId = selectedSpace.id
@@ -3546,6 +3659,87 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 val entry = selectedEntry ?: return@KnowledgeEditorPane
                 copyTextToClipboard(buildKnowledgeBaseReference(entry))
                 saveMessage = "引用已复制"
+            },
+        )
+    }
+
+    if (showMemoryDialog) {
+        KnowledgeMemoryDialog(
+            preferences = memoryPreferences,
+            entries = memoryEntries,
+            isLoading = isMemoryLoading,
+            isSaving = isMemorySaving,
+            draftTitle = memoryDraftTitle,
+            draftContent = memoryDraftContent,
+            draftType = memoryDraftType,
+            feedbackMessage = memoryFeedback,
+            onDraftTitleChange = { memoryDraftTitle = it },
+            onDraftContentChange = { memoryDraftContent = it },
+            onDraftTypeChange = { memoryDraftType = it },
+            onPreferencesChange = { memoryPreferences = it },
+            onDismiss = {
+                if (!isMemorySaving) {
+                    showMemoryDialog = false
+                    memoryFeedback = ""
+                }
+            },
+            onSavePreferences = {
+                scope.launch {
+                    isMemorySaving = true
+                    val updated = ApiClient.updateKBContextPreferences(
+                        userId = user.id,
+                        excludedSpaceIds = memoryPreferences.excludedSpaceIds,
+                        memoryEnabled = memoryPreferences.memoryEnabled,
+                        autoCaptureEnabled = memoryPreferences.autoCaptureEnabled,
+                        ephemeralSessionEnabled = memoryPreferences.ephemeralSessionEnabled,
+                    )
+                    memoryFeedback = if (updated != null) {
+                        memoryPreferences = updated
+                        "记忆设置已保存"
+                    } else {
+                        "记忆设置保存失败"
+                    }
+                    isMemorySaving = false
+                }
+            },
+            onCreateMemory = {
+                scope.launch {
+                    val content = memoryDraftContent.trim()
+                    if (content.isBlank()) {
+                        memoryFeedback = "请先输入记忆内容"
+                        return@launch
+                    }
+                    isMemorySaving = true
+                    val created = ApiClient.createKBMemoryEntry(
+                        userId = user.id,
+                        content = content,
+                        memoryType = memoryDraftType,
+                        title = memoryDraftTitle.trim().takeIf { it.isNotBlank() },
+                    )
+                    memoryFeedback = if (created != null) {
+                        memoryEntries = sortKnowledgeMemoryEntries(listOf(created) + memoryEntries.filterNot { it.id == created.id })
+                        memoryDraftTitle = ""
+                        memoryDraftContent = ""
+                        memoryDraftType = KBMemoryType.PREFERENCE
+                        "记忆已写入"
+                    } else {
+                        "写入记忆失败"
+                    }
+                    isMemorySaving = false
+                }
+            },
+            onDeleteMemory = { entryId ->
+                scope.launch {
+                    isMemorySaving = true
+                    val deleted = ApiClient.deleteKBMemoryEntry(entryId, user.id)
+                    memoryFeedback = if (deleted) {
+                        memoryEntries = memoryEntries.filterNot { it.id == entryId }
+                        "记忆已删除"
+                    } else {
+                        "删除记忆失败"
+                    }
+                    isMemorySaving = false
+                }
             },
         )
     }
@@ -3909,6 +4103,414 @@ fun KnowledgeBaseScene(appState: WebAppState) {
 }
 
 // ---- Shared dialog helpers ----
+
+@Composable
+private fun KnowledgeMemoryDialog(
+    preferences: KnowledgeBaseContextPreferences,
+    entries: List<KBEntryItem>,
+    isLoading: Boolean,
+    isSaving: Boolean,
+    draftTitle: String,
+    draftContent: String,
+    draftType: KBMemoryType,
+    feedbackMessage: String,
+    onDraftTitleChange: (String) -> Unit,
+    onDraftContentChange: (String) -> Unit,
+    onDraftTypeChange: (KBMemoryType) -> Unit,
+    onPreferencesChange: (KnowledgeBaseContextPreferences) -> Unit,
+    onDismiss: () -> Unit,
+    onSavePreferences: () -> Unit,
+    onCreateMemory: () -> Unit,
+    onDeleteMemory: (String) -> Unit,
+) {
+    Div({
+        style {
+            position(Position.Fixed)
+            top(0.px); left(0.px); right(0.px); bottom(0.px)
+            backgroundColor(Color("rgba(0,0,0,0.42)"))
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.Center)
+            alignItems(AlignItems.Center)
+            property("z-index", "1000")
+        }
+        onClick { onDismiss() }
+    }) {
+        Div({
+            style {
+                backgroundColor(Color.white)
+                borderRadius(16.px)
+                padding(24.px)
+                width(760.px)
+                property("max-width", "calc(100vw - 32px)")
+                property("max-height", "calc(100vh - 48px)")
+                property("overflow-y", "auto")
+                property("box-shadow", "0 16px 48px rgba(0,0,0,0.18)")
+            }
+            onClick { it.stopPropagation() }
+        }) {
+            H3({ style { marginTop(0.px); marginBottom(8.px); color(Color(SilkColors.textPrimary)) } }) {
+                Text("KB Memory")
+            }
+            Div({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    marginBottom(16.px)
+                    property("line-height", "1.6")
+                }
+            }) {
+                Text("管理长期记忆的注入开关、自动记忆策略，以及当前已保存的个人 memory。")
+            }
+            if (feedbackMessage.isNotBlank()) {
+                Div({
+                    style {
+                        marginBottom(12.px)
+                        padding(10.px, 12.px)
+                        borderRadius(10.px)
+                        backgroundColor(Color("#F7F1E3"))
+                        color(Color(SilkColors.textPrimary))
+                        fontSize(13.px)
+                    }
+                }) { Text(feedbackMessage) }
+            }
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "12px")
+                }
+            }) {
+                KnowledgeMemorySettingsSection(
+                    preferences = preferences,
+                    onPreferencesChange = onPreferencesChange,
+                    onSavePreferences = onSavePreferences,
+                    isSaving = isSaving,
+                )
+                KnowledgeMemoryComposerSection(
+                    draftTitle = draftTitle,
+                    draftContent = draftContent,
+                    draftType = draftType,
+                    isSaving = isSaving,
+                    onDraftTitleChange = onDraftTitleChange,
+                    onDraftContentChange = onDraftContentChange,
+                    onDraftTypeChange = onDraftTypeChange,
+                    onCreateMemory = onCreateMemory,
+                )
+                KnowledgeMemoryEntriesSection(
+                    entries = entries,
+                    isLoading = isLoading,
+                    isSaving = isSaving,
+                    onDeleteMemory = onDeleteMemory,
+                )
+            }
+            DialogActions(
+                onCancel = onDismiss,
+                onConfirm = onDismiss,
+                confirmLabel = "关闭",
+                confirmEnabled = !isSaving,
+            )
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeMemorySettingsSection(
+    preferences: KnowledgeBaseContextPreferences,
+    onPreferencesChange: (KnowledgeBaseContextPreferences) -> Unit,
+    onSavePreferences: () -> Unit,
+    isSaving: Boolean,
+) {
+    KnowledgeMemorySection(title = "设置") {
+        KnowledgeMemoryCheckboxRow(
+            label = "启用长期记忆注入",
+            description = "回复前检索相关 memory 并注入 prompt。",
+            checked = preferences.memoryEnabled,
+            onCheckedChange = {
+                onPreferencesChange(preferences.copy(memoryEnabled = it))
+            },
+        )
+        KnowledgeMemoryCheckboxRow(
+            label = "允许自动记忆",
+            description = "只针对低风险偏好做自动抽取；高风险内容仍不自动入库。",
+            checked = preferences.autoCaptureEnabled,
+            onCheckedChange = {
+                onPreferencesChange(preferences.copy(autoCaptureEnabled = it))
+            },
+        )
+        KnowledgeMemoryCheckboxRow(
+            label = "启用会话级临时记忆",
+            description = "为后续的短会话记忆保留开关，当前先只做显式控制。",
+            checked = preferences.ephemeralSessionEnabled,
+            onCheckedChange = {
+                onPreferencesChange(preferences.copy(ephemeralSessionEnabled = it))
+            },
+        )
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.FlexEnd)
+                marginTop(8.px)
+            }
+        }) {
+            KnowledgeInlineActionButton(
+                label = if (isSaving) "保存中..." else "保存设置",
+                background = SilkColors.primaryDark,
+                enabled = !isSaving,
+                onClick = onSavePreferences,
+            )
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeMemoryComposerSection(
+    draftTitle: String,
+    draftContent: String,
+    draftType: KBMemoryType,
+    isSaving: Boolean,
+    onDraftTitleChange: (String) -> Unit,
+    onDraftContentChange: (String) -> Unit,
+    onDraftTypeChange: (KBMemoryType) -> Unit,
+    onCreateMemory: () -> Unit,
+) {
+    KnowledgeMemorySection(title = "新增记忆") {
+        LabeledInput(
+            placeholder = "标题（可选，不填则由后端生成）",
+            currentValue = draftTitle,
+            onValueChange = onDraftTitleChange,
+        )
+        Div({
+            style {
+                marginBottom(12.px)
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("gap", "8px")
+            }
+        }) {
+            Span({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    fontWeight("600")
+                }
+            }) { Text("记忆类型") }
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    property("gap", "6px")
+                    property("flex-wrap", "wrap")
+                }
+            }) {
+                KBMemoryType.entries.forEach { type ->
+                    KnowledgeToggleButton(
+                        label = knowledgeMemoryTypeLabel(type),
+                        selected = draftType == type,
+                        onClick = { onDraftTypeChange(type) },
+                    )
+                }
+            }
+        }
+        TextArea(
+            value = draftContent,
+            attrs = {
+                attr("placeholder", "例如：记住我默认用中文回答；记住这个项目优先 Kotlin/Ktor；记住我喜欢先给最小修复。")
+                onInput { onDraftContentChange(it.value) }
+                style {
+                    width(100.percent)
+                    height(120.px)
+                    borderRadius(10.px)
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    padding(10.px, 12.px)
+                    fontSize(14.px)
+                    property("box-sizing", "border-box")
+                    marginBottom(12.px)
+                }
+            },
+        )
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.FlexEnd)
+            }
+        }) {
+            KnowledgeInlineActionButton(
+                label = if (isSaving) "写入中..." else "写入记忆",
+                background = SilkColors.primary,
+                enabled = !isSaving,
+                onClick = onCreateMemory,
+            )
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeMemoryEntriesSection(
+    entries: List<KBEntryItem>,
+    isLoading: Boolean,
+    isSaving: Boolean,
+    onDeleteMemory: (String) -> Unit,
+) {
+    KnowledgeMemorySection(title = "当前记忆") {
+        when {
+            isLoading -> KnowledgeCenteredMessage("正在加载 memory...", SilkColors.textSecondary, 16.px)
+            entries.isEmpty() -> KnowledgeCenteredMessage("还没有保存任何长期记忆", SilkColors.textLight, 20.px)
+            else -> {
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        flexDirection(FlexDirection.Column)
+                        property("gap", "10px")
+                    }
+                }) {
+                    entries.forEach { entry ->
+                        KnowledgeMemoryEntryCard(
+                            entry = entry,
+                            isSaving = isSaving,
+                            onDelete = { onDeleteMemory(entry.id) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeMemoryEntryCard(
+    entry: KBEntryItem,
+    isSaving: Boolean,
+    onDelete: () -> Unit,
+) {
+    Div({
+        style {
+            padding(12.px)
+            borderRadius(12.px)
+            backgroundColor(Color("#FFFCF6"))
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("gap", "8px")
+        }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
+                alignItems(AlignItems.Center)
+                property("gap", "12px")
+            }
+        }) {
+            Div({
+                style {
+                    fontSize(14.px)
+                    fontWeight("600")
+                    color(Color(SilkColors.textPrimary))
+                }
+            }) {
+                Text(entry.title.ifBlank { "未命名记忆" })
+            }
+            KnowledgeInlineActionButton(
+                label = "删除",
+                background = "#8F3D3A",
+                enabled = !isSaving,
+                onClick = onDelete,
+            )
+        }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                property("gap", "6px")
+                property("flex-wrap", "wrap")
+            }
+        }) {
+            entry.memory?.type?.let { KnowledgeBadge(knowledgeMemoryTypeLabel(it), SilkColors.primaryDark) }
+            entry.memory?.key?.takeIf { it.isNotBlank() }?.let { KnowledgeBadge("key:$it", SilkColors.info) }
+            if (entry.memory?.explicit == true) {
+                KnowledgeBadge("显式记忆", SilkColors.success)
+            }
+        }
+        Div({
+            style {
+                fontSize(13.px)
+                color(Color(SilkColors.textPrimary))
+                property("line-height", "1.6")
+                property("white-space", "pre-wrap")
+            }
+        }) {
+            Text(entry.content.ifBlank { "无内容" })
+        }
+    }
+}
+
+@Composable
+private fun KnowledgeMemorySection(title: String, content: @Composable () -> Unit) {
+    Div({
+        style {
+            padding(16.px)
+            borderRadius(14.px)
+            backgroundColor(Color("#FFFDF9"))
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+        }
+    }) {
+        Div({
+            style {
+                fontSize(15.px)
+                fontWeight("600")
+                color(Color(SilkColors.textPrimary))
+                marginBottom(12.px)
+            }
+        }) { Text(title) }
+        content()
+    }
+}
+
+@Composable
+private fun KnowledgeMemoryCheckboxRow(
+    label: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            justifyContent(JustifyContent.SpaceBetween)
+            alignItems(AlignItems.FlexStart)
+            property("gap", "12px")
+            padding(10.px, 0.px)
+        }
+    }) {
+        Div({
+            style {
+                property("flex", "1")
+            }
+        }) {
+            Div({
+                style {
+                    fontSize(14.px)
+                    fontWeight("600")
+                    color(Color(SilkColors.textPrimary))
+                    marginBottom(4.px)
+                }
+            }) { Text(label) }
+            Div({
+                style {
+                    fontSize(12.px)
+                    color(Color(SilkColors.textSecondary))
+                    property("line-height", "1.5")
+                }
+            }) { Text(description) }
+        }
+        Input(InputType.Checkbox) {
+            checked(checked)
+            onInput { onCheckedChange(!checked) }
+            style {
+                marginTop(4.px)
+                property("transform", "scale(1.2)")
+            }
+        }
+    }
+}
 
 @Composable
 fun ModalDialog(title: String, onDismiss: () -> Unit, content: @Composable () -> Unit) {

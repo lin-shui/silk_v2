@@ -260,12 +260,28 @@ enum class KBSourceType {
 }
 
 @Serializable
+enum class KBMemoryType {
+    PROFILE,
+    PREFERENCE,
+    EPISODIC,
+    PROCEDURAL,
+}
+
+@Serializable
 data class KBEntrySource(
     val sourceType: KBSourceType = KBSourceType.MANUAL,
     val sourceGroupId: String? = null,
     val workflowId: String? = null,
     val messageIds: List<String> = emptyList(),
     val confidence: Double? = null,
+)
+
+@Serializable
+data class KBMemoryMetadata(
+    val type: KBMemoryType = KBMemoryType.EPISODIC,
+    val key: String? = null,
+    val explicit: Boolean = true,
+    val capturedAt: Long = 0L,
 )
 
 @Serializable
@@ -293,10 +309,21 @@ data class KBEntryItem(
     val ownerId: String = "",
     val status: KBEntryStatus = KBEntryStatus.PUBLISHED,
     val source: KBEntrySource = KBEntrySource(),
+    val memory: KBMemoryMetadata? = null,
     val createdBy: String = "",
     val updatedBy: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0
+)
+
+@Serializable
+data class KnowledgeBaseContextPreferences(
+    val userId: String,
+    val excludedSpaceIds: List<String> = emptyList(),
+    val memoryEnabled: Boolean = true,
+    val autoCaptureEnabled: Boolean = false,
+    val ephemeralSessionEnabled: Boolean = false,
+    val updatedAt: Long = 0L,
 )
 
 @Serializable
@@ -1448,6 +1475,88 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("导出知识库条目失败:", e)
             null
+        }
+    }
+
+    suspend fun getKBContextPreferences(userId: String): KnowledgeBaseContextPreferences {
+        return try {
+            val response = get("/api/kb/context-preferences?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取知识库上下文偏好失败:", e)
+            KnowledgeBaseContextPreferences(userId = userId)
+        }
+    }
+
+    suspend fun updateKBContextPreferences(
+        userId: String,
+        excludedSpaceIds: List<String>,
+        memoryEnabled: Boolean,
+        autoCaptureEnabled: Boolean,
+        ephemeralSessionEnabled: Boolean,
+    ): KnowledgeBaseContextPreferences? {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put(
+                    "excludedSpaceIds",
+                    kotlinx.serialization.json.JsonArray(excludedSpaceIds.map { kotlinx.serialization.json.JsonPrimitive(it) })
+                )
+                put("memoryEnabled", kotlinx.serialization.json.JsonPrimitive(memoryEnabled))
+                put("autoCaptureEnabled", kotlinx.serialization.json.JsonPrimitive(autoCaptureEnabled))
+                put("ephemeralSessionEnabled", kotlinx.serialization.json.JsonPrimitive(ephemeralSessionEnabled))
+            }.toString()
+            val response = put("/api/kb/context-preferences", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("更新知识库上下文偏好失败:", e)
+            null
+        }
+    }
+
+    suspend fun listKBMemoryEntries(userId: String): List<KBEntryItem> {
+        return try {
+            val response = get("/api/kb/memory?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取 memory 列表失败:", e)
+            emptyList()
+        }
+    }
+
+    suspend fun createKBMemoryEntry(
+        userId: String,
+        content: String,
+        memoryType: KBMemoryType? = null,
+        title: String? = null,
+        key: String? = null,
+    ): KBEntryItem? {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("content", kotlinx.serialization.json.JsonPrimitive(content))
+                memoryType?.let { put("memoryType", kotlinx.serialization.json.JsonPrimitive(it.name)) }
+                title?.takeIf { it.isNotBlank() }?.let { put("title", kotlinx.serialization.json.JsonPrimitive(it)) }
+                key?.takeIf { it.isNotBlank() }?.let { put("key", kotlinx.serialization.json.JsonPrimitive(it)) }
+            }.toString()
+            val response = post("/api/kb/memory", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("创建 memory 失败:", e)
+            null
+        }
+    }
+
+    suspend fun deleteKBMemoryEntry(entryId: String, userId: String): Boolean {
+        return try {
+            val response = window.fetch(
+                "$BASE_URL/api/kb/memory/$entryId?userId=$userId",
+                RequestInit(method = "DELETE", headers = authHeaders())
+            ).await()
+            response.ok
+        } catch (e: Exception) {
+            console.log("删除 memory 失败:", e)
+            false
         }
     }
 

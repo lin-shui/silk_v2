@@ -3,9 +3,12 @@ package com.silk.backend.kb
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
+import com.silk.backend.models.KBMemoryMetadata
+import com.silk.backend.models.KBMemoryType
 import com.silk.backend.models.KBEntrySource
 import com.silk.backend.models.KBEntryStatus
 import com.silk.backend.models.KBTopic
+import com.silk.backend.models.KBTopicPurpose
 import com.silk.backend.models.KnowledgeSpaceType
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -76,12 +79,13 @@ class KnowledgeBaseManager(
     // ---- Topics ----
 
     fun listTopics(userId: String): List<KBTopic> =
-        load().topics.filter { canReadTopic(it, userId) }
+        load().topics.filter { it.purpose == KBTopicPurpose.GENERAL && canReadTopic(it, userId) }
 
     fun createTopic(
         name: String,
         project: String,
         userId: String,
+        purpose: KBTopicPurpose = KBTopicPurpose.GENERAL,
         spaceType: KnowledgeSpaceType = KnowledgeSpaceType.PERSONAL,
         groupId: String? = null,
         accessPolicy: KBAccessPolicy = KBAccessPolicy(),
@@ -101,6 +105,7 @@ class KnowledgeBaseManager(
             name = name,
             project = project,
             ownerId = userId,
+            purpose = purpose,
             spaceType = normalizedSpaceType,
             groupId = normalizedGroupId,
             accessPolicy = normalizePolicy(accessPolicy, normalizedSpaceType),
@@ -179,6 +184,7 @@ class KnowledgeBaseManager(
         userId: String,
         status: KBEntryStatus = KBEntryStatus.PUBLISHED,
         source: KBEntrySource = KBEntrySource(),
+        memory: KBMemoryMetadata? = null,
     ): KBEntry? {
         val store = load()
         val topic = store.topics.find { it.id == topicId } ?: return null
@@ -193,6 +199,7 @@ class KnowledgeBaseManager(
             ownerId = userId,
             status = status,
             source = source,
+            memory = memory,
             createdBy = userId,
             updatedBy = userId,
             createdAt = now,
@@ -274,6 +281,7 @@ class KnowledgeBaseManager(
             .filter { it.status == KBEntryStatus.PUBLISHED }
             .mapNotNull { entry ->
                 val topic = topicById[entry.topicId] ?: return@mapNotNull null
+                if (topic.purpose == KBTopicPurpose.MEMORY) return@mapNotNull null
                 if (!canReadTopic(topic, userId)) return@mapNotNull null
                 if (topic.spacePreferenceId() in excludedSpaceIds) return@mapNotNull null
                 scoreContextCandidate(
@@ -282,6 +290,144 @@ class KnowledgeBaseManager(
                     terms = terms,
                     preferredGroupId = preferredGroupId,
                 )
+            }
+            .sortedWith(
+                compareByDescending<KBContextSearchHit> { it.score }
+                    .thenByDescending { it.entry.updatedAt }
+            )
+            .take(limit)
+            .toList()
+    }
+
+    fun listMemoryEntries(userId: String): List<KBEntry> {
+        val store = load()
+        val topicIds = store.topics.asSequence()
+            .filter { it.purpose == KBTopicPurpose.MEMORY && it.ownerId == userId }
+            .map { it.id }
+            .toSet()
+        if (topicIds.isEmpty()) return emptyList()
+        return store.entries.asSequence()
+            .filter { it.topicId in topicIds }
+            .filter { it.status != KBEntryStatus.DELETED }
+            .sortedByDescending { it.updatedAt }
+            .toList()
+    }
+
+    fun captureExplicitMemory(
+        userId: String,
+        content: String,
+        title: String,
+        type: KBMemoryType,
+        key: String? = null,
+    ): KBEntry {
+        return captureMemory(
+            userId = userId,
+            content = content,
+            title = title,
+            type = type,
+            key = key,
+            explicit = true,
+            sourceType = com.silk.backend.models.KBSourceType.CHAT,
+        )
+    }
+
+    fun captureAutoMemory(
+        userId: String,
+        content: String,
+        title: String,
+        type: KBMemoryType,
+        key: String,
+    ): KBEntry? {
+        return captureMemory(
+            userId = userId,
+            content = content,
+            title = title,
+            type = type,
+            key = key,
+            explicit = false,
+            sourceType = com.silk.backend.models.KBSourceType.AI_RESPONSE,
+        )
+    }
+
+    private fun captureMemory(
+        userId: String,
+        content: String,
+        title: String,
+        type: KBMemoryType,
+        key: String? = null,
+        explicit: Boolean,
+        sourceType: com.silk.backend.models.KBSourceType,
+    ): KBEntry {
+        val normalizedContent = content.trim()
+        require(normalizedContent.isNotEmpty()) { "memory content must not be blank" }
+        val normalizedTitle = title.trim().ifEmpty { buildMemoryTitle(type, normalizedContent) }
+        val normalizedKey = key?.trim()?.takeIf { it.isNotEmpty() } ?: buildMemoryKey(type, normalizedContent)
+        val store = load()
+        val topic = findOrCreateMemoryTopic(store, userId)
+        val now = System.currentTimeMillis()
+        val existingIndex = store.entries.indexOfFirst { entry ->
+            entry.topicId == topic.id &&
+                entry.memory?.key == normalizedKey
+        }
+        if (!explicit && existingIndex >= 0 && store.entries[existingIndex].memory?.explicit == true) {
+            return store.entries[existingIndex]
+        }
+        val saved = if (existingIndex >= 0) {
+            val existing = store.entries[existingIndex]
+            existing.copy(
+                title = normalizedTitle,
+                content = normalizedContent,
+                tags = buildMemoryTags(type),
+                status = KBEntryStatus.PUBLISHED,
+                source = KBEntrySource(sourceType = sourceType),
+                memory = defaultMemoryMetadata(type, normalizedKey, explicit = explicit),
+                updatedBy = userId,
+                updatedAt = now,
+            )
+        } else {
+            KBEntry(
+                id = "kb_entry_${System.currentTimeMillis()}_${(1000..9999).random()}",
+                topicId = topic.id,
+                title = normalizedTitle,
+                content = normalizedContent,
+                tags = buildMemoryTags(type),
+                ownerId = userId,
+                status = KBEntryStatus.PUBLISHED,
+                source = KBEntrySource(sourceType = sourceType),
+                memory = defaultMemoryMetadata(type, normalizedKey, explicit = explicit),
+                createdBy = userId,
+                updatedBy = userId,
+                createdAt = now,
+                updatedAt = now,
+            )
+        }
+        if (existingIndex >= 0) {
+            store.entries[existingIndex] = saved
+        } else {
+            store.entries.add(saved)
+        }
+        save(store)
+        return saved
+    }
+
+    fun searchMemoryEntriesForContext(
+        userId: String,
+        query: String,
+        limit: Int = 5,
+    ): List<KBContextSearchHit> {
+        val terms = extractSearchTerms(query)
+        if (terms.isEmpty() || limit <= 0) return emptyList()
+
+        val store = load()
+        val topicById = store.topics.associateBy { it.id }
+        return store.entries.asSequence()
+            .filter { it.ownerId == userId }
+            .filter { it.status == KBEntryStatus.PUBLISHED }
+            .filter { it.memory != null }
+            .mapNotNull { entry ->
+                val topic = topicById[entry.topicId] ?: return@mapNotNull null
+                if (topic.purpose != KBTopicPurpose.MEMORY) return@mapNotNull null
+                scoreContextCandidate(topic, entry, terms, preferredGroupId = null, memoryBoost = 10)
             }
             .sortedWith(
                 compareByDescending<KBContextSearchHit> { it.score }
@@ -331,6 +477,7 @@ class KnowledgeBaseManager(
     private fun normalizeTopic(topic: KBTopic): KBTopic {
         val normalizedSpaceType = normalizeSpaceType(topic.spaceType, topic.groupId)
         return topic.copy(
+            purpose = topic.purpose,
             spaceType = normalizedSpaceType,
             groupId = normalizeGroupId(normalizedSpaceType, topic.groupId),
             accessPolicy = normalizePolicy(topic.accessPolicy, normalizedSpaceType),
@@ -344,6 +491,7 @@ class KnowledgeBaseManager(
         return entry.copy(
             status = entry.status,
             source = entry.source,
+            memory = entry.memory,
             createdBy = entry.createdBy.ifBlank { fallbackOwner },
             updatedBy = entry.updatedBy.ifBlank { fallbackOwner },
         )
@@ -391,6 +539,7 @@ class KnowledgeBaseManager(
         entry: KBEntry,
         terms: List<String>,
         preferredGroupId: String?,
+        memoryBoost: Int = 0,
     ): KBContextSearchHit? {
         val title = normalizeSearchText(entry.title)
         val project = normalizeSearchText(topic.project)
@@ -421,9 +570,13 @@ class KnowledgeBaseManager(
         }
 
         if (score == 0) return null
+        score += memoryBoost
         if (!preferredGroupId.isNullOrBlank() && topic.groupId == preferredGroupId) {
             score += 5
             reasons += "当前团队空间"
+        }
+        if (topic.purpose == KBTopicPurpose.MEMORY) {
+            reasons += "长期记忆"
         }
 
         return KBContextSearchHit(
@@ -452,5 +605,25 @@ class KnowledgeBaseManager(
             .replace(Regex("""[^\p{IsHan}a-z0-9]+"""), " ")
             .replace(Regex("""\s+"""), " ")
             .trim()
+    }
+
+    private fun findOrCreateMemoryTopic(store: KBStore, userId: String): KBTopic {
+        val existing = store.topics.firstOrNull { it.ownerId == userId && it.purpose == KBTopicPurpose.MEMORY }
+        if (existing != null) return existing
+
+        val now = System.currentTimeMillis()
+        val created = KBTopic(
+            id = "kb_topic_${System.currentTimeMillis()}_${(1000..9999).random()}",
+            name = "Memory",
+            project = "memory",
+            ownerId = userId,
+            purpose = KBTopicPurpose.MEMORY,
+            createdBy = userId,
+            updatedBy = userId,
+            createdAt = now,
+            updatedAt = now,
+        )
+        store.topics.add(created)
+        return created
     }
 }

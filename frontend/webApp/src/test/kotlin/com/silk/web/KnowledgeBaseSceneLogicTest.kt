@@ -298,6 +298,38 @@ class KnowledgeBaseSceneLogicTest {
     }
 
     @Test
+    fun memoryHelpersExposeReadableLabelsAndNewestFirstOrder() {
+        val older = KBEntryItem(
+            id = "memory-1",
+            title = "旧记忆",
+            memory = KBMemoryMetadata(type = KBMemoryType.PREFERENCE, capturedAt = 100L),
+            updatedAt = 100L,
+        )
+        val newer = KBEntryItem(
+            id = "memory-2",
+            title = "新记忆",
+            memory = KBMemoryMetadata(type = KBMemoryType.PROCEDURAL, capturedAt = 300L),
+            updatedAt = 200L,
+        )
+
+        assertEquals("偏好", knowledgeMemoryTypeLabel(KBMemoryType.PREFERENCE))
+        assertEquals("做事方式", knowledgeMemoryTypeLabel(KBMemoryType.PROCEDURAL))
+        assertEquals(listOf("memory-2", "memory-1"), sortKnowledgeMemoryEntries(listOf(older, newer)).map { it.id })
+    }
+
+    @Test
+    fun memoryStatusLabelReflectsPreferenceSwitch() {
+        assertEquals(
+            "长期记忆已启用",
+            knowledgeMemoryStatusLabel(KnowledgeBaseContextPreferences(userId = "u1", memoryEnabled = true)),
+        )
+        assertEquals(
+            "长期记忆已关闭",
+            knowledgeMemoryStatusLabel(KnowledgeBaseContextPreferences(userId = "u1", memoryEnabled = false)),
+        )
+    }
+
+    @Test
     fun editorModeSwitchPresentationAdaptsToWidth() {
         assertEquals(
             KnowledgeEditorModeSwitchPresentation.FULL,

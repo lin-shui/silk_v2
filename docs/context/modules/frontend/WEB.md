@@ -43,6 +43,7 @@
   - Silk 聊天输入区和 Workflow composer 上方都显示 KB Context Tray：后端为本轮准备知识库上下文时，前端用状态消息里的 `references(kind=available, path=kb://...)` 渲染卡片，展示手动/固定/自动来源、加入原因与摘要，并可点回原文档；该 KB 上下文状态条会从普通灰色状态列表里过滤掉（`isKnowledgeBaseContextStatusMessage`），避免和 Tray 重复
   - Context Tray 支持"固定下轮 / 排除下轮"控制：选择写进消息合同 `kbContextSelection(pinnedEntryIds, excludedEntryIds)`，随 `ChatClient.sendMessage` 发送，后端按该选择重建下一轮 KB context
   - 聊天与 Workflow 文本消息操作栏支持"📚入库"：选目标 topic 后把消息存为 `candidate` 知识条目（`POST /api/kb/captures`），带 `CHAT` / `AI_RESPONSE` / `WORKFLOW` 来源元数据（AI 消息自动标记为 `AI_RESPONSE`），成功后跳到对应 KB 文档
+  - KB 左栏新增 `KB Memory` 快捷面板：显示长期记忆是否启用，并弹出 memory 管理弹层；Web 端现可读写 `GET/PUT /api/kb/context-preferences` 与 `GET/POST/DELETE /api/kb/memory*`，支持查看/新增/删除 memory，以及控制 `memoryEnabled` / `autoCaptureEnabled` / `ephemeralSessionEnabled`；其中 `autoCaptureEnabled` 已接到后端低风险自动记忆（回答语言 / 风格 / 代码语言偏好）
   - 知识库条目侧栏：candidate inbox 过滤（全部/候选/已发布/已归档）+ 批量发布/归档/并入；会议入库入口（选空间/主题/标签/置信度，存为 candidate 或 published，写入 `MEETING` provenance）
   - M2 空间/权限：按"个人 + 我所在群组"切空间并过滤可访问 topic；topic/entry 编辑器展示空间/读写/状态/来源 badge；无写权限时禁用创建与保存、编辑区只读；owner/team host/topic manager 可在"权限"面板改名称、项目、`read/write/manage` grants、`writeLocked`、`teamMembersCanWrite`
   - KB Web UX backlog 已继续回补：条目标题默认展示为静态标题，单击后才进入编辑态并复用现有保存链路；来源群组 / 工作流 / 来源消息字段本身可点击回跳，不再额外堆叠按钮；消息回跳优先在目标消息容器内按 `data-message-id` 定位并只滚动对应容器

@@ -3,6 +3,7 @@ package com.silk.backend.kb
 import com.silk.backend.TestWorkspace
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.models.KBEntryStatus
+import com.silk.backend.models.KBMemoryType
 import com.silk.backend.models.KnowledgeBaseContextSelection
 import com.silk.backend.models.KnowledgeSpaceType
 import kotlin.io.path.createTempDirectory
@@ -10,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class KnowledgeBaseReferenceResolverTest {
@@ -196,6 +198,55 @@ class KnowledgeBaseReferenceResolverTest {
             assertEquals("kb://${teamTopic.id}/${pinnedEntry.id}", context.availableReferences.single().path)
             assertContains(context.promptBlock.orEmpty(), "### 用户固定上下文")
             assertTrue(!context.promptBlock.orEmpty().contains(excludedEntry.title))
+        }
+    }
+
+    @Test
+    fun `resolver injects related memory entries when memory is enabled`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val saved = manager.captureExplicitMemory(
+                userId = "owner",
+                content = "我喜欢 Kotlin 和 Ktor",
+                title = "Preference: Kotlin stack",
+                type = KBMemoryType.PREFERENCE,
+            )
+
+            val context = resolveKnowledgeBasePromptContext(
+                rawInput = "请按我常用的 Kotlin 技术栈给建议",
+                userId = "owner",
+                knowledgeBaseManager = manager,
+                memoryEnabled = true,
+            )
+
+            assertEquals(1, context.diagnostics.memoryReferenceCount)
+            assertEquals("memory", context.availableReferences.single().origin)
+            assertContains(context.promptBlock.orEmpty(), "### 用户长期记忆")
+            assertContains(context.promptBlock.orEmpty(), saved.content)
+        }
+    }
+
+    @Test
+    fun `resolver skips memory entries when memory is disabled`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            manager.captureExplicitMemory(
+                userId = "owner",
+                content = "请默认用中文回答",
+                title = "Procedure: 中文回答",
+                type = KBMemoryType.PROCEDURAL,
+            )
+
+            val context = resolveKnowledgeBasePromptContext(
+                rawInput = "总结一下今天的工作",
+                userId = "owner",
+                knowledgeBaseManager = manager,
+                memoryEnabled = false,
+            )
+
+            assertEquals(0, context.diagnostics.memoryReferenceCount)
+            assertTrue(context.availableReferences.isEmpty())
+            assertNull(context.promptBlock)
         }
     }
 }

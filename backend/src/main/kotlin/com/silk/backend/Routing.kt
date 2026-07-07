@@ -3738,6 +3738,9 @@ private fun Route.workflowKbRoutes() {
         registerApiKbEntriesEntryIdPutRoute()
         registerApiKbEntriesEntryIdDeleteRoute()
         registerApiKbEntriesEntryIdExportGetRoute()
+        registerApiKbMemoryGetRoute()
+        registerApiKbMemoryPostRoute()
+        registerApiKbMemoryEntryIdDeleteRoute()
         registerApiKbContextPreferencesGetRoute()
         registerApiKbContextPreferencesPutRoute()
 
@@ -4351,10 +4354,93 @@ private fun Route.registerApiKbContextPreferencesPutRoute() {
         val excludedSpaceIds = req["excludedSpaceIds"]?.let { element ->
             runCatching { element.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull } }.getOrNull()
         } ?: emptyList()
-        val updated = knowledgeBaseContextPreferenceStore.updateExcludedSpaces(userId, excludedSpaceIds)
+        val updated = knowledgeBaseContextPreferenceStore.update(
+            userId = userId,
+            excludedSpaceIds = excludedSpaceIds,
+            memoryEnabled = req["memoryEnabled"]?.jsonPrimitive?.booleanOrNull,
+            autoCaptureEnabled = req["autoCaptureEnabled"]?.jsonPrimitive?.booleanOrNull,
+            ephemeralSessionEnabled = req["ephemeralSessionEnabled"]?.jsonPrimitive?.booleanOrNull,
+        )
         call.respondText(
             Json.encodeToString(com.silk.backend.kb.KnowledgeBaseContextPreferences.serializer(), updated),
             ContentType.Application.Json,
+        )
+    }
+}
+
+private fun Route.registerApiKbMemoryGetRoute() {
+
+    get("/api/kb/memory") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val list = knowledgeBaseManager.listMemoryEntries(userId)
+        call.respondText(
+            Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBEntry.serializer()), list),
+            ContentType.Application.Json,
+        )
+    }
+}
+
+private fun Route.registerApiKbMemoryPostRoute() {
+
+    post("/api/kb/memory") {
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.contentOrNull)
+        val content = req["content"]?.jsonPrimitive?.contentOrNull?.trim()
+        if (userId.isNullOrBlank() || content.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing required fields"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val memoryType = req["memoryType"]?.jsonPrimitive?.contentOrNull?.let {
+            runCatching { com.silk.backend.models.KBMemoryType.valueOf(it.trim().uppercase()) }.getOrNull()
+        }
+        if (req["memoryType"] != null && memoryType == null) {
+            call.respondText("""{"success":false,"message":"Invalid memoryType"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val detected = com.silk.backend.kb.detectExplicitMemoryCapture(content)
+        val memoryContent = detected?.content ?: content
+        val type = memoryType ?: detected?.type ?: com.silk.backend.models.KBMemoryType.EPISODIC
+        val entry = knowledgeBaseManager.captureExplicitMemory(
+            userId = userId,
+            content = memoryContent,
+            title = req["title"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty().ifEmpty {
+                detected?.title ?: com.silk.backend.kb.buildMemoryTitle(type, memoryContent)
+            },
+            type = type,
+            key = req["key"]?.jsonPrimitive?.contentOrNull,
+        )
+        call.respondText(
+            Json.encodeToString(KBEntry.serializer(), entry),
+            ContentType.Application.Json,
+            HttpStatusCode.Created,
+        )
+    }
+}
+
+private fun Route.registerApiKbMemoryEntryIdDeleteRoute() {
+
+    delete("/api/kb/memory/{entryId}") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@delete
+        }
+        val entry = knowledgeBaseManager.getEntry(entryId, userId)
+        if (entry?.memory == null || entry.ownerId != userId) {
+            call.respondText("""{"success":false,"message":"Memory entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@delete
+        }
+        val ok = knowledgeBaseManager.deleteEntry(entryId, userId)
+        call.respondText(
+            """{"success":$ok}""",
+            ContentType.Application.Json,
+            if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound,
         )
     }
 }
