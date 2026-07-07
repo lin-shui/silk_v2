@@ -7,8 +7,8 @@ import com.silk.backend.models.KBSourceType
 import kotlinx.serialization.Serializable
 
 private val explicitMemoryRegexes = listOf(
-    Regex("""^\s*(?:请)?记住[：:,\s]+(.+?)\s*$""", RegexOption.IGNORE_CASE),
-    Regex("""^\s*remember(?:\s+that)?[：:,\s]+(.+?)\s*$""", RegexOption.IGNORE_CASE),
+    Regex("""^\s*(?:(?:请|麻烦)\s*)?(?:你要\s*)?记住(?:一下)?(?:[：:,\s]+|(?=\S))(.+?)\s*$""", RegexOption.IGNORE_CASE),
+    Regex("""^\s*remember(?:\s+that)?(?:[：:,\s]+|(?=\S))(.+?)\s*$""", RegexOption.IGNORE_CASE),
 )
 internal const val MEMORY_PROMPT_HEADER =
     "以下是与当前问题相关的长期记忆，仅作为辅助上下文；如果与用户本轮最新要求冲突，必须以本轮要求为准。"
@@ -65,7 +65,7 @@ internal fun inferMemoryType(content: String): KBMemoryType {
             KBMemoryType.PROCEDURAL
         listOf("喜欢", "偏好", "习惯", "常用", "技术栈", "语言", "风格", "尽量", "不要").any { normalized.contains(it) } ->
             KBMemoryType.PREFERENCE
-        listOf("我是", "我在", "我的职位", "我的角色", "我负责", "我用的是").any { normalized.contains(it) } ->
+        listOf("我是", "我叫", "我在", "我的职位", "我的角色", "我负责", "我用的是").any { normalized.contains(it) } ->
             KBMemoryType.PROFILE
         else -> KBMemoryType.EPISODIC
     }
