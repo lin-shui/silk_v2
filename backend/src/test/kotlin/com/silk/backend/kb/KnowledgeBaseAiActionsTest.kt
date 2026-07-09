@@ -102,4 +102,38 @@ class KnowledgeBaseAiActionsTest {
             assertEquals("新增了 KB 自动总结和执行约束。", success.entry.content)
         }
     }
+
+    @Test
+    fun `workflow request defaults create_entry to workflow candidate provenance`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val topic = manager.createTopic(name = "项目沉淀", project = "silk", userId = "owner")
+
+            val results = executeKnowledgeBaseAiActions(
+                manager = manager,
+                request = KnowledgeBaseAiExecutionRequest(
+                    userId = "owner",
+                    preferredGroupId = "group-7",
+                    sourceGroupId = "group-7",
+                    workflowId = "wf-7",
+                    recentMessageIds = listOf("msg-9", "msg-10"),
+                ),
+                actions = listOf(
+                    KnowledgeBaseAiAction(
+                        operation = KnowledgeBaseAiOperation.CREATE_ENTRY,
+                        topicId = topic.id,
+                        title = "工作流总结",
+                        content = "整理了 workflow agent 的 KB 后处理。",
+                    )
+                ),
+            )
+
+            val success = assertIs<KnowledgeBaseAiExecutionResult.Success>(results.single())
+            assertEquals(KBEntryStatus.CANDIDATE, success.entry.status)
+            assertEquals(KBSourceType.WORKFLOW, success.entry.source.sourceType)
+            assertEquals("wf-7", success.entry.source.workflowId)
+            assertEquals("group-7", success.entry.source.sourceGroupId)
+            assertEquals(listOf("msg-9", "msg-10"), success.entry.source.messageIds)
+        }
+    }
 }

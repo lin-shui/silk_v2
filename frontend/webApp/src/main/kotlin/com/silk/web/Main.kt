@@ -1643,6 +1643,8 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     
     var messageText by remember { mutableStateOf("") }
     var kbContextSelection by remember(group.id) { mutableStateOf(KnowledgeBaseContextSelection()) }
+    var kbPersistentExcludedSpaceIds by remember(group.id) { mutableStateOf<List<String>>(emptyList()) }
+    var kbContextSelectionTouched by remember(group.id) { mutableStateOf(false) }
     var kbCaptureDraft by remember { mutableStateOf<KnowledgeCaptureDraft?>(null) }
     var kbCaptureTopics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
     var kbCaptureGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
@@ -1682,6 +1684,28 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             kbCaptureSaving = false
             kbCaptureResult = if (context.topics.isEmpty()) "还没有可用主题，请先去知识库创建主题。" else null
         }
+    }
+    LaunchedEffect(user.id, group.id) {
+        kbPersistentExcludedSpaceIds = ApiClient.getKBContextPreferences(user.id).excludedSpaceIds
+        if (!kbContextSelectionTouched) {
+            kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+                restoredSelection = kbContextSelection.takeIf {
+                    it.pinnedEntryIds.isNotEmpty() || it.excludedEntryIds.isNotEmpty()
+                },
+                persistentExcludedSpaceIds = kbPersistentExcludedSpaceIds,
+            )
+        }
+    }
+    LaunchedEffect(messages.size, user.id, kbPersistentExcludedSpaceIds, kbContextSelectionTouched) {
+        if (kbContextSelectionTouched) return@LaunchedEffect
+        if (kbContextSelection.pinnedEntryIds.isNotEmpty() || kbContextSelection.excludedEntryIds.isNotEmpty()) {
+            return@LaunchedEffect
+        }
+        val restoredSelection = latestKnowledgeBaseContextSelection(messages, user.id) ?: return@LaunchedEffect
+        kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+            restoredSelection = restoredSelection,
+            persistentExcludedSpaceIds = kbPersistentExcludedSpaceIds,
+        )
     }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
@@ -3172,7 +3196,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 KnowledgeBaseContextTray(
                     statusMessages = statusMessages,
                     selection = kbContextSelection,
-                    onSelectionChange = { kbContextSelection = it },
+                    onSelectionChange = {
+                        kbContextSelectionTouched = true
+                        kbContextSelection = it
+                    },
                 )
 // 输入框容器（用于定位 mention 菜单）
                 Div({

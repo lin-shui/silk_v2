@@ -44,6 +44,7 @@ data class KnowledgeBaseAiExecutionRequest(
     val userId: String,
     val preferredGroupId: String? = null,
     val sourceGroupId: String? = null,
+    val workflowId: String? = null,
     val recentMessageIds: List<String> = emptyList(),
 )
 
@@ -107,6 +108,21 @@ fun executeKnowledgeBaseAiActions(
     }
 }
 
+fun buildKnowledgeBaseActionSummary(results: List<KnowledgeBaseAiExecutionResult>): String {
+    if (results.isEmpty()) return ""
+    return buildString {
+        appendLine()
+        appendLine()
+        appendLine("KB 执行结果:")
+        results.forEach { result ->
+            when (result) {
+                is KnowledgeBaseAiExecutionResult.Success -> appendLine("- ${result.message}")
+                is KnowledgeBaseAiExecutionResult.Failure -> appendLine("- 未执行：${result.message}")
+            }
+        }
+    }.trimEnd()
+}
+
 private fun createEntryFromAction(
     manager: KnowledgeBaseManager,
     request: KnowledgeBaseAiExecutionRequest,
@@ -126,7 +142,7 @@ private fun createEntryFromAction(
         return KnowledgeBaseAiExecutionResult.Failure(action, "KB 操作缺少标题或正文，已忽略。")
     }
 
-    val sourceType = action.sourceType ?: KBSourceType.CHAT
+    val sourceType = action.sourceType ?: defaultSourceTypeForRequest(request)
     val created = manager.createEntry(
         topicId = topic.id,
         title = title,
@@ -137,6 +153,7 @@ private fun createEntryFromAction(
         source = KBEntrySource(
             sourceType = sourceType,
             sourceGroupId = request.sourceGroupId,
+            workflowId = request.workflowId,
             messageIds = request.recentMessageIds,
         ),
     ) ?: return KnowledgeBaseAiExecutionResult.Failure(action, "创建 KB 条目失败，目标主题可能已不存在或当前用户无写权限。")
@@ -190,6 +207,10 @@ private fun forcedStatusForSource(sourceType: KBSourceType, requestedStatus: KBE
         KBSourceType.CHAT, KBSourceType.AI_RESPONSE, KBSourceType.WORKFLOW -> KBEntryStatus.CANDIDATE
         else -> requestedStatus ?: KBEntryStatus.CANDIDATE
     }
+}
+
+private fun defaultSourceTypeForRequest(request: KnowledgeBaseAiExecutionRequest): KBSourceType {
+    return if (!request.workflowId.isNullOrBlank()) KBSourceType.WORKFLOW else KBSourceType.CHAT
 }
 
 private fun resolveWritableTopic(

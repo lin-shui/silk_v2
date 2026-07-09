@@ -960,6 +960,8 @@ private fun WorkflowChatPanel(
     var diffRefreshSignal by remember(groupId) { mutableStateOf(0) }
     var sourcePanelWidth by remember { mutableStateOf(LayoutPrefs.getInt("silk_wf_scpanel_w", 420)) }
     var kbContextSelection by remember(groupId) { mutableStateOf(KnowledgeBaseContextSelection()) }
+    var kbPersistentExcludedSpaceIds by remember(groupId) { mutableStateOf<List<String>>(emptyList()) }
+    var kbContextSelectionTouched by remember(groupId) { mutableStateOf(false) }
     var kbCaptureDraft by remember(groupId) { mutableStateOf<KnowledgeCaptureDraft?>(null) }
     var kbCaptureTopics by remember(groupId) { mutableStateOf<List<KBTopicItem>>(emptyList()) }
     var kbCaptureGroups by remember(groupId) { mutableStateOf<List<Group>>(emptyList()) }
@@ -1000,6 +1002,28 @@ private fun WorkflowChatPanel(
             kbCaptureSaving = false
             kbCaptureResult = if (context.topics.isEmpty()) "还没有可用主题，请先去知识库创建主题。" else null
         }
+    }
+    LaunchedEffect(userId, groupId) {
+        kbPersistentExcludedSpaceIds = ApiClient.getKBContextPreferences(userId).excludedSpaceIds
+        if (!kbContextSelectionTouched) {
+            kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+                restoredSelection = kbContextSelection.takeIf {
+                    it.pinnedEntryIds.isNotEmpty() || it.excludedEntryIds.isNotEmpty()
+                },
+                persistentExcludedSpaceIds = kbPersistentExcludedSpaceIds,
+            )
+        }
+    }
+    LaunchedEffect(messages.size, userId, kbPersistentExcludedSpaceIds, kbContextSelectionTouched) {
+        if (kbContextSelectionTouched) return@LaunchedEffect
+        if (kbContextSelection.pinnedEntryIds.isNotEmpty() || kbContextSelection.excludedEntryIds.isNotEmpty()) {
+            return@LaunchedEffect
+        }
+        val restoredSelection = latestKnowledgeBaseContextSelection(messages, userId) ?: return@LaunchedEffect
+        kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+            restoredSelection = restoredSelection,
+            persistentExcludedSpaceIds = kbPersistentExcludedSpaceIds,
+        )
     }
 
     // 拉取当前 CC 工作目录：
@@ -1314,7 +1338,10 @@ private fun WorkflowChatPanel(
         KnowledgeBaseContextTray(
             statusMessages = statusMessages,
             selection = kbContextSelection,
-            onSelectionChange = { kbContextSelection = it },
+            onSelectionChange = {
+                kbContextSelectionTouched = true
+                kbContextSelection = it
+            },
         )
         // Badge row: new session + permission mode + agent quick-switch
         Div({

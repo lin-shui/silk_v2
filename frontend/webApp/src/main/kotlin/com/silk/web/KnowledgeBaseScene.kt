@@ -374,6 +374,21 @@ internal fun knowledgeMoveTargetTopics(topics: List<KBTopicItem>, sourceTopic: K
     return topics.filter { canMoveKnowledgeEntryToTopic(topic, it) }
 }
 
+private fun knowledgeMergeTargetTopics(topics: List<KBTopicItem>, sourceTopic: KBTopicItem?): List<KBTopicItem> {
+    val topic = sourceTopic ?: return emptyList()
+    return buildList {
+        add(topic)
+        addAll(topics.filter { canMoveKnowledgeEntryToTopic(topic, it) })
+    }
+}
+
+private data class KnowledgeMergeTargetOption(
+    val entry: KBEntryItem,
+    val topic: KBTopicItem,
+)
+
+private const val KNOWLEDGE_COPILOT_DEFAULT_PROMPT = "请基于当前文档帮我整理结构、补全遗漏信息，并保持 Markdown 可直接保存。"
+
 internal fun filterKnowledgeEntries(entries: List<KBEntryItem>, filter: KnowledgeEntryFilter): List<KBEntryItem> {
     return when (filter) {
         KnowledgeEntryFilter.ALL -> entries
@@ -1325,6 +1340,7 @@ private fun KnowledgeEditorPane(
     onEditorSplitRatioChange: (Double) -> Unit,
     onMoveEntry: (() -> Unit)?,
     onDeleteEntry: (() -> Unit)?,
+    onOpenCopilot: (() -> Unit)?,
     onSave: () -> Unit,
     onStatusAction: (() -> Unit)?,
     statusActionLabel: String?,
@@ -1357,6 +1373,7 @@ private fun KnowledgeEditorPane(
                 onEditorModeChange = onEditorModeChange,
                 onMoveEntry = onMoveEntry,
                 onDeleteEntry = onDeleteEntry,
+                onOpenCopilot = onOpenCopilot,
                 onSave = onSave,
                 onStatusAction = onStatusAction,
                 statusActionLabel = statusActionLabel,
@@ -1629,6 +1646,7 @@ private fun KnowledgeEditorToolbar(
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onMoveEntry: (() -> Unit)?,
     onDeleteEntry: (() -> Unit)?,
+    onOpenCopilot: (() -> Unit)?,
     onSave: () -> Unit,
     onStatusAction: (() -> Unit)?,
     statusActionLabel: String?,
@@ -1756,6 +1774,7 @@ private fun KnowledgeEditorToolbar(
             onEditorModeChange = onEditorModeChange,
             onMoveEntry = onMoveEntry,
             onDeleteEntry = onDeleteEntry,
+            onOpenCopilot = onOpenCopilot,
             onSave = onSave,
             onStatusAction = onStatusAction,
             statusActionLabel = statusActionLabel,
@@ -1777,6 +1796,7 @@ private fun KnowledgeEditorToolbarActions(
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onMoveEntry: (() -> Unit)?,
     onDeleteEntry: (() -> Unit)?,
+    onOpenCopilot: (() -> Unit)?,
     onSave: () -> Unit,
     onStatusAction: (() -> Unit)?,
     statusActionLabel: String?,
@@ -1803,6 +1823,12 @@ private fun KnowledgeEditorToolbarActions(
         if (saveMessage.isNotEmpty()) {
             Span({ style { fontSize(12.px); color(Color(SilkColors.success)) } }) { Text(saveMessage) }
         }
+        KnowledgeToolbarButton(
+            label = "AI 协作",
+            background = SilkColors.info,
+            enabled = canEdit && !isSaving && onOpenCopilot != null,
+            onClick = { onOpenCopilot?.invoke() },
+        )
         KnowledgeToolbarButton(
             label = "复制引用",
             background = SilkColors.primaryDark,
@@ -2365,6 +2391,184 @@ private fun CreateEntryDialog(
 }
 
 @Composable
+private fun KnowledgeCopilotDialog(
+    entry: KBEntryItem,
+    instruction: String,
+    applyChanges: Boolean,
+    isRunning: Boolean,
+    feedbackMessage: String,
+    assistantReply: String,
+    draft: KnowledgeBaseCopilotDraft?,
+    onInstructionChange: (String) -> Unit,
+    onApplyChangesChange: (Boolean) -> Unit,
+    onApplyDraftToEditor: () -> Unit,
+    onDismiss: () -> Unit,
+    onRun: () -> Unit,
+) {
+    ModalDialog(title = "KB Copilot", onDismiss = onDismiss) {
+        Div({
+            style {
+                padding(10.px, 12.px)
+                borderRadius(10.px)
+                backgroundColor(Color("#F7F4EA"))
+                marginBottom(12.px)
+            }
+        }) {
+            Span({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    fontWeight("600")
+                }
+            }) { Text("当前条目") }
+            Div({ style { marginTop(6.px) } }) {
+                Text(entry.title)
+            }
+        }
+        Div({
+            style {
+                marginBottom(12.px)
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("gap", "8px")
+            }
+        }) {
+            Span({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    fontWeight("600")
+                }
+            }) { Text("让 AI 怎么改") }
+            TextArea {
+                value(instruction)
+                onInput { onInstructionChange(it.value) }
+                attr("placeholder", "例如：把这篇文档整理成更清晰的结构，并补上发布后的验证步骤")
+                style {
+                    width(100.percent)
+                    height(144.px)
+                    borderRadius(8.px)
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    padding(12.px)
+                    fontSize(14.px)
+                    property("line-height", "1.6")
+                    property("box-sizing", "border-box")
+                    property("resize", "vertical")
+                }
+            }
+        }
+        KnowledgeBooleanSetting(
+            label = "直接写回知识库",
+            description = "开启后，Copilot 会通过 KB action 直接更新当前条目；关闭则只生成草稿，先填回编辑器由你确认。",
+            value = applyChanges,
+            onChange = onApplyChangesChange,
+        )
+        if (feedbackMessage.isNotBlank()) {
+            Div({
+                style {
+                    marginBottom(12.px)
+                    padding(10.px, 12.px)
+                    borderRadius(8.px)
+                    backgroundColor(Color("#F4FAF6"))
+                    color(Color(SilkColors.textSecondary))
+                    fontSize(13.px)
+                }
+            }) {
+                Text(feedbackMessage)
+            }
+        }
+        if (assistantReply.isNotBlank()) {
+            Div({
+                style {
+                    marginBottom(12.px)
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "8px")
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(13.px)
+                        color(Color(SilkColors.textSecondary))
+                        fontWeight("600")
+                    }
+                }) { Text("AI 说明") }
+                Div({
+                    style {
+                        property("max-height", "180px")
+                        property("overflow-y", "auto")
+                        padding(12.px)
+                        borderRadius(8.px)
+                        backgroundColor(Color("#FFFDF8"))
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    }
+                }) {
+                    MarkdownContent(assistantReply)
+                }
+            }
+        }
+        draft?.let { draftValue ->
+            Div({
+                style {
+                    marginBottom(12.px)
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "8px")
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(13.px)
+                        color(Color(SilkColors.textSecondary))
+                        fontWeight("600")
+                    }
+                }) { Text("草稿预览") }
+                Div({
+                    style {
+                        padding(12.px)
+                        borderRadius(8.px)
+                        backgroundColor(Color("#FFFFFF"))
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    }
+                }) {
+                    Div({ style { marginBottom(8.px); fontWeight("600") } }) { Text(draftValue.title) }
+                    if (draftValue.tags.isNotEmpty()) {
+                        Div({ style { marginBottom(8.px); fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) {
+                            Text("标签: ${draftValue.tags.joinToString(", ")}")
+                        }
+                    }
+                    Div({
+                        style {
+                            property("max-height", "180px")
+                            property("overflow-y", "auto")
+                            backgroundColor(Color("#FFFDF8"))
+                            borderRadius(8.px)
+                            padding(12.px)
+                        }
+                    }) {
+                        MarkdownContent(draftValue.content)
+                    }
+                }
+                if (!applyChanges) {
+                    KnowledgeToolbarButton(
+                        label = "把草稿填回编辑器",
+                        background = SilkColors.primaryDark,
+                        enabled = !isRunning,
+                        onClick = onApplyDraftToEditor,
+                    )
+                }
+            }
+        }
+        DialogActions(
+            onCancel = onDismiss,
+            onConfirm = onRun,
+            confirmLabel = if (isRunning) "执行中..." else if (applyChanges) "执行并写回" else "生成草稿",
+            confirmEnabled = !isRunning && instruction.trim().isNotBlank(),
+        )
+    }
+}
+
+@Composable
 private fun MoveKnowledgeEntryDialog(
     entryTitle: String,
     targetTopics: List<KBTopicItem>,
@@ -2761,20 +2965,21 @@ private suspend fun bulkUpdateKnowledgeEntryStatus(
 
 private suspend fun mergeCandidateIntoKnowledgeEntry(
     candidateEntry: KBEntryItem?,
-    targetEntryId: String,
-    topic: KBTopicItem?,
-    entries: List<KBEntryItem>,
+    sourceTopic: KBTopicItem?,
+    targetOption: KnowledgeMergeTargetOption?,
     userId: String,
     onSavingChange: (Boolean) -> Unit,
     onSaveMessageChange: (String) -> Unit,
+    onSelectedTopicChange: (KBTopicItem?) -> Unit,
     onSelectedEntryChange: (KBEntryItem?) -> Unit,
     onEntriesChange: (List<KBEntryItem>) -> Unit,
     onEditorContentChange: (String) -> Unit,
     onEntryFilterChange: (KnowledgeEntryFilter) -> Unit,
     onDialogVisibilityChange: (Boolean) -> Unit,
 ) {
-    if (topic == null || candidateEntry == null || candidateEntry.status != KBEntryStatus.CANDIDATE) return
-    val targetEntry = entries.find { it.id == targetEntryId } ?: return
+    if (sourceTopic == null || candidateEntry == null || candidateEntry.status != KBEntryStatus.CANDIDATE) return
+    val targetOptionValue = targetOption ?: return
+    val targetEntry = targetOptionValue.entry
     onSavingChange(true)
     onSaveMessageChange("")
     val mergedTarget = ApiClient.updateKBEntry(
@@ -2804,25 +3009,27 @@ private suspend fun mergeCandidateIntoKnowledgeEntry(
         onSavingChange(false)
         return
     }
-    val refreshedEntries = ApiClient.getKBEntries(topic.id, userId)
+    val refreshedEntries = ApiClient.getKBEntries(targetOptionValue.topic.id, userId)
     val refreshedTarget = refreshedEntries.find { it.id == targetEntry.id } ?: mergedTarget
+    onSelectedTopicChange(targetOptionValue.topic)
     onEntriesChange(refreshedEntries)
     onSelectedEntryChange(refreshedTarget)
     onEditorContentChange(refreshedTarget.content)
     onEntryFilterChange(knowledgeFilterForStatus(refreshedTarget.status))
-    onSaveMessageChange("已并入目标文档，原候选已归档")
+    onSaveMessageChange("已并入“${targetOptionValue.topic.name} / ${refreshedTarget.title}”，原候选已归档")
     onSavingChange(false)
     onDialogVisibilityChange(false)
 }
 
 private suspend fun bulkMergeCandidatesIntoKnowledgeEntry(
     selectedCandidateEntryIds: Set<String>,
-    targetEntryId: String,
-    topic: KBTopicItem?,
-    entries: List<KBEntryItem>,
+    sourceTopic: KBTopicItem?,
+    candidateEntries: List<KBEntryItem>,
+    targetOption: KnowledgeMergeTargetOption?,
     userId: String,
     onSavingChange: (Boolean) -> Unit,
     onSaveMessageChange: (String) -> Unit,
+    onSelectedTopicChange: (KBTopicItem?) -> Unit,
     onSelectedEntryChange: (KBEntryItem?) -> Unit,
     onEntriesChange: (List<KBEntryItem>) -> Unit,
     onEditorContentChange: (String) -> Unit,
@@ -2830,10 +3037,12 @@ private suspend fun bulkMergeCandidatesIntoKnowledgeEntry(
     onSelectedCandidateEntryIdsChange: (Set<String>) -> Unit,
     onDialogVisibilityChange: (Boolean) -> Unit,
 ) {
-    if (topic == null || selectedCandidateEntryIds.isEmpty()) return
-    val targetEntry = entries.find { it.id == targetEntryId } ?: return
-    val candidateEntries = entries.filter { it.id in selectedCandidateEntryIds && it.id != targetEntryId && it.status == KBEntryStatus.CANDIDATE }
-    if (candidateEntries.isEmpty()) return
+    if (sourceTopic == null || selectedCandidateEntryIds.isEmpty()) return
+    val targetOptionValue = targetOption ?: return
+    val targetEntry = targetOptionValue.entry
+    val candidatesToMerge = candidateEntries
+        .filter { it.id in selectedCandidateEntryIds && it.id != targetEntry.id && it.status == KBEntryStatus.CANDIDATE }
+    if (candidatesToMerge.isEmpty()) return
     onSavingChange(true)
     onSaveMessageChange("")
     val mergedTarget = ApiClient.updateKBEntry(
@@ -2841,9 +3050,9 @@ private suspend fun bulkMergeCandidatesIntoKnowledgeEntry(
         title = null,
         content = mergeKnowledgeEntriesContent(
             targetContent = targetEntry.content,
-            candidateEntries = candidateEntries,
+            candidateEntries = candidatesToMerge,
         ),
-        tags = mergeKnowledgeEntriesTags(targetTags = targetEntry.tags, candidateEntries = candidateEntries),
+        tags = mergeKnowledgeEntriesTags(targetTags = targetEntry.tags, candidateEntries = candidatesToMerge),
         userId = userId,
     )
     if (mergedTarget == null) {
@@ -2851,7 +3060,7 @@ private suspend fun bulkMergeCandidatesIntoKnowledgeEntry(
         return
     }
     var archivedCount = 0
-    candidateEntries.forEach { candidate ->
+    candidatesToMerge.forEach { candidate ->
         val archived = ApiClient.updateKBEntry(
             entryId = candidate.id,
             title = null,
@@ -2864,18 +3073,38 @@ private suspend fun bulkMergeCandidatesIntoKnowledgeEntry(
             archivedCount += 1
         }
     }
-    val refreshedEntries = ApiClient.getKBEntries(topic.id, userId)
+    val refreshedEntries = ApiClient.getKBEntries(targetOptionValue.topic.id, userId)
     val refreshedTarget = refreshedEntries.find { it.id == targetEntry.id } ?: mergedTarget
+    onSelectedTopicChange(targetOptionValue.topic)
     onEntriesChange(refreshedEntries)
     onSelectedEntryChange(refreshedTarget)
     onEditorContentChange(refreshedTarget.content)
     onEntryFilterChange(knowledgeFilterForStatus(refreshedTarget.status))
     onSelectedCandidateEntryIdsChange(emptySet())
     if (archivedCount > 0) {
-        onSaveMessageChange("已并入 $archivedCount 条候选，目标文档已更新")
+        onSaveMessageChange("已并入 $archivedCount 条候选到“${targetOptionValue.topic.name} / ${refreshedTarget.title}”")
     }
     onSavingChange(false)
     onDialogVisibilityChange(false)
+}
+
+private suspend fun loadKnowledgeMergeTargetOptions(
+    topics: List<KBTopicItem>,
+    sourceTopic: KBTopicItem?,
+    userId: String,
+    excludedEntryIds: Set<String>,
+): List<KnowledgeMergeTargetOption> {
+    val mergeTopics = knowledgeMergeTargetTopics(topics, sourceTopic)
+    if (mergeTopics.isEmpty()) return emptyList()
+    return mergeTopics.flatMap { topic ->
+        ApiClient.getKBEntries(topic.id, userId)
+            .filter { entry -> entry.id !in excludedEntryIds && entry.status != KBEntryStatus.DELETED }
+            .map { entry -> KnowledgeMergeTargetOption(entry = entry, topic = topic) }
+    }.sortedWith(
+        compareBy<KnowledgeMergeTargetOption> { it.topic.id != sourceTopic?.id }
+            .thenBy { it.topic.name.lowercase() }
+            .thenBy { it.entry.title.lowercase() }
+    )
 }
 
 private suspend fun moveKnowledgeEntryToTopic(
@@ -3131,6 +3360,54 @@ private suspend fun submitMeetingKnowledgeCapture(
     onVisibilityChange(false)
 }
 
+private suspend fun runKnowledgeBaseCopilot(
+    entry: KBEntryItem?,
+    userId: String,
+    instruction: String,
+    applyChanges: Boolean,
+    onRunningChange: (Boolean) -> Unit,
+    onFeedbackChange: (String) -> Unit,
+    onReplyChange: (String) -> Unit,
+    onDraftChange: (KnowledgeBaseCopilotDraft?) -> Unit,
+    onSelectedEntryChange: (KBEntryItem?) -> Unit,
+    onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onEditorTitleChange: (String) -> Unit,
+    onEditorContentChange: (String) -> Unit,
+) {
+    val entryValue = entry ?: return
+    val normalizedInstruction = instruction.trim()
+    if (normalizedInstruction.isBlank()) {
+        onFeedbackChange("请先输入要让 AI 执行的编辑要求")
+        return
+    }
+    onRunningChange(true)
+    onFeedbackChange("")
+    val response = ApiClient.runKBCopilot(
+        userId = userId,
+        entryId = entryValue.id,
+        instruction = normalizedInstruction,
+        applyChanges = applyChanges,
+    )
+    if (response == null) {
+        onRunningChange(false)
+        onFeedbackChange("KB Copilot 调用失败")
+        return
+    }
+    onReplyChange(response.assistantReply)
+    onDraftChange(response.draft)
+    if (response.success && response.appliedEntry != null) {
+        val updatedEntry = response.appliedEntry
+        onSelectedEntryChange(updatedEntry)
+        onEntriesChange(ApiClient.getKBEntries(updatedEntry.topicId, userId))
+        onEditorTitleChange(updatedEntry.title)
+        onEditorContentChange(updatedEntry.content)
+    }
+    onFeedbackChange(response.message.ifBlank {
+        if (response.success) "KB Copilot 已生成草稿" else "KB Copilot 未生成可用草稿"
+    })
+    onRunningChange(false)
+}
+
 @Composable
 @Suppress("CyclomaticComplexMethod")
 fun KnowledgeBaseScene(appState: WebAppState) {
@@ -3180,6 +3457,15 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var showBatchMergeCandidatesDialog by remember { mutableStateOf(false) }
     var batchMergeTargetEntryId by remember { mutableStateOf("") }
     var isBatchMergeSaving by remember { mutableStateOf(false) }
+    var mergeTargetOptions by remember(selectedTopic?.id) { mutableStateOf<List<KnowledgeMergeTargetOption>>(emptyList()) }
+    var isMergeTargetsLoading by remember(selectedTopic?.id) { mutableStateOf(false) }
+    var showCopilotDialog by remember { mutableStateOf(false) }
+    var copilotInstruction by remember(selectedEntry?.id) { mutableStateOf(KNOWLEDGE_COPILOT_DEFAULT_PROMPT) }
+    var isCopilotRunning by remember { mutableStateOf(false) }
+    var copilotApplyChanges by remember { mutableStateOf(false) }
+    var copilotFeedback by remember { mutableStateOf("") }
+    var copilotReply by remember { mutableStateOf("") }
+    var copilotDraft by remember { mutableStateOf<KnowledgeBaseCopilotDraft?>(null) }
     var activeDragPayload by remember { mutableStateOf<KnowledgeEntryDragPayload?>(null) }
     var activeDropTopicId by remember { mutableStateOf<String?>(null) }
     var showTopicManageMode by remember(selectedSpaceId) { mutableStateOf(false) }
@@ -3260,18 +3546,8 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     val moveTargetTopics = remember(topics, selectedTopic?.id) {
         knowledgeMoveTargetTopics(topics, selectedTopic)
     }
-    val mergeTargetOptions = remember(entries, selectedEntry?.id) {
-        entries.filter { entry ->
-            entry.id != selectedEntry?.id && entry.status != KBEntryStatus.DELETED
-        }
-    }
     val batchMergeCandidateEntries = remember(entries, selectedCandidateEntryIds) {
         entries.filter { it.id in selectedCandidateEntryIds && it.status == KBEntryStatus.CANDIDATE }
-    }
-    val batchMergeTargetOptions = remember(entries, selectedCandidateEntryIds) {
-        entries.filter { entry ->
-            entry.id !in selectedCandidateEntryIds && entry.status != KBEntryStatus.DELETED
-        }
     }
 
     LaunchedEffect(selectedSpaceId, topics) {
@@ -3297,11 +3573,11 @@ fun KnowledgeBaseScene(appState: WebAppState) {
         if (entryFilter != KnowledgeEntryFilter.CANDIDATE && selectedCandidateEntryIds.isNotEmpty()) {
             selectedCandidateEntryIds = emptySet()
         }
-        if (showMergeCandidateDialog && mergeTargetOptions.none { it.id == mergeTargetEntryId }) {
-            mergeTargetEntryId = mergeTargetOptions.firstOrNull()?.id.orEmpty()
+        if (showMergeCandidateDialog && mergeTargetOptions.none { it.entry.id == mergeTargetEntryId }) {
+            mergeTargetEntryId = mergeTargetOptions.firstOrNull()?.entry?.id.orEmpty()
         }
-        if (showBatchMergeCandidatesDialog && batchMergeTargetOptions.none { it.id == batchMergeTargetEntryId }) {
-            batchMergeTargetEntryId = batchMergeTargetOptions.firstOrNull()?.id.orEmpty()
+        if (showBatchMergeCandidatesDialog && mergeTargetOptions.none { it.entry.id == batchMergeTargetEntryId }) {
+            batchMergeTargetEntryId = mergeTargetOptions.firstOrNull()?.entry?.id.orEmpty()
         }
         if (showMoveEntryDialog && moveTargetTopics.none { it.id == moveTargetTopicId }) {
             moveTargetTopicId = moveTargetTopics.firstOrNull()?.id.orEmpty()
@@ -3449,7 +3725,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             canCreateEntry = canEditSelectedTopic,
             canDragEntries = canEditSelectedTopic && selectedTopic != null && moveTargetTopics.isNotEmpty(),
             selectedCandidateEntryIds = selectedCandidateEntryIds,
-            canBatchMergeCandidates = selectedCandidateEntryIds.isNotEmpty() && batchMergeTargetOptions.isNotEmpty(),
+            canBatchMergeCandidates = selectedCandidateEntryIds.isNotEmpty(),
             onFilterChange = { entryFilter = it },
             onSearchQueryChange = { entrySearchQuery = it },
             onCreateEntry = { showCreateEntryDialog = true },
@@ -3471,9 +3747,17 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                     else filteredEntries.map { it.id }.toSet()
             },
             onBatchMergeCandidates = {
-                if (batchMergeTargetOptions.isNotEmpty()) {
-                    batchMergeTargetEntryId = batchMergeTargetOptions.firstOrNull()?.id.orEmpty()
-                    showBatchMergeCandidatesDialog = true
+                showBatchMergeCandidatesDialog = true
+                scope.launch {
+                    isMergeTargetsLoading = true
+                    mergeTargetOptions = loadKnowledgeMergeTargetOptions(
+                        topics = topics,
+                        sourceTopic = selectedTopic,
+                        userId = user.id,
+                        excludedEntryIds = selectedCandidateEntryIds,
+                    )
+                    batchMergeTargetEntryId = mergeTargetOptions.firstOrNull()?.entry?.id.orEmpty()
+                    isMergeTargetsLoading = false
                 }
             },
             onBatchPublishCandidates = {
@@ -3603,6 +3887,18 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             onDeleteEntry = selectedEntry
                 ?.takeIf { canManageSelectedTopic }
                 ?.let { { showDeleteEntryDialog = true } },
+            onOpenCopilot = selectedEntry
+                ?.takeIf { canEditSelectedTopic }
+                ?.let {
+                    {
+                        copilotInstruction = KNOWLEDGE_COPILOT_DEFAULT_PROMPT
+                        copilotApplyChanges = false
+                        copilotFeedback = ""
+                        copilotReply = ""
+                        copilotDraft = null
+                        showCopilotDialog = true
+                    }
+                },
             onSave = {
                 scope.launch {
                     saveKnowledgeEntry(
@@ -3638,11 +3934,21 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             },
             statusActionLabel = selectedEntryStatusAction?.first,
             onMergeCandidate = selectedEntry
-                ?.takeIf { it.status == KBEntryStatus.CANDIDATE && canEditSelectedTopic && mergeTargetOptions.isNotEmpty() }
+                ?.takeIf { it.status == KBEntryStatus.CANDIDATE && canEditSelectedTopic }
                 ?.let {
                     {
-                        mergeTargetEntryId = mergeTargetOptions.firstOrNull()?.id.orEmpty()
                         showMergeCandidateDialog = true
+                        scope.launch {
+                            isMergeTargetsLoading = true
+                            mergeTargetOptions = loadKnowledgeMergeTargetOptions(
+                                topics = topics,
+                                sourceTopic = selectedTopic,
+                                userId = user.id,
+                                excludedEntryIds = setOf(it.id),
+                            )
+                            mergeTargetEntryId = mergeTargetOptions.firstOrNull()?.entry?.id.orEmpty()
+                            isMergeTargetsLoading = false
+                        }
                     }
                 },
             onExport = {
@@ -3739,6 +4045,51 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                         "删除记忆失败"
                     }
                     isMemorySaving = false
+                }
+            },
+        )
+    }
+
+    val activeCopilotEntry = selectedEntry
+    if (showCopilotDialog && activeCopilotEntry != null) {
+        KnowledgeCopilotDialog(
+            entry = activeCopilotEntry,
+            instruction = copilotInstruction,
+            applyChanges = copilotApplyChanges,
+            isRunning = isCopilotRunning,
+            feedbackMessage = copilotFeedback,
+            assistantReply = copilotReply,
+            draft = copilotDraft,
+            onInstructionChange = { copilotInstruction = it },
+            onApplyChangesChange = { copilotApplyChanges = it },
+            onApplyDraftToEditor = {
+                copilotDraft?.let { draft ->
+                    editorTitle = draft.title
+                    editorContent = draft.content
+                    saveMessage = "已把 Copilot 草稿填入当前编辑器，确认后可继续保存"
+                }
+            },
+            onDismiss = {
+                if (!isCopilotRunning) {
+                    showCopilotDialog = false
+                }
+            },
+            onRun = {
+                scope.launch {
+                    runKnowledgeBaseCopilot(
+                        entry = activeCopilotEntry,
+                        userId = user.id,
+                        instruction = copilotInstruction,
+                        applyChanges = copilotApplyChanges,
+                        onRunningChange = { isCopilotRunning = it },
+                        onFeedbackChange = { copilotFeedback = it },
+                        onReplyChange = { copilotReply = it },
+                        onDraftChange = { copilotDraft = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEntriesChange = { entries = it },
+                        onEditorTitleChange = { editorTitle = it },
+                        onEditorContentChange = { editorContent = it },
+                    )
                 }
             },
         )
@@ -3933,9 +4284,10 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     if (showMergeCandidateDialog && mergeCandidateEntry != null) {
         MergeKnowledgeEntryDialog(
             title = "并入已有文档",
-            description = "将候选“${mergeCandidateEntry.title}”并入目标文档后，原候选会自动归档。",
+            description = "将候选“${mergeCandidateEntry.title}”并入同一 knowledge space 的目标文档后，原候选会自动归档。",
             targetEntries = mergeTargetOptions,
             selectedTargetEntryId = mergeTargetEntryId,
+            isLoading = isMergeTargetsLoading,
             isSaving = isMergeCandidateSaving,
             onSelectedTargetEntryIdChange = { mergeTargetEntryId = it },
             onDismiss = {
@@ -3947,12 +4299,12 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 scope.launch {
                     mergeCandidateIntoKnowledgeEntry(
                         candidateEntry = mergeCandidateEntry,
-                        targetEntryId = mergeTargetEntryId,
-                        topic = selectedTopic,
-                        entries = entries,
+                        sourceTopic = selectedTopic,
+                        targetOption = mergeTargetOptions.find { it.entry.id == mergeTargetEntryId },
                         userId = user.id,
                         onSavingChange = { isMergeCandidateSaving = it },
                         onSaveMessageChange = { saveMessage = it },
+                        onSelectedTopicChange = { selectedTopic = it },
                         onSelectedEntryChange = { selectedEntry = it },
                         onEntriesChange = { entries = it },
                         onEditorContentChange = { editorContent = it },
@@ -3967,9 +4319,10 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     if (showBatchMergeCandidatesDialog && batchMergeCandidateEntries.isNotEmpty()) {
         MergeKnowledgeEntryDialog(
             title = "批量并入已有文档",
-            description = "将选中的 ${batchMergeCandidateEntries.size} 条候选并入目标文档后，这些候选会自动归档。",
-            targetEntries = batchMergeTargetOptions,
+            description = "将选中的 ${batchMergeCandidateEntries.size} 条候选并入同一 knowledge space 的目标文档后，这些候选会自动归档。",
+            targetEntries = mergeTargetOptions,
             selectedTargetEntryId = batchMergeTargetEntryId,
+            isLoading = isMergeTargetsLoading,
             isSaving = isBatchMergeSaving,
             onSelectedTargetEntryIdChange = { batchMergeTargetEntryId = it },
             onDismiss = {
@@ -3981,12 +4334,13 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 scope.launch {
                     bulkMergeCandidatesIntoKnowledgeEntry(
                         selectedCandidateEntryIds = selectedCandidateEntryIds,
-                        targetEntryId = batchMergeTargetEntryId,
-                        topic = selectedTopic,
-                        entries = entries,
+                        sourceTopic = selectedTopic,
+                        candidateEntries = batchMergeCandidateEntries,
+                        targetOption = mergeTargetOptions.find { it.entry.id == batchMergeTargetEntryId },
                         userId = user.id,
                         onSavingChange = { isBatchMergeSaving = it },
                         onSaveMessageChange = { saveMessage = it },
+                        onSelectedTopicChange = { selectedTopic = it },
                         onSelectedEntryChange = { selectedEntry = it },
                         onEntriesChange = { entries = it },
                         onEditorContentChange = { editorContent = it },
@@ -4565,8 +4919,9 @@ fun LabeledInput(placeholder: String, currentValue: String, onValueChange: (Stri
 private fun MergeKnowledgeEntryDialog(
     title: String,
     description: String,
-    targetEntries: List<KBEntryItem>,
+    targetEntries: List<KnowledgeMergeTargetOption>,
     selectedTargetEntryId: String,
+    isLoading: Boolean,
     isSaving: Boolean,
     onSelectedTargetEntryIdChange: (String) -> Unit,
     onDismiss: () -> Unit,
@@ -4597,22 +4952,48 @@ private fun MergeKnowledgeEntryDialog(
                     fontWeight("600")
                 }
             }) { Text("目标文档") }
-            org.jetbrains.compose.web.dom.Select({
-                style {
-                    width(100.percent)
-                    height(40.px)
-                    borderRadius(8.px)
-                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                    padding(0.px, 10.px)
-                    backgroundColor(Color.white)
-                    color(Color(SilkColors.textPrimary))
+            if (isLoading) {
+                Div({
+                    style {
+                        padding(12.px)
+                        borderRadius(8.px)
+                        backgroundColor(Color("#FAF5EC"))
+                        fontSize(13.px)
+                        color(Color(SilkColors.textSecondary))
+                    }
+                }) {
+                    Text("正在加载同一 knowledge space 的可合并文档...")
                 }
-                attr("value", selectedTargetEntryId)
-                onChange { onSelectedTargetEntryIdChange(it.value ?: "") }
-            }) {
-                targetEntries.forEach { entry ->
-                    org.jetbrains.compose.web.dom.Option(value = entry.id) {
-                        Text("${entry.title} · ${entry.status.name.lowercase()}")
+            } else if (targetEntries.isEmpty()) {
+                Div({
+                    style {
+                        padding(12.px)
+                        borderRadius(8.px)
+                        backgroundColor(Color("#FFF5F2"))
+                        fontSize(13.px)
+                        color(Color(SilkColors.warning))
+                    }
+                }) {
+                    Text("当前没有可合并的目标文档")
+                }
+            } else {
+                org.jetbrains.compose.web.dom.Select({
+                    style {
+                        width(100.percent)
+                        height(40.px)
+                        borderRadius(8.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        padding(0.px, 10.px)
+                        backgroundColor(Color.white)
+                        color(Color(SilkColors.textPrimary))
+                    }
+                    attr("value", selectedTargetEntryId)
+                    onChange { onSelectedTargetEntryIdChange(it.value ?: "") }
+                }) {
+                    targetEntries.forEach { option ->
+                        org.jetbrains.compose.web.dom.Option(value = option.entry.id) {
+                            Text("${option.topic.name} / ${option.entry.title} · ${option.entry.status.name.lowercase()}")
+                        }
                     }
                 }
             }
@@ -4621,7 +5002,7 @@ private fun MergeKnowledgeEntryDialog(
             onCancel = onDismiss,
             onConfirm = onConfirm,
             confirmLabel = if (isSaving) "合并中..." else "确认合并",
-            confirmEnabled = !isSaving && selectedTargetEntryId.isNotBlank(),
+            confirmEnabled = !isLoading && !isSaving && selectedTargetEntryId.isNotBlank(),
         )
     }
 }
