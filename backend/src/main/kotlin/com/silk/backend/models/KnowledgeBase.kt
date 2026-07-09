@@ -60,11 +60,22 @@ data class KBEntrySource(
 )
 
 @Serializable
+data class ArchivedMemoryVersion(
+    val content: String,
+    val title: String,
+    val archivedAt: Long,
+    val reason: String = "",
+)
+
+@Serializable
 data class KBMemoryMetadata(
     val type: KBMemoryType = KBMemoryType.EPISODIC,
     val key: String? = null,
     val explicit: Boolean = true,
     val capturedAt: Long = 0L,
+    val lastAccessedAt: Long = 0L,
+    val accessedCount: Int = 0,
+    val archivedVersions: List<ArchivedMemoryVersion> = emptyList(),
 )
 
 @Serializable

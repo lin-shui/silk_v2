@@ -47,19 +47,21 @@ MVP 不做：
 
 - 已复用 `kb_store.json`，通过 `KBTopic.purpose=MEMORY` 为每个用户懒创建个人 memory topic
 - 已支持显式“记住 xxx”抽取，按 `profile/preference/episodic/procedural` 写入或按 key 覆写 memory
-- 已支持在 `autoCaptureEnabled` 打开时，对低风险偏好指令自动抽取 `response_language` / `response_style` / `code_language_preference`
+- 已支持在 `autoCaptureEnabled` 打开时，对低风险偏好指令自动抽取 `response_language` / `response_style` / `code_language_preference` / `tech_stack_preference` / `output_format_preference`
+- 已添加敏感信息过滤器（密码/token/API key/信用卡号/私钥等），敏感内容命中后整轮不触发自动记忆
 - 已在 `resolveKnowledgeBasePromptContext(...)` 中注入相关 memory，并在 prompt 明确“当前输入优先”
 - 已提供 `GET/POST/DELETE /api/kb/memory*` 与 `GET/PUT /api/kb/context-preferences`
 - Web 端 `KnowledgeBaseScene` 已补 memory 管理弹层：可查看/新增/删除个人 memory，并保存 `memoryEnabled` / `autoCaptureEnabled` / `ephemeralSessionEnabled`
 
 待补：
 
-- 更稳的冲突合并、更多自动记忆类别与敏感记忆过滤
+- 更稳的冲突合并（同 key 去重与合并、旧值归档）
+- episodic memory 的 recency / TTL 衰减与周期性 consolidation
 - Android / Harmony / Desktop 侧的 memory 管理入口（若需要多端一致）
 
 目标：先把“可见、可删、可控”的长期记忆跑通。
 
-### Phase 2: Low-Risk Auto Memory
+### Phase 2: Low-Risk Auto Memory ✅
 
 - 自动抽取语言偏好、输出格式偏好、技术栈偏好、procedural 偏好
 - 高风险内容不自动入库，需要确认或直接丢弃
@@ -68,16 +70,35 @@ MVP 不做：
   - `autoCaptureEnabled`
   - `ephemeralSessionEnabled`
 
+当前落地（2026-07-09）：
+
+- 已实现全部五种自动检测器：`response_language`、`response_style`、`code_language_preference`、`tech_stack_preference`、`output_format_preference`
+- 已实现敏感内容过滤器（`containsSensitiveContent`），检测密码/token/API key/信用卡号/私钥等模式，命中后整轮不触发自动记忆
+- 自动记忆按 key 去重 upsert，且不会覆盖用户显式记忆
+- 代码面：`backend/src/main/kotlin/com/silk/backend/kb/KnowledgeBaseMemory.kt` — `detectAutoMemoryCaptures`、`detectTechStackPreference`、`detectOutputFormatPreference`、`containsSensitiveContent`
+- 测试面：`backend/src/test/kotlin/com/silk/backend/kb/KnowledgeBaseMemoryTest.kt` — 覆盖全部检测器与敏感过滤
+
 目标：获得基础的 GPT-style memory 体验，但保持可解释。
 
-### Phase 3: Merge And Conflict Handling
+### Phase 3: Merge And Conflict Handling ✅
 
-- 同 key 记忆去重与合并
-- 新偏好覆盖旧偏好时自动归档旧值
-- episodic memory 增加 recency / TTL 衰减
-- 增加周期性 consolidation
+- 已实现同 key 记忆覆盖时自动归档旧值（`archiveOldVersion`）：新内容覆盖前将旧值保存到 `KBMemoryMetadata.archivedVersions`，保留审计轨迹
+- 已实现基于字符 tri-gram Jaccard 的近重复检测（`memoryContentSimilarity`，阈值 0.60）
+- 已实现 `mergeNearDuplicateMemories`：合并同类型、高相似度的记忆条目，被合并条目的内容归档到保留条目
+- 已实现 EPISODIC 记忆 TTL 衰减（`applyTTLDecay`）：90 天未访问自动归档为 `ARCHIVED`
+- 已实现 PREFERENCE/PROCEDURAL 不活跃衰减：180 天未访问标记为低优先级
+- PROFILE 记忆永不过期
+- 已实现 `consolidateMemories` 主入口：合并近重复 + TTL 衰减，返回 `ConsolidationReport`
+- 已实现 `recencyScore`：按最近访问时间加权，近 1 小时最高（8 分），逐级衰减
+- 已实现 `markMemoryAccessed`：追踪访问次数和最后访问时间
+- 已实现 `getMemoryEntryWithAccess`：访问时自动更新 `lastAccessedAt` / `accessedCount`
+- 已实现 `consolidateMemoryStore(userId)`：后端内存合并入口，由 `POST /api/kb/memory/consolidate` 触发
+- 已新增 `GET /api/kb/memory/{entryId}` 路由，支持访问追踪
+- 已新增 `ArchivedMemoryVersion` 模型：记录旧版本的内容、标题、归档时间与原因
+- 已更新 `KBMemoryMetadata`：增加 `lastAccessedAt`、`accessedCount`、`archivedVersions` 字段
+- 新增 15 个测试覆盖：归档、相似度、合并、TTL、recency 分、consolidation 全链路
 
-目标：避免 memory 越积越脏。
+目标：避免 memory 越积越脏，旧偏好可追溯、近重复自动合并。
 
 ### Phase 4: Scoped Project Memory
 

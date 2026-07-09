@@ -255,6 +255,23 @@ data class UserSearchResult(
 )
 
 /**
+ * 按名称搜索用户响应（用于知识库分享等批量选择场景）
+ */
+@Serializable
+data class UserSearchByNameResponse(
+    val success: Boolean,
+    val users: List<UserSearchItem> = emptyList(),
+    val message: String = "",
+)
+
+@Serializable
+data class UserSearchItem(
+    val id: String,
+    val fullName: String,
+    val loginName: String = "",
+)
+
+/**
  * 开始/获取私聊会话请求
  */
 @Serializable

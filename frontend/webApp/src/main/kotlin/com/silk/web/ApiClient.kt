@@ -144,6 +144,20 @@ data class UserSearchResult(
 )
 
 @Serializable
+data class UserSearchItem(
+    val id: String,
+    val fullName: String,
+    val loginName: String = "",
+)
+
+@Serializable
+data class UserSearchByNameResponse(
+    val success: Boolean,
+    val users: List<UserSearchItem> = emptyList(),
+    val message: String = "",
+)
+
+@Serializable
 data class PrivateChatResponse(
     val success: Boolean,
     val message: String,
@@ -277,11 +291,22 @@ data class KBEntrySource(
 )
 
 @Serializable
+data class ArchivedMemoryVersion(
+    val content: String,
+    val title: String,
+    val archivedAt: Long,
+    val reason: String = "",
+)
+
+@Serializable
 data class KBMemoryMetadata(
     val type: KBMemoryType = KBMemoryType.EPISODIC,
     val key: String? = null,
     val explicit: Boolean = true,
     val capturedAt: Long = 0L,
+    val lastAccessedAt: Long = 0L,
+    val accessedCount: Int = 0,
+    val archivedVersions: List<ArchivedMemoryVersion> = emptyList(),
 )
 
 @Serializable
@@ -690,6 +715,19 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("搜索用户失败:", e)
             UserSearchResult(false, message = "网络错误")
+        }
+    }
+
+    /**
+     * 按名称关键词搜索用户（用于知识库分享等场景）
+     */
+    suspend fun searchUsersByName(query: String): UserSearchByNameResponse {
+        return try {
+            val response = get("/api/users/search-by-name?q=${encodeUri(query)}")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("搜索用户失败:", e)
+            UserSearchByNameResponse(success = false, message = "网络错误")
         }
     }
     

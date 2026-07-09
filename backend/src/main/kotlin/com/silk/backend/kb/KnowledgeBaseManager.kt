@@ -374,13 +374,21 @@ class KnowledgeBaseManager(
         }
         val saved = if (existingIndex >= 0) {
             val existing = store.entries[existingIndex]
+            // Phase 3: 覆盖前归档旧值
+            val archivedMeta = archiveOldVersion(
+                existingEntry = existing,
+                newContent = normalizedContent,
+                reason = if (explicit) "用户显式更新" else "自动记忆覆盖",
+            )
             existing.copy(
                 title = normalizedTitle,
                 content = normalizedContent,
                 tags = buildMemoryTags(type),
                 status = KBEntryStatus.PUBLISHED,
                 source = KBEntrySource(sourceType = sourceType),
-                memory = defaultMemoryMetadata(type, normalizedKey, explicit = explicit),
+                memory = (archivedMeta ?: defaultMemoryMetadata(type, normalizedKey, explicit = explicit)).copy(
+                    explicit = explicit,
+                ),
                 updatedBy = userId,
                 updatedAt = now,
             )
@@ -420,6 +428,7 @@ class KnowledgeBaseManager(
 
         val store = load()
         val topicById = store.topics.associateBy { it.id }
+        val now = System.currentTimeMillis()
         return store.entries.asSequence()
             .filter { it.ownerId == userId }
             .filter { it.status == KBEntryStatus.PUBLISHED }
@@ -429,12 +438,55 @@ class KnowledgeBaseManager(
                 if (topic.purpose != KBTopicPurpose.MEMORY) return@mapNotNull null
                 scoreContextCandidate(topic, entry, terms, preferredGroupId = null, memoryBoost = 10)
             }
+            .map { hit ->
+                // Phase 3: 叠加 recency 加权分
+                val meta = hit.entry.memory ?: return@map hit
+                val recency = recencyScore(meta, now)
+                hit.copy(score = hit.score + (recency * 2).toInt())
+            }
             .sortedWith(
                 compareByDescending<KBContextSearchHit> { it.score }
                     .thenByDescending { it.entry.updatedAt }
             )
             .take(limit)
             .toList()
+    }
+
+    /**
+     * 获取记忆条目并在访问时更新 lastAccessedAt / accessedCount。
+     */
+    fun getMemoryEntryWithAccess(entryId: String, userId: String): KBEntry? {
+        val store = load()
+        val idx = store.entries.indexOfFirst { it.id == entryId }
+        if (idx < 0) return null
+        val entry = store.entries[idx]
+        val meta = entry.memory ?: return entry
+        val topic = store.topics.find { it.id == entry.topicId }
+        if (topic?.purpose != KBTopicPurpose.MEMORY) return entry
+        if (entry.ownerId != userId) return entry
+        val updatedMeta = markMemoryAccessed(meta)
+        store.entries[idx] = entry.copy(memory = updatedMeta)
+        save(store)
+        return store.entries[idx]
+    }
+
+    /**
+     * 对指定用户的记忆 store 执行 consolidation（去重合并 + TTL 衰减）。
+     * @return ConsolidationReport 报告本次操作统计
+     */
+    fun consolidateMemoryStore(userId: String): ConsolidationReport {
+        val store = load()
+        val topic = store.topics.firstOrNull { it.ownerId == userId && it.purpose == KBTopicPurpose.MEMORY }
+            ?: return ConsolidationReport()
+        val memoryEntries = store.entries.filter { it.topicId == topic.id }.toMutableList()
+        val report = consolidateMemories(memoryEntries)
+        // 将 consolidation 后的条目写回 store
+        val nonMemoryInTopic = store.entries.filter { it.topicId != topic.id }
+        store.entries.clear()
+        store.entries.addAll(nonMemoryInTopic)
+        store.entries.addAll(memoryEntries)
+        save(store)
+        return report
     }
 
     fun canReadTopic(topic: KBTopic, userId: String): Boolean {

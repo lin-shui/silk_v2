@@ -55,6 +55,8 @@ import com.silk.backend.database.UnreadRepository
 import com.silk.backend.database.UpdateUserSettingsRequest
 import com.silk.backend.database.UpdateUserTodoRequest
 import com.silk.backend.database.UserRepository
+import com.silk.backend.database.UserSearchByNameResponse
+import com.silk.backend.database.UserSearchItem
 import com.silk.backend.database.UserSearchResult
 import com.silk.backend.database.UserSettingsRepository
 import com.silk.backend.database.UserSettingsResponse
@@ -63,6 +65,7 @@ import com.silk.backend.database.UserTodoRefreshStatusResponse
 import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.export.ChatObsidianExporter
 import com.silk.backend.kb.KBObsidianExporter
+import com.silk.backend.kb.ConsolidationReport
 import com.silk.backend.kb.KnowledgeBaseCopilotRequest
 import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
 import com.silk.backend.kb.KnowledgeBaseManager
@@ -1648,6 +1651,25 @@ private fun Route.groupContactRoutes() {
             } else {
                 call.respond(UserSearchResult(false, message = "未找到该电话号码对应的用户"))
             }
+        }
+        
+        // 按名称关键词搜索用户（用于知识库分享等场景）
+        get("/api/users/search-by-name") {
+            val query = call.request.queryParameters["q"] ?: ""
+            if (query.isBlank() || query.length < 2) {
+                call.respond(UserSearchByNameResponse(success = false, message = "请输入至少2个字符"))
+                return@get
+            }
+            
+            val users = UserRepository.searchUsersByName(query)
+            val items = users.map { user ->
+                UserSearchItem(
+                    id = user.id,
+                    fullName = user.fullName,
+                    loginName = user.loginName,
+                )
+            }
+            call.respond(UserSearchByNameResponse(success = true, users = items))
         }
         
         // 发送联系人请求（通过电话号码）
@@ -3747,8 +3769,10 @@ private fun Route.workflowKbRoutes() {
         registerApiKbEntriesEntryIdExportGetRoute()
         registerApiKbCopilotPostRoute()
         registerApiKbMemoryGetRoute()
+        registerApiKbMemoryEntryIdGetRoute()
         registerApiKbMemoryPostRoute()
         registerApiKbMemoryEntryIdDeleteRoute()
+        registerApiKbMemoryConsolidatePostRoute()
         registerApiKbContextPreferencesGetRoute()
         registerApiKbContextPreferencesPutRoute()
 
@@ -4498,6 +4522,44 @@ private fun Route.registerApiKbMemoryEntryIdDeleteRoute() {
             """{"success":$ok}""",
             ContentType.Application.Json,
             if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound,
+        )
+    }
+}
+
+private fun Route.registerApiKbMemoryEntryIdGetRoute() {
+
+    get("/api/kb/memory/{entryId}") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        // 使用 getMemoryEntryWithAccess 以追踪访问时间
+        val entry = knowledgeBaseManager.getMemoryEntryWithAccess(entryId, userId)
+        if (entry == null || entry.memory == null) {
+            call.respondText("""{"success":false,"message":"Memory entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@get
+        }
+        call.respondText(
+            Json.encodeToString(KBEntry.serializer(), entry),
+            ContentType.Application.Json,
+        )
+    }
+}
+
+private fun Route.registerApiKbMemoryConsolidatePostRoute() {
+
+    post("/api/kb/memory/consolidate") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val report = knowledgeBaseManager.consolidateMemoryStore(userId)
+        call.respondText(
+            kbRouteJson.encodeToString(ConsolidationReport.serializer(), report),
+            ContentType.Application.Json,
         )
     }
 }

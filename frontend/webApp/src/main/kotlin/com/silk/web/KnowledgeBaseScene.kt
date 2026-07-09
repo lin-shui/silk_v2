@@ -38,6 +38,8 @@ import org.jetbrains.compose.web.css.height
 import org.jetbrains.compose.web.css.justifyContent
 import org.jetbrains.compose.web.css.left
 import org.jetbrains.compose.web.css.marginBottom
+import org.jetbrains.compose.web.css.marginLeft
+import org.jetbrains.compose.web.css.maxHeight
 import org.jetbrains.compose.web.css.marginTop
 import org.jetbrains.compose.web.css.minWidth
 import org.jetbrains.compose.web.css.padding
@@ -2262,21 +2264,256 @@ private fun CreateTopicDialog(
     }
 }
 
+/**
+ * 已选用户 chips 展示
+ */
+@Composable
+private fun SelectedUserChips(
+    selectedUserIds: List<String>,
+    selectedUserNames: MutableMap<String, String>,
+    onRemoveUser: (String) -> Unit,
+) {
+    if (selectedUserIds.isEmpty()) return
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            property("flexWrap", "wrap")
+            property("gap", "4px")
+            marginBottom(4.px)
+        }
+    }) {
+        selectedUserIds.forEach { userId ->
+            val displayName = selectedUserNames[userId] ?: userId.take(8) + "..."
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "4px")
+                    backgroundColor(Color("#E8F0FE"))
+                    borderRadius(12.px)
+                    padding(2.px, 8.px)
+                    fontSize(12.px)
+                    color(Color("#1A73E8"))
+                }
+            }) {
+                Span({ }) { Text(displayName) }
+                Span({
+                    style {
+                        property("cursor", "pointer")
+                        fontSize(14.px)
+                        color(Color("#999"))
+                        property("lineHeight", "14px")
+                        marginLeft(2.px)
+                    }
+                    onClick { _ ->
+                        onRemoveUser(userId)
+                    }
+                }) { Text("×") }
+            }
+        }
+    }
+}
+
+/**
+ * 用户搜索选择器组件
+ * 通过名称搜索用户并以 chips 形式展示已选用户
+ */
+@Composable
+private fun UserSearchSelector(
+    label: String,
+    selectedUserIds: List<String>,
+    onSelectionChange: (List<String>) -> Unit,
+    placeholder: String = "输入用户名称搜索...",
+) {
+    val scope = rememberCoroutineScope()
+    var searchQuery by remember { mutableStateOf("") }
+    var searchResults by remember { mutableStateOf<List<UserSearchItem>>(emptyList()) }
+    var isSearching by remember { mutableStateOf(false) }
+    var showResults by remember { mutableStateOf(false) }
+    // 缓存已选用户的名称（用于展示 chip 标签）
+    val selectedUserNames = remember(selectedUserIds) {
+        mutableMapOf<String, String>().apply {
+            searchResults.forEach { if (it.id in selectedUserIds) put(it.id, it.fullName) }
+        }
+    }
+
+    Div({
+        style {
+            marginBottom(12.px)
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            property("gap", "6px")
+        }
+    }) {
+        Span({
+            style {
+                fontSize(13.px)
+                color(Color(SilkColors.textSecondary))
+                fontWeight("600")
+            }
+        }) { Text(label) }
+
+        SelectedUserChips(selectedUserIds, selectedUserNames) { removedId ->
+            onSelectionChange(selectedUserIds.filter { it != removedId })
+        }
+
+        // 搜索输入框
+        Div({
+            style { position(Position.Relative) }
+        }) {
+            Input(InputType.Text) {
+                classes("kb-share-search-input")
+                attr("placeholder", placeholder)
+                value(searchQuery)
+                onInput { event ->
+                    val value = (event.target as? org.w3c.dom.HTMLInputElement)?.value ?: ""
+                    searchQuery = value
+                    if (value.length >= 2) {
+                        isSearching = true
+                        showResults = true
+                        scope.launch {
+                            val response = ApiClient.searchUsersByName(value)
+                            searchResults = if (response.success) {
+                                response.users.filter { it.id !in selectedUserIds }
+                            } else {
+                                emptyList()
+                            }
+                            isSearching = false
+                        }
+                    } else {
+                        searchResults = emptyList()
+                        showResults = false
+                    }
+                }
+                onFocus { showResults = searchResults.isNotEmpty() }
+                onBlur {
+                    // 延迟隐藏，让点击结果先触发
+                    scope.launch {
+                        kotlinx.coroutines.delay(200)
+                        showResults = false
+                    }
+                }
+                style {
+                    width(100.percent)
+                    padding(8.px, 10.px)
+                    fontSize(13.px)
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    borderRadius(6.px)
+                    property("outline", "none")
+                    property("boxSizing", "border-box")
+                }
+            }
+
+            // 搜索结果下拉
+            if (showResults && searchQuery.length >= 2) {
+                SearchResultsDropdown(
+                    isSearching = isSearching,
+                    searchResults = searchResults,
+                    onSelectUser = { user ->
+                        onSelectionChange(selectedUserIds + user.id)
+                        selectedUserNames[user.id] = user.fullName
+                        searchQuery = ""
+                        searchResults = emptyList()
+                        showResults = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 搜索结果下拉列表
+ */
+@Composable
+private fun SearchResultsDropdown(
+    isSearching: Boolean,
+    searchResults: List<UserSearchItem>,
+    onSelectUser: (UserSearchItem) -> Unit,
+) {
+    Div({
+        style {
+            position(Position.Absolute)
+            top(100.percent)
+            left(0.px)
+            right(0.px)
+            backgroundColor(Color("#FFFFFF"))
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            borderRadius(6.px)
+            property("boxShadow", "0 4px 12px rgba(0,0,0,0.12)")
+            property("zIndex", "100")
+            maxHeight(200.px)
+        }
+    }) {
+        if (isSearching) {
+            Span({
+                style {
+                    padding(8.px, 12.px)
+                    fontSize(13.px)
+                    color(Color(SilkColors.textLight))
+                }
+            }) { Text("搜索中...") }
+        } else if (searchResults.isEmpty()) {
+            Span({
+                style {
+                    padding(8.px, 12.px)
+                    fontSize(13.px)
+                    color(Color(SilkColors.textLight))
+                }
+            }) { Text("未找到匹配用户") }
+        } else {
+            searchResults.forEach { user ->
+                Div({
+                    style {
+                        padding(8.px, 12.px)
+                        fontSize(13.px)
+                        property("cursor", "pointer")
+                        backgroundColor(Color("#00000000"))
+                        property("transition", "background-color 0.15s")
+                    }
+                    onMouseOver { _ ->
+                        style {
+                            backgroundColor(Color("#F5F5F5"))
+                        }
+                    }
+                    onMouseOut { _ ->
+                        style {
+                            backgroundColor(Color("#00000000"))
+                        }
+                    }
+                    onClick { _ ->
+                        onSelectUser(user)
+                    }
+                }) {
+                    Span({ style { fontWeight("500") } }) { Text(user.fullName) }
+                    Span({
+                        style {
+                            marginLeft(8.px)
+                            fontSize(12.px)
+                            color(Color(SilkColors.textLight))
+                        }
+                    }) { Text("(${user.loginName})") }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun TopicAccessDialog(
     topicName: String,
     topicProject: String,
     isTeamTopic: Boolean,
-    readUserIds: String,
-    writeUserIds: String,
-    manageUserIds: String,
+    readUserIds: List<String>,
+    writeUserIds: List<String>,
+    manageUserIds: List<String>,
     writeLocked: Boolean,
     teamMembersCanWrite: Boolean,
     onTopicNameChange: (String) -> Unit,
     onTopicProjectChange: (String) -> Unit,
-    onReadUserIdsChange: (String) -> Unit,
-    onWriteUserIdsChange: (String) -> Unit,
-    onManageUserIdsChange: (String) -> Unit,
+    onReadUserIdsChange: (List<String>) -> Unit,
+    onWriteUserIdsChange: (List<String>) -> Unit,
+    onManageUserIdsChange: (List<String>) -> Unit,
     onWriteLockedChange: (Boolean) -> Unit,
     onTeamMembersCanWriteChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
@@ -2285,9 +2522,24 @@ private fun TopicAccessDialog(
     ModalDialog(title = "主题权限", onDismiss = onDismiss) {
         LabeledInput("主题名称", topicName, onTopicNameChange)
         LabeledInput("所属项目（可选）", topicProject, onTopicProjectChange)
-        LabeledInput("只读用户，逗号分隔", readUserIds, onReadUserIdsChange)
-        LabeledInput("可写用户，逗号分隔", writeUserIds, onWriteUserIdsChange)
-        LabeledInput("可管理用户，逗号分隔", manageUserIds, onManageUserIdsChange)
+        UserSearchSelector(
+            label = "只读用户",
+            selectedUserIds = readUserIds,
+            onSelectionChange = onReadUserIdsChange,
+            placeholder = "搜索用户名称添加只读权限...",
+        )
+        UserSearchSelector(
+            label = "可写用户",
+            selectedUserIds = writeUserIds,
+            onSelectionChange = onWriteUserIdsChange,
+            placeholder = "搜索用户名称添加写权限...",
+        )
+        UserSearchSelector(
+            label = "可管理用户",
+            selectedUserIds = manageUserIds,
+            onSelectionChange = onManageUserIdsChange,
+            placeholder = "搜索用户名称添加管理权限...",
+        )
         KnowledgeBooleanSetting(
             label = "锁定写入",
             description = "开启后，普通团队成员不会继承写权限。",
@@ -2770,18 +3022,18 @@ private fun resetTopicAccessDialog(
     onVisibilityChange: (Boolean) -> Unit,
     onTopicNameChange: (String) -> Unit,
     onTopicProjectChange: (String) -> Unit,
-    onReadUserIdsChange: (String) -> Unit,
-    onWriteUserIdsChange: (String) -> Unit,
-    onManageUserIdsChange: (String) -> Unit,
+    onReadUserIdsChange: (List<String>) -> Unit,
+    onWriteUserIdsChange: (List<String>) -> Unit,
+    onManageUserIdsChange: (List<String>) -> Unit,
     onWriteLockedChange: (Boolean) -> Unit,
     onTeamMembersCanWriteChange: (Boolean) -> Unit,
 ) {
     onVisibilityChange(false)
     onTopicNameChange("")
     onTopicProjectChange("")
-    onReadUserIdsChange("")
-    onWriteUserIdsChange("")
-    onManageUserIdsChange("")
+    onReadUserIdsChange(emptyList())
+    onWriteUserIdsChange(emptyList())
+    onManageUserIdsChange(emptyList())
     onWriteLockedChange(false)
     onTeamMembersCanWriteChange(true)
 }
@@ -3479,9 +3731,9 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var showTopicAccessDialog by remember { mutableStateOf(false) }
     var editableTopicName by remember { mutableStateOf("") }
     var editableTopicProject by remember { mutableStateOf("") }
-    var editableReadUserIds by remember { mutableStateOf("") }
-    var editableWriteUserIds by remember { mutableStateOf("") }
-    var editableManageUserIds by remember { mutableStateOf("") }
+    var editableReadUserIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    var editableWriteUserIds by remember { mutableStateOf<List<String>>(emptyList()) }
+    var editableManageUserIds by remember { mutableStateOf<List<String>>(emptyList()) }
     var editableWriteLocked by remember { mutableStateOf(false) }
     var editableTeamMembersCanWrite by remember { mutableStateOf(true) }
 
@@ -3654,9 +3906,9 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             onManageTopic = { topic ->
                 editableTopicName = topic.name
                 editableTopicProject = topic.project
-                editableReadUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.readUserIds)
-                editableWriteUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.writeUserIds)
-                editableManageUserIds = knowledgeUserIdsToCsv(topic.accessPolicy.manageUserIds)
+                editableReadUserIds = topic.accessPolicy.readUserIds.toList()
+                editableWriteUserIds = topic.accessPolicy.writeUserIds.toList()
+                editableManageUserIds = topic.accessPolicy.manageUserIds.toList()
                 editableWriteLocked = topic.accessPolicy.writeLocked
                 editableTeamMembersCanWrite = topic.accessPolicy.teamMembersCanWrite
                 selectedTopic = topic
@@ -4168,9 +4420,9 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                         name = editableTopicName.trim(),
                         project = editableTopicProject.trim(),
                         accessPolicy = KBAccessPolicy(
-                            readUserIds = csvToKnowledgeUserIds(editableReadUserIds),
-                            writeUserIds = csvToKnowledgeUserIds(editableWriteUserIds),
-                            manageUserIds = csvToKnowledgeUserIds(editableManageUserIds),
+                            readUserIds = editableReadUserIds,
+                            writeUserIds = editableWriteUserIds,
+                            manageUserIds = editableManageUserIds,
                             writeLocked = editableWriteLocked,
                             teamMembersCanWrite = if (topic.spaceType == KnowledgeSpaceType.TEAM) {
                                 editableTeamMembersCanWrite
