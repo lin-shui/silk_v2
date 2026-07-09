@@ -1,10 +1,17 @@
 // backend/src/main/kotlin/com/silk/backend/agents/core/AgentRuntime.kt
 package com.silk.backend.agents.core
 
+import com.silk.backend.ChatHistoryManager
 import com.silk.backend.Message
 import com.silk.backend.MessageType
 import com.silk.backend.SilkAgent
 import com.silk.backend.agents.acp.AcpClient
+import com.silk.backend.kb.KnowledgeBaseAiExecutionRequest
+import com.silk.backend.kb.KnowledgeBaseManager
+import com.silk.backend.kb.buildKnowledgeBaseActionSummary
+import com.silk.backend.kb.executeKnowledgeBaseAiActions
+import com.silk.backend.kb.extractKnowledgeBaseAiActions
+import com.silk.backend.workflow.WorkflowManager
 import kotlinx.coroutines.sync.withLock
 import com.silk.backend.card.CardReplyRouter
 import com.silk.backend.card.CardReplyHandler
@@ -78,6 +85,8 @@ object AgentRuntime {
          * 默认实现回退到旧的单值版本（向后兼容老 impl）。
          */
         fun loadSeed(rawGroupId: String, agentType: String): WorkflowSeed? = loadSeed(rawGroupId)
+        /** 根据 workflow groupId 反查 workflowId；非 workflow 群返回 null。 */
+        fun resolveWorkflowId(rawGroupId: String): String? = null
     }
 
     data class WorkflowSeed(
@@ -89,6 +98,9 @@ object AgentRuntime {
 
     @Volatile
     private var persistence: WorkflowPersistence? = null
+    private val chatHistoryManager by lazy { ChatHistoryManager() }
+    private val knowledgeBaseManager by lazy { KnowledgeBaseManager() }
+    private val workflowManager by lazy { WorkflowManager() }
 
     fun setWorkflowPersistence(p: WorkflowPersistence) {
         persistence = p
@@ -903,15 +915,17 @@ object AgentRuntime {
 
             // prompt 完成处理
             when (result.stopReason) {
-                StopReason.END_TURN -> {
-                    if (accumulated.isNotEmpty()) {
+                StopReason.END_TURN -> accumulated.toString()
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { postProcessAgentFinalContent(it, session.userId, ctx.groupId) }
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { finalContent ->
                         broadcastFn(AgentMessages.final(
-                            accumulated.toString(),
+                            finalContent,
                             agentUserId = descriptor.agentUserId,
                             agentName = descriptor.displayName,
                         ))
                     }
-                }
                 StopReason.MAX_TOKENS -> {
                     broadcastFn(AgentMessages.system(
                         "⚠️ 达到最大 token 限制",
@@ -996,6 +1010,45 @@ object AgentRuntime {
             agentUserId = descriptor.agentUserId,
             agentName = descriptor.displayName,
         ))
+    }
+
+    internal fun postProcessAgentFinalContent(
+        rawContent: String,
+        userId: String,
+        groupId: String,
+        manager: KnowledgeBaseManager = knowledgeBaseManager,
+        resolveWorkflowId: (String) -> String? = { rawGroupId ->
+            persistence?.resolveWorkflowId(rawGroupId)
+                ?: workflowManager.getWorkflowByGroupId(rawGroupId)?.id
+        },
+        recentMessageIdsProvider: (String) -> List<String> = ::loadRecentMessageIds,
+    ): String {
+        val parsed = extractKnowledgeBaseAiActions(rawContent)
+        if (parsed.actions.isEmpty()) return parsed.cleanedContent
+
+        val rawGroupId = stripGroupPrefix(groupId)
+        val workflowId = resolveWorkflowId(rawGroupId)
+        val recentMessageIds = recentMessageIdsProvider(groupId)
+        val results = executeKnowledgeBaseAiActions(
+            manager = manager,
+            request = KnowledgeBaseAiExecutionRequest(
+                userId = userId,
+                preferredGroupId = rawGroupId.takeIf { it.isNotBlank() },
+                sourceGroupId = rawGroupId.takeIf { it.isNotBlank() },
+                workflowId = workflowId,
+                recentMessageIds = recentMessageIds,
+            ),
+            actions = parsed.actions,
+        )
+        return (parsed.cleanedContent.trimEnd() + buildKnowledgeBaseActionSummary(results)).trimEnd()
+    }
+
+    private fun loadRecentMessageIds(groupId: String): List<String> {
+        return chatHistoryManager.loadChatHistory(groupId)
+            ?.messages
+            ?.takeLast(8)
+            ?.mapNotNull { it.messageId.takeIf(String::isNotBlank) }
+            .orEmpty()
     }
 
     /**

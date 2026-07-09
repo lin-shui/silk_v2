@@ -11,6 +11,7 @@ Use this skill after local edits and before commit, push, PR creation, or PR upd
 
 Treat documentation sync as part of the same deliverable as the code change.
 
+- Before comparing against a base branch, deciding whether a PR already exists, or opening/updating a PR, fetch the target remote/base branch first so branch/PR decisions use fresh upstream state.
 - If code, scripts, CI, runtime entry points, payload contracts, storage paths, env vars, or validation commands changed, check whether `ARCHITECTURE.md`, `docs/context/**`, `.env.example`, `silk.sh`, or `README.md` became stale.
 - If docs are stale, update the closest source-of-truth document in the same commit as the behavior change.
 - If code and docs intentionally remain out of sync, record the drift in `docs/context/project/KNOWN_DRIFT.md` and mention it in the PR body.

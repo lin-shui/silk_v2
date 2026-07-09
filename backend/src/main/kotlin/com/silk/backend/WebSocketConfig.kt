@@ -29,6 +29,7 @@ import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
 import com.silk.backend.kb.KnowledgeBasePromptContext
 import com.silk.backend.kb.KnowledgeBaseAiExecutionRequest
 import com.silk.backend.kb.KnowledgeBaseAiExecutionResult
+import com.silk.backend.kb.buildKnowledgeBaseActionSummary
 import com.silk.backend.kb.detectAutoMemoryCaptures
 import com.silk.backend.kb.detectExplicitMemoryCapture
 import com.silk.backend.kb.executeKnowledgeBaseAiActions
@@ -39,6 +40,7 @@ import org.slf4j.LoggerFactory
 
 private val knowledgeBaseManager: KnowledgeBaseManager get() = KnowledgeBaseManager()
 private val knowledgeBaseContextPreferenceStore: KnowledgeBaseContextPreferenceStore get() = KnowledgeBaseContextPreferenceStore()
+private val workflowManagerForKnowledgeBase: com.silk.backend.workflow.WorkflowManager get() = com.silk.backend.workflow.WorkflowManager()
 
 private fun buildPersistentKnowledgeBaseContextSelection(
     preferences: com.silk.backend.kb.KnowledgeBaseContextPreferences,
@@ -77,21 +79,6 @@ private fun buildKnowledgeBaseContextStatus(kbContext: KnowledgeBasePromptContex
         if (excluded > 0) append("；排除 $excluded")
         append("）")
     }
-}
-
-private fun buildKnowledgeBaseActionSummary(results: List<KnowledgeBaseAiExecutionResult>): String {
-    if (results.isEmpty()) return ""
-    return buildString {
-        appendLine()
-        appendLine()
-        appendLine("KB 执行结果:")
-        results.forEach { result ->
-            when (result) {
-                is KnowledgeBaseAiExecutionResult.Success -> appendLine("- ${result.message}")
-                is KnowledgeBaseAiExecutionResult.Failure -> appendLine("- 未执行：${result.message}")
-            }
-        }
-    }.trimEnd()
 }
 
 private fun knowledgeBaseWorkspaceSpaceLabel(topic: com.silk.backend.models.KBTopic): String {
@@ -1927,6 +1914,9 @@ class ChatServer(
 
         val streamState = AgentStreamState()
         try {
+            val activeWorkflowId = sessionName.removePrefix("group_")
+                .takeIf { sessionName.startsWith("group_") }
+                ?.let { workflowManagerForKnowledgeBase.getWorkflowByGroupId(it)?.id }
             val response = directModelAgent.processInput(
                 userInput = kbContext.resolvedUserInput,
                 systemPrompt = systemPrompt,
@@ -1946,6 +1936,7 @@ class ChatServer(
                     userId = userId,
                     preferredGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") },
                     sourceGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") },
+                    workflowId = activeWorkflowId,
                     recentMessageIds = historyMessages.takeLast(8).map { it.messageId },
                 ),
                 actions = directModelAgent.lastKnowledgeBaseActions,

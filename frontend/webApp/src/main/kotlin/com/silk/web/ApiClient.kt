@@ -333,6 +333,24 @@ data class ExportKBResponse(
     val vaultPath: String = "",
     val fileName: String = ""
 )
+
+@Serializable
+data class KnowledgeBaseCopilotDraft(
+    val entryId: String,
+    val topicId: String,
+    val title: String,
+    val content: String,
+    val tags: List<String> = emptyList(),
+)
+
+@Serializable
+data class KnowledgeBaseCopilotResponse(
+    val success: Boolean,
+    val assistantReply: String = "",
+    val draft: KnowledgeBaseCopilotDraft? = null,
+    val appliedEntry: KBEntryItem? = null,
+    val message: String = "",
+)
 /**
  * JWT 令牌管理
  */
@@ -1474,6 +1492,27 @@ object ApiClient {
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("导出知识库条目失败:", e)
+            null
+        }
+    }
+
+    suspend fun runKBCopilot(
+        userId: String,
+        entryId: String,
+        instruction: String,
+        applyChanges: Boolean,
+    ): KnowledgeBaseCopilotResponse? {
+        return try {
+            val body = buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("entryId", kotlinx.serialization.json.JsonPrimitive(entryId))
+                put("instruction", kotlinx.serialization.json.JsonPrimitive(instruction))
+                put("applyChanges", kotlinx.serialization.json.JsonPrimitive(applyChanges))
+            }.toString()
+            val response = post("/api/kb/copilot", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("运行 KB Copilot 失败:", e)
             null
         }
     }

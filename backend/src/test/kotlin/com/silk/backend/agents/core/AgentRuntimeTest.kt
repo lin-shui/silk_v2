@@ -3,7 +3,11 @@ package com.silk.backend.agents.core
 
 import com.silk.backend.Message
 import com.silk.backend.MessageType
+import com.silk.backend.TestWorkspace
 import com.silk.backend.agents.adapters.claudecode.ClaudeCodeDescriptor
+import com.silk.backend.kb.KnowledgeBaseManager
+import com.silk.backend.models.KBEntryStatus
+import com.silk.backend.models.KBSourceType
 import kotlinx.coroutines.test.runTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -195,5 +199,44 @@ class AgentRuntimeTest {
     @Test
     fun `isAgentUserId returns false for regular user`() {
         assertFalse(AgentRuntime.isAgentUserId("550e8400-e29b-41d4-a716-446655440000"))
+    }
+
+    @Test
+    fun `postProcessAgentFinalContent executes workflow kb action with provenance`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val topic = assertNotNull(manager.createTopic(name = "项目沉淀", project = "silk", userId = "owner"))
+
+            val processed = AgentRuntime.postProcessAgentFinalContent(
+                rawContent = """
+                    已整理为知识候选。
+
+                    ```silk_kb_action
+                    {
+                      "operation": "create_entry",
+                      "topicId": "${topic.id}",
+                      "title": "工作流复盘",
+                      "content": "补齐了外部 agent 的 KB 后处理。"
+                    }
+                    ```
+                """.trimIndent(),
+                userId = "owner",
+                groupId = "group_group-7",
+                manager = manager,
+                resolveWorkflowId = { "wf-7" },
+                recentMessageIdsProvider = { listOf("msg-1", "msg-2") },
+            )
+
+            assertTrue(processed.contains("已整理为知识候选。"))
+            assertTrue(processed.contains("KB 执行结果:"))
+            assertTrue(processed.contains("工作流复盘"))
+
+            val stored = assertNotNull(manager.listEntries(topic.id, "owner").singleOrNull())
+            assertEquals(KBEntryStatus.CANDIDATE, stored.status)
+            assertEquals(KBSourceType.WORKFLOW, stored.source.sourceType)
+            assertEquals("wf-7", stored.source.workflowId)
+            assertEquals("group-7", stored.source.sourceGroupId)
+            assertEquals(listOf("msg-1", "msg-2"), stored.source.messageIds)
+        }
     }
 }

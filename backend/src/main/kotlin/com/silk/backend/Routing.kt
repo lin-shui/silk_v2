@@ -2,6 +2,7 @@ package com.silk.backend
 
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.ai.ContentBlock
+import com.silk.backend.ai.DirectModelAgent
 import com.silk.backend.auth.AuthService
 import com.silk.backend.auth.GroupService
 import com.silk.backend.database.AddMemberRequest
@@ -62,8 +63,11 @@ import com.silk.backend.database.UserTodoRefreshStatusResponse
 import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.export.ChatObsidianExporter
 import com.silk.backend.kb.KBObsidianExporter
+import com.silk.backend.kb.KnowledgeBaseCopilotRequest
 import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
 import com.silk.backend.kb.KnowledgeBaseManager
+import com.silk.backend.kb.buildKnowledgeBaseWorkspaceEntries
+import com.silk.backend.kb.executeKnowledgeBaseCopilot
 import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
 import com.silk.backend.models.KBEntrySource
@@ -320,6 +324,9 @@ fun Application.configureRouting() {
                 permissionMode = wf.permissionMode,
             )
         }
+
+        override fun resolveWorkflowId(rawGroupId: String): String? =
+            workflowManager.getWorkflowByGroupId(rawGroupId)?.id
     })
 
     routing {
@@ -3738,6 +3745,7 @@ private fun Route.workflowKbRoutes() {
         registerApiKbEntriesEntryIdPutRoute()
         registerApiKbEntriesEntryIdDeleteRoute()
         registerApiKbEntriesEntryIdExportGetRoute()
+        registerApiKbCopilotPostRoute()
         registerApiKbMemoryGetRoute()
         registerApiKbMemoryPostRoute()
         registerApiKbMemoryEntryIdDeleteRoute()
@@ -4321,6 +4329,55 @@ private fun Route.registerApiKbEntriesEntryIdExportGetRoute() {
                 put("fileName", "${sanitizeFileName(entry.title)}.md")
             }.toString(),
             ContentType.Application.Json
+        )
+    }
+}
+
+private fun Route.registerApiKbCopilotPostRoute() {
+
+    post("/api/kb/copilot") {
+        val req = runCatching {
+            kbRouteJson.decodeFromString(KnowledgeBaseCopilotRequest.serializer(), call.receiveText())
+        }.getOrNull()
+        if (req == null) {
+            call.respondText(
+                """{"success":false,"message":"Invalid copilot request"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+        val userId = resolveKbCallerUserIdOrRespond(call, req.userId)
+        if (userId.isNullOrBlank()) {
+            call.respondText(
+                """{"success":false,"message":"Missing userId"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+        val response = executeKnowledgeBaseCopilot(
+            manager = knowledgeBaseManager,
+            request = req.copy(userId = userId),
+            runAgent = { input ->
+                val agent = DirectModelAgent(sessionId = "kb_copilot_${sanitizeFileName(req.entryId)}")
+                val workspaceDir = "${AIConfig.CLAUDE_CLI_WORKSPACE_ROOT}/kb_copilot_${sanitizeFileName(userId)}_${sanitizeFileName(req.entryId)}"
+                java.io.File(workspaceDir).mkdirs()
+                agent.initClaudeClient(workspaceDir)
+                agent.syncKnowledgeBaseWorkspace(input.workspaceEntries.ifEmpty {
+                    buildKnowledgeBaseWorkspaceEntries(knowledgeBaseManager, userId)
+                })
+                agent.processInput(
+                    userInput = input.userPrompt,
+                    systemPrompt = input.systemPrompt,
+                    callback = { _, _, _ -> },
+                )
+            },
+        )
+        call.respondText(
+            kbRouteJson.encodeToString(com.silk.backend.kb.KnowledgeBaseCopilotResponse.serializer(), response),
+            ContentType.Application.Json,
+            if (response.success || response.draft != null) HttpStatusCode.OK else HttpStatusCode.BadGateway,
         )
     }
 }
