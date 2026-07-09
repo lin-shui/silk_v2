@@ -4,6 +4,7 @@ import org.jetbrains.exposed.sql.ResultRow
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.select
 import org.jetbrains.exposed.sql.update
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -189,6 +190,22 @@ object UserRepository {
         }
     }
 
+    /**
+     * 根据名称关键词搜索用户（模糊匹配 fullName 或 loginName）
+     */
+    fun searchUsersByName(query: String, limit: Int = 10): List<User> {
+        val lowerQuery = query.lowercase()
+        return transaction {
+            Users.selectAll()
+                .mapNotNull { rowToUser(it) }
+                .filter { user ->
+                    user.fullName.lowercase().contains(lowerQuery) ||
+                    user.loginName.lowercase().contains(lowerQuery)
+                }
+                .take(limit)
+        }
+    }
+    
     /**
      * 将数据库行转换为User对象
      */
