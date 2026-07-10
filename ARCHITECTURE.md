@@ -46,7 +46,8 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | Surface | Primary Paths | Notes |
 | --- | --- | --- |
 | App/bootstrap | `Application.kt`, `settings.gradle.kts`, root `build.gradle.kts`, `silk.sh` | 运行入口与构建编排 |
-| HTTP routes | `Routing.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt`, `routes/AgentChangesRoutes.kt` | `Routing.kt` 仍然很大，是主索引点；`AgentChangesRoutes` 是只读代码审查（Source Control）路由 |
+| HTTP routes | `Routing.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt`, `routes/AgentChangesRoutes.kt`, `routes/ObsidianRoutes.kt` | `Routing.kt` 仍然很大，是主索引点；`AgentChangesRoutes` 是只读代码审查（Source Control）路由；`ObsidianRoutes` 提供 `/api/obsidian/sync` 一键导出 |
+| Obsidian integration | `obsidian-plugin/silk-sync/` | Obsidian 插件，一键同步 Silk 聊天记录和 KB 条目到 vault |
 | Chat/WebSocket | `WebSocketConfig.kt`, `ChatHistoryManager.kt` | 消息主链、历史、URL 下载 |
 | Agent framework | `agents/core/`, `agents/acp/`, `agents/adapters/` | Claude Code 与 Codex via ACP，唯一执行路径 |
 | AI/tools/search | `ai/`（AnthropicClient + DirectModelAgent）, `utils/WebPageDownloader.kt` | Anthropic Messages API + 原生 web_search 工具 + 后端 grep 搜索 |

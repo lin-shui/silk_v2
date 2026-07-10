@@ -84,6 +84,7 @@ import com.silk.backend.workflow.WorkflowManager
 import com.silk.backend.routes.agentChangesRoutes
 import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
+import com.silk.backend.routes.obsidianRoutes
 import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.core.AgentRegistry
 import com.silk.backend.agents.core.AgentRuntime
@@ -343,6 +344,7 @@ fun Application.configureRouting() {
         ccConnectBridgeRoute()
         ccConnectApiRoutes()
         workflowKbRoutes()
+        obsidianRoutes()
         chatWebSocketRoute()
         audioDuplexRoute()
     }

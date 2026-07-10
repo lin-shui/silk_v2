@@ -59,6 +59,8 @@
   - app version 查询
 - `routes/AsrRoutes.kt`:
   - `/api/asr/transcribe`
+- `routes/ObsidianRoutes.kt`:
+  - `GET /api/obsidian/sync` — 一键导出用户所有群聊 + KB 条目的 Obsidian Markdown
 
 ## ChatServer Flow
 
