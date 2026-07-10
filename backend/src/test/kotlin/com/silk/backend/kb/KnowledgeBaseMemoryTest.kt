@@ -371,6 +371,164 @@ class KnowledgeBaseMemoryTest {
         }
     }
 
+    // ──────────────────────────────────────────────
+    // Phase 4: Scoped Project (Group) Memory
+    // ──────────────────────────────────────────────
+
+    @Test
+    fun `group memory topic is created lazily`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val group = com.silk.backend.database.GroupRepository.createGroup("Group Memory Group", hostId = "host-user")
+            assertNotNull(group)
+            assertTrue(com.silk.backend.database.GroupRepository.addUserToGroup(group.id, "member-user"))
+
+            val entry = manager.captureExplicitGroupMemory(
+                userId = "member-user",
+                groupId = group.id,
+                content = "团队技术栈偏好：Kotlin + Ktor",
+                title = "Group Tech Stack",
+                type = KBMemoryType.PREFERENCE,
+                key = "group_tech_stack",
+            )
+            assertNotNull(entry)
+            assertEquals("团队技术栈偏好：Kotlin + Ktor", entry.content)
+            assertTrue(entry.memory?.explicit == true)
+
+            val list = manager.listGroupMemoryEntries(group.id, "member-user")
+            assertEquals(1, list.size)
+            assertEquals(entry.id, list.single().id)
+
+            val nonMemberList = manager.listGroupMemoryEntries(group.id, "outsider-user")
+            assertEquals(0, nonMemberList.size, "非成员不应看到群组记忆")
+        }
+    }
+
+    @Test
+    fun `group memory is accessible to all group members`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val group = com.silk.backend.database.GroupRepository.createGroup("Shared Memory Group", hostId = "host-user")
+            assertNotNull(group)
+            assertTrue(com.silk.backend.database.GroupRepository.addUserToGroup(group.id, "alice"))
+            assertTrue(com.silk.backend.database.GroupRepository.addUserToGroup(group.id, "bob"))
+
+            manager.captureExplicitGroupMemory(
+                userId = "alice",
+                groupId = group.id,
+                content = "团队使用 Kotlin 做后端",
+                title = "Tech Stack",
+                type = KBMemoryType.PREFERENCE,
+                key = "group_tech_stack",
+            )
+
+            val aliceList = manager.listGroupMemoryEntries(group.id, "alice")
+            val bobList = manager.listGroupMemoryEntries(group.id, "bob")
+            assertEquals(1, aliceList.size, "alice 可看到群组记忆")
+            assertEquals(1, bobList.size, "bob 也可看到同一条群组记忆")
+            assertEquals(aliceList.single().id, bobList.single().id)
+        }
+    }
+
+    @Test
+    fun `group auto memory does not override explicit group memory`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val group = com.silk.backend.database.GroupRepository.createGroup("Auto Override Group", hostId = "host-user")
+            assertNotNull(group)
+            assertTrue(com.silk.backend.database.GroupRepository.addUserToGroup(group.id, "member"))
+
+            val explicit = manager.captureExplicitGroupMemory(
+                userId = "member",
+                groupId = group.id,
+                content = "团队默认用中文交流",
+                title = "Language",
+                type = KBMemoryType.PROCEDURAL,
+                key = "response_language",
+            )
+            assertTrue(explicit.memory?.explicit == true)
+
+            val auto = manager.captureAutoGroupMemory(
+                userId = "member",
+                groupId = group.id,
+                content = "团队默认用英文交流",
+                title = "Language EN",
+                type = KBMemoryType.PROCEDURAL,
+                key = "response_language",
+            )
+            assertNotNull(auto)
+            assertEquals(explicit.id, auto.id, "自动记忆不应覆盖显式记忆")
+            assertEquals("团队默认用中文交流", auto.content, "内容保持显式记忆的原始值")
+        }
+    }
+
+    @Test
+    fun `searchGroupMemoryEntriesForContext returns matching entries`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val group = com.silk.backend.database.GroupRepository.createGroup("Search Group", hostId = "host-user")
+            assertNotNull(group)
+            assertTrue(com.silk.backend.database.GroupRepository.addUserToGroup(group.id, "member"))
+
+            manager.captureExplicitGroupMemory(
+                userId = "member",
+                groupId = group.id,
+                content = "团队用 Kotlin 和 Ktor 开发",
+                title = "Tech Stack",
+                type = KBMemoryType.PREFERENCE,
+                key = "group_tech_stack",
+            )
+            manager.captureExplicitGroupMemory(
+                userId = "member",
+                groupId = group.id,
+                content = "团队使用 PostgreSQL",
+                title = "Database",
+                type = KBMemoryType.PREFERENCE,
+                key = "group_db",
+            )
+
+            val results = manager.searchGroupMemoryEntriesForContext("member", group.id, "Ktor", limit = 5)
+            assertTrue(results.isNotEmpty(), "应匹配到 Ktor 相关的群组记忆")
+            assertTrue(results.any { it.entry.content.contains("Ktor") }, "应找到含 Ktor 的条目")
+
+            val noMatch = manager.searchGroupMemoryEntriesForContext("member", group.id, "React", limit = 5)
+            assertEquals(0, noMatch.size, "不匹配的关键词不应返回结果")
+        }
+    }
+
+    @Test
+    fun `group memory consolidation works`() {
+        TestWorkspace().use { workspace ->
+            val manager = KnowledgeBaseManager(baseDir = workspace.knowledgeBaseDir.absolutePath)
+            val group = com.silk.backend.database.GroupRepository.createGroup("Consolidate Group", hostId = "host-user")
+            assertNotNull(group)
+            assertTrue(com.silk.backend.database.GroupRepository.addUserToGroup(group.id, "member"))
+
+            manager.captureExplicitGroupMemory(
+                userId = "member",
+                groupId = group.id,
+                content = "团队用 Kotlin",
+                title = "Tech",
+                type = KBMemoryType.PREFERENCE,
+                key = "key1",
+            )
+            manager.captureExplicitGroupMemory(
+                userId = "member",
+                groupId = group.id,
+                content = "团队用 Kotlin 开发",
+                title = "Tech2",
+                type = KBMemoryType.PREFERENCE,
+                key = "key2",
+            )
+
+            assertEquals(2, manager.listGroupMemoryEntries(group.id, "member").size, "合并前 2 条")
+
+            val report = manager.consolidateGroupMemoryStore(group.id, "member")
+            assertTrue(report.mergedPairs >= 1, "应合并近重复")
+            assertTrue(report.totalAfter < report.totalBefore, "合并后条目减少")
+        }
+    }
+
     private fun makeMemoryEntry(
         content: String,
         key: String,

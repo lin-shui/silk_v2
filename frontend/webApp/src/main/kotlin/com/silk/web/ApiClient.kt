@@ -282,12 +282,22 @@ enum class KBMemoryType {
 }
 
 @Serializable
+data class KBFileRef(
+    val fileName: String,
+    val fileSize: Long,
+    val mimeType: String,
+    val downloadUrl: String,
+    val sourceMessageId: String? = null,
+)
+
+@Serializable
 data class KBEntrySource(
     val sourceType: KBSourceType = KBSourceType.MANUAL,
     val sourceGroupId: String? = null,
     val workflowId: String? = null,
     val messageIds: List<String> = emptyList(),
     val confidence: Double? = null,
+    val fileRef: KBFileRef? = null,
 )
 
 @Serializable
@@ -1555,6 +1565,65 @@ object ApiClient {
         }
     }
 
+    // ── Group Assets ──
+
+    @Serializable
+    data class GroupAssetFile(
+        val fileId: String,
+        val fileName: String,
+        val fileSize: Long,
+        val mimeType: String,
+        val uploadTime: Long,
+        val downloadUrl: String,
+        val hasLinkedEntry: Boolean = false,
+        val linkedEntryIds: List<String> = emptyList(),
+        val sourceMessageId: String? = null,
+    )
+
+    @Serializable
+    data class GroupAssetsResponse(
+        val groupId: String,
+        val files: List<GroupAssetFile> = emptyList(),
+        val kbEntries: List<KBEntryItem> = emptyList(),
+        val kbTopics: List<KBTopicItem> = emptyList(),
+    )
+
+    suspend fun getGroupAssets(groupId: String, userId: String): GroupAssetsResponse? {
+        return try {
+            val response = get("/api/kb/group-assets/$groupId?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取群空间资产失败:", e)
+            null
+        }
+    }
+
+    suspend fun linkFileToKBEntry(
+        entryId: String,
+        userId: String,
+        groupId: String,
+        fileName: String,
+        fileSize: Long,
+        mimeType: String,
+        sourceMessageId: String? = null,
+    ): KBEntryItem? {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("groupId", kotlinx.serialization.json.JsonPrimitive(groupId))
+                put("fileName", kotlinx.serialization.json.JsonPrimitive(fileName))
+                put("fileSize", kotlinx.serialization.json.JsonPrimitive(fileSize.toString()))
+                put("mimeType", kotlinx.serialization.json.JsonPrimitive(mimeType))
+                sourceMessageId?.let { put("sourceMessageId", kotlinx.serialization.json.JsonPrimitive(it)) }
+            }.toString()
+            val response = post("/api/kb/entries/$entryId/link-file", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("关联文件到 KB 条目失败:", e)
+            null
+        }
+    }
+
     suspend fun getKBContextPreferences(userId: String): KnowledgeBaseContextPreferences {
         return try {
             val response = get("/api/kb/context-preferences?userId=$userId")
@@ -1591,9 +1660,13 @@ object ApiClient {
         }
     }
 
-    suspend fun listKBMemoryEntries(userId: String): List<KBEntryItem> {
+    suspend fun listKBMemoryEntries(userId: String, groupId: String? = null): List<KBEntryItem> {
         return try {
-            val response = get("/api/kb/memory?userId=$userId")
+            val url = buildString {
+                append("/api/kb/memory?userId=$userId")
+                if (groupId != null) append("&groupId=$groupId")
+            }
+            val response = get(url)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("获取 memory 列表失败:", e)
@@ -1607,6 +1680,7 @@ object ApiClient {
         memoryType: KBMemoryType? = null,
         title: String? = null,
         key: String? = null,
+        groupId: String? = null,
     ): KBEntryItem? {
         return try {
             val body = kotlinx.serialization.json.buildJsonObject {
@@ -1615,6 +1689,7 @@ object ApiClient {
                 memoryType?.let { put("memoryType", kotlinx.serialization.json.JsonPrimitive(it.name)) }
                 title?.takeIf { it.isNotBlank() }?.let { put("title", kotlinx.serialization.json.JsonPrimitive(it)) }
                 key?.takeIf { it.isNotBlank() }?.let { put("key", kotlinx.serialization.json.JsonPrimitive(it)) }
+                groupId?.let { put("groupId", kotlinx.serialization.json.JsonPrimitive(it)) }
             }.toString()
             val response = post("/api/kb/memory", body)
             jsonParser.decodeFromString(response)
@@ -1624,10 +1699,14 @@ object ApiClient {
         }
     }
 
-    suspend fun deleteKBMemoryEntry(entryId: String, userId: String): Boolean {
+    suspend fun deleteKBMemoryEntry(entryId: String, userId: String, groupId: String? = null): Boolean {
         return try {
+            val url = buildString {
+                append("$BASE_URL/api/kb/memory/$entryId?userId=$userId")
+                if (groupId != null) append("&groupId=$groupId")
+            }
             val response = window.fetch(
-                "$BASE_URL/api/kb/memory/$entryId?userId=$userId",
+                url,
                 RequestInit(method = "DELETE", headers = authHeaders())
             ).await()
             response.ok

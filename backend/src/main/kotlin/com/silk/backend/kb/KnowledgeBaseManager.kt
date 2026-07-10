@@ -9,6 +9,7 @@ import com.silk.backend.models.KBEntrySource
 import com.silk.backend.models.KBEntryStatus
 import com.silk.backend.models.KBTopic
 import com.silk.backend.models.KBTopicPurpose
+import com.silk.backend.models.KBFileRef
 import com.silk.backend.models.KnowledgeSpaceType
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -19,6 +20,39 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+
+/**
+ * 群空间资产中的文件条目（KB 场景中展示用）。
+ */
+@Serializable
+data class GroupAssetFile(
+    val fileId: String,
+    val fileName: String,
+    val fileSize: Long,
+    val mimeType: String,
+    val uploadTime: Long,
+    val downloadUrl: String,
+    /** 该文件是否已被 KB 条目引用（通过 fileRef 匹配 downloadUrl）。 */
+    val hasLinkedEntry: Boolean = false,
+    /** 引用该文件的 KB 条目 ID 列表。 */
+    val linkedEntryIds: List<String> = emptyList(),
+    /** 来源消息 ID（若有）。 */
+    val sourceMessageId: String? = null,
+)
+
+/**
+ * 群空间资产统一响应。
+ */
+@Serializable
+data class GroupAssetsResponse(
+    val groupId: String,
+    /** 该群上传目录中的文件。 */
+    val files: List<GroupAssetFile> = emptyList(),
+    /** 该群团队空间中的 KB 条目（PUBLISHED，不含 memory）。 */
+    val kbEntries: List<KBEntry> = emptyList(),
+    /** 该群团队空间中的 KB 主题。 */
+    val kbTopics: List<KBTopic> = emptyList(),
+)
 
 @Serializable
 data class KBStore(
@@ -677,5 +711,387 @@ class KnowledgeBaseManager(
         )
         store.topics.add(created)
         return created
+    }
+
+    // ── Phase 4: Scoped Project (Group) Memory ──
+
+    /**
+     * 查找或创建群组级别的记忆 topic（team-scoped, purpose=MEMORY）。
+     * Group memory topic 通过 groupId + purpose=MEMORY 唯一识别。
+     * 只允许群组成员创建/访问。
+     */
+    internal fun findOrCreateGroupMemoryTopic(store: KBStore, groupId: String, userId: String): KBTopic {
+        val existing = store.topics.firstOrNull {
+            it.purpose == KBTopicPurpose.MEMORY &&
+                it.spaceType == KnowledgeSpaceType.TEAM &&
+                it.groupId == groupId
+        }
+        if (existing != null) return existing
+
+        require(GroupRepository.isUserInGroup(groupId, userId)) {
+            "User $userId is not a member of group $groupId"
+        }
+        val now = System.currentTimeMillis()
+        val created = KBTopic(
+            id = "kb_topic_${System.currentTimeMillis()}_${(1000..9999).random()}",
+            name = "Group Memory",
+            project = "memory",
+            ownerId = userId,
+            purpose = KBTopicPurpose.MEMORY,
+            spaceType = KnowledgeSpaceType.TEAM,
+            groupId = groupId,
+            accessPolicy = KBAccessPolicy(teamMembersCanWrite = true),
+            createdBy = userId,
+            updatedBy = userId,
+            createdAt = now,
+            updatedAt = now,
+        )
+        store.topics.add(created)
+        logger.info("Created group memory topic for group {} by user {}", groupId, userId)
+        return created
+    }
+
+    /**
+     * 获取群组记忆 topic，若不存在则返回 null。
+     */
+    fun getGroupMemoryTopic(groupId: String): KBTopic? {
+        return load().topics.firstOrNull {
+            it.purpose == KBTopicPurpose.MEMORY &&
+                it.spaceType == KnowledgeSpaceType.TEAM &&
+                it.groupId == groupId
+        }
+    }
+
+    /**
+     * 以群组身份捕获显式记忆。记忆归属于群组，所有群组成员可读。
+     * 使用 group-scoped memory topic，每个 groupId 一个记忆空间。
+     */
+    fun captureExplicitGroupMemory(
+        userId: String,
+        groupId: String,
+        content: String,
+        title: String,
+        type: KBMemoryType,
+        key: String? = null,
+    ): KBEntry {
+        return captureGroupMemory(
+            userId = userId,
+            groupId = groupId,
+            content = content,
+            title = title,
+            type = type,
+            key = key,
+            explicit = true,
+            sourceType = com.silk.backend.models.KBSourceType.CHAT,
+        )
+    }
+
+    /**
+     * 以群组身份捕获自动记忆。不会覆盖同 key 的显式群组记忆。
+     */
+    fun captureAutoGroupMemory(
+        userId: String,
+        groupId: String,
+        content: String,
+        title: String,
+        type: KBMemoryType,
+        key: String,
+    ): KBEntry? {
+        return captureGroupMemory(
+            userId = userId,
+            groupId = groupId,
+            content = content,
+            title = title,
+            type = type,
+            key = key,
+            explicit = false,
+            sourceType = com.silk.backend.models.KBSourceType.AI_RESPONSE,
+        )
+    }
+
+    private fun captureGroupMemory(
+        userId: String,
+        groupId: String,
+        content: String,
+        title: String,
+        type: KBMemoryType,
+        key: String? = null,
+        explicit: Boolean,
+        sourceType: com.silk.backend.models.KBSourceType,
+    ): KBEntry {
+        val normalizedContent = content.trim()
+        require(normalizedContent.isNotEmpty()) { "memory content must not be blank" }
+        val normalizedTitle = title.trim().ifEmpty { buildMemoryTitle(type, normalizedContent) }
+        val normalizedKey = key?.trim()?.takeIf { it.isNotEmpty() } ?: buildMemoryKey(type, normalizedContent)
+        val store = load()
+
+        require(GroupRepository.isUserInGroup(groupId, userId)) {
+            "User $userId is not a member of group $groupId"
+        }
+        val topic = findOrCreateGroupMemoryTopic(store, groupId, userId)
+        val now = System.currentTimeMillis()
+        val existingIndex = store.entries.indexOfFirst { entry ->
+            entry.topicId == topic.id &&
+                entry.memory?.key == normalizedKey
+        }
+
+        // 自动记忆不覆盖同 key 的显式记忆
+        if (!explicit && existingIndex >= 0 && store.entries[existingIndex].memory?.explicit == true) {
+            return store.entries[existingIndex]
+        }
+
+        val saved = if (existingIndex >= 0) {
+            val existing = store.entries[existingIndex]
+            val archivedMeta = archiveOldVersion(
+                existingEntry = existing,
+                newContent = normalizedContent,
+                reason = if (explicit) "用户显式更新群组记忆" else "自动记忆覆盖群组记忆",
+            )
+            existing.copy(
+                title = normalizedTitle,
+                content = normalizedContent,
+                tags = buildMemoryTags(type),
+                status = KBEntryStatus.PUBLISHED,
+                source = KBEntrySource(sourceType = sourceType),
+                memory = (archivedMeta ?: defaultMemoryMetadata(type, normalizedKey, explicit = explicit)).copy(
+                    explicit = explicit,
+                ),
+                updatedBy = userId,
+                updatedAt = now,
+            )
+        } else {
+            KBEntry(
+                id = "kb_entry_${System.currentTimeMillis()}_${(1000..9999).random()}",
+                topicId = topic.id,
+                title = normalizedTitle,
+                content = normalizedContent,
+                tags = buildMemoryTags(type),
+                ownerId = userId,
+                status = KBEntryStatus.PUBLISHED,
+                source = KBEntrySource(sourceType = sourceType),
+                memory = defaultMemoryMetadata(type, normalizedKey, explicit = explicit),
+                createdBy = userId,
+                updatedBy = userId,
+                createdAt = now,
+                updatedAt = now,
+            )
+        }
+        if (existingIndex >= 0) {
+            store.entries[existingIndex] = saved
+        } else {
+            store.entries.add(saved)
+        }
+        save(store)
+        return saved
+    }
+
+    /**
+     * 搜索给定群组的记忆条目（含群组记忆）。仅返回当前用户可读的记忆。
+     */
+    fun searchGroupMemoryEntriesForContext(
+        userId: String,
+        groupId: String,
+        query: String,
+        limit: Int = 5,
+    ): List<KBContextSearchHit> {
+        val terms = extractSearchTerms(query)
+        if (terms.isEmpty() || limit <= 0) return emptyList()
+
+        val store = load()
+        val topicById = store.topics.associateBy { it.id }
+        val now = System.currentTimeMillis()
+        return store.entries.asSequence()
+            .filter { it.status == KBEntryStatus.PUBLISHED }
+            .filter { it.memory != null }
+            .mapNotNull { entry ->
+                val topic = topicById[entry.topicId] ?: return@mapNotNull null
+                if (topic.purpose != KBTopicPurpose.MEMORY) return@mapNotNull null
+                if (topic.spaceType != KnowledgeSpaceType.TEAM) return@mapNotNull null
+                if (topic.groupId != groupId) return@mapNotNull null
+                if (!canReadTopic(topic, userId)) return@mapNotNull null
+                scoreContextCandidate(topic, entry, terms, preferredGroupId = groupId, memoryBoost = 10)
+            }
+            .map { hit ->
+                val meta = hit.entry.memory ?: return@map hit
+                val recency = recencyScore(meta, now)
+                hit.copy(score = hit.score + (recency * 2).toInt())
+            }
+            .sortedWith(
+                compareByDescending<KBContextSearchHit> { it.score }
+                    .thenByDescending { it.entry.updatedAt }
+            )
+            .take(limit)
+            .toList()
+    }
+
+    /**
+     * 列出群组记忆条目。
+     * @param groupId 目标群组 ID
+     * @param userId 调用者 ID（用于权限校验）
+     */
+    fun listGroupMemoryEntries(groupId: String, userId: String): List<KBEntry> {
+        val store = load()
+        val topic = store.topics.firstOrNull {
+            it.purpose == KBTopicPurpose.MEMORY &&
+                it.spaceType == KnowledgeSpaceType.TEAM &&
+                it.groupId == groupId
+        } ?: return emptyList()
+
+        if (!canReadTopic(topic, userId)) return emptyList()
+        return store.entries.asSequence()
+            .filter { it.topicId == topic.id }
+            .filter { it.status != KBEntryStatus.DELETED }
+            .sortedByDescending { it.updatedAt }
+            .toList()
+    }
+
+    /**
+     * 对指定群组的记忆 store 执行 consolidation（去重合并 + TTL 衰减）。
+     */
+    fun consolidateGroupMemoryStore(groupId: String, userId: String): ConsolidationReport {
+        val store = load()
+        val topic = store.topics.firstOrNull {
+            it.purpose == KBTopicPurpose.MEMORY &&
+                it.spaceType == KnowledgeSpaceType.TEAM &&
+                it.groupId == groupId
+        } ?: return ConsolidationReport()
+
+        if (!canManageTopic(topic, userId)) return ConsolidationReport()
+        val memoryEntries = store.entries.filter { it.topicId == topic.id }.toMutableList()
+        val report = consolidateMemories(memoryEntries)
+        val nonMemoryInTopic = store.entries.filter { it.topicId != topic.id }
+        store.entries.clear()
+        store.entries.addAll(nonMemoryInTopic)
+        store.entries.addAll(memoryEntries)
+        save(store)
+        return report
+    }
+
+    // ── Group Assets (unified file + KB browsing) ──
+
+    /**
+     * 获取群空间统一资产列表（上传文件 + KB 条目）。
+     * 只返回当前用户可读的内容。
+     */
+    fun getGroupAssets(groupId: String, userId: String): GroupAssetsResponse {
+        require(GroupRepository.isUserInGroup(groupId, userId)) {
+            "User $userId is not a member of group $groupId"
+        }
+
+        val store = load()
+        val teamTopics = collectGroupTopics(store, groupId, userId)
+        val teamTopicIds = teamTopics.map { it.id }.toSet()
+        val kbEntries = store.entries.filter {
+            it.topicId in teamTopicIds &&
+                it.status == KBEntryStatus.PUBLISHED
+        }
+
+        val files = collectGroupUploadFiles(groupId, kbEntries)
+
+        return GroupAssetsResponse(
+            groupId = groupId,
+            files = files,
+            kbEntries = kbEntries,
+            kbTopics = teamTopics,
+        )
+    }
+
+    private fun collectGroupTopics(store: KBStore, groupId: String, userId: String): List<KBTopic> =
+        store.topics.filter {
+            it.spaceType == KnowledgeSpaceType.TEAM &&
+                it.groupId == groupId &&
+                it.purpose == KBTopicPurpose.GENERAL &&
+                canReadTopic(it, userId)
+        }
+
+    private fun collectGroupUploadFiles(groupId: String, kbEntries: List<KBEntry>): List<GroupAssetFile> {
+        val chatHistoryDir = System.getProperty("silk.chatHistoryDir")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let(::File)
+            ?: File("chat_history")
+        val sessionDirName = if (groupId.startsWith("group_")) groupId else "group_$groupId"
+        val uploadsDir = File(File(chatHistoryDir, sessionDirName), "uploads")
+
+        val fileRefMap = buildFileRefMap(kbEntries)
+
+        return if (uploadsDir.exists()) {
+            collectFilesFromUploadDir(uploadsDir, groupId, fileRefMap)
+        } else {
+            emptyList()
+        }
+    }
+
+    private fun buildFileRefMap(kbEntries: List<KBEntry>): Map<String, List<String>> {
+        val map = mutableMapOf<String, MutableList<String>>()
+        kbEntries.forEach { entry ->
+            entry.source.fileRef?.let { ref ->
+                map.getOrPut(ref.downloadUrl) { mutableListOf() }.add(entry.id)
+            }
+        }
+        return map
+    }
+
+    private fun collectFilesFromUploadDir(uploadsDir: File, groupId: String, fileRefMap: Map<String, List<String>>): List<GroupAssetFile> =
+        uploadsDir.listFiles()
+            ?.filter { file ->
+                file.name != "processed_urls.txt" &&
+                    file.name != "file_registry.json" &&
+                    !file.name.endsWith(".extracted.md")
+            }
+            ?.map { file ->
+                val downloadUrl = "/api/files/download/$groupId/${file.name}"
+                val linkedEntryIds = fileRefMap[downloadUrl] ?: emptyList()
+                GroupAssetFile(
+                    fileId = file.name,
+                    fileName = file.name,
+                    fileSize = file.length(),
+                    mimeType = Files.probeContentType(file.toPath()) ?: "application/octet-stream",
+                    uploadTime = file.lastModified(),
+                    downloadUrl = downloadUrl,
+                    hasLinkedEntry = linkedEntryIds.isNotEmpty(),
+                    linkedEntryIds = linkedEntryIds,
+                )
+            }
+            ?.sortedByDescending { it.uploadTime }
+            ?: emptyList()
+
+    /**
+     * 为 KB 条目关联一个群文件引用。
+     * 用于在 KB 编辑器中从文件创建条目时，直接将文件引用存入 source.fileRef。
+     */
+    fun linkFileToEntry(
+        entryId: String,
+        groupId: String,
+        fileName: String,
+        fileSize: Long,
+        mimeType: String,
+        userId: String,
+        sourceMessageId: String? = null,
+    ): KBEntry? {
+        val store = load()
+        val idx = store.entries.indexOfFirst { it.id == entryId }
+        if (idx < 0) return null
+        val entry = store.entries[idx]
+        val topic = store.topics.find { it.id == entry.topicId } ?: return null
+        if (!canWriteTopic(topic, userId)) return null
+
+        val downloadUrl = "/api/files/download/$groupId/$fileName"
+        val fileRef = KBFileRef(
+            fileName = fileName,
+            fileSize = fileSize,
+            mimeType = mimeType,
+            downloadUrl = downloadUrl,
+            sourceMessageId = sourceMessageId,
+        )
+        val updatedSource = entry.source.copy(fileRef = fileRef)
+        val updated = entry.copy(
+            source = updatedSource,
+            updatedBy = userId,
+            updatedAt = System.currentTimeMillis(),
+        )
+        store.entries[idx] = updated
+        save(store)
+        return updated
     }
 }
