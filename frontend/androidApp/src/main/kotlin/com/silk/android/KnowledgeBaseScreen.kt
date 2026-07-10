@@ -1,5 +1,8 @@
 package com.silk.android
 
+import android.content.Intent
+import android.net.Uri
+import android.webkit.WebView
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
@@ -51,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -1178,6 +1182,7 @@ private fun KnowledgeBaseEntriesPage(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@Suppress("CyclomaticComplexMethod")
 private fun KnowledgeBaseEditorPage(
     userId: String,
     groups: List<Group>,
@@ -1267,6 +1272,13 @@ private fun KnowledgeBaseEditorPage(
                         }
                     }
                 }
+            }
+            // ── File preview for entries with fileRef ──
+            if (selectedEntry?.source?.sourceType == KBSourceType.FILE &&
+                selectedEntry.source.fileRef != null
+            ) {
+                val fileRef = selectedEntry.source.fileRef!!
+                KnowledgeFilePreviewCard(fileRef = fileRef)
             }
             if (!canWriteSelectedTopic) {
                 Text(
@@ -1995,4 +2007,109 @@ private fun memoryTypeLabel(type: KBMemoryType): String = when (type) {
     KBMemoryType.PREFERENCE -> "Preference"
     KBMemoryType.EPISODIC -> "Episodic"
     KBMemoryType.PROCEDURAL -> "Procedural"
+}
+
+// ── File Preview Card ──
+
+/**
+ * Android 端 KB 条目文件预览卡片。
+ * 使用 WebView 统一渲染图片/PDF/音视频（WebView 原生支持这些格式）。
+ */
+@Composable
+@Suppress("CyclomaticComplexMethod")
+private fun KnowledgeFilePreviewCard(fileRef: KBFileRef) {
+    val fileIcon = when {
+        fileRef.mimeType.startsWith("image/") -> "🖼️"
+        fileRef.mimeType.startsWith("video/") -> "🎬"
+        fileRef.mimeType.startsWith("audio/") -> "🎵"
+        fileRef.mimeType.contains("pdf") -> "📄"
+        else -> "📁"
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = SilkColors.surface),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(fileIcon, fontSize = 20.sp)
+                    Text(
+                        fileRef.fileName,
+                        fontWeight = FontWeight.Medium,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            // 判断是否为可直接预览的类型
+            val isPreviewable = fileRef.mimeType.startsWith("image/") ||
+                fileRef.mimeType.startsWith("video/") ||
+                fileRef.mimeType.startsWith("audio/") ||
+                fileRef.mimeType == "application/pdf"
+            if (isPreviewable) {
+                // 使用 WebView 预览文件
+                AndroidView(
+                    factory = { context ->
+                        WebView(context).apply {
+                            settings.javaScriptEnabled = true
+                            settings.allowFileAccess = false
+                            settings.loadWithOverviewMode = true
+                            settings.useWideViewPort = true
+                            settings.builtInZoomControls = true
+                            settings.displayZoomControls = false
+                            when {
+                                fileRef.mimeType.startsWith("image/") ||
+                                    fileRef.mimeType.startsWith("video/") ||
+                                    fileRef.mimeType.startsWith("audio/") -> {
+                                    // 图片/视频/音频：直接用 WebView 加载 URL
+                                    loadUrl(fileRef.downloadUrl)
+                                }
+                                fileRef.mimeType == "application/pdf" -> {
+                                    // PDF：通过 Google Docs 在线查看器
+                                    val encodedUrl = java.net.URLEncoder.encode(fileRef.downloadUrl, "UTF-8")
+                                    loadUrl("https://docs.google.com/viewer?embedded=true&url=$encodedUrl")
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(
+                        when {
+                            fileRef.mimeType.startsWith("image/") -> 300.dp
+                            fileRef.mimeType.startsWith("video/") -> 250.dp
+                            fileRef.mimeType.startsWith("audio/") -> 80.dp
+                            else -> 400.dp
+                        }
+                    ),
+                )
+            } else {
+                // 不支持预览的类型显示下载选项
+                Text(
+                    "暂不支持预览此文件类型",
+                    color = SilkColors.textLight,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            val context = androidx.compose.ui.platform.LocalContext.current
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = {
+                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
+                        data = android.net.Uri.parse(fileRef.downloadUrl)
+                    }
+                    context.startActivity(intent)
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isPreviewable) "全屏打开" else "下载文件")
+            }
+        }
+    }
 }

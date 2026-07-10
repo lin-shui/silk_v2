@@ -92,9 +92,18 @@ internal const val KNOWLEDGE_SIDEBAR_MIN_WIDTH = 200.0
 internal const val KNOWLEDGE_SIDEBAR_MAX_WIDTH = 420.0
 internal const val KNOWLEDGE_EDITOR_SPLIT_MIN_RATIO = 0.25
 internal const val KNOWLEDGE_EDITOR_SPLIT_MAX_RATIO = 0.75
+internal const val KNOWLEDGE_COPILOT_SIDEBAR_DEFAULT_WIDTH = 360.0
+internal const val KNOWLEDGE_COPILOT_SIDEBAR_MIN_WIDTH = 280.0
+internal const val KNOWLEDGE_COPILOT_SIDEBAR_MAX_WIDTH = 520.0
+private const val KNOWLEDGE_COPILOT_SIDEBAR_WIDTH_KEY = "silk_kb_copilot_sidebar_width"
+private const val KNOWLEDGE_COPILOT_DEFAULT_PROMPT =
+    "请基于当前文档帮我整理结构、补全遗漏信息，并保持 Markdown 可直接保存。"
 
 internal fun clampKnowledgeSidebarWidth(width: Double): Double =
     width.coerceIn(KNOWLEDGE_SIDEBAR_MIN_WIDTH, KNOWLEDGE_SIDEBAR_MAX_WIDTH)
+
+internal fun clampKnowledgeCopilotSidebarWidth(width: Double): Double =
+    width.coerceIn(KNOWLEDGE_COPILOT_SIDEBAR_MIN_WIDTH, KNOWLEDGE_COPILOT_SIDEBAR_MAX_WIDTH)
 
 internal fun clampKnowledgeEditorSplitRatio(ratio: Double): Double =
     ratio.coerceIn(KNOWLEDGE_EDITOR_SPLIT_MIN_RATIO, KNOWLEDGE_EDITOR_SPLIT_MAX_RATIO)
@@ -389,8 +398,6 @@ private data class KnowledgeMergeTargetOption(
     val topic: KBTopicItem,
 )
 
-private const val KNOWLEDGE_COPILOT_DEFAULT_PROMPT = "请基于当前文档帮我整理结构、补全遗漏信息，并保持 Markdown 可直接保存。"
-
 internal fun filterKnowledgeEntries(entries: List<KBEntryItem>, filter: KnowledgeEntryFilter): List<KBEntryItem> {
     return when (filter) {
         KnowledgeEntryFilter.ALL -> entries
@@ -501,6 +508,8 @@ private fun TopicSidebar(
     memoryPreferences: KnowledgeBaseContextPreferences,
     activeDragPayload: KnowledgeEntryDragPayload?,
     activeDropTopicId: String?,
+    showGroupFilesView: Boolean = false,
+    isTeamSpace: Boolean = false,
     onToggleManageMode: () -> Unit,
     onManageMemory: () -> Unit,
     onCreateTopic: () -> Unit,
@@ -511,6 +520,7 @@ private fun TopicSidebar(
     onDeleteTopic: (KBTopicItem) -> Unit,
     onEntryDragHoverTopicChange: (String?) -> Unit,
     onEntryDropToTopic: (String) -> Unit,
+    onGroupFilesSelect: () -> Unit = {},
 ) {
     val hasManageableTopic = topics.any { canManageKnowledgeTopic(it, userId, groups) }
     Div({
@@ -568,6 +578,15 @@ private fun TopicSidebar(
             onEntryDragHoverTopicChange = onEntryDragHoverTopicChange,
             onEntryDropToTopic = onEntryDropToTopic,
         )
+        // ── 群文件特殊主题 ──
+        if (isTeamSpace) {
+            GroupFilesTopicRow(
+                isSelected = showGroupFilesView,
+                onClick = {
+                    onGroupFilesSelect()
+                },
+            )
+        }
     }
 }
 
@@ -874,13 +893,6 @@ private fun EntrySidebar(
     onEntrySelect: (KBEntryItem) -> Unit,
     onEntryDragStart: (KBEntryItem) -> Unit,
     onEntryDragEnd: () -> Unit,
-    // Group assets props
-    showGroupAssets: Boolean = false,
-    groupAssetsResponse: ApiClient.GroupAssetsResponse? = null,
-    isGroupAssetsLoading: Boolean = false,
-    isTeamSpace: Boolean = false,
-    onToggleGroupAssets: () -> Unit = {},
-    onCreateEntryFromFile: ((ApiClient.GroupAssetFile) -> Unit)? = null,
 ) {
     Div({
         style {
@@ -894,96 +906,126 @@ private fun EntrySidebar(
         }
     }) {
         KnowledgeColumnHeader(
-            title = if (showGroupAssets) "群空间资产" else (selectedTopic?.name ?: "条目"),
-            actionLabel = if (selectedTopic != null && !showGroupAssets) "+" else null,
+            title = selectedTopic?.name ?: "条目",
+            actionLabel = if (selectedTopic != null) "+" else null,
             actionEnabled = canCreateEntry,
             onAction = onCreateEntry,
-            secondaryAction = if (isTeamSpace) {
-                KnowledgeHeaderSecondaryAction(
-                    label = if (showGroupAssets) "返回条目" else "群资产",
-                    background = if (showGroupAssets) SilkColors.primaryDark else SilkColors.primary,
-                    onClick = onToggleGroupAssets,
-                )
-            } else null,
         )
 
-        if (showGroupAssets) {
-            GroupAssetsContent(
-                groupAssetsResponse = groupAssetsResponse,
-                isLoading = isGroupAssetsLoading,
-                onCreateEntryFromFile = onCreateEntryFromFile,
-            )
-        } else {
-            EntryFilterTabs(
-                selectedFilter = selectedFilter,
-                onFilterChange = onFilterChange,
-                showMeetingCaptureAction = selectedTopic != null,
-                onMeetingCapture = onMeetingCapture,
-                selectedCandidateCount = selectedCandidateEntryIds.size,
-                showCandidateInboxActions = selectedTopic != null && canCreateEntry && entries.isNotEmpty() && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
-                allCandidatesSelected = entries.isNotEmpty() && entries.all { it.id in selectedCandidateEntryIds },
-                onToggleSelectAllCandidates = onToggleSelectAllCandidates,
-                canBatchMergeCandidates = canBatchMergeCandidates,
-                onBatchMergeCandidates = onBatchMergeCandidates,
-                onBatchPublishCandidates = onBatchPublishCandidates,
-                onBatchArchiveCandidates = onBatchArchiveCandidates,
-            )
-            KnowledgeSearchField(
-                value = searchQuery,
-                placeholder = "搜索标题 / 标签 / 内容",
-                onValueChange = onSearchQueryChange,
-            )
-            EntrySidebarContent(
-                selectedTopic = selectedTopic,
-                entries = entries,
-                selectedEntry = selectedEntry,
-                searchQuery = searchQuery,
-                selectedCandidateEntryIds = selectedCandidateEntryIds,
-                showCandidateSelection = canCreateEntry && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
-                canDragEntries = canDragEntries,
-                onToggleCandidateSelection = onToggleCandidateSelection,
-                onEntrySelect = onEntrySelect,
-                onEntryDragStart = onEntryDragStart,
-                onEntryDragEnd = onEntryDragEnd,
-            )
+        EntryFilterTabs(
+            selectedFilter = selectedFilter,
+            onFilterChange = onFilterChange,
+            showMeetingCaptureAction = selectedTopic != null,
+            onMeetingCapture = onMeetingCapture,
+            selectedCandidateCount = selectedCandidateEntryIds.size,
+            showCandidateInboxActions = selectedTopic != null && canCreateEntry && entries.isNotEmpty() && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
+            allCandidatesSelected = entries.isNotEmpty() && entries.all { it.id in selectedCandidateEntryIds },
+            onToggleSelectAllCandidates = onToggleSelectAllCandidates,
+            canBatchMergeCandidates = canBatchMergeCandidates,
+            onBatchMergeCandidates = onBatchMergeCandidates,
+            onBatchPublishCandidates = onBatchPublishCandidates,
+            onBatchArchiveCandidates = onBatchArchiveCandidates,
+        )
+        KnowledgeSearchField(
+            value = searchQuery,
+            placeholder = "搜索标题 / 标签 / 内容",
+            onValueChange = onSearchQueryChange,
+        )
+        EntrySidebarContent(
+            selectedTopic = selectedTopic,
+            entries = entries,
+            selectedEntry = selectedEntry,
+            searchQuery = searchQuery,
+            selectedCandidateEntryIds = selectedCandidateEntryIds,
+            showCandidateSelection = canCreateEntry && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
+            canDragEntries = canDragEntries,
+            onToggleCandidateSelection = onToggleCandidateSelection,
+            onEntrySelect = onEntrySelect,
+            onEntryDragStart = onEntryDragStart,
+            onEntryDragEnd = onEntryDragEnd,
+        )
+    }
+}
+
+@Composable
+private fun GroupFilesTopicRow(
+    isSelected: Boolean,
+    onClick: () -> Unit,
+) {
+    Div({
+        style {
+            padding(10.px, 14.px)
+            property("cursor", "pointer")
+            backgroundColor(Color(if (isSelected) "rgba(201,168,108,0.15)" else "transparent"))
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            property("border-left", if (isSelected) "3px solid ${SilkColors.primary}" else "3px solid transparent")
+        }
+        onClick { onClick() }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                property("gap", "8px")
+                alignItems(AlignItems.Center)
+            }
+        }) {
+            Span({ style { fontSize(16.px) } }) { Text("📁") }
+            Span({
+                style {
+                    fontSize(14.px)
+                    color(Color(SilkColors.textPrimary))
+                    fontWeight(if (isSelected) "600" else "400")
+                }
+            }) { Text("群文件") }
+        }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                property("gap", "6px")
+                marginTop(6.px)
+                property("flex-wrap", "wrap")
+            }
+        }) {
+            KnowledgeBadge("团队", SilkColors.info)
         }
     }
 }
 
 @Composable
-private fun GroupAssetsContent(
-    groupAssetsResponse: ApiClient.GroupAssetsResponse?,
+private fun GroupFilesContent(
+    groupFilesResponse: ApiClient.GroupAssetsResponse?,
     isLoading: Boolean,
     onCreateEntryFromFile: ((ApiClient.GroupAssetFile) -> Unit)?,
+    onPreviewFile: ((ApiClient.GroupAssetFile) -> Unit)? = null,
+    widthPx: Double = 240.0,
 ) {
     Div({
         style {
-            property("flex", "1")
-            property("overflow-y", "auto")
+            width(widthPx.px)
+            minWidth(KNOWLEDGE_SIDEBAR_MIN_WIDTH.px)
+            property("flex-shrink", "0")
+            property("border-right", "1px solid ${SilkColors.border}")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            backgroundColor(Color(SilkColors.surfaceElevated))
         }
     }) {
-        if (isLoading) {
-            KnowledgeCenteredMessage("加载群资产中...", SilkColors.textSecondary, 16.px)
-        } else if (groupAssetsResponse == null) {
-            KnowledgeCenteredMessage("未找到群资产数据", SilkColors.textLight, 20.px)
-        } else {
-            // KB entries section
-            if (groupAssetsResponse.kbEntries.isNotEmpty()) {
-                Div({
-                    style {
-                        padding(8.px, 12.px)
-                        fontSize(12.px)
-                        fontWeight("600")
-                        color(Color(SilkColors.textSecondary))
-                        backgroundColor(Color("#FFF8EE"))
-                        property("border-bottom", "1px solid ${SilkColors.border}")
-                    }
-                }) { Text("知识库条目 (${groupAssetsResponse.kbEntries.size})") }
-                groupAssetsResponse.kbEntries.forEach { entry ->
-                    GroupAssetEntryRow(entry = entry)
-                }
+        KnowledgeColumnHeader(
+            title = "群文件",
+            actionLabel = null,
+            onAction = {},
+        )
+        Div({
+            style {
+                property("flex", "1")
+                property("overflow-y", "auto")
             }
-
+        }) {
+        if (isLoading) {
+            KnowledgeCenteredMessage("加载群文件中...", SilkColors.textSecondary, 16.px)
+        } else if (groupFilesResponse == null) {
+            KnowledgeCenteredMessage("未找到群文件数据", SilkColors.textLight, 20.px)
+        } else {
             // Files section
             Div({
                 style {
@@ -994,24 +1036,29 @@ private fun GroupAssetsContent(
                     backgroundColor(Color("#F0F4FF"))
                     property("border-bottom", "1px solid ${SilkColors.border}")
                 }
-            }) { Text("群文件 (${groupAssetsResponse.files.size})") }
+            }) { Text("群文件 (${groupFilesResponse.files.size})") }
 
-            if (groupAssetsResponse.files.isEmpty()) {
+            if (groupFilesResponse.files.isEmpty()) {
                 KnowledgeCenteredMessage("该群还没有上传文件", SilkColors.textLight, 20.px)
             } else {
-                groupAssetsResponse.files.forEach { file ->
+                groupFilesResponse.files.forEach { file ->
                     GroupAssetFileRow(
                         file = file,
                         onCreateEntry = onCreateEntryFromFile?.let { { it(file) } },
+                        onPreview = onPreviewFile?.let { { it(file) } },
                     )
                 }
             }
         }
     }
+}  // closes big else
 }
 
 @Composable
-private fun GroupAssetEntryRow(entry: KBEntryItem) {
+internal fun GroupAssetEntryRow(
+    entry: KBEntryItem,
+    onPreviewFile: ((KBFileRef) -> Unit)? = null,
+) {
     Div({
         style {
             padding(10.px, 14.px)
@@ -1038,6 +1085,19 @@ private fun GroupAssetEntryRow(entry: KBEntryItem) {
                 }
             }) {
                 Span({ }) { Text("📎 ${fileRef.fileName}") }
+                // Preview button for supported media types
+                if (onPreviewFile != null && isPreviewableMimeType(fileRef.mimeType)) {
+                    Span({
+                        style {
+                            property("cursor", "pointer")
+                            property("text-decoration", "underline")
+                            marginLeft(4.px)
+                            color(Color(SilkColors.success))
+                            fontWeight("600")
+                        }
+                        onClick { onPreviewFile(fileRef) }
+                    }) { Text("预览") }
+                }
                 Span({
                     style {
                         property("cursor", "pointer")
@@ -1063,9 +1123,11 @@ private fun GroupAssetEntryRow(entry: KBEntryItem) {
 }
 
 @Composable
+@Suppress("CyclomaticComplexMethod")
 private fun GroupAssetFileRow(
     file: ApiClient.GroupAssetFile,
     onCreateEntry: (() -> Unit)?,
+    onPreview: (() -> Unit)? = null,
 ) {
     val fileIcon = when {
         file.mimeType.startsWith("image/") -> "🖼️"
@@ -1117,6 +1179,19 @@ private fun GroupAssetFileRow(
                 property("align-items", "center")
             }
         }) {
+            // Source type badge
+            val sourceLabel = when (file.sourceType) {
+                "kb_entry_file" -> "条目附件"
+                "url_extracted" -> "网页提取"
+                else -> "上传"
+            }
+            val sourceColor = when (file.sourceType) {
+                "kb_entry_file" -> SilkColors.primary
+                "url_extracted" -> "#8B5CF6"
+                else -> SilkColors.textSecondary
+            }
+            KnowledgeBadge(sourceLabel, sourceColor)
+
             Span({
                 style {
                     fontSize(11.px)
@@ -1126,15 +1201,30 @@ private fun GroupAssetFileRow(
             if (file.hasLinkedEntry) {
                 KnowledgeBadge("已关联", SilkColors.success)
             }
-            Span({
-                style {
-                    fontSize(11.px)
-                    color(Color(SilkColors.info))
-                    property("cursor", "pointer")
-                    property("text-decoration", "underline")
-                }
-                onClick { window.open(file.downloadUrl, "_blank") }
-            }) { Text("下载") }
+            // Preview action for supported media types
+            if (onPreview != null && isPreviewableMimeType(file.mimeType)) {
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.success))
+                        property("cursor", "pointer")
+                        property("text-decoration", "underline")
+                        fontWeight("600")
+                    }
+                    onClick { onPreview() }
+                }) { Text("预览") }
+            }
+            if (file.downloadUrl.isNotBlank()) {
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.info))
+                        property("cursor", "pointer")
+                        property("text-decoration", "underline")
+                    }
+                    onClick { window.open(file.downloadUrl, "_blank") }
+                }) { Text("下载") }
+            }
             if (onCreateEntry != null) {
                 KnowledgeInlineActionButton(
                     label = "创建 KB 文档",
@@ -1146,7 +1236,7 @@ private fun GroupAssetFileRow(
     }
 }
 
-private fun formatKnowledgeFileSize(bytes: Long): String {
+internal fun formatKnowledgeFileSize(bytes: Long): String {
     return when {
         bytes < 1024 -> "$bytes B"
         bytes < 1024 * 1024 -> "${bytes / 1024} KB"
@@ -1591,10 +1681,15 @@ private fun KnowledgeEditorPane(
             flexDirection(FlexDirection.Column)
             minWidth(320.px)
             property("min-height", "0")
+            property("overflow", "hidden")
         }
     }) {
         if (selectedEntry == null) {
-            EmptyEditorState()
+            EmptyEditorState(
+                selectedTopic = selectedTopic,
+                canEdit = canEdit,
+                onOpenCopilot = onOpenCopilot,
+            )
         } else {
             KnowledgeEditorToolbar(
                 title = editorTitle,
@@ -1628,6 +1723,26 @@ private fun KnowledgeEditorPane(
                 onOpenSourceWorkflow = onOpenSourceWorkflow,
                 onOpenSourceMessage = onOpenSourceMessage,
             )
+            // Inline file preview for entries with fileRef
+            if (selectedEntry.source.sourceType == KBSourceType.FILE &&
+                selectedEntry.source.fileRef != null
+            ) {
+                val fileRef = selectedEntry.source.fileRef!!
+                Div({
+                    style {
+                        padding(12.px, 16.px)
+                        property("border-bottom", "1px solid ${SilkColors.border}")
+                    }
+                }) {
+                    KnowledgeFilePreview(
+                        downloadUrl = fileRef.downloadUrl,
+                        fileName = fileRef.fileName,
+                        mimeType = fileRef.mimeType,
+                        fileSize = fileRef.fileSize,
+                        maxHeightPx = 400,
+                    )
+                }
+            }
             KnowledgeMarkdownWorkspace(
                 content = editorContent,
                 onContentChange = onContentChange,
@@ -2434,7 +2549,11 @@ private fun KnowledgeToolbarButton(label: String, background: String, enabled: B
 }
 
 @Composable
-private fun EmptyEditorState() {
+private fun EmptyEditorState(
+    selectedTopic: KBTopicItem? = null,
+    canEdit: Boolean = false,
+    onOpenCopilot: (() -> Unit)? = null,
+) {
     Div({
         style {
             property("flex", "1")
@@ -2442,15 +2561,33 @@ private fun EmptyEditorState() {
             justifyContent(JustifyContent.Center)
             alignItems(AlignItems.Center)
             flexDirection(FlexDirection.Column)
+            property("gap", "12px")
         }
     }) {
-        Span({ style { fontSize(48.px); marginBottom(16.px) } }) { Text("\uD83D\uDCDA") }
-        Span({
-            style { fontSize(18.px); color(Color(SilkColors.textSecondary)) }
-        }) { Text("选择或创建条目开始编辑") }
+        Span({ style { fontSize(48.px); marginBottom(8.px) } }) { Text("\uD83D\uDCDA") }
+        if (selectedTopic != null) {
+            Span({
+                style { fontSize(18.px); color(Color(SilkColors.textPrimary)); fontWeight("500") }
+            }) { Text("主题：${selectedTopic.name}") }
+            Span({
+                style { fontSize(14.px); color(Color(SilkColors.textSecondary)); property("text-align", "center"); property("max-width", "400px"); property("line-height", "1.6") }
+            }) { Text("选择一个条目开始编辑，或使用 AI 协作在主题中创建新文档") }
+            if (canEdit && onOpenCopilot != null) {
+                KnowledgeToolbarButton(
+                    label = "AI 协作 — 创建新条目",
+                    background = SilkColors.info,
+                    enabled = true,
+                    onClick = onOpenCopilot,
+                )
+            }
+        } else {
+            Span({
+                style { fontSize(18.px); color(Color(SilkColors.textSecondary)) }
+            }) { Text("选择或创建主题开始编辑") }
+        }
         Span({
             style { fontSize(14.px); color(Color(SilkColors.textLight)); marginTop(8.px) }
-        }) { Text("内容将自动归类到 Obsidian 知识库") }
+        }) { Text("内容将自动归类到 Silk 知识库") }
     }
 }
 
@@ -3051,6 +3188,405 @@ private fun KnowledgeCopilotDialog(
             confirmLabel = if (isRunning) "执行中..." else if (applyChanges) "执行并写回" else "生成草稿",
             confirmEnabled = !isRunning && instruction.trim().isNotBlank(),
         )
+    }
+}
+
+/**
+ * Mode of the KB Copilot sidebar.
+ */
+private enum class CopilotMode {
+    /** Operating on a single entry (edit/rewrite) */
+    ENTRY,
+    /** Operating on the current topic/space (create new entry, summarize, etc.) */
+    TOPIC,
+}
+
+@Composable
+@Suppress("CyclomaticComplexMethod")
+private fun KnowledgeCopilotSidebar(
+    entry: KBEntryItem?,
+    topic: KBTopicItem?,
+    instruction: String,
+    applyChanges: Boolean,
+    isRunning: Boolean,
+    feedbackMessage: String,
+    assistantReply: String,
+    draft: KnowledgeBaseCopilotDraft?,
+    sidebarWidth: Double,
+    copilotMode: CopilotMode,
+    conversationHistory: List<ConversationTurn>,
+    onInstructionChange: (String) -> Unit,
+    onApplyChangesChange: (Boolean) -> Unit,
+    onApplyDraftToEditor: () -> Unit,
+    onClose: () -> Unit,
+    onRun: () -> Unit,
+    onNewConversation: (() -> Unit)? = null,
+) {
+    Div({
+        style {
+            width(sidebarWidth.px)
+            minWidth(KNOWLEDGE_COPILOT_SIDEBAR_MIN_WIDTH.px)
+            property("flex", "0 0 auto")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            backgroundColor(Color("#FFFFFF"))
+            property("border-left", "1px solid ${SilkColors.border}")
+            property("min-height", "0")
+            property("overflow", "hidden")
+            property("box-sizing", "border-box")
+        }
+    }) {
+        // Header
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
+                alignItems(AlignItems.Center)
+                padding(12.px, 16.px)
+                property("border-bottom", "1px solid ${SilkColors.border}")
+                property("flex-shrink", "0")
+            }
+        }) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "8px")
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(14.px)
+                        fontWeight("600")
+                        color(Color(SilkColors.textPrimary))
+                    }
+                }) { Text("KB Copilot") }
+                Span({
+                    style {
+                        fontSize(11.px)
+                        padding(2.px, 6.px)
+                        borderRadius(4.px)
+                        backgroundColor(Color("#E8F4FD"))
+                        color(Color("#1A73E8"))
+                        fontWeight("500")
+                    }
+                }) { Text(if (copilotMode == CopilotMode.TOPIC) "空间" else "条目") }
+            }
+            Button({
+                style {
+                    property("background", "none")
+                    border(0.px)
+                    property("cursor", "pointer")
+                    fontSize(18.px)
+                    color(Color(SilkColors.textSecondary))
+                    padding(4.px)
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    justifyContent(JustifyContent.Center)
+                    property("line-height", "1")
+                }
+                onClick { onClose() }
+            }) {
+                Text("✕")
+            }
+        }
+        // Current context info
+        Div({
+            style {
+                padding(10.px, 16.px)
+                backgroundColor(Color("#F7F4EA"))
+                property("flex-shrink", "0")
+            }
+        }) {
+            when (copilotMode) {
+                CopilotMode.ENTRY -> {
+                    Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); fontWeight("600"); marginBottom(4.px) } }) {
+                        Text("当前条目")
+                    }
+                    Div({ style { fontSize(13.px); color(Color(SilkColors.textPrimary)); property("word-break", "break-all") } }) {
+                        Text(entry?.title?.ifBlank { "未命名" } ?: "")
+                    }
+                }
+                CopilotMode.TOPIC -> {
+                    Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); fontWeight("600"); marginBottom(4.px) } }) {
+                        Text("当前主题")
+                    }
+                    Div({ style { fontSize(13.px); color(Color(SilkColors.textPrimary)); property("word-break", "break-all") } }) {
+                        Text(topic?.name?.ifBlank { "未命名" } ?: "")
+                    }
+                    Div({ style { fontSize(11.px); marginTop(4.px); color(Color(SilkColors.textSecondary)) } }) {
+                        Text("Copilot 将在此主题中创建新条目。如要编辑已有条目，请先选择一个条目。")
+                    }
+                }
+            }
+        }
+        // Scrollable body
+        Div({
+            style {
+                property("flex", "1")
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("overflow-y", "auto")
+                padding(12.px, 16.px)
+                property("gap", "12px")
+            }
+        }) {
+            // Conversation history (multi-turn)
+            if (conversationHistory.isNotEmpty()) {
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        flexDirection(FlexDirection.Column)
+                        property("gap", "8px")
+                        property("flex-shrink", "0")
+                    }
+                }) {
+                    Span({
+                        style {
+                            fontSize(12.px)
+                            color(Color(SilkColors.textSecondary))
+                            fontWeight("600")
+                        }
+                    }) { Text("对话历史 (${conversationHistory.size} 轮)") }
+                    conversationHistory.forEach { turn ->
+                        Div({
+                            style {
+                                padding(8.px, 10.px)
+                                borderRadius(6.px)
+                                fontSize(12.px)
+                                property("line-height", "1.5")
+                                backgroundColor(
+                                    if (turn.role == "user") Color("#F0F4FF")
+                                    else Color("#F8F8FA")
+                                )
+                                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            }
+                        }) {
+                            Span({
+                                style {
+                                    fontWeight("600")
+                                    fontSize(11.px)
+                                    color(
+                                        if (turn.role == "user") Color("#1A73E8")
+                                        else Color(SilkColors.textSecondary)
+                                    )
+                                    marginBottom(4.px)
+                                    display(DisplayStyle.Block)
+                                }
+                            }) {
+                                Text(if (turn.role == "user") "🙋 你" else "🤖 AI")
+                            }
+                            Span({
+                                style { color(Color(SilkColors.textPrimary)) }
+                            }) { Text(turn.content) }
+                        }
+                    }
+                }
+            }
+            // Instruction input
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "6px")
+                    property("flex-shrink", "0")
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(13.px)
+                        color(Color(SilkColors.textSecondary))
+                        fontWeight("600")
+                    }
+                }) {
+                    Text(
+                        if (conversationHistory.isNotEmpty()) "继续修改" else
+                        if (copilotMode == CopilotMode.TOPIC) "想创建什么文档" else "让 AI 怎么改"
+                    )
+                }
+                TextArea {
+                    value(instruction)
+                    onInput { onInstructionChange(it.value) }
+                    onKeyDown { event ->
+                        if (event.key == "Enter" && (event.ctrlKey || event.metaKey)) {
+                            event.preventDefault()
+                            onRun()
+                        }
+                    }
+                    attr("placeholder",
+                        if (conversationHistory.isNotEmpty())
+                            "例如：在这个基础上增加一个章节…"
+                        else if (copilotMode == CopilotMode.TOPIC)
+                            "例如：创建一个关于部署流程的指南"
+                        else
+                            "例如：整理结构，补充验证步骤"
+                    )
+                    style {
+                        width(100.percent)
+                        height(if (conversationHistory.isNotEmpty()) 80.px else 100.px)
+                        borderRadius(8.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        padding(10.px)
+                        fontSize(13.px)
+                        property("line-height", "1.5")
+                        property("box-sizing", "border-box")
+                        property("resize", "vertical")
+                        property("outline", "none")
+                        fontFamily("inherit")
+                    }
+                }
+            }
+            // Run / Continue button
+            Div({
+                style { property("flex-shrink", "0") }
+            }) {
+                KnowledgeToolbarButton(
+                    label = buildString {
+                        append(
+                            if (isRunning) "执行中..."
+                            else if (applyChanges) "执行并写回"
+                            else if (copilotMode == CopilotMode.TOPIC) "生成草稿并创建条目"
+                            else "生成草稿"
+                        )
+                        if (!isRunning) append("  (⌘Enter)")
+                    },
+                    background = SilkColors.info,
+                    enabled = !isRunning && instruction.trim().isNotBlank(),
+                    onClick = onRun,
+                )
+            }
+            // New conversation button
+            if (conversationHistory.isNotEmpty() && onNewConversation != null) {
+                Div({
+                    style { property("flex-shrink", "0") }
+                }) {
+                    KnowledgeToolbarButton(
+                        label = "🔄 新对话",
+                        background = SilkColors.textLight,
+                        enabled = !isRunning,
+                        onClick = onNewConversation,
+                    )
+                }
+            }
+            // Apply toggle
+            Div({
+                style { property("flex-shrink", "0") }
+            }) {
+                KnowledgeBooleanSetting(
+                    label = "直接写回知识库",
+                    description = if (copilotMode == CopilotMode.TOPIC) "开启后直接创建新条目，关闭则只生成草稿" else "开启后直接更新当前条目，关闭则只生成草稿",
+                    value = applyChanges,
+                    onChange = onApplyChangesChange,
+                )
+            }
+            // Feedback message
+            if (feedbackMessage.isNotBlank()) {
+                Div({
+                    style {
+                        padding(8.px, 10.px)
+                        borderRadius(6.px)
+                        backgroundColor(Color("#F4FAF6"))
+                        color(Color(SilkColors.textSecondary))
+                        fontSize(12.px)
+                        property("flex-shrink", "0")
+                    }
+                }) {
+                    Text(feedbackMessage)
+                }
+            }
+            // AI reply
+            if (assistantReply.isNotBlank()) {
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        flexDirection(FlexDirection.Column)
+                        property("gap", "6px")
+                        property("flex-shrink", "0")
+                    }
+                }) {
+                    Span({
+                        style {
+                            fontSize(13.px)
+                            color(Color(SilkColors.textSecondary))
+                            fontWeight("600")
+                        }
+                    }) { Text("AI 说明") }
+                    Div({
+                        style {
+                            property("max-height", "150px")
+                            property("overflow-y", "auto")
+                            padding(10.px)
+                            borderRadius(6.px)
+                            backgroundColor(Color("#FFFDF8"))
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            fontSize(13.px)
+                            property("line-height", "1.5")
+                        }
+                    }) {
+                        MarkdownContent(assistantReply)
+                    }
+                }
+            }
+            // Draft preview
+            draft?.let { draftValue ->
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        flexDirection(FlexDirection.Column)
+                        property("gap", "6px")
+                        property("flex-shrink", "0")
+                    }
+                }) {
+                    Span({
+                        style {
+                            fontSize(13.px)
+                            color(Color(SilkColors.textSecondary))
+                            fontWeight("600")
+                        }
+                    }) { Text("草稿预览") }
+                    Div({
+                        style {
+                            padding(10.px)
+                            borderRadius(6.px)
+                            backgroundColor(Color("#FFFFFF"))
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        }
+                    }) {
+                        Div({ style { fontSize(14.px); fontWeight("600"); marginBottom(6.px) } }) {
+                            Text(draftValue.title)
+                        }
+                        if (draftValue.tags.isNotEmpty()) {
+                            Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); marginBottom(6.px) } }) {
+                                Text("标签: ${draftValue.tags.joinToString(", ")}")
+                            }
+                        }
+                        Div({
+                            style {
+                                property("max-height", "160px")
+                                property("overflow-y", "auto")
+                                backgroundColor(Color("#FFFDF8"))
+                                borderRadius(6.px)
+                                padding(10.px)
+                                fontSize(13.px)
+                                property("line-height", "1.5")
+                            }
+                        }) {
+                            MarkdownContent(draftValue.content)
+                        }
+                    }
+                    if (!applyChanges) {
+                        Div({ style { marginTop(4.px) } }) {
+                            KnowledgeToolbarButton(
+                                label = "把草稿填回编辑器",
+                                background = SilkColors.primaryDark,
+                                enabled = !isRunning,
+                                onClick = onApplyDraftToEditor,
+                            )
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -3937,21 +4473,31 @@ private suspend fun submitMeetingKnowledgeCapture(
     onVisibilityChange(false)
 }
 
+private fun isPreviewableMimeType(mimeType: String): Boolean {
+    return mimeType.startsWith("image/") ||
+        mimeType.startsWith("audio/") ||
+        mimeType.startsWith("video/") ||
+        mimeType == "application/pdf"
+}
+
 private suspend fun runKnowledgeBaseCopilot(
     entry: KBEntryItem?,
+    topic: KBTopicItem?,
     userId: String,
     instruction: String,
     applyChanges: Boolean,
+    conversationHistory: List<ConversationTurn>,
     onRunningChange: (Boolean) -> Unit,
     onFeedbackChange: (String) -> Unit,
     onReplyChange: (String) -> Unit,
     onDraftChange: (KnowledgeBaseCopilotDraft?) -> Unit,
+    onConversationHistoryChange: (List<ConversationTurn>) -> Unit,
+    onInstructionChange: (String) -> Unit,
     onSelectedEntryChange: (KBEntryItem?) -> Unit,
     onEntriesChange: (List<KBEntryItem>) -> Unit,
     onEditorTitleChange: (String) -> Unit,
     onEditorContentChange: (String) -> Unit,
 ) {
-    val entryValue = entry ?: return
     val normalizedInstruction = instruction.trim()
     if (normalizedInstruction.isBlank()) {
         onFeedbackChange("请先输入要让 AI 执行的编辑要求")
@@ -3961,26 +4507,36 @@ private suspend fun runKnowledgeBaseCopilot(
     onFeedbackChange("")
     val response = ApiClient.runKBCopilot(
         userId = userId,
-        entryId = entryValue.id,
+        entryId = entry?.id,
+        topicId = topic?.id,
         instruction = normalizedInstruction,
         applyChanges = applyChanges,
+        conversationHistory = conversationHistory,
     )
     if (response == null) {
         onRunningChange(false)
         onFeedbackChange("KB Copilot 调用失败")
         return
     }
+    // Append current turn to conversation history
+    val updatedHistory = conversationHistory + listOf(
+        ConversationTurn(role = "user", content = normalizedInstruction),
+        ConversationTurn(role = "assistant", content = response.assistantReply.ifBlank { response.message }),
+    )
+    onConversationHistoryChange(updatedHistory)
+    // Clear instruction for next turn
+    onInstructionChange("")
     onReplyChange(response.assistantReply)
     onDraftChange(response.draft)
     if (response.success && response.appliedEntry != null) {
-        val updatedEntry = response.appliedEntry
-        onSelectedEntryChange(updatedEntry)
-        onEntriesChange(ApiClient.getKBEntries(updatedEntry.topicId, userId))
-        onEditorTitleChange(updatedEntry.title)
-        onEditorContentChange(updatedEntry.content)
+        val appliedEntry = response.appliedEntry
+        onSelectedEntryChange(appliedEntry)
+        onEntriesChange(ApiClient.getKBEntries(appliedEntry.topicId, userId))
+        onEditorTitleChange(appliedEntry.title)
+        onEditorContentChange(appliedEntry.content)
     }
     onFeedbackChange(response.message.ifBlank {
-        if (response.success) "KB Copilot 已生成草稿" else "KB Copilot 未生成可用草稿"
+        if (response.success) "KB Copilot 已生成草稿，可继续修改" else "KB Copilot 未生成可用草稿"
     })
     onRunningChange(false)
 }
@@ -4012,13 +4568,15 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var memoryFeedback by remember { mutableStateOf("") }
     // "personal" or "group"; only relevant when selectedSpaceId is a group space
     var memoryActiveTab by remember { mutableStateOf("personal") }
-    // Group assets (files + KB entries) for team spaces
-    var showGroupAssets by remember(selectedSpaceId) { mutableStateOf(false) }
-    var groupAssetsResponse by remember { mutableStateOf<ApiClient.GroupAssetsResponse?>(null) }
-    var isGroupAssetsLoading by remember { mutableStateOf(false) }
+    // Group files view for team spaces (shown as a special topic in sidebar)
+    var showGroupFilesView by remember(selectedSpaceId) { mutableStateOf(false) }
+    var groupFilesResponse by remember { mutableStateOf<ApiClient.GroupAssetsResponse?>(null) }
+    var isGroupFilesLoading by remember { mutableStateOf(false) }
     var showCreateEntryFromFileDialog by remember { mutableStateOf(false) }
     var createEntryFromFileFile by remember { mutableStateOf<ApiClient.GroupAssetFile?>(null) }
     var createEntryFromFileTopicId by remember { mutableStateOf("") }
+    // File preview overlay state
+    var previewFile by remember { mutableStateOf<ApiClient.GroupAssetFile?>(null) }
 
     var showCreateTopicDialog by remember { mutableStateOf(false) }
     var newTopicName by remember { mutableStateOf("") }
@@ -4047,12 +4605,22 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var mergeTargetOptions by remember(selectedTopic?.id) { mutableStateOf<List<KnowledgeMergeTargetOption>>(emptyList()) }
     var isMergeTargetsLoading by remember(selectedTopic?.id) { mutableStateOf(false) }
     var showCopilotDialog by remember { mutableStateOf(false) }
+    var showCopilotSidebar by remember { mutableStateOf(false) }
+    var copilotSidebarWidth by remember(user.id) {
+        mutableStateOf(
+            parseStoredKnowledgeSidebarWidth(
+                raw = localStorage.getItem(KNOWLEDGE_COPILOT_SIDEBAR_WIDTH_KEY),
+                defaultWidth = KNOWLEDGE_COPILOT_SIDEBAR_DEFAULT_WIDTH,
+            )
+        )
+    }
     var copilotInstruction by remember(selectedEntry?.id) { mutableStateOf(KNOWLEDGE_COPILOT_DEFAULT_PROMPT) }
     var isCopilotRunning by remember { mutableStateOf(false) }
     var copilotApplyChanges by remember { mutableStateOf(false) }
     var copilotFeedback by remember { mutableStateOf("") }
     var copilotReply by remember { mutableStateOf("") }
     var copilotDraft by remember { mutableStateOf<KnowledgeBaseCopilotDraft?>(null) }
+    var copilotConversationHistory by remember { mutableStateOf<List<ConversationTurn>>(emptyList()) }
     var activeDragPayload by remember { mutableStateOf<KnowledgeEntryDragPayload?>(null) }
     var activeDropTopicId by remember { mutableStateOf<String?>(null) }
     var showTopicManageMode by remember(selectedSpaceId) { mutableStateOf(false) }
@@ -4149,6 +4717,8 @@ fun KnowledgeBaseScene(appState: WebAppState) {
 
     LaunchedEffect(selectedEntry?.id) {
         editorTitle = selectedEntry?.title.orEmpty()
+        // Close copilot sidebar when switching to a different entry
+        showCopilotSidebar = false
     }
 
     LaunchedEffect(entries, entryFilter, selectedTopic?.id) {
@@ -4217,6 +4787,19 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             selectedTopic = selectedTopic,
             isManageMode = showTopicManageMode,
             memoryPreferences = memoryPreferences,
+            showGroupFilesView = showGroupFilesView,
+            isTeamSpace = selectedSpaceId != PERSONAL_SPACE_ID,
+            onGroupFilesSelect = {
+                val isNowGroupFiles = !showGroupFilesView
+                showGroupFilesView = isNowGroupFiles
+                if (isNowGroupFiles && selectedSpaceId != PERSONAL_SPACE_ID) {
+                    scope.launch {
+                        isGroupFilesLoading = true
+                        groupFilesResponse = ApiClient.getGroupAssets(selectedSpaceId, user.id)
+                        isGroupFilesLoading = false
+                    }
+                }
+            },
             onCreateTopic = {
                 newTopicSpaceId = selectedSpaceId
                 showCreateTopicDialog = true
@@ -4242,6 +4825,8 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             onSearchQueryChange = { topicSearchQuery = it },
             onSpaceSelect = { selectedSpace ->
                 selectedSpaceId = selectedSpace.id
+                showGroupFilesView = false
+                groupFilesResponse = null
             },
             userId = user.id,
             groups = userGroups,
@@ -4263,6 +4848,8 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             activeDragPayload = activeDragPayload,
             activeDropTopicId = activeDropTopicId,
             onTopicSelect = { topic ->
+                showGroupFilesView = false
+                groupFilesResponse = null
                 scope.launch {
                     loadKnowledgeEntries(
                         topic = topic,
@@ -4309,279 +4896,382 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             topicSidebarWidth = clampKnowledgeSidebarWidth(topicSidebarWidth + deltaPx)
             persistKnowledgePaneNumber(KNOWLEDGE_TOPIC_SIDEBAR_WIDTH_KEY, topicSidebarWidth)
         }
-        EntrySidebar(
-            widthPx = entrySidebarWidth,
-            selectedTopic = selectedTopic,
-            searchQuery = entrySearchQuery,
-            entries = filteredEntries,
-            selectedEntry = selectedEntry,
-            selectedFilter = entryFilter,
-            canCreateEntry = canEditSelectedTopic,
-            canDragEntries = canEditSelectedTopic && selectedTopic != null && moveTargetTopics.isNotEmpty(),
-            selectedCandidateEntryIds = selectedCandidateEntryIds,
-            canBatchMergeCandidates = selectedCandidateEntryIds.isNotEmpty(),
-            onFilterChange = { entryFilter = it },
-            onSearchQueryChange = { entrySearchQuery = it },
-            onCreateEntry = { showCreateEntryDialog = true },
-            onMeetingCapture = {
-                val topic = selectedTopic ?: return@EntrySidebar
-                meetingCaptureSpaceId = defaultKnowledgeSpaceIdForTopic(topic)
-                meetingCaptureTopicId = topic.id
-                meetingCaptureTitle = buildDefaultMeetingCaptureTitle(topic)
-                meetingCaptureContent = ""
-                meetingCaptureTagsText = "meeting, minutes"
-                meetingCaptureStatus = KBEntryStatus.CANDIDATE
-                meetingCaptureConfidenceText = "0.90"
-                meetingCaptureResultMessage = null
-                showMeetingCaptureDialog = true
-            },
-            showGroupAssets = showGroupAssets,
-            groupAssetsResponse = groupAssetsResponse,
-            isGroupAssetsLoading = isGroupAssetsLoading,
-            isTeamSpace = selectedSpaceId != PERSONAL_SPACE_ID,
-            onToggleGroupAssets = {
-                showGroupAssets = !showGroupAssets
-                if (!showGroupAssets) {
-                    groupAssetsResponse = null
-                } else if (selectedSpaceId != PERSONAL_SPACE_ID) {
+        if (showGroupFilesView) {
+            GroupFilesContent(
+                groupFilesResponse = groupFilesResponse,
+                isLoading = isGroupFilesLoading,
+                widthPx = entrySidebarWidth,
+                onCreateEntryFromFile = { file ->
+                    createEntryFromFileFile = file
+                    createEntryFromFileTopicId = filteredTopics.firstOrNull()?.id.orEmpty()
+                    showCreateEntryFromFileDialog = true
+                },
+                onPreviewFile = { file -> previewFile = file },
+            )
+        } else {
+            EntrySidebar(
+                widthPx = entrySidebarWidth,
+                selectedTopic = selectedTopic,
+                searchQuery = entrySearchQuery,
+                entries = filteredEntries,
+                selectedEntry = selectedEntry,
+                selectedFilter = entryFilter,
+                canCreateEntry = canEditSelectedTopic,
+                canDragEntries = canEditSelectedTopic && selectedTopic != null && moveTargetTopics.isNotEmpty(),
+                selectedCandidateEntryIds = selectedCandidateEntryIds,
+                canBatchMergeCandidates = selectedCandidateEntryIds.isNotEmpty(),
+                onFilterChange = { entryFilter = it },
+                onSearchQueryChange = { entrySearchQuery = it },
+                onCreateEntry = { showCreateEntryDialog = true },
+                onMeetingCapture = {
+                    val topic = selectedTopic ?: return@EntrySidebar
+                    meetingCaptureSpaceId = defaultKnowledgeSpaceIdForTopic(topic)
+                    meetingCaptureTopicId = topic.id
+                    meetingCaptureTitle = buildDefaultMeetingCaptureTitle(topic)
+                    meetingCaptureContent = ""
+                    meetingCaptureTagsText = "meeting, minutes"
+                    meetingCaptureStatus = KBEntryStatus.CANDIDATE
+                    meetingCaptureConfidenceText = "0.90"
+                    meetingCaptureResultMessage = null
+                    showMeetingCaptureDialog = true
+                },
+                onToggleSelectAllCandidates = {
+                    selectedCandidateEntryIds =
+                        if (selectedCandidateEntryIds.size == filteredEntries.size) emptySet()
+                        else filteredEntries.map { it.id }.toSet()
+                },
+                onBatchMergeCandidates = {
+                    showBatchMergeCandidatesDialog = true
                     scope.launch {
-                        isGroupAssetsLoading = true
-                        groupAssetsResponse = ApiClient.getGroupAssets(selectedSpaceId, user.id)
-                        isGroupAssetsLoading = false
-                    }
-                }
-            },
-            onCreateEntryFromFile = { file ->
-                createEntryFromFileFile = file
-                createEntryFromFileTopicId = filteredTopics.firstOrNull()?.id.orEmpty()
-                showCreateEntryFromFileDialog = true
-            },
-            onToggleSelectAllCandidates = {
-                selectedCandidateEntryIds =
-                    if (selectedCandidateEntryIds.size == filteredEntries.size) emptySet()
-                    else filteredEntries.map { it.id }.toSet()
-            },
-            onBatchMergeCandidates = {
-                showBatchMergeCandidatesDialog = true
-                scope.launch {
-                    isMergeTargetsLoading = true
-                    mergeTargetOptions = loadKnowledgeMergeTargetOptions(
-                        topics = topics,
-                        sourceTopic = selectedTopic,
-                        userId = user.id,
-                        excludedEntryIds = selectedCandidateEntryIds,
-                    )
-                    batchMergeTargetEntryId = mergeTargetOptions.firstOrNull()?.entry?.id.orEmpty()
-                    isMergeTargetsLoading = false
-                }
-            },
-            onBatchPublishCandidates = {
-                scope.launch {
-                    bulkUpdateKnowledgeEntryStatus(
-                        entryIds = selectedCandidateEntryIds,
-                        topic = selectedTopic,
-                        userId = user.id,
-                        status = KBEntryStatus.PUBLISHED,
-                        currentSelectedEntryId = selectedEntry?.id,
-                        onSavingChange = { isSaving = it },
-                        onSaveMessageChange = { saveMessage = it },
-                        onSelectedEntryChange = { selectedEntry = it },
-                        onEntriesChange = { entries = it },
-                        onEditorContentChange = { editorContent = it },
-                        onEntryFilterChange = { entryFilter = it },
-                        onSelectedCandidateEntryIdsChange = { selectedCandidateEntryIds = it },
-                    )
-                }
-            },
-            onBatchArchiveCandidates = {
-                scope.launch {
-                    bulkUpdateKnowledgeEntryStatus(
-                        entryIds = selectedCandidateEntryIds,
-                        topic = selectedTopic,
-                        userId = user.id,
-                        status = KBEntryStatus.ARCHIVED,
-                        currentSelectedEntryId = selectedEntry?.id,
-                        onSavingChange = { isSaving = it },
-                        onSaveMessageChange = { saveMessage = it },
-                        onSelectedEntryChange = { selectedEntry = it },
-                        onEntriesChange = { entries = it },
-                        onEditorContentChange = { editorContent = it },
-                        onEntryFilterChange = { entryFilter = it },
-                        onSelectedCandidateEntryIdsChange = { selectedCandidateEntryIds = it },
-                    )
-                }
-            },
-            onToggleCandidateSelection = { entryId ->
-                selectedCandidateEntryIds = toggleKnowledgeEntrySelection(selectedCandidateEntryIds, entryId)
-            },
-            onEntrySelect = { entry ->
-                loadKnowledgeEntry(
-                    entry = entry,
-                    onSelectedEntryChange = { selectedEntry = it },
-                    onEditorContentChange = { editorContent = it },
-                )
-            },
-            onEntryDragStart = { entry ->
-                selectedTopic?.let { sourceTopic ->
-                    activeDragPayload = KnowledgeEntryDragPayload(
-                        entryId = entry.id,
-                        sourceTopicId = sourceTopic.id,
-                    )
-                }
-            },
-            onEntryDragEnd = {
-                activeDragPayload = null
-                activeDropTopicId = null
-            },
-        )
-        KnowledgeHorizontalResizeHandle(storageHint = "entry-sidebar") { deltaPx ->
-            entrySidebarWidth = clampKnowledgeSidebarWidth(entrySidebarWidth + deltaPx)
-            persistKnowledgePaneNumber(KNOWLEDGE_ENTRY_SIDEBAR_WIDTH_KEY, entrySidebarWidth)
-        }
-        KnowledgeEditorPane(
-            selectedTopic = selectedTopic,
-            selectedEntry = selectedEntry,
-            editorTitle = editorTitle,
-            savedTitle = selectedEntry?.title.orEmpty(),
-            editorContent = editorContent,
-            isSaving = isSaving,
-            saveMessage = saveMessage,
-            editorMode = editorMode,
-            editorSplitRatio = editorSplitRatio,
-            availableEditorWidthPx = window.innerWidth.toDouble() - topicSidebarWidth - entrySidebarWidth - 20.0,
-            canEdit = canEditSelectedTopic,
-            spaceLabel = selectedTopicSpaceLabel,
-            permissionLabel = selectedTopicPermissionLabel,
-            currentUserId = user.id,
-            groups = userGroups,
-            onOpenSourceGroup = { group -> appState.openChatGroup(group) },
-            onOpenSourceWorkflow = { workflowId -> appState.openWorkflow(workflowId) },
-            onOpenSourceMessage = { jump ->
-                when (jump.kind) {
-                    KnowledgeSourceMessageJumpKind.CHAT -> {
-                        userGroups.find { it.id == jump.targetId }?.let { group ->
-                            appState.openChatGroup(group = group, messageId = jump.messageId)
-                        }
-                    }
-                    KnowledgeSourceMessageJumpKind.WORKFLOW -> {
-                        appState.openWorkflow(workflowId = jump.targetId, messageId = jump.messageId)
-                    }
-                }
-            },
-            onTitleChange = {
-                editorTitle = it
-                if (saveMessage.isNotEmpty()) {
-                    saveMessage = ""
-                }
-            },
-            onResetTitle = {
-                editorTitle = selectedEntry?.title.orEmpty()
-                if (saveMessage.isNotEmpty()) {
-                    saveMessage = ""
-                }
-            },
-            onContentChange = {
-                editorContent = it
-                if (saveMessage.isNotEmpty()) {
-                    saveMessage = ""
-                }
-            },
-            onEditorModeChange = { editorMode = it },
-            onEditorSplitRatioChange = { nextRatio ->
-                editorSplitRatio = clampKnowledgeEditorSplitRatio(nextRatio)
-                persistKnowledgePaneNumber(KNOWLEDGE_EDITOR_SPLIT_RATIO_KEY, editorSplitRatio)
-            },
-            onMoveEntry = selectedEntry
-                ?.takeIf { canEditSelectedTopic && moveTargetTopics.isNotEmpty() }
-                ?.let {
-                    {
-                        moveTargetTopicId = moveTargetTopics.firstOrNull()?.id.orEmpty()
-                        showMoveEntryDialog = true
+                        isMergeTargetsLoading = true
+                        mergeTargetOptions = loadKnowledgeMergeTargetOptions(
+                            topics = topics,
+                            sourceTopic = selectedTopic,
+                            userId = user.id,
+                            excludedEntryIds = selectedCandidateEntryIds,
+                        )
+                        batchMergeTargetEntryId = mergeTargetOptions.firstOrNull()?.entry?.id.orEmpty()
+                        isMergeTargetsLoading = false
                     }
                 },
-            onDeleteEntry = selectedEntry
-                ?.takeIf { canManageSelectedTopic }
-                ?.let { { showDeleteEntryDialog = true } },
-            onOpenCopilot = selectedEntry
-                ?.takeIf { canEditSelectedTopic }
-                ?.let {
-                    {
-                        copilotInstruction = KNOWLEDGE_COPILOT_DEFAULT_PROMPT
-                        copilotApplyChanges = false
-                        copilotFeedback = ""
-                        copilotReply = ""
-                        copilotDraft = null
-                        showCopilotDialog = true
-                    }
-                },
-            onSave = {
-                scope.launch {
-                    saveKnowledgeEntry(
-                        entry = selectedEntry,
-                        topic = selectedTopic,
-                        editorTitle = editorTitle,
-                        editorContent = editorContent,
-                        userId = user.id,
-                        onSavingChange = { isSaving = it },
-                        onSaveMessageChange = { saveMessage = it },
-                        onSelectedEntryChange = { selectedEntry = it },
-                        onEditorTitleChange = { editorTitle = it },
-                        onEntriesChange = { entries = it },
-                    )
-                }
-            },
-            onStatusAction = selectedEntryStatusAction?.let { (_, targetStatus) ->
-                {
-                    entryFilter = knowledgeFilterForStatus(targetStatus)
+                onBatchPublishCandidates = {
                     scope.launch {
-                        updateKnowledgeEntryStatus(
-                            entry = selectedEntry,
+                        bulkUpdateKnowledgeEntryStatus(
+                            entryIds = selectedCandidateEntryIds,
                             topic = selectedTopic,
                             userId = user.id,
-                            status = targetStatus,
+                            status = KBEntryStatus.PUBLISHED,
+                            currentSelectedEntryId = selectedEntry?.id,
                             onSavingChange = { isSaving = it },
                             onSaveMessageChange = { saveMessage = it },
                             onSelectedEntryChange = { selectedEntry = it },
                             onEntriesChange = { entries = it },
+                            onEditorContentChange = { editorContent = it },
+                            onEntryFilterChange = { entryFilter = it },
+                            onSelectedCandidateEntryIdsChange = { selectedCandidateEntryIds = it },
                         )
                     }
-                }
-            },
-            statusActionLabel = selectedEntryStatusAction?.first,
-            onMergeCandidate = selectedEntry
-                ?.takeIf { it.status == KBEntryStatus.CANDIDATE && canEditSelectedTopic }
-                ?.let {
-                    {
-                        showMergeCandidateDialog = true
-                        scope.launch {
-                            isMergeTargetsLoading = true
-                            mergeTargetOptions = loadKnowledgeMergeTargetOptions(
-                                topics = topics,
-                                sourceTopic = selectedTopic,
-                                userId = user.id,
-                                excludedEntryIds = setOf(it.id),
-                            )
-                            mergeTargetEntryId = mergeTargetOptions.firstOrNull()?.entry?.id.orEmpty()
-                            isMergeTargetsLoading = false
+                },
+                onBatchArchiveCandidates = {
+                    scope.launch {
+                        bulkUpdateKnowledgeEntryStatus(
+                            entryIds = selectedCandidateEntryIds,
+                            topic = selectedTopic,
+                            userId = user.id,
+                            status = KBEntryStatus.ARCHIVED,
+                            currentSelectedEntryId = selectedEntry?.id,
+                            onSavingChange = { isSaving = it },
+                            onSaveMessageChange = { saveMessage = it },
+                            onSelectedEntryChange = { selectedEntry = it },
+                            onEntriesChange = { entries = it },
+                            onEditorContentChange = { editorContent = it },
+                            onEntryFilterChange = { entryFilter = it },
+                            onSelectedCandidateEntryIdsChange = { selectedCandidateEntryIds = it },
+                        )
+                    }
+                },
+                onToggleCandidateSelection = { entryId ->
+                    selectedCandidateEntryIds = toggleKnowledgeEntrySelection(selectedCandidateEntryIds, entryId)
+                },
+                onEntrySelect = { entry ->
+                    loadKnowledgeEntry(
+                        entry = entry,
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEditorContentChange = { editorContent = it },
+                    )
+                },
+                onEntryDragStart = { entry ->
+                    selectedTopic?.let { sourceTopic ->
+                        activeDragPayload = KnowledgeEntryDragPayload(
+                            entryId = entry.id,
+                            sourceTopicId = sourceTopic.id,
+                        )
+                    }
+                },
+                onEntryDragEnd = {
+                    activeDragPayload = null
+                    activeDropTopicId = null
+                },
+            )
+        }
+        KnowledgeHorizontalResizeHandle(storageHint = "entry-sidebar") { deltaPx ->
+            entrySidebarWidth = clampKnowledgeSidebarWidth(entrySidebarWidth + deltaPx)
+            persistKnowledgePaneNumber(KNOWLEDGE_ENTRY_SIDEBAR_WIDTH_KEY, entrySidebarWidth)
+        }
+        val baseEditorWidth = window.innerWidth.toDouble() - topicSidebarWidth - entrySidebarWidth - 20.0
+        // Copilot sidebar + resize handle (10px) + gap (8px)
+        val copilotSidebarOffset = if (showCopilotSidebar) (copilotSidebarWidth + 18.0) else 0.0
+
+        // Determine copilot mode: entry-level or topic-level
+        val currentCopilotMode = when {
+            selectedEntry != null && canEditSelectedTopic -> CopilotMode.ENTRY
+            selectedTopic != null && canEditSelectedTopic -> CopilotMode.TOPIC
+            else -> null
+        }
+
+        Div({
+            style {
+                property("flex", "1")
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Row)
+                minWidth(320.px)
+                property("min-height", "0")
+                property("overflow", "hidden")
+            }
+        }) {
+            KnowledgeEditorPane(
+                selectedTopic = selectedTopic,
+                selectedEntry = selectedEntry,
+                editorTitle = editorTitle,
+                savedTitle = selectedEntry?.title.orEmpty(),
+                editorContent = editorContent,
+                isSaving = isSaving,
+                saveMessage = saveMessage,
+                editorMode = editorMode,
+                editorSplitRatio = editorSplitRatio,
+                availableEditorWidthPx = baseEditorWidth - copilotSidebarOffset,
+                canEdit = canEditSelectedTopic,
+                spaceLabel = selectedTopicSpaceLabel,
+                permissionLabel = selectedTopicPermissionLabel,
+                currentUserId = user.id,
+                groups = userGroups,
+                onOpenSourceGroup = { group -> appState.openChatGroup(group) },
+                onOpenSourceWorkflow = { workflowId -> appState.openWorkflow(workflowId) },
+                onOpenSourceMessage = { jump ->
+                    when (jump.kind) {
+                        KnowledgeSourceMessageJumpKind.CHAT -> {
+                            userGroups.find { it.id == jump.targetId }?.let { group ->
+                                appState.openChatGroup(group = group, messageId = jump.messageId)
+                            }
+                        }
+                        KnowledgeSourceMessageJumpKind.WORKFLOW -> {
+                            appState.openWorkflow(workflowId = jump.targetId, messageId = jump.messageId)
                         }
                     }
                 },
-            onExport = {
-                scope.launch {
-                    exportKnowledgeEntry(
-                        entry = selectedEntry,
-                        topic = selectedTopic,
-                        userId = user.id,
-                        onSaveMessageChange = { saveMessage = it },
-                    )
+                onTitleChange = {
+                    editorTitle = it
+                    if (saveMessage.isNotEmpty()) {
+                        saveMessage = ""
+                    }
+                },
+                onResetTitle = {
+                    editorTitle = selectedEntry?.title.orEmpty()
+                    if (saveMessage.isNotEmpty()) {
+                        saveMessage = ""
+                    }
+                },
+                onContentChange = {
+                    editorContent = it
+                    if (saveMessage.isNotEmpty()) {
+                        saveMessage = ""
+                    }
+                },
+                onEditorModeChange = { editorMode = it },
+                onEditorSplitRatioChange = { nextRatio ->
+                    editorSplitRatio = clampKnowledgeEditorSplitRatio(nextRatio)
+                    persistKnowledgePaneNumber(KNOWLEDGE_EDITOR_SPLIT_RATIO_KEY, editorSplitRatio)
+                },
+                onMoveEntry = selectedEntry
+                    ?.takeIf { canEditSelectedTopic && moveTargetTopics.isNotEmpty() }
+                    ?.let {
+                        {
+                            moveTargetTopicId = moveTargetTopics.firstOrNull()?.id.orEmpty()
+                            showMoveEntryDialog = true
+                        }
+                    },
+                onDeleteEntry = selectedEntry
+                    ?.takeIf { canManageSelectedTopic }
+                    ?.let { { showDeleteEntryDialog = true } },
+                onOpenCopilot = currentCopilotMode?.let { mode ->
+                    {
+                        val willShow = !showCopilotSidebar
+                        if (willShow) {
+                            // Reset state when opening for a new entry/topic
+                            copilotInstruction = KNOWLEDGE_COPILOT_DEFAULT_PROMPT
+                            copilotApplyChanges = false
+                            copilotFeedback = ""
+                            copilotReply = ""
+                            copilotDraft = null
+                            copilotConversationHistory = emptyList()
+                        }
+                        showCopilotSidebar = willShow
+                    }
+                },
+                onSave = {
+                    scope.launch {
+                        saveKnowledgeEntry(
+                            entry = selectedEntry,
+                            topic = selectedTopic,
+                            editorTitle = editorTitle,
+                            editorContent = editorContent,
+                            userId = user.id,
+                            onSavingChange = { isSaving = it },
+                            onSaveMessageChange = { saveMessage = it },
+                            onSelectedEntryChange = { selectedEntry = it },
+                            onEditorTitleChange = { editorTitle = it },
+                            onEntriesChange = { entries = it },
+                        )
+                    }
+                },
+                onStatusAction = selectedEntryStatusAction?.let { (_, targetStatus) ->
+                    {
+                        entryFilter = knowledgeFilterForStatus(targetStatus)
+                        scope.launch {
+                            updateKnowledgeEntryStatus(
+                                entry = selectedEntry,
+                                topic = selectedTopic,
+                                userId = user.id,
+                                status = targetStatus,
+                                onSavingChange = { isSaving = it },
+                                onSaveMessageChange = { saveMessage = it },
+                                onSelectedEntryChange = { selectedEntry = it },
+                                onEntriesChange = { entries = it },
+                            )
+                        }
+                    }
+                },
+                statusActionLabel = selectedEntryStatusAction?.first,
+                onMergeCandidate = selectedEntry
+                    ?.takeIf { it.status == KBEntryStatus.CANDIDATE && canEditSelectedTopic }
+                    ?.let {
+                        {
+                            showMergeCandidateDialog = true
+                            scope.launch {
+                                isMergeTargetsLoading = true
+                                mergeTargetOptions = loadKnowledgeMergeTargetOptions(
+                                    topics = topics,
+                                    sourceTopic = selectedTopic,
+                                    userId = user.id,
+                                    excludedEntryIds = setOf(it.id),
+                                )
+                                mergeTargetEntryId = mergeTargetOptions.firstOrNull()?.entry?.id.orEmpty()
+                                isMergeTargetsLoading = false
+                            }
+                        }
+                    },
+                onExport = {
+                    scope.launch {
+                        exportKnowledgeEntry(
+                            entry = selectedEntry,
+                            topic = selectedTopic,
+                            userId = user.id,
+                            onSaveMessageChange = { saveMessage = it },
+                        )
+                    }
+                },
+                onCopyReference = {
+                    val entry = selectedEntry ?: return@KnowledgeEditorPane
+                    copyTextToClipboard(buildKnowledgeBaseReference(entry))
+                    saveMessage = "引用已复制"
+                },
+            )
+            // Render copilot sidebar at scene level for both entry and topic mode
+            if (showCopilotSidebar && currentCopilotMode != null) {
+                KnowledgeHorizontalResizeHandle(storageHint = "copilot-sidebar") { deltaPx ->
+                    copilotSidebarWidth = clampKnowledgeCopilotSidebarWidth(copilotSidebarWidth - deltaPx)
+                    persistKnowledgePaneNumber(KNOWLEDGE_COPILOT_SIDEBAR_WIDTH_KEY, copilotSidebarWidth)
                 }
-            },
-            onCopyReference = {
-                val entry = selectedEntry ?: return@KnowledgeEditorPane
-                copyTextToClipboard(buildKnowledgeBaseReference(entry))
-                saveMessage = "引用已复制"
-            },
-        )
+                KnowledgeCopilotSidebar(
+                    entry = selectedEntry,
+                    topic = selectedTopic,
+                    instruction = copilotInstruction,
+                    applyChanges = copilotApplyChanges,
+                    isRunning = isCopilotRunning,
+                    feedbackMessage = copilotFeedback,
+                    assistantReply = copilotReply,
+                    draft = copilotDraft,
+                    sidebarWidth = copilotSidebarWidth,
+                    copilotMode = currentCopilotMode,
+                    conversationHistory = copilotConversationHistory,
+                    onInstructionChange = { copilotInstruction = it },
+                    onApplyChangesChange = { copilotApplyChanges = it },
+                    onApplyDraftToEditor = {
+                        copilotDraft?.let { draft ->
+                            if (currentCopilotMode == CopilotMode.ENTRY) {
+                                // Entry mode: fill draft into editor
+                                editorTitle = draft.title
+                                editorContent = draft.content
+                                saveMessage = "已把 Copilot 草稿填入当前编辑器，确认后可继续保存"
+                            } else {
+                                // Topic mode: create entry directly from draft
+                                scope.launch {
+                                    isSaving = true
+                                    val newEntry = ApiClient.createKBEntry(
+                                        topicId = draft.topicId,
+                                        title = draft.title,
+                                        content = draft.content,
+                                        tags = draft.tags,
+                                        userId = user.id,
+                                    )
+                                    if (newEntry != null) {
+                                        saveMessage = "已创建条目《${newEntry.title}》"
+                                        entries = ApiClient.getKBEntries(draft.topicId, user.id)
+                                        selectedEntry = newEntry
+                                        editorTitle = newEntry.title
+                                        editorContent = newEntry.content
+                                        showCopilotSidebar = false
+                                    } else {
+                                        saveMessage = "创建条目失败"
+                                    }
+                                    isSaving = false
+                                }
+                            }
+                        }
+                    },
+                    onClose = { showCopilotSidebar = false },
+                    onRun = {
+                        scope.launch {
+                            runKnowledgeBaseCopilot(
+                                entry = selectedEntry,
+                                topic = selectedTopic,
+                                userId = user.id,
+                                instruction = copilotInstruction,
+                                applyChanges = copilotApplyChanges,
+                                conversationHistory = copilotConversationHistory,
+                                onRunningChange = { isCopilotRunning = it },
+                                onFeedbackChange = { copilotFeedback = it },
+                                onReplyChange = { copilotReply = it },
+                                onDraftChange = { copilotDraft = it },
+                                onConversationHistoryChange = { copilotConversationHistory = it },
+                                onInstructionChange = { copilotInstruction = it },
+                                onSelectedEntryChange = { selectedEntry = it },
+                                onEntriesChange = { entries = it },
+                                onEditorTitleChange = { editorTitle = it },
+                                onEditorContentChange = { editorContent = it },
+                            )
+                        }
+                    },
+                    onNewConversation = {
+                        copilotConversationHistory = emptyList()
+                        copilotInstruction = KNOWLEDGE_COPILOT_DEFAULT_PROMPT
+                        copilotFeedback = ""
+                        copilotReply = ""
+                        copilotDraft = null
+                    },
+                )
+            }
+        }
     }
 
     if (showMemoryDialog) {
@@ -4712,13 +5402,17 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 scope.launch {
                     runKnowledgeBaseCopilot(
                         entry = activeCopilotEntry,
+                        topic = selectedTopic,
                         userId = user.id,
                         instruction = copilotInstruction,
                         applyChanges = copilotApplyChanges,
+                        conversationHistory = emptyList(),
                         onRunningChange = { isCopilotRunning = it },
                         onFeedbackChange = { copilotFeedback = it },
                         onReplyChange = { copilotReply = it },
                         onDraftChange = { copilotDraft = it },
+                        onConversationHistoryChange = {},
+                        onInstructionChange = { copilotInstruction = it },
                         onSelectedEntryChange = { selectedEntry = it },
                         onEntriesChange = { entries = it },
                         onEditorTitleChange = { editorTitle = it },
@@ -5154,6 +5848,18 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 },
             )
         }
+    }
+
+    // ── File preview overlay ──
+    val previewingFile = previewFile
+    if (previewingFile != null) {
+        KnowledgeFilePreviewOverlay(
+            downloadUrl = previewingFile.downloadUrl,
+            fileName = previewingFile.fileName,
+            mimeType = previewingFile.mimeType,
+            fileSize = previewingFile.fileSize,
+            onClose = { previewFile = null },
+        )
     }
 }
 

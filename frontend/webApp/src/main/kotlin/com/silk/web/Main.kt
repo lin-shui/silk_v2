@@ -4333,6 +4333,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     if (showFolderExplorer) {
         FolderExplorerDialog(
             groupId = group.id,
+            userId = user.id,
             strings = strings,
             onDismiss = { showFolderExplorer = false }
         )
@@ -4343,11 +4344,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
 @Composable
 fun FolderExplorerDialog(
     groupId: String,
+    userId: String,
     strings: com.silk.shared.i18n.Strings,
     onDismiss: () -> Unit
 ) {
     var files by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var processedUrls by remember { mutableStateOf<List<String>>(emptyList()) }
+    var kbEntries by remember { mutableStateOf<List<KBEntryItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var refreshTrigger by remember { mutableStateOf(0) }
@@ -4357,6 +4360,13 @@ fun FolderExplorerDialog(
         val apiUrl = "${backendHttpOrigin()}/api/files/list/$groupId"
         isLoading = true
         errorMessage = null
+        // 并行加载 KB 群空间条目
+        scope.launch {
+            val assets = ApiClient.getGroupAssets(groupId, userId)
+            if (assets != null) {
+                kbEntries = assets.kbEntries
+            }
+        }
         try {
             console.log("📁 请求文件列表:", apiUrl)
             val response = window.fetch(apiUrl).await()
@@ -4492,7 +4502,33 @@ fun FolderExplorerDialog(
                         }
                     }
                 } else {
-                    // 1️⃣ 首先显示已下载的 URL 清单
+                    // 0️⃣ KB 群空间条目
+                    if (kbEntries.isNotEmpty()) {
+                        Div({
+                            style {
+                                marginBottom(16.px)
+                            }
+                        }) {
+                            Div({
+                                style {
+                                    fontSize(14.px)
+                                    fontWeight("600")
+                                    color(Color(SilkColors.textSecondary))
+                                    marginBottom(8.px)
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "6px")
+                                }
+                            }) {
+                                Text("📚 知识库条目 (${kbEntries.size})")
+                            }
+                            kbEntries.forEach { entry ->
+                                GroupAssetEntryRow(entry = entry)
+                            }
+                        }
+                    }
+
+                    // 1️⃣ 然后显示已下载的 URL 清单
                     if (processedUrls.isNotEmpty()) {
                         Div({
                             style {
