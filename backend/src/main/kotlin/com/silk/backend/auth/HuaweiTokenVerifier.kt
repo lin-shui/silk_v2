@@ -78,7 +78,7 @@ object HuaweiTokenVerifier {
             val accessToken = tokenObj["access_token"]?.jsonPrimitive?.content ?: return null
             fetchUserInfoFromUserinfoEndpoint(accessToken)
         } catch (e: Exception) {
-            logger.error("❌ 华为 OAuth code 交换失败: {}", e.message)
+            logger.error("❌ 华为 OAuth code 交换失败: {} (redirectUri={})", e.message, redirectUri)
             null
         }
     }
@@ -93,6 +93,7 @@ object HuaweiTokenVerifier {
         clientSecret: String,
         redirectUri: String,
     ): JsonObject? {
+        logger.info("📤 请求华为 token 端点, redirectUri={}, code前8字={}", redirectUri, code.take(8))
         val tokenForm = buildString {
             append("grant_type=authorization_code")
             append("&code=").append(URLEncoder.encode(code, "UTF-8"))
@@ -110,7 +111,7 @@ object HuaweiTokenVerifier {
         val response = httpClient.newCall(tokenRequest).execute()
         val tokenBodyStr = response.body?.string()
         if (tokenBodyStr == null) {
-            logger.error("❌ 华为 token 端点返回空响应, HTTP status=${response.code}")
+            logger.error("❌ 华为 token 端点返回空响应, HTTP status=${response.code}, redirectUri={}", redirectUri)
             return null
         }
         logger.info("📥 华为 token 端点响应 (HTTP ${response.code}, 前300字): {}", tokenBodyStr.take(300))
@@ -125,7 +126,7 @@ object HuaweiTokenVerifier {
             val errCode = tokenObj["error"]?.jsonPrimitive?.content ?: "?"
             val errDesc = tokenObj["error_description"]?.jsonPrimitive?.content ?: "?"
             val subErr = tokenObj["sub_error"]?.jsonPrimitive?.content ?: "?"
-            logger.error("❌ 华为 token 交换失败: error=$errCode, description=$errDesc, sub_error=$subErr")
+            logger.error("❌ 华为 token 交换失败: error=$errCode, description=$errDesc, sub_error=$subErr, redirectUri={}", redirectUri)
             return null
         }
         return tokenObj

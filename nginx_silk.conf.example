@@ -27,18 +27,9 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
     }
-}
 
-server {
-    listen BACKEND_HTTP_PORT ssl;
-    server_name YOUR_DOMAIN;
-
-    ssl_certificate /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem;
-
-    client_max_body_size 200m;
-
-    location / {
+    # 将 API 请求代理到后端（同源解决跨端口 CORS 问题）
+    location /auth/ {
         proxy_pass http://127.0.0.1:BACKEND_INTERNAL_PORT;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -47,6 +38,34 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    location /api/ {
+        proxy_pass http://127.0.0.1:BACKEND_INTERNAL_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /static/ {
+        proxy_pass http://127.0.0.1:BACKEND_INTERNAL_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:BACKEND_INTERNAL_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # WebSocket 代理
     location /chat {
         proxy_pass http://127.0.0.1:BACKEND_INTERNAL_PORT;
         proxy_http_version 1.1;

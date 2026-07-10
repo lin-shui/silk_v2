@@ -128,25 +128,25 @@ object SilkColors {
 }
 
 fun backendHttpOrigin(): String {
-    val protocol = window.location.protocol
     val hostname = window.location.hostname
-    val currentPort = window.location.port
-    return if (currentPort == BuildConfig.FRONTEND_PORT) {
-        "$protocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
-    } else {
-        window.location.origin
+    val isLocalDev = hostname == "localhost" || hostname == "127.0.0.1"
+    if (isLocalDev) {
+        val protocol = window.location.protocol
+        return "$protocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
     }
+    // 生产环境走同源，由 nginx 代理后端 API
+    return window.location.origin
 }
 
 internal fun backendWsOrigin(): String {
+    val hostname = window.location.hostname
+    val isLocalDev = hostname == "localhost" || hostname == "127.0.0.1"
     val wsProtocol = if (window.location.protocol == "https:") "wss:" else "ws:"
-    val currentPort = window.location.port
-    val host = if (currentPort == BuildConfig.FRONTEND_PORT) {
-        "${window.location.hostname}:${BuildConfig.BACKEND_HTTP_PORT}"
-    } else {
-        window.location.host
+    if (isLocalDev) {
+        return "$wsProtocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
     }
-    return "$wsProtocol//$host"
+    // 生产环境走 443 标准端口（避免非标准端口被网络封锁）
+    return "$wsProtocol//$hostname"
 }
 
 // ==================== 安全的 JS 互操作辅助函数（避免在 js("...") 中引用 Kotlin 变量） ====================
@@ -5368,10 +5368,8 @@ fun MarkdownContent(
                 val img = images.item(imgIdx) as? HTMLElement ?: continue
                 val src = img.getAttribute("src") ?: ""
                 if (src.startsWith("http://")) {
-                    // 代理在 API 后端，不在前端静态服务器
-                    val backendPort = BuildConfig.BACKEND_HTTP_PORT
-                    val loc = window.location
-                    val proxyBase = "${loc.protocol}//${loc.hostname}:$backendPort"
+                    // 图片代理走同源，由 nginx 转发到后端
+                    val proxyBase = window.location.origin
                     img.setAttribute("src", "$proxyBase/api/image-proxy?url=${js("encodeURIComponent")(src)}")
                 }
             }

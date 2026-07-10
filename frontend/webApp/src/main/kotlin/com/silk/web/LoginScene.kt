@@ -65,7 +65,11 @@ fun LoginScene(appState: WebAppState) {
         }
     }
     
-    var errorMessage by remember { mutableStateOf(appState.loginError.also { appState.loginError = "" }) }
+    // 从 appState 读取错误信息，读完后清除（确保每次变更都能刷新显示）
+    val errorMessage = appState.loginError
+    if (errorMessage.isNotEmpty()) {
+        appState.loginError = ""
+    }
     var isLoading by remember { mutableStateOf(false) }
     // 密码登录表单
     var loginName by remember { mutableStateOf("") }
@@ -224,7 +228,7 @@ fun LoginScene(appState: WebAppState) {
                     onClick {
                         if (!isLoading && loginName.isNotBlank() && password.isNotBlank()) {
                             isLoading = true
-                            errorMessage = ""
+                            appState.loginError = ""
                             scope.launch {
                                 try {
                                     val response = ApiClient.login(loginName, password)
@@ -240,10 +244,10 @@ fun LoginScene(appState: WebAppState) {
                                         }
                                         showBindPrompt = true
                                     } else {
-                                        errorMessage = response.message
+                                        appState.loginError = response.message
                                     }
                                 } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                                    errorMessage = "登录失败: ${e.message}"
+                                    appState.loginError = "登录失败: ${e.message}"
                                 } finally {
                                     isLoading = false
                                 }
@@ -292,12 +296,12 @@ fun LoginScene(appState: WebAppState) {
                 onClick {
                     if (!isLoading) {
                         isLoading = true
-                        errorMessage = ""
+                        appState.loginError = ""
                         // 先检查 clientId 是否配置
                         val clientId = BuildConfig.HUAWEI_OAUTH_CLIENT_ID
                         if (clientId.isBlank()) {
                             console.error("❌ HUAWEI_OAUTH_CLIENT_ID 未配置")
-                            errorMessage = "华为登录暂未配置，请联系管理员"
+                            appState.loginError = "华为登录暂未配置，请联系管理员"
                             isLoading = false
                             return@onClick
                         }
@@ -463,13 +467,17 @@ private fun startHuaweiOAuthCommon(isBind: Boolean) {
     
     // 生成 state 用于 CSRF 防护
     val state = generateRandomState()
+    // 当前页面 URL 作为 redirect_uri（OAuth 回调时重新加载页面）
+    val redirectUri = window.location.href.split("?")[0].split("#")[0]
+    
     try {
         kotlinx.browser.sessionStorage.setItem("huawei_oauth_state", state)
         kotlinx.browser.sessionStorage.setItem("huawei_oauth_bind", if (isBind) "1" else "0")
+        // 保存 redirectUri 到 sessionStorage，确保回调时使用完全相同的值
+        kotlinx.browser.sessionStorage.setItem("huawei_oauth_redirect_uri", redirectUri)
     } catch (_: Exception) {}
     
-    // 当前页面 URL 作为 redirect_uri（OAuth 回调时重新加载页面）
-    val redirectUri = window.location.href.split("?")[0].split("#")[0]
+    console.log("🔗 [华为OAuth] redirectUri (请求时):", redirectUri)
     
     // 构造华为 OAuth 授权 URL
     val authUrl = buildString {
@@ -538,12 +546,25 @@ suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
         return false
     }
     
-    // 清除 state
+    // 从 sessionStorage 读取请求时保存的 redirectUri，确保与华为授权请求时完全一致
+    val savedRedirectUri = try {
+        kotlinx.browser.sessionStorage.getItem("huawei_oauth_redirect_uri")
+    } catch (_: Exception) { null }
+    val redirectUri = savedRedirectUri ?: window.location.href.split("?")[0].split("#")[0]
+    
+    // 清除存储的 state 和 redirectUri
     try {
         kotlinx.browser.sessionStorage.removeItem(stateKey)
+        kotlinx.browser.sessionStorage.removeItem("huawei_oauth_redirect_uri")
     } catch (_: Exception) {}
     
-    val redirectUri = window.location.href.split("?")[0].split("#")[0]
+    val currentRedirectUri = window.location.href.split("?")[0].split("#")[0]
+    if (redirectUri != currentRedirectUri) {
+        console.warn("⚠️ [华为OAuth] redirectUri 不一致: 保存的=${redirectUri}, 当前的=${currentRedirectUri}，使用保存的值")
+    }
+    
+    console.log("🔑 [华为OAuth] redirectUri (将用于token交换):", redirectUri)
+    console.log("🔑 [华为OAuth] code:", code, "state:", state)
     
     console.log("🔑 收到 $oauthType OAuth code，正在登录...")
     
@@ -583,7 +604,9 @@ suspend fun handleOAuthCallback(appState: WebAppState): Boolean {
             }
         } else {
             // 登录模式
+            console.log("🔑 [华为OAuth] 发起登录请求，redirectUri=", redirectUri)
             val result = ApiClient.huaweiWebLogin(code, redirectUri)
+            console.log("🔑 [华为OAuth] 登录响应: success=${result.success}, message=${result.message}, user=${result.user?.fullName}, hasToken=${result.accessToken != null}")
             val huaweiLoginOk = result.success && result.user != null && result.accessToken != null && result.refreshToken != null
             if (huaweiLoginOk) {
                 console.log("✅ 华为登录成功:", result.user!!.fullName, "isNewUser=", result.isNewUser)
