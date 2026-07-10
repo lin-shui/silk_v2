@@ -1,6 +1,6 @@
 # KB Memory Layer Plan
 
-Status: 进行中
+Status: 进行中（Phase 1-4 已完成，Phase 5 挂起；Android 记忆管理入口 2026-07-10 已补）
 Date: 2026-07-07
 
 ## Goal
@@ -57,7 +57,7 @@ MVP 不做：
 
 - 更稳的冲突合并（同 key 去重与合并、旧值归档）
 - episodic memory 的 recency / TTL 衰减与周期性 consolidation
-- Android / Harmony / Desktop 侧的 memory 管理入口（若需要多端一致）
+- ~~Android / Harmony / Desktop 侧的 memory 管理入口~~（2026-07-10 Android 已补：`KnowledgeMemoryDialog` + `KnowledgeMemoryEntryCard`，支持个人/群组管理、设置切换、创建/删除；Harmony / Desktop 待补）（若需要多端一致）
 
 目标：先把“可见、可删、可控”的长期记忆跑通。
 
@@ -100,12 +100,24 @@ MVP 不做：
 
 目标：避免 memory 越积越脏，旧偏好可追溯、近重复自动合并。
 
-### Phase 4: Scoped Project Memory
+### Phase 4: Scoped Project Memory ✅
 
-- 在现有 team KB topic 基础上承载 `group` / project memory
-- 检索时区分 `user` 与 `group` scope
-- 保持现有 space/ACL 隔离，避免跨群污染
+- 在现有 team KB topic 基础上承载 `group` / project memory：新增 `findOrCreateGroupMemoryTopic` / `captureExplicitGroupMemory` / `captureAutoGroupMemory` / `searchGroupMemoryEntriesForContext` / `listGroupMemoryEntries` / `consolidateGroupMemoryStore`
+- 检索时区分 `user` 与 `group` scope：`resolveKnowledgeBasePromptContext` 会在 `preferredGroupId` 可用时同时检索个人记忆与群组记忆，prompt 中分节展示
+- 保持现有 space/ACL 隔离，避免跨群污染：群组记忆 topic 使用 `spaceType=TEAM` + `groupId`，通过 `canReadTopic` / `canWriteTopic` 强制执行群组成员可见性
+- WebSocket 聊天主链：群组会话中的显式"记住 xxx"与自动记忆会同步写入群组记忆空间
+- HTTP API：`GET/POST /api/kb/memory` 支持 `groupId` 参数路由到群组记忆；`POST /api/kb/memory/consolidate` 支持 `groupId` 参数
+- Web 前端：`KnowledgeMemoryDialog` 增加 Tab 切换（个人记忆 / 群组记忆），在团队空间内打开记忆弹窗时默认切换到群组 Tab，创建/删除操作按活动 Tab 路由到正确空间
+- 测试覆盖：5 个新测试覆盖群组记忆创建、成员可见性、自动不覆盖显式、搜索匹配与 consolidation
 
+当前落地（2026-07-10）：
+- `backend/src/main/kotlin/com/silk/backend/kb/KnowledgeBaseManager.kt` — `findOrCreateGroupMemoryTopic`、`captureExplicitGroupMemory`、`captureAutoGroupMemory`、`captureGroupMemory`、`searchGroupMemoryEntriesForContext`、`listGroupMemoryEntries`、`consolidateGroupMemoryStore`
+- `backend/src/main/kotlin/com/silk/backend/kb/KnowledgeBasePromptContext.kt` — `resolveMemoryKnowledgeBaseReferences` 增加 `preferredGroupId` 参数，检索群组记忆并注入 prompt
+- `backend/src/main/kotlin/com/silk/backend/Routing.kt` — `GET/POST /api/kb/memory` 支持 `groupId`；删除路由兼容群组记忆；consolidate 支持 `groupId`
+- `backend/src/main/kotlin/com/silk/backend/WebSocketConfig.kt` — 群组会话中记忆同步保存到群组空间
+- `backend/src/test/kotlin/com/silk/backend/kb/KnowledgeBaseMemoryTest.kt` — 5 个 Phase 4 测试- **Web 前端群组记忆管理入口**（2026-07-10 补）：
+  - `frontend/webApp/ApiClient.kt` — `listKBMemoryEntries`/`createKBMemoryEntry`/`deleteKBMemoryEntry` 增加可选 `groupId` 参数
+  - `frontend/webApp/KnowledgeBaseScene.kt` — `KnowledgeMemoryDialog` 增加 Tab 切换（个人记忆 / 群组记忆），在团队空间内打开记忆弹窗时默认切换到群组 Tab，创建/删除操作按活动 Tab 路由到正确空间
 目标：把“用户偏好”和“项目约束”分层。
 
 ### Phase 5: Storage Upgrade
@@ -131,6 +143,7 @@ MVP 不做：
 
 ## Affected Surfaces
 
+### Phase 1-3
 - `backend/src/main/kotlin/com/silk/backend/WebSocketConfig.kt`
 - `backend/src/main/kotlin/com/silk/backend/Routing.kt`
 - `backend/src/main/kotlin/com/silk/backend/kb/KnowledgeBaseManager.kt`
@@ -139,6 +152,13 @@ MVP 不做：
 - `frontend/shared/src/commonMain/kotlin/com/silk/shared/models/Message.kt`
 - `frontend/shared/src/commonMain/kotlin/com/silk/shared/ChatClient.kt`
 - `frontend/webApp/src/main/kotlin/com/silk/web/**`
+
+### Phase 4（新增）
+- `backend/src/main/kotlin/com/silk/backend/kb/KnowledgeBaseManager.kt` — `findOrCreateGroupMemoryTopic`, `captureExplicitGroupMemory`, `captureAutoGroupMemory`, `captureGroupMemory`, `searchGroupMemoryEntriesForContext`, `listGroupMemoryEntries`, `consolidateGroupMemoryStore`
+- `backend/src/main/kotlin/com/silk/backend/kb/KnowledgeBasePromptContext.kt` — `resolveMemoryKnowledgeBaseReferences` 增加 `preferredGroupId`，同时检索个人与群组记忆
+- `backend/src/main/kotlin/com/silk/backend/Routing.kt` — `GET/POST /api/kb/memory` 支持 `groupId`；consolidate 支持 `groupId`
+- `backend/src/main/kotlin/com/silk/backend/WebSocketConfig.kt` — 群组会话中记忆同步写入群组空间
+- `backend/src/test/kotlin/com/silk/backend/kb/KnowledgeBaseMemoryTest.kt` — 5 个 Phase 4 测试
 
 ## Risks
 
@@ -152,10 +172,16 @@ MVP 不做：
 - `./gradlew :backend:test`
 - 改 shared contract 时：`./gradlew :frontend:webApp:nodeTest :frontend:androidApp:testDebugUnitTest :frontend:desktopApp:test`
 
-建议补的测试：
+已有测试（Phase 4 新增 5 个）：
+
+- `group memory topic is created lazily` — 懒创建 + 非成员不可见
+- `group memory is accessible to all group members` — 同群组多成员可见
+- `group auto memory does not override explicit group memory` — 自动记忆不覆盖显式
+- `searchGroupMemoryEntriesForContext returns matching entries` — 搜索匹配
+- `group memory consolidation works` — 群组记忆去重合并
+
+建议后续补的测试：
 
 - memory route contract
 - prompt 注入优先级
-- merge / archive / TTL
-- user/group scope 隔离
-- 敏感记忆过滤
+- 前端群组记忆管理入口

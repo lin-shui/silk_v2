@@ -85,6 +85,7 @@ fun resolveKnowledgeBasePromptContext(
             userId = userId,
             query = resolvedUserInput,
             memoryCandidateLimit = memoryCandidateLimit,
+            preferredGroupId = preferredGroupId,
         )
     } else {
         emptyList()
@@ -227,8 +228,9 @@ private fun resolveMemoryKnowledgeBaseReferences(
     userId: String,
     query: String,
     memoryCandidateLimit: Int,
+    preferredGroupId: String? = null,
 ): List<ResolvedKnowledgeBaseReference> {
-    return knowledgeBaseManager.searchMemoryEntriesForContext(
+    val personalMemories = knowledgeBaseManager.searchMemoryEntriesForContext(
         userId = userId,
         query = query,
         limit = memoryCandidateLimit,
@@ -239,6 +241,27 @@ private fun resolveMemoryKnowledgeBaseReferences(
             label = hit.entry.title,
         )
     }
+
+    val personalCount = personalMemories.size
+    val groupLimit = (memoryCandidateLimit - personalCount).coerceIn(1, memoryCandidateLimit)
+    val groupMemories = if (!preferredGroupId.isNullOrBlank() && groupLimit > 0) {
+        knowledgeBaseManager.searchGroupMemoryEntriesForContext(
+            userId = userId,
+            groupId = preferredGroupId,
+            query = query,
+            limit = groupLimit,
+        ).map { hit ->
+            ResolvedKnowledgeBaseReference(
+                entry = hit.entry,
+                topic = hit.topic,
+                label = hit.entry.title,
+            )
+        }
+    } else {
+        emptyList()
+    }
+
+    return personalMemories + groupMemories
 }
 
 private fun buildKnowledgeBaseReferenceSeeds(
@@ -278,14 +301,21 @@ private fun buildKnowledgeBaseReferenceSeeds(
             spaceLabel = knowledgeBaseSpaceLabel(resolved.topic),
         )
     } + memoryReferences.map { resolved ->
+        val isGroupMemory = resolved.topic.spaceType == KnowledgeSpaceType.TEAM
+        val spaceLabel = if (isGroupMemory) "群组记忆" else "长期记忆"
+        val spaceId = if (isGroupMemory) {
+            "group-memory:${resolved.topic.groupId ?: resolved.entry.ownerId}"
+        } else {
+            "memory:${resolved.entry.ownerId}"
+        }
         AvailableReferenceSeed(
-            title = "Memory / ${resolved.entry.title}",
+            title = if (isGroupMemory) "Group Memory / ${resolved.entry.title}" else "Memory / ${resolved.entry.title}",
             snippet = buildKnowledgeBaseSnippet(resolved.entry),
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
             origin = "memory",
             reason = buildMemoryReason(resolved.entry),
-            spaceId = "memory:${resolved.entry.ownerId}",
-            spaceLabel = "长期记忆",
+            spaceId = spaceId,
+            spaceLabel = spaceLabel,
         )
     }
 }
@@ -362,15 +392,26 @@ private fun buildKnowledgeBasePromptBlock(
     }
 
     if (memoryReferences.isNotEmpty()) {
-        appendLine("### 用户长期记忆")
-        appendLine(MEMORY_PROMPT_HEADER)
+        val hasGroupMemory = memoryReferences.any { it.topic.spaceType == KnowledgeSpaceType.TEAM }
+        if (hasGroupMemory) {
+            appendLine("### 用户与群组长期记忆")
+            appendLine(MEMORY_PROMPT_HEADER)
+            appendLine("说明：以下包含个人记忆与当前团队的群组共享记忆。")
+        } else {
+            appendLine("### 用户长期记忆")
+            appendLine(MEMORY_PROMPT_HEADER)
+        }
         memoryReferences.forEach { resolved ->
             val marker = "[available:${nextIndex++}]"
+            val extraReasons = mutableListOf(buildMemoryReason(resolved.entry))
+            if (resolved.topic.spaceType == KnowledgeSpaceType.TEAM) {
+                extraReasons.add("群组共享记忆")
+            }
             appendReferenceBlock(
                 marker = marker,
                 topic = resolved.topic,
                 entry = resolved.entry,
-                reasons = listOf(buildMemoryReason(resolved.entry)),
+                reasons = extraReasons,
             )
         }
     }

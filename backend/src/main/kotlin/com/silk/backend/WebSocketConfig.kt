@@ -1837,6 +1837,7 @@ class ChatServer(
         } else {
             knowledgeBaseContextPreferenceStore.get(userId)
         }
+        val preferredGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") }
         val explicitMemoryCapture = detectExplicitMemoryCapture(userMessage)
         if (kbPreferences.memoryEnabled) {
             explicitMemoryCapture?.let { capture ->
@@ -1848,6 +1849,19 @@ class ChatServer(
                     key = capture.key ?: buildMemoryKey(capture.type, capture.content),
                 )
                 broadcastSystemStatus(status = "🧠 已保存长期记忆：${saved.title}")
+                // Phase 4: 群组会话中也保存一份到群组记忆
+                if (preferredGroupId != null) {
+                    try {
+                        knowledgeBaseManager.captureExplicitGroupMemory(
+                            userId = userId,
+                            groupId = preferredGroupId,
+                            content = capture.content,
+                            title = capture.title,
+                            type = capture.type,
+                            key = capture.key ?: buildMemoryKey(capture.type, capture.content),
+                        )
+                    } catch (_: Exception) { /* 非群组成员时静默忽略 */ }
+                }
             }
             if (explicitMemoryCapture == null && kbPreferences.autoCaptureEnabled) {
                 val autoSaved = detectAutoMemoryCaptures(userMessage)
@@ -1866,6 +1880,21 @@ class ChatServer(
                         it.title.removePrefix("Preference: ").removePrefix("Procedure: ")
                     }
                     broadcastSystemStatus(status = "🧠 已更新自动记忆：$summary")
+                    // Phase 4: 群组会话中也保存自动记忆到群组
+                    if (preferredGroupId != null) {
+                        detectAutoMemoryCaptures(userMessage).forEach { capture ->
+                            try {
+                                knowledgeBaseManager.captureAutoGroupMemory(
+                                    userId = userId,
+                                    groupId = preferredGroupId,
+                                    content = capture.content,
+                                    title = capture.title,
+                                    type = capture.type,
+                                    key = capture.key,
+                                )
+                            } catch (_: Exception) { /* 非群组成员时静默忽略 */ }
+                        }
+                    }
                 }
             }
         } else if (explicitMemoryCapture != null) {
@@ -1878,7 +1907,7 @@ class ChatServer(
             rawInput = userMessage,
             userId = userId,
             knowledgeBaseManager = knowledgeBaseManager,
-            preferredGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") },
+            preferredGroupId = preferredGroupId,
             memoryEnabled = kbPreferences.memoryEnabled,
             selection = mergeKnowledgeBaseContextSelection(
                 persistentSelection,
@@ -1934,8 +1963,8 @@ class ChatServer(
                 manager = knowledgeBaseManager,
                 request = KnowledgeBaseAiExecutionRequest(
                     userId = userId,
-                    preferredGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") },
-                    sourceGroupId = sessionName.removePrefix("group_").takeIf { sessionName.startsWith("group_") },
+                    preferredGroupId = preferredGroupId,
+                    sourceGroupId = preferredGroupId,
                     workflowId = activeWorkflowId,
                     recentMessageIds = historyMessages.takeLast(8).map { it.messageId },
                 ),

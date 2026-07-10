@@ -874,6 +874,13 @@ private fun EntrySidebar(
     onEntrySelect: (KBEntryItem) -> Unit,
     onEntryDragStart: (KBEntryItem) -> Unit,
     onEntryDragEnd: () -> Unit,
+    // Group assets props
+    showGroupAssets: Boolean = false,
+    groupAssetsResponse: ApiClient.GroupAssetsResponse? = null,
+    isGroupAssetsLoading: Boolean = false,
+    isTeamSpace: Boolean = false,
+    onToggleGroupAssets: () -> Unit = {},
+    onCreateEntryFromFile: ((ApiClient.GroupAssetFile) -> Unit)? = null,
 ) {
     Div({
         style {
@@ -887,43 +894,270 @@ private fun EntrySidebar(
         }
     }) {
         KnowledgeColumnHeader(
-            title = selectedTopic?.name ?: "条目",
-            actionLabel = if (selectedTopic != null) "+" else null,
+            title = if (showGroupAssets) "群空间资产" else (selectedTopic?.name ?: "条目"),
+            actionLabel = if (selectedTopic != null && !showGroupAssets) "+" else null,
             actionEnabled = canCreateEntry,
             onAction = onCreateEntry,
+            secondaryAction = if (isTeamSpace) {
+                KnowledgeHeaderSecondaryAction(
+                    label = if (showGroupAssets) "返回条目" else "群资产",
+                    background = if (showGroupAssets) SilkColors.primaryDark else SilkColors.primary,
+                    onClick = onToggleGroupAssets,
+                )
+            } else null,
         )
-        EntryFilterTabs(
-            selectedFilter = selectedFilter,
-            onFilterChange = onFilterChange,
-            showMeetingCaptureAction = selectedTopic != null,
-            onMeetingCapture = onMeetingCapture,
-            selectedCandidateCount = selectedCandidateEntryIds.size,
-            showCandidateInboxActions = selectedTopic != null && canCreateEntry && entries.isNotEmpty() && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
-            allCandidatesSelected = entries.isNotEmpty() && entries.all { it.id in selectedCandidateEntryIds },
-            onToggleSelectAllCandidates = onToggleSelectAllCandidates,
-            canBatchMergeCandidates = canBatchMergeCandidates,
-            onBatchMergeCandidates = onBatchMergeCandidates,
-            onBatchPublishCandidates = onBatchPublishCandidates,
-            onBatchArchiveCandidates = onBatchArchiveCandidates,
-        )
-        KnowledgeSearchField(
-            value = searchQuery,
-            placeholder = "搜索标题 / 标签 / 内容",
-            onValueChange = onSearchQueryChange,
-        )
-        EntrySidebarContent(
-            selectedTopic = selectedTopic,
-            entries = entries,
-            selectedEntry = selectedEntry,
-            searchQuery = searchQuery,
-            selectedCandidateEntryIds = selectedCandidateEntryIds,
-            showCandidateSelection = canCreateEntry && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
-            canDragEntries = canDragEntries,
-            onToggleCandidateSelection = onToggleCandidateSelection,
-            onEntrySelect = onEntrySelect,
-            onEntryDragStart = onEntryDragStart,
-            onEntryDragEnd = onEntryDragEnd,
-        )
+
+        if (showGroupAssets) {
+            GroupAssetsContent(
+                groupAssetsResponse = groupAssetsResponse,
+                isLoading = isGroupAssetsLoading,
+                onCreateEntryFromFile = onCreateEntryFromFile,
+            )
+        } else {
+            EntryFilterTabs(
+                selectedFilter = selectedFilter,
+                onFilterChange = onFilterChange,
+                showMeetingCaptureAction = selectedTopic != null,
+                onMeetingCapture = onMeetingCapture,
+                selectedCandidateCount = selectedCandidateEntryIds.size,
+                showCandidateInboxActions = selectedTopic != null && canCreateEntry && entries.isNotEmpty() && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
+                allCandidatesSelected = entries.isNotEmpty() && entries.all { it.id in selectedCandidateEntryIds },
+                onToggleSelectAllCandidates = onToggleSelectAllCandidates,
+                canBatchMergeCandidates = canBatchMergeCandidates,
+                onBatchMergeCandidates = onBatchMergeCandidates,
+                onBatchPublishCandidates = onBatchPublishCandidates,
+                onBatchArchiveCandidates = onBatchArchiveCandidates,
+            )
+            KnowledgeSearchField(
+                value = searchQuery,
+                placeholder = "搜索标题 / 标签 / 内容",
+                onValueChange = onSearchQueryChange,
+            )
+            EntrySidebarContent(
+                selectedTopic = selectedTopic,
+                entries = entries,
+                selectedEntry = selectedEntry,
+                searchQuery = searchQuery,
+                selectedCandidateEntryIds = selectedCandidateEntryIds,
+                showCandidateSelection = canCreateEntry && selectedFilter == KnowledgeEntryFilter.CANDIDATE,
+                canDragEntries = canDragEntries,
+                onToggleCandidateSelection = onToggleCandidateSelection,
+                onEntrySelect = onEntrySelect,
+                onEntryDragStart = onEntryDragStart,
+                onEntryDragEnd = onEntryDragEnd,
+            )
+        }
+    }
+}
+
+@Composable
+private fun GroupAssetsContent(
+    groupAssetsResponse: ApiClient.GroupAssetsResponse?,
+    isLoading: Boolean,
+    onCreateEntryFromFile: ((ApiClient.GroupAssetFile) -> Unit)?,
+) {
+    Div({
+        style {
+            property("flex", "1")
+            property("overflow-y", "auto")
+        }
+    }) {
+        if (isLoading) {
+            KnowledgeCenteredMessage("加载群资产中...", SilkColors.textSecondary, 16.px)
+        } else if (groupAssetsResponse == null) {
+            KnowledgeCenteredMessage("未找到群资产数据", SilkColors.textLight, 20.px)
+        } else {
+            // KB entries section
+            if (groupAssetsResponse.kbEntries.isNotEmpty()) {
+                Div({
+                    style {
+                        padding(8.px, 12.px)
+                        fontSize(12.px)
+                        fontWeight("600")
+                        color(Color(SilkColors.textSecondary))
+                        backgroundColor(Color("#FFF8EE"))
+                        property("border-bottom", "1px solid ${SilkColors.border}")
+                    }
+                }) { Text("知识库条目 (${groupAssetsResponse.kbEntries.size})") }
+                groupAssetsResponse.kbEntries.forEach { entry ->
+                    GroupAssetEntryRow(entry = entry)
+                }
+            }
+
+            // Files section
+            Div({
+                style {
+                    padding(8.px, 12.px)
+                    fontSize(12.px)
+                    fontWeight("600")
+                    color(Color(SilkColors.textSecondary))
+                    backgroundColor(Color("#F0F4FF"))
+                    property("border-bottom", "1px solid ${SilkColors.border}")
+                }
+            }) { Text("群文件 (${groupAssetsResponse.files.size})") }
+
+            if (groupAssetsResponse.files.isEmpty()) {
+                KnowledgeCenteredMessage("该群还没有上传文件", SilkColors.textLight, 20.px)
+            } else {
+                groupAssetsResponse.files.forEach { file ->
+                    GroupAssetFileRow(
+                        file = file,
+                        onCreateEntry = onCreateEntryFromFile?.let { { it(file) } },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupAssetEntryRow(entry: KBEntryItem) {
+    Div({
+        style {
+            padding(10.px, 14.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            fontSize(13.px)
+        }
+    }) {
+        Div({
+            style {
+                fontWeight("600")
+                color(Color(SilkColors.textPrimary))
+            }
+        }) { Text(entry.title) }
+        if (entry.source.sourceType == KBSourceType.FILE && entry.source.fileRef != null) {
+            val fileRef = entry.source.fileRef!!
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    property("gap", "4px")
+                    marginTop(4.px)
+                    fontSize(11.px)
+                    color(Color(SilkColors.info))
+                    property("align-items", "center")
+                }
+            }) {
+                Span({ }) { Text("📎 ${fileRef.fileName}") }
+                Span({
+                    style {
+                        property("cursor", "pointer")
+                        property("text-decoration", "underline")
+                        marginLeft(4.px)
+                    }
+                    onClick {
+                        window.open(fileRef.downloadUrl, "_blank")
+                    }
+                }) { Text("查看文件") }
+            }
+        }
+        Div({
+            style {
+                fontSize(11.px)
+                color(Color(SilkColors.textLight))
+                marginTop(4.px)
+            }
+        }) {
+            Text(knowledgeSourceShortLabel(entry.source.sourceType))
+        }
+    }
+}
+
+@Composable
+private fun GroupAssetFileRow(
+    file: ApiClient.GroupAssetFile,
+    onCreateEntry: (() -> Unit)?,
+) {
+    val fileIcon = when {
+        file.mimeType.startsWith("image/") -> "🖼️"
+        file.mimeType.startsWith("video/") -> "🎬"
+        file.mimeType.startsWith("audio/") -> "🎵"
+        file.mimeType.contains("pdf") -> "📄"
+        else -> "📁"
+    }
+    Div({
+        style {
+            padding(10.px, 14.px)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+        }
+    }) {
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
+                alignItems(AlignItems.Center)
+            }
+        }) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    property("gap", "6px")
+                    alignItems(AlignItems.Center)
+                    property("flex", "1")
+                    property("min-width", "0")
+                }
+            }) {
+                Span({ style { fontSize(14.px) } }) { Text(fileIcon) }
+                Span({
+                    style {
+                        fontSize(13.px)
+                        color(Color(SilkColors.textPrimary))
+                        property("overflow", "hidden")
+                        property("text-overflow", "ellipsis")
+                        property("white-space", "nowrap")
+                    }
+                }) { Text(file.fileName) }
+            }
+        }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                property("gap", "6px")
+                marginTop(6.px)
+                property("flex-wrap", "wrap")
+                property("align-items", "center")
+            }
+        }) {
+            Span({
+                style {
+                    fontSize(11.px)
+                    color(Color(SilkColors.textLight))
+                }
+            }) { Text(formatKnowledgeFileSize(file.fileSize)) }
+            if (file.hasLinkedEntry) {
+                KnowledgeBadge("已关联", SilkColors.success)
+            }
+            Span({
+                style {
+                    fontSize(11.px)
+                    color(Color(SilkColors.info))
+                    property("cursor", "pointer")
+                    property("text-decoration", "underline")
+                }
+                onClick { window.open(file.downloadUrl, "_blank") }
+            }) { Text("下载") }
+            if (onCreateEntry != null) {
+                KnowledgeInlineActionButton(
+                    label = "创建 KB 文档",
+                    background = SilkColors.primary,
+                    onClick = onCreateEntry,
+                )
+            }
+        }
+    }
+}
+
+private fun formatKnowledgeFileSize(bytes: Long): String {
+    return when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+        bytes < 1024 * 1024 * 1024 -> {
+            val mb = bytes.toDouble() / (1024 * 1024)
+            "${(mb * 10).toLong() / 10.0} MB"
+        }
+        else -> {
+            val gb = bytes.toDouble() / (1024 * 1024 * 1024)
+            "${(gb * 100).toLong() / 100.0} GB"
+        }
     }
 }
 
@@ -2891,6 +3125,97 @@ private fun ConfirmKnowledgeDeleteDialog(
 }
 
 @Composable
+private fun CreateEntryFromFileDialog(
+    file: ApiClient.GroupAssetFile,
+    topics: List<KBTopicItem>,
+    selectedTopicId: String,
+    isSaving: Boolean,
+    onTopicSelectionChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    ModalDialog(title = "从文件创建 KB 文档", onDismiss = onDismiss) {
+        Div({
+            style {
+                fontSize(13.px)
+                color(Color(SilkColors.textSecondary))
+                marginBottom(8.px)
+            }
+        }) { Text("文件: ${file.fileName}") }
+        Div({
+            style {
+                fontSize(13.px)
+                color(Color(SilkColors.textSecondary))
+                marginBottom(16.px)
+                property("line-height", "1.6")
+            }
+        }) { Text("请选择目标主题：") }
+        if (topics.isEmpty()) {
+            Div({
+                style {
+                    padding(12.px)
+                    fontSize(13.px)
+                    color(Color(SilkColors.warning))
+                    backgroundColor(Color("#FFF8EE"))
+                    borderRadius(8.px)
+                    marginBottom(16.px)
+                }
+            }) { Text("当前空间没有可写入的主题，请先创建主题。") }
+        } else {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "4px")
+                    marginBottom(16.px)
+                    property("max-height", "240px")
+                    property("overflow-y", "auto")
+                }
+            }) {
+                topics.forEach { topic ->
+                    val isSelected = topic.id == selectedTopicId
+                    Div({
+                        style {
+                            padding(10.px, 14.px)
+                            borderRadius(8.px)
+                            property("cursor", "pointer")
+                            backgroundColor(
+                                if (isSelected) Color("#E8F0FE") else Color("transparent")
+                            )
+                            property("transition", "background-color 0.15s")
+                        }
+                        onClick { onTopicSelectionChange(topic.id) }
+                    }) {
+                        Span({
+                            style {
+                                fontSize(14.px)
+                                fontWeight(if (isSelected) "600" else "400")
+                                color(Color(SilkColors.textPrimary))
+                            }
+                        }) { Text(topic.name) }
+                        if (topic.project.isNotBlank()) {
+                            Div({
+                                style {
+                                    fontSize(12.px)
+                                    color(Color(SilkColors.textLight))
+                                    marginTop(2.px)
+                                }
+                            }) { Text(topic.project) }
+                        }
+                    }
+                }
+            }
+        }
+        DialogActions(
+            onCancel = onDismiss,
+            onConfirm = onConfirm,
+            confirmLabel = if (isSaving) "创建中..." else "创建候选条目",
+            confirmEnabled = !isSaving && topics.isNotEmpty(),
+        )
+    }
+}
+
+@Composable
 private fun KnowledgeColumnHeader(
     title: String,
     actionLabel: String?,
@@ -3677,6 +4002,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var entrySearchQuery by remember(selectedTopic?.id) { mutableStateOf("") }
     var memoryPreferences by remember(user.id) { mutableStateOf(KnowledgeBaseContextPreferences(userId = user.id)) }
     var memoryEntries by remember(user.id) { mutableStateOf<List<KBEntryItem>>(emptyList()) }
+    var groupMemoryEntries by remember(user.id) { mutableStateOf<List<KBEntryItem>>(emptyList()) }
     var showMemoryDialog by remember { mutableStateOf(false) }
     var isMemoryLoading by remember { mutableStateOf(false) }
     var isMemorySaving by remember { mutableStateOf(false) }
@@ -3684,6 +4010,15 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var memoryDraftContent by remember { mutableStateOf("") }
     var memoryDraftType by remember { mutableStateOf(KBMemoryType.PREFERENCE) }
     var memoryFeedback by remember { mutableStateOf("") }
+    // "personal" or "group"; only relevant when selectedSpaceId is a group space
+    var memoryActiveTab by remember { mutableStateOf("personal") }
+    // Group assets (files + KB entries) for team spaces
+    var showGroupAssets by remember(selectedSpaceId) { mutableStateOf(false) }
+    var groupAssetsResponse by remember { mutableStateOf<ApiClient.GroupAssetsResponse?>(null) }
+    var isGroupAssetsLoading by remember { mutableStateOf(false) }
+    var showCreateEntryFromFileDialog by remember { mutableStateOf(false) }
+    var createEntryFromFileFile by remember { mutableStateOf<ApiClient.GroupAssetFile?>(null) }
+    var createEntryFromFileTopicId by remember { mutableStateOf("") }
 
     var showCreateTopicDialog by remember { mutableStateOf(false) }
     var newTopicName by remember { mutableStateOf("") }
@@ -3889,11 +4224,18 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             onToggleManageMode = { showTopicManageMode = !showTopicManageMode },
             onManageMemory = {
                 showMemoryDialog = true
+                memoryActiveTab = if (selectedSpaceId != PERSONAL_SPACE_ID) "group" else "personal"
                 scope.launch {
                     isMemoryLoading = true
                     memoryFeedback = ""
                     memoryPreferences = ApiClient.getKBContextPreferences(user.id)
                     memoryEntries = sortKnowledgeMemoryEntries(ApiClient.listKBMemoryEntries(user.id))
+                    val groupId = selectedSpaceId.takeIf { it != PERSONAL_SPACE_ID }
+                    groupMemoryEntries = if (groupId != null) {
+                        sortKnowledgeMemoryEntries(ApiClient.listKBMemoryEntries(user.id, groupId = groupId))
+                    } else {
+                        emptyList()
+                    }
                     isMemoryLoading = false
                 }
             },
@@ -3992,6 +4334,27 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 meetingCaptureConfidenceText = "0.90"
                 meetingCaptureResultMessage = null
                 showMeetingCaptureDialog = true
+            },
+            showGroupAssets = showGroupAssets,
+            groupAssetsResponse = groupAssetsResponse,
+            isGroupAssetsLoading = isGroupAssetsLoading,
+            isTeamSpace = selectedSpaceId != PERSONAL_SPACE_ID,
+            onToggleGroupAssets = {
+                showGroupAssets = !showGroupAssets
+                if (!showGroupAssets) {
+                    groupAssetsResponse = null
+                } else if (selectedSpaceId != PERSONAL_SPACE_ID) {
+                    scope.launch {
+                        isGroupAssetsLoading = true
+                        groupAssetsResponse = ApiClient.getGroupAssets(selectedSpaceId, user.id)
+                        isGroupAssetsLoading = false
+                    }
+                }
+            },
+            onCreateEntryFromFile = { file ->
+                createEntryFromFileFile = file
+                createEntryFromFileTopicId = filteredTopics.firstOrNull()?.id.orEmpty()
+                showCreateEntryFromFileDialog = true
             },
             onToggleSelectAllCandidates = {
                 selectedCandidateEntryIds =
@@ -4222,9 +4585,13 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     }
 
     if (showMemoryDialog) {
+        val currentGroupId = selectedSpaceId.takeIf { it != PERSONAL_SPACE_ID }
         KnowledgeMemoryDialog(
             preferences = memoryPreferences,
             entries = memoryEntries,
+            groupEntries = groupMemoryEntries,
+            groupId = currentGroupId,
+            activeTab = memoryActiveTab,
             isLoading = isMemoryLoading,
             isSaving = isMemorySaving,
             draftTitle = memoryDraftTitle,
@@ -4235,6 +4602,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             onDraftContentChange = { memoryDraftContent = it },
             onDraftTypeChange = { memoryDraftType = it },
             onPreferencesChange = { memoryPreferences = it },
+            onActiveTabChange = { memoryActiveTab = it },
             onDismiss = {
                 if (!isMemorySaving) {
                     showMemoryDialog = false
@@ -4268,14 +4636,20 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                         return@launch
                     }
                     isMemorySaving = true
+                    val isGroupMode = memoryActiveTab == "group" && currentGroupId != null
                     val created = ApiClient.createKBMemoryEntry(
                         userId = user.id,
                         content = content,
                         memoryType = memoryDraftType,
                         title = memoryDraftTitle.trim().takeIf { it.isNotBlank() },
+                        groupId = if (isGroupMode) currentGroupId else null,
                     )
                     memoryFeedback = if (created != null) {
-                        memoryEntries = sortKnowledgeMemoryEntries(listOf(created) + memoryEntries.filterNot { it.id == created.id })
+                        if (isGroupMode) {
+                            groupMemoryEntries = sortKnowledgeMemoryEntries(listOf(created) + groupMemoryEntries.filterNot { it.id == created.id })
+                        } else {
+                            memoryEntries = sortKnowledgeMemoryEntries(listOf(created) + memoryEntries.filterNot { it.id == created.id })
+                        }
                         memoryDraftTitle = ""
                         memoryDraftContent = ""
                         memoryDraftType = KBMemoryType.PREFERENCE
@@ -4289,9 +4663,17 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             onDeleteMemory = { entryId ->
                 scope.launch {
                     isMemorySaving = true
-                    val deleted = ApiClient.deleteKBMemoryEntry(entryId, user.id)
+                    val isGroupMode = memoryActiveTab == "group" && currentGroupId != null
+                    val deleted = ApiClient.deleteKBMemoryEntry(
+                        entryId, user.id,
+                        groupId = if (isGroupMode) currentGroupId else null,
+                    )
                     memoryFeedback = if (deleted) {
-                        memoryEntries = memoryEntries.filterNot { it.id == entryId }
+                        if (isGroupMode) {
+                            groupMemoryEntries = groupMemoryEntries.filterNot { it.id == entryId }
+                        } else {
+                            memoryEntries = memoryEntries.filterNot { it.id == entryId }
+                        }
                         "记忆已删除"
                     } else {
                         "删除记忆失败"
@@ -4706,6 +5088,73 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             },
         )
     }
+
+    if (showCreateEntryFromFileDialog) {
+        val file = createEntryFromFileFile
+        if (file != null) {
+            val writableTopics = filteredTopics.filter { canWriteKnowledgeTopic(it, user.id, userGroups) }
+            CreateEntryFromFileDialog(
+                file = file,
+                topics = writableTopics,
+                selectedTopicId = createEntryFromFileTopicId,
+                isSaving = isSaving,
+                onTopicSelectionChange = { createEntryFromFileTopicId = it },
+                onDismiss = {
+                    if (!isSaving) {
+                        showCreateEntryFromFileDialog = false
+                        createEntryFromFileFile = null
+                    }
+                },
+                onConfirm = {
+                    scope.launch {
+                        val targetTopic = writableTopics.find { it.id == createEntryFromFileTopicId }
+                        if (targetTopic == null) {
+                            saveMessage = "请选择目标主题"
+                            return@launch
+                        }
+                        isSaving = true
+                        val title = file.fileName.substringBeforeLast(".")
+                        val source = KBEntrySource(
+                            sourceType = KBSourceType.FILE,
+                            sourceGroupId = selectedSpaceId.takeIf { it != PERSONAL_SPACE_ID },
+                            fileRef = KBFileRef(
+                                fileName = file.fileName,
+                                fileSize = file.fileSize,
+                                mimeType = file.mimeType,
+                                downloadUrl = file.downloadUrl,
+                            ),
+                        )
+                        val newEntry = ApiClient.captureKBEntry(
+                            topicId = targetTopic.id,
+                            title = title,
+                            content = "## $title\n\n> 从群文件导入\n\n",
+                            tags = listOf("file-import"),
+                            userId = user.id,
+                            source = source,
+                            status = KBEntryStatus.CANDIDATE,
+                        )
+                        isSaving = false
+                        if (newEntry != null) {
+                            showCreateEntryFromFileDialog = false
+                            createEntryFromFileFile = null
+                            saveMessage = "已创建候选条目: $title"
+                            val currentTopic = selectedTopic
+                            if (currentTopic != null) {
+                                loadKnowledgeEntries(
+                                    topic = currentTopic,
+                                    userId = user.id,
+                                    onSelectedTopicChange = { selectedTopic = it },
+                                    onSelectedEntryChange = { selectedEntry = it },
+                                    onEditorContentChange = { editorContent = it },
+                                    onEntriesChange = { entries = it },
+                                )
+                            }
+                        }
+                    }
+                },
+            )
+        }
+    }
 }
 
 // ---- Shared dialog helpers ----
@@ -4714,6 +5163,9 @@ fun KnowledgeBaseScene(appState: WebAppState) {
 private fun KnowledgeMemoryDialog(
     preferences: KnowledgeBaseContextPreferences,
     entries: List<KBEntryItem>,
+    groupEntries: List<KBEntryItem>,
+    groupId: String?,
+    activeTab: String,
     isLoading: Boolean,
     isSaving: Boolean,
     draftTitle: String,
@@ -4724,6 +5176,7 @@ private fun KnowledgeMemoryDialog(
     onDraftContentChange: (String) -> Unit,
     onDraftTypeChange: (KBMemoryType) -> Unit,
     onPreferencesChange: (KnowledgeBaseContextPreferences) -> Unit,
+    onActiveTabChange: (String) -> Unit,
     onDismiss: () -> Unit,
     onSavePreferences: () -> Unit,
     onCreateMemory: () -> Unit,
@@ -4765,7 +5218,7 @@ private fun KnowledgeMemoryDialog(
                     property("line-height", "1.6")
                 }
             }) {
-                Text("管理长期记忆的注入开关、自动记忆策略，以及当前已保存的个人 memory。")
+                Text("管理长期记忆的注入开关、自动记忆策略，以及当前已保存的个人/群组 memory。")
             }
             if (feedbackMessage.isNotBlank()) {
                 Div({
@@ -4779,6 +5232,24 @@ private fun KnowledgeMemoryDialog(
                     }
                 }) { Text(feedbackMessage) }
             }
+            // Tab switcher — group tab only when inside a team space
+            if (groupId != null) {
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        property("gap", "8px")
+                        marginBottom(16.px)
+                    }
+                }) {
+                    listOf("personal" to "个人记忆", "group" to "群组记忆").forEach { (tabId, tabLabel) ->
+                        KnowledgeToggleButton(
+                            label = tabLabel,
+                            selected = activeTab == tabId,
+                            onClick = { onActiveTabChange(tabId) },
+                        )
+                    }
+                }
+            }
             Div({
                 style {
                     display(DisplayStyle.Flex)
@@ -4786,28 +5257,48 @@ private fun KnowledgeMemoryDialog(
                     property("gap", "12px")
                 }
             }) {
-                KnowledgeMemorySettingsSection(
-                    preferences = preferences,
-                    onPreferencesChange = onPreferencesChange,
-                    onSavePreferences = onSavePreferences,
-                    isSaving = isSaving,
-                )
-                KnowledgeMemoryComposerSection(
-                    draftTitle = draftTitle,
-                    draftContent = draftContent,
-                    draftType = draftType,
-                    isSaving = isSaving,
-                    onDraftTitleChange = onDraftTitleChange,
-                    onDraftContentChange = onDraftContentChange,
-                    onDraftTypeChange = onDraftTypeChange,
-                    onCreateMemory = onCreateMemory,
-                )
-                KnowledgeMemoryEntriesSection(
-                    entries = entries,
-                    isLoading = isLoading,
-                    isSaving = isSaving,
-                    onDeleteMemory = onDeleteMemory,
-                )
+                if (activeTab == "personal") {
+                    KnowledgeMemorySettingsSection(
+                        preferences = preferences,
+                        onPreferencesChange = onPreferencesChange,
+                        onSavePreferences = onSavePreferences,
+                        isSaving = isSaving,
+                    )
+                    KnowledgeMemoryComposerSection(
+                        draftTitle = draftTitle,
+                        draftContent = draftContent,
+                        draftType = draftType,
+                        isSaving = isSaving,
+                        onDraftTitleChange = onDraftTitleChange,
+                        onDraftContentChange = onDraftContentChange,
+                        onDraftTypeChange = onDraftTypeChange,
+                        onCreateMemory = onCreateMemory,
+                    )
+                    KnowledgeMemoryEntriesSection(
+                        entries = entries,
+                        isLoading = isLoading,
+                        isSaving = isSaving,
+                        onDeleteMemory = onDeleteMemory,
+                    )
+                } else {
+                    // Group memory tab — composer + entries, no settings
+                    KnowledgeMemoryComposerSection(
+                        draftTitle = draftTitle,
+                        draftContent = draftContent,
+                        draftType = draftType,
+                        isSaving = isSaving,
+                        onDraftTitleChange = onDraftTitleChange,
+                        onDraftContentChange = onDraftContentChange,
+                        onDraftTypeChange = onDraftTypeChange,
+                        onCreateMemory = onCreateMemory,
+                    )
+                    KnowledgeMemoryEntriesSection(
+                        entries = groupEntries,
+                        isLoading = isLoading,
+                        isSaving = isSaving,
+                        onDeleteMemory = onDeleteMemory,
+                    )
+                }
             }
             DialogActions(
                 onCancel = onDismiss,

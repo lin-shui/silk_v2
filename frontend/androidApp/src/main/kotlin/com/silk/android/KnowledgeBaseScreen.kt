@@ -103,6 +103,43 @@ data class KBEntrySource(
     val workflowId: String? = null,
     val messageIds: List<String> = emptyList(),
     val confidence: Double? = null,
+    val fileRef: KBFileRef? = null,
+)
+
+@Serializable
+enum class KBMemoryType {
+    PROFILE,
+    PREFERENCE,
+    EPISODIC,
+    PROCEDURAL,
+}
+
+@Serializable
+data class KBFileRef(
+    val fileName: String,
+    val fileSize: Long,
+    val mimeType: String,
+    val downloadUrl: String,
+    val sourceMessageId: String? = null,
+)
+
+@Serializable
+data class ArchivedMemoryVersion(
+    val content: String,
+    val title: String,
+    val archivedAt: Long,
+    val reason: String = "",
+)
+
+@Serializable
+data class KBMemoryMetadata(
+    val type: KBMemoryType = KBMemoryType.EPISODIC,
+    val key: String? = null,
+    val explicit: Boolean = true,
+    val capturedAt: Long = 0L,
+    val lastAccessedAt: Long = 0L,
+    val accessedCount: Int = 0,
+    val archivedVersions: List<ArchivedMemoryVersion> = emptyList(),
 )
 
 @Serializable
@@ -130,10 +167,21 @@ data class KBEntryItem(
     val ownerId: String = "",
     val status: KBEntryStatus = KBEntryStatus.PUBLISHED,
     val source: KBEntrySource = KBEntrySource(),
+    val memory: KBMemoryMetadata? = null,
     val createdBy: String = "",
     val updatedBy: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
+)
+
+@Serializable
+data class KnowledgeBaseContextPreferences(
+    val userId: String,
+    val excludedSpaceIds: List<String> = emptyList(),
+    val memoryEnabled: Boolean = true,
+    val autoCaptureEnabled: Boolean = false,
+    val ephemeralSessionEnabled: Boolean = false,
+    val updatedAt: Long = 0L,
 )
 
 private enum class KBSubPage { TOPICS, ENTRIES, EDITOR }
@@ -479,6 +527,19 @@ fun KnowledgeBaseScreen(appState: AppState) {
     var editorContent by remember { mutableStateOf("") }
     var isSaving by remember { mutableStateOf(false) }
 
+    // Memory management state
+    var showMemoryDialog by remember { mutableStateOf(false) }
+    var memoryPreferences by remember { mutableStateOf(KnowledgeBaseContextPreferences(userId = user.id)) }
+    var memoryEntries by remember { mutableStateOf<List<KBEntryItem>>(emptyList()) }
+    var groupMemoryEntries by remember { mutableStateOf<List<KBEntryItem>>(emptyList()) }
+    var isMemoryLoading by remember { mutableStateOf(false) }
+    var isMemorySaving by remember { mutableStateOf(false) }
+    var memoryDraftTitle by remember { mutableStateOf("") }
+    var memoryDraftContent by remember { mutableStateOf("") }
+    var memoryDraftType by remember { mutableStateOf(KBMemoryType.PREFERENCE) }
+    var memoryFeedback by remember { mutableStateOf("") }
+    var memoryActiveTab by remember { mutableStateOf("personal") }
+
     LaunchedEffect(user.id) {
         isLoading = true
         groups = ApiClient.getUserGroups(user.id).groups.orEmpty().filterNot { it.name.startsWith("wf_") }
@@ -596,7 +657,92 @@ fun KnowledgeBaseScreen(appState: AppState) {
                 )
             }
         },
+        onShowMemory = { showMemoryDialog = true },
     )
+
+    if (showMemoryDialog) {
+        KnowledgeMemoryDialog(
+            preferences = memoryPreferences,
+            entries = memoryEntries,
+            groupEntries = groupMemoryEntries,
+            groupId = selectedSpaceId.takeIf { it != PERSONAL_SPACE_ID },
+            activeTab = memoryActiveTab,
+            isLoading = isMemoryLoading,
+            isSaving = isMemorySaving,
+            draftTitle = memoryDraftTitle,
+            draftContent = memoryDraftContent,
+            draftType = memoryDraftType,
+            feedbackMessage = memoryFeedback,
+            onDraftTitleChange = { memoryDraftTitle = it },
+            onDraftContentChange = { memoryDraftContent = it },
+            onDraftTypeChange = { memoryDraftType = it },
+            onPreferencesChange = { memoryPreferences = it },
+            onActiveTabChange = { memoryActiveTab = it },
+            onDismiss = { showMemoryDialog = false },
+            onSavePreferences = {
+                scope.launch {
+                    isMemorySaving = true
+                    memoryFeedback = ""
+                    val result = ApiClient.updateKBContextPreferences(
+                        userId = user.id,
+                        excludedSpaceIds = memoryPreferences.excludedSpaceIds,
+                        memoryEnabled = memoryPreferences.memoryEnabled,
+                        autoCaptureEnabled = memoryPreferences.autoCaptureEnabled,
+                        ephemeralSessionEnabled = memoryPreferences.ephemeralSessionEnabled,
+                    )
+                    if (result != null) {
+                        memoryPreferences = result
+                        memoryFeedback = "设置已保存"
+                    } else {
+                        memoryFeedback = "保存失败"
+                    }
+                    isMemorySaving = false
+                }
+            },
+            onCreateMemory = {
+                scope.launch {
+                    isMemorySaving = true
+                    memoryFeedback = ""
+                    val groupId = selectedSpaceId.takeIf { it != PERSONAL_SPACE_ID }
+                    val result = ApiClient.createKBMemoryEntry(
+                        userId = user.id,
+                        content = memoryDraftContent.trim(),
+                        memoryType = memoryDraftType,
+                        title = memoryDraftTitle.trim().ifBlank { null },
+                        groupId = groupId,
+                    )
+                    if (result != null) {
+                        memoryFeedback = "记忆已保存"
+                        memoryDraftTitle = ""
+                        memoryDraftContent = ""
+                        // Refresh list
+                        memoryEntries = ApiClient.listKBMemoryEntries(user.id)
+                        if (groupId != null) {
+                            groupMemoryEntries = ApiClient.listKBMemoryEntries(user.id, groupId = groupId)
+                        }
+                    } else {
+                        memoryFeedback = "保存失败"
+                    }
+                    isMemorySaving = false
+                }
+            },
+            onDeleteMemory = { entryId ->
+                scope.launch {
+                    val groupId = selectedSpaceId.takeIf { it != PERSONAL_SPACE_ID }
+                    val success = ApiClient.deleteKBMemoryEntry(entryId, user.id, groupId)
+                    if (success) {
+                        memoryFeedback = "记忆已删除"
+                        memoryEntries = ApiClient.listKBMemoryEntries(user.id)
+                        if (groupId != null) {
+                            groupMemoryEntries = ApiClient.listKBMemoryEntries(user.id, groupId = groupId)
+                        }
+                    } else {
+                        memoryFeedback = "删除失败"
+                    }
+                }
+            },
+        )
+    }
 
     KnowledgeBaseDialogs(
         isSaving = isSaving,
@@ -741,6 +887,7 @@ private fun KnowledgeBasePageHost(
     onEditorContentChange: (String) -> Unit,
     onSaveEntry: () -> Unit,
     onStatusAction: (KBEntryStatus) -> Unit,
+    onShowMemory: () -> Unit,
 ) {
     when (subPage) {
         KBSubPage.TOPICS -> KnowledgeBaseTopicsPage(
@@ -753,6 +900,7 @@ private fun KnowledgeBasePageHost(
             onSpaceSelected = onSpaceSelected,
             onShowCreateTopic = onShowCreateTopic,
             onTopicSelected = onTopicSelected,
+            onShowMemory = onShowMemory,
         )
         KBSubPage.ENTRIES -> KnowledgeBaseEntriesPage(
             userId = userId,
@@ -766,6 +914,7 @@ private fun KnowledgeBasePageHost(
             onShowCreateEntry = onShowCreateEntry,
             onShowMeetingCapture = onShowMeetingCapture,
             onEntrySelected = onEntrySelected,
+            onShowMemory = onShowMemory,
         )
         KBSubPage.EDITOR -> KnowledgeBaseEditorPage(
             userId = userId,
@@ -795,6 +944,7 @@ private fun KnowledgeBaseTopicsPage(
     onSpaceSelected: (String) -> Unit,
     onShowCreateTopic: () -> Unit,
     onTopicSelected: (KBTopicItem) -> Unit,
+    onShowMemory: () -> Unit,
 ) {
     Scaffold(
         floatingActionButton = {
@@ -809,10 +959,14 @@ private fun KnowledgeBaseTopicsPage(
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("知识库", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onShowMemory) {
+                    Text("KB Memory")
+                }
             }
             LazyRow(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
@@ -901,6 +1055,7 @@ private fun KnowledgeBaseEntriesPage(
     onFilterChange: (KnowledgeEntryFilter) -> Unit,
     onBack: () -> Unit,
     onShowCreateEntry: () -> Unit,
+    onShowMemory: () -> Unit,
     onShowMeetingCapture: () -> Unit,
     onEntrySelected: (KBEntryItem) -> Unit,
 ) {
@@ -914,6 +1069,9 @@ private fun KnowledgeBaseEntriesPage(
                     }
                 },
                 actions = {
+                    TextButton(onClick = onShowMemory) {
+                        Text("KB Memory")
+                    }
                     TextButton(
                         onClick = onShowMeetingCapture,
                         enabled = canWriteSelectedTopic,
@@ -1504,4 +1662,337 @@ private fun MeetingCaptureTopicPicker(
             }
         }
     }
+}
+
+// ── Knowledge Memory Dialog ──
+
+@Composable
+private fun KnowledgeMemoryDialog(
+    preferences: KnowledgeBaseContextPreferences,
+    entries: List<KBEntryItem>,
+    groupEntries: List<KBEntryItem>,
+    groupId: String?,
+    activeTab: String,
+    isLoading: Boolean,
+    isSaving: Boolean,
+    draftTitle: String,
+    draftContent: String,
+    draftType: KBMemoryType,
+    feedbackMessage: String,
+    onDraftTitleChange: (String) -> Unit,
+    onDraftContentChange: (String) -> Unit,
+    onDraftTypeChange: (KBMemoryType) -> Unit,
+    onPreferencesChange: (KnowledgeBaseContextPreferences) -> Unit,
+    onActiveTabChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onSavePreferences: () -> Unit,
+    onCreateMemory: () -> Unit,
+    onDeleteMemory: (String) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("KB Memory") },
+        text = {
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().height(480.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                item {
+                    Text(
+                        "管理长期记忆的注入开关与已保存的个人/群组 memory。",
+                        color = SilkColors.textSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (feedbackMessage.isNotBlank()) {
+                    item {
+                        Surface(
+                            color = Color(0xFFF7F1E3),
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                feedbackMessage,
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+                if (groupId != null) {
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("personal" to "个人记忆", "group" to "群组记忆").forEach { (tabId, tabLabel) ->
+                                Button(
+                                    onClick = { onActiveTabChange(tabId) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (activeTab == tabId) SilkColors.primary else SilkColors.surface,
+                                        contentColor = if (activeTab == tabId) Color.White else SilkColors.textPrimary,
+                                    ),
+                                ) {
+                                    Text(tabLabel)
+                                }
+                            }
+                        }
+                    }
+                }
+                if (activeTab == "personal") {
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("设置", fontWeight = FontWeight.Bold)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "Memory 注入",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                androidx.compose.material3.Switch(
+                                    checked = preferences.memoryEnabled,
+                                    onCheckedChange = { onPreferencesChange(preferences.copy(memoryEnabled = it)) },
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "自动记忆",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                androidx.compose.material3.Switch(
+                                    checked = preferences.autoCaptureEnabled,
+                                    onCheckedChange = { onPreferencesChange(preferences.copy(autoCaptureEnabled = it)) },
+                                )
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "临时会话",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                androidx.compose.material3.Switch(
+                                    checked = preferences.ephemeralSessionEnabled,
+                                    onCheckedChange = { onPreferencesChange(preferences.copy(ephemeralSessionEnabled = it)) },
+                                )
+                            }
+                            Button(
+                                onClick = onSavePreferences,
+                                enabled = !isSaving,
+                                colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(if (isSaving) "保存中..." else "保存设置")
+                            }
+                        }
+                    }
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("新建记忆", fontWeight = FontWeight.Bold)
+                            OutlinedTextField(
+                                value = draftTitle,
+                                onValueChange = onDraftTitleChange,
+                                label = { Text("标题（可选）") },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            OutlinedTextField(
+                                value = draftContent,
+                                onValueChange = onDraftContentChange,
+                                label = { Text("记忆内容") },
+                                modifier = Modifier.fillMaxWidth(),
+                                minLines = 3,
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf(
+                                    KBMemoryType.PROFILE to "Profile",
+                                    KBMemoryType.PREFERENCE to "Preference",
+                                    KBMemoryType.EPISODIC to "Episodic",
+                                    KBMemoryType.PROCEDURAL to "Procedural",
+                                ).forEach { (type, label) ->
+                                    Button(
+                                        onClick = { onDraftTypeChange(type) },
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (draftType == type) SilkColors.primary else SilkColors.surface,
+                                            contentColor = if (draftType == type) Color.White else SilkColors.textPrimary,
+                                        ),
+                                    ) {
+                                        Text(label)
+                                    }
+                                }
+                            }
+                            Button(
+                                onClick = onCreateMemory,
+                                enabled = !isSaving && draftContent.isNotBlank(),
+                                colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(if (isSaving) "保存中..." else "保存记忆")
+                            }
+                        }
+                    }
+                    item {
+                        Text("已保存的记忆（个人）", fontWeight = FontWeight.Bold)
+                    }
+                    if (isLoading) {
+                        item {
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                    } else if (entries.isEmpty()) {
+                        item {
+                            Text("暂无个人记忆", color = SilkColors.textLight, style = MaterialTheme.typography.bodySmall)
+                        }
+                    } else {
+                        items(entries.take(20)) { entry ->
+                            KnowledgeMemoryEntryCard(entry = entry, isSaving = isSaving, onDelete = { onDeleteMemory(entry.id) })
+                        }
+                    }
+                } else {
+                    item {
+                        Text("新建群组记忆", fontWeight = FontWeight.Bold)
+                    }
+                    item {
+                        OutlinedTextField(
+                            value = draftTitle,
+                            onValueChange = onDraftTitleChange,
+                            label = { Text("标题（可选）") },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    item {
+                        OutlinedTextField(
+                            value = draftContent,
+                            onValueChange = onDraftContentChange,
+                            label = { Text("记忆内容") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 3,
+                        )
+                    }
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(
+                                KBMemoryType.PROFILE to "Profile",
+                                KBMemoryType.PREFERENCE to "Preference",
+                                KBMemoryType.EPISODIC to "Episodic",
+                                KBMemoryType.PROCEDURAL to "Procedural",
+                            ).forEach { (type, label) ->
+                                Button(
+                                    onClick = { onDraftTypeChange(type) },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (draftType == type) SilkColors.primary else SilkColors.surface,
+                                        contentColor = if (draftType == type) Color.White else SilkColors.textPrimary,
+                                    ),
+                                ) {
+                                    Text(label)
+                                }
+                            }
+                        }
+                    }
+                    item {
+                        Button(
+                            onClick = onCreateMemory,
+                            enabled = !isSaving && draftContent.isNotBlank(),
+                            colors = ButtonDefaults.buttonColors(containerColor = SilkColors.primary),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (isSaving) "保存中..." else "保存群组记忆")
+                        }
+                    }
+                    item {
+                        Text("已保存的记忆（群组）", fontWeight = FontWeight.Bold)
+                    }
+                    if (isLoading) {
+                        item {
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                    } else if (groupEntries.isEmpty()) {
+                        item {
+                            Text("暂无群组记忆", color = SilkColors.textLight, style = MaterialTheme.typography.bodySmall)
+                        }
+                    } else {
+                        items(groupEntries.take(20)) { entry ->
+                            KnowledgeMemoryEntryCard(entry = entry, isSaving = isSaving, onDelete = { onDeleteMemory(entry.id) })
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("关闭")
+            }
+        },
+    )
+}
+
+// ── Knowledge Memory Entry Card ──
+
+@Composable
+private fun KnowledgeMemoryEntryCard(
+    entry: KBEntryItem,
+    isSaving: Boolean,
+    onDelete: () -> Unit,
+) {
+    Surface(
+        color = Color(0xFFFFFCF6),
+        shape = MaterialTheme.shapes.small,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    entry.title.ifBlank { "未命名记忆" },
+                    fontWeight = FontWeight.Medium,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Button(
+                    onClick = onDelete,
+                    enabled = !isSaving,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE57373)),
+                ) {
+                    Text("删除", color = Color.White)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                entry.memory?.let { mem ->
+                    KnowledgeBadge(
+                        text = memoryTypeLabel(mem.type),
+                        backgroundColor = SilkColors.background,
+                    )
+                    mem.key?.let { key ->
+                        KnowledgeBadge(
+                            text = "key:$key",
+                            backgroundColor = SilkColors.surface,
+                        )
+                    }
+                    if (mem.explicit) {
+                        KnowledgeBadge(
+                            text = "显式记忆",
+                            backgroundColor = Color(0xFFE8F5E9),
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                entry.content,
+                style = MaterialTheme.typography.bodySmall,
+                color = SilkColors.textSecondary,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+private fun memoryTypeLabel(type: KBMemoryType): String = when (type) {
+    KBMemoryType.PROFILE -> "Profile"
+    KBMemoryType.PREFERENCE -> "Preference"
+    KBMemoryType.EPISODIC -> "Episodic"
+    KBMemoryType.PROCEDURAL -> "Procedural"
 }

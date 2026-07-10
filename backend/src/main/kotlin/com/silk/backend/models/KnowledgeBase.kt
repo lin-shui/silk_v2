@@ -51,12 +51,26 @@ enum class KBMemoryType {
 }
 
 @Serializable
+data class KBFileRef(
+    val fileName: String,
+    val fileSize: Long,
+    val mimeType: String,
+    val downloadUrl: String,
+    val sourceMessageId: String? = null,
+)
+
+@Serializable
 data class KBEntrySource(
     val sourceType: KBSourceType = KBSourceType.MANUAL,
     val sourceGroupId: String? = null,
     val workflowId: String? = null,
     val messageIds: List<String> = emptyList(),
     val confidence: Double? = null,
+    /**
+     * 当 sourceType == FILE 时，可直接携带文件引用信息，
+     * 无需再通过 messageIds 回溯到聊天消息解析 FileMessagePayload。
+     */
+    val fileRef: KBFileRef? = null,
 )
 
 @Serializable
