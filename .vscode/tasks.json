@@ -1,0 +1,11 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "run-backend-tests",
+			"type": "shell",
+			"command": "cd /Users/pengzhike/Documents/project/huawei/silk_v2 && ./gradlew :backend:test",
+			"group": "test"
+		}
+	]
+}

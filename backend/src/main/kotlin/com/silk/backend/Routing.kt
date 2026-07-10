@@ -4383,12 +4383,13 @@ private fun Route.registerApiKbCopilotPostRoute() {
             )
             return@post
         }
+        val copilotId = req.entryId?.takeIf { it.isNotBlank() } ?: req.topicId?.takeIf { it.isNotBlank() } ?: "unknown"
         val response = executeKnowledgeBaseCopilot(
             manager = knowledgeBaseManager,
             request = req.copy(userId = userId),
             runAgent = { input ->
-                val agent = DirectModelAgent(sessionId = "kb_copilot_${sanitizeFileName(req.entryId)}")
-                val workspaceDir = "${AIConfig.CLAUDE_CLI_WORKSPACE_ROOT}/kb_copilot_${sanitizeFileName(userId)}_${sanitizeFileName(req.entryId)}"
+                val agent = DirectModelAgent(sessionId = "kb_copilot_${sanitizeFileName(copilotId)}")
+                val workspaceDir = "${AIConfig.CLAUDE_CLI_WORKSPACE_ROOT}/kb_copilot_${sanitizeFileName(userId)}_${sanitizeFileName(copilotId)}"
                 java.io.File(workspaceDir).mkdirs()
                 agent.initClaudeClient(workspaceDir)
                 agent.syncKnowledgeBaseWorkspace(input.workspaceEntries.ifEmpty {

@@ -371,11 +371,20 @@ data class ExportKBResponse(
 
 @Serializable
 data class KnowledgeBaseCopilotDraft(
-    val entryId: String,
+    val entryId: String? = null,
     val topicId: String,
     val title: String,
     val content: String,
     val tags: List<String> = emptyList(),
+)
+
+/**
+ * A single turn in a multi-turn KB Copilot conversation.
+ */
+@Serializable
+data class ConversationTurn(
+    val role: String, // "user" or "assistant"
+    val content: String,
 )
 
 @Serializable
@@ -1546,16 +1555,35 @@ object ApiClient {
 
     suspend fun runKBCopilot(
         userId: String,
-        entryId: String,
+        entryId: String?,
+        topicId: String? = null,
         instruction: String,
         applyChanges: Boolean,
+        conversationHistory: List<ConversationTurn> = emptyList(),
     ): KnowledgeBaseCopilotResponse? {
         return try {
             val body = buildJsonObject {
                 put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
-                put("entryId", kotlinx.serialization.json.JsonPrimitive(entryId))
+                if (!entryId.isNullOrBlank()) {
+                    put("entryId", kotlinx.serialization.json.JsonPrimitive(entryId))
+                }
+                if (!topicId.isNullOrBlank()) {
+                    put("topicId", kotlinx.serialization.json.JsonPrimitive(topicId))
+                }
                 put("instruction", kotlinx.serialization.json.JsonPrimitive(instruction))
                 put("applyChanges", kotlinx.serialization.json.JsonPrimitive(applyChanges))
+                if (conversationHistory.isNotEmpty()) {
+                    put("conversationHistory", kotlinx.serialization.json.JsonArray(
+                        conversationHistory.map { turn ->
+                            kotlinx.serialization.json.JsonObject(
+                                mapOf(
+                                    "role" to kotlinx.serialization.json.JsonPrimitive(turn.role),
+                                    "content" to kotlinx.serialization.json.JsonPrimitive(turn.content),
+                                )
+                            )
+                        }
+                    ))
+                }
             }.toString()
             val response = post("/api/kb/copilot", body)
             jsonParser.decodeFromString(response)
@@ -1578,6 +1606,7 @@ object ApiClient {
         val hasLinkedEntry: Boolean = false,
         val linkedEntryIds: List<String> = emptyList(),
         val sourceMessageId: String? = null,
+        val sourceType: String = "upload",
     )
 
     @Serializable

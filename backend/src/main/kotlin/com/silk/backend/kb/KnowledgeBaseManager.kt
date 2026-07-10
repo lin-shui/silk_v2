@@ -38,6 +38,8 @@ data class GroupAssetFile(
     val linkedEntryIds: List<String> = emptyList(),
     /** 来源消息 ID（若有）。 */
     val sourceMessageId: String? = null,
+    /** 文件来源类型：upload / kb_entry_file / url_extracted */
+    val sourceType: String = "upload",
 )
 
 /**
@@ -986,11 +988,17 @@ class KnowledgeBaseManager(
                 it.status == KBEntryStatus.PUBLISHED
         }
 
-        val files = collectGroupUploadFiles(groupId, kbEntries)
+        // 收集多种来源的文件
+        val uploadFiles = collectGroupUploadFiles(groupId, kbEntries)
+        val kbLinkedFiles = collectKBLinkedFiles(store, teamTopicIds, uploadFiles)
+        val urlExtractedFiles = collectGroupUrlExtractedFiles(groupId, kbEntries)
+
+        val allFiles = (uploadFiles + kbLinkedFiles + urlExtractedFiles)
+            .sortedByDescending { it.uploadTime }
 
         return GroupAssetsResponse(
             groupId = groupId,
-            files = files,
+            files = allFiles,
             kbEntries = kbEntries,
             kbTopics = teamTopics,
         )
@@ -1004,6 +1012,9 @@ class KnowledgeBaseManager(
                 canReadTopic(it, userId)
         }
 
+    /**
+     * 收集群上传目录中的文件（包括 *.extracted.md 提取文件）。
+     */
     private fun collectGroupUploadFiles(groupId: String, kbEntries: List<KBEntry>): List<GroupAssetFile> {
         val chatHistoryDir = System.getProperty("silk.chatHistoryDir")
             ?.trim()
@@ -1015,9 +1026,103 @@ class KnowledgeBaseManager(
 
         val fileRefMap = buildFileRefMap(kbEntries)
 
-        return if (uploadsDir.exists()) {
-            collectFilesFromUploadDir(uploadsDir, groupId, fileRefMap)
-        } else {
+        if (!uploadsDir.exists()) return emptyList()
+
+        val files = uploadsDir.listFiles()?.filter { file ->
+            file.name != "processed_urls.txt" &&
+                file.name != "file_registry.json"
+        }?.map { file ->
+            val downloadUrl = "/api/files/download/$groupId/${file.name}"
+            val linkedEntryIds = fileRefMap[downloadUrl] ?: emptyList()
+            val isExtracted = file.name.endsWith(".extracted.md")
+            GroupAssetFile(
+                fileId = file.name,
+                fileName = if (isExtracted) file.name.removeSuffix(".extracted.md") + "（提取摘要）" else file.name,
+                fileSize = file.length(),
+                mimeType = if (isExtracted) "text/markdown" else (Files.probeContentType(file.toPath()) ?: "application/octet-stream"),
+                uploadTime = file.lastModified(),
+                downloadUrl = downloadUrl,
+                hasLinkedEntry = linkedEntryIds.isNotEmpty(),
+                linkedEntryIds = linkedEntryIds,
+                sourceType = if (isExtracted) "url_extracted" else "upload",
+            )
+        }?.sortedByDescending { it.uploadTime } ?: emptyList()
+
+        return files
+    }
+
+    /**
+     * 收集 KB 条目中 fileRef 引用的文件（不在上传目录中的）。
+     * 例如通过 linkFileToEntry 关联的外部文件。
+     */
+    private fun collectKBLinkedFiles(
+        store: KBStore,
+        teamTopicIds: Set<String>,
+        existingUploadFiles: List<GroupAssetFile>,
+    ): List<GroupAssetFile> {
+        val existingDownloadUrls = existingUploadFiles.map { it.downloadUrl }.toSet()
+        val linkedFiles = mutableListOf<GroupAssetFile>()
+
+        store.entries.forEach { entry ->
+            if (entry.topicId in teamTopicIds && entry.source.fileRef != null) {
+                val ref = entry.source.fileRef!!
+                if (ref.downloadUrl !in existingDownloadUrls) {
+                    linkedFiles += GroupAssetFile(
+                        fileId = ref.fileName,
+                        fileName = ref.fileName,
+                        fileSize = ref.fileSize,
+                        mimeType = ref.mimeType,
+                        uploadTime = entry.updatedAt,
+                        downloadUrl = ref.downloadUrl,
+                        hasLinkedEntry = true,
+                        linkedEntryIds = listOf(entry.id),
+                        sourceMessageId = ref.sourceMessageId,
+                        sourceType = "kb_entry_file",
+                    )
+                }
+            }
+        }
+
+        return linkedFiles
+    }
+
+    /**
+     * 收集群空间中的 URL 下载提取内容（processed_urls.txt 中记录的 URL 列表）。
+     */
+    private fun collectGroupUrlExtractedFiles(groupId: String, kbEntries: List<KBEntry>): List<GroupAssetFile> {
+        val chatHistoryDir = System.getProperty("silk.chatHistoryDir")
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?.let(::File)
+            ?: File("chat_history")
+        val sessionDirName = if (groupId.startsWith("group_")) groupId else "group_$groupId"
+        val uploadsDir = File(File(chatHistoryDir, sessionDirName), "uploads")
+        val processedUrlsFile = File(uploadsDir, "processed_urls.txt")
+
+        if (!processedUrlsFile.exists()) return emptyList()
+
+        return try {
+            val urls = processedUrlsFile.readLines().filter { it.isNotBlank() }
+            val fileRefMap = buildFileRefMap(kbEntries)
+            val now = System.currentTimeMillis()
+
+            urls.mapIndexed { index, url ->
+                val fileName = "url_${index + 1}"
+                val downloadUrl = "/api/files/download/$groupId/$fileName"
+                val linkedEntryIds = fileRefMap[downloadUrl] ?: emptyList()
+                GroupAssetFile(
+                    fileId = fileName,
+                    fileName = url.trim(),
+                    fileSize = 0L,
+                    mimeType = "text/url",
+                    uploadTime = now - (urls.size - index).toLong() * 1000,
+                    downloadUrl = downloadUrl,
+                    hasLinkedEntry = linkedEntryIds.isNotEmpty(),
+                    linkedEntryIds = linkedEntryIds,
+                    sourceType = "url_extracted",
+                )
+            }
+        } catch (_: Exception) {
             emptyList()
         }
     }
@@ -1031,30 +1136,6 @@ class KnowledgeBaseManager(
         }
         return map
     }
-
-    private fun collectFilesFromUploadDir(uploadsDir: File, groupId: String, fileRefMap: Map<String, List<String>>): List<GroupAssetFile> =
-        uploadsDir.listFiles()
-            ?.filter { file ->
-                file.name != "processed_urls.txt" &&
-                    file.name != "file_registry.json" &&
-                    !file.name.endsWith(".extracted.md")
-            }
-            ?.map { file ->
-                val downloadUrl = "/api/files/download/$groupId/${file.name}"
-                val linkedEntryIds = fileRefMap[downloadUrl] ?: emptyList()
-                GroupAssetFile(
-                    fileId = file.name,
-                    fileName = file.name,
-                    fileSize = file.length(),
-                    mimeType = Files.probeContentType(file.toPath()) ?: "application/octet-stream",
-                    uploadTime = file.lastModified(),
-                    downloadUrl = downloadUrl,
-                    hasLinkedEntry = linkedEntryIds.isNotEmpty(),
-                    linkedEntryIds = linkedEntryIds,
-                )
-            }
-            ?.sortedByDescending { it.uploadTime }
-            ?: emptyList()
 
     /**
      * 为 KB 条目关联一个群文件引用。

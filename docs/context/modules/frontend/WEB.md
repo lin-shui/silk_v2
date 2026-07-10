@@ -45,7 +45,7 @@
 - 聊天与 Workflow 文本消息操作栏支持"📚入库"：选目标 topic 后把消息存为 `candidate` 知识条目（`POST /api/kb/captures`），带 `CHAT` / `AI_RESPONSE` / `WORKFLOW` 来源元数据（AI 消息自动标记为 `AI_RESPONSE`），成功后跳到对应 KB 文档
 - KB 左栏新增 `KB Memory` 快捷面板：显示长期记忆是否启用，并弹出 memory 管理弹层；Web 端现可读写 `GET/PUT /api/kb/context-preferences` 与 `GET/POST/DELETE /api/kb/memory*`，支持查看/新增/删除 memory，以及控制 `memoryEnabled` / `autoCaptureEnabled` / `ephemeralSessionEnabled`；其中 `autoCaptureEnabled` 已接到后端低风险自动记忆（回答语言 / 风格 / 代码语言偏好）
 - KB Memory 弹层支持团队空间内的群组记忆管理：当处于团队空间时，弹层顶部出现"个人记忆 / 群组记忆"Tab 切换；群组 Tab 下可查看/新增/删除该群组的共享记忆，新建/删除操作经 `groupId` 参数路由到 `/api/kb/memory` 端点；后端保持 ACL 隔离，非群组成员看不到群组记忆条目
-- KB 编辑器工具栏新增 `AI 协作`：打开 `KB Copilot` 对话框，通过 `POST /api/kb/copilot` 让后端围绕当前条目生成 `update_entry` 草稿；用户可先把草稿填回编辑器再手动保存，也可直接让后端按当前 caller 权限写回条目
+- KB 编辑器工具栏新增 `AI 协作`：切换 `KB Copilot` 右侧侧栏，通过 `POST /api/kb/copilot` 让后端生成编辑草稿；支持两种模式——**条目模式**（有选中条目时围绕当前条目生成 `update_entry` 草稿）和**主题模式**（无条目时根据用户指令在当前主题创建新条目，生成 `create_entry` 草稿）；侧栏与编辑器并列显示，支持宽度调节，切换条目时自动关闭；支持多轮对话（`ConversationTurn`），侧栏内显示历史对话、继续修改输入框和"🔄 新对话"重置按钮，切换条目/主题时自动清空历史；用户在主题模式下可从侧栏"填回编辑器"直接创建新条目；也可直接让后端按当前 caller 权限写回或创建条目
 - Candidate inbox 支持把候选条目并入同一 knowledge space 下的其他 topic 文档；合并对话框会跨 topic 拉取目标文档列表，合并完成后自动切到实际目标文档
   - 知识库条目侧栏：candidate inbox 过滤（全部/候选/已发布/已归档）+ 批量发布/归档/并入；会议入库入口（选空间/主题/标签/置信度，存为 candidate 或 published，写入 `MEETING` provenance）
   - M2 空间/权限：按"个人 + 我所在群组"切空间并过滤可访问 topic；topic/entry 编辑器展示空间/读写/状态/来源 badge；无写权限时禁用创建与保存、编辑区只读；owner/team host/topic manager 可在"权限"面板改名称、项目、`read/write/manage` grants、`writeLocked`、`teamMembersCanWrite`

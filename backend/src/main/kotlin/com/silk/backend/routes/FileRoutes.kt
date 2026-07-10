@@ -267,12 +267,15 @@ private suspend fun handleFileDownload(call: ApplicationCall) {
         ?: Files.probeContentType(file.toPath())
         ?: ContentType.Application.OctetStream.toString()
 
-    // 图片用 Inline（浏览器展示），非图片用 Attachment（下载）
-    val isImage = detectedContentType.startsWith("image/")
+    // 图片/PDF/音频/视频用 Inline（浏览器直接展示），其余用 Attachment（下载）
+    val isInlineType = detectedContentType.startsWith("image/") ||
+        detectedContentType == "application/pdf" ||
+        detectedContentType.startsWith("audio/") ||
+        detectedContentType.startsWith("video/")
     // 对文件名进行百分号编码，防止 Netty 因中文等非 ASCII 字符拒绝 Content-Disposition 头
     val encodedFileId = java.net.URLEncoder.encode(fileId, Charsets.UTF_8.name())
         .replace("+", "%20")
-    val dispositionType = if (isImage) ContentDisposition.Inline else ContentDisposition.Attachment
+    val dispositionType = if (isInlineType) ContentDisposition.Inline else ContentDisposition.Attachment
     val disposition = dispositionType.withParameter(ContentDisposition.Parameters.FileName, encodedFileId)
     call.response.header(HttpHeaders.ContentDisposition, disposition.toString())
 

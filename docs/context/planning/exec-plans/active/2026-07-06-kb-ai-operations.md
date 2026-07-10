@@ -61,4 +61,5 @@ Date: 2026-07-06
 - 2026-07-09 已补齐外部 agent 回复后处理：`AgentRuntime.executeSinglePrompt()` 会在最终广播前统一执行 `extractKnowledgeBaseAiActions -> executeKnowledgeBaseAiActions -> buildKnowledgeBaseActionSummary`。
 - `KnowledgeBaseAiExecutionRequest` 现已补齐 `workflowId`；当当前群属于 workflow 时，KB action 会把 `workflowId + sourceGroupId + recentMessageIds` 写入 provenance，且未显式指定 `sourceType` 的 create 默认按 `WORKFLOW` 候选入库。
 - 2026-07-09 已补上 KB 页 `POST /api/kb/copilot`：后端围绕当前 entry 构造定向编辑 prompt，并要求模型返回当前条目的 `update_entry` 草稿；Web 端可选择先把草稿填回编辑器，或直接按 caller ACL 写回当前条目。
+- 2026-07-10：KB Copilot UI 从模态对话框升级为右侧侧栏面板（`KnowledgeCopilotSidebar`），与编辑器并列显示；工具栏"AI 协作"按钮切换侧栏开关，切换条目时自动关闭；侧栏宽度可调并持久化。
 - 已补充 `KnowledgeBaseAiActionsTest` 并通过 `./gradlew :backend:test --tests 'com.silk.backend.kb.KnowledgeBaseAiActionsTest'` 与 `./gradlew :backend:test` 验证。
