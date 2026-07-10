@@ -2096,10 +2096,10 @@ private fun KnowledgeFilePreviewCard(fileRef: KBFileRef) {
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
+            val context = androidx.compose.ui.platform.LocalContext.current
             Spacer(Modifier.height(8.dp))
             Button(
                 onClick = {
-                    val context = androidx.compose.ui.platform.LocalContext.current
                     val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
                         data = android.net.Uri.parse(fileRef.downloadUrl)
                     }
