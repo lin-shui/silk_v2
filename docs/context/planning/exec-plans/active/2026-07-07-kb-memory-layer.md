@@ -180,8 +180,13 @@ MVP 不做：
 - `searchGroupMemoryEntriesForContext returns matching entries` — 搜索匹配
 - `group memory consolidation works` — 群组记忆去重合并
 
-建议后续补的测试：
+Phase 5（2026-07-13 新增 14 个 prompt 上下文测试）：
 
-- memory route contract
-- prompt 注入优先级
-- 前端群组记忆管理入口
+- `KnowledgeBasePromptContextTest` 覆盖优先级、排除、空间过滤、群体记忆路由、诊断计数等
+- 已验证 `./gradlew :backend:test` 通过
+
+已覆盖的场景：
+
+- **memory route contract** — 已有 `KnowledgeBaseRouteContractTest` 覆盖 memory CRUD 路由
+- **prompt 注入优先级** — `KnowledgeBasePromptContextTest` 覆盖 manual > pinned > auto > memory 排序、`memoryEnabled` 开关、排除条目/空间过滤
+- **前端群组记忆管理入口** — Web 端已补（2026-07-10），Android 已补（2026-07-10），Harmony / Desktop 待补（若需要多端一致）
