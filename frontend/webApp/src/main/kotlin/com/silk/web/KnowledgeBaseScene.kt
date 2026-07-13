@@ -14,6 +14,7 @@ import kotlinx.browser.document
 import kotlinx.browser.localStorage
 import kotlinx.browser.window
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import org.jetbrains.compose.web.attributes.InputType
 import org.jetbrains.compose.web.css.AlignItems
 import org.jetbrains.compose.web.css.Color
@@ -520,6 +521,7 @@ private fun TopicSidebar(
     onDeleteTopic: (KBTopicItem) -> Unit,
     onEntryDragHoverTopicChange: (String?) -> Unit,
     onEntryDropToTopic: (String) -> Unit,
+    onCollapse: () -> Unit = {},
     onGroupFilesSelect: () -> Unit = {},
 ) {
     val hasManageableTopic = topics.any { canManageKnowledgeTopic(it, userId, groups) }
@@ -586,6 +588,23 @@ private fun TopicSidebar(
                     onGroupFilesSelect()
                 },
             )
+        }
+        // ── 折叠按钮 ──
+        Div({
+            style {
+                property("flex-shrink", "0")
+                property("border-top", "1px solid ${SilkColors.border}")
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                justifyContent(JustifyContent.Center)
+                padding(8.px)
+                property("cursor", "pointer")
+                backgroundColor(Color(SilkColors.surface))
+            }
+            attr("title", "折叠侧栏")
+            onClick { onCollapse() }
+        }) {
+            Span({ style { fontSize(14.px); color(Color(SilkColors.textSecondary)) } }) { Text("◀") }
         }
     }
 }
@@ -2639,238 +2658,7 @@ private fun CreateTopicDialog(
  * 已选用户 chips 展示
  */
 @Composable
-private fun SelectedUserChips(
-    selectedUserIds: List<String>,
-    selectedUserNames: MutableMap<String, String>,
-    onRemoveUser: (String) -> Unit,
-) {
-    if (selectedUserIds.isEmpty()) return
-    Div({
-        style {
-            display(DisplayStyle.Flex)
-            property("flexWrap", "wrap")
-            property("gap", "4px")
-            marginBottom(4.px)
-        }
-    }) {
-        selectedUserIds.forEach { userId ->
-            val displayName = selectedUserNames[userId] ?: userId.take(8) + "..."
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("gap", "4px")
-                    backgroundColor(Color("#E8F0FE"))
-                    borderRadius(12.px)
-                    padding(2.px, 8.px)
-                    fontSize(12.px)
-                    color(Color("#1A73E8"))
-                }
-            }) {
-                Span({ }) { Text(displayName) }
-                Span({
-                    style {
-                        property("cursor", "pointer")
-                        fontSize(14.px)
-                        color(Color("#999"))
-                        property("lineHeight", "14px")
-                        marginLeft(2.px)
-                    }
-                    onClick { _ ->
-                        onRemoveUser(userId)
-                    }
-                }) { Text("×") }
-            }
-        }
-    }
-}
-
-/**
- * 用户搜索选择器组件
- * 通过名称搜索用户并以 chips 形式展示已选用户
- */
-@Composable
-private fun UserSearchSelector(
-    label: String,
-    selectedUserIds: List<String>,
-    onSelectionChange: (List<String>) -> Unit,
-    placeholder: String = "输入用户名称搜索...",
-) {
-    val scope = rememberCoroutineScope()
-    var searchQuery by remember { mutableStateOf("") }
-    var searchResults by remember { mutableStateOf<List<UserSearchItem>>(emptyList()) }
-    var isSearching by remember { mutableStateOf(false) }
-    var showResults by remember { mutableStateOf(false) }
-    // 缓存已选用户的名称（用于展示 chip 标签）
-    val selectedUserNames = remember(selectedUserIds) {
-        mutableMapOf<String, String>().apply {
-            searchResults.forEach { if (it.id in selectedUserIds) put(it.id, it.fullName) }
-        }
-    }
-
-    Div({
-        style {
-            marginBottom(12.px)
-            display(DisplayStyle.Flex)
-            flexDirection(FlexDirection.Column)
-            property("gap", "6px")
-        }
-    }) {
-        Span({
-            style {
-                fontSize(13.px)
-                color(Color(SilkColors.textSecondary))
-                fontWeight("600")
-            }
-        }) { Text(label) }
-
-        SelectedUserChips(selectedUserIds, selectedUserNames) { removedId ->
-            onSelectionChange(selectedUserIds.filter { it != removedId })
-        }
-
-        // 搜索输入框
-        Div({
-            style { position(Position.Relative) }
-        }) {
-            Input(InputType.Text) {
-                classes("kb-share-search-input")
-                attr("placeholder", placeholder)
-                value(searchQuery)
-                onInput { event ->
-                    val value = (event.target as? org.w3c.dom.HTMLInputElement)?.value ?: ""
-                    searchQuery = value
-                    if (value.length >= 2) {
-                        isSearching = true
-                        showResults = true
-                        scope.launch {
-                            val response = ApiClient.searchUsersByName(value)
-                            searchResults = if (response.success) {
-                                response.users.filter { it.id !in selectedUserIds }
-                            } else {
-                                emptyList()
-                            }
-                            isSearching = false
-                        }
-                    } else {
-                        searchResults = emptyList()
-                        showResults = false
-                    }
-                }
-                onFocus { showResults = searchResults.isNotEmpty() }
-                onBlur {
-                    // 延迟隐藏，让点击结果先触发
-                    scope.launch {
-                        kotlinx.coroutines.delay(200)
-                        showResults = false
-                    }
-                }
-                style {
-                    width(100.percent)
-                    padding(8.px, 10.px)
-                    fontSize(13.px)
-                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                    borderRadius(6.px)
-                    property("outline", "none")
-                    property("boxSizing", "border-box")
-                }
-            }
-
-            // 搜索结果下拉
-            if (showResults && searchQuery.length >= 2) {
-                SearchResultsDropdown(
-                    isSearching = isSearching,
-                    searchResults = searchResults,
-                    onSelectUser = { user ->
-                        onSelectionChange(selectedUserIds + user.id)
-                        selectedUserNames[user.id] = user.fullName
-                        searchQuery = ""
-                        searchResults = emptyList()
-                        showResults = false
-                    },
-                )
-            }
-        }
-    }
-}
-
-/**
- * 搜索结果下拉列表
- */
-@Composable
-private fun SearchResultsDropdown(
-    isSearching: Boolean,
-    searchResults: List<UserSearchItem>,
-    onSelectUser: (UserSearchItem) -> Unit,
-) {
-    Div({
-        style {
-            position(Position.Absolute)
-            top(100.percent)
-            left(0.px)
-            right(0.px)
-            backgroundColor(Color("#FFFFFF"))
-            border(1.px, LineStyle.Solid, Color(SilkColors.border))
-            borderRadius(6.px)
-            property("boxShadow", "0 4px 12px rgba(0,0,0,0.12)")
-            property("zIndex", "100")
-            maxHeight(200.px)
-        }
-    }) {
-        if (isSearching) {
-            Span({
-                style {
-                    padding(8.px, 12.px)
-                    fontSize(13.px)
-                    color(Color(SilkColors.textLight))
-                }
-            }) { Text("搜索中...") }
-        } else if (searchResults.isEmpty()) {
-            Span({
-                style {
-                    padding(8.px, 12.px)
-                    fontSize(13.px)
-                    color(Color(SilkColors.textLight))
-                }
-            }) { Text("未找到匹配用户") }
-        } else {
-            searchResults.forEach { user ->
-                Div({
-                    style {
-                        padding(8.px, 12.px)
-                        fontSize(13.px)
-                        property("cursor", "pointer")
-                        backgroundColor(Color("#00000000"))
-                        property("transition", "background-color 0.15s")
-                    }
-                    onMouseOver { _ ->
-                        style {
-                            backgroundColor(Color("#F5F5F5"))
-                        }
-                    }
-                    onMouseOut { _ ->
-                        style {
-                            backgroundColor(Color("#00000000"))
-                        }
-                    }
-                    onClick { _ ->
-                        onSelectUser(user)
-                    }
-                }) {
-                    Span({ style { fontWeight("500") } }) { Text(user.fullName) }
-                    Span({
-                        style {
-                            marginLeft(8.px)
-                            fontSize(12.px)
-                            color(Color(SilkColors.textLight))
-                        }
-                    }) { Text("(${user.loginName})") }
-                }
-            }
-        }
-    }
-}
-
-@Composable
+@Suppress("CyclomaticComplexMethod")
 private fun TopicAccessDialog(
     topicName: String,
     topicProject: String,
@@ -2890,27 +2678,283 @@ private fun TopicAccessDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
+    val scope = rememberCoroutineScope()
+    var searchQuery by remember { mutableStateOf("") }
+    var searchResults by remember { mutableStateOf<List<UserSearchItem>>(emptyList()) }
+    var isSearching by remember { mutableStateOf(false) }
+    var showResults by remember { mutableStateOf(false) }
+    // 缓存已选用户的名称
+    val selectedUserNames = remember(readUserIds, writeUserIds, manageUserIds) {
+        mutableMapOf<String, String>().apply {
+            searchResults.forEach {
+                if (it.id in readUserIds || it.id in writeUserIds || it.id in manageUserIds) {
+                    put(it.id, it.fullName)
+                }
+            }
+        }
+    }
+    // 所有已选用户的并集（去重）
+    val allSelectedUserIds = remember(readUserIds, writeUserIds, manageUserIds) {
+        (readUserIds + writeUserIds + manageUserIds).distinct()
+    }
+
+    // 添加用户并指定角色
+    fun addUserWithRole(userId: String, userName: String, role: String) {
+        selectedUserNames[userId] = userName
+        when (role) {
+            "read" -> onReadUserIdsChange(readUserIds + userId)
+            "write" -> onWriteUserIdsChange(writeUserIds + userId)
+            "manage" -> onManageUserIdsChange(manageUserIds + userId)
+        }
+    }
+
+    // 移除用户（从所有角色中移除）
+    fun removeUser(userId: String) {
+        onReadUserIdsChange(readUserIds.filter { it != userId })
+        onWriteUserIdsChange(writeUserIds.filter { it != userId })
+        onManageUserIdsChange(manageUserIds.filter { it != userId })
+    }
+
+    // 切换角色
+    fun toggleRole(userId: String, role: String) {
+        when (role) {
+            "read" -> {
+                onReadUserIdsChange(
+                    if (userId in readUserIds) readUserIds.filter { it != userId }
+                    else readUserIds + userId
+                )
+            }
+            "write" -> {
+                onWriteUserIdsChange(
+                    if (userId in writeUserIds) writeUserIds.filter { it != userId }
+                    else writeUserIds + userId
+                )
+            }
+            "manage" -> {
+                onManageUserIdsChange(
+                    if (userId in manageUserIds) manageUserIds.filter { it != userId }
+                    else manageUserIds + userId
+                )
+            }
+        }
+    }
+
     ModalDialog(title = "主题权限", onDismiss = onDismiss) {
         LabeledInput("主题名称", topicName, onTopicNameChange)
         LabeledInput("所属项目（可选）", topicProject, onTopicProjectChange)
-        UserSearchSelector(
-            label = "只读用户",
-            selectedUserIds = readUserIds,
-            onSelectionChange = onReadUserIdsChange,
-            placeholder = "搜索用户名称添加只读权限...",
-        )
-        UserSearchSelector(
-            label = "可写用户",
-            selectedUserIds = writeUserIds,
-            onSelectionChange = onWriteUserIdsChange,
-            placeholder = "搜索用户名称添加写权限...",
-        )
-        UserSearchSelector(
-            label = "可管理用户",
-            selectedUserIds = manageUserIds,
-            onSelectionChange = onManageUserIdsChange,
-            placeholder = "搜索用户名称添加管理权限...",
-        )
+
+        // ── 统一搜索框 ──
+        Div({
+            style {
+                marginBottom(12.px)
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("gap", "6px")
+            }
+        }) {
+            Span({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textSecondary))
+                    fontWeight("600")
+                }
+            }) { Text("添加成员") }
+            Div({
+                style { position(Position.Relative) }
+            }) {
+                Input(InputType.Text) {
+                    attr("placeholder", "搜索用户名称添加权限...")
+                    value(searchQuery)
+                    onInput { event ->
+                        val value = (event.target as? org.w3c.dom.HTMLInputElement)?.value ?: ""
+                        searchQuery = value
+                        if (value.length >= 2) {
+                            isSearching = true
+                            showResults = true
+                            scope.launch {
+                                val response = ApiClient.searchUsersByName(value)
+                                searchResults = if (response.success) {
+                                    response.users.filter { it.id !in allSelectedUserIds }
+                                } else {
+                                    emptyList()
+                                }
+                                isSearching = false
+                            }
+                        } else {
+                            searchResults = emptyList()
+                            showResults = false
+                        }
+                    }
+                    onFocus { showResults = searchResults.isNotEmpty() }
+                    onBlur {
+                        scope.launch {
+                            kotlinx.coroutines.delay(200)
+                            showResults = false
+                        }
+                    }
+                    style {
+                        width(100.percent)
+                        padding(8.px, 10.px)
+                        fontSize(13.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(6.px)
+                        property("outline", "none")
+                        property("boxSizing", "border-box")
+                    }
+                }
+                // 搜索结果下拉（带角色选择）
+                if (showResults && searchQuery.length >= 2) {
+                    Div({
+                        style {
+                            position(Position.Absolute)
+                            top(100.percent)
+                            left(0.px)
+                            right(0.px)
+                            backgroundColor(Color("#FFFFFF"))
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            borderRadius(6.px)
+                            property("boxShadow", "0 4px 12px rgba(0,0,0,0.12)")
+                            property("zIndex", "100")
+                            maxHeight(220.px)
+                            property("overflow-y", "auto")
+                        }
+                    }) {
+                        if (isSearching) {
+                            Span({ style { padding(8.px, 12.px); fontSize(13.px); color(Color(SilkColors.textLight)) } }) {
+                                Text("搜索中...")
+                            }
+                        } else if (searchResults.isEmpty()) {
+                            Span({ style { padding(8.px, 12.px); fontSize(13.px); color(Color(SilkColors.textLight)) } }) {
+                                Text("未找到匹配用户")
+                            }
+                        } else {
+                            searchResults.forEach { user ->
+                                Div({
+                                    style {
+                                        padding(8.px, 12.px)
+                                        property("border-bottom", "1px solid ${SilkColors.border}")
+                                    }
+                                }) {
+                                    Div({
+                                        style {
+                                            fontSize(13.px); fontWeight("500"); marginBottom(4.px)
+                                        }
+                                    }) {
+                                        Span({}) { Text(user.fullName) }
+                                        Span({ style { marginLeft(8.px); fontSize(12.px); color(Color(SilkColors.textLight)) } }) {
+                                            Text("(${user.loginName})")
+                                        }
+                                    }
+                                    Div({
+                                        style {
+                                            display(DisplayStyle.Flex); property("gap", "4px")
+                                        }
+                                    }) {
+                                        listOf(
+                                            "read" to "👁 只读",
+                                            "write" to "✏ 可写",
+                                            "manage" to "⚙ 管理",
+                                        ).forEach { (role, label) ->
+                                            Button({
+                                                style {
+                                                    fontSize(11.px)
+                                                    padding(3.px, 8.px)
+                                                    borderRadius(4.px)
+                                                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                                                    backgroundColor(Color("#F5F5F5"))
+                                                    color(Color(SilkColors.textSecondary))
+                                                    property("cursor", "pointer")
+                                                }
+                                                onClick {
+                                                    addUserWithRole(user.id, user.fullName, role)
+                                                    searchQuery = ""
+                                                    searchResults = emptyList()
+                                                    showResults = false
+                                                }
+                                            }) { Text(label) }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── 已有成员 ──
+        if (allSelectedUserIds.isNotEmpty()) {
+            Div({
+                style {
+                    marginBottom(8.px)
+                    fontSize(13.px)
+                    fontWeight("600")
+                    color(Color(SilkColors.textSecondary))
+                }
+            }) { Text("已有成员") }
+            Div({
+                style {
+                    marginBottom(12.px)
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "4px")
+                    padding(8.px)
+                    borderRadius(6.px)
+                    backgroundColor(Color("#F9F9F9"))
+                }
+            }) {
+                allSelectedUserIds.forEach { userId ->
+                    val displayName = selectedUserNames[userId] ?: userId.take(8) + "..."
+                    val isRead = userId in readUserIds
+                    val isWrite = userId in writeUserIds
+                    val isManage = userId in manageUserIds
+                    Div({
+                        style {
+                            display(DisplayStyle.Flex)
+                            alignItems(AlignItems.Center)
+                            property("gap", "6px")
+                            padding(6.px, 8.px)
+                            borderRadius(6.px)
+                            backgroundColor(Color("#FFFFFF"))
+                        }
+                    }) {
+                        // 用户头像/名称
+                        Span({
+                            style {
+                                fontSize(13.px)
+                                fontWeight("500")
+                                minWidth(80.px)
+                                color(Color(SilkColors.textPrimary))
+                            }
+                        }) { Text(displayName) }
+                        // 角色 toggle 按钮
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                property("flex", "1")
+                                property("gap", "4px")
+                            }
+                        }) {
+                            RoleToggleChip(label = "👁", selected = isRead, onClick = { toggleRole(userId, "read") })
+                            RoleToggleChip(label = "✏", selected = isWrite, onClick = { toggleRole(userId, "write") })
+                            RoleToggleChip(label = "⚙", selected = isManage, onClick = { toggleRole(userId, "manage") })
+                        }
+                        // 移除按钮
+                        Span({
+                            style {
+                                fontSize(16.px)
+                                color(Color("#CCCCCC"))
+                                property("cursor", "pointer")
+                                property("flex-shrink", "0")
+                            }
+                            attr("title", "移除此用户")
+                            onClick { removeUser(userId) }
+                        }) { Text("✕") }
+                    }
+                }
+            }
+        }
+
         KnowledgeBooleanSetting(
             label = "锁定写入",
             description = "开启后，普通团队成员不会继承写权限。",
@@ -2930,6 +2974,29 @@ private fun TopicAccessDialog(
             onConfirm = onConfirm,
             confirmLabel = "保存权限",
         )
+    }
+}
+
+@Composable
+private fun RoleToggleChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Div({
+        style {
+            padding(2.px, 8.px)
+            borderRadius(10.px)
+            fontSize(12.px)
+            property("cursor", "pointer")
+            backgroundColor(Color(if (selected) "#E8F0FE" else "#F0F0F0"))
+            color(Color(if (selected) "#1A73E8" else SilkColors.textLight))
+            fontWeight(if (selected) "600" else "400")
+            property("transition", "all 0.15s")
+        }
+        onClick { onClick() }
+    }) {
+        Text(label)
     }
 }
 
@@ -3174,9 +3241,9 @@ private fun KnowledgeCopilotDialog(
                 }
                 if (!applyChanges) {
                     KnowledgeToolbarButton(
-                        label = "把草稿填回编辑器",
+                        label = "在编辑器中显示修改",
                         background = SilkColors.primaryDark,
-                        enabled = !isRunning,
+                        enabled = !isRunning && draft?.diffChunks?.isNotEmpty() == true,
                         onClick = onApplyDraftToEditor,
                     )
                 }
@@ -3188,6 +3255,348 @@ private fun KnowledgeCopilotDialog(
             confirmLabel = if (isRunning) "执行中..." else if (applyChanges) "执行并写回" else "生成草稿",
             confirmEnabled = !isRunning && instruction.trim().isNotBlank(),
         )
+    }
+}
+
+/**
+ * Build the final content string from diff chunks based on accept/reject decisions.
+ */
+private fun buildFinalContentFromDiff(
+    chunks: List<DiffChunk>,
+    accepted: Set<Int>,
+): String {
+    val parts = chunks.mapIndexed { index, chunk ->
+        when (chunk.type) {
+            "unchanged" -> chunk.originalText
+            "deleted" -> if (index in accepted) "" else chunk.originalText
+            "inserted" -> if (index in accepted) chunk.newText else ""
+            "modified" -> if (index in accepted) chunk.newText else chunk.originalText
+            else -> chunk.originalText
+        }
+    }
+    return parts.filter { it.isNotEmpty() }.joinToString("\n")
+}
+
+/**
+ * Diff review pane: shows AI-suggested changes as inline diff chunks with accept/reject controls.
+ * Replaces the normal Markdown source editor during diff review mode.
+ */
+@Composable
+@Suppress("CyclomaticComplexMethod")
+private fun DiffReviewPane(
+    chunks: List<DiffChunk>,
+    accepted: Set<Int>,
+    rejected: Set<Int>,
+    targetTitle: String,
+    onAcceptChunk: (Int) -> Unit,
+    onRejectChunk: (Int) -> Unit,
+    onAcceptAll: () -> Unit,
+    onApplyChanges: () -> Unit,
+    onCancelReview: () -> Unit,
+) {
+    val totalChunks = chunks.size
+    val decidedCount = accepted.size + rejected.size
+    val allDecided = decidedCount >= totalChunks
+
+    Div({
+        style {
+            property("flex", "1")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            backgroundColor(Color("#FFFFFF"))
+            property("min-height", "0")
+            property("overflow", "hidden")
+        }
+    }) {
+        // Header
+        Div({
+            style {
+                padding(12.px, 16.px)
+                property("border-bottom", "1px solid ${SilkColors.border}")
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
+                alignItems(AlignItems.Center)
+                property("flex-shrink", "0")
+                backgroundColor(Color(SilkColors.surfaceElevated))
+            }
+        }) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "8px")
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(15.px)
+                        fontWeight("600")
+                        color(Color(SilkColors.textPrimary))
+                    }
+                }) { Text("修改审查") }
+                Span({
+                    style {
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                    }
+                }) {
+                    Text("已决定 $decidedCount / $totalChunks 块")
+                }
+            }
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    property("gap", "6px")
+                    alignItems(AlignItems.Center)
+                }
+            }) {
+                KnowledgeToolbarButton(
+                    label = "✓ 接受全部",
+                    background = SilkColors.success,
+                    enabled = accepted.size < totalChunks,
+                    onClick = onAcceptAll,
+                )
+                KnowledgeToolbarButton(
+                    label = "✗ 退出对比",
+                    background = SilkColors.textSecondary,
+                    enabled = true,
+                    onClick = onCancelReview,
+                )
+                KnowledgeToolbarButton(
+                    label = "✓ 应用修改",
+                    background = SilkColors.primaryDark,
+                    enabled = allDecided,
+                    onClick = onApplyChanges,
+                )
+            }
+        }
+
+        // Title info
+        Div({
+            style {
+                padding(8.px, 16.px)
+                fontSize(13.px)
+                color(Color(SilkColors.textSecondary))
+                backgroundColor(Color("#F8F8FA"))
+                property("border-bottom", "1px solid ${SilkColors.border}")
+                property("flex-shrink", "0")
+            }
+        }) {
+            Text("目标标题: $targetTitle")
+        }
+
+        // Scrollable diff content
+        Div({
+            style {
+                property("flex", "1")
+                property("overflow-y", "auto")
+                padding(8.px, 0.px)
+            }
+        }) {
+            if (chunks.isEmpty()) {
+                Div({
+                    style {
+                        padding(24.px)
+                        fontSize(14.px)
+                        color(Color(SilkColors.textLight))
+                        property("text-align", "center")
+                    }
+                }) { Text("没有内容差异") }
+            } else {
+                chunks.forEachIndexed { index, chunk ->
+                    DiffChunkRow(
+                        chunk = chunk,
+                        index = index,
+                        isAccepted = index in accepted,
+                        isRejected = index in rejected,
+                        onAccept = { onAcceptChunk(index) },
+                        onReject = { onRejectChunk(index) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiffChunkRow(
+    chunk: DiffChunk,
+    index: Int,
+    isAccepted: Boolean,
+    isRejected: Boolean,
+    onAccept: () -> Unit,
+    onReject: () -> Unit,
+) {
+    val bgColor = when {
+        isAccepted -> "rgba(82,164,117,0.12)"
+        isRejected -> "rgba(200,80,70,0.10)"
+        chunk.type == "inserted" -> "rgba(82,164,117,0.06)"
+        chunk.type == "deleted" -> "rgba(200,80,70,0.06)"
+        chunk.type == "modified" -> "rgba(230,180,60,0.12)"
+        else -> "transparent"
+    }
+    val borderColor = when {
+        isAccepted -> "#52A475"
+        isRejected -> "#C85046"
+        chunk.type == "inserted" -> "#52A475"
+        chunk.type == "deleted" -> "#C85046"
+        chunk.type == "modified" -> "#E6B43C"
+        else -> "transparent"
+    }
+    val typeLabel = when (chunk.type) {
+        "unchanged" -> "未更改"
+        "deleted" -> "已删除"
+        "inserted" -> "新增"
+        "modified" -> "已修改"
+        else -> chunk.type
+    }
+
+    Div({
+        style {
+            padding(6.px, 16.px)
+            backgroundColor(Color(bgColor))
+            property("border-left", "3px solid $borderColor")
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            property("transition", "background-color 150ms ease")
+        }
+    }) {
+        // Header row: type label + line range + actions
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
+                alignItems(AlignItems.Center)
+                marginBottom(4.px)
+                property("gap", "8px")
+            }
+        }) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "6px")
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(11.px)
+                        fontWeight("600")
+                        color(Color(borderColor))
+                        padding(2.px, 6.px)
+                        borderRadius(4.px)
+                        backgroundColor(Color("#FFFFFF"))
+                        property("border", "1px solid $borderColor")
+                    }
+                }) { Text(typeLabel) }
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textLight))
+                    }
+                }) {
+                    Text("L${chunk.lineStart + 1}-L${chunk.lineEnd + 1}")
+                }
+            }
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    property("gap", "4px")
+                }
+            }) {
+                if (!isAccepted) {
+                    Button({
+                        style {
+                            backgroundColor(Color("#52A475"))
+                            color(Color.white)
+                            border(0.px)
+                            borderRadius(4.px)
+                            padding(3.px, 8.px)
+                            fontSize(11.px)
+                            property("cursor", "pointer")
+                        }
+                        onClick {
+                            it.stopPropagation()
+                            onAccept()
+                        }
+                    }) {
+                        Text(
+                            if (chunk.type == "deleted") "✓ 确认删除"
+                            else "✓ 接受"
+                        )
+                    }
+                }
+                if (!isRejected && chunk.type != "unchanged") {
+                    Button({
+                        style {
+                            backgroundColor(Color("#C85046"))
+                            color(Color.white)
+                            border(0.px)
+                            borderRadius(4.px)
+                            padding(3.px, 8.px)
+                            fontSize(11.px)
+                            property("cursor", "pointer")
+                        }
+                        onClick {
+                            it.stopPropagation()
+                            onReject()
+                        }
+                    }) {
+                        Text(
+                            if (chunk.type == "inserted") "✗ 跳过"
+                            else "✗ 拒绝"
+                        )
+                    }
+                }
+                if (isAccepted || isRejected) {
+                    Span({
+                        style {
+                            fontSize(11.px)
+                            fontWeight("600")
+                            color(Color(if (isAccepted) "#52A475" else "#C85046"))
+                            padding(3.px, 6.px)
+                        }
+                    }) {
+                        Text(if (isAccepted) "✓ 已接受" else "✗ 已拒绝")
+                    }
+                }
+            }
+        }
+
+        // Content
+        val displayText = when (chunk.type) {
+            "deleted" -> chunk.originalText
+            "inserted" -> chunk.newText
+            "modified" -> {
+                // Show both original and new for modified chunks
+                buildString {
+                    appendLine("--- 原内容 ---")
+                    append(chunk.originalText)
+                    appendLine()
+                    appendLine("--- 新内容 ---")
+                    append(chunk.newText)
+                }
+            }
+            else -> chunk.originalText
+        }
+        if (displayText.isNotBlank()) {
+            Div({
+                style {
+                    fontSize(13.px)
+                    color(Color(SilkColors.textPrimary))
+                    fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
+                    property("line-height", "1.6")
+                    property("white-space", "pre-wrap")
+                    property("word-break", "break-word")
+                    backgroundColor(Color("rgba(255,255,255,0.7)"))
+                    borderRadius(4.px)
+                    padding(6.px, 8.px)
+                    property("max-height", "200px")
+                    property("overflow-y", "auto")
+                }
+            }) {
+                Text(displayText)
+            }
+        }
     }
 }
 
@@ -3577,9 +3986,9 @@ private fun KnowledgeCopilotSidebar(
                     if (!applyChanges) {
                         Div({ style { marginTop(4.px) } }) {
                             KnowledgeToolbarButton(
-                                label = "把草稿填回编辑器",
+                                label = "在编辑器中显示修改",
                                 background = SilkColors.primaryDark,
-                                enabled = !isRunning,
+                                enabled = !isRunning && draft?.diffChunks?.isNotEmpty() == true,
                                 onClick = onApplyDraftToEditor,
                             )
                         }
@@ -4505,38 +4914,90 @@ private suspend fun runKnowledgeBaseCopilot(
     }
     onRunningChange(true)
     onFeedbackChange("")
-    val response = ApiClient.runKBCopilot(
+    onReplyChange("")
+
+    // Use SSE streaming for real-time typing effect
+    var collectedReply = ""
+    var finalDraft: KnowledgeBaseCopilotDraft? = null
+    var finalAppliedEntry: KBEntryItem? = null
+    var success = false
+    var message = ""
+
+    val response = ApiClient.streamKBCopilot(
         userId = userId,
         entryId = entry?.id,
         topicId = topic?.id,
         instruction = normalizedInstruction,
         applyChanges = applyChanges,
         conversationHistory = conversationHistory,
+        onEvent = { event, data ->
+            when (event) {
+                "thinking" -> {
+                    onFeedbackChange("AI 正在思考…")
+                }
+                "text" -> {
+                    collectedReply += data
+                    onReplyChange(collectedReply)
+                }
+                "draft" -> {
+                    try {
+                        val parsed = Json.decodeFromString<KnowledgeBaseCopilotDraft>(data)
+                        finalDraft = parsed
+                        onDraftChange(parsed)
+                        onFeedbackChange("已生成草稿，可继续修改或应用到编辑器")
+                    } catch (e: Exception) {
+                        console.log("解析流式 draft 失败:", e)
+                    }
+                }
+                "applied" -> {
+                    try {
+                        val parsed = Json.decodeFromString<KBEntryItem>(data)
+                        finalAppliedEntry = parsed
+                    } catch (e: Exception) {
+                        console.log("解析流式 appliedEntry 失败:", e)
+                    }
+                }
+                "error" -> {
+                    message = data
+                    onFeedbackChange(data)
+                }
+                "done" -> {
+                    success = true
+                }
+            }
+        },
     )
+
     if (response == null) {
         onRunningChange(false)
         onFeedbackChange("KB Copilot 调用失败")
         return
     }
-    // Append current turn to conversation history
+
+    // Build conversation history from the streamed response
+    val assistantContent = collectedReply.ifBlank { response.assistantReply.ifBlank { response.message } }
     val updatedHistory = conversationHistory + listOf(
         ConversationTurn(role = "user", content = normalizedInstruction),
-        ConversationTurn(role = "assistant", content = response.assistantReply.ifBlank { response.message }),
+        ConversationTurn(role = "assistant", content = assistantContent),
     )
     onConversationHistoryChange(updatedHistory)
-    // Clear instruction for next turn
     onInstructionChange("")
-    onReplyChange(response.assistantReply)
-    onDraftChange(response.draft)
-    if (response.success && response.appliedEntry != null) {
-        val appliedEntry = response.appliedEntry
-        onSelectedEntryChange(appliedEntry)
-        onEntriesChange(ApiClient.getKBEntries(appliedEntry.topicId, userId))
-        onEditorTitleChange(appliedEntry.title)
-        onEditorContentChange(appliedEntry.content)
+
+    // Use result from SSE events or fall back to response object
+    val effectiveDraft = finalDraft ?: response.draft
+    val effectiveApplied = finalAppliedEntry ?: response.appliedEntry
+    val effectiveSuccess = success || response.success
+    val effectiveMessage = message.ifBlank { response.message }
+
+    onDraftChange(effectiveDraft)
+    if (effectiveSuccess && effectiveApplied != null) {
+        onSelectedEntryChange(effectiveApplied)
+        onEntriesChange(ApiClient.getKBEntries(effectiveApplied.topicId, userId))
+        onEditorTitleChange(effectiveApplied.title)
+        onEditorContentChange(effectiveApplied.content)
     }
-    onFeedbackChange(response.message.ifBlank {
-        if (response.success) "KB Copilot 已生成草稿，可继续修改" else "KB Copilot 未生成可用草稿"
+    onFeedbackChange(effectiveMessage.ifBlank {
+        if (effectiveSuccess) "KB Copilot 已生成草稿，可继续修改" else "KB Copilot 未生成可用草稿"
     })
     onRunningChange(false)
 }
@@ -4621,6 +5082,13 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var copilotReply by remember { mutableStateOf("") }
     var copilotDraft by remember { mutableStateOf<KnowledgeBaseCopilotDraft?>(null) }
     var copilotConversationHistory by remember { mutableStateOf<List<ConversationTurn>>(emptyList()) }
+    // Diff review mode states
+    var showDiffReview by remember { mutableStateOf(false) }
+    var diffChunks by remember { mutableStateOf<List<DiffChunk>>(emptyList()) }
+    var acceptedChunkIndices by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var rejectedChunkIndices by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var diffOriginalContent by remember { mutableStateOf("") }
+    var diffTargetTitle by remember { mutableStateOf("") }
     var activeDragPayload by remember { mutableStateOf<KnowledgeEntryDragPayload?>(null) }
     var activeDropTopicId by remember { mutableStateOf<String?>(null) }
     var showTopicManageMode by remember(selectedSpaceId) { mutableStateOf(false) }
@@ -4632,6 +5100,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var showDeleteTopicDialog by remember { mutableStateOf(false) }
     var isDeleteTopicSaving by remember { mutableStateOf(false) }
     var showTopicAccessDialog by remember { mutableStateOf(false) }
+    var topicsSidebarCollapsed by remember { mutableStateOf(LayoutPrefs.getBool("kb_sidebar_collapsed", false)) }
     var editableTopicName by remember { mutableStateOf("") }
     var editableTopicProject by remember { mutableStateOf("") }
     var editableReadUserIds by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -4777,108 +5246,118 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             property("background", SilkColors.backgroundGradient)
         }
     }) {
-        TopicSidebar(
-            widthPx = topicSidebarWidth,
-            spaceOptions = spaceOptions,
-            selectedSpaceId = selectedSpaceId,
-            searchQuery = topicSearchQuery,
-            topics = filteredTopics,
-            isLoading = isLoading,
-            selectedTopic = selectedTopic,
-            isManageMode = showTopicManageMode,
-            memoryPreferences = memoryPreferences,
-            showGroupFilesView = showGroupFilesView,
-            isTeamSpace = selectedSpaceId != PERSONAL_SPACE_ID,
-            onGroupFilesSelect = {
-                val isNowGroupFiles = !showGroupFilesView
-                showGroupFilesView = isNowGroupFiles
-                if (isNowGroupFiles && selectedSpaceId != PERSONAL_SPACE_ID) {
-                    scope.launch {
-                        isGroupFilesLoading = true
-                        groupFilesResponse = ApiClient.getGroupAssets(selectedSpaceId, user.id)
-                        isGroupFilesLoading = false
+        if (topicsSidebarCollapsed) {
+            ReopenBar(onExpand = {
+                topicsSidebarCollapsed = false
+                LayoutPrefs.setBool("kb_sidebar_collapsed", false)
+            })
+        } else {
+            TopicSidebar(
+                widthPx = topicSidebarWidth,
+                spaceOptions = spaceOptions,
+                selectedSpaceId = selectedSpaceId,
+                searchQuery = topicSearchQuery,
+                topics = filteredTopics,
+                isLoading = isLoading,
+                selectedTopic = selectedTopic,
+                isManageMode = showTopicManageMode,
+                memoryPreferences = memoryPreferences,
+                showGroupFilesView = showGroupFilesView,
+                isTeamSpace = selectedSpaceId != PERSONAL_SPACE_ID,
+                onCollapse = {
+                    topicsSidebarCollapsed = true
+                    LayoutPrefs.setBool("kb_sidebar_collapsed", true)
+                },
+                onGroupFilesSelect = {
+                    val isNowGroupFiles = !showGroupFilesView
+                    showGroupFilesView = isNowGroupFiles
+                    if (isNowGroupFiles && selectedSpaceId != PERSONAL_SPACE_ID) {
+                        scope.launch {
+                            isGroupFilesLoading = true
+                            groupFilesResponse = ApiClient.getGroupAssets(selectedSpaceId, user.id)
+                            isGroupFilesLoading = false
+                        }
                     }
-                }
-            },
-            onCreateTopic = {
-                newTopicSpaceId = selectedSpaceId
-                showCreateTopicDialog = true
-            },
-            onToggleManageMode = { showTopicManageMode = !showTopicManageMode },
-            onManageMemory = {
-                showMemoryDialog = true
-                memoryActiveTab = if (selectedSpaceId != PERSONAL_SPACE_ID) "group" else "personal"
-                scope.launch {
-                    isMemoryLoading = true
-                    memoryFeedback = ""
-                    memoryPreferences = ApiClient.getKBContextPreferences(user.id)
-                    memoryEntries = sortKnowledgeMemoryEntries(ApiClient.listKBMemoryEntries(user.id))
-                    val groupId = selectedSpaceId.takeIf { it != PERSONAL_SPACE_ID }
-                    groupMemoryEntries = if (groupId != null) {
-                        sortKnowledgeMemoryEntries(ApiClient.listKBMemoryEntries(user.id, groupId = groupId))
-                    } else {
-                        emptyList()
-                    }
-                    isMemoryLoading = false
-                }
-            },
-            onSearchQueryChange = { topicSearchQuery = it },
-            onSpaceSelect = { selectedSpace ->
-                selectedSpaceId = selectedSpace.id
-                showGroupFilesView = false
-                groupFilesResponse = null
-            },
-            userId = user.id,
-            groups = userGroups,
-            onManageTopic = { topic ->
-                editableTopicName = topic.name
-                editableTopicProject = topic.project
-                editableReadUserIds = topic.accessPolicy.readUserIds.toList()
-                editableWriteUserIds = topic.accessPolicy.writeUserIds.toList()
-                editableManageUserIds = topic.accessPolicy.manageUserIds.toList()
-                editableWriteLocked = topic.accessPolicy.writeLocked
-                editableTeamMembersCanWrite = topic.accessPolicy.teamMembersCanWrite
-                selectedTopic = topic
-                showTopicAccessDialog = true
-            },
-            onDeleteTopic = { topic ->
-                selectedTopic = topic
-                showDeleteTopicDialog = true
-            },
-            activeDragPayload = activeDragPayload,
-            activeDropTopicId = activeDropTopicId,
-            onTopicSelect = { topic ->
-                showGroupFilesView = false
-                groupFilesResponse = null
-                scope.launch {
-                    loadKnowledgeEntries(
-                        topic = topic,
-                        userId = user.id,
-                        onSelectedTopicChange = { selectedTopic = it },
-                        onSelectedEntryChange = { selectedEntry = it },
-                        onEditorContentChange = { editorContent = it },
-                        onEntriesChange = { entries = it },
-                    )
-                }
-            },
-            onEntryDragHoverTopicChange = { topicId ->
-                activeDropTopicId = topicId
-            },
-            onEntryDropToTopic = { targetTopicId ->
-                val dragPayload = activeDragPayload
-                val draggedEntry = entries.find { it.id == dragPayload?.entryId }
-                val sourceTopic = selectedTopic
-                activeDropTopicId = null
-                activeDragPayload = null
-                if (draggedEntry != null && sourceTopic != null) {
+                },
+                onCreateTopic = {
+                    newTopicSpaceId = selectedSpaceId
+                    showCreateTopicDialog = true
+                },
+                onToggleManageMode = { showTopicManageMode = !showTopicManageMode },
+                onManageMemory = {
+                    showMemoryDialog = true
+                    memoryActiveTab = if (selectedSpaceId != PERSONAL_SPACE_ID) "group" else "personal"
                     scope.launch {
-                        moveKnowledgeEntryToTopic(
-                            entry = draggedEntry,
-                            sourceTopic = sourceTopic,
-                            targetTopicId = targetTopicId,
-                            topics = topics,
+                        isMemoryLoading = true
+                        memoryFeedback = ""
+                        memoryPreferences = ApiClient.getKBContextPreferences(user.id)
+                        memoryEntries = sortKnowledgeMemoryEntries(ApiClient.listKBMemoryEntries(user.id))
+                        val groupId = selectedSpaceId.takeIf { it != PERSONAL_SPACE_ID }
+                        groupMemoryEntries = if (groupId != null) {
+                            sortKnowledgeMemoryEntries(ApiClient.listKBMemoryEntries(user.id, groupId = groupId))
+                        } else {
+                            emptyList()
+                        }
+                        isMemoryLoading = false
+                    }
+                },
+                onSearchQueryChange = { topicSearchQuery = it },
+                onSpaceSelect = { selectedSpace ->
+                    selectedSpaceId = selectedSpace.id
+                    showGroupFilesView = false
+                    groupFilesResponse = null
+                },
+                userId = user.id,
+                groups = userGroups,
+                onManageTopic = { topic ->
+                    editableTopicName = topic.name
+                    editableTopicProject = topic.project
+                    editableReadUserIds = topic.accessPolicy.readUserIds.toList()
+                    editableWriteUserIds = topic.accessPolicy.writeUserIds.toList()
+                    editableManageUserIds = topic.accessPolicy.manageUserIds.toList()
+                    editableWriteLocked = topic.accessPolicy.writeLocked
+                    editableTeamMembersCanWrite = topic.accessPolicy.teamMembersCanWrite
+                    selectedTopic = topic
+                    showTopicAccessDialog = true
+                },
+                onDeleteTopic = { topic ->
+                    selectedTopic = topic
+                    showDeleteTopicDialog = true
+                },
+                activeDragPayload = activeDragPayload,
+                activeDropTopicId = activeDropTopicId,
+                onTopicSelect = { topic ->
+                    showGroupFilesView = false
+                    groupFilesResponse = null
+                    scope.launch {
+                        loadKnowledgeEntries(
+                            topic = topic,
                             userId = user.id,
-                            onSavingChange = { isMoveEntrySaving = it },
+                            onSelectedTopicChange = { selectedTopic = it },
+                            onSelectedEntryChange = { selectedEntry = it },
+                            onEditorContentChange = { editorContent = it },
+                            onEntriesChange = { entries = it },
+                        )
+                    }
+                },
+                onEntryDragHoverTopicChange = { topicId ->
+                    activeDropTopicId = topicId
+                },
+                onEntryDropToTopic = { targetTopicId ->
+                    val dragPayload = activeDragPayload
+                    val draggedEntry = entries.find { it.id == dragPayload?.entryId }
+                    val sourceTopic = selectedTopic
+                    activeDropTopicId = null
+                    activeDragPayload = null
+                    if (draggedEntry != null && sourceTopic != null) {
+                        scope.launch {
+                            moveKnowledgeEntryToTopic(
+                                entry = draggedEntry,
+                                sourceTopic = sourceTopic,
+                                targetTopicId = targetTopicId,
+                                topics = topics,
+                                userId = user.id,
+                                onSavingChange = { isMoveEntrySaving = it },
                             onSaveMessageChange = { saveMessage = it },
                             onTopicsChange = { topics = it },
                             onSelectedTopicChange = { selectedTopic = it },
@@ -4895,6 +5374,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
         KnowledgeHorizontalResizeHandle(storageHint = "topic-sidebar") { deltaPx ->
             topicSidebarWidth = clampKnowledgeSidebarWidth(topicSidebarWidth + deltaPx)
             persistKnowledgePaneNumber(KNOWLEDGE_TOPIC_SIDEBAR_WIDTH_KEY, topicSidebarWidth)
+        }
         }
         if (showGroupFilesView) {
             GroupFilesContent(
@@ -5039,17 +5519,57 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 property("overflow", "hidden")
             }
         }) {
-            KnowledgeEditorPane(
-                selectedTopic = selectedTopic,
-                selectedEntry = selectedEntry,
-                editorTitle = editorTitle,
-                savedTitle = selectedEntry?.title.orEmpty(),
-                editorContent = editorContent,
-                isSaving = isSaving,
-                saveMessage = saveMessage,
-                editorMode = editorMode,
-                editorSplitRatio = editorSplitRatio,
-                availableEditorWidthPx = baseEditorWidth - copilotSidebarOffset,
+            if (showDiffReview) {
+                // Diff review mode: show the diff review pane + apply/cancel handlers
+                DiffReviewPane(
+                    chunks = diffChunks,
+                    accepted = acceptedChunkIndices,
+                    rejected = rejectedChunkIndices,
+                    targetTitle = diffTargetTitle,
+                    onAcceptChunk = { index ->
+                        acceptedChunkIndices = acceptedChunkIndices + index
+                        rejectedChunkIndices = rejectedChunkIndices - index
+                    },
+                    onRejectChunk = { index ->
+                        rejectedChunkIndices = rejectedChunkIndices + index
+                        acceptedChunkIndices = acceptedChunkIndices - index
+                    },
+                    onAcceptAll = {
+                        val allIndices = diffChunks.indices.toSet()
+                        acceptedChunkIndices = allIndices
+                        rejectedChunkIndices = emptySet()
+                    },
+                    onApplyChanges = {
+                        // Build final content from accepted chunks
+                        val finalContent = buildFinalContentFromDiff(diffChunks, acceptedChunkIndices)
+                        editorTitle = diffTargetTitle
+                        editorContent = finalContent
+                        saveMessage = "已应用 AI 修改草稿，确认后可继续保存"
+                        showDiffReview = false
+                        diffChunks = emptyList()
+                        acceptedChunkIndices = emptySet()
+                        rejectedChunkIndices = emptySet()
+                    },
+                    onCancelReview = {
+                        showDiffReview = false
+                        diffChunks = emptyList()
+                        acceptedChunkIndices = emptySet()
+                        rejectedChunkIndices = emptySet()
+                        saveMessage = "已取消修改"
+                    },
+                )
+            } else {
+                KnowledgeEditorPane(
+                    selectedTopic = selectedTopic,
+                    selectedEntry = selectedEntry,
+                    editorTitle = editorTitle,
+                    savedTitle = selectedEntry?.title.orEmpty(),
+                    editorContent = editorContent,
+                    isSaving = isSaving,
+                    saveMessage = saveMessage,
+                    editorMode = editorMode,
+                    editorSplitRatio = editorSplitRatio,
+                    availableEditorWidthPx = baseEditorWidth - copilotSidebarOffset,
                 canEdit = canEditSelectedTopic,
                 spaceLabel = selectedTopicSpaceLabel,
                 permissionLabel = selectedTopicPermissionLabel,
@@ -5186,6 +5706,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                     saveMessage = "引用已复制"
                 },
             )
+            } // end of else block (showDiffReview = false -> show editor pane)
             // Render copilot sidebar at scene level for both entry and topic mode
             if (showCopilotSidebar && currentCopilotMode != null) {
                 KnowledgeHorizontalResizeHandle(storageHint = "copilot-sidebar") { deltaPx ->
@@ -5209,10 +5730,20 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                     onApplyDraftToEditor = {
                         copilotDraft?.let { draft ->
                             if (currentCopilotMode == CopilotMode.ENTRY) {
-                                // Entry mode: fill draft into editor
-                                editorTitle = draft.title
-                                editorContent = draft.content
-                                saveMessage = "已把 Copilot 草稿填入当前编辑器，确认后可继续保存"
+                                // Entry mode: activate diff review if chunks available
+                                if (draft.diffChunks.isNotEmpty()) {
+                                    diffChunks = draft.diffChunks
+                                    diffOriginalContent = editorContent
+                                    diffTargetTitle = draft.title
+                                    acceptedChunkIndices = emptySet()
+                                    rejectedChunkIndices = emptySet()
+                                    showDiffReview = true
+                                } else {
+                                    // Fallback: fill draft into editor
+                                    editorTitle = draft.title
+                                    editorContent = draft.content
+                                    saveMessage = "已把 Copilot 草稿填入当前编辑器，确认后可继续保存"
+                                }
                             } else {
                                 // Topic mode: create entry directly from draft
                                 scope.launch {
@@ -5388,9 +5919,19 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             onApplyChangesChange = { copilotApplyChanges = it },
             onApplyDraftToEditor = {
                 copilotDraft?.let { draft ->
-                    editorTitle = draft.title
-                    editorContent = draft.content
-                    saveMessage = "已把 Copilot 草稿填入当前编辑器，确认后可继续保存"
+                    if (draft.diffChunks.isNotEmpty()) {
+                        diffChunks = draft.diffChunks
+                        diffOriginalContent = editorContent
+                        diffTargetTitle = draft.title
+                        acceptedChunkIndices = emptySet()
+                        rejectedChunkIndices = emptySet()
+                        showDiffReview = true
+                        showCopilotDialog = false
+                    } else {
+                        editorTitle = draft.title
+                        editorContent = draft.content
+                        saveMessage = "已把 Copilot 草稿填入当前编辑器，确认后可继续保存"
+                    }
                 }
             },
             onDismiss = {

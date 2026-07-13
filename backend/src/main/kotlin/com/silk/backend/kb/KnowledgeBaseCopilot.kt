@@ -5,6 +5,7 @@ import com.silk.backend.models.KBEntry
 import com.silk.backend.models.KBTopic
 import com.silk.backend.models.KBEntryStatus
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 
 /**
  * A single turn in a multi-turn KB Copilot conversation.
@@ -33,6 +34,8 @@ data class KnowledgeBaseCopilotDraft(
     val title: String,
     val content: String,
     val tags: List<String> = emptyList(),
+    /** Line-level diff chunks for inline diff review in the frontend. */
+    val diffChunks: List<DiffChunk> = emptyList(),
 )
 
 @Serializable
@@ -50,11 +53,36 @@ data class KnowledgeBaseCopilotAgentInput(
     val workspaceEntries: List<KnowledgeBaseWorkspaceEntry>,
 )
 
+/**
+ * Stream event emitted during copilot execution.
+ * Used by the SSE endpoint to push real-time status to the frontend.
+ */
+@Serializable
+data class CopilotStreamEvent(
+    val event: String, // "thinking" | "text" | "draft" | "applied" | "error" | "done"
+    val data: String = "",
+)
+
+/**
+ * A single chunk in a line-level diff between original and AI-suggested content.
+ * Used by the frontend to render inline diff with accept/reject controls.
+ */
+@Serializable
+data class DiffChunk(
+    val type: String, // "unchanged" | "deleted" | "inserted" | "modified"
+    val originalText: String = "",
+    val newText: String = "",
+    val lineStart: Int = 0,
+    val lineEnd: Int = 0,
+)
+
 @Suppress("CyclomaticComplexMethod")
 suspend fun executeKnowledgeBaseCopilot(
     manager: KnowledgeBaseManager,
     request: KnowledgeBaseCopilotRequest,
     runAgent: suspend (KnowledgeBaseCopilotAgentInput) -> String,
+    /** Optional streaming callback: first param is event type, second is data. */
+    onStreamEvent: (suspend (CopilotStreamEvent) -> Unit)? = null,
 ): KnowledgeBaseCopilotResponse {
     val normalizedInstruction = request.instruction.trim()
     if (request.userId.isBlank() || normalizedInstruction.isBlank()) {
@@ -75,6 +103,8 @@ suspend fun executeKnowledgeBaseCopilot(
     }
 
     if (entry != null && topic == null) {
+        onStreamEvent?.invoke(CopilotStreamEvent(event = "error", data = "Topic not found for entry"))
+        onStreamEvent?.invoke(CopilotStreamEvent(event = "done"))
         return KnowledgeBaseCopilotResponse(
             success = false,
             assistantReply = "",
@@ -82,6 +112,8 @@ suspend fun executeKnowledgeBaseCopilot(
         )
     }
     if (entry == null && topic == null) {
+        onStreamEvent?.invoke(CopilotStreamEvent(event = "error", data = "Please select an entry or topic first"))
+        onStreamEvent?.invoke(CopilotStreamEvent(event = "done"))
         return KnowledgeBaseCopilotResponse(
             success = false,
             assistantReply = "",
@@ -118,6 +150,7 @@ suspend fun executeKnowledgeBaseCopilot(
         append(normalizedInstruction)
     }
 
+    onStreamEvent?.invoke(CopilotStreamEvent(event = "thinking", data = "🤔 AI 正在分析指令…"))
     val rawReply = runAgent(
         KnowledgeBaseCopilotAgentInput(
             systemPrompt = systemPrompt,
@@ -126,6 +159,7 @@ suspend fun executeKnowledgeBaseCopilot(
         )
     )
     val parsed = extractKnowledgeBaseAiActions(rawReply)
+    onStreamEvent?.invoke(CopilotStreamEvent(event = "text", data = parsed.cleanedContent))
 
     if (entry != null && topic != null) {
         // Entry-level: look for UPDATE_ENTRY action for this entry
@@ -137,15 +171,21 @@ suspend fun executeKnowledgeBaseCopilot(
             // Still check for CREATE_ENTRY if user explicitly wanted that
             val createAction = parsed.actions.firstOrNull { it.operation == KnowledgeBaseAiOperation.CREATE_ENTRY }
             if (createAction != null) {
-                return handleCreateEntryDraft(manager, request, topic, parsed, createAction)
+                val result = handleCreateEntryDraft(manager, request, topic, parsed, createAction)
+                emitStreamEventsForResult(result, onStreamEvent)
+                return result
             }
+            onStreamEvent?.invoke(CopilotStreamEvent(event = "error", data = "AI did not return a KB update draft"))
+            onStreamEvent?.invoke(CopilotStreamEvent(event = "done"))
             return KnowledgeBaseCopilotResponse(
                 success = false,
                 assistantReply = parsed.cleanedContent,
                 message = "AI did not return a KB update draft",
             )
         }
-        return handleUpdateEntry(manager, request, entry, topic, parsed, updateAction)
+        val result = handleUpdateEntry(manager, request, entry, topic, parsed, updateAction)
+        emitStreamEventsForResult(result, onStreamEvent)
+        return result
     }
 
     // Topic-level: look for CREATE_ENTRY action
@@ -153,13 +193,43 @@ suspend fun executeKnowledgeBaseCopilot(
         it.operation == KnowledgeBaseAiOperation.CREATE_ENTRY
     }
     if (createAction == null) {
+        onStreamEvent?.invoke(CopilotStreamEvent(event = "error", data = "AI did not return a KB entry draft"))
+        onStreamEvent?.invoke(CopilotStreamEvent(event = "done"))
         return KnowledgeBaseCopilotResponse(
             success = false,
             assistantReply = parsed.cleanedContent,
             message = "AI did not return a KB entry draft",
         )
     }
-    return handleCreateEntryDraft(manager, request, topic!!, parsed, createAction)
+    val result = handleCreateEntryDraft(manager, request, topic!!, parsed, createAction)
+    emitStreamEventsForResult(result, onStreamEvent)
+    return result
+}
+
+/**
+ * Emit stream events (draft/applied/error/done) based on the copilot response.
+ */
+private suspend fun emitStreamEventsForResult(
+    result: KnowledgeBaseCopilotResponse,
+    onStreamEvent: (suspend (CopilotStreamEvent) -> Unit)?,
+) {
+    if (onStreamEvent == null) return
+    if (result.draft != null) {
+        val draftJson = kotlinx.serialization.json.Json.encodeToString(
+            KnowledgeBaseCopilotDraft.serializer(), result.draft
+        )
+        onStreamEvent(CopilotStreamEvent(event = "draft", data = draftJson))
+    }
+    if (result.appliedEntry != null) {
+        val entryJson = kotlinx.serialization.json.Json.encodeToString(
+            com.silk.backend.models.KBEntry.serializer(), result.appliedEntry
+        )
+        onStreamEvent(CopilotStreamEvent(event = "applied", data = entryJson))
+    }
+    if (!result.success) {
+        onStreamEvent(CopilotStreamEvent(event = "error", data = result.message))
+    }
+    onStreamEvent(CopilotStreamEvent(event = "done"))
 }
 
 fun buildKnowledgeBaseWorkspaceEntries(
@@ -196,6 +266,120 @@ private fun buildKnowledgeBaseWorkspaceSpaceLabel(topic: KBTopic): String {
         topic.spaceType == com.silk.backend.models.KnowledgeSpaceType.TEAM -> "团队"
         else -> "个人"
     }
+}
+
+/**
+ * Compute a line-level diff between original and new content using LCS (Longest Common Subsequence).
+ * Returns a list of DiffChunks that can be rendered by the frontend for inline diff review.
+ */
+fun computeLineDiff(original: String, newContent: String): List<DiffChunk> {
+    val origLines = original.split("\n")
+    val newLines = newContent.split("\n")
+
+    if (original == newContent) {
+        return listOf(DiffChunk(
+            type = "unchanged",
+            originalText = original,
+            newText = newContent,
+            lineStart = 0,
+            lineEnd = (origLines.size - 1).coerceAtLeast(0),
+        ))
+    }
+
+    // Build LCS table
+    val m = origLines.size
+    val n = newLines.size
+    val dp = Array(m + 1) { IntArray(n + 1) }
+
+    for (i in 1..m) {
+        for (j in 1..n) {
+            dp[i][j] = if (origLines[i - 1] == newLines[j - 1]) {
+                dp[i - 1][j - 1] + 1
+            } else {
+                maxOf(dp[i - 1][j], dp[i][j - 1])
+            }
+        }
+    }
+
+    // Backtrack to build diff in reverse order
+    val reverseChunks = mutableListOf<DiffChunk>()
+    var i = m
+    var j = n
+
+    while (i > 0 || j > 0) {
+        when {
+            i > 0 && j > 0 && origLines[i - 1] == newLines[j - 1] -> {
+                reverseChunks.add(DiffChunk(
+                    type = "unchanged",
+                    originalText = origLines[i - 1],
+                    newText = newLines[j - 1],
+                    lineStart = i - 1,
+                    lineEnd = i - 1,
+                ))
+                i--
+                j--
+            }
+            j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) -> {
+                reverseChunks.add(DiffChunk(
+                    type = "inserted",
+                    originalText = "",
+                    newText = newLines[j - 1],
+                    lineStart = i,
+                    lineEnd = i,
+                ))
+                j--
+            }
+            i > 0 -> {
+                reverseChunks.add(DiffChunk(
+                    type = "deleted",
+                    originalText = origLines[i - 1],
+                    newText = "",
+                    lineStart = i - 1,
+                    lineEnd = i - 1,
+                ))
+                i--
+            }
+        }
+    }
+
+    // Reverse to chronological order, then merge consecutive same-type chunks
+    val orderedChunks = reverseChunks.asReversed()
+    return mergeDiffChunks(orderedChunks)
+}
+
+/**
+ * Merge consecutive same-type diff chunks into larger chunks for cleaner display.
+ */
+private fun mergeDiffChunks(chunks: List<DiffChunk>): List<DiffChunk> {
+    if (chunks.isEmpty()) return emptyList()
+
+    val merged = mutableListOf<DiffChunk>()
+    var current = chunks[0]
+
+    for (idx in 1 until chunks.size) {
+        val next = chunks[idx]
+        if (current.type == next.type) {
+            // Merge same-type chunks: join text with newlines, extend line range
+            current = current.copy(
+                originalText = buildString {
+                    if (current.originalText.isNotEmpty()) append(current.originalText)
+                    if (current.originalText.isNotEmpty() && next.originalText.isNotEmpty()) append("\n")
+                    if (next.originalText.isNotEmpty()) append(next.originalText)
+                },
+                newText = buildString {
+                    if (current.newText.isNotEmpty()) append(current.newText)
+                    if (current.newText.isNotEmpty() && next.newText.isNotEmpty()) append("\n")
+                    if (next.newText.isNotEmpty()) append(next.newText)
+                },
+                lineEnd = next.lineEnd,
+            )
+        } else {
+            merged.add(current)
+            current = next
+        }
+    }
+    merged.add(current)
+    return merged
 }
 
 private fun buildKnowledgeBaseCopilotSystemPrompt(topic: KBTopic, entry: KBEntry): String = buildString {
@@ -256,11 +440,15 @@ private suspend fun handleUpdateEntry(
     action: KnowledgeBaseAiAction,
 ): KnowledgeBaseCopilotResponse {
     val normalizedDraft = normalizeCopilotDraft(entry, topic, action)
+    // Compute line-level diff between original and suggested content
+    val diffChunks = computeLineDiff(entry.content, normalizedDraft.content)
+    val draftWithDiff = normalizedDraft.copy(diffChunks = diffChunks)
+
     if (!request.applyChanges) {
         return KnowledgeBaseCopilotResponse(
             success = true,
             assistantReply = parsed.cleanedContent,
-            draft = normalizedDraft,
+            draft = draftWithDiff,
             message = "已生成 KB 修改草稿",
         )
     }
@@ -284,20 +472,20 @@ private suspend fun handleUpdateEntry(
         is KnowledgeBaseAiExecutionResult.Success -> KnowledgeBaseCopilotResponse(
             success = true,
             assistantReply = parsed.cleanedContent,
-            draft = normalizedDraft,
+            draft = draftWithDiff,
             appliedEntry = applyResult.entry,
             message = applyResult.message,
         )
         is KnowledgeBaseAiExecutionResult.Failure -> KnowledgeBaseCopilotResponse(
             success = false,
             assistantReply = parsed.cleanedContent,
-            draft = normalizedDraft,
+            draft = draftWithDiff,
             message = applyResult.message,
         )
         null -> KnowledgeBaseCopilotResponse(
             success = false,
             assistantReply = parsed.cleanedContent,
-            draft = normalizedDraft,
+            draft = draftWithDiff,
             message = "KB Copilot apply failed",
         )
     }
