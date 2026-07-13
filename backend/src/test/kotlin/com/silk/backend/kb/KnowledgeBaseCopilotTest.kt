@@ -33,7 +33,7 @@ class KnowledgeBaseCopilotTest {
                     applyChanges = false,
                 ),
                 runAgent = {
-                    """
+                    val raw = """
                     我会补齐灰度发布步骤并整理标签。
 
                     ```silk_kb_action
@@ -47,6 +47,11 @@ class KnowledgeBaseCopilotTest {
                     }
                     ```
                     """.trimIndent()
+                    val parsed = extractKnowledgeBaseAiActions(raw)
+                    KbCopilotAgentResult(
+                        displayText = parsed.cleanedContent,
+                        actions = parsed.actions,
+                    )
                 },
             )
 
@@ -82,7 +87,7 @@ class KnowledgeBaseCopilotTest {
                     applyChanges = true,
                 ),
                 runAgent = {
-                    """
+                    val raw = """
                     已按你的要求重写结构。
 
                     ```silk_kb_action
@@ -96,6 +101,11 @@ class KnowledgeBaseCopilotTest {
                     }
                     ```
                     """.trimIndent()
+                    val parsed = extractKnowledgeBaseAiActions(raw)
+                    KbCopilotAgentResult(
+                        displayText = parsed.cleanedContent,
+                        actions = parsed.actions,
+                    )
                 },
             )
 

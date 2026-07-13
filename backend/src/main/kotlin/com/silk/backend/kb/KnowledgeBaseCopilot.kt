@@ -54,6 +54,17 @@ data class KnowledgeBaseCopilotAgentInput(
 )
 
 /**
+ * Result from runAgent: the display text (without silk_kb_action blocks) and the
+ * extracted KB actions.  Keeping them together avoids the problem of re-parsing
+ * already-cleaned text to re-discover actions that were stripped by
+ * DirectModelAgent.finalizeAgentResponse internally.
+ */
+data class KbCopilotAgentResult(
+    val displayText: String,
+    val actions: List<KnowledgeBaseAiAction>,
+)
+
+/**
  * Stream event emitted during copilot execution.
  * Used by the SSE endpoint to push real-time status to the frontend.
  */
@@ -80,7 +91,7 @@ data class DiffChunk(
 suspend fun executeKnowledgeBaseCopilot(
     manager: KnowledgeBaseManager,
     request: KnowledgeBaseCopilotRequest,
-    runAgent: suspend (KnowledgeBaseCopilotAgentInput) -> String,
+    runAgent: suspend (KnowledgeBaseCopilotAgentInput) -> KbCopilotAgentResult,
     /** Optional streaming callback: first param is event type, second is data. */
     onStreamEvent: (suspend (CopilotStreamEvent) -> Unit)? = null,
 ): KnowledgeBaseCopilotResponse {
@@ -151,15 +162,22 @@ suspend fun executeKnowledgeBaseCopilot(
     }
 
     onStreamEvent?.invoke(CopilotStreamEvent(event = "thinking", data = "🤔 AI 正在分析指令…"))
-    val rawReply = runAgent(
+    val agentResult = runAgent(
         KnowledgeBaseCopilotAgentInput(
             systemPrompt = systemPrompt,
             userPrompt = fullUserPrompt,
             workspaceEntries = buildKnowledgeBaseWorkspaceEntries(manager, request.userId),
         )
     )
-    val parsed = extractKnowledgeBaseAiActions(rawReply)
-    onStreamEvent?.invoke(CopilotStreamEvent(event = "text", data = parsed.cleanedContent))
+    val displayText = stripThinkingBlocks(agentResult.displayText)
+    onStreamEvent?.invoke(CopilotStreamEvent(event = "text", data = displayText))
+
+    // Build a KnowledgeBaseAiParseResult from the agent's pre-extracted actions
+    // for backward compatibility with handleUpdateEntry / handleCreateEntryDraft
+    val parsed = KnowledgeBaseAiParseResult(
+        cleanedContent = agentResult.displayText,
+        actions = agentResult.actions,
+    )
 
     if (entry != null && topic != null) {
         // Entry-level: look for UPDATE_ENTRY action for this entry
@@ -179,7 +197,7 @@ suspend fun executeKnowledgeBaseCopilot(
             onStreamEvent?.invoke(CopilotStreamEvent(event = "done"))
             return KnowledgeBaseCopilotResponse(
                 success = false,
-                assistantReply = parsed.cleanedContent,
+                assistantReply = agentResult.displayText,
                 message = "AI did not return a KB update draft",
             )
         }
@@ -395,12 +413,28 @@ private fun buildKnowledgeBaseCopilotSystemPrompt(topic: KBTopic, entry: KBEntry
     appendLine("- Tags: ${entry.tags.joinToString(", ").ifBlank { "(none)" }}")
     appendLine()
     appendLine("## 输出要求")
-    appendLine("1. 先用 1-3 句中文总结你会如何修改。")
-    appendLine("2. 然后必须输出一个 ```silk_kb_action 代码块。")
-    appendLine("3. 代码块内只允许一个 JSON 对象，operation 固定为 update_entry。")
-    appendLine("4. JSON 中的 topicId 必须为 ${topic.id}，entryId 必须为 ${entry.id}。")
-    appendLine("5. title/content/tags 必须提供修改后的完整结果；content 使用完整 Markdown，而不是 diff。")
-    appendLine("6. 如果你判断当前文档无需改动，也要输出 update_entry，并保留原文内容。")
+    appendLine("1. 先用中文总结你的修改方案（最多3句），不要使用 <!--THINKING--> 标签，这段总结会直接显示给用户。")
+    appendLine("2. 然后必须输出一个 ```silk_kb_action 代码块，代码块必须使用 silk_kb_action 语言标记，不要用 json 或其他标记。")
+    appendLine("3. 代码块内只允许一个 JSON 对象，operation 字段必须为 \"update_entry\"。")
+    appendLine("4. JSON 必须包含 operation、topicId、entryId、title、content、tags 等字段。")
+    appendLine("5. JSON 中的 topicId 必须为 \"${topic.id}\"，entryId 必须为 \"${entry.id}\"。")
+    appendLine("6. title/content/tags 必须提供修改后的完整结果；content 使用完整 Markdown，而不是 diff。")
+    appendLine("7. 如果你判断当前文档无需改动，也要输出 update_entry，并保留原文内容。")
+    appendLine()
+    appendLine("## 输出示例")
+    appendLine("```")
+    appendLine("总结内容...")
+    appendLine()
+    appendLine("```silk_kb_action")
+    appendLine("{")
+    appendLine("  \"operation\": \"update_entry\",")
+    appendLine("  \"topicId\": \"${topic.id}\",")
+    appendLine("  \"entryId\": \"${entry.id}\",")
+    appendLine("  \"title\": \"${entry.title}\",")
+    appendLine("  \"content\": \"更新后的完整 Markdown 内容\",")
+    appendLine("  \"tags\": [\"tag1\", \"tag2\"]")
+    appendLine("}")
+    appendLine("```")
     appendLine()
     appendLine("## 当前文档 Markdown")
     appendLine("```markdown")
@@ -419,13 +453,29 @@ private fun buildKnowledgeBaseTopicCopilotSystemPrompt(topic: KBTopic): String =
     appendLine("- Space: ${buildKnowledgeBaseWorkspaceSpaceLabel(topic)}")
     appendLine()
     appendLine("## 输出要求")
-    appendLine("1. 先用 1-3 句中文解释你准备创建什么样的文档。")
-    appendLine("2. 然后必须输出一个 ```silk_kb_action 代码块。")
-    appendLine("3. 代码块内只允许一个 JSON 对象，operation 固定为 create_entry。")
-    appendLine("4. JSON 中的 topicId 必须为 ${topic.id}。")
-    appendLine("5. title/content/tags 必须提供完整的文档内容。")
-    appendLine("6. status 为 \"CANDIDATE\"，方便用户确认后再发布。")
-    appendLine("7. content 使用完整 Markdown。")
+    appendLine("1. 先用中文解释你准备创建什么样的文档（最多3句），不要使用 <!--THINKING--> 标签，这段解释会直接显示给用户。")
+    appendLine("2. 然后必须输出一个 ```silk_kb_action 代码块，代码块必须使用 silk_kb_action 语言标记，不要用 json 或其他标记。")
+    appendLine("3. 代码块内只允许一个 JSON 对象，operation 字段必须为 \"create_entry\"。")
+    appendLine("4. JSON 必须包含 operation、topicId、title、content、tags、status 等字段。")
+    appendLine("5. JSON 中的 topicId 必须为 \"${topic.id}\"。")
+    appendLine("6. title/content/tags 必须提供完整的文档内容。")
+    appendLine("7. status 为 \"CANDIDATE\"，方便用户确认后再发布。")
+    appendLine("8. content 使用完整 Markdown。")
+    appendLine()
+    appendLine("## 输出示例")
+    appendLine("```")
+    appendLine("解释内容...")
+    appendLine()
+    appendLine("```silk_kb_action")
+    appendLine("{")
+    appendLine("  \"operation\": \"create_entry\",")
+    appendLine("  \"topicId\": \"${topic.id}\",")
+    appendLine("  \"title\": \"新条目标题\",")
+    appendLine("  \"content\": \"完整的 Markdown 内容\",")
+    appendLine("  \"tags\": [\"tag1\", \"tag2\"],")
+    appendLine("  \"status\": \"CANDIDATE\"")
+    appendLine("}")
+    appendLine("```")
     appendLine()
     appendLine("## 当前主题已有条目")
     appendLine("请在 workspace entries 中查阅当前主题的已有条目，避免创建重复内容。")

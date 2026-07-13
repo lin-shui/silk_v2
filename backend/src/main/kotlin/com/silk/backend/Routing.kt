@@ -74,6 +74,7 @@ import com.silk.backend.kb.KnowledgeBaseEntrySearchResponse
 import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.kb.buildKnowledgeBaseWorkspaceEntries
 import com.silk.backend.kb.executeKnowledgeBaseCopilot
+import com.silk.backend.kb.stripThinkingBlocks
 import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
 import com.silk.backend.models.KBEntrySource
@@ -4418,10 +4419,14 @@ private fun Route.registerApiKbCopilotPostRoute() {
                 agent.syncKnowledgeBaseWorkspace(input.workspaceEntries.ifEmpty {
                     buildKnowledgeBaseWorkspaceEntries(knowledgeBaseManager, userId)
                 })
-                agent.processInput(
+                val text = agent.processInput(
                     userInput = input.userPrompt,
                     systemPrompt = input.systemPrompt,
                     callback = { _, _, _ -> },
+                )
+                com.silk.backend.kb.KbCopilotAgentResult(
+                    displayText = text,
+                    actions = agent.lastKnowledgeBaseActions,
                 )
             },
         )
@@ -4484,7 +4489,7 @@ private fun Route.registerApiKbCopilotStreamPostRoute() {
                     agent.syncKnowledgeBaseWorkspace(input.workspaceEntries.ifEmpty {
                         buildKnowledgeBaseWorkspaceEntries(knowledgeBaseManager, userId)
                     })
-                    agent.processInput(
+                    val text = agent.processInput(
                         userInput = input.userPrompt,
                         systemPrompt = input.systemPrompt,
                         callback = { stepType, content, _ ->
@@ -4496,9 +4501,21 @@ private fun Route.registerApiKbCopilotStreamPostRoute() {
                                 else -> null
                             }
                             if (sseEvent != null && content.isNotBlank()) {
-                                writeEvent(CopilotStreamEvent(event = sseEvent, data = content))
+                                // Strip <!--THINKING--> blocks from display content
+                                val displayContent = if (sseEvent == "text") {
+                                    stripThinkingBlocks(content)
+                                } else {
+                                    content
+                                }
+                                if (displayContent.isNotBlank()) {
+                                    writeEvent(CopilotStreamEvent(event = sseEvent, data = displayContent))
+                                }
                             }
                         },
+                    )
+                    com.silk.backend.kb.KbCopilotAgentResult(
+                        displayText = text,
+                        actions = agent.lastKnowledgeBaseActions,
                     )
                 },
                 onStreamEvent = { event ->
