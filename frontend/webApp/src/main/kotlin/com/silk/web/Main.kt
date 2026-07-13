@@ -767,10 +767,28 @@ fun ChatScene(appState: WebAppState) {
                     padding(12.px, 16.px)
                     property("border-bottom", "1px solid ${SilkColors.border}")
                     display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.SpaceBetween)
                     alignItems(AlignItems.Center)
-                    property("gap", "8px")
                 }
             }) {
+                Span({
+                    style {
+                        fontSize(16.px)
+                        color(Color(SilkColors.primary))
+                        property("font-weight", "700")
+                        property("letter-spacing", "1px")
+                        property("flex-shrink", "0")
+                    }
+                }) {
+                    Text("Silk")
+                }
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        alignItems(AlignItems.Center)
+                        property("gap", "8px")
+                    }
+                }) {
                 Button({
                     attr("title", "收起列表")
                     style {
@@ -787,22 +805,6 @@ fun ChatScene(appState: WebAppState) {
                         LayoutPrefs.setBool("silk_chat_list_collapsed", true)
                     }
                 }) { Text("«") }
-                Span({
-                    style {
-                        fontSize(16.px)
-                        color(Color(SilkColors.primary))
-                        property("font-weight", "700")
-                        property("letter-spacing", "1px")
-                        property("flex-shrink", "0")
-                    }
-                }) {
-                    Text("Silk")
-                }
-                Div({
-                    style {
-                        property("flex", "1")
-                    }
-                })
                 Span({
                     style {
                         fontSize(12.px)
@@ -911,6 +913,7 @@ fun ChatScene(appState: WebAppState) {
                         }
                     }
                 }
+                } // close right-button group
             }
 
             Div({

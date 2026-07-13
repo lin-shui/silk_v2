@@ -10,7 +10,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 private val kbActionJson = Json { ignoreUnknownKeys = true }
-private val kbActionBlockRegex = Regex("""```silk_kb_action\s*([\s\S]*?)```""")
+private val kbActionBlockRegex = Regex("""```silk_kb_action\s*([\s\S]*)```""")
+private val jsonCodeBlockRegex = Regex("""```json\s*([\s\S]*)```""")
+private val thinkingBlockRegex = Regex("""<!--THINKING-->[\s\S]*?<!--END_THINKING-->""")
 
 @Serializable
 data class KnowledgeBaseAiActionEnvelope(
@@ -70,27 +72,51 @@ data class KnowledgeBaseAiParseResult(
     val actions: List<KnowledgeBaseAiAction>,
 )
 
+/**
+ * Strip <!--THINKING-->...<!--END_THINKING--> blocks from display content.
+ * This is a display-level cleanup, separate from action parsing logic.
+ */
+fun stripThinkingBlocks(content: String): String {
+    return thinkingBlockRegex.replace(content, "").trim()
+}
+
 fun extractKnowledgeBaseAiActions(content: String): KnowledgeBaseAiParseResult {
-    if (!kbActionBlockRegex.containsMatchIn(content)) {
+    val actions = mutableListOf<KnowledgeBaseAiAction>()
+
+    // Step 1: Try silk_kb_action blocks first (primary format)
+    // Parse from original content (don't strip thinking blocks here —
+    // they carry visible assistant text that must be preserved in cleanedContent)
+    val extractFromRegex: (Regex) -> Unit = { regex ->
+        regex.findAll(content).forEach { match ->
+            val payload = match.groupValues.getOrNull(1)?.trim().orEmpty()
+            if (payload.isBlank()) return@forEach
+            runCatching {
+                when {
+                    payload.startsWith("[") -> kbActionJson.decodeFromString<List<KnowledgeBaseAiAction>>(payload)
+                    payload.startsWith("{") && payload.contains("\"actions\"") ->
+                        kbActionJson.decodeFromString<KnowledgeBaseAiActionEnvelope>(payload).actions
+                    payload.startsWith("{") -> listOf(kbActionJson.decodeFromString<KnowledgeBaseAiAction>(payload))
+                    else -> emptyList()
+                }
+            }.getOrNull()?.let(actions::addAll)
+        }
+    }
+
+    extractFromRegex(kbActionBlockRegex)
+
+    // Step 2: If no actions found from silk_kb_action blocks, try ```json blocks as fallback
+    if (actions.isEmpty()) {
+        extractFromRegex(jsonCodeBlockRegex)
+    }
+
+    if (actions.isEmpty()) {
         return KnowledgeBaseAiParseResult(cleanedContent = content, actions = emptyList())
     }
 
-    val actions = mutableListOf<KnowledgeBaseAiAction>()
-    kbActionBlockRegex.findAll(content).forEach { match ->
-        val payload = match.groupValues.getOrNull(1)?.trim().orEmpty()
-        if (payload.isBlank()) return@forEach
-        runCatching {
-            when {
-                payload.startsWith("[") -> kbActionJson.decodeFromString<List<KnowledgeBaseAiAction>>(payload)
-                payload.startsWith("{") && payload.contains("\"actions\"") ->
-                    kbActionJson.decodeFromString<KnowledgeBaseAiActionEnvelope>(payload).actions
-                payload.startsWith("{") -> listOf(kbActionJson.decodeFromString<KnowledgeBaseAiAction>(payload))
-                else -> emptyList()
-            }
-        }.getOrNull()?.let(actions::addAll)
-    }
-
-    val cleaned = kbActionBlockRegex.replace(content, "").replace(Regex("""\n{3,}"""), "\n\n").trim()
+    // Step 3: Clean both types of code blocks from the content for display
+    val cleaned = kbActionBlockRegex.replace(content, "")
+        .let { jsonCodeBlockRegex.replace(it, "") }
+        .replace(Regex("""\n{3,}"""), "\n\n").trim()
     return KnowledgeBaseAiParseResult(cleanedContent = cleaned, actions = actions)
 }
 

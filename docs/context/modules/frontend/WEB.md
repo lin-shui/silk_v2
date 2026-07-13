@@ -39,7 +39,7 @@
   - 切目录走 HTTP `cdCcDir`（不发聊天 `/cd` 气泡）；FolderPicker 内部用 `loadJob` 取消旧请求避免 stale 覆盖
   - 共用 `ModalOverlay` composable；后端 `DirListingResponse.separator` 字段决定路径拼接，前端不猜 Unix vs Windows
 - 知识库（`KnowledgeBaseScene.kt` + `KnowledgeBaseCaptureDialog.kt` / `KnowledgeBaseContextTray.kt` / `KnowledgeBaseMeetingCaptureDialog.kt`）：
-  - 左侧 `TopicSidebar` 支持折叠/展开按钮（◀/▶），折叠后缩为 28px 窄条（`ReopenBar`），折叠状态经 `LayoutPrefs` 持久化到 localStorage
+  - 左侧 `TopicSidebar` 和中间 `EntrySidebar` 均支持折叠，折叠按钮统一放在 header 右侧按钮区最左位（`«`），折叠后缩为 28px 窄条（`ReopenBar`），状态经 `LayoutPrefs`（`kb_sidebar_collapsed` / `kb_entry_sidebar_collapsed`）持久化到 localStorage
   - `TopicAccessDialog` 重构为飞书式统一权限面板：单一搜索框 + 角色选择（👁 只读 / ✏ 可写 / ⚙ 管理）+ 已用用户列表含角色 toggle chip + 移除按钮
   - 聊天/Workflow 输入框输入 `$` 触发 KB 文档浮动选择器，调用 `GET /api/kb/entries/search` 搜索已发布条目，选中后插入 `[[kb:entryId|title]]` 引用
 - 知识库面板支持复制 `[[kb:entryId|标题]]` 引用；聊天/工作流消息中的该格式和 AI 返回的 KB `available` 引用都可点击并切到对应知识库文档（`KnowledgeBaseReferences.kt` / `AppState.openKnowledgeBaseEntry`）

@@ -93,12 +93,11 @@ internal const val KNOWLEDGE_SIDEBAR_MIN_WIDTH = 200.0
 internal const val KNOWLEDGE_SIDEBAR_MAX_WIDTH = 420.0
 internal const val KNOWLEDGE_EDITOR_SPLIT_MIN_RATIO = 0.25
 internal const val KNOWLEDGE_EDITOR_SPLIT_MAX_RATIO = 0.75
-internal const val KNOWLEDGE_COPILOT_SIDEBAR_DEFAULT_WIDTH = 360.0
-internal const val KNOWLEDGE_COPILOT_SIDEBAR_MIN_WIDTH = 280.0
+internal const val KNOWLEDGE_COPILOT_SIDEBAR_DEFAULT_WIDTH = 380.0
+internal const val KNOWLEDGE_COPILOT_SIDEBAR_MIN_WIDTH = 320.0
 internal const val KNOWLEDGE_COPILOT_SIDEBAR_MAX_WIDTH = 520.0
 private const val KNOWLEDGE_COPILOT_SIDEBAR_WIDTH_KEY = "silk_kb_copilot_sidebar_width"
-private const val KNOWLEDGE_COPILOT_DEFAULT_PROMPT =
-    "请基于当前文档帮我整理结构、补全遗漏信息，并保持 Markdown 可直接保存。"
+private const val KNOWLEDGE_COPILOT_DEFAULT_PROMPT = ""
 
 internal fun clampKnowledgeSidebarWidth(width: Double): Double =
     width.coerceIn(KNOWLEDGE_SIDEBAR_MIN_WIDTH, KNOWLEDGE_SIDEBAR_MAX_WIDTH)
@@ -539,6 +538,7 @@ private fun TopicSidebar(
         KnowledgeColumnHeader(
             title = "知识空间",
             actionLabel = "+",
+            onCollapse = onCollapse,
             onAction = onCreateTopic,
             secondaryAction = if (hasManageableTopic) {
                 KnowledgeHeaderSecondaryAction(
@@ -588,23 +588,6 @@ private fun TopicSidebar(
                     onGroupFilesSelect()
                 },
             )
-        }
-        // ── 折叠按钮 ──
-        Div({
-            style {
-                property("flex-shrink", "0")
-                property("border-top", "1px solid ${SilkColors.border}")
-                display(DisplayStyle.Flex)
-                alignItems(AlignItems.Center)
-                justifyContent(JustifyContent.Center)
-                padding(8.px)
-                property("cursor", "pointer")
-                backgroundColor(Color(SilkColors.surface))
-            }
-            attr("title", "折叠侧栏")
-            onClick { onCollapse() }
-        }) {
-            Span({ style { fontSize(14.px); color(Color(SilkColors.textSecondary)) } }) { Text("◀") }
         }
     }
 }
@@ -900,6 +883,7 @@ private fun EntrySidebar(
     canDragEntries: Boolean,
     selectedCandidateEntryIds: Set<String>,
     canBatchMergeCandidates: Boolean,
+    onCollapse: () -> Unit = {},
     onFilterChange: (KnowledgeEntryFilter) -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onCreateEntry: () -> Unit,
@@ -928,6 +912,7 @@ private fun EntrySidebar(
             title = selectedTopic?.name ?: "条目",
             actionLabel = if (selectedTopic != null) "+" else null,
             actionEnabled = canCreateEntry,
+            onCollapse = onCollapse,
             onAction = onCreateEntry,
         )
 
@@ -3278,8 +3263,23 @@ private fun buildFinalContentFromDiff(
 }
 
 /**
+ * Build a change summary from diff chunks.
+ */
+private fun buildChangeSummary(chunks: List<DiffChunk>): String {
+    val added = chunks.count { it.type == "inserted" }
+    val deleted = chunks.count { it.type == "deleted" }
+    val modified = chunks.count { it.type == "modified" }
+    val parts = mutableListOf<String>()
+    if (added > 0) parts.add("新增 $added 个内容块")
+    if (deleted > 0) parts.add("删除 $deleted 个内容块")
+    if (modified > 0) parts.add("修改 $modified 个内容块")
+    return parts.joinToString("；")
+}
+
+/**
  * Diff review pane: shows AI-suggested changes as inline diff chunks with accept/reject controls.
  * Replaces the normal Markdown source editor during diff review mode.
+ * Actions (accept all / apply / cancel) are controlled from the sidebar REVIEW state.
  */
 @Composable
 @Suppress("CyclomaticComplexMethod")
@@ -3287,16 +3287,11 @@ private fun DiffReviewPane(
     chunks: List<DiffChunk>,
     accepted: Set<Int>,
     rejected: Set<Int>,
-    targetTitle: String,
     onAcceptChunk: (Int) -> Unit,
     onRejectChunk: (Int) -> Unit,
-    onAcceptAll: () -> Unit,
-    onApplyChanges: () -> Unit,
-    onCancelReview: () -> Unit,
 ) {
     val totalChunks = chunks.size
     val decidedCount = accepted.size + rejected.size
-    val allDecided = decidedCount >= totalChunks
 
     Div({
         style {
@@ -3308,10 +3303,10 @@ private fun DiffReviewPane(
             property("overflow", "hidden")
         }
     }) {
-        // Header
+        // Simple header — action buttons moved to sidebar REVIEW state
         Div({
             style {
-                padding(12.px, 16.px)
+                padding(10.px, 16.px)
                 property("border-bottom", "1px solid ${SilkColors.border}")
                 display(DisplayStyle.Flex)
                 justifyContent(JustifyContent.SpaceBetween)
@@ -3320,69 +3315,21 @@ private fun DiffReviewPane(
                 backgroundColor(Color(SilkColors.surfaceElevated))
             }
         }) {
-            Div({
+            Span({
                 style {
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    property("gap", "8px")
+                    fontSize(15.px)
+                    fontWeight("600")
+                    color(Color(SilkColors.textPrimary))
+                }
+            }) { Text("修改审查") }
+            Span({
+                style {
+                    fontSize(12.px)
+                    color(Color(SilkColors.textSecondary))
                 }
             }) {
-                Span({
-                    style {
-                        fontSize(15.px)
-                        fontWeight("600")
-                        color(Color(SilkColors.textPrimary))
-                    }
-                }) { Text("修改审查") }
-                Span({
-                    style {
-                        fontSize(12.px)
-                        color(Color(SilkColors.textSecondary))
-                    }
-                }) {
-                    Text("已决定 $decidedCount / $totalChunks 块")
-                }
+                Text("已处理 $decidedCount / $totalChunks 处")
             }
-            Div({
-                style {
-                    display(DisplayStyle.Flex)
-                    property("gap", "6px")
-                    alignItems(AlignItems.Center)
-                }
-            }) {
-                KnowledgeToolbarButton(
-                    label = "✓ 接受全部",
-                    background = SilkColors.success,
-                    enabled = accepted.size < totalChunks,
-                    onClick = onAcceptAll,
-                )
-                KnowledgeToolbarButton(
-                    label = "✗ 退出对比",
-                    background = SilkColors.textSecondary,
-                    enabled = true,
-                    onClick = onCancelReview,
-                )
-                KnowledgeToolbarButton(
-                    label = "✓ 应用修改",
-                    background = SilkColors.primaryDark,
-                    enabled = allDecided,
-                    onClick = onApplyChanges,
-                )
-            }
-        }
-
-        // Title info
-        Div({
-            style {
-                padding(8.px, 16.px)
-                fontSize(13.px)
-                color(Color(SilkColors.textSecondary))
-                backgroundColor(Color("#F8F8FA"))
-                property("border-bottom", "1px solid ${SilkColors.border}")
-                property("flex-shrink", "0")
-            }
-        }) {
-            Text("目标标题: $targetTitle")
         }
 
         // Scrollable diff content
@@ -3450,10 +3397,86 @@ private fun DiffChunkRow(
         "modified" -> "已修改"
         else -> chunk.type
     }
+    // For unchanged chunks, show a collapsible section (default collapsed)
+    if (chunk.type == "unchanged") {
+        var expanded by remember { mutableStateOf(false) }
+        Div({
+            style {
+                property("border-bottom", "1px solid ${SilkColors.border}")
+            }
+        }) {
+            // Clickable header to toggle expansion
+            Div({
+                style {
+                    padding(4.px, 16.px)
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "6px")
+                    property("cursor", "pointer")
+                    property("user-select", "none")
+                    backgroundColor(Color(if (expanded) "rgba(0,0,0,0.02)" else "transparent"))
+                    property("transition", "background-color 150ms ease")
+                }
+                onClick { expanded = !expanded }
+            }) {
+                Span({
+                    style {
+                        fontSize(10.px)
+                        color(Color(SilkColors.textLight))
+                        property("transition", "transform 150ms ease")
+                        property("display", "inline-block")
+                        property("transform", if (expanded) "rotate(90deg)" else "rotate(0deg)")
+                    }
+                }) { Text("▶") }
+                Span({
+                    style {
+                        fontSize(11.px)
+                        color(Color(SilkColors.textLight))
+                    }
+                }) {
+                    Text("⋯ 未更改内容 (L${chunk.lineStart + 1}-L${chunk.lineEnd + 1})")
+                }
+                Span({
+                    style {
+                        fontSize(10.px)
+                        color(Color(SilkColors.textLight))
+                        property("opacity", "0.6")
+                        marginLeft(4.px)
+                    }
+                }) {
+                    Text(if (expanded) "点击折叠" else "点击展开")
+                }
+            }
+            // Expandable content area
+            if (expanded) {
+                Div({
+                    style {
+                        padding(6.px, 16.px, 10.px, 24.px)
+                        fontSize(13.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("line-height", "1.6")
+                        property("opacity", "0.65")
+                        property("max-height", "300px")
+                        property("overflow-y", "auto")
+                        property("border-top", "1px solid ${SilkColors.border}")
+                    }
+                }) {
+                    if (chunk.originalText.isNotBlank()) {
+                        MarkdownContent(chunk.originalText)
+                    } else if (chunk.newText.isNotBlank()) {
+                        MarkdownContent(chunk.newText)
+                    } else {
+                        Text("(空)")
+                    }
+                }
+            }
+        }
+        return
+    }
 
     Div({
         style {
-            padding(6.px, 16.px)
+            padding(8.px, 16.px)
             backgroundColor(Color(bgColor))
             property("border-left", "3px solid $borderColor")
             property("border-bottom", "1px solid ${SilkColors.border}")
@@ -3466,7 +3489,7 @@ private fun DiffChunkRow(
                 display(DisplayStyle.Flex)
                 justifyContent(JustifyContent.SpaceBetween)
                 alignItems(AlignItems.Center)
-                marginBottom(4.px)
+                marginBottom(6.px)
                 property("gap", "8px")
             }
         }) {
@@ -3525,7 +3548,7 @@ private fun DiffChunkRow(
                         )
                     }
                 }
-                if (!isRejected && chunk.type != "unchanged") {
+                if (!isRejected) {
                     Button({
                         style {
                             backgroundColor(Color("#C85046"))
@@ -3542,7 +3565,7 @@ private fun DiffChunkRow(
                         }
                     }) {
                         Text(
-                            if (chunk.type == "inserted") "✗ 跳过"
+                            if (chunk.type == "inserted") "✗ 跳过新增"
                             else "✗ 拒绝"
                         )
                     }
@@ -3562,39 +3585,175 @@ private fun DiffChunkRow(
             }
         }
 
-        // Content
-        val displayText = when (chunk.type) {
-            "deleted" -> chunk.originalText
-            "inserted" -> chunk.newText
-            "modified" -> {
-                // Show both original and new for modified chunks
-                buildString {
-                    appendLine("--- 原内容 ---")
-                    append(chunk.originalText)
-                    appendLine()
-                    appendLine("--- 新内容 ---")
-                    append(chunk.newText)
+        // Visual diff content — render each type with distinct visual style
+        when (chunk.type) {
+            "inserted" -> {
+                // Green-highlighted addition block
+                Div({
+                    style {
+                        backgroundColor(Color("rgba(82,164,117,0.08)"))
+                        borderRadius(4.px)
+                        border(1.px, LineStyle.Solid, Color("#52A475"))
+                        property("overflow", "hidden")
+                    }
+                }) {
+                    Div({
+                        style {
+                            padding(4.px, 8.px)
+                            backgroundColor(Color("#52A475"))
+                            color(Color.white)
+                            fontSize(11.px)
+                            fontWeight("600")
+                        }
+                    }) { Text("新增内容") }
+                    Div({
+                        style {
+                            padding(8.px)
+                            fontSize(14.px)
+                            color(Color(SilkColors.textPrimary))
+                            property("line-height", "1.7")
+                            property("max-height", "200px")
+                            property("overflow-y", "auto")
+                        }
+                    }) {
+                        if (chunk.newText.isNotBlank()) {
+                            MarkdownContent(chunk.newText)
+                        } else {
+                            Text("(空)")
+                        }
+                    }
                 }
             }
-            else -> chunk.originalText
-        }
-        if (displayText.isNotBlank()) {
-            Div({
-                style {
-                    fontSize(13.px)
-                    color(Color(SilkColors.textPrimary))
-                    fontFamily("ui-monospace, SFMono-Regular, Menlo, Consolas, monospace")
-                    property("line-height", "1.6")
-                    property("white-space", "pre-wrap")
-                    property("word-break", "break-word")
-                    backgroundColor(Color("rgba(255,255,255,0.7)"))
-                    borderRadius(4.px)
-                    padding(6.px, 8.px)
-                    property("max-height", "200px")
-                    property("overflow-y", "auto")
+            "deleted" -> {
+                // Red-highlighted deletion block
+                Div({
+                    style {
+                        backgroundColor(Color("rgba(200,80,70,0.08)"))
+                        borderRadius(4.px)
+                        border(1.px, LineStyle.Solid, Color("#C85046"))
+                        property("overflow", "hidden")
+                    }
+                }) {
+                    Div({
+                        style {
+                            padding(4.px, 8.px)
+                            backgroundColor(Color("#C85046"))
+                            color(Color.white)
+                            fontSize(11.px)
+                            fontWeight("600")
+                        }
+                    }) { Text("删除内容") }
+                    Div({
+                        style {
+                            padding(8.px)
+                            fontSize(14.px)
+                            color(Color(SilkColors.textPrimary))
+                            property("line-height", "1.7")
+                            property("max-height", "200px")
+                            property("overflow-y", "auto")
+                            property("text-decoration", "line-through")
+                            property("opacity", "0.7")
+                        }
+                    }) {
+                        if (chunk.originalText.isNotBlank()) {
+                            MarkdownContent(chunk.originalText)
+                        } else {
+                            Text("(空)")
+                        }
+                    }
                 }
-            }) {
-                Text(displayText)
+            }
+            "modified" -> {
+                // Side-by-side visual diff: original (red) → new (green)
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        flexDirection(FlexDirection.Column)
+                        property("gap", "6px")
+                    }
+                }) {
+                    // Original content (red)
+                    Div({
+                        style {
+                            backgroundColor(Color("rgba(200,80,70,0.08)"))
+                            borderRadius(4.px)
+                            border(1.px, LineStyle.Solid, Color("#C85046"))
+                            property("overflow", "hidden")
+                        }
+                    }) {
+                        Div({
+                            style {
+                                padding(3.px, 8.px)
+                                backgroundColor(Color("#C85046"))
+                                color(Color.white)
+                                fontSize(11.px)
+                                fontWeight("600")
+                            }
+                        }) { Text("修改前") }
+                        Div({
+                            style {
+                                padding(8.px)
+                                fontSize(14.px)
+                                color(Color(SilkColors.textPrimary))
+                                property("line-height", "1.7")
+                                property("max-height", "150px")
+                                property("overflow-y", "auto")
+                                property("text-decoration", "line-through")
+                                property("opacity", "0.7")
+                            }
+                        }) {
+                            if (chunk.originalText.isNotBlank()) {
+                                MarkdownContent(chunk.originalText)
+                            } else {
+                                Text("(空)")
+                            }
+                        }
+                    }
+                    // Arrow indicator
+                    Div({
+                        style {
+                            fontSize(13.px)
+                            color(Color(SilkColors.textSecondary))
+                            property("text-align", "center")
+                            property("line-height", "1")
+                        }
+                    }) { Text("↓ 修改为 ↓") }
+                    // New content (green)
+                    Div({
+                        style {
+                            backgroundColor(Color("rgba(82,164,117,0.08)"))
+                            borderRadius(4.px)
+                            border(1.px, LineStyle.Solid, Color("#52A475"))
+                            property("overflow", "hidden")
+                        }
+                    }) {
+                        Div({
+                            style {
+                                padding(3.px, 8.px)
+                                backgroundColor(Color("#52A475"))
+                                color(Color.white)
+                                fontSize(11.px)
+                                fontWeight("600")
+                            }
+                        }) { Text("修改后") }
+                        Div({
+                            style {
+                                padding(8.px)
+                                fontSize(14.px)
+                                color(Color(SilkColors.textPrimary))
+                                property("line-height", "1.7")
+                                property("max-height", "150px")
+                                property("overflow-y", "auto")
+                            }
+                        }) {
+                            if (chunk.newText.isNotBlank()) {
+                                MarkdownContent(chunk.newText)
+                            } else {
+                                Text("(空)")
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -3610,26 +3769,55 @@ private enum class CopilotMode {
     TOPIC,
 }
 
+/**
+ * Three-state flow for the Copilot sidebar.
+ */
+private enum class CopilotSidebarState {
+    /** User inputs modification requirements */
+    INPUT,
+    /** AI returns a preview of the generated changes */
+    PREVIEW,
+    /** User reviews diff chunks and accepts/rejects each */
+    REVIEW,
+}
+
+/**
+ * Three-state KB Copilot sidebar: INPUT → PREVIEW → REVIEW.
+ *
+ * Rules:
+ * - One primary button per page.
+ * - At most two visible buttons per area.
+ * - Conversation history hidden by default (click "查看过程" to expand).
+ * - "直接写回知识库" toggle removed (all drafts go through review).
+ * - Low-frequency operations in "⋯" menu.
+ */
 @Composable
-@Suppress("CyclomaticComplexMethod")
+@Suppress("CyclomaticComplexMethod", "LongMethod")
 private fun KnowledgeCopilotSidebar(
     entry: KBEntryItem?,
     topic: KBTopicItem?,
     instruction: String,
-    applyChanges: Boolean,
     isRunning: Boolean,
     feedbackMessage: String,
     assistantReply: String,
     draft: KnowledgeBaseCopilotDraft?,
     sidebarWidth: Double,
     copilotMode: CopilotMode,
-    conversationHistory: List<ConversationTurn>,
+    sidebarState: CopilotSidebarState,
+    diffChunks: List<DiffChunk>,
+    acceptedChunkIndices: Set<Int>,
+    rejectedChunkIndices: Set<Int>,
     onInstructionChange: (String) -> Unit,
-    onApplyChangesChange: (Boolean) -> Unit,
-    onApplyDraftToEditor: () -> Unit,
-    onClose: () -> Unit,
     onRun: () -> Unit,
-    onNewConversation: (() -> Unit)? = null,
+    onClose: () -> Unit,
+    onBackToInput: () -> Unit,
+    onStartReview: () -> Unit,
+    onAcceptChunk: (Int) -> Unit,
+    onRejectChunk: (Int) -> Unit,
+    onAcceptAll: () -> Unit,
+    onApplyChanges: () -> Unit,
+    onCancelReview: () -> Unit,
+    onClearConversation: () -> Unit,
 ) {
     Div({
         style {
@@ -3645,6 +3833,96 @@ private fun KnowledgeCopilotSidebar(
             property("box-sizing", "border-box")
         }
     }) {
+        when (sidebarState) {
+            CopilotSidebarState.INPUT -> CopilotInputState(
+                entry = entry,
+                topic = topic,
+                instruction = instruction,
+                isRunning = isRunning,
+                feedbackMessage = feedbackMessage,
+                copilotMode = copilotMode,
+                sidebarWidth = sidebarWidth,
+                onInstructionChange = onInstructionChange,
+                onRun = onRun,
+                onClose = onClose,
+                onClearConversation = onClearConversation,
+            )
+            CopilotSidebarState.PREVIEW -> CopilotPreviewState(
+                assistantReply = assistantReply,
+                draft = draft,
+                isRunning = isRunning,
+                feedbackMessage = feedbackMessage,
+                onBackToInput = onBackToInput,
+                onStartReview = onStartReview,
+                onRun = onRun,
+                onInstructionChange = onInstructionChange,
+                instruction = instruction,
+                onClose = onClose,
+            )
+            CopilotSidebarState.REVIEW -> CopilotReviewState(
+                diffChunks = diffChunks,
+                acceptedChunkIndices = acceptedChunkIndices,
+                rejectedChunkIndices = rejectedChunkIndices,
+                onAcceptChunk = onAcceptChunk,
+                onRejectChunk = onRejectChunk,
+                onAcceptAll = onAcceptAll,
+                onApplyChanges = onApplyChanges,
+                onCancelReview = onCancelReview,
+                onClose = onClose,
+            )
+        }
+    }
+}
+
+// ==================== State 1: Input ====================
+
+@Composable
+@Suppress("UNUSED_PARAMETER", "CyclomaticComplexMethod")
+private fun CopilotInputState(
+    entry: KBEntryItem?,
+    topic: KBTopicItem?,
+    instruction: String,
+    isRunning: Boolean,
+    feedbackMessage: String,
+    copilotMode: CopilotMode,
+    @Suppress("UNUSED_PARAMETER") sidebarWidth: Double,
+    onInstructionChange: (String) -> Unit,
+    onRun: () -> Unit,
+    onClose: () -> Unit,
+    onClearConversation: () -> Unit,
+) {
+    // "⋯" menu state
+    var showMenu by remember { mutableStateOf(false) }
+    val menuAnchorId = remember { "kb-copilot-menu-${Random.nextInt(1_000_000)}" }
+
+    if (showMenu) {
+        DisposableEffect(menuAnchorId) {
+            val listener: (Event) -> Unit = { event ->
+                val target = event.target as? org.w3c.dom.Node
+                val root = document.getElementById(menuAnchorId)
+                if (root?.contains(target) != true) showMenu = false
+            }
+            val keyListener: (Event) -> Unit = { event ->
+                if ((event as? KeyboardEvent)?.key == "Escape") showMenu = false
+            }
+            document.addEventListener("mousedown", listener)
+            document.addEventListener("keydown", keyListener)
+            onDispose {
+                document.removeEventListener("mousedown", listener)
+                document.removeEventListener("keydown", keyListener)
+            }
+        }
+    }
+
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            height(100.percent)
+            property("min-height", "0")
+            property("overflow", "hidden")
+        }
+    }) {
         // Header
         Div({
             style {
@@ -3656,50 +3934,80 @@ private fun KnowledgeCopilotSidebar(
                 property("flex-shrink", "0")
             }
         }) {
+            Span({
+                style {
+                    fontSize(14.px)
+                    fontWeight("600")
+                    color(Color(SilkColors.textPrimary))
+                }
+            }) { Text("KB Copilot") }
             Div({
                 style {
                     display(DisplayStyle.Flex)
+                    property("gap", "4px")
                     alignItems(AlignItems.Center)
-                    property("gap", "8px")
                 }
             }) {
-                Span({
-                    style {
-                        fontSize(14.px)
-                        fontWeight("600")
-                        color(Color(SilkColors.textPrimary))
+                // "⋯" menu button
+                Div({ attr("id", menuAnchorId); style { position(Position.Relative) } }) {
+                    Button({
+                        style {
+                            property("background", "none")
+                            border(0.px)
+                            property("cursor", "pointer")
+                            fontSize(18.px)
+                            color(Color(SilkColors.textSecondary))
+                            padding(4.px, 8.px)
+                            display(DisplayStyle.Flex)
+                            alignItems(AlignItems.Center)
+                            justifyContent(JustifyContent.Center)
+                            property("line-height", "1")
+                            property("letter-spacing", "2px")
+                        }
+                        onClick { showMenu = !showMenu }
+                    }) { Text("⋯") }
+                    if (showMenu) {
+                        Div({
+                            style {
+                                position(Position.Absolute)
+                                top(32.px)
+                                right(0.px)
+                                backgroundColor(Color("#FFFFFF"))
+                                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                                borderRadius(8.px)
+                                padding(4.px, 0.px)
+                                property("min-width", "150px")
+                                property("box-shadow", "0 8px 24px rgba(0,0,0,0.10)")
+                                property("z-index", "30")
+                                display(DisplayStyle.Flex)
+                                flexDirection(FlexDirection.Column)
+                            }
+                        }) {
+                            CopilotMenuRow("清空会话") { showMenu = false; onClearConversation() }
+                            CopilotMenuRow("查看历史对话") { showMenu = false }
+                            CopilotMenuRow("Copilot 设置") { showMenu = false }
+                            CopilotMenuRow("反馈问题") { showMenu = false }
+                        }
                     }
-                }) { Text("KB Copilot") }
-                Span({
-                    style {
-                        fontSize(11.px)
-                        padding(2.px, 6.px)
-                        borderRadius(4.px)
-                        backgroundColor(Color("#E8F4FD"))
-                        color(Color("#1A73E8"))
-                        fontWeight("500")
-                    }
-                }) { Text(if (copilotMode == CopilotMode.TOPIC) "空间" else "条目") }
-            }
-            Button({
-                style {
-                    property("background", "none")
-                    border(0.px)
-                    property("cursor", "pointer")
-                    fontSize(18.px)
-                    color(Color(SilkColors.textSecondary))
-                    padding(4.px)
-                    display(DisplayStyle.Flex)
-                    alignItems(AlignItems.Center)
-                    justifyContent(JustifyContent.Center)
-                    property("line-height", "1")
                 }
-                onClick { onClose() }
-            }) {
-                Text("✕")
+                Button({
+                    style {
+                        property("background", "none")
+                        border(0.px)
+                        property("cursor", "pointer")
+                        fontSize(18.px)
+                        color(Color(SilkColors.textSecondary))
+                        padding(4.px)
+                        display(DisplayStyle.Flex)
+                        alignItems(AlignItems.Center)
+                        justifyContent(JustifyContent.Center)
+                        property("line-height", "1")
+                    }
+                    onClick { onClose() }
+                }) { Text("✕") }
             }
         }
-        // Current context info
+        // Current entry context
         Div({
             style {
                 padding(10.px, 16.px)
@@ -3707,29 +4015,17 @@ private fun KnowledgeCopilotSidebar(
                 property("flex-shrink", "0")
             }
         }) {
-            when (copilotMode) {
-                CopilotMode.ENTRY -> {
-                    Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); fontWeight("600"); marginBottom(4.px) } }) {
-                        Text("当前条目")
-                    }
-                    Div({ style { fontSize(13.px); color(Color(SilkColors.textPrimary)); property("word-break", "break-all") } }) {
-                        Text(entry?.title?.ifBlank { "未命名" } ?: "")
-                    }
-                }
-                CopilotMode.TOPIC -> {
-                    Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); fontWeight("600"); marginBottom(4.px) } }) {
-                        Text("当前主题")
-                    }
-                    Div({ style { fontSize(13.px); color(Color(SilkColors.textPrimary)); property("word-break", "break-all") } }) {
-                        Text(topic?.name?.ifBlank { "未命名" } ?: "")
-                    }
-                    Div({ style { fontSize(11.px); marginTop(4.px); color(Color(SilkColors.textSecondary)) } }) {
-                        Text("Copilot 将在此主题中创建新条目。如要编辑已有条目，请先选择一个条目。")
-                    }
+            Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); fontWeight("600"); marginBottom(4.px) } }) {
+                Text("正在编辑")
+            }
+            Div({ style { fontSize(13.px); color(Color(SilkColors.textPrimary)); property("word-break", "break-all") } }) {
+                when (copilotMode) {
+                    CopilotMode.ENTRY -> Text(entry?.title?.ifBlank { "未命名" } ?: "")
+                    CopilotMode.TOPIC -> Text(topic?.name?.ifBlank { "未命名" } ?: "")
                 }
             }
         }
-        // Scrollable body
+        // Scrollable input area
         Div({
             style {
                 property("flex", "1")
@@ -3740,59 +4036,6 @@ private fun KnowledgeCopilotSidebar(
                 property("gap", "12px")
             }
         }) {
-            // Conversation history (multi-turn)
-            if (conversationHistory.isNotEmpty()) {
-                Div({
-                    style {
-                        display(DisplayStyle.Flex)
-                        flexDirection(FlexDirection.Column)
-                        property("gap", "8px")
-                        property("flex-shrink", "0")
-                    }
-                }) {
-                    Span({
-                        style {
-                            fontSize(12.px)
-                            color(Color(SilkColors.textSecondary))
-                            fontWeight("600")
-                        }
-                    }) { Text("对话历史 (${conversationHistory.size} 轮)") }
-                    conversationHistory.forEach { turn ->
-                        Div({
-                            style {
-                                padding(8.px, 10.px)
-                                borderRadius(6.px)
-                                fontSize(12.px)
-                                property("line-height", "1.5")
-                                backgroundColor(
-                                    if (turn.role == "user") Color("#F0F4FF")
-                                    else Color("#F8F8FA")
-                                )
-                                border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                            }
-                        }) {
-                            Span({
-                                style {
-                                    fontWeight("600")
-                                    fontSize(11.px)
-                                    color(
-                                        if (turn.role == "user") Color("#1A73E8")
-                                        else Color(SilkColors.textSecondary)
-                                    )
-                                    marginBottom(4.px)
-                                    display(DisplayStyle.Block)
-                                }
-                            }) {
-                                Text(if (turn.role == "user") "🙋 你" else "🤖 AI")
-                            }
-                            Span({
-                                style { color(Color(SilkColors.textPrimary)) }
-                            }) { Text(turn.content) }
-                        }
-                    }
-                }
-            }
-            // Instruction input
             Div({
                 style {
                     display(DisplayStyle.Flex)
@@ -3808,10 +4051,7 @@ private fun KnowledgeCopilotSidebar(
                         fontWeight("600")
                     }
                 }) {
-                    Text(
-                        if (conversationHistory.isNotEmpty()) "继续修改" else
-                        if (copilotMode == CopilotMode.TOPIC) "想创建什么文档" else "让 AI 怎么改"
-                    )
+                    Text("你想怎么修改这篇文档？")
                 }
                 TextArea {
                     value(instruction)
@@ -3822,17 +4062,10 @@ private fun KnowledgeCopilotSidebar(
                             onRun()
                         }
                     }
-                    attr("placeholder",
-                        if (conversationHistory.isNotEmpty())
-                            "例如：在这个基础上增加一个章节…"
-                        else if (copilotMode == CopilotMode.TOPIC)
-                            "例如：创建一个关于部署流程的指南"
-                        else
-                            "例如：整理结构，补充验证步骤"
-                    )
+                    attr("placeholder", if (copilotMode == CopilotMode.TOPIC) "例如：创建一个关于部署流程的指南" else "例如：补充 Markdown 表格示例并统一各级标题结构")
                     style {
                         width(100.percent)
-                        height(if (conversationHistory.isNotEmpty()) 80.px else 100.px)
+                        height(120.px)
                         borderRadius(8.px)
                         border(1.px, LineStyle.Solid, Color(SilkColors.border))
                         padding(10.px)
@@ -3845,48 +4078,222 @@ private fun KnowledgeCopilotSidebar(
                     }
                 }
             }
-            // Run / Continue button
+            // Single primary button
             Div({
                 style { property("flex-shrink", "0") }
             }) {
                 KnowledgeToolbarButton(
-                    label = buildString {
-                        append(
-                            if (isRunning) "执行中..."
-                            else if (applyChanges) "执行并写回"
-                            else if (copilotMode == CopilotMode.TOPIC) "生成草稿并创建条目"
-                            else "生成草稿"
-                        )
-                        if (!isRunning) append("  (⌘Enter)")
-                    },
-                    background = SilkColors.info,
+                    label = if (isRunning) "执行中..." else "生成修改",
+                    background = SilkColors.primary,
                     enabled = !isRunning && instruction.trim().isNotBlank(),
                     onClick = onRun,
                 )
             }
-            // New conversation button
-            if (conversationHistory.isNotEmpty() && onNewConversation != null) {
+            // Feedback message (error/success)
+            if (feedbackMessage.isNotBlank()) {
                 Div({
-                    style { property("flex-shrink", "0") }
+                    style {
+                        padding(8.px, 10.px)
+                        borderRadius(6.px)
+                        backgroundColor(Color("#F4FAF6"))
+                        color(Color(SilkColors.textSecondary))
+                        fontSize(12.px)
+                        property("flex-shrink", "0")
+                    }
                 }) {
-                    KnowledgeToolbarButton(
-                        label = "🔄 新对话",
-                        background = SilkColors.textLight,
-                        enabled = !isRunning,
-                        onClick = onNewConversation,
-                    )
+                    Text(feedbackMessage)
                 }
             }
-            // Apply toggle
-            Div({
-                style { property("flex-shrink", "0") }
+        }
+    }
+}
+
+// ==================== State 2: Preview ====================
+
+@Composable
+private fun CopilotPreviewState(
+    assistantReply: String,
+    draft: KnowledgeBaseCopilotDraft?,
+    isRunning: Boolean,
+    feedbackMessage: String,
+    onBackToInput: () -> Unit,
+    onStartReview: () -> Unit,
+    onRun: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") onInstructionChange: (String) -> Unit,
+    @Suppress("UNUSED_PARAMETER") instruction: String,
+    onClose: () -> Unit,
+) {
+    // Build change summary from diff chunks
+    val changeSummary = remember(draft?.diffChunks) {
+        draft?.diffChunks?.let { buildChangeSummary(it) } ?: ""
+    }
+    // First paragraph of AI reply as brief description
+    val briefDescription = remember(assistantReply) {
+        assistantReply.trim().lines().firstOrNull()?.take(120) ?: ""
+    }
+
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            height(100.percent)
+            property("min-height", "0")
+            property("overflow", "hidden")
+        }
+    }) {
+        // Header with back button
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
+                alignItems(AlignItems.Center)
+                padding(12.px, 16.px)
+                property("border-bottom", "1px solid ${SilkColors.border}")
+                property("flex-shrink", "0")
+            }
+        }) {
+            Button({
+                style {
+                    property("background", "none")
+                    border(0.px)
+                    property("cursor", "pointer")
+                    fontSize(13.px)
+                    color(Color(SilkColors.primaryDark))
+                    padding(0.px)
+                    fontWeight("500")
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    property("gap", "4px")
+                }
+                onClick { onBackToInput() }
             }) {
-                KnowledgeBooleanSetting(
-                    label = "直接写回知识库",
-                    description = if (copilotMode == CopilotMode.TOPIC) "开启后直接创建新条目，关闭则只生成草稿" else "开启后直接更新当前条目，关闭则只生成草稿",
-                    value = applyChanges,
-                    onChange = onApplyChangesChange,
-                )
+                Text("← 返回修改要求")
+            }
+            Button({
+                style {
+                    property("background", "none")
+                    border(0.px)
+                    property("cursor", "pointer")
+                    fontSize(18.px)
+                    color(Color(SilkColors.textSecondary))
+                    padding(4.px)
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    justifyContent(JustifyContent.Center)
+                    property("line-height", "1")
+                }
+                onClick { onClose() }
+            }) { Text("✕") }
+        }
+        // Scrollable content
+        Div({
+            style {
+                property("flex", "1")
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("overflow-y", "auto")
+                padding(12.px, 16.px)
+                property("gap", "12px")
+            }
+        }) {
+            // Result header
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "4px")
+                    property("flex-shrink", "0")
+                }
+            }) {
+                Span({
+                    style {
+                        fontSize(15.px)
+                        fontWeight("600")
+                        color(Color(SilkColors.textPrimary))
+                    }
+                }) { Text("已生成修改") }
+                if (briefDescription.isNotBlank()) {
+                    Span({
+                        style {
+                            fontSize(13.px)
+                            color(Color(SilkColors.textSecondary))
+                            property("line-height", "1.5")
+                        }
+                    }) { Text(briefDescription) }
+                }
+            }
+            // Change summary
+            if (changeSummary.isNotBlank()) {
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        flexDirection(FlexDirection.Column)
+                        property("gap", "6px")
+                        property("flex-shrink", "0")
+                    }
+                }) {
+                    Span({
+                        style {
+                            fontSize(12.px)
+                            color(Color(SilkColors.textSecondary))
+                            fontWeight("600")
+                        }
+                    }) { Text("变更摘要") }
+                    Span({
+                        style {
+                            fontSize(13.px)
+                            color(Color(SilkColors.textPrimary))
+                            property("line-height", "1.6")
+                        }
+                    }) { Text(changeSummary) }
+                }
+            }
+            // Compact preview
+            draft?.let { draftValue ->
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        flexDirection(FlexDirection.Column)
+                        property("gap", "6px")
+                        property("flex-shrink", "0")
+                    }
+                }) {
+                    Span({
+                        style {
+                            fontSize(12.px)
+                            color(Color(SilkColors.textSecondary))
+                            fontWeight("600")
+                        }
+                    }) { Text("修改预览") }
+                    Div({
+                        style {
+                            padding(10.px)
+                            borderRadius(8.px)
+                            backgroundColor(Color("#FFFFFF"))
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        }
+                    }) {
+                        Div({ style { fontSize(14.px); fontWeight("600"); marginBottom(6.px) } }) {
+                            Text(draftValue.title)
+                        }
+                        Div({
+                            style {
+                                property("max-height", "140px")
+                                property("overflow-y", "auto")
+                                backgroundColor(Color("#FFFDF8"))
+                                borderRadius(6.px)
+                                padding(8.px)
+                                fontSize(13.px)
+                                property("line-height", "1.5")
+                                property("color", SilkColors.textSecondary)
+                            }
+                        }) {
+                            // Show only first 300 chars as a teaser
+                            val teaser = draftValue.content.take(300)
+                            Text(teaser + if (draftValue.content.length > 300) "…" else "")
+                        }
+                    }
+                }
             }
             // Feedback message
             if (feedbackMessage.isNotBlank()) {
@@ -3903,41 +4310,216 @@ private fun KnowledgeCopilotSidebar(
                     Text(feedbackMessage)
                 }
             }
-            // AI reply
-            if (assistantReply.isNotBlank()) {
-                Div({
+            // Buttons
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    flexDirection(FlexDirection.Column)
+                    property("gap", "6px")
+                    property("flex-shrink", "0")
+                    marginTop(4.px)
+                }
+            }) {
+                // Primary: start review
+                KnowledgeToolbarButton(
+                    label = "查看并审阅修改",
+                    background = SilkColors.primary,
+                    enabled = !isRunning && draft?.diffChunks?.isNotEmpty() == true,
+                    onClick = onStartReview,
+                )
+                // Secondary: regenerate
+                Button({
                     style {
-                        display(DisplayStyle.Flex)
-                        flexDirection(FlexDirection.Column)
-                        property("gap", "6px")
-                        property("flex-shrink", "0")
+                        property("background", "none")
+                        border(0.px)
+                        property("cursor", if (isRunning) "not-allowed" else "pointer")
+                        fontSize(13.px)
+                        color(Color(SilkColors.textSecondary))
+                        padding(6.px, 14.px)
+                        property("text-decoration", "underline")
+                    }
+                    if (isRunning) {
+                        attr("disabled", "true")
+                    }
+                    onClick {
+                        if (!isRunning) onRun()
                     }
                 }) {
-                    Span({
-                        style {
-                            fontSize(13.px)
-                            color(Color(SilkColors.textSecondary))
-                            fontWeight("600")
-                        }
-                    }) { Text("AI 说明") }
-                    Div({
-                        style {
-                            property("max-height", "150px")
-                            property("overflow-y", "auto")
-                            padding(10.px)
-                            borderRadius(6.px)
-                            backgroundColor(Color("#FFFDF8"))
-                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                            fontSize(13.px)
-                            property("line-height", "1.5")
-                        }
-                    }) {
-                        MarkdownContent(assistantReply)
-                    }
+                    Text("重新生成")
                 }
             }
-            // Draft preview
-            draft?.let { draftValue ->
+        }
+    }
+}
+
+// ==================== State 3: Review ====================
+
+@Composable
+private fun CopilotReviewState(
+    diffChunks: List<DiffChunk>,
+    acceptedChunkIndices: Set<Int>,
+    rejectedChunkIndices: Set<Int>,
+    onAcceptChunk: (Int) -> Unit,
+    onRejectChunk: (Int) -> Unit,
+    onAcceptAll: () -> Unit,
+    onApplyChanges: () -> Unit,
+    onCancelReview: () -> Unit,
+    onClose: () -> Unit,
+) {
+    val totalChunks = diffChunks.size
+    val decidedCount = acceptedChunkIndices.size + rejectedChunkIndices.size
+    val allDecided = decidedCount >= totalChunks && totalChunks > 0
+    val acceptedCount = acceptedChunkIndices.size
+    val rejectedCount = rejectedChunkIndices.size
+
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Column)
+            height(100.percent)
+            property("min-height", "0")
+            property("overflow", "hidden")
+        }
+    }) {
+        // Header
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.SpaceBetween)
+                alignItems(AlignItems.Center)
+                padding(12.px, 16.px)
+                property("border-bottom", "1px solid ${SilkColors.border}")
+                property("flex-shrink", "0")
+            }
+        }) {
+            Span({
+                style {
+                    fontSize(14.px)
+                    fontWeight("600")
+                    color(Color(SilkColors.textPrimary))
+                }
+            }) { Text("修改审阅") }
+            Button({
+                style {
+                    property("background", "none")
+                    border(0.px)
+                    property("cursor", "pointer")
+                    fontSize(18.px)
+                    color(Color(SilkColors.textSecondary))
+                    padding(4.px)
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    justifyContent(JustifyContent.Center)
+                    property("line-height", "1")
+                }
+                onClick { onClose() }
+            }) { Text("✕") }
+        }
+        // Scrollable content
+        Div({
+            style {
+                property("flex", "1")
+                display(DisplayStyle.Flex)
+                flexDirection(FlexDirection.Column)
+                property("overflow-y", "auto")
+                padding(12.px, 16.px)
+                property("gap", "12px")
+            }
+        }) {
+            // Progress
+            Div({
+                style {
+                    padding(8.px, 12.px)
+                    borderRadius(8.px)
+                    backgroundColor(Color("#F8F8FA"))
+                    fontSize(13.px)
+                    color(Color(SilkColors.textPrimary))
+                    fontWeight("500")
+                    property("flex-shrink", "0")
+                }
+            }) {
+                Text("已处理 $decidedCount / $totalChunks 处")
+            }
+
+            if (!allDecided) {
+                // Current modification context
+                if (diffChunks.isNotEmpty()) {
+                    val currentUndecidedIndex = diffChunks.indices.firstOrNull { idx ->
+                        idx !in acceptedChunkIndices && idx !in rejectedChunkIndices
+                    }
+                    if (currentUndecidedIndex != null) {
+                        val currentChunk = diffChunks[currentUndecidedIndex]
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                flexDirection(FlexDirection.Column)
+                                property("gap", "6px")
+                                property("flex-shrink", "0")
+                            }
+                        }) {
+                            Span({
+                                style {
+                                    fontSize(12.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    fontWeight("600")
+                                }
+                            }) { Text("当前修改") }
+                            Div({
+                                style {
+                                    padding(8.px, 10.px)
+                                    borderRadius(6.px)
+                                    backgroundColor(Color("#FFFDF8"))
+                                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                                    fontSize(13.px)
+                                    property("line-height", "1.5")
+                                    property("max-height", "100px")
+                                    property("overflow-y", "auto")
+                                }
+                            }) {
+                                val typeLabel = when (currentChunk.type) {
+                                    "inserted" -> "新增内容"
+                                    "deleted" -> "删除内容"
+                                    "modified" -> "修改内容"
+                                    else -> "内容变更"
+                                }
+                                Text("$typeLabel (L${currentChunk.lineStart + 1}-L${currentChunk.lineEnd + 1})")
+                            }
+                        }
+                        // Chunk-level actions
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                flexDirection(FlexDirection.Column)
+                                property("gap", "6px")
+                                property("flex-shrink", "0")
+                            }
+                        }) {
+                            KnowledgeToolbarButton(
+                                label = if (currentChunk.type == "deleted") "接受此删除" else "接受此修改",
+                                background = SilkColors.success,
+                                enabled = true,
+                                onClick = { onAcceptChunk(currentUndecidedIndex) },
+                            )
+                            if (currentChunk.type != "unchanged") {
+                                KnowledgeToolbarButton(
+                                    label = if (currentChunk.type == "inserted") "跳过此新增" else "跳过此修改",
+                                    background = SilkColors.textSecondary,
+                                    enabled = true,
+                                    onClick = { onRejectChunk(currentUndecidedIndex) },
+                                )
+                            }
+                        }
+                    }
+                }
+                // Global actions divider
+                Div({
+                    style {
+                        property("border-top", "1px solid ${SilkColors.border}")
+                        marginTop(4.px)
+                        property("flex-shrink", "0")
+                    }
+                }) {}
+                // Global actions
                 Div({
                     style {
                         display(DisplayStyle.Flex)
@@ -3946,56 +4528,100 @@ private fun KnowledgeCopilotSidebar(
                         property("flex-shrink", "0")
                     }
                 }) {
-                    Span({
+                    KnowledgeToolbarButton(
+                        label = "接受全部",
+                        background = SilkColors.primary,
+                        enabled = acceptedChunkIndices.size < totalChunks,
+                        onClick = onAcceptAll,
+                    )
+                    Button({
                         style {
+                            property("background", "none")
+                            border(0.px)
+                            property("cursor", "pointer")
                             fontSize(13.px)
-                            color(Color(SilkColors.textSecondary))
-                            fontWeight("600")
+                            color(Color(SilkColors.error))
+                            padding(6.px, 14.px)
                         }
-                    }) { Text("草稿预览") }
+                        onClick { onCancelReview() }
+                    }) {
+                        Text("放弃全部修改")
+                    }
+                }
+            } else {
+                // All decided: final confirmation
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        flexDirection(FlexDirection.Column)
+                        property("gap", "8px")
+                        property("flex-shrink", "0")
+                    }
+                }) {
                     Div({
                         style {
-                            padding(10.px)
-                            borderRadius(6.px)
-                            backgroundColor(Color("#FFFFFF"))
-                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            padding(8.px, 12.px)
+                            borderRadius(8.px)
+                            backgroundColor(Color("#F4FAF6"))
+                            fontSize(13.px)
+                            color(Color(SilkColors.textPrimary))
+                            property("line-height", "1.6")
                         }
                     }) {
-                        Div({ style { fontSize(14.px); fontWeight("600"); marginBottom(6.px) } }) {
-                            Text(draftValue.title)
-                        }
-                        if (draftValue.tags.isNotEmpty()) {
-                            Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); marginBottom(6.px) } }) {
-                                Text("标签: ${draftValue.tags.joinToString(", ")}")
-                            }
-                        }
-                        Div({
-                            style {
-                                property("max-height", "160px")
-                                property("overflow-y", "auto")
-                                backgroundColor(Color("#FFFDF8"))
-                                borderRadius(6.px)
-                                padding(10.px)
-                                fontSize(13.px)
-                                property("line-height", "1.5")
-                            }
-                        }) {
-                            MarkdownContent(draftValue.content)
-                        }
+                        Text("已选择 $acceptedCount 项修改" +
+                            if (rejectedCount > 0) "，跳过 $rejectedCount 项" else "")
                     }
-                    if (!applyChanges) {
-                        Div({ style { marginTop(4.px) } }) {
-                            KnowledgeToolbarButton(
-                                label = "在编辑器中显示修改",
-                                background = SilkColors.primaryDark,
-                                enabled = !isRunning && draft?.diffChunks?.isNotEmpty() == true,
-                                onClick = onApplyDraftToEditor,
-                            )
+                    KnowledgeToolbarButton(
+                        label = "应用到文档",
+                        background = SilkColors.primary,
+                        enabled = acceptedCount > 0,
+                        onClick = onApplyChanges,
+                    )
+                    Button({
+                        style {
+                            property("background", "none")
+                            border(0.px)
+                            property("cursor", "pointer")
+                            fontSize(13.px)
+                            color(Color(SilkColors.textSecondary))
+                            padding(6.px, 14.px)
                         }
+                        onClick { onCancelReview() }
+                    }) {
+                        Text("取消")
                     }
                 }
             }
         }
+    }
+}
+
+// ==================== Shared Components ====================
+
+@Composable
+private fun CopilotMenuRow(label: String, onClick: () -> Unit) {
+    Div({
+        style {
+            padding(8.px, 14.px)
+            fontSize(13.px)
+            color(Color(SilkColors.textPrimary))
+            property("cursor", "pointer")
+            property("white-space", "nowrap")
+            property("transition", "background-color 100ms ease")
+        }
+        onClick { onClick() }
+        onMouseOver {
+            val el = it.currentTarget.asDynamic()
+            el.style.backgroundColor = SilkColors.background
+            Unit
+        }
+        onMouseOut {
+            val el = it.currentTarget.asDynamic()
+            el.style.backgroundColor = "transparent"
+            Unit
+        }
+    }) {
+        Text(label)
     }
 }
 
@@ -4166,6 +4792,7 @@ private fun KnowledgeColumnHeader(
     actionLabel: String?,
     actionEnabled: Boolean = true,
     secondaryAction: KnowledgeHeaderSecondaryAction? = null,
+    onCollapse: (() -> Unit)? = null,
     onAction: () -> Unit,
 ) {
     Div({
@@ -4187,6 +4814,25 @@ private fun KnowledgeColumnHeader(
                 alignItems(AlignItems.Center)
             }
         }) {
+            if (onCollapse != null) {
+                Button({
+                    attr("title", "收起列表")
+                    style {
+                        backgroundColor(Color(SilkColors.surfaceElevated))
+                        color(Color(SilkColors.textSecondary))
+                        property("border", "1px solid ${SilkColors.border}")
+                        borderRadius(6.px)
+                        padding(4.px, 10.px)
+                        property("cursor", "pointer")
+                        fontSize(12.px)
+                        property("white-space", "nowrap")
+                    }
+                    onClick {
+                        it.stopPropagation()
+                        onCollapse()
+                    }
+                }) { Text("\u00AB") }
+            }
             secondaryAction?.let { action ->
                 KnowledgeInlineActionButton(
                     label = action.label,
@@ -4212,6 +4858,7 @@ private fun KnowledgeInlineActionButton(
     label: String,
     background: String,
     enabled: Boolean = true,
+    title: String? = null,
     onClick: () -> Unit,
 ) {
     Button({
@@ -4224,6 +4871,9 @@ private fun KnowledgeInlineActionButton(
             property("cursor", if (enabled) "pointer" else "not-allowed")
             fontSize(12.px)
             property("white-space", "nowrap")
+        }
+        if (title != null) {
+            attr("title", title)
         }
         if (!enabled) {
             attr("disabled", "true")
@@ -5077,7 +5727,6 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     }
     var copilotInstruction by remember(selectedEntry?.id) { mutableStateOf(KNOWLEDGE_COPILOT_DEFAULT_PROMPT) }
     var isCopilotRunning by remember { mutableStateOf(false) }
-    var copilotApplyChanges by remember { mutableStateOf(false) }
     var copilotFeedback by remember { mutableStateOf("") }
     var copilotReply by remember { mutableStateOf("") }
     var copilotDraft by remember { mutableStateOf<KnowledgeBaseCopilotDraft?>(null) }
@@ -5089,6 +5738,12 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var rejectedChunkIndices by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var diffOriginalContent by remember { mutableStateOf("") }
     var diffTargetTitle by remember { mutableStateOf("") }
+    // Derive sidebar state from draft and diff review
+    val effectiveSidebarState: CopilotSidebarState = when {
+        showDiffReview -> CopilotSidebarState.REVIEW
+        copilotDraft != null -> CopilotSidebarState.PREVIEW
+        else -> CopilotSidebarState.INPUT
+    }
     var activeDragPayload by remember { mutableStateOf<KnowledgeEntryDragPayload?>(null) }
     var activeDropTopicId by remember { mutableStateOf<String?>(null) }
     var showTopicManageMode by remember(selectedSpaceId) { mutableStateOf(false) }
@@ -5101,6 +5756,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var isDeleteTopicSaving by remember { mutableStateOf(false) }
     var showTopicAccessDialog by remember { mutableStateOf(false) }
     var topicsSidebarCollapsed by remember { mutableStateOf(LayoutPrefs.getBool("kb_sidebar_collapsed", false)) }
+    var entrySidebarCollapsed by remember { mutableStateOf(LayoutPrefs.getBool("kb_entry_sidebar_collapsed", false)) }
     var editableTopicName by remember { mutableStateOf("") }
     var editableTopicProject by remember { mutableStateOf("") }
     var editableReadUserIds by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -5376,7 +6032,12 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             persistKnowledgePaneNumber(KNOWLEDGE_TOPIC_SIDEBAR_WIDTH_KEY, topicSidebarWidth)
         }
         }
-        if (showGroupFilesView) {
+        if (entrySidebarCollapsed) {
+            ReopenBar(onExpand = {
+                entrySidebarCollapsed = false
+                LayoutPrefs.setBool("kb_entry_sidebar_collapsed", false)
+            })
+        } else if (showGroupFilesView) {
             GroupFilesContent(
                 groupFilesResponse = groupFilesResponse,
                 isLoading = isGroupFilesLoading,
@@ -5400,6 +6061,10 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 canDragEntries = canEditSelectedTopic && selectedTopic != null && moveTargetTopics.isNotEmpty(),
                 selectedCandidateEntryIds = selectedCandidateEntryIds,
                 canBatchMergeCandidates = selectedCandidateEntryIds.isNotEmpty(),
+                onCollapse = {
+                    entrySidebarCollapsed = true
+                    LayoutPrefs.setBool("kb_entry_sidebar_collapsed", true)
+                },
                 onFilterChange = { entryFilter = it },
                 onSearchQueryChange = { entrySearchQuery = it },
                 onCreateEntry = { showCreateEntryDialog = true },
@@ -5494,11 +6159,15 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 },
             )
         }
-        KnowledgeHorizontalResizeHandle(storageHint = "entry-sidebar") { deltaPx ->
-            entrySidebarWidth = clampKnowledgeSidebarWidth(entrySidebarWidth + deltaPx)
-            persistKnowledgePaneNumber(KNOWLEDGE_ENTRY_SIDEBAR_WIDTH_KEY, entrySidebarWidth)
+        if (!entrySidebarCollapsed) {
+            KnowledgeHorizontalResizeHandle(storageHint = "entry-sidebar") { deltaPx ->
+                entrySidebarWidth = clampKnowledgeSidebarWidth(entrySidebarWidth + deltaPx)
+                persistKnowledgePaneNumber(KNOWLEDGE_ENTRY_SIDEBAR_WIDTH_KEY, entrySidebarWidth)
+            }
         }
-        val baseEditorWidth = window.innerWidth.toDouble() - topicSidebarWidth - entrySidebarWidth - 20.0
+        val effectiveEntrySidebarWidth = if (entrySidebarCollapsed) 0.0 else entrySidebarWidth
+        val effectiveTopicSidebarWidth = if (topicsSidebarCollapsed) 0.0 else topicSidebarWidth
+        val baseEditorWidth = window.innerWidth.toDouble() - effectiveTopicSidebarWidth - effectiveEntrySidebarWidth - 20.0
         // Copilot sidebar + resize handle (10px) + gap (8px)
         val copilotSidebarOffset = if (showCopilotSidebar) (copilotSidebarWidth + 18.0) else 0.0
 
@@ -5520,12 +6189,11 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             }
         }) {
             if (showDiffReview) {
-                // Diff review mode: show the diff review pane + apply/cancel handlers
+                // Diff review mode: show diff chunks without action buttons (controlled from sidebar)
                 DiffReviewPane(
                     chunks = diffChunks,
                     accepted = acceptedChunkIndices,
                     rejected = rejectedChunkIndices,
-                    targetTitle = diffTargetTitle,
                     onAcceptChunk = { index ->
                         acceptedChunkIndices = acceptedChunkIndices + index
                         rejectedChunkIndices = rejectedChunkIndices - index
@@ -5533,29 +6201,6 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                     onRejectChunk = { index ->
                         rejectedChunkIndices = rejectedChunkIndices + index
                         acceptedChunkIndices = acceptedChunkIndices - index
-                    },
-                    onAcceptAll = {
-                        val allIndices = diffChunks.indices.toSet()
-                        acceptedChunkIndices = allIndices
-                        rejectedChunkIndices = emptySet()
-                    },
-                    onApplyChanges = {
-                        // Build final content from accepted chunks
-                        val finalContent = buildFinalContentFromDiff(diffChunks, acceptedChunkIndices)
-                        editorTitle = diffTargetTitle
-                        editorContent = finalContent
-                        saveMessage = "已应用 AI 修改草稿，确认后可继续保存"
-                        showDiffReview = false
-                        diffChunks = emptyList()
-                        acceptedChunkIndices = emptySet()
-                        rejectedChunkIndices = emptySet()
-                    },
-                    onCancelReview = {
-                        showDiffReview = false
-                        diffChunks = emptyList()
-                        acceptedChunkIndices = emptySet()
-                        rejectedChunkIndices = emptySet()
-                        saveMessage = "已取消修改"
                     },
                 )
             } else {
@@ -5629,11 +6274,14 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                         if (willShow) {
                             // Reset state when opening for a new entry/topic
                             copilotInstruction = KNOWLEDGE_COPILOT_DEFAULT_PROMPT
-                            copilotApplyChanges = false
                             copilotFeedback = ""
                             copilotReply = ""
                             copilotDraft = null
                             copilotConversationHistory = emptyList()
+                            showDiffReview = false
+                            diffChunks = emptyList()
+                            acceptedChunkIndices = emptySet()
+                            rejectedChunkIndices = emptySet()
                         }
                         showCopilotSidebar = willShow
                     }
@@ -5717,34 +6365,56 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                     entry = selectedEntry,
                     topic = selectedTopic,
                     instruction = copilotInstruction,
-                    applyChanges = copilotApplyChanges,
                     isRunning = isCopilotRunning,
                     feedbackMessage = copilotFeedback,
                     assistantReply = copilotReply,
                     draft = copilotDraft,
                     sidebarWidth = copilotSidebarWidth,
                     copilotMode = currentCopilotMode,
-                    conversationHistory = copilotConversationHistory,
+                    sidebarState = effectiveSidebarState,
+                    diffChunks = diffChunks,
+                    acceptedChunkIndices = acceptedChunkIndices,
+                    rejectedChunkIndices = rejectedChunkIndices,
                     onInstructionChange = { copilotInstruction = it },
-                    onApplyChangesChange = { copilotApplyChanges = it },
-                    onApplyDraftToEditor = {
+                    onRun = {
+                        scope.launch {
+                            runKnowledgeBaseCopilot(
+                                entry = selectedEntry,
+                                topic = selectedTopic,
+                                userId = user.id,
+                                instruction = copilotInstruction,
+                                // Always use applyChanges=false: all drafts go through review
+                                applyChanges = false,
+                                conversationHistory = copilotConversationHistory,
+                                onRunningChange = { isCopilotRunning = it },
+                                onFeedbackChange = { copilotFeedback = it },
+                                onReplyChange = { copilotReply = it },
+                                onDraftChange = { copilotDraft = it },
+                                onConversationHistoryChange = { copilotConversationHistory = it },
+                                onInstructionChange = { copilotInstruction = it },
+                                onSelectedEntryChange = { selectedEntry = it },
+                                onEntriesChange = { entries = it },
+                                onEditorTitleChange = { editorTitle = it },
+                                onEditorContentChange = { editorContent = it },
+                            )
+                        }
+                    },
+                    onClose = { showCopilotSidebar = false },
+                    onBackToInput = {
+                        copilotDraft = null
+                        copilotReply = ""
+                        copilotFeedback = ""
+                    },
+                    onStartReview = {
                         copilotDraft?.let { draft ->
-                            if (currentCopilotMode == CopilotMode.ENTRY) {
-                                // Entry mode: activate diff review if chunks available
-                                if (draft.diffChunks.isNotEmpty()) {
-                                    diffChunks = draft.diffChunks
-                                    diffOriginalContent = editorContent
-                                    diffTargetTitle = draft.title
-                                    acceptedChunkIndices = emptySet()
-                                    rejectedChunkIndices = emptySet()
-                                    showDiffReview = true
-                                } else {
-                                    // Fallback: fill draft into editor
-                                    editorTitle = draft.title
-                                    editorContent = draft.content
-                                    saveMessage = "已把 Copilot 草稿填入当前编辑器，确认后可继续保存"
-                                }
-                            } else {
+                            if (currentCopilotMode == CopilotMode.ENTRY && draft.diffChunks.isNotEmpty()) {
+                                diffChunks = draft.diffChunks
+                                diffOriginalContent = editorContent
+                                diffTargetTitle = draft.title
+                                acceptedChunkIndices = emptySet()
+                                rejectedChunkIndices = emptySet()
+                                showDiffReview = true
+                            } else if (currentCopilotMode == CopilotMode.TOPIC) {
                                 // Topic mode: create entry directly from draft
                                 scope.launch {
                                     isSaving = true
@@ -5767,33 +6437,47 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                                     }
                                     isSaving = false
                                 }
+                            } else {
+                                // Fallback: fill draft into editor
+                                editorTitle = draft.title
+                                editorContent = draft.content
+                                saveMessage = "已把 Copilot 草稿填入当前编辑器，确认后可继续保存"
                             }
                         }
                     },
-                    onClose = { showCopilotSidebar = false },
-                    onRun = {
-                        scope.launch {
-                            runKnowledgeBaseCopilot(
-                                entry = selectedEntry,
-                                topic = selectedTopic,
-                                userId = user.id,
-                                instruction = copilotInstruction,
-                                applyChanges = copilotApplyChanges,
-                                conversationHistory = copilotConversationHistory,
-                                onRunningChange = { isCopilotRunning = it },
-                                onFeedbackChange = { copilotFeedback = it },
-                                onReplyChange = { copilotReply = it },
-                                onDraftChange = { copilotDraft = it },
-                                onConversationHistoryChange = { copilotConversationHistory = it },
-                                onInstructionChange = { copilotInstruction = it },
-                                onSelectedEntryChange = { selectedEntry = it },
-                                onEntriesChange = { entries = it },
-                                onEditorTitleChange = { editorTitle = it },
-                                onEditorContentChange = { editorContent = it },
-                            )
-                        }
+                    onAcceptChunk = { index ->
+                        acceptedChunkIndices = acceptedChunkIndices + index
+                        rejectedChunkIndices = rejectedChunkIndices - index
                     },
-                    onNewConversation = {
+                    onRejectChunk = { index ->
+                        rejectedChunkIndices = rejectedChunkIndices + index
+                        acceptedChunkIndices = acceptedChunkIndices - index
+                    },
+                    onAcceptAll = {
+                        val allIndices = diffChunks.indices.toSet()
+                        acceptedChunkIndices = allIndices
+                        rejectedChunkIndices = emptySet()
+                    },
+                    onApplyChanges = {
+                        val finalContent = buildFinalContentFromDiff(diffChunks, acceptedChunkIndices)
+                        editorTitle = diffTargetTitle
+                        editorContent = finalContent
+                        saveMessage = "修改已应用"
+                        showDiffReview = false
+                        showCopilotSidebar = false
+                        diffChunks = emptyList()
+                        acceptedChunkIndices = emptySet()
+                        rejectedChunkIndices = emptySet()
+                        copilotDraft = null
+                    },
+                    onCancelReview = {
+                        showDiffReview = false
+                        diffChunks = emptyList()
+                        acceptedChunkIndices = emptySet()
+                        rejectedChunkIndices = emptySet()
+                        saveMessage = "已取消修改"
+                    },
+                    onClearConversation = {
                         copilotConversationHistory = emptyList()
                         copilotInstruction = KNOWLEDGE_COPILOT_DEFAULT_PROMPT
                         copilotFeedback = ""
@@ -5907,16 +6591,17 @@ fun KnowledgeBaseScene(appState: WebAppState) {
 
     val activeCopilotEntry = selectedEntry
     if (showCopilotDialog && activeCopilotEntry != null) {
+        // Use the new three-state flow: always applyChanges=false (all drafts go through review)
         KnowledgeCopilotDialog(
             entry = activeCopilotEntry,
             instruction = copilotInstruction,
-            applyChanges = copilotApplyChanges,
+            applyChanges = false,
             isRunning = isCopilotRunning,
             feedbackMessage = copilotFeedback,
             assistantReply = copilotReply,
             draft = copilotDraft,
             onInstructionChange = { copilotInstruction = it },
-            onApplyChangesChange = { copilotApplyChanges = it },
+            onApplyChangesChange = {},
             onApplyDraftToEditor = {
                 copilotDraft?.let { draft ->
                     if (draft.diffChunks.isNotEmpty()) {
@@ -5946,7 +6631,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                         topic = selectedTopic,
                         userId = user.id,
                         instruction = copilotInstruction,
-                        applyChanges = copilotApplyChanges,
+                        applyChanges = false,
                         conversationHistory = emptyList(),
                         onRunningChange = { isCopilotRunning = it },
                         onFeedbackChange = { copilotFeedback = it },
