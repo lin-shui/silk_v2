@@ -9,6 +9,7 @@ import com.silk.shared.models.SILK_AGENT_USER_ID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class KnowledgeBaseSceneLogicTest {
@@ -587,5 +588,95 @@ class KnowledgeBaseSceneLogicTest {
         )
 
         assertEquals(listOf(regularStatus), filterNonKnowledgeBaseContextStatusMessages(listOf(contextStatus, regularStatus)))
+    }
+
+    @Test
+    fun computeLineDiffIdenticalTextsReturnsSingleUnchangedChunk() {
+        val text = "line1\nline2\nline3"
+
+        val diff = computeLineDiff(text, text)
+        assertEquals(1, diff.size)
+        assertEquals("unchanged", diff[0].type)
+        assertEquals(text, diff[0].originalText)
+    }
+
+    @Test
+    fun computeLineDiffDetectsInsertions() {
+        val original = "line1\nline2"
+        val modified = "line1\nline2\nline3"
+
+        val diff = computeLineDiff(original, modified)
+        assertEquals(2, diff.size)
+        assertEquals("unchanged", diff[0].type)
+        assertEquals("inserted", diff[1].type)
+        assertEquals("line3", diff[1].newText)
+    }
+
+    @Test
+    fun computeLineDiffDetectsDeletions() {
+        val original = "line1\nline2\nline3"
+        val modified = "line1\nline3"
+
+        val diff = computeLineDiff(original, modified)
+        assertEquals(3, diff.size)
+        assertEquals("unchanged", diff[0].type)
+        assertEquals("deleted", diff[1].type)
+        assertEquals("line2", diff[1].originalText)
+        assertEquals("unchanged", diff[2].type)
+    }
+
+    @Test
+    fun computeLineDiffDetectsModifications() {
+        val original = "line1\nold line\nline3"
+        val modified = "line1\nnew line\nline3"
+
+        val diff = computeLineDiff(original, modified)
+        val modifiedChunk = diff.find { it.type == "modified" }
+        assertNotNull(modifiedChunk)
+        assertEquals("old line", modifiedChunk.originalText)
+        assertEquals("new line", modifiedChunk.newText)
+    }
+
+    @Test
+    fun computeLineDiffEmptyOriginalBecomesAllInserted() {
+        val diff = computeLineDiff("", "hello\nworld")
+
+        assertEquals(1, diff.size)
+        assertEquals("inserted", diff[0].type)
+        assertEquals("hello\nworld", diff[0].newText)
+    }
+
+    @Test
+    fun computeLineDiffEmptyModifiedBecomesAllDeleted() {
+        val diff = computeLineDiff("hello\nworld", "")
+
+        assertEquals(1, diff.size)
+        assertEquals("deleted", diff[0].type)
+        assertEquals("hello\nworld", diff[0].originalText)
+    }
+
+    @Test
+    fun computeLineDiffAdjacentDeleteInsertBecomesModified() {
+        val original = "keep\nold1\nold2\nkeep2"
+        val modified = "keep\nnew1\nnew2\nkeep2"
+
+        val diff = computeLineDiff(original, modified)
+        val modifiedChunk = diff.find { it.type == "modified" }
+        assertNotNull(modifiedChunk)
+        assertEquals("old1\nold2", modifiedChunk.originalText)
+        assertEquals("new1\nnew2", modifiedChunk.newText)
+    }
+
+    @Test
+    fun computeLineDiffCoalescesConsecutiveSameType() {
+        val original = "a\nb\nc"
+        val modified = "a\nx\ny\nc"
+
+        val diff = computeLineDiff(original, modified)
+        // Expected: unchanged("a"), deleted("b") + inserted("x\ny") -> modified, unchanged("c")
+        val unchangedChunks = diff.filter { it.type == "unchanged" }
+        val modifiedChunks = diff.filter { it.type == "modified" }
+        assertTrue(modifiedChunks.isNotEmpty())
+        assertEquals(2, unchangedChunks.size)
     }
 }

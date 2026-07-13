@@ -1,5 +1,6 @@
 package com.silk.backend.kb
 
+import com.silk.backend.ai.AIConfig
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
@@ -11,6 +12,9 @@ import com.silk.backend.models.KBTopic
 import com.silk.backend.models.KBTopicPurpose
 import com.silk.backend.models.KBFileRef
 import com.silk.backend.models.KnowledgeSpaceType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
@@ -89,14 +93,64 @@ internal const val PERSONAL_KB_SPACE_ID = "__personal__"
 
 class KnowledgeBaseManager(
     private val baseDir: String =
-        System.getProperty("silk.kbDir")?.trim()?.takeIf { it.isNotEmpty() } ?: "knowledge_base"
+        System.getProperty("silk.kbDir")?.trim()?.takeIf { it.isNotEmpty() } ?: "knowledge_base",
+    /** 嵌入生成器。未配置嵌入 API 时使用 NoOpEmbeddingProvider，语义搜索退化为纯关键词。 */
+    private val embeddingProvider: EmbeddingProvider = createEmbeddingProvider(),
 ) {
+    companion object {
+        /**
+         * 根据配置自动创建嵌入提供者。
+         * 若 EMBEDDING_ENABLED 且 EMBEDDING_API_KEY 已配置，返回 OpenAiCompatibleEmbeddingProvider，
+         * 否则返回 NoOpEmbeddingProvider。
+         */
+        private fun createEmbeddingProvider(): EmbeddingProvider {
+            return if (AIConfig.EMBEDDING_ENABLED && AIConfig.EMBEDDING_API_KEY.isNotBlank()) {
+                OpenAiCompatibleEmbeddingProvider()
+            } else {
+                NoOpEmbeddingProvider()
+            }
+        }
+    }
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
     private val logger = LoggerFactory.getLogger(KnowledgeBaseManager::class.java)
     private val storeFile get() = File("$baseDir/kb_store.json")
+    /** 嵌入缓存管理器。 */
+    internal val embeddingCache = KbEmbeddingCache(baseDir)
 
     init {
         File(baseDir).mkdirs()
+    }
+
+    /**
+     * 生成条目的嵌入文本——将标题 + 标签 + 内容前 4K 拼接。
+     */
+    private fun embeddingTextForEntry(entry: KBEntry): String {
+        val parts = listOfNotNull(
+            entry.title.takeIf { it.isNotBlank() },
+            entry.tags.takeIf { it.isNotEmpty() }?.joinToString(" "),
+            entry.content.takeIf { it.isNotBlank() }?.take(4_000),
+        )
+        return parts.joinToString("\n")
+    }
+
+    /**
+     * 刷新单条条目的嵌入缓存（内容变化时调用）。
+     */
+    private suspend fun refreshEntryEmbedding(entry: KBEntry) {
+        if (!AIConfig.EMBEDDING_ENABLED) return
+        val text = embeddingTextForEntry(entry)
+        if (text.isBlank()) return
+        try {
+            val embedding = embeddingProvider.generateEmbedding(text)
+            if (embedding.isNotEmpty()) {
+                embeddingCache.updateEntryEmbedding(entry.id, embedding)
+            }
+        } catch (e: java.io.IOException) {
+            logger.warn("Failed to refresh embedding for entry {}: {}", entry.id, e.message)
+        } catch (e: InterruptedException) {
+            logger.warn("Interrupted while refreshing embedding for entry {}: {}", entry.id, e.message)
+            Thread.currentThread().interrupt()
+        }
     }
 
     @Synchronized
@@ -178,8 +232,12 @@ class KnowledgeBaseManager(
         if (!canManageTopic(topic, userId)) return false
         val removed = store.topics.removeAll { it.id == topicId }
         if (removed) {
+            val entryIds = store.entries.filter { it.topicId == topicId }.map { it.id }.toSet()
             store.entries.removeAll { it.topicId == topicId }
             save(store)
+            if (AIConfig.EMBEDDING_ENABLED && entryIds.isNotEmpty()) {
+                entryIds.forEach { embeddingCache.removeEntryEmbedding(it) }
+            }
             logger.info("Deleted KB topic: {}", topicId)
         }
         return removed
@@ -260,6 +318,12 @@ class KnowledgeBaseManager(
         store.entries.add(entry)
         save(store)
         logger.info("Created KB entry: {} in topic {}", entry.id, topicId)
+        // 异步刷新嵌入缓存
+        if (AIConfig.EMBEDDING_ENABLED) {
+            GlobalScope.launch(Dispatchers.IO) {
+                refreshEntryEmbedding(entry)
+            }
+        }
         return entry
     }
 
@@ -297,6 +361,12 @@ class KnowledgeBaseManager(
         )
         store.entries[idx] = updated
         save(store)
+        // 异步刷新嵌入缓存
+        if (AIConfig.EMBEDDING_ENABLED) {
+            GlobalScope.launch(Dispatchers.IO) {
+                refreshEntryEmbedding(updated)
+            }
+        }
         return updated
     }
 
@@ -306,7 +376,13 @@ class KnowledgeBaseManager(
         val topic = store.topics.find { it.id == entry.topicId } ?: return false
         if (!canManageTopic(topic, userId)) return false
         val removed = store.entries.removeAll { it.id == entryId }
-        if (removed) save(store)
+        if (removed) {
+            save(store)
+            // 清除嵌入缓存
+            if (AIConfig.EMBEDDING_ENABLED) {
+                embeddingCache.removeEntryEmbedding(entryId)
+            }
+        }
         return removed
     }
 
@@ -322,13 +398,17 @@ class KnowledgeBaseManager(
         limit: Int = 3,
         excludedEntryIds: Set<String> = emptySet(),
         excludedSpaceIds: Set<String> = emptySet(),
+        /** 降权空间 ID 列表：这些空间的条目仍参与召回，但 score 被打折，排在最后。 */
+        downrankedSpaceIds: Set<String> = emptySet(),
     ): List<KBContextSearchHit> {
         val terms = extractSearchTerms(query)
         if (terms.isEmpty() || limit <= 0) return emptyList()
 
         val store = load()
         val topicById = store.topics.associateBy { it.id }
-        return store.entries.asSequence()
+
+        // 关键词匹配
+        val keywordHits = store.entries.asSequence()
             .filter { it.id !in excludedEntryIds }
             .filter { it.status == KBEntryStatus.PUBLISHED }
             .mapNotNull { entry ->
@@ -336,19 +416,91 @@ class KnowledgeBaseManager(
                 if (topic.purpose == KBTopicPurpose.MEMORY) return@mapNotNull null
                 if (!canReadTopic(topic, userId)) return@mapNotNull null
                 if (topic.spacePreferenceId() in excludedSpaceIds) return@mapNotNull null
+                val isDownranked = topic.spacePreferenceId() in downrankedSpaceIds
                 scoreContextCandidate(
                     topic = topic,
                     entry = entry,
                     terms = terms,
                     preferredGroupId = preferredGroupId,
+                    downranked = isDownranked,
                 )
             }
-            .sortedWith(
+            .toList()
+
+        if (keywordHits.isEmpty()) return emptyList()
+
+        // 混合评分：关键词分 × α + 向量分 × β（若嵌入启用且有缓存与 API Key）
+        return if (AIConfig.EMBEDDING_ENABLED && query.isNotBlank()) {
+            val queryEmbedding = queryEmbeddingSync(query)
+            if (queryEmbedding.isNotEmpty()) {
+                val embeddings = embeddingCache.getAllEmbeddings()
+                hybridScoreAndRank(keywordHits, queryEmbedding, embeddings).take(limit)
+            } else {
+                keywordHits.sortedWith(
+                    compareByDescending<KBContextSearchHit> { it.score }
+                        .thenByDescending { it.entry.updatedAt }
+                ).take(limit)
+            }
+        } else {
+            keywordHits.sortedWith(
+                compareByDescending<KBContextSearchHit> { it.score }
+                    .thenByDescending { it.entry.updatedAt }
+            ).take(limit)
+        }
+    }
+
+    /**
+     * 混合评分与排序：对已通过关键词匹配的条目，叠加向量相似度分数后重排序。
+     * finalScore = α × normalizedKeyword + β × vectorCosineSimilarity
+     */
+    private fun hybridScoreAndRank(
+        hits: List<KBContextSearchHit>,
+        queryEmbedding: List<Float>,
+        embeddings: Map<String, List<Float>>,
+    ): List<KBContextSearchHit> {
+        if (queryEmbedding.isEmpty() || embeddings.isEmpty()) {
+            return hits.sortedWith(
                 compareByDescending<KBContextSearchHit> { it.score }
                     .thenByDescending { it.entry.updatedAt }
             )
-            .take(limit)
-            .toList()
+        }
+
+        val alpha = AIConfig.HYBRID_SEARCH_ALPHA
+        val beta = AIConfig.HYBRID_SEARCH_BETA
+
+        val maxKeywordScore = hits.maxOfOrNull { it.score.coerceAtLeast(1) } ?: 1
+
+        return hits.map { hit ->
+            val entryEmbedding = embeddings[hit.entry.id]
+            val vectorScore = if (entryEmbedding != null) {
+                cosineSimilarity(queryEmbedding, entryEmbedding)
+            } else {
+                0.0
+            }
+            val normalizedKeyword = hit.score.toDouble() / maxKeywordScore
+            val combinedScore = alpha * normalizedKeyword + beta * vectorScore
+            hit.copy(score = (combinedScore * 100).toInt())
+        }.sortedByDescending { it.score }
+    }
+
+    /**
+     * 同步获取查询文本的嵌入向量。
+     * 嵌入 API 调用通过 runBlocking(IO) 包装，确保搜索方法保持非 suspend。
+     */
+    private fun queryEmbeddingSync(query: String): List<Float> {
+        if (!AIConfig.EMBEDDING_ENABLED || query.isBlank()) return emptyList()
+        return try {
+            kotlinx.coroutines.runBlocking(Dispatchers.IO) {
+                embeddingProvider.generateEmbedding(query.take(2_000))
+            }
+        } catch (e: java.io.IOException) {
+            logger.warn("Failed to generate query embedding: {}", e.message)
+            emptyList()
+        } catch (e: InterruptedException) {
+            logger.warn("Interrupted while generating query embedding: {}", e.message)
+            Thread.currentThread().interrupt()
+            emptyList()
+        }
     }
 
     /**
@@ -521,7 +673,7 @@ class KnowledgeBaseManager(
         val store = load()
         val topicById = store.topics.associateBy { it.id }
         val now = System.currentTimeMillis()
-        return store.entries.asSequence()
+        val keywordHits = store.entries.asSequence()
             .filter { it.ownerId == userId }
             .filter { it.status == KBEntryStatus.PUBLISHED }
             .filter { it.memory != null }
@@ -531,17 +683,32 @@ class KnowledgeBaseManager(
                 scoreContextCandidate(topic, entry, terms, preferredGroupId = null, memoryBoost = 10)
             }
             .map { hit ->
-                // Phase 3: 叠加 recency 加权分
                 val meta = hit.entry.memory ?: return@map hit
                 val recency = recencyScore(meta, now)
                 hit.copy(score = hit.score + (recency * 2).toInt())
             }
-            .sortedWith(
+            .toList()
+
+        if (keywordHits.isEmpty()) return emptyList()
+
+        // 混合评分：关键词 + recency + 向量
+        return if (AIConfig.EMBEDDING_ENABLED && query.isNotBlank()) {
+            val queryEmbedding = queryEmbeddingSync(query)
+            if (queryEmbedding.isNotEmpty()) {
+                val embeddings = embeddingCache.getAllEmbeddings()
+                hybridScoreAndRank(keywordHits, queryEmbedding, embeddings).take(limit)
+            } else {
+                keywordHits.sortedWith(
+                    compareByDescending<KBContextSearchHit> { it.score }
+                        .thenByDescending { it.entry.updatedAt }
+                ).take(limit)
+            }
+        } else {
+            keywordHits.sortedWith(
                 compareByDescending<KBContextSearchHit> { it.score }
                     .thenByDescending { it.entry.updatedAt }
-            )
-            .take(limit)
-            .toList()
+            ).take(limit)
+        }
     }
 
     /**
@@ -684,6 +851,7 @@ class KnowledgeBaseManager(
         terms: List<String>,
         preferredGroupId: String?,
         memoryBoost: Int = 0,
+        downranked: Boolean = false,
     ): KBContextSearchHit? {
         val title = normalizeSearchText(entry.title)
         val project = normalizeSearchText(topic.project)
@@ -721,6 +889,10 @@ class KnowledgeBaseManager(
         }
         if (topic.purpose == KBTopicPurpose.MEMORY) {
             reasons += "长期记忆"
+        }
+        if (downranked) {
+            score = (score * 0.5).toInt().coerceAtMost(score - 3)
+            reasons += "空间降权"
         }
 
         return KBContextSearchHit(
@@ -958,7 +1130,7 @@ class KnowledgeBaseManager(
         val store = load()
         val topicById = store.topics.associateBy { it.id }
         val now = System.currentTimeMillis()
-        return store.entries.asSequence()
+        val keywordHits = store.entries.asSequence()
             .filter { it.status == KBEntryStatus.PUBLISHED }
             .filter { it.memory != null }
             .mapNotNull { entry ->
@@ -974,12 +1146,27 @@ class KnowledgeBaseManager(
                 val recency = recencyScore(meta, now)
                 hit.copy(score = hit.score + (recency * 2).toInt())
             }
-            .sortedWith(
+            .toList()
+
+        if (keywordHits.isEmpty()) return emptyList()
+
+        return if (AIConfig.EMBEDDING_ENABLED && query.isNotBlank()) {
+            val queryEmbedding = queryEmbeddingSync(query)
+            if (queryEmbedding.isNotEmpty()) {
+                val embeddings = embeddingCache.getAllEmbeddings()
+                hybridScoreAndRank(keywordHits, queryEmbedding, embeddings).take(limit)
+            } else {
+                keywordHits.sortedWith(
+                    compareByDescending<KBContextSearchHit> { it.score }
+                        .thenByDescending { it.entry.updatedAt }
+                ).take(limit)
+            }
+        } else {
+            keywordHits.sortedWith(
                 compareByDescending<KBContextSearchHit> { it.score }
                     .thenByDescending { it.entry.updatedAt }
-            )
-            .take(limit)
-            .toList()
+            ).take(limit)
+        }
     }
 
     /**

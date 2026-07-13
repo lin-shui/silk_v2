@@ -182,6 +182,7 @@ data class KBEntryItem(
 data class KnowledgeBaseContextPreferences(
     val userId: String,
     val excludedSpaceIds: List<String> = emptyList(),
+    val downrankedSpaceIds: List<String> = emptyList(),
     val memoryEnabled: Boolean = true,
     val autoCaptureEnabled: Boolean = false,
     val ephemeralSessionEnabled: Boolean = false,

@@ -1,7 +1,7 @@
 # KB Memory Layer Plan
 
-Status: 进行中（Phase 1-4 已完成，Phase 5 挂起；Android 记忆管理入口 2026-07-10 已补）
-Date: 2026-07-07
+Status: 进行中（Phase 1-4 ✅，Phase 5 重启中 → [2026-07-13-kb-phase5-storage-upgrade.md](2026-07-13-kb-phase5-storage-upgrade.md)；Android 记忆管理入口 2026-07-10 已补）
+Date: 2026-07-07（Phase 5 重启于 2026-07-13）
 
 ## Goal
 
@@ -120,11 +120,22 @@ MVP 不做：
   - `frontend/webApp/KnowledgeBaseScene.kt` — `KnowledgeMemoryDialog` 增加 Tab 切换（个人记忆 / 群组记忆），在团队空间内打开记忆弹窗时默认切换到群组 Tab，创建/删除操作按活动 Tab 路由到正确空间
 目标：把“用户偏好”和“项目约束”分层。
 
-### Phase 5: Storage Upgrade
+### Phase 5: Storage Upgrade（已重启，2026-07-13）
 
-- 当 JSON store 无法承载增长后，再迁移到独立 memory store
-- 优先方案：`PostgreSQL + pgvector`
-- 检索改为结构化命中 + 语义召回混合模式
+→ 详细计划见 [2026-07-13-kb-phase5-storage-upgrade.md](2026-07-13-kb-phase5-storage-upgrade.md)
+
+**策略调整**：分两阶段推进。
+
+**Stage 1（当前执行）**：嵌入向量语义检索
+- 保持 JSON store 不变
+- 新增嵌入生成器（复用 Anthropic API），生成文本向量
+- 内存向量索引 + 混合搜索（关键词分 × 0.4 + 向量分 × 0.4 + recency × 0.2）
+- 嵌入缓存到 `kb_embeddings.json` 侧边文件
+
+**Stage 2（后续阶段）**：PostgreSQL + pgvector 迁移
+- 新增 PostgreSQL docker-compose、JDBC 驱动
+- Exposed 表定义、迁移端点
+- 运行时通过 `silk.kb.store=json|postgres` 切换存储后端
 
 ## Data / Prompt Rules
 
@@ -180,8 +191,13 @@ MVP 不做：
 - `searchGroupMemoryEntriesForContext returns matching entries` — 搜索匹配
 - `group memory consolidation works` — 群组记忆去重合并
 
-建议后续补的测试：
+Phase 5（2026-07-13 新增 14 个 prompt 上下文测试）：
 
-- memory route contract
-- prompt 注入优先级
-- 前端群组记忆管理入口
+- `KnowledgeBasePromptContextTest` 覆盖优先级、排除、空间过滤、群体记忆路由、诊断计数等
+- 已验证 `./gradlew :backend:test` 通过
+
+已覆盖的场景：
+
+- **memory route contract** — 已有 `KnowledgeBaseRouteContractTest` 覆盖 memory CRUD 路由
+- **prompt 注入优先级** — `KnowledgeBasePromptContextTest` 覆盖 manual > pinned > auto > memory 排序、`memoryEnabled` 开关、排除条目/空间过滤
+- **前端群组记忆管理入口** — Web 端已补（2026-07-10），Android 已补（2026-07-10），Harmony / Desktop 待补（若需要多端一致）
