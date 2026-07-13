@@ -16,6 +16,8 @@ import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.DirEntry
 import com.silk.shared.models.DirListingResponse
 import com.silk.shared.models.Message
+import kotlinx.browser.document
+import kotlinx.browser.window
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.web.attributes.InputType
 import org.jetbrains.compose.web.css.AlignItems
@@ -41,6 +43,7 @@ import org.jetbrains.compose.web.css.height
 import org.jetbrains.compose.web.css.justifyContent
 import org.jetbrains.compose.web.css.left
 import org.jetbrains.compose.web.css.marginBottom
+import org.jetbrains.compose.web.css.marginLeft
 import org.jetbrains.compose.web.css.marginTop
 import org.jetbrains.compose.web.css.maxHeight
 import org.jetbrains.compose.web.css.minHeight
@@ -945,6 +948,12 @@ private fun WorkflowChatPanel(
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
     var messageText by remember(groupId) { mutableStateOf("") }
+    var showKbRefMenu by remember(groupId) { mutableStateOf(false) }
+    var kbRefSearchText by remember(groupId) { mutableStateOf("") }
+    var kbRefStartIndex by remember(groupId) { mutableStateOf(-1) }
+    var kbRefMenuPosition by remember(groupId) { mutableStateOf(Pair(0.0, 0.0)) }
+    var kbRefSearchResults by remember(groupId) { mutableStateOf<List<KnowledgeBaseEntrySearchResult>>(emptyList()) }
+    var kbRefIsSearching by remember(groupId) { mutableStateOf(false) }
     var workingDir by remember(groupId) { mutableStateOf("") }
     var activeAgentDisplay by remember(groupId) { mutableStateOf("") }
     var permissionMode by remember(groupId) { mutableStateOf("") }
@@ -1565,7 +1574,37 @@ private fun WorkflowChatPanel(
         }) {
         TextArea {
             value(messageText)
-            onInput { messageText = it.value }
+            onInput { event ->
+                val newValue = event.value
+                val oldValue = messageText
+                messageText = newValue
+                // 检测 $ 触发 KB 引用
+                if (newValue.length > oldValue.length) {
+                    val lastChar = newValue.lastOrNull()
+                    if (lastChar == '$') {
+                        val input = document.getElementById("wf-composer-input") as? org.w3c.dom.HTMLElement
+                        if (input != null) {
+                            val rect = input.getBoundingClientRect()
+                            kbRefMenuPosition = Pair(rect.left, window.innerHeight - rect.top + 4)
+                        }
+                        showKbRefMenu = true
+                        kbRefStartIndex = newValue.length - 1
+                        kbRefSearchText = ""
+                        kbRefSearchResults = emptyList()
+                    }
+                }
+                if (showKbRefMenu && kbRefStartIndex >= 0) {
+                    val textAfterDollar = newValue.substring(kbRefStartIndex + 1)
+                    val spaceIndex = textAfterDollar.indexOf(' ')
+                    if (spaceIndex >= 0) {
+                        showKbRefMenu = false
+                        kbRefSearchResults = emptyList()
+                    } else {
+                        kbRefSearchText = textAfterDollar
+                    }
+                }
+            }
+            attr("id", "wf-composer-input")
             attr("placeholder", "向 Agent 发送消息...（Shift+Enter 换行）")
             onKeyDown { event ->
                 if (shouldSubmitWorkflowMessage(event, messageText)) {
@@ -1595,6 +1634,106 @@ private fun WorkflowChatPanel(
                 property("resize", "none")
                 property("white-space", "pre-wrap")
                 property("line-height", "1.5")
+            }
+        }
+
+        // $ KB 引用浮动面板
+        if (showKbRefMenu) {
+            LaunchedEffect(kbRefSearchText) {
+                if (kbRefSearchText.length >= 1) {
+                    kbRefIsSearching = true
+                    kotlinx.coroutines.delay(300)
+                    val results = ApiClient.searchKbEntries(userId, kbRefSearchText)
+                    kbRefSearchResults = results
+                    kbRefIsSearching = false
+                } else {
+                    kbRefSearchResults = emptyList()
+                    kbRefIsSearching = false
+                }
+            }
+            Div({
+                style {
+                    property("position", "fixed")
+                    property("left", "${kbRefMenuPosition.first}px")
+                    property("bottom", "${kbRefMenuPosition.second}px")
+                    backgroundColor(Color(SilkColors.surface))
+                    border {
+                        width(1.px)
+                        style(LineStyle.Solid)
+                        color(Color(SilkColors.border))
+                    }
+                    borderRadius(8.px)
+                    property("box-shadow", "0 4px 12px rgba(0,0,0,0.15)")
+                    property("z-index", "9999")
+                    property("max-height", "260px")
+                    property("overflow-y", "auto")
+                    property("min-width", "280px")
+                    property("max-width", "400px")
+                }
+            }) {
+                Div({
+                    style {
+                        padding(8.px, 12.px)
+                        fontSize(12.px)
+                        color(Color(SilkColors.textSecondary))
+                        property("border-bottom", "1px solid ${SilkColors.border}")
+                        property("background", SilkColors.surfaceElevated)
+                    }
+                }) { Text("📚 搜索 KB 文档") }
+                if (kbRefIsSearching) {
+                    Div({ style { padding(12.px); fontSize(13.px); color(Color(SilkColors.textLight)) } }) {
+                        Text("搜索中...")
+                    }
+                } else if (kbRefSearchResults.isEmpty()) {
+                    if (kbRefSearchText.length >= 1) {
+                        Div({ style { padding(12.px); fontSize(13.px); color(Color(SilkColors.textLight)) } }) {
+                            Text("未找到匹配文档")
+                        }
+                    } else {
+                        Div({ style { padding(12.px); fontSize(13.px); color(Color(SilkColors.textLight)) } }) {
+                            Text("输入关键词搜索 KB 文档...")
+                        }
+                    }
+                } else {
+                    kbRefSearchResults.forEach { result ->
+                        Div({
+                            style {
+                                padding(8.px, 12.px)
+                                property("cursor", "pointer")
+                                property("transition", "background-color 0.15s ease")
+                                property("border-bottom", "1px solid ${SilkColors.border}")
+                            }
+                            onClick {
+                                val beforeDollar = messageText.substring(0, kbRefStartIndex)
+                                val afterDollar = messageText.substring(kbRefStartIndex + 1)
+                                val afterSpace = afterDollar.indexOf(' ').let { idx ->
+                                    if (idx >= 0) afterDollar.substring(idx) else ""
+                                }
+                                messageText = "$beforeDollar[[kb:${result.entryId}|${result.title}]]$afterSpace"
+                                showKbRefMenu = false
+                                kbRefSearchResults = emptyList()
+                                window.setTimeout({
+                                    val input = document.getElementById("wf-composer-input")
+                                    input?.asDynamic()?.focus()
+                                }, 0)
+                            }
+                            onMouseEnter {
+                                (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = SilkColors.secondary
+                            }
+                            onMouseLeave {
+                                (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = "transparent"
+                            }
+                        }) {
+                            Div({ style { fontSize(14.px); fontWeight("500"); color(Color(SilkColors.textPrimary)) } }) {
+                                Text(result.title)
+                            }
+                            Div({ style { marginTop(2.px); fontSize(12.px); color(Color(SilkColors.textLight)) } }) {
+                                Span({ }) { Text(result.topicName) }
+                                Span({ style { marginLeft(8.px) } }) { Text("(${result.spaceLabel})") }
+                            }
+                        }
+                    }
+                }
             }
         }
 

@@ -66,9 +66,11 @@ import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.export.ChatObsidianExporter
 import com.silk.backend.kb.KBObsidianExporter
 import com.silk.backend.kb.ConsolidationReport
+import com.silk.backend.kb.CopilotStreamEvent
 import com.silk.backend.kb.GroupAssetsResponse
 import com.silk.backend.kb.KnowledgeBaseCopilotRequest
 import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
+import com.silk.backend.kb.KnowledgeBaseEntrySearchResponse
 import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.kb.buildKnowledgeBaseWorkspaceEntries
 import com.silk.backend.kb.executeKnowledgeBaseCopilot
@@ -115,6 +117,7 @@ import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
+import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -3762,6 +3765,7 @@ private fun Route.workflowKbRoutes() {
         registerApiKbTopicsTopicIdPutRoute()
         registerApiKbTopicsTopicIdDeleteRoute()
         registerApiKbEntriesGetRoute()
+        registerApiKbEntriesSearchGetRoute()
         registerApiKbEntriesEntryIdGetRoute()
         registerApiKbEntriesPostRoute()
         registerApiKbCapturesPostRoute()
@@ -3769,6 +3773,7 @@ private fun Route.workflowKbRoutes() {
         registerApiKbEntriesEntryIdDeleteRoute()
         registerApiKbEntriesEntryIdExportGetRoute()
         registerApiKbCopilotPostRoute()
+        registerApiKbCopilotStreamPostRoute()
         registerApiKbMemoryGetRoute()
         registerApiKbMemoryEntryIdGetRoute()
         registerApiKbMemoryPostRoute()
@@ -4149,6 +4154,24 @@ private fun Route.registerApiKbEntriesGetRoute() {
     }
 }
 
+private fun Route.registerApiKbEntriesSearchGetRoute() {
+    get("/api/kb/entries/search") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        val q = call.request.queryParameters["q"] ?: ""
+        if (userId.isNullOrBlank() || q.isBlank()) {
+            call.respondText(
+                """{"success":false,"entries":[],"message":"Missing userId or query"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@get
+        }
+        val results = knowledgeBaseManager.searchPublishedEntries(userId, q.trim(), limit = 20)
+        val json = kbRouteJson.encodeToString(KnowledgeBaseEntrySearchResponse.serializer(), KnowledgeBaseEntrySearchResponse(results))
+        call.respondText(json, ContentType.Application.Json)
+    }
+}
+
 private fun Route.registerApiKbEntriesEntryIdGetRoute() {
 
     get("/api/kb/entries/{entryId}") {
@@ -4407,6 +4430,103 @@ private fun Route.registerApiKbCopilotPostRoute() {
             ContentType.Application.Json,
             if (response.success || response.draft != null) HttpStatusCode.OK else HttpStatusCode.BadGateway,
         )
+    }
+}
+
+private fun Route.registerApiKbCopilotStreamPostRoute() {
+
+    post("/api/kb/copilot/stream") {
+        val req = runCatching {
+            kbRouteJson.decodeFromString(KnowledgeBaseCopilotRequest.serializer(), call.receiveText())
+        }.getOrNull()
+        if (req == null) {
+            call.respondText(
+                """{"success":false,"message":"Invalid copilot request"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+        val userId = resolveKbCallerUserIdOrRespond(call, req.userId)
+        if (userId.isNullOrBlank()) {
+            call.respondText(
+                """{"success":false,"message":"Missing userId"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+        val copilotId = req.entryId?.takeIf { it.isNotBlank() } ?: req.topicId?.takeIf { it.isNotBlank() } ?: "unknown"
+
+        // SSE headers: no cache, keep-alive
+        call.response.header(HttpHeaders.CacheControl, "no-cache")
+        call.response.header("X-Accel-Buffering", "no")
+        call.response.header(HttpHeaders.Connection, "keep-alive")
+
+        call.respondTextWriter(
+            contentType = ContentType("text", "event-stream"),
+            status = HttpStatusCode.OK,
+        ) {
+            val writeEvent: suspend (CopilotStreamEvent) -> Unit = { event ->
+                val dataPart = event.data.replace("\n", "\\n")
+                write("event: ${event.event}\ndata: $dataPart\n\n")
+                flush()
+            }
+
+            val response = executeKnowledgeBaseCopilot(
+                manager = knowledgeBaseManager,
+                request = req.copy(userId = userId),
+                runAgent = { input ->
+                    val agent = DirectModelAgent(sessionId = "kb_copilot_${sanitizeFileName(copilotId)}")
+                    val workspaceDir = "${AIConfig.CLAUDE_CLI_WORKSPACE_ROOT}/kb_copilot_${sanitizeFileName(userId)}_${sanitizeFileName(copilotId)}"
+                    java.io.File(workspaceDir).mkdirs()
+                    agent.initClaudeClient(workspaceDir)
+                    agent.syncKnowledgeBaseWorkspace(input.workspaceEntries.ifEmpty {
+                        buildKnowledgeBaseWorkspaceEntries(knowledgeBaseManager, userId)
+                    })
+                    agent.processInput(
+                        userInput = input.userPrompt,
+                        systemPrompt = input.systemPrompt,
+                        callback = { stepType, content, _ ->
+                            // Forward model streaming events (thinking/text) as SSE
+                            val sseEvent = when (stepType) {
+                                "thinking" -> "thinking"
+                                "text", "complete" -> "text"
+                                "error" -> "error"
+                                else -> null
+                            }
+                            if (sseEvent != null && content.isNotBlank()) {
+                                writeEvent(CopilotStreamEvent(event = sseEvent, data = content))
+                            }
+                        },
+                    )
+                },
+                onStreamEvent = { event ->
+                    // Forward copilot-level events (draft/applied/error/done)
+                    when (event.event) {
+                        "draft", "applied" -> {
+                            // data is already JSON, send as-is
+                            write("event: ${event.event}\ndata: ${event.data}\n\n")
+                            flush()
+                        }
+                        "error" -> {
+                            writeEvent(event)
+                        }
+                        "done" -> {
+                            write("event: done\ndata: \n\n")
+                            flush()
+                        }
+                    }
+                },
+            )
+
+            // If the response indicates error but no error event was sent yet
+            if (!response.success && response.draft == null) {
+                writeEvent(CopilotStreamEvent(event = "error", data = response.message))
+                write("event: done\ndata: \n\n")
+                flush()
+            }
+        }
     }
 }
 

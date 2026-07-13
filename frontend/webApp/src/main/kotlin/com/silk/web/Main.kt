@@ -1745,6 +1745,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var mentionSearchText by remember { mutableStateOf("") }
     var mentionStartIndex by remember { mutableStateOf(-1) }
     var mentionMenuPosition by remember { mutableStateOf(Pair(0.0, 0.0)) } // (left, bottom)
+    // $ KB 引用
+    var showKbRefMenu by remember { mutableStateOf(false) }
+    var kbRefSearchText by remember { mutableStateOf("") }
+    var kbRefStartIndex by remember { mutableStateOf(-1) }
+    var kbRefMenuPosition by remember { mutableStateOf(Pair(0.0, 0.0)) }
+    var kbRefSearchResults by remember { mutableStateOf<List<KnowledgeBaseEntrySearchResult>>(emptyList()) }
+    var kbRefIsSearching by remember { mutableStateOf(false) }
     
     // cc-connect token dialog
     var showCcConnectTokenDialog by remember { mutableStateOf(false) }
@@ -3216,19 +3223,30 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             val oldValue = messageText
                             messageText = newValue
                             
-                            // 检测 @ 符号
+                            // 检测 @ 符号（@ 用户/Agent）
                             if (newValue.length > oldValue.length) {
                                 val lastChar = newValue.lastOrNull()
                                 if (lastChar == '@') {
-                                    // 计算输入框位置用于 fixed 定位菜单
                                     val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLElement
                                     if (input != null) {
                                         val rect = input.getBoundingClientRect()
                                         mentionMenuPosition = Pair(rect.left, window.innerHeight - rect.top + 4)
                                     }
                                     showMentionMenu = true
+                                    showKbRefMenu = false
                                     mentionStartIndex = newValue.length - 1
                                     mentionSearchText = ""
+                                } else if (lastChar == '$') {
+                                    val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLElement
+                                    if (input != null) {
+                                        val rect = input.getBoundingClientRect()
+                                        kbRefMenuPosition = Pair(rect.left, window.innerHeight - rect.top + 4)
+                                    }
+                                    showKbRefMenu = true
+                                    showMentionMenu = false
+                                    kbRefStartIndex = newValue.length - 1
+                                    kbRefSearchText = ""
+                                    kbRefSearchResults = emptyList()
                                 }
                             }
                             
@@ -3237,10 +3255,20 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 val textAfterAt = newValue.substring(mentionStartIndex + 1)
                                 val spaceIndex = textAfterAt.indexOf(' ')
                                 if (spaceIndex >= 0) {
-                                    // 用户输入了空格，关闭菜单
                                     showMentionMenu = false
                                 } else {
                                     mentionSearchText = textAfterAt
+                                }
+                            }
+                            // 如果在 $ KB 引用模式，更新搜索文本
+                            if (showKbRefMenu && kbRefStartIndex >= 0) {
+                                val textAfterDollar = newValue.substring(kbRefStartIndex + 1)
+                                val spaceIndex = textAfterDollar.indexOf(' ')
+                                if (spaceIndex >= 0) {
+                                    showKbRefMenu = false
+                                    kbRefSearchResults = emptyList()
+                                } else {
+                                    kbRefSearchText = textAfterDollar
                                 }
                             }
                         }
@@ -3287,6 +3315,108 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
 
                     
+                    // $ KB 引用浮动面板
+                    if (showKbRefMenu) {
+                        val scope = rememberCoroutineScope()
+                        // 搜索延迟 debounce
+                        LaunchedEffect(kbRefSearchText) {
+                            if (kbRefSearchText.length >= 1) {
+                                kbRefIsSearching = true
+                                kotlinx.coroutines.delay(300)
+                                val results = ApiClient.searchKbEntries(user.id, kbRefSearchText)
+                                kbRefSearchResults = results
+                                kbRefIsSearching = false
+                            } else {
+                                kbRefSearchResults = emptyList()
+                                kbRefIsSearching = false
+                            }
+                        }
+                        Div({
+                            style {
+                                property("position", "fixed")
+                                property("left", "${kbRefMenuPosition.first}px")
+                                property("bottom", "${kbRefMenuPosition.second}px")
+                                backgroundColor(Color(SilkColors.surface))
+                                border {
+                                    width(1.px)
+                                    style(LineStyle.Solid)
+                                    color(Color(SilkColors.border))
+                                }
+                                borderRadius(8.px)
+                                property("box-shadow", "0 4px 12px rgba(0,0,0,0.15)")
+                                property("z-index", "9999")
+                                property("max-height", "260px")
+                                property("overflow-y", "auto")
+                                property("min-width", "280px")
+                                property("max-width", "400px")
+                            }
+                        }) {
+                            Div({
+                                style {
+                                    padding(8.px, 12.px)
+                                    fontSize(12.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    property("border-bottom", "1px solid ${SilkColors.border}")
+                                    property("background", SilkColors.surfaceElevated)
+                                }
+                            }) { Text("📚 搜索 KB 文档") }
+                            if (kbRefIsSearching) {
+                                Div({ style { padding(12.px); fontSize(13.px); color(Color(SilkColors.textLight)) } }) {
+                                    Text("搜索中...")
+                                }
+                            } else if (kbRefSearchResults.isEmpty()) {
+                                if (kbRefSearchText.length >= 1) {
+                                    Div({ style { padding(12.px); fontSize(13.px); color(Color(SilkColors.textLight)) } }) {
+                                        Text("未找到匹配文档")
+                                    }
+                                } else {
+                                    Div({ style { padding(12.px); fontSize(13.px); color(Color(SilkColors.textLight)) } }) {
+                                        Text("输入关键词搜索 KB 文档...")
+                                    }
+                                }
+                            } else {
+                                kbRefSearchResults.forEach { result ->
+                                    Div({
+                                        style {
+                                            padding(8.px, 12.px)
+                                            property("cursor", "pointer")
+                                            property("transition", "background-color 0.15s ease")
+                                            property("border-bottom", "1px solid ${SilkColors.border}")
+                                        }
+                                        onClick {
+                                            val beforeDollar = messageText.substring(0, kbRefStartIndex)
+                                            val afterDollar = messageText.substring(kbRefStartIndex + 1)
+                                            val afterSpace = afterDollar.indexOf(' ').let { idx ->
+                                                if (idx >= 0) afterDollar.substring(idx) else ""
+                                            }
+                                            messageText = "$beforeDollar[[kb:${result.entryId}|${result.title}]]$afterSpace"
+                                            showKbRefMenu = false
+                                            kbRefSearchResults = emptyList()
+                                            window.setTimeout({
+                                                val input = document.getElementById("chat-input")
+                                                input?.asDynamic()?.focus()
+                                            }, 0)
+                                        }
+                                        onMouseEnter {
+                                            (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = SilkColors.secondary
+                                        }
+                                        onMouseLeave {
+                                            (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = "transparent"
+                                        }
+                                    }) {
+                                        Div({ style { fontSize(14.px); fontWeight("500"); color(Color(SilkColors.textPrimary)) } }) {
+                                            Text(result.title)
+                                        }
+                                        Div({ style { marginTop(2.px); fontSize(12.px); color(Color(SilkColors.textLight)) } }) {
+                                            Span({ }) { Text(result.topicName) }
+                                            Span({ style { marginLeft(8.px) } }) { Text("(${result.spaceLabel})") }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // @ Mention 下拉菜单 - 使用 fixed 定位避免被 overflow:hidden 裁剪
                     if (showMentionMenu) {
                         Div({

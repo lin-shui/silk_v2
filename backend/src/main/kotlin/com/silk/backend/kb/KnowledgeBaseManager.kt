@@ -69,6 +69,22 @@ data class KBContextSearchHit(
     val reasons: List<String>,
 )
 
+/**
+ * KB 条目搜索结果（$ 快捷引用用）。
+ */
+@Serializable
+data class KnowledgeBaseEntrySearchResult(
+    val entryId: String,
+    val title: String,
+    val topicName: String,
+    val spaceLabel: String,
+)
+
+@Serializable
+data class KnowledgeBaseEntrySearchResponse(
+    val entries: List<KnowledgeBaseEntrySearchResult>,
+)
+
 internal const val PERSONAL_KB_SPACE_ID = "__personal__"
 
 class KnowledgeBaseManager(
@@ -331,6 +347,46 @@ class KnowledgeBaseManager(
                 compareByDescending<KBContextSearchHit> { it.score }
                     .thenByDescending { it.entry.updatedAt }
             )
+            .take(limit)
+            .toList()
+    }
+
+    /**
+     * 搜索已发布条目（$ 快捷引用用），返回简单搜索结果列表。
+     */
+    fun searchPublishedEntries(userId: String, query: String, limit: Int = 20): List<KnowledgeBaseEntrySearchResult> {
+        val terms = extractSearchTerms(query)
+        if (terms.isEmpty() || limit <= 0) return emptyList()
+        val store = load()
+        val topicById = store.topics.associateBy { it.id }
+        return store.entries.asSequence()
+            .filter { it.status == KBEntryStatus.PUBLISHED }
+            .mapNotNull { entry ->
+                val topic = topicById[entry.topicId] ?: return@mapNotNull null
+                if (topic.purpose == KBTopicPurpose.MEMORY) return@mapNotNull null
+                if (!canReadTopic(topic, userId)) return@mapNotNull null
+                // 简单文本匹配：标题或内容包含搜索词
+                val matchScore = terms.sumOf { term ->
+                    var score = 0
+                    if (entry.title.contains(term, ignoreCase = true)) score += 10
+                    if (entry.content?.contains(term, ignoreCase = true) == true) score += 3
+                    if (entry.tags.any { it.contains(term, ignoreCase = true) }) score += 5
+                    score
+                }
+                if (matchScore <= 0) return@mapNotNull null
+                val spaceLabel = when {
+                    topic.spaceType == KnowledgeSpaceType.PERSONAL -> "个人"
+                    topic.groupId != null -> "团队"
+                    else -> "团队"
+                }
+                KnowledgeBaseEntrySearchResult(
+                    entryId = entry.id,
+                    title = entry.title,
+                    topicName = topic.name,
+                    spaceLabel = spaceLabel,
+                )
+            }
+            .sortedByDescending { it.title }
             .take(limit)
             .toList()
     }

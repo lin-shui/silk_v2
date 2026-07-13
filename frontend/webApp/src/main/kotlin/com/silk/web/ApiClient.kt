@@ -370,12 +370,38 @@ data class ExportKBResponse(
 )
 
 @Serializable
+data class DiffChunk(
+    val type: String, // "unchanged" | "deleted" | "inserted" | "modified"
+    val originalText: String = "",
+    val newText: String = "",
+    val lineStart: Int = 0,
+    val lineEnd: Int = 0,
+)
+
+@Serializable
 data class KnowledgeBaseCopilotDraft(
     val entryId: String? = null,
     val topicId: String,
     val title: String,
     val content: String,
     val tags: List<String> = emptyList(),
+    val diffChunks: List<DiffChunk> = emptyList(),
+)
+
+/**
+ * KB 条目搜索结果（$ 快捷引用用）。
+ */
+@Serializable
+data class KnowledgeBaseEntrySearchResult(
+    val entryId: String,
+    val title: String,
+    val topicName: String,
+    val spaceLabel: String,
+)
+
+@Serializable
+data class KnowledgeBaseEntrySearchResponse(
+    val entries: List<KnowledgeBaseEntrySearchResult>,
 )
 
 /**
@@ -1446,6 +1472,19 @@ object ApiClient {
         }
     }
 
+    // $ 快捷引用搜索 KB 条目
+    suspend fun searchKbEntries(userId: String, query: String): List<KnowledgeBaseEntrySearchResult> {
+        return try {
+            val encoded = js("encodeURIComponent(query)")
+            val response = get("/api/kb/entries/search?userId=$userId&q=$encoded")
+            val parsed = jsonParser.decodeFromString<KnowledgeBaseEntrySearchResponse>(response)
+            parsed.entries
+        } catch (e: Exception) {
+            console.log("搜索 KB 条目失败:", e)
+            emptyList()
+        }
+    }
+
     suspend fun createKBEntry(topicId: String, title: String, content: String, tags: List<String>, userId: String): KBEntryItem? {
         return try {
             val tagsJson = tags.joinToString(",") { "\"$it\"" }
@@ -1589,6 +1628,119 @@ object ApiClient {
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("运行 KB Copilot 失败:", e)
+            null
+        }
+    }
+
+    /**
+     * Stream KB Copilot via SSE.
+     * Uses fetch to POST to /api/kb/copilot/stream and parses SSE events incrementally.
+     * @param onEvent called for each SSE event: (eventType, data)
+     * @return the final KnowledgeBaseCopilotResponse built from streamed events
+     */
+    suspend fun streamKBCopilot(
+        userId: String,
+        entryId: String?,
+        topicId: String?,
+        instruction: String,
+        applyChanges: Boolean,
+        conversationHistory: List<ConversationTurn>,
+        onEvent: (event: String, data: String) -> Unit,
+    ): KnowledgeBaseCopilotResponse? {
+        return try {
+            val body = buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                if (!entryId.isNullOrBlank()) {
+                    put("entryId", kotlinx.serialization.json.JsonPrimitive(entryId))
+                }
+                if (!topicId.isNullOrBlank()) {
+                    put("topicId", kotlinx.serialization.json.JsonPrimitive(topicId))
+                }
+                put("instruction", kotlinx.serialization.json.JsonPrimitive(instruction))
+                put("applyChanges", kotlinx.serialization.json.JsonPrimitive(applyChanges))
+                if (conversationHistory.isNotEmpty()) {
+                    put("conversationHistory", kotlinx.serialization.json.JsonArray(
+                        conversationHistory.map { turn ->
+                            kotlinx.serialization.json.JsonObject(
+                                mapOf(
+                                    "role" to kotlinx.serialization.json.JsonPrimitive(turn.role),
+                                    "content" to kotlinx.serialization.json.JsonPrimitive(turn.content),
+                                )
+                            )
+                        }
+                    ))
+                }
+            }.toString()
+
+            val headers = authHeaders()
+            val init = RequestInit(
+                method = "POST",
+                headers = headers,
+                body = body,
+            )
+            val url = "$BASE_URL/api/kb/copilot/stream"
+            val response = window.fetch(url, init).await()
+
+            if (!response.ok) {
+                console.log("KBCopilot SSE 请求失败:", response.status)
+                return null
+            }
+
+            // Consume SSE response (non-streaming fallback via response.text())
+            // True ReadableStream streaming will be added in a follow-up iteration
+            var draft: KnowledgeBaseCopilotDraft? = null
+            var appliedEntry: KBEntryItem? = null
+            var assistantReply = ""
+            var success = false
+            var message = ""
+
+            // Parse SSE events from full response text
+            val fullText = response.text().await()
+            val rawEvents = fullText.split("\n\n")
+            for (rawEvent in rawEvents) {
+                val lines = rawEvent.split("\n")
+                var eventType = ""
+                var eventData = ""
+                for (line in lines) {
+                    if (line.startsWith("event: ")) eventType = line.removePrefix("event: ")
+                    else if (line.startsWith("data: ")) {
+                        eventData = line.removePrefix("data: ")
+                            .replace("\\n", "\n")
+                    }
+                }
+                if (eventType.isNotEmpty()) {
+                    onEvent(eventType, eventData)
+                    when (eventType) {
+                        "text" -> assistantReply = eventData
+                        "draft" -> {
+                            try {
+                                draft = jsonParser.decodeFromString<KnowledgeBaseCopilotDraft>(eventData)
+                            } catch (e: Exception) {
+                                console.log("解析 draft 失败:", e)
+                            }
+                        }
+                        "applied" -> {
+                            try {
+                                appliedEntry = jsonParser.decodeFromString<KBEntryItem>(eventData)
+                            } catch (e: Exception) {
+                                console.log("解析 appliedEntry 失败:", e)
+                            }
+                        }
+                        "error" -> message = eventData
+                        "done" -> success = true
+                    }
+                }
+            }
+
+            KnowledgeBaseCopilotResponse(
+                success = success,
+                assistantReply = assistantReply,
+                draft = draft,
+                appliedEntry = appliedEntry,
+                message = message,
+            )
+        } catch (e: Exception) {
+            console.log("KBCopilot 流式请求失败:", e)
             null
         }
     }
