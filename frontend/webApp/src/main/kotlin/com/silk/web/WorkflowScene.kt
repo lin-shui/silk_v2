@@ -970,6 +970,7 @@ private fun WorkflowChatPanel(
     var sourcePanelWidth by remember { mutableStateOf(LayoutPrefs.getInt("silk_wf_scpanel_w", 420)) }
     var kbContextSelection by remember(groupId) { mutableStateOf(KnowledgeBaseContextSelection()) }
     var kbPersistentExcludedSpaceIds by remember(groupId) { mutableStateOf<List<String>>(emptyList()) }
+    var kbPersistentDownrankedSpaceIds by remember(groupId) { mutableStateOf<List<String>>(emptyList()) }
     var kbContextSelectionTouched by remember(groupId) { mutableStateOf(false) }
     var kbCaptureDraft by remember(groupId) { mutableStateOf<KnowledgeCaptureDraft?>(null) }
     var kbCaptureTopics by remember(groupId) { mutableStateOf<List<KBTopicItem>>(emptyList()) }
@@ -1013,17 +1014,20 @@ private fun WorkflowChatPanel(
         }
     }
     LaunchedEffect(userId, groupId) {
-        kbPersistentExcludedSpaceIds = ApiClient.getKBContextPreferences(userId).excludedSpaceIds
+        val prefs = ApiClient.getKBContextPreferences(userId)
+        kbPersistentExcludedSpaceIds = prefs.excludedSpaceIds
+        kbPersistentDownrankedSpaceIds = prefs.downrankedSpaceIds
         if (!kbContextSelectionTouched) {
             kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
                 restoredSelection = kbContextSelection.takeIf {
                     it.pinnedEntryIds.isNotEmpty() || it.excludedEntryIds.isNotEmpty()
                 },
                 persistentExcludedSpaceIds = kbPersistentExcludedSpaceIds,
+                persistentDownrankedSpaceIds = kbPersistentDownrankedSpaceIds,
             )
         }
     }
-    LaunchedEffect(messages.size, userId, kbPersistentExcludedSpaceIds, kbContextSelectionTouched) {
+    LaunchedEffect(messages.size, userId, kbPersistentExcludedSpaceIds, kbPersistentDownrankedSpaceIds, kbContextSelectionTouched) {
         if (kbContextSelectionTouched) return@LaunchedEffect
         if (kbContextSelection.pinnedEntryIds.isNotEmpty() || kbContextSelection.excludedEntryIds.isNotEmpty()) {
             return@LaunchedEffect
@@ -1032,6 +1036,7 @@ private fun WorkflowChatPanel(
         kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
             restoredSelection = restoredSelection,
             persistentExcludedSpaceIds = kbPersistentExcludedSpaceIds,
+            persistentDownrankedSpaceIds = kbPersistentDownrankedSpaceIds,
         )
     }
 

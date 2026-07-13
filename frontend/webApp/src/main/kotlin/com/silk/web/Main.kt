@@ -1647,6 +1647,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var messageText by remember { mutableStateOf("") }
     var kbContextSelection by remember(group.id) { mutableStateOf(KnowledgeBaseContextSelection()) }
     var kbPersistentExcludedSpaceIds by remember(group.id) { mutableStateOf<List<String>>(emptyList()) }
+    var kbPersistentDownrankedSpaceIds by remember(group.id) { mutableStateOf<List<String>>(emptyList()) }
     var kbContextSelectionTouched by remember(group.id) { mutableStateOf(false) }
     var kbCaptureDraft by remember { mutableStateOf<KnowledgeCaptureDraft?>(null) }
     var kbCaptureTopics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
@@ -1689,17 +1690,20 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     LaunchedEffect(user.id, group.id) {
-        kbPersistentExcludedSpaceIds = ApiClient.getKBContextPreferences(user.id).excludedSpaceIds
+        val prefs = ApiClient.getKBContextPreferences(user.id)
+        kbPersistentExcludedSpaceIds = prefs.excludedSpaceIds
+        kbPersistentDownrankedSpaceIds = prefs.downrankedSpaceIds
         if (!kbContextSelectionTouched) {
             kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
                 restoredSelection = kbContextSelection.takeIf {
                     it.pinnedEntryIds.isNotEmpty() || it.excludedEntryIds.isNotEmpty()
                 },
                 persistentExcludedSpaceIds = kbPersistentExcludedSpaceIds,
+                persistentDownrankedSpaceIds = kbPersistentDownrankedSpaceIds,
             )
         }
     }
-    LaunchedEffect(messages.size, user.id, kbPersistentExcludedSpaceIds, kbContextSelectionTouched) {
+    LaunchedEffect(messages.size, user.id, kbPersistentExcludedSpaceIds, kbPersistentDownrankedSpaceIds, kbContextSelectionTouched) {
         if (kbContextSelectionTouched) return@LaunchedEffect
         if (kbContextSelection.pinnedEntryIds.isNotEmpty() || kbContextSelection.excludedEntryIds.isNotEmpty()) {
             return@LaunchedEffect
@@ -1708,6 +1712,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
             restoredSelection = restoredSelection,
             persistentExcludedSpaceIds = kbPersistentExcludedSpaceIds,
+            persistentDownrankedSpaceIds = kbPersistentDownrankedSpaceIds,
         )
     }
     var showInvitationDialog by remember { mutableStateOf(false) }

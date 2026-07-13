@@ -97,6 +97,20 @@ object AIConfig {
     // SearXNG 自托管搜索引擎地址（如 http://localhost:8080）
     val SEARXNG_URL: String get() = env("SEARXNG_URL") ?: ""
 
+    // ── KB 嵌入向量（Semantic Search） ─────────────────────────────
+    /** OpenAI 兼容的嵌入 API Key（Voyage AI / OpenAI / 本地代理等）。为空时禁用语义搜索。 */
+    val EMBEDDING_API_KEY: String get() = env("EMBEDDING_API_KEY") ?: ""
+    /** OpenAI 兼容的嵌入 API 端点。 */
+    val EMBEDDING_API_URL: String get() = env("EMBEDDING_API_URL") ?: "https://api.voyageai.com/v1/embeddings"
+    /** 嵌入模型名。 */
+    val EMBEDDING_MODEL: String get() = env("EMBEDDING_MODEL") ?: "voyage-3"
+    /** 语义搜索开关：关闭时仅使用关键词匹配。 */
+    val EMBEDDING_ENABLED: Boolean get() = env("EMBEDDING_ENABLED")?.toBoolean() ?: false
+    /** 混合搜索 α（关键词权重），β（向量权重），γ（recency 权重）。α+β+γ ≈ 1.0 */
+    val HYBRID_SEARCH_ALPHA: Double get() = env("HYBRID_SEARCH_ALPHA")?.toDoubleOrNull()?.coerceIn(0.0, 1.0) ?: 0.4
+    val HYBRID_SEARCH_BETA: Double get() = env("HYBRID_SEARCH_BETA")?.toDoubleOrNull()?.coerceIn(0.0, 1.0) ?: 0.4
+    val HYBRID_SEARCH_GAMMA: Double get() = env("HYBRID_SEARCH_GAMMA")?.toDoubleOrNull()?.coerceIn(0.0, 1.0) ?: 0.2
+
     // AutoCLI (nashsu/AutoCLI) 集成
     val AUTOCLI_ENABLED: Boolean get() = env("AUTOCLI_ENABLED")?.toBoolean() ?: false
     val AUTOCLI_PATH: String get() = env("AUTOCLI_PATH")?.trim()?.takeIf { it.isNotEmpty() } ?: "autocli"

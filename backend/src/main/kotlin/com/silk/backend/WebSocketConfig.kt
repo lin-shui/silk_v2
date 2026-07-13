@@ -45,7 +45,10 @@ private val workflowManagerForKnowledgeBase: com.silk.backend.workflow.WorkflowM
 private fun buildPersistentKnowledgeBaseContextSelection(
     preferences: com.silk.backend.kb.KnowledgeBaseContextPreferences,
 ): KnowledgeBaseContextSelection {
-    return KnowledgeBaseContextSelection(excludedSpaceIds = preferences.excludedSpaceIds)
+    return KnowledgeBaseContextSelection(
+        excludedSpaceIds = preferences.excludedSpaceIds,
+        downrankedSpaceIds = preferences.downrankedSpaceIds,
+    )
 }
 
 private fun mergeKnowledgeBaseContextSelection(
@@ -56,6 +59,9 @@ private fun mergeKnowledgeBaseContextSelection(
         pinnedEntryIds = requestSelection.pinnedEntryIds.distinct(),
         excludedEntryIds = requestSelection.excludedEntryIds.distinct(),
         excludedSpaceIds = (persistent.excludedSpaceIds + requestSelection.excludedSpaceIds).distinct(),
+        downrankedSpaceIds = (persistent.downrankedSpaceIds + requestSelection.downrankedSpaceIds)
+            .filterNot { it in persistent.excludedSpaceIds || it in requestSelection.excludedSpaceIds }
+            .distinct(),
     )
 }
 
@@ -1901,7 +1907,7 @@ class ChatServer(
             broadcastSystemStatus(status = "🧠 记忆功能已关闭，本轮不会保存长期记忆")
         }
 
-        // 解析知识库上下文（手动引用 [[kb:...]] + pinned/excluded + 自动检索 + space 级排除）
+        // 解析知识库上下文（手动引用 [[kb:...]] + pinned/excluded + 自动检索 + space 级排除/降权）
         val persistentSelection = buildPersistentKnowledgeBaseContextSelection(kbPreferences)
         val kbContext = resolveKnowledgeBasePromptContext(
             rawInput = userMessage,
@@ -1913,6 +1919,7 @@ class ChatServer(
                 persistentSelection,
                 kbContextSelection ?: KnowledgeBaseContextSelection(),
             ),
+            persistentDownrankedSpaceIds = kbPreferences.downrankedSpaceIds.toSet(),
         )
         if (kbContext.availableReferences.isNotEmpty()) {
             logger.info(

@@ -493,6 +493,103 @@ internal fun mergeKnowledgeEntriesTags(
     )
 }
 
+/**
+ * Compute a line-level diff between two texts using LCS.
+ * Returns a list of [DiffChunk] with type "unchanged" | "deleted" | "inserted".
+ * "modified" chunks are represented as adjacent deleted+inserted pairs.
+ */
+@Suppress("CyclomaticComplexMethod")
+internal fun computeLineDiff(original: String, modified: String): List<DiffChunk> {
+    // Handle empty strings: split("\n") on empty string gives [""], not []
+    val origLines = if (original.isEmpty()) emptyList() else original.split("\n")
+    val modLines = if (modified.isEmpty()) emptyList() else modified.split("\n")
+    val m = origLines.size
+    val n = modLines.size
+
+    // Build LCS length table
+    val dp = Array(m + 1) { IntArray(n + 1) }
+    for (i in 1..m) {
+        for (j in 1..n) {
+            dp[i][j] = if (origLines[i - 1] == modLines[j - 1]) {
+                dp[i - 1][j - 1] + 1
+            } else {
+                maxOf(dp[i - 1][j], dp[i][j - 1])
+            }
+        }
+    }
+
+    // Backtrack to build diff
+    val chunks = mutableListOf<DiffChunk>()
+    var i = m
+    var j = n
+    val reverseOps = mutableListOf<Pair<String, String>>() // (type, line)
+
+    while (i > 0 || j > 0) {
+        when {
+            i > 0 && j > 0 && origLines[i - 1] == modLines[j - 1] -> {
+                reverseOps.add("unchanged" to origLines[i - 1])
+                i--
+                j--
+            }
+            j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) -> {
+                reverseOps.add("inserted" to modLines[j - 1])
+                j--
+            }
+            i > 0 -> {
+                reverseOps.add("deleted" to origLines[i - 1])
+                i--
+            }
+        }
+    }
+    reverseOps.reverse()
+
+    // Coalesce consecutive same-type ops into chunks
+    var lineIdx = 0
+    var opIdx = 0
+    while (opIdx < reverseOps.size) {
+        val (type, _) = reverseOps[opIdx]
+        val startLine = lineIdx
+        val lines = mutableListOf<String>()
+        while (opIdx < reverseOps.size && reverseOps[opIdx].first == type) {
+            lines.add(reverseOps[opIdx].second)
+            opIdx++
+            if (type != "deleted") lineIdx++ // deleted lines don't advance line count in target
+        }
+        // For co-authored deleted+inserted, merge into "modified" when adjacent
+        if (type == "deleted" && opIdx < reverseOps.size && reverseOps[opIdx].first == "inserted") {
+            val deletedLines = lines.toList()
+            val insertedLines = mutableListOf<String>()
+            while (opIdx < reverseOps.size && reverseOps[opIdx].first == "inserted") {
+                insertedLines.add(reverseOps[opIdx].second)
+                opIdx++
+                lineIdx++
+            }
+            chunks.add(
+                DiffChunk(
+                    type = "modified",
+                    originalText = deletedLines.joinToString("\n"),
+                    newText = insertedLines.joinToString("\n"),
+                    lineStart = startLine,
+                    lineEnd = startLine + deletedLines.size - 1,
+                ),
+            )
+        } else {
+            val text = lines.joinToString("\n")
+            chunks.add(
+                DiffChunk(
+                    type = type,
+                    originalText = if (type != "inserted") text else "",
+                    newText = if (type != "deleted") text else "",
+                    lineStart = startLine,
+                    lineEnd = if (type != "deleted") startLine + lines.size - 1 else startLine,
+                ),
+            )
+        }
+    }
+
+    return chunks
+}
+
 @Composable
 private fun TopicSidebar(
     widthPx: Double,
@@ -6836,6 +6933,17 @@ fun KnowledgeBaseScene(appState: WebAppState) {
 
     val mergeCandidateEntry = selectedEntry?.takeIf { it.status == KBEntryStatus.CANDIDATE }
     if (showMergeCandidateDialog && mergeCandidateEntry != null) {
+        val targetOptionForPreview = mergeTargetOptions.find { it.entry.id == mergeTargetEntryId }
+        val mergeTargetContent = targetOptionForPreview?.entry?.content.orEmpty()
+        val mergeMergedContent = remember(mergeTargetContent, mergeCandidateEntry) {
+            if (mergeTargetContent.isNotBlank()) {
+                mergeKnowledgeEntryContent(
+                    targetContent = mergeTargetContent,
+                    candidateTitle = mergeCandidateEntry.title,
+                    candidateContent = mergeCandidateEntry.content,
+                )
+            } else ""
+        }
         MergeKnowledgeEntryDialog(
             title = "并入已有文档",
             description = "将候选“${mergeCandidateEntry.title}”并入同一 knowledge space 的目标文档后，原候选会自动归档。",
@@ -6843,6 +6951,8 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             selectedTargetEntryId = mergeTargetEntryId,
             isLoading = isMergeTargetsLoading,
             isSaving = isMergeCandidateSaving,
+            targetContent = mergeTargetContent,
+            mergedContent = mergeMergedContent,
             onSelectedTargetEntryIdChange = { mergeTargetEntryId = it },
             onDismiss = {
                 if (!isMergeCandidateSaving) {
@@ -6854,7 +6964,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                     mergeCandidateIntoKnowledgeEntry(
                         candidateEntry = mergeCandidateEntry,
                         sourceTopic = selectedTopic,
-                        targetOption = mergeTargetOptions.find { it.entry.id == mergeTargetEntryId },
+                        targetOption = targetOptionForPreview,
                         userId = user.id,
                         onSavingChange = { isMergeCandidateSaving = it },
                         onSaveMessageChange = { saveMessage = it },
@@ -6871,6 +6981,16 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     }
 
     if (showBatchMergeCandidatesDialog && batchMergeCandidateEntries.isNotEmpty()) {
+        val batchTargetOptionForPreview = mergeTargetOptions.find { it.entry.id == batchMergeTargetEntryId }
+        val batchTargetContent = batchTargetOptionForPreview?.entry?.content.orEmpty()
+        val batchMergedContent = remember(batchTargetContent, batchMergeCandidateEntries) {
+            if (batchTargetContent.isNotBlank()) {
+                mergeKnowledgeEntriesContent(
+                    targetContent = batchTargetContent,
+                    candidateEntries = batchMergeCandidateEntries.filter { it.id != batchTargetOptionForPreview?.entry?.id },
+                )
+            } else ""
+        }
         MergeKnowledgeEntryDialog(
             title = "批量并入已有文档",
             description = "将选中的 ${batchMergeCandidateEntries.size} 条候选并入同一 knowledge space 的目标文档后，这些候选会自动归档。",
@@ -6878,6 +6998,8 @@ fun KnowledgeBaseScene(appState: WebAppState) {
             selectedTargetEntryId = batchMergeTargetEntryId,
             isLoading = isMergeTargetsLoading,
             isSaving = isBatchMergeSaving,
+            targetContent = batchTargetContent,
+            mergedContent = batchMergedContent,
             onSelectedTargetEntryIdChange = { batchMergeTargetEntryId = it },
             onDismiss = {
                 if (!isBatchMergeSaving) {
@@ -6890,7 +7012,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                         selectedCandidateEntryIds = selectedCandidateEntryIds,
                         sourceTopic = selectedTopic,
                         candidateEntries = batchMergeCandidateEntries,
-                        targetOption = mergeTargetOptions.find { it.entry.id == batchMergeTargetEntryId },
+                        targetOption = batchTargetOptionForPreview,
                         userId = user.id,
                         onSavingChange = { isBatchMergeSaving = it },
                         onSaveMessageChange = { saveMessage = it },
@@ -7590,6 +7712,7 @@ fun LabeledInput(placeholder: String, currentValue: String, onValueChange: (Stri
     }
 }
 
+@Suppress("CyclomaticComplexMethod")
 @Composable
 private fun MergeKnowledgeEntryDialog(
     title: String,
@@ -7598,10 +7721,28 @@ private fun MergeKnowledgeEntryDialog(
     selectedTargetEntryId: String,
     isLoading: Boolean,
     isSaving: Boolean,
+    targetContent: String = "",
+    mergedContent: String = "",
     onSelectedTargetEntryIdChange: (String) -> Unit,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
+    var showDiff by remember { mutableStateOf(false) }
+    val diffChunks = remember(targetContent, mergedContent) {
+        if (targetContent.isNotBlank() && mergedContent.isNotBlank() && targetContent != mergedContent) {
+            computeLineDiff(targetContent, mergedContent)
+        } else {
+            emptyList()
+        }
+    }
+    val hasDiff = diffChunks.isNotEmpty()
+    val addedLines = diffChunks.filter { it.type == "inserted" }.sumOf { it.newText.count { c -> c == '\n' } + 1 }
+    val deletedLines = diffChunks.filter { it.type == "deleted" || it.type == "modified" }
+        .sumOf { it.originalText.count { c -> c == '\n' } + 1 }
+    val modifiedSections = diffChunks.count { it.type == "modified" }
+
+    val hasMergePreview = targetContent.isNotBlank() && mergedContent.isNotBlank()
+
     ModalDialog(title = title, onDismiss = onDismiss) {
         Div({
             style {
@@ -7663,7 +7804,10 @@ private fun MergeKnowledgeEntryDialog(
                         color(Color(SilkColors.textPrimary))
                     }
                     attr("value", selectedTargetEntryId)
-                    onChange { onSelectedTargetEntryIdChange(it.value ?: "") }
+                    onChange {
+                        onSelectedTargetEntryIdChange(it.value ?: "")
+                        showDiff = false
+                    }
                 }) {
                     targetEntries.forEach { option ->
                         org.jetbrains.compose.web.dom.Option(value = option.entry.id) {
@@ -7673,6 +7817,144 @@ private fun MergeKnowledgeEntryDialog(
                 }
             }
         }
+
+        // Diff preview toggle — only when a target is selected and merge content is available
+        if (hasMergePreview && selectedTargetEntryId.isNotBlank() && !isLoading) {
+            Div({
+                style {
+                    marginBottom(12.px)
+                    property("border-top", "1px solid ${SilkColors.border}")
+                    property("padding-top", "10px")
+                }
+            }) {
+                // Diff summary bar
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        justifyContent(JustifyContent.SpaceBetween)
+                        alignItems(AlignItems.Center)
+                        marginBottom(8.px)
+                    }
+                }) {
+                    Span({
+                        style {
+                            fontSize(13.px)
+                            fontWeight("600")
+                            color(Color(SilkColors.textPrimary))
+                        }
+                    }) { Text("合并预览") }
+                    if (hasDiff) {
+                        Span({
+                            style {
+                                fontSize(12.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("gap", "8px")
+                                display(DisplayStyle.Flex)
+                            }
+                        }) {
+                            Span({
+                                style { color(Color("#52A475")) }
+                            }) { Text("+$addedLines") }
+                            Span({
+                                style { color(Color("#C85046")) }
+                            }) { Text("-$deletedLines") }
+                            if (modifiedSections > 0) {
+                                Span({
+                                    style { color(Color("#E6B43C")) }
+                                }) { Text("~$modifiedSections") }
+                            }
+                        }
+                    }
+                }
+
+                // Toggle button for detailed diff view
+                if (hasDiff) {
+                    Button({
+                        style {
+                            width(100.percent)
+                            padding(6.px, 12.px)
+                            fontSize(12.px)
+                            backgroundColor(if (showDiff) Color(SilkColors.surface) else Color("#F5F5F5"))
+                            color(Color(SilkColors.textSecondary))
+                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                            borderRadius(6.px)
+                            property("cursor", "pointer")
+                            marginBottom(if (showDiff) 8.px else 0.px)
+                            property("transition", "all 150ms ease")
+                        }
+                        onClick { showDiff = !showDiff }
+                    }) {
+                        Text(if (showDiff) "收起差异详情 ▲" else "展开差异详情 ▼")
+                    }
+
+                    // Expandable diff detail view
+                    if (showDiff) {
+                        Div({
+                            style {
+                                maxHeight(250.px)
+                                property("overflow-y", "auto")
+                                borderRadius(6.px)
+                                property("border", "1px solid ${SilkColors.border}")
+                                backgroundColor(Color("#FAFAFA"))
+                                fontSize(12.px)
+                                property("font-family", "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace")
+                                property("line-height", "1.6")
+                                property("white-space", "pre-wrap")
+                                property("word-break", "break-all")
+                            }
+                        }) {
+                            diffChunks.forEach { chunk ->
+                                val chunkBg = when (chunk.type) {
+                                    "inserted" -> "rgba(82,164,117,0.10)"
+                                    "deleted" -> "rgba(200,80,70,0.08)"
+                                    "modified" -> "rgba(230,180,60,0.10)"
+                                    else -> "transparent"
+                                }
+                                val prefix = when (chunk.type) {
+                                    "inserted" -> "+ "
+                                    "deleted" -> "- "
+                                    "modified" -> "~ "
+                                    else -> "  "
+                                }
+                                val chunkColor = when (chunk.type) {
+                                    "inserted" -> "#2D7D4A"
+                                    "deleted" -> "#B33A2E"
+                                    "modified" -> "#A68B2C"
+                                    else -> SilkColors.textPrimary
+                                }
+                                val displayText = when (chunk.type) {
+                                    "inserted" -> chunk.newText
+                                    "deleted" -> chunk.originalText
+                                    "modified" -> chunk.originalText + "\n" + chunk.newText
+                                    else -> chunk.originalText
+                                }
+                                Div({
+                                    style {
+                                        backgroundColor(Color(chunkBg))
+                                        color(Color(chunkColor))
+                                        padding(2.px, 8.px)
+                                        property("white-space", "pre-wrap")
+                                    }
+                                }) {
+                                    Text(displayText.lines().joinToString("\n") { "$prefix$it" })
+                                }
+                            }
+                        }
+                    }
+                } else if (selectedTargetEntryId.isNotBlank()) {
+                    Div({
+                        style {
+                            fontSize(12.px)
+                            color(Color(SilkColors.textLight))
+                            property("font-style", "italic")
+                        }
+                    }) {
+                        Text("合并后内容与原文一致，无差异")
+                    }
+                }
+            }
+        }
+
         DialogActions(
             onCancel = onDismiss,
             onConfirm = onConfirm,

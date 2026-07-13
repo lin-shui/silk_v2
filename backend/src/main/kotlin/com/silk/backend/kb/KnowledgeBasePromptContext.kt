@@ -22,6 +22,8 @@ data class KnowledgeBaseContextDiagnostics(
     val memoryReferenceCount: Int = 0,
     val excludedReferenceCount: Int = 0,
     val excludedSpaceCount: Int = 0,
+    /** 降权空间数量：这些空间的条目仍参与召回但优先级降低。 */
+    val downrankedSpaceCount: Int = 0,
 )
 
 private data class KnowledgeBaseReferenceToken(
@@ -53,6 +55,8 @@ fun resolveKnowledgeBasePromptContext(
     memoryCandidateLimit: Int = 5,
     memoryEnabled: Boolean = true,
     selection: KnowledgeBaseContextSelection = KnowledgeBaseContextSelection(),
+    /** 来自持久偏好的降权空间 ID（与 selection 中的降权空间合并）。 */
+    persistentDownrankedSpaceIds: Set<String> = emptySet(),
 ): KnowledgeBasePromptContext {
     val tokens = parseKnowledgeBaseReferenceTokens(rawInput)
     val resolvedByEntryId = resolveManualKnowledgeBaseReferences(tokens, userId, knowledgeBaseManager)
@@ -63,6 +67,7 @@ fun resolveKnowledgeBasePromptContext(
     val manualEntryIds = resolvedByEntryId.keys.toSet()
     val excludedEntryIds = normalizeExcludedEntryIds(selection, manualEntryIds)
     val excludedSpaceIds = normalizeExcludedSpaceIds(selection)
+    val downrankedSpaceIds = normalizeDownrankedSpaceIds(selection, persistentDownrankedSpaceIds)
     val pinnedReferences = resolvePinnedKnowledgeBaseReferences(
         selection = selection,
         manualEntryIds = manualEntryIds,
@@ -78,6 +83,7 @@ fun resolveKnowledgeBasePromptContext(
         autoCandidateLimit = autoCandidateLimit,
         excludedEntryIds = manualEntryIds + pinnedReferences.map { it.entry.id } + excludedEntryIds,
         excludedSpaceIds = excludedSpaceIds,
+        downrankedSpaceIds = downrankedSpaceIds,
     )
     val memoryReferences = if (memoryEnabled) {
         resolveMemoryKnowledgeBaseReferences(
@@ -120,6 +126,7 @@ fun resolveKnowledgeBasePromptContext(
             memoryReferenceCount = memoryReferences.size,
             excludedReferenceCount = excludedEntryIds.size,
             excludedSpaceCount = excludedSpaceIds.size,
+            downrankedSpaceCount = downrankedSpaceIds.size,
         ),
     )
 }
@@ -173,6 +180,20 @@ private fun normalizeExcludedSpaceIds(
         .toSet()
 }
 
+private fun normalizeDownrankedSpaceIds(
+    selection: KnowledgeBaseContextSelection,
+    persistentDownrankedSpaceIds: Set<String>,
+): Set<String> {
+    val fromSelection = selection.downrankedSpaceIds.asSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .toSet()
+    // 合并消息级与持久偏好，排除那些已被硬排除的空间
+    val allDownranked = fromSelection + persistentDownrankedSpaceIds
+    val excluded = normalizeExcludedSpaceIds(selection)
+    return allDownranked.filterNot { it in excluded }.toSet()
+}
+
 private fun resolvePinnedKnowledgeBaseReferences(
     selection: KnowledgeBaseContextSelection,
     manualEntryIds: Set<String>,
@@ -206,6 +227,7 @@ private fun resolveAutoKnowledgeBaseReferences(
     autoCandidateLimit: Int,
     excludedEntryIds: Set<String>,
     excludedSpaceIds: Set<String>,
+    downrankedSpaceIds: Set<String> = emptySet(),
 ): List<AutoKnowledgeBaseReference> {
     return knowledgeBaseManager.searchEntriesForContext(
         userId = userId,
@@ -214,6 +236,7 @@ private fun resolveAutoKnowledgeBaseReferences(
         limit = autoCandidateLimit,
         excludedEntryIds = excludedEntryIds,
         excludedSpaceIds = excludedSpaceIds,
+        downrankedSpaceIds = downrankedSpaceIds,
     ).map { hit ->
         AutoKnowledgeBaseReference(
             entry = hit.entry,

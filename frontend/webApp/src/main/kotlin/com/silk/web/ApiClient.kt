@@ -355,6 +355,7 @@ data class KBEntryItem(
 data class KnowledgeBaseContextPreferences(
     val userId: String,
     val excludedSpaceIds: List<String> = emptyList(),
+    val downrankedSpaceIds: List<String> = emptyList(),
     val memoryEnabled: Boolean = true,
     val autoCaptureEnabled: Boolean = false,
     val ephemeralSessionEnabled: Boolean = false,
@@ -1818,6 +1819,7 @@ object ApiClient {
     suspend fun updateKBContextPreferences(
         userId: String,
         excludedSpaceIds: List<String>,
+        downrankedSpaceIds: List<String> = emptyList(),
         memoryEnabled: Boolean,
         autoCaptureEnabled: Boolean,
         ephemeralSessionEnabled: Boolean,
@@ -1828,6 +1830,10 @@ object ApiClient {
                 put(
                     "excludedSpaceIds",
                     kotlinx.serialization.json.JsonArray(excludedSpaceIds.map { kotlinx.serialization.json.JsonPrimitive(it) })
+                )
+                put(
+                    "downrankedSpaceIds",
+                    kotlinx.serialization.json.JsonArray(downrankedSpaceIds.map { kotlinx.serialization.json.JsonPrimitive(it) })
                 )
                 put("memoryEnabled", kotlinx.serialization.json.JsonPrimitive(memoryEnabled))
                 put("autoCaptureEnabled", kotlinx.serialization.json.JsonPrimitive(autoCaptureEnabled))

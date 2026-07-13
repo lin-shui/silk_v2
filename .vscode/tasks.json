@@ -6,6 +6,12 @@
 			"type": "shell",
 			"command": "cd /Users/pengzhike/Documents/project/huawei/silk_v2 && ./gradlew :backend:test",
 			"group": "test"
+		},
+		{
+			"label": "run-web-tests",
+			"type": "shell",
+			"command": "cd /Users/pengzhike/Documents/project/huawei/silk_v2 && ./gradlew :frontend:webApp:nodeTest",
+			"group": "test"
 		}
 	]
 }

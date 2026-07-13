@@ -39,7 +39,7 @@
 | `agents/` | Agent 框架（`core/` 路由+状态、`acp/` ACP 协议层、`adapters/` Claude Code / Codex 描述符） |
 | `todos/` | Todo 抽取、刷新、存储、节假日逻辑 |
 | `workflow/` | Workflow JSON store |
-| `kb/` | Knowledge Base JSON store + exporter + AI Copilot（`KnowledgeBaseCopilot.kt`）+ AI Actions（`KnowledgeBaseAiActions.kt`）+ Memory Layer（`KnowledgeBaseMemory.kt`）+ Prompt Context（`KnowledgeBasePromptContext.kt`）+ Context Preference（`KnowledgeBaseContextPreferenceStore.kt`）+ Obsidian 导出 |
+| `kb/` | Knowledge Base JSON store + exporter + AI Copilot（`KnowledgeBaseCopilot.kt`）+ AI Actions（`KnowledgeBaseAiActions.kt`）+ Memory Layer（`KnowledgeBaseMemory.kt`）+ Prompt Context（`KnowledgeBasePromptContext.kt`）+ Context Preference（`KnowledgeBaseContextPreferenceStore.kt`）+ Embedding（`KnowledgeBaseEmbedding.kt`）+ Obsidian 导出 |
 | `trust/` | Workflow directory trust store |
 | `export/` | Chat 导出 |
 | `routes/` | 已拆出的文件/ASR 路由 |

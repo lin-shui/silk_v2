@@ -396,6 +396,32 @@ interface ResponseEnvelope {
 export class ApiClient {
   private baseUrl: string = API_BASE_URL;
   private timeout: number = API_TIMEOUT;
+  private _token: string = '';
+
+  /**
+   * 设置 Bearer token
+   */
+  setToken(token: string): void {
+    this._token = token;
+  }
+
+  /**
+   * 清除 Bearer token
+   */
+  clearToken(): void {
+    this._token = '';
+  }
+
+  /**
+   * 构建带 Authorization 的请求头
+   */
+  private buildHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this._token) {
+      headers['Authorization'] = `Bearer ${this._token}`;
+    }
+    return headers;
+  }
 
   /**
    * 设置基础 URL
@@ -468,9 +494,7 @@ export class ApiClient {
     try {
       const opts: http.HttpRequestOptions = {
         method: http.RequestMethod.GET,
-        header: {
-          'Content-Type': 'application/json'
-        },
+        header: this.buildHeaders(),
         connectTimeout: this.timeout,
         readTimeout: this.timeout
       };
@@ -500,9 +524,7 @@ export class ApiClient {
     try {
       const opts: http.HttpRequestOptions = {
         method: http.RequestMethod.POST,
-        header: {
-          'Content-Type': 'application/json'
-        },
+        header: this.buildHeaders(),
         extraData: body,
         connectTimeout: this.timeout,
         readTimeout: this.timeout
@@ -530,9 +552,7 @@ export class ApiClient {
     try {
       const opts: http.HttpRequestOptions = {
         method: http.RequestMethod.PUT,
-        header: {
-          'Content-Type': 'application/json'
-        },
+        header: this.buildHeaders(),
         extraData: body,
         connectTimeout: this.timeout,
         readTimeout: this.timeout
@@ -792,7 +812,7 @@ export class ApiClient {
   private async getRaw(endpoint: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.GET, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.GET, header: this.buildHeaders(), connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts
@@ -806,7 +826,7 @@ export class ApiClient {
   private async postRaw(endpoint: string, body: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.POST, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.POST, header: this.buildHeaders(), extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts
@@ -820,7 +840,7 @@ export class ApiClient {
   private async putRaw(endpoint: string, body: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.PUT, header: { 'Content-Type': 'application/json' }, extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.PUT, header: this.buildHeaders(), extraData: body, connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts
@@ -834,7 +854,7 @@ export class ApiClient {
   private async deleteRaw(endpoint: string): Promise<string> {
     const httpRequest = this.createHttpRequest();
     try {
-      const opts: http.HttpRequestOptions = { method: http.RequestMethod.DELETE, header: { 'Content-Type': 'application/json' }, connectTimeout: this.timeout, readTimeout: this.timeout };
+      const opts: http.HttpRequestOptions = { method: http.RequestMethod.DELETE, header: this.buildHeaders(), connectTimeout: this.timeout, readTimeout: this.timeout };
       const response = await httpRequest.request(
         `${this.baseUrl}${endpoint}`,
         opts

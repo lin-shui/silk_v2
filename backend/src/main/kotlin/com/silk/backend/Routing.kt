@@ -4576,9 +4576,13 @@ private fun Route.registerApiKbContextPreferencesPutRoute() {
         val excludedSpaceIds = req["excludedSpaceIds"]?.let { element ->
             runCatching { element.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull } }.getOrNull()
         } ?: emptyList()
+        val downrankedSpaceIds = req["downrankedSpaceIds"]?.let { element ->
+            runCatching { element.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull } }.getOrNull()
+        } ?: emptyList()
         val updated = knowledgeBaseContextPreferenceStore.update(
             userId = userId,
             excludedSpaceIds = excludedSpaceIds,
+            downrankedSpaceIds = downrankedSpaceIds,
             memoryEnabled = req["memoryEnabled"]?.jsonPrimitive?.booleanOrNull,
             autoCaptureEnabled = req["autoCaptureEnabled"]?.jsonPrimitive?.booleanOrNull,
             ephemeralSessionEnabled = req["ephemeralSessionEnabled"]?.jsonPrimitive?.booleanOrNull,
