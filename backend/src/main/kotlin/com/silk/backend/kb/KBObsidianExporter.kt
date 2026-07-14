@@ -44,7 +44,7 @@ object KBObsidianExporter {
     }
 
     private fun sanitize(input: String): String =
-        input.replace(Regex("[^\\w\\s\\-]"), "")
+        input.replace(Regex("[^\\p{L}\\p{N}\\s\\-]"), "")
             .replace(Regex("\\s+"), " ")
             .trim()
             .ifBlank { "unknown" }
