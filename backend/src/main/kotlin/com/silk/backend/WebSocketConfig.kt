@@ -317,15 +317,6 @@ class ChatServer(
         return pendingImages.containsKey("$sessionName:$userId")
     }
 
-    // 保存已处理的URL到文件
-    private fun saveProcessedUrl(url: String) {
-        try {
-            processedUrlsFile.appendText("$url\n")
-        } catch (e: java.io.IOException) {
-            logger.warn("⚠️ 保存URL缓存失败: {}", e.message, e)
-        }
-    }
-
     suspend fun join(userId: String, userName: String, session: WebSocketSession) {
         // 权限校验：群聊仅允许群成员加入（否则会导致历史/工具上下文越权）
         if (sessionName.startsWith("group_") && !AgentRuntime.isAgentUserId(userId)) {
@@ -537,21 +528,6 @@ class ChatServer(
             }
         }
         logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
-    }
-
-    /**
-     * 如果消息是非 Agent 的 TEXT 消息，启动 URL 处理（异步）
-     */
-    private fun maybeLaunchUrlProcessing(message: Message) {
-        if (message.type == MessageType.TEXT && !message.isTransient && !AgentRuntime.isAgentMessage(message)) {
-            CoroutineScope(Dispatchers.IO).launch {
-                runChatCatching {
-                    processUrlsInMessage(message)
-                }.onFailure { e ->
-                    logger.warn("⚠️ URL处理失败: {}", e.message)
-                }
-            }
-        }
     }
 
     /**
@@ -1091,111 +1067,6 @@ class ChatServer(
 
         // ==================== Silk AI 回复逻辑 ====================
         handleSilkAiBroadcast(message, effectiveSilkPrivate)
-    }
-
-    /**
-     * 处理消息中的URL - 下载网页并索引
-     */
-    @Suppress("NestedBlockDepth")
-    private suspend fun processUrlsInMessage(message: Message) {
-        logger.debug("🔗 [URL检测] 开始检测消息: {}...", message.content.take(50))
-        val urls = com.silk.backend.utils.WebPageDownloader.extractUrls(message.content)
-        logger.debug("🔗 [URL检测] 提取到 {} 个URL: {}", urls.size, urls)
-
-        if (urls.isEmpty()) {
-            logger.debug("🔗 [URL检测] 没有URL，跳过")
-            return
-        }
-
-        // 过滤掉已经处理过的URL
-        val newUrls = urls.filter { url ->
-            val normalized = url.lowercase().trimEnd('/')
-            !processedUrls.contains(normalized)
-        }
-
-        if (newUrls.isEmpty()) {
-            logger.debug("🔗 检测到 {} 个URL，但都已处理过，跳过", urls.size)
-            return
-        }
-
-        logger.debug("🔗 检测到 {} 个URL，其中 {} 个是新的: {}", urls.size, newUrls.size, newUrls)
-
-        // 创建上传目录（使用统一的方法获取目录路径）
-        val uploadDir = historyManager.getUploadsDir(sessionName)
-
-        for (url in newUrls) {
-            val normalizedUrl = url.lowercase().trimEnd('/')
-
-            try {
-                // 发送状态消息
-                broadcastSystemStatus("🌐 正在下载: $url")
-
-                // 下载内容（支持网页和PDF）
-                val content = com.silk.backend.utils.WebPageDownloader.downloadAndExtract(url)
-
-                if (content != null) {
-                    // ✅ 只有成功下载后才标记为已处理
-                    processedUrls.add(normalizedUrl)
-                    saveProcessedUrl(normalizedUrl)
-
-                    // 保存到文件
-                    val savedFile = com.silk.backend.utils.WebPageDownloader.saveToFile(content, uploadDir)
-                    val downloadSessionId = sessionName.removePrefix("group_")
-
-                    // 发送状态消息
-                    val fileType = if (content.isPdf) "PDF" else "网页"
-                    broadcastSystemStatus("📄 已下载$fileType: ${content.title}")
-                    broadcast(
-                        Message(
-                            id = generateId(),
-                            userId = message.userId,
-                            userName = message.userName,
-                            content = buildFileMessageContent(
-                                fileName = savedFile.name,
-                                fileSize = savedFile.length(),
-                                downloadUrl = buildFileDownloadUrl(downloadSessionId, savedFile.name)
-                            ),
-                            timestamp = System.currentTimeMillis(),
-                            type = MessageType.FILE
-                        )
-                    )
-
-                    // 索引到 Weaviate
-                    val participants = getSessionParticipants(message.userId)
-
-                    // 创建一个代表内容的历史条目
-                    val webPageEntry = com.silk.backend.models.ChatHistoryEntry(
-                        messageId = "webpage_${System.currentTimeMillis()}",
-                        senderId = message.userId,
-                        senderName = "[$fileType] ${content.title}",
-                        content = """
-                            来源URL: ${content.url}
-                            标题: ${content.title}
-                            类型: $fileType
-
-                            ${content.textContent.take(10000)}
-                        """.trimIndent(),
-                        timestamp = System.currentTimeMillis(),
-                        messageType = if (content.isPdf) "PDF" else "WEBPAGE"
-                    )
-
-                    val indexed = silkAgent.indexMessageToSearch(webPageEntry, participants)
-                    if (indexed) {
-                        logger.debug("🔍 内容已索引: {}", content.title)
-                        broadcastSystemStatus("✅ 已索引$fileType: ${content.title}")
-                    }
-                } else {
-                    broadcastSystemStatus("⚠️ 无法下载: $url")
-                }
-            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                logger.error("❌ 处理URL失败: {} - {}", url, e.message)
-                broadcastSystemStatus("❌ 处理链接失败: $url")
-            }
-        }
-
-        // ✅ 处理完成后，延迟3秒清除状态消息（让用户能看到结果）
-        kotlinx.coroutines.delay(3000)
-        broadcastSystemStatus("CLEAR_STATUS")
     }
 
     /**
