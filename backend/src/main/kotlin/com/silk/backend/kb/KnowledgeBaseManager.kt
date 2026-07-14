@@ -267,7 +267,7 @@ class KnowledgeBaseManager(
             val topics = repo.allTopics().toMutableList()
             val entries = repo.allEntries().toMutableList()
             KBStore(topics = topics, entries = entries)
-        } @Suppress("TooGenericExceptionCaught") catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error("Failed to load KB store from PostgreSQL: {}", e.message)
             KBStore()
         }
@@ -294,7 +294,7 @@ class KnowledgeBaseManager(
                 repo.createEntry(entry)
             }
             logger.info("Saved {} topics and {} entries to PostgreSQL", store.topics.size, store.entries.size)
-        } @Suppress("TooGenericExceptionCaught") catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error("Failed to save KB store to PostgreSQL: {}", e.message)
         }
     }
@@ -1553,7 +1553,7 @@ class KnowledgeBaseManager(
         val repo: PgKnowledgeBaseRepository
         try {
             repo = PgKnowledgeBaseRepository()
-        } @Suppress("TooGenericExceptionCaught") catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error("Failed to create PgKnowledgeBaseRepository: {}", e.message)
             return MigrationReport(success = false, message = "PostgreSQL 未初始化：${e.message}")
         }
@@ -1590,7 +1590,7 @@ class KnowledgeBaseManager(
                 entriesMigrated = entryCount, embeddingsMigrated = embedCount,
                 message = "迁移完成：$topicCount 个主题，$entryCount 个条目，$embedCount 个嵌入向量",
             )
-        } @Suppress("TooGenericExceptionCaught") catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error("Migration to PostgreSQL failed: {}", e.message)
             return MigrationReport(
                 success = false, topicsMigrated = topicCount,

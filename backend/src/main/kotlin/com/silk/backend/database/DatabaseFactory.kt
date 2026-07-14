@@ -124,7 +124,7 @@ object DatabaseFactory {
 
                 logger.info("✅ KB PostgreSQL 表创建完成 (host={}, db={})", host, db)
             }
-        } @Suppress("TooGenericExceptionCaught") catch (e: Exception) {
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.error("❌ KB PostgreSQL 初始化失败: {}", e.message)
             // 不阻止应用启动——PG 不可用时降级回 JSON store
             kbPostgresDatabase = null

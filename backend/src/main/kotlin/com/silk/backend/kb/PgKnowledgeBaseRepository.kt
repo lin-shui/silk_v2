@@ -5,6 +5,7 @@ import com.silk.backend.database.DatabaseFactory
 import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
 import com.silk.backend.models.KBEntrySource
+import com.silk.backend.models.KBEntryStatus
 import com.silk.backend.models.KBMemoryMetadata
 import com.silk.backend.models.KBTopic
 import com.silk.backend.models.KBTopicPurpose
