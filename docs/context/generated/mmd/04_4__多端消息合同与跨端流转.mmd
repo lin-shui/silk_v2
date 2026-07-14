@@ -1,0 +1,47 @@
+graph LR
+    subgraph "合同定义层 frontend/shared"
+        MESSAGE["Message 模型<br/>MessageType / MessageCategory"]
+        CLIENT["ChatClient<br/>WebSocket 状态机"]
+        API["ApiResponses<br/>HTTP 响应 DTO"]
+        SETTINGS["UserSettings<br/>CC DTO / 目录协议"]
+        AUDIO_MODELS["AudioDuplexModels<br/>语音会话状态"]
+    end
+
+    subgraph "前端消费端"
+        WEB_UI["WebApp<br/>Compose for Web"]
+        ANDROID_UI["Android App<br/>Jetpack Compose"]
+        DESKTOP_UI["Desktop App<br/>Compose Desktop"]
+    end
+
+    subgraph "独立端"
+        HARMONY_UI["HarmonyOS App<br/>ArkTS/ArkUI<br/>手动同步合同"]
+    end
+
+    subgraph "后端生产端"
+        BACKEND_WS["WebSocketConfig.kt<br/>消息生产"]
+        BACKEND_ROUTES["Routing.kt<br/>HTTP 响应"]
+    end
+
+    MESSAGE --> WEB_UI
+    MESSAGE --> ANDROID_UI
+    MESSAGE --> DESKTOP_UI
+    MESSAGE --> BACKEND_WS
+
+    CLIENT --> WEB_UI
+    CLIENT --> ANDROID_UI
+    CLIENT --> DESKTOP_UI
+
+    API --> BACKEND_ROUTES
+    API --> WEB_UI
+    API --> ANDROID_UI
+    API --> DESKTOP_UI
+
+    SETTINGS --> BACKEND_ROUTES
+    SETTINGS --> WEB_UI
+
+    AUDIO_MODELS --> WEB_UI
+    AUDIO_MODELS --> ANDROID_UI
+    AUDIO_MODELS --> HARMONY_UI
+
+    HARMONY_NOTE["⚠️ Harmony 不复用 shared 模块，需手工保持协议同步"]
+    HARMONY_UI -.- HARMONY_NOTE

@@ -1,0 +1,80 @@
+graph TB
+    subgraph "前端层"
+        WEB["🌐 WebApp<br/>Compose for Web"]
+        AND["📱 Android App<br/>Jetpack Compose"]
+        DESK["🖥 Desktop App<br/>Compose Desktop"]
+        HARMONY["📱 HarmonyOS App<br/>ArkTS/ArkUI"]
+        FEISHU["💬 飞书 Bot<br/>Python 网关"]
+    end
+
+    subgraph "通信层"
+        WS["WebSocket<br/>/chat"]
+        HTTP["HTTP REST API"]
+        AUDIO_WS["WebSocket<br/>/ws/audio-duplex"]
+    end
+
+    subgraph "后端 Ktor JVM"
+        ROUTING["Routing.kt<br/>HTTP 路由总入口"]
+        CHAT_SERVER["ChatServer<br/>WebSocketConfig.kt"]
+        AGENT_RUNTIME["AgentRuntime<br/>Agent 框架核心"]
+        DIRECT_AI["DirectModelAgent<br/>Anthropic Messages API"]
+        SEARCH["searchContext()<br/>Grep 搜索"]
+        ASR["ASR Routes<br/>语音转文字"]
+        ACP_REGISTRY["AcpRegistry<br/>ACP 连接管理"]
+    end
+
+    subgraph "Agent 执行层"
+        CC_BRIDGE["cc_bridge/acp_adapter.py<br/>Claude Code CLI"]
+        CODEX_BRIDGE["codex_bridge/codex_adapter.py<br/>Codex CLI"]
+        CC_CONNECT["cc-connect 插件<br/>外部 AI 代理"]
+    end
+
+    subgraph "存储层"
+        SQLITE["SQLite<br/>silk_database.db"]
+        CHAT_HISTORY["chat_history/<br/>session.json"]
+        WORKFLOW["~/.silk-data/workflows/<br/>workflow_store.json"]
+        KB["knowledge_base/<br/>kb_store.json"]
+        UPLOADS["chat_history/<session>/uploads/"]
+    end
+
+    subgraph "外部服务"
+        ANTHROPIC["Anthropic Messages API"]
+        AI_ASR["OpenAI-compatible ASR"]
+        AUDIO_DUPLEX["Audio Duplex Worker"]
+        WEAVIATE["Weaviate<br/>向量数据库（备选）"]
+    end
+
+    WEB --> WS
+    WEB --> HTTP
+    AND --> WS
+    AND --> HTTP
+    DESK --> WS
+    DESK --> HTTP
+    HARMONY --> WS
+    HARMONY --> HTTP
+    HARMONY --> AUDIO_WS
+    FEISHU --> HTTP
+
+    WS --> CHAT_SERVER
+    WS --> AUDIO_WS
+    HTTP --> ROUTING
+
+    CHAT_SERVER --> AGENT_RUNTIME
+    CHAT_SERVER --> DIRECT_AI
+    DIRECT_AI --> ANTHROPIC
+    DIRECT_AI --> SEARCH
+
+    AGENT_RUNTIME --> ACP_REGISTRY
+    ACP_REGISTRY --> CC_BRIDGE
+    ACP_REGISTRY --> CODEX_BRIDGE
+    ACP_REGISTRY --> CC_CONNECT
+
+    CHAT_SERVER --> CHAT_HISTORY
+    CHAT_SERVER --> SQLITE
+    ROUTING --> WORKFLOW
+    ROUTING --> KB
+    ROUTING --> UPLOADS
+
+    AUDIO_WS --> AUDIO_DUPLEX
+    ASR --> AI_ASR
+    SEARCH --> WEAVIATE

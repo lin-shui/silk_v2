@@ -22,7 +22,8 @@ enum class NavTab {
     SILK,
     WORKFLOW,
     KNOWLEDGE_BASE,
-    AUDIO_DUPLEX
+    AUDIO_DUPLEX,
+    GAP_LIGHT
 }
 
 data class ChatNavigationTarget(
