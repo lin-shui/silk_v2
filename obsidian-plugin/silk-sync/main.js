@@ -32,7 +32,8 @@ var import_obsidian2 = require("obsidian");
 var DEFAULT_SETTINGS = {
   serverUrl: "http://localhost:13096",
   apiToken: "",
-  userId: ""
+  userId: "",
+  syncDir: "Silk"
 };
 
 // src/sync.ts
@@ -64,11 +65,13 @@ async function runSync(app, settings) {
     let chatCount = 0;
     let kbCount = 0;
     for (const chat of data.chats) {
-      await writeFile(app, chat.vaultPath, chat.markdown);
+      const path = rebasePath(chat.vaultPath, settings.syncDir);
+      await writeFile(app, path, chat.markdown);
       chatCount++;
     }
     for (const entry of data.kbEntries) {
-      await writeFile(app, entry.vaultPath, entry.markdown);
+      const path = rebasePath(entry.vaultPath, settings.syncDir);
+      await writeFile(app, path, entry.markdown);
       kbCount++;
     }
     new import_obsidian.Notice(`\u2705 \u540C\u6B65\u5B8C\u6210: ${chatCount} \u4E2A\u7FA4\u804A, ${kbCount} \u6761 KB \u6761\u76EE`);
@@ -76,6 +79,10 @@ async function runSync(app, settings) {
     new import_obsidian.Notice(`\u274C \u540C\u6B65\u5931\u8D25: ${e.message}`);
     console.error("Silk sync error:", e);
   }
+}
+function rebasePath(vaultPath, syncDir) {
+  const dir = syncDir.replace(/^\/+|\/+$/g, "").trim() || "Silk";
+  return vaultPath.replace(/^Silk\/?/, dir + "/");
 }
 async function writeFile(app, vaultPath, content) {
   const parts = vaultPath.split("/");
@@ -167,6 +174,12 @@ var SilkSyncSettingTab = class extends import_obsidian2.PluginSettingTab {
     new import_obsidian2.Setting(containerEl).setName("\u7528\u6237 ID").setDesc("\u4ECE Silk Web \u8BBE\u7F6E \u2192 \u5916\u90E8\u8BBF\u95EE \u4E2D\u590D\u5236\u7528\u6237 ID").addText(
       (text) => text.setPlaceholder("\u8F93\u5165\u7528\u6237 ID\uFF08\u5982 user_xxx\uFF09").setValue(this.plugin.settings.userId).onChange(async (value) => {
         this.plugin.settings.userId = value;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("\u540C\u6B65\u76EE\u5F55").setDesc("\u5185\u5BB9\u5C06\u540C\u6B65\u5230 vault \u4E0B\u7684\u6B64\u76EE\u5F55\uFF08\u9ED8\u8BA4 Silk\uFF09\uFF0C\u4F8B\u5982\u8F93\u5165\u300C\u6211\u7684\u77E5\u8BC6\u5E93\u300D\u5219\u5199\u5165\u300C\u6211\u7684\u77E5\u8BC6\u5E93/Chats/...\u300D").addText(
+      (text) => text.setPlaceholder("Silk").setValue(this.plugin.settings.syncDir).onChange(async (value) => {
+        this.plugin.settings.syncDir = value;
         await this.plugin.saveSettings();
       })
     );

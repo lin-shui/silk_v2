@@ -117,6 +117,19 @@ class SilkSyncSettingTab extends PluginSettingTab {
 					})
 			);
 
+		new Setting(containerEl)
+			.setName("同步目录")
+			.setDesc("内容将同步到 vault 下的此目录（默认 Silk），例如输入「我的知识库」则写入「我的知识库/Chats/...」")
+			.addText((text) =>
+				text
+					.setPlaceholder("Silk")
+					.setValue(this.plugin.settings.syncDir)
+					.onChange(async (value) => {
+						this.plugin.settings.syncDir = value;
+						await this.plugin.saveSettings();
+					})
+			);
+
 		// 测试连接按钮
 		new Setting(containerEl)
 			.setName("测试连接")

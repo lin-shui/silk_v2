@@ -56,8 +56,9 @@ fun Route.obsidianRoutes() {
                     sessionName = sessionName,
                     history = chatHistory,
                 )
+                // 保留 Unicode 字母数字（中文等正常显示），仅替换文件系统不允许的字符
                 val safeGroupName = group.name
-                    .replace(Regex("[^a-zA-Z0-9._\\-]"), "_")
+                    .replace(Regex("[^\\p{L}\\p{N}.\\-_]"), "_")
                     .trim('_')
                     .ifBlank { "group_${group.id}" }
 
