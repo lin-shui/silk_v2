@@ -253,12 +253,21 @@ def _process_line(line: str, state: dict) -> str:
     if msg_type == "system":
         return ""
 
-    # ── Legacy stream_event format (claude 2.x also emits this!) ──
-    if msg_type != "stream_event":
+    # ── Handle stream_event and direct content block events ──
+    # stream_event: event is nested in obj["event"]
+    # direct: content_block_start/delta/stop may appear as top-level types
+    #         for subsequent messages after a tool call
+    event = None
+    event_type = None
+    if msg_type == "stream_event":
+        event = obj.get("event", {})
+        event_type = event.get("type", "")
+    elif msg_type in ("content_block_start", "content_block_delta", "content_block_stop"):
+        # Direct content block event (claude may emit this for post-tool messages)
+        event = obj
+        event_type = msg_type
+    else:
         return ""
-
-    event = obj.get("event", {})
-    event_type = event.get("type", "")
 
     if event_type == "content_block_start":
         block = event.get("content_block", {})
