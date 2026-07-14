@@ -14,6 +14,8 @@ import com.silk.backend.database.RegisterRequest
 import com.silk.backend.database.SimpleResponse
 import com.silk.backend.database.UpdateUserSettingsRequest
 import com.silk.backend.database.UpdateUserTodoRequest
+import com.silk.backend.database.User
+import com.silk.backend.database.UserRepository
 import com.silk.backend.database.UserTodoItemDto
 import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.database.UserSettingsResponse
@@ -33,6 +35,7 @@ import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.mindrot.jbcrypt.BCrypt
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -50,6 +53,7 @@ class BackendHttpContractTest {
             testApplication {
                 application { module() }
 
+                // 验证注册已禁用
                 val registerResponse = client.post("/auth/register") {
                     contentType(ContentType.Application.Json)
                     setBody(
@@ -65,8 +69,13 @@ class BackendHttpContractTest {
                 }
                 assertEquals(HttpStatusCode.OK, registerResponse.status)
                 val registerBody = registerResponse.decode<AuthResponse>()
-                assertTrue(registerBody.success)
-                val user = assertNotNull(registerBody.user)
+                assertFalse(registerBody.success)
+                assertEquals("注册已关闭，请使用华为帐号登录", registerBody.message)
+                assertNull(registerBody.user)
+
+                // 直接创建测试用户（绕过已禁用的注册API）
+                val user = createTestUser("alice", "Alice Chen", "13800000001")
+                assertNotNull(user)
 
                 val duplicateRegister = client.post("/auth/register") {
                     contentType(ContentType.Application.Json)
@@ -82,7 +91,7 @@ class BackendHttpContractTest {
                     )
                 }.decode<AuthResponse>()
                 assertFalse(duplicateRegister.success)
-                assertEquals("该登录名已被使用", duplicateRegister.message)
+                assertEquals("注册已关闭，请使用华为帐号登录", duplicateRegister.message)
 
                 val loginResponse = client.post("/auth/login") {
                     contentType(ContentType.Application.Json)
@@ -136,8 +145,9 @@ class BackendHttpContractTest {
             testApplication {
                 application { module() }
 
-                val host = registerUser("host", "Host User", "13800000011")
-                val guest = registerUser("guest", "Guest User", "13800000012")
+                // 直接创建测试用户（不通过已禁用的注册API）
+                val host = createTestUser("host", "Host User", "13800000011")
+                val guest = createTestUser("guest", "Guest User", "13800000012")
 
                 val createGroupResponse = client.post("/groups/create") {
                     contentType(ContentType.Application.Json)
@@ -391,23 +401,22 @@ class BackendHttpContractTest {
         }
     }
 
-    private suspend fun io.ktor.server.testing.ApplicationTestBuilder.registerUser(
+    /**
+     * 创建测试用户（直接通过Repository，因为注册API已禁用）
+     */
+    private fun createTestUser(
         loginName: String,
         fullName: String,
         phoneNumber: String
-    ) = client.post("/auth/register") {
-        contentType(ContentType.Application.Json)
-        setBody(
-            json.encodeToString(
-                RegisterRequest(
-                    loginName = loginName,
-                    fullName = fullName,
-                    phoneNumber = phoneNumber,
-                    password = "secret123"
-                )
-            )
-        )
-    }.decode<AuthResponse>().user!!
+    ): User {
+        val passwordHash = BCrypt.hashpw("secret123", BCrypt.gensalt())
+        return UserRepository.createUser(
+            loginName = loginName,
+            fullName = fullName,
+            phoneNumber = phoneNumber,
+            passwordHash = passwordHash
+        ) ?: error("Failed to create test user: $loginName")
+    }
 
     private fun createGroupForTest(groupName: String) =
         assertNotNull(GroupRepository.createGroup(groupName, hostId = "host-user"))

@@ -118,6 +118,9 @@ frontend/harmonyApp/oh_modules/
 
 # Agent / IDE session artifacts (not source)
 tmp/
+.silk-runtime/
+backend/bin/
+frontend/desktopApp/bin/
 
 # Claude Code
 .claude/

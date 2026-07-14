@@ -181,5 +181,13 @@ object SilkChatStyles {
     background: #C9A86C;
     border-color: #C9A86C;
 }
+
+.silk-message-nav-highlight {
+    background: rgba(201, 168, 108, 0.18) !important;
+    outline: 2px solid rgba(201, 168, 108, 0.75);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 6px rgba(201, 168, 108, 0.12);
+    transition: background 0.2s ease, outline-color 0.2s ease, box-shadow 0.2s ease;
+}
 """.trimIndent()
 }

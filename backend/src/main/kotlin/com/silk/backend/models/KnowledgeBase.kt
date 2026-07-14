@@ -9,6 +9,12 @@ enum class KnowledgeSpaceType {
 }
 
 @Serializable
+enum class KBTopicPurpose {
+    GENERAL,
+    MEMORY,
+}
+
+@Serializable
 data class KBAccessPolicy(
     val readUserIds: List<String> = emptyList(),
     val writeUserIds: List<String> = emptyList(),
@@ -37,12 +43,53 @@ enum class KBSourceType {
 }
 
 @Serializable
+enum class KBMemoryType {
+    PROFILE,
+    PREFERENCE,
+    EPISODIC,
+    PROCEDURAL,
+}
+
+@Serializable
+data class KBFileRef(
+    val fileName: String,
+    val fileSize: Long,
+    val mimeType: String,
+    val downloadUrl: String,
+    val sourceMessageId: String? = null,
+)
+
+@Serializable
 data class KBEntrySource(
     val sourceType: KBSourceType = KBSourceType.MANUAL,
     val sourceGroupId: String? = null,
     val workflowId: String? = null,
     val messageIds: List<String> = emptyList(),
     val confidence: Double? = null,
+    /**
+     * 当 sourceType == FILE 时，可直接携带文件引用信息，
+     * 无需再通过 messageIds 回溯到聊天消息解析 FileMessagePayload。
+     */
+    val fileRef: KBFileRef? = null,
+)
+
+@Serializable
+data class ArchivedMemoryVersion(
+    val content: String,
+    val title: String,
+    val archivedAt: Long,
+    val reason: String = "",
+)
+
+@Serializable
+data class KBMemoryMetadata(
+    val type: KBMemoryType = KBMemoryType.EPISODIC,
+    val key: String? = null,
+    val explicit: Boolean = true,
+    val capturedAt: Long = 0L,
+    val lastAccessedAt: Long = 0L,
+    val accessedCount: Int = 0,
+    val archivedVersions: List<ArchivedMemoryVersion> = emptyList(),
 )
 
 @Serializable
@@ -51,6 +98,7 @@ data class KBTopic(
     val name: String,
     val project: String = "",
     val ownerId: String,
+    val purpose: KBTopicPurpose = KBTopicPurpose.GENERAL,
     val spaceType: KnowledgeSpaceType = KnowledgeSpaceType.PERSONAL,
     val groupId: String? = null,
     val accessPolicy: KBAccessPolicy = KBAccessPolicy(),
@@ -70,6 +118,7 @@ data class KBEntry(
     val ownerId: String,
     val status: KBEntryStatus = KBEntryStatus.PUBLISHED,
     val source: KBEntrySource = KBEntrySource(),
+    val memory: KBMemoryMetadata? = null,
     val createdBy: String = "",
     val updatedBy: String = "",
     val createdAt: Long,

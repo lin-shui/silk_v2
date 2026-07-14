@@ -35,7 +35,8 @@ internal fun isKnowledgeBaseContextStatusMessage(message: Message): Boolean {
 internal fun hasKnowledgeBaseContextSelection(selection: KnowledgeBaseContextSelection): Boolean {
     return selection.pinnedEntryIds.isNotEmpty() ||
         selection.excludedEntryIds.isNotEmpty() ||
-        selection.excludedSpaceIds.isNotEmpty()
+        selection.excludedSpaceIds.isNotEmpty() ||
+        selection.downrankedSpaceIds.isNotEmpty()
 }
 
 internal fun togglePinnedKnowledgeBaseEntry(
@@ -76,20 +77,61 @@ internal fun toggleExcludedKnowledgeBaseEntry(
     )
 }
 
+/**
+ * 三态切换：normal → downranked → excluded → normal
+ * - 若 space 不在任何列表中 → 进入 downranked
+ * - 若 space 在 downranked 中 → 进入 excluded
+ * - 若 space 在 excluded 中 → 恢复 normal（从两者中移除）
+ */
+internal fun cycleKnowledgeBaseSpaceControl(
+    selection: KnowledgeBaseContextSelection,
+    spaceId: String,
+): KnowledgeBaseContextSelection {
+    val downranked = selection.downrankedSpaceIds.toMutableList()
+    val excluded = selection.excludedSpaceIds.toMutableList()
+    val isDownranked = spaceId in downranked
+    val isExcludedOnly = !isDownranked && spaceId in excluded
+    when {
+        // 不在任何列表中 → 降权
+        !isDownranked && !isExcludedOnly -> {
+            downranked += spaceId
+        }
+        // 在降权中 → 排除
+        isDownranked -> {
+            downranked.removeAll { it == spaceId }
+            excluded += spaceId
+        }
+        // 在排除中 → 恢复
+        isExcludedOnly -> {
+            excluded.removeAll { it == spaceId }
+        }
+    }
+    return KnowledgeBaseContextSelection(
+        pinnedEntryIds = selection.pinnedEntryIds.distinct(),
+        excludedEntryIds = selection.excludedEntryIds.distinct(),
+        excludedSpaceIds = excluded.distinct(),
+        downrankedSpaceIds = downranked.distinct(),
+    )
+}
+
+/** 向后兼容：直接切换排除状态（降权 → 排除，排除 → 正常） */
 internal fun toggleExcludedKnowledgeBaseSpace(
     selection: KnowledgeBaseContextSelection,
     spaceId: String,
 ): KnowledgeBaseContextSelection {
     val excludedSpaces = selection.excludedSpaceIds.toMutableList()
+    val downrankedSpaces = selection.downrankedSpaceIds.toMutableList()
     if (spaceId in excludedSpaces) {
         excludedSpaces.removeAll { it == spaceId }
     } else {
         excludedSpaces += spaceId
+        downrankedSpaces.removeAll { it == spaceId }
     }
     return KnowledgeBaseContextSelection(
         pinnedEntryIds = selection.pinnedEntryIds.distinct(),
         excludedEntryIds = selection.excludedEntryIds.distinct(),
         excludedSpaceIds = excludedSpaces.distinct(),
+        downrankedSpaceIds = downrankedSpaces.distinct(),
     )
 }
 
@@ -111,12 +153,14 @@ internal fun latestKnowledgeBaseContextSelection(
 internal fun mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
     restoredSelection: KnowledgeBaseContextSelection?,
     persistentExcludedSpaceIds: List<String>,
+    persistentDownrankedSpaceIds: List<String> = emptyList(),
 ): KnowledgeBaseContextSelection {
     val base = restoredSelection ?: KnowledgeBaseContextSelection()
     return KnowledgeBaseContextSelection(
         pinnedEntryIds = base.pinnedEntryIds.distinct(),
         excludedEntryIds = base.excludedEntryIds.distinct(),
         excludedSpaceIds = (persistentExcludedSpaceIds + base.excludedSpaceIds).distinct(),
+        downrankedSpaceIds = (persistentDownrankedSpaceIds + base.downrankedSpaceIds).distinct(),
     )
 }
 
@@ -133,6 +177,7 @@ internal fun KnowledgeBaseContextTray(
     val pinnedCount = selection.pinnedEntryIds.size
     val excludedCount = selection.excludedEntryIds.size
     val excludedSpaceCount = selection.excludedSpaceIds.size
+    val downrankedSpaceCount = selection.downrankedSpaceIds.size
 
     Div({
         style {
@@ -168,7 +213,8 @@ internal fun KnowledgeBaseContextTray(
                         marginTop(4.px)
                     }
                 }) { Text(status.content) }
-                if (pinnedCount > 0 || excludedCount > 0 || excludedSpaceCount > 0) {
+                val hasActivePreferences = pinnedCount > 0 || excludedCount > 0 || excludedSpaceCount > 0 || downrankedSpaceCount > 0
+                if (hasActivePreferences) {
                     Div({
                         style {
                             fontSize(12.px)
@@ -176,7 +222,7 @@ internal fun KnowledgeBaseContextTray(
                             marginTop(4.px)
                         }
                     }) {
-                        Text("下轮偏好：固定 $pinnedCount，排除条目 $excludedCount，关闭空间 $excludedSpaceCount")
+                        Text("下轮偏好：固定 $pinnedCount，排除条目 $excludedCount，关闭空间 $excludedSpaceCount，降权空间 $downrankedSpaceCount")
                     }
                 }
             }
@@ -197,6 +243,7 @@ internal fun KnowledgeBaseContextTray(
                 val isExcluded = entryId != null && entryId in selection.excludedEntryIds
                 val spaceId = ref.spaceId
                 val isSpaceExcluded = spaceId != null && spaceId in selection.excludedSpaceIds
+                val isSpaceDownranked = spaceId != null && !isSpaceExcluded && spaceId in selection.downrankedSpaceIds
                 Button({
                     style {
                         backgroundColor(Color("#FFFFFF"))
@@ -289,15 +336,33 @@ internal fun KnowledgeBaseContextTray(
                                 }
                             }
                             if (spaceId != null) {
+                                // 三态空间控制：normal → 🔽 downranked → ❌ excluded → normal
+                                val spaceLabel = ref.spaceLabel ?: "此空间"
+                                val stateLabel: String
+                                val stateAccent: String
+                                val stateIcon: String
+                                when {
+                                    isSpaceExcluded -> {
+                                        stateLabel = "恢复${spaceLabel}推荐"
+                                        stateAccent = SilkColors.info
+                                        stateIcon = "✅ "
+                                    }
+                                    isSpaceDownranked -> {
+                                        stateLabel = "降权${spaceLabel}"
+                                        stateAccent = SilkColors.warning
+                                        stateIcon = "🔽 "
+                                    }
+                                    else -> {
+                                        stateLabel = "降低${spaceLabel}优先级"
+                                        stateAccent = SilkColors.textSecondary
+                                        stateIcon = ""
+                                    }
+                                }
                                 ContextTrayActionButton(
-                                    label = if (isSpaceExcluded) {
-                                        "恢复${ref.spaceLabel ?: "此空间"}自动推荐"
-                                    } else {
-                                        "关闭${ref.spaceLabel ?: "此空间"}自动推荐"
-                                    },
-                                    accent = if (isSpaceExcluded) SilkColors.info else SilkColors.warning,
+                                    label = stateIcon + stateLabel,
+                                    accent = stateAccent,
                                 ) {
-                                    onSelectionChange(toggleExcludedKnowledgeBaseSpace(selection, spaceId))
+                                    onSelectionChange(cycleKnowledgeBaseSpaceControl(selection, spaceId))
                                 }
                             }
                         }

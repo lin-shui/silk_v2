@@ -144,6 +144,20 @@ data class UserSearchResult(
 )
 
 @Serializable
+data class UserSearchItem(
+    val id: String,
+    val fullName: String,
+    val loginName: String = "",
+)
+
+@Serializable
+data class UserSearchByNameResponse(
+    val success: Boolean,
+    val users: List<UserSearchItem> = emptyList(),
+    val message: String = "",
+)
+
+@Serializable
 data class PrivateChatResponse(
     val success: Boolean,
     val message: String,
@@ -260,12 +274,49 @@ enum class KBSourceType {
 }
 
 @Serializable
+enum class KBMemoryType {
+    PROFILE,
+    PREFERENCE,
+    EPISODIC,
+    PROCEDURAL,
+}
+
+@Serializable
+data class KBFileRef(
+    val fileName: String,
+    val fileSize: Long,
+    val mimeType: String,
+    val downloadUrl: String,
+    val sourceMessageId: String? = null,
+)
+
+@Serializable
 data class KBEntrySource(
     val sourceType: KBSourceType = KBSourceType.MANUAL,
     val sourceGroupId: String? = null,
     val workflowId: String? = null,
     val messageIds: List<String> = emptyList(),
     val confidence: Double? = null,
+    val fileRef: KBFileRef? = null,
+)
+
+@Serializable
+data class ArchivedMemoryVersion(
+    val content: String,
+    val title: String,
+    val archivedAt: Long,
+    val reason: String = "",
+)
+
+@Serializable
+data class KBMemoryMetadata(
+    val type: KBMemoryType = KBMemoryType.EPISODIC,
+    val key: String? = null,
+    val explicit: Boolean = true,
+    val capturedAt: Long = 0L,
+    val lastAccessedAt: Long = 0L,
+    val accessedCount: Int = 0,
+    val archivedVersions: List<ArchivedMemoryVersion> = emptyList(),
 )
 
 @Serializable
@@ -293,10 +344,22 @@ data class KBEntryItem(
     val ownerId: String = "",
     val status: KBEntryStatus = KBEntryStatus.PUBLISHED,
     val source: KBEntrySource = KBEntrySource(),
+    val memory: KBMemoryMetadata? = null,
     val createdBy: String = "",
     val updatedBy: String = "",
     val createdAt: Long = 0,
     val updatedAt: Long = 0
+)
+
+@Serializable
+data class KnowledgeBaseContextPreferences(
+    val userId: String,
+    val excludedSpaceIds: List<String> = emptyList(),
+    val downrankedSpaceIds: List<String> = emptyList(),
+    val memoryEnabled: Boolean = true,
+    val autoCaptureEnabled: Boolean = false,
+    val ephemeralSessionEnabled: Boolean = false,
+    val updatedAt: Long = 0L,
 )
 
 @Serializable
@@ -305,6 +368,59 @@ data class ExportKBResponse(
     val markdown: String = "",
     val vaultPath: String = "",
     val fileName: String = ""
+)
+
+@Serializable
+data class DiffChunk(
+    val type: String, // "unchanged" | "deleted" | "inserted" | "modified"
+    val originalText: String = "",
+    val newText: String = "",
+    val lineStart: Int = 0,
+    val lineEnd: Int = 0,
+)
+
+@Serializable
+data class KnowledgeBaseCopilotDraft(
+    val entryId: String? = null,
+    val topicId: String,
+    val title: String,
+    val content: String,
+    val tags: List<String> = emptyList(),
+    val diffChunks: List<DiffChunk> = emptyList(),
+)
+
+/**
+ * KB 条目搜索结果（$ 快捷引用用）。
+ */
+@Serializable
+data class KnowledgeBaseEntrySearchResult(
+    val entryId: String,
+    val title: String,
+    val topicName: String,
+    val spaceLabel: String,
+)
+
+@Serializable
+data class KnowledgeBaseEntrySearchResponse(
+    val entries: List<KnowledgeBaseEntrySearchResult>,
+)
+
+/**
+ * A single turn in a multi-turn KB Copilot conversation.
+ */
+@Serializable
+data class ConversationTurn(
+    val role: String, // "user" or "assistant"
+    val content: String,
+)
+
+@Serializable
+data class KnowledgeBaseCopilotResponse(
+    val success: Boolean,
+    val assistantReply: String = "",
+    val draft: KnowledgeBaseCopilotDraft? = null,
+    val appliedEntry: KBEntryItem? = null,
+    val message: String = "",
 )
 /**
  * JWT 令牌管理
@@ -645,6 +761,19 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("搜索用户失败:", e)
             UserSearchResult(false, message = "网络错误")
+        }
+    }
+
+    /**
+     * 按名称关键词搜索用户（用于知识库分享等场景）
+     */
+    suspend fun searchUsersByName(query: String): UserSearchByNameResponse {
+        return try {
+            val response = get("/api/users/search-by-name?q=${encodeUri(query)}")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("搜索用户失败:", e)
+            UserSearchByNameResponse(success = false, message = "网络错误")
         }
     }
     
@@ -1344,6 +1473,19 @@ object ApiClient {
         }
     }
 
+    // $ 快捷引用搜索 KB 条目
+    suspend fun searchKbEntries(userId: String, query: String): List<KnowledgeBaseEntrySearchResult> {
+        return try {
+            val encoded = js("encodeURIComponent(query)")
+            val response = get("/api/kb/entries/search?userId=$userId&q=$encoded")
+            val parsed = jsonParser.decodeFromString<KnowledgeBaseEntrySearchResponse>(response)
+            parsed.entries
+        } catch (e: Exception) {
+            console.log("搜索 KB 条目失败:", e)
+            emptyList()
+        }
+    }
+
     suspend fun createKBEntry(topicId: String, title: String, content: String, tags: List<String>, userId: String): KBEntryItem? {
         return try {
             val tagsJson = tags.joinToString(",") { "\"$it\"" }
@@ -1448,6 +1590,316 @@ object ApiClient {
         } catch (e: Exception) {
             console.log("导出知识库条目失败:", e)
             null
+        }
+    }
+
+    suspend fun runKBCopilot(
+        userId: String,
+        entryId: String?,
+        topicId: String? = null,
+        instruction: String,
+        applyChanges: Boolean,
+        conversationHistory: List<ConversationTurn> = emptyList(),
+    ): KnowledgeBaseCopilotResponse? {
+        return try {
+            val body = buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                if (!entryId.isNullOrBlank()) {
+                    put("entryId", kotlinx.serialization.json.JsonPrimitive(entryId))
+                }
+                if (!topicId.isNullOrBlank()) {
+                    put("topicId", kotlinx.serialization.json.JsonPrimitive(topicId))
+                }
+                put("instruction", kotlinx.serialization.json.JsonPrimitive(instruction))
+                put("applyChanges", kotlinx.serialization.json.JsonPrimitive(applyChanges))
+                if (conversationHistory.isNotEmpty()) {
+                    put("conversationHistory", kotlinx.serialization.json.JsonArray(
+                        conversationHistory.map { turn ->
+                            kotlinx.serialization.json.JsonObject(
+                                mapOf(
+                                    "role" to kotlinx.serialization.json.JsonPrimitive(turn.role),
+                                    "content" to kotlinx.serialization.json.JsonPrimitive(turn.content),
+                                )
+                            )
+                        }
+                    ))
+                }
+            }.toString()
+            val response = post("/api/kb/copilot", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("运行 KB Copilot 失败:", e)
+            null
+        }
+    }
+
+    /**
+     * Stream KB Copilot via SSE.
+     * Uses fetch to POST to /api/kb/copilot/stream and parses SSE events incrementally.
+     * @param onEvent called for each SSE event: (eventType, data)
+     * @return the final KnowledgeBaseCopilotResponse built from streamed events
+     */
+    suspend fun streamKBCopilot(
+        userId: String,
+        entryId: String?,
+        topicId: String?,
+        instruction: String,
+        applyChanges: Boolean,
+        conversationHistory: List<ConversationTurn>,
+        onEvent: (event: String, data: String) -> Unit,
+    ): KnowledgeBaseCopilotResponse? {
+        return try {
+            val body = buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                if (!entryId.isNullOrBlank()) {
+                    put("entryId", kotlinx.serialization.json.JsonPrimitive(entryId))
+                }
+                if (!topicId.isNullOrBlank()) {
+                    put("topicId", kotlinx.serialization.json.JsonPrimitive(topicId))
+                }
+                put("instruction", kotlinx.serialization.json.JsonPrimitive(instruction))
+                put("applyChanges", kotlinx.serialization.json.JsonPrimitive(applyChanges))
+                if (conversationHistory.isNotEmpty()) {
+                    put("conversationHistory", kotlinx.serialization.json.JsonArray(
+                        conversationHistory.map { turn ->
+                            kotlinx.serialization.json.JsonObject(
+                                mapOf(
+                                    "role" to kotlinx.serialization.json.JsonPrimitive(turn.role),
+                                    "content" to kotlinx.serialization.json.JsonPrimitive(turn.content),
+                                )
+                            )
+                        }
+                    ))
+                }
+            }.toString()
+
+            val headers = authHeaders()
+            val init = RequestInit(
+                method = "POST",
+                headers = headers,
+                body = body,
+            )
+            val url = "$BASE_URL/api/kb/copilot/stream"
+            val response = window.fetch(url, init).await()
+
+            if (!response.ok) {
+                console.log("KBCopilot SSE 请求失败:", response.status)
+                return null
+            }
+
+            // Consume SSE response (non-streaming fallback via response.text())
+            // True ReadableStream streaming will be added in a follow-up iteration
+            var draft: KnowledgeBaseCopilotDraft? = null
+            var appliedEntry: KBEntryItem? = null
+            var assistantReply = ""
+            var success = false
+            var message = ""
+
+            // Parse SSE events from full response text
+            val fullText = response.text().await()
+            val rawEvents = fullText.split("\n\n")
+            for (rawEvent in rawEvents) {
+                val lines = rawEvent.split("\n")
+                var eventType = ""
+                var eventData = ""
+                for (line in lines) {
+                    if (line.startsWith("event: ")) eventType = line.removePrefix("event: ")
+                    else if (line.startsWith("data: ")) {
+                        eventData = line.removePrefix("data: ")
+                            .replace("\\n", "\n")
+                    }
+                }
+                if (eventType.isNotEmpty()) {
+                    onEvent(eventType, eventData)
+                    when (eventType) {
+                        "text" -> assistantReply = eventData
+                        "draft" -> {
+                            try {
+                                draft = jsonParser.decodeFromString<KnowledgeBaseCopilotDraft>(eventData)
+                            } catch (e: Exception) {
+                                console.log("解析 draft 失败:", e)
+                            }
+                        }
+                        "applied" -> {
+                            try {
+                                appliedEntry = jsonParser.decodeFromString<KBEntryItem>(eventData)
+                            } catch (e: Exception) {
+                                console.log("解析 appliedEntry 失败:", e)
+                            }
+                        }
+                        "error" -> message = eventData
+                        "done" -> success = true
+                    }
+                }
+            }
+
+            KnowledgeBaseCopilotResponse(
+                success = success,
+                assistantReply = assistantReply,
+                draft = draft,
+                appliedEntry = appliedEntry,
+                message = message,
+            )
+        } catch (e: Exception) {
+            console.log("KBCopilot 流式请求失败:", e)
+            null
+        }
+    }
+
+    // ── Group Assets ──
+
+    @Serializable
+    data class GroupAssetFile(
+        val fileId: String,
+        val fileName: String,
+        val fileSize: Long,
+        val mimeType: String,
+        val uploadTime: Long,
+        val downloadUrl: String,
+        val hasLinkedEntry: Boolean = false,
+        val linkedEntryIds: List<String> = emptyList(),
+        val sourceMessageId: String? = null,
+        val sourceType: String = "upload",
+    )
+
+    @Serializable
+    data class GroupAssetsResponse(
+        val groupId: String,
+        val files: List<GroupAssetFile> = emptyList(),
+        val kbEntries: List<KBEntryItem> = emptyList(),
+        val kbTopics: List<KBTopicItem> = emptyList(),
+    )
+
+    suspend fun getGroupAssets(groupId: String, userId: String): GroupAssetsResponse? {
+        return try {
+            val response = get("/api/kb/group-assets/$groupId?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取群空间资产失败:", e)
+            null
+        }
+    }
+
+    suspend fun linkFileToKBEntry(
+        entryId: String,
+        userId: String,
+        groupId: String,
+        fileName: String,
+        fileSize: Long,
+        mimeType: String,
+        sourceMessageId: String? = null,
+    ): KBEntryItem? {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("groupId", kotlinx.serialization.json.JsonPrimitive(groupId))
+                put("fileName", kotlinx.serialization.json.JsonPrimitive(fileName))
+                put("fileSize", kotlinx.serialization.json.JsonPrimitive(fileSize.toString()))
+                put("mimeType", kotlinx.serialization.json.JsonPrimitive(mimeType))
+                sourceMessageId?.let { put("sourceMessageId", kotlinx.serialization.json.JsonPrimitive(it)) }
+            }.toString()
+            val response = post("/api/kb/entries/$entryId/link-file", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("关联文件到 KB 条目失败:", e)
+            null
+        }
+    }
+
+    suspend fun getKBContextPreferences(userId: String): KnowledgeBaseContextPreferences {
+        return try {
+            val response = get("/api/kb/context-preferences?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取知识库上下文偏好失败:", e)
+            KnowledgeBaseContextPreferences(userId = userId)
+        }
+    }
+
+    suspend fun updateKBContextPreferences(
+        userId: String,
+        excludedSpaceIds: List<String>,
+        downrankedSpaceIds: List<String> = emptyList(),
+        memoryEnabled: Boolean,
+        autoCaptureEnabled: Boolean,
+        ephemeralSessionEnabled: Boolean,
+    ): KnowledgeBaseContextPreferences? {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put(
+                    "excludedSpaceIds",
+                    kotlinx.serialization.json.JsonArray(excludedSpaceIds.map { kotlinx.serialization.json.JsonPrimitive(it) })
+                )
+                put(
+                    "downrankedSpaceIds",
+                    kotlinx.serialization.json.JsonArray(downrankedSpaceIds.map { kotlinx.serialization.json.JsonPrimitive(it) })
+                )
+                put("memoryEnabled", kotlinx.serialization.json.JsonPrimitive(memoryEnabled))
+                put("autoCaptureEnabled", kotlinx.serialization.json.JsonPrimitive(autoCaptureEnabled))
+                put("ephemeralSessionEnabled", kotlinx.serialization.json.JsonPrimitive(ephemeralSessionEnabled))
+            }.toString()
+            val response = put("/api/kb/context-preferences", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("更新知识库上下文偏好失败:", e)
+            null
+        }
+    }
+
+    suspend fun listKBMemoryEntries(userId: String, groupId: String? = null): List<KBEntryItem> {
+        return try {
+            val url = buildString {
+                append("/api/kb/memory?userId=$userId")
+                if (groupId != null) append("&groupId=$groupId")
+            }
+            val response = get(url)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取 memory 列表失败:", e)
+            emptyList()
+        }
+    }
+
+    suspend fun createKBMemoryEntry(
+        userId: String,
+        content: String,
+        memoryType: KBMemoryType? = null,
+        title: String? = null,
+        key: String? = null,
+        groupId: String? = null,
+    ): KBEntryItem? {
+        return try {
+            val body = kotlinx.serialization.json.buildJsonObject {
+                put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+                put("content", kotlinx.serialization.json.JsonPrimitive(content))
+                memoryType?.let { put("memoryType", kotlinx.serialization.json.JsonPrimitive(it.name)) }
+                title?.takeIf { it.isNotBlank() }?.let { put("title", kotlinx.serialization.json.JsonPrimitive(it)) }
+                key?.takeIf { it.isNotBlank() }?.let { put("key", kotlinx.serialization.json.JsonPrimitive(it)) }
+                groupId?.let { put("groupId", kotlinx.serialization.json.JsonPrimitive(it)) }
+            }.toString()
+            val response = post("/api/kb/memory", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("创建 memory 失败:", e)
+            null
+        }
+    }
+
+    suspend fun deleteKBMemoryEntry(entryId: String, userId: String, groupId: String? = null): Boolean {
+        return try {
+            val url = buildString {
+                append("$BASE_URL/api/kb/memory/$entryId?userId=$userId")
+                if (groupId != null) append("&groupId=$groupId")
+            }
+            val response = window.fetch(
+                url,
+                RequestInit(method = "DELETE", headers = authHeaders())
+            ).await()
+            response.ok
+        } catch (e: Exception) {
+            console.log("删除 memory 失败:", e)
+            false
         }
     }
 

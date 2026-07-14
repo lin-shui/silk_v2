@@ -17,6 +17,7 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.PartData
 import io.ktor.http.content.forEachPart
 import io.ktor.http.content.streamProvider
+import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
 import io.ktor.server.request.receiveMultipart
@@ -266,12 +267,15 @@ private suspend fun handleFileDownload(call: ApplicationCall) {
         ?: Files.probeContentType(file.toPath())
         ?: ContentType.Application.OctetStream.toString()
 
-    // 图片用 Inline（浏览器展示），非图片用 Attachment（下载）
-    val isImage = detectedContentType.startsWith("image/")
+    // 图片/PDF/音频/视频用 Inline（浏览器直接展示），其余用 Attachment（下载）
+    val isInlineType = detectedContentType.startsWith("image/") ||
+        detectedContentType == "application/pdf" ||
+        detectedContentType.startsWith("audio/") ||
+        detectedContentType.startsWith("video/")
     // 对文件名进行百分号编码，防止 Netty 因中文等非 ASCII 字符拒绝 Content-Disposition 头
     val encodedFileId = java.net.URLEncoder.encode(fileId, Charsets.UTF_8.name())
         .replace("+", "%20")
-    val dispositionType = if (isImage) ContentDisposition.Inline else ContentDisposition.Attachment
+    val dispositionType = if (isInlineType) ContentDisposition.Inline else ContentDisposition.Attachment
     val disposition = dispositionType.withParameter(ContentDisposition.Parameters.FileName, encodedFileId)
     call.response.header(HttpHeaders.ContentDisposition, disposition.toString())
 
@@ -401,7 +405,11 @@ private suspend fun handleFileList(call: ApplicationCall) {
     }
 
     val files = uploadsDir.listFiles()
-        ?.filter { it.name != "processed_urls.txt" }  // 排除 URL 清单文件
+        ?.filter { file ->
+            file.name != "processed_urls.txt" &&     // 排除 URL 清单文件
+            file.name != "file_registry.json" &&     // 排除文件预处理注册表
+            !file.name.endsWith(".extracted.md")     // 排除预处理生成的提取文件
+        }
         ?.map { file ->
             FileInfo(
                 fileId = file.name,
@@ -563,6 +571,7 @@ private suspend fun handleFileUpload(call: ApplicationCall) {
         val userTextForMsg = parts.userTextInput?.trim() ?: ""
 
         broadcastUploadUserMessageAndVision(
+            applicationScope = call.application,
             sessionId, userId, userName, fileName,
             targetFile, downloadUrl, fileSize, userTextForMsg, isImageFile
         )
@@ -580,7 +589,7 @@ private suspend fun handleFileUpload(call: ApplicationCall) {
         ))
 
         val hasUserText = parts.userTextInput?.trim().isNullOrBlank().not()
-        CoroutineScope(Dispatchers.IO).launch {
+        call.application.launch(Dispatchers.IO) {
             preprocessUploadedFile(
                 finalSessionId = sessionId,
                 finalUserId = userId,
@@ -607,6 +616,7 @@ private suspend fun handleFileUpload(call: ApplicationCall) {
  */
 @Suppress("TooGenericExceptionCaught", "LongParameterList")
 private suspend fun broadcastUploadUserMessageAndVision(
+    applicationScope: Application,
     sessionId: String,
     userId: String,
     userName: String,
@@ -624,16 +634,14 @@ private suspend fun broadcastUploadUserMessageAndVision(
         logger.info("📸 已广播用户合并消息: {} + {}", fileName, userText.take(50))
 
         // 在后端协程中处理 vision（不走 WebSocket）
-        CoroutineScope(Dispatchers.IO).launch {
+        applicationScope.launch(Dispatchers.IO) {
             processUploadedImageVision(
                 chatSvr = chatSvr,
                 finalSessionId = sessionId,
                 finalUserId = userId,
                 finalUserName = userName,
-                finalFileName = fileName,
                 finalUserText = userText,
                 targetFile = targetFile,
-                downloadUrl = downloadUrl,
                 isImageFile = isImageFile,
             )
         }
@@ -697,9 +705,8 @@ private suspend fun preprocessUploadedFile(
                 val chatSvr = getGroupChatServer(finalSessionId)
                 if (chatSvr != null && chatSvr.hasPendingImage(finalUserId)) {
                     // 待处理图片还在，说明 text 还没到，vision 正常广播
-                    val downloadUrl = buildFileDownloadUrl(finalSessionId, finalSafeFileName)
                     broadcastSystemStatus(finalSessionId, "✅ 图片解析完成: $finalFileName")
-                    broadcastExtractedContent(finalSessionId, updatedContent, finalFileName, downloadUrl)
+                    broadcastExtractedContent(finalSessionId, updatedContent, finalFileName)
                 } else {
                     // 待处理图片已被 text 消费，不再广播冗余的 vision 结果
                     logger.debug("📸 Vision 异步结果已由 text 合并处理，跳过广播: {}", finalFileName)
@@ -752,10 +759,8 @@ private suspend fun processUploadedImageVision(
     finalSessionId: String,
     finalUserId: String,
     finalUserName: String,
-    finalFileName: String,
     finalUserText: String,
     targetFile: File,
-    downloadUrl: String,
     isImageFile: Boolean,
 ) {
     try {
@@ -777,20 +782,18 @@ private suspend fun processUploadedImageVision(
             chatSvr.forwardImageToCcConnect(
                 imageFile = targetFile,
                 userText = strippedText.trim(),
-                downloadUrl = downloadUrl,
                 userId = finalUserId,
                 userName = finalUserName,
                 ccGroupId = ccGroupId,
             )
         } else {
             chatSvr.handleVisionImageAndText(
-                targetFile, "", finalUserText, downloadUrl, finalUserId
+                targetFile, finalUserText
             )
         }
     } catch (e: Exception) {
         logger.error("❌ Vision 异步处理失败: {}", e.message, e)
         chatSvr.broadcastCombinedVisionResult(
-            com.silk.backend.PendingImageState(finalUserId, "", finalFileName, targetFile, downloadUrl),
             "⚠️ Vision 分析出错: ${e.message}",
             System.currentTimeMillis()
         )

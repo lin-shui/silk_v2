@@ -1,5 +1,13 @@
 <?xml version="1.0" ?>
 <SmellBaseline>
   <ManuallySuppressedIssues/>
-  <CurrentIssues/>
+  <CurrentIssues>
+    <ID>CyclomaticComplexMethod:ApiClient.kt$ApiClient$suspend fun streamKBCopilot( userId: String, entryId: String?, topicId: String?, instruction: String, applyChanges: Boolean, conversationHistory: List&lt;ConversationTurn&gt;, onEvent: (event: String, data: String) -&gt; Unit, ): KnowledgeBaseCopilotResponse?</ID>
+    <ID>CyclomaticComplexMethod:KnowledgeBaseScene.kt$@Composable private fun DiffChunkRow( chunk: DiffChunk, index: Int, isAccepted: Boolean, isRejected: Boolean, onAccept: () -&gt; Unit, onReject: () -&gt; Unit, )</ID>
+    <ID>CyclomaticComplexMethod:KnowledgeBaseScene.kt$private suspend fun runKnowledgeBaseCopilot( entry: KBEntryItem?, topic: KBTopicItem?, userId: String, instruction: String, applyChanges: Boolean, conversationHistory: List&lt;ConversationTurn&gt;, onRunningChange: (Boolean) -&gt; Unit, onFeedbackChange: (String) -&gt; Unit, onReplyChange: (String) -&gt; Unit, onDraftChange: (KnowledgeBaseCopilotDraft?) -&gt; Unit, onConversationHistoryChange: (List&lt;ConversationTurn&gt;) -&gt; Unit, onInstructionChange: (String) -&gt; Unit, onSelectedEntryChange: (KBEntryItem?) -&gt; Unit, onEntriesChange: (List&lt;KBEntryItem&gt;) -&gt; Unit, onEditorTitleChange: (String) -&gt; Unit, onEditorContentChange: (String) -&gt; Unit, )</ID>
+    <ID>NestedBlockDepth:ApiClient.kt$ApiClient$suspend fun streamKBCopilot( userId: String, entryId: String?, topicId: String?, instruction: String, applyChanges: Boolean, conversationHistory: List&lt;ConversationTurn&gt;, onEvent: (event: String, data: String) -&gt; Unit, ): KnowledgeBaseCopilotResponse?</ID>
+    <ID>TooGenericExceptionCaught:KnowledgeBaseScene.kt$e: Exception</ID>
+    <ID>UnusedParameter:ApiClient.kt$ApiClient$query: String</ID>
+    <ID>UnusedParameter:KnowledgeBaseScene.kt$index: Int</ID>
+  </CurrentIssues>
 </SmellBaseline>

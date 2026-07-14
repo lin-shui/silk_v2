@@ -8,6 +8,13 @@
   - `availableReferences`：本轮可引用的 KB 条目列表（含 `spaceId`/`spaceLabel`/`origin`/`reason`），经 `registerReference` 写入 `MessageReference`
   - `additionalContext: String?`：由 `resolveKnowledgeBasePromptContext` 生成的 KB prompt 文本块，追加到系统提示词末尾
   - `callback`：流式回调（thinking/text/blocks_state/tool 相关事件）
+- `DirectModelAgent` 还会在每轮生成前接收一份 workspace 视角的 KB 快照：
+  - `knowledge_base/manifest.md`：当前用户可读 topic/entry 清单（含 ids、状态、space、相对路径）
+  - `knowledge_base/topics/<topic>__<topicId>/<entry>__<entryId>.md`：单条 KB 文档，供 Claude CLI 的 Grep/Read 主动查阅
+- 当模型在最终回复末尾输出 ` ```silk_kb_action ` 代码块时，后端会统一做“清洗正文 + 解析 JSON + 权限校验 + 执行 + 回写结果摘要”后处理：
+  - 内建 Silk AI：`WebSocketConfig.generateIntelligentResponse()` 使用 `DirectModelAgent.lastKnowledgeBaseActions`
+  - 外部 agent：`AgentRuntime.executeSinglePrompt()` 会对 ACP 最终回复执行同样的后处理
+  - 若当前群组属于 workflow，会补齐 `workflowId + sourceGroupId + recentMessageIds` provenance；未显式指定 `sourceType` 的 create 默认按 `WORKFLOW`，并和 `CHAT` / `AI_RESPONSE` 一样强制落成 `CANDIDATE`
 - `AIConfig.kt` 统一读取：
   - Anthropic Claude API（Messages API）
   - ASR
@@ -47,6 +54,10 @@
   - 遍历用户所有群组，读取最近 50 条 TEXT 消息
   - 写入 `workspaceDir/other_groups/chat_history_<群名>.md`
   - AI 可通过 Grep/Read 工具跨群搜索，提示词中明确告知跨群访问权限
+- KB 自助查阅：
+  - 聊天主链会把当前用户可读的 KB 条目同步到 agent workspace
+  - system prompt 明确要求：若用户要求“总结到 KB / 更新 KB / 先查 skill 再执行”，模型应先读 `knowledge_base/manifest.md`，再输出结构化 `silk_kb_action`
+  - 这套约束现在对内建 Silk AI 与经 ACP 接入的外部 agent 都生效；真正写入仍只由 Silk 服务端执行
 - `utils/WebPageDownloader.kt`：
   - URL 提取、HTML/PDF 下载、提取、落盘
   - `WebPageDownloaderSmokeTest` 覆盖本地 smoke

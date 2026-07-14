@@ -2,6 +2,7 @@ package com.silk.backend
 
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.ai.ContentBlock
+import com.silk.backend.ai.DirectModelAgent
 import com.silk.backend.auth.AuthService
 import com.silk.backend.auth.GroupService
 import com.silk.backend.database.AddMemberRequest
@@ -54,6 +55,8 @@ import com.silk.backend.database.UnreadRepository
 import com.silk.backend.database.UpdateUserSettingsRequest
 import com.silk.backend.database.UpdateUserTodoRequest
 import com.silk.backend.database.UserRepository
+import com.silk.backend.database.UserSearchByNameResponse
+import com.silk.backend.database.UserSearchItem
 import com.silk.backend.database.UserSearchResult
 import com.silk.backend.database.UserSettingsRepository
 import com.silk.backend.database.UserSettingsResponse
@@ -62,8 +65,17 @@ import com.silk.backend.database.UserTodoRefreshStatusResponse
 import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.export.ChatObsidianExporter
 import com.silk.backend.kb.KBObsidianExporter
+import com.silk.backend.kb.ConsolidationReport
+import com.silk.backend.kb.CopilotStreamEvent
+import com.silk.backend.kb.GroupAssetsResponse
+import com.silk.backend.kb.KnowledgeBaseCopilotRequest
 import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
+import com.silk.backend.kb.KnowledgeBaseEntrySearchResponse
 import com.silk.backend.kb.KnowledgeBaseManager
+import com.silk.backend.kb.MigrationReport
+import com.silk.backend.kb.buildKnowledgeBaseWorkspaceEntries
+import com.silk.backend.kb.executeKnowledgeBaseCopilot
+import com.silk.backend.kb.stripThinkingBlocks
 import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
 import com.silk.backend.models.KBEntrySource
@@ -76,6 +88,7 @@ import com.silk.backend.workflow.WorkflowManager
 import com.silk.backend.routes.agentChangesRoutes
 import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
+import com.silk.backend.routes.obsidianRoutes
 import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.core.AgentRegistry
 import com.silk.backend.agents.core.AgentRuntime
@@ -107,6 +120,7 @@ import io.ktor.server.response.header
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondText
+import io.ktor.server.response.respondTextWriter
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -199,7 +213,7 @@ private fun resolveActiveAgentType(userId: String): String? {
  * 获取或创建指定群组的ChatServer
  */
 internal fun getGroupChatServer(groupId: String): ChatServer {
-    return groupChatServers.getOrPut(groupId) {
+    return groupChatServers.computeIfAbsent(groupId) {
         val sessionName = "group_$groupId"
         val wf = workflowManager.getWorkflowByGroupId(groupId)
         val isSilkChat = wf != null && wf.agentType == "silk_chat"
@@ -226,10 +240,10 @@ suspend fun broadcastSystemStatus(groupId: String, status: String) {
  * 广播文件提取内容到指定群组 - 供 FileRoutes 使用
  * 预处理完成后，将 OCR/Vision 提取结果发送到聊天中
  */
-suspend fun broadcastExtractedContent(groupId: String, content: String, label: String, downloadUrl: String = "") {
+suspend fun broadcastExtractedContent(groupId: String, content: String, label: String) {
     val chatServer = groupChatServers[groupId]
     if (chatServer != null) {
-        chatServer.broadcastExtractedContent(content, label, downloadUrl)
+        chatServer.broadcastExtractedContent(content, label)
     } else {
         logger.warn("⚠️ [broadcastExtractedContent] 群组 {} 不存在", groupId)
     }
@@ -320,6 +334,9 @@ fun Application.configureRouting() {
                 permissionMode = wf.permissionMode,
             )
         }
+
+        override fun resolveWorkflowId(rawGroupId: String): String? =
+            workflowManager.getWorkflowByGroupId(rawGroupId)?.id
     })
 
     routing {
@@ -333,6 +350,7 @@ fun Application.configureRouting() {
         ccConnectApiRoutes()
         workflowKbRoutes()
         pollMessagesRoute()
+        obsidianRoutes()
         chatWebSocketRoute()
         audioDuplexRoute()
     }
@@ -682,7 +700,13 @@ private fun Route.coreRoutes() {
             
             try {
                 val settings = UserSettingsRepository.getUserSettings(userId)
-                call.respond(UserSettingsResponse(true, "获取设置成功", settings))
+                // 确保 appAuthToken 存在（旧用户可能没有该字段）
+                if (settings.appAuthToken == null) {
+                    UserSettingsRepository.getOrCreateAppAuthToken(userId)
+                }
+                // 重新获取包含完整字段的设置
+                val updatedSettings = UserSettingsRepository.getUserSettings(userId)
+                call.respond(UserSettingsResponse(true, "获取设置成功", updatedSettings))
             } catch (e: Exception) {
                 logger.error("❌ 获取用户设置失败: {}", e.message)
                 call.respond(
@@ -1642,6 +1666,25 @@ private fun Route.groupContactRoutes() {
             } else {
                 call.respond(UserSearchResult(false, message = "未找到该电话号码对应的用户"))
             }
+        }
+        
+        // 按名称关键词搜索用户（用于知识库分享等场景）
+        get("/api/users/search-by-name") {
+            val query = call.request.queryParameters["q"] ?: ""
+            if (query.isBlank() || query.length < 2) {
+                call.respond(UserSearchByNameResponse(success = false, message = "请输入至少2个字符"))
+                return@get
+            }
+            
+            val users = UserRepository.searchUsersByName(query)
+            val items = users.map { user ->
+                UserSearchItem(
+                    id = user.id,
+                    fullName = user.fullName,
+                    loginName = user.loginName,
+                )
+            }
+            call.respond(UserSearchByNameResponse(success = true, users = items))
         }
         
         // 发送联系人请求（通过电话号码）
@@ -3759,14 +3802,25 @@ private fun Route.workflowKbRoutes() {
         registerApiKbTopicsTopicIdPutRoute()
         registerApiKbTopicsTopicIdDeleteRoute()
         registerApiKbEntriesGetRoute()
+        registerApiKbEntriesSearchGetRoute()
         registerApiKbEntriesEntryIdGetRoute()
         registerApiKbEntriesPostRoute()
         registerApiKbCapturesPostRoute()
         registerApiKbEntriesEntryIdPutRoute()
         registerApiKbEntriesEntryIdDeleteRoute()
         registerApiKbEntriesEntryIdExportGetRoute()
+        registerApiKbCopilotPostRoute()
+        registerApiKbCopilotStreamPostRoute()
+        registerApiKbMemoryGetRoute()
+        registerApiKbMemoryEntryIdGetRoute()
+        registerApiKbMemoryPostRoute()
+        registerApiKbMemoryEntryIdDeleteRoute()
+        registerApiKbMemoryConsolidatePostRoute()
         registerApiKbContextPreferencesGetRoute()
         registerApiKbContextPreferencesPutRoute()
+        registerApiKbGroupAssetsGetRoute()
+        registerApiKbEntriesEntryIdLinkFilePostRoute()
+        registerApiAdminKbMigrateToPgPostRoute()
 
 }
 
@@ -4138,6 +4192,24 @@ private fun Route.registerApiKbEntriesGetRoute() {
     }
 }
 
+private fun Route.registerApiKbEntriesSearchGetRoute() {
+    get("/api/kb/entries/search") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        val q = call.request.queryParameters["q"] ?: ""
+        if (userId.isNullOrBlank() || q.isBlank()) {
+            call.respondText(
+                """{"success":false,"entries":[],"message":"Missing userId or query"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@get
+        }
+        val results = knowledgeBaseManager.searchPublishedEntries(userId, q.trim(), limit = 20)
+        val json = kbRouteJson.encodeToString(KnowledgeBaseEntrySearchResponse.serializer(), KnowledgeBaseEntrySearchResponse(results))
+        call.respondText(json, ContentType.Application.Json)
+    }
+}
+
 private fun Route.registerApiKbEntriesEntryIdGetRoute() {
 
     get("/api/kb/entries/{entryId}") {
@@ -4349,6 +4421,169 @@ private fun Route.registerApiKbEntriesEntryIdExportGetRoute() {
     }
 }
 
+private fun Route.registerApiKbCopilotPostRoute() {
+
+    post("/api/kb/copilot") {
+        val req = runCatching {
+            kbRouteJson.decodeFromString(KnowledgeBaseCopilotRequest.serializer(), call.receiveText())
+        }.getOrNull()
+        if (req == null) {
+            call.respondText(
+                """{"success":false,"message":"Invalid copilot request"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+        val userId = resolveKbCallerUserIdOrRespond(call, req.userId)
+        if (userId.isNullOrBlank()) {
+            call.respondText(
+                """{"success":false,"message":"Missing userId"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+        val copilotId = req.entryId?.takeIf { it.isNotBlank() } ?: req.topicId?.takeIf { it.isNotBlank() } ?: "unknown"
+        val response = executeKnowledgeBaseCopilot(
+            manager = knowledgeBaseManager,
+            request = req.copy(userId = userId),
+            runAgent = { input ->
+                val agent = DirectModelAgent(sessionId = "kb_copilot_${sanitizeFileName(copilotId)}")
+                val workspaceDir = "${AIConfig.CLAUDE_CLI_WORKSPACE_ROOT}/kb_copilot_${sanitizeFileName(userId)}_${sanitizeFileName(copilotId)}"
+                java.io.File(workspaceDir).mkdirs()
+                agent.initClaudeClient(workspaceDir)
+                agent.syncKnowledgeBaseWorkspace(input.workspaceEntries.ifEmpty {
+                    buildKnowledgeBaseWorkspaceEntries(knowledgeBaseManager, userId)
+                })
+                val text = agent.processInput(
+                    userInput = input.userPrompt,
+                    systemPrompt = input.systemPrompt,
+                    callback = { _, _, _ -> },
+                )
+                com.silk.backend.kb.KbCopilotAgentResult(
+                    displayText = text,
+                    actions = agent.lastKnowledgeBaseActions,
+                )
+            },
+        )
+        call.respondText(
+            kbRouteJson.encodeToString(com.silk.backend.kb.KnowledgeBaseCopilotResponse.serializer(), response),
+            ContentType.Application.Json,
+            if (response.success || response.draft != null) HttpStatusCode.OK else HttpStatusCode.BadGateway,
+        )
+    }
+}
+
+private fun Route.registerApiKbCopilotStreamPostRoute() {
+
+    post("/api/kb/copilot/stream") {
+        val req = runCatching {
+            kbRouteJson.decodeFromString(KnowledgeBaseCopilotRequest.serializer(), call.receiveText())
+        }.getOrNull()
+        if (req == null) {
+            call.respondText(
+                """{"success":false,"message":"Invalid copilot request"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+        val userId = resolveKbCallerUserIdOrRespond(call, req.userId)
+        if (userId.isNullOrBlank()) {
+            call.respondText(
+                """{"success":false,"message":"Missing userId"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+        val copilotId = req.entryId?.takeIf { it.isNotBlank() } ?: req.topicId?.takeIf { it.isNotBlank() } ?: "unknown"
+
+        // SSE headers: no cache, keep-alive
+        call.response.header(HttpHeaders.CacheControl, "no-cache")
+        call.response.header("X-Accel-Buffering", "no")
+        call.response.header(HttpHeaders.Connection, "keep-alive")
+
+        call.respondTextWriter(
+            contentType = ContentType("text", "event-stream"),
+            status = HttpStatusCode.OK,
+        ) {
+            val writeEvent: suspend (CopilotStreamEvent) -> Unit = { event ->
+                val dataPart = event.data.replace("\n", "\\n")
+                write("event: ${event.event}\ndata: $dataPart\n\n")
+                flush()
+            }
+
+            val response = executeKnowledgeBaseCopilot(
+                manager = knowledgeBaseManager,
+                request = req.copy(userId = userId),
+                runAgent = { input ->
+                    val agent = DirectModelAgent(sessionId = "kb_copilot_${sanitizeFileName(copilotId)}")
+                    val workspaceDir = "${AIConfig.CLAUDE_CLI_WORKSPACE_ROOT}/kb_copilot_${sanitizeFileName(userId)}_${sanitizeFileName(copilotId)}"
+                    java.io.File(workspaceDir).mkdirs()
+                    agent.initClaudeClient(workspaceDir)
+                    agent.syncKnowledgeBaseWorkspace(input.workspaceEntries.ifEmpty {
+                        buildKnowledgeBaseWorkspaceEntries(knowledgeBaseManager, userId)
+                    })
+                    val text = agent.processInput(
+                        userInput = input.userPrompt,
+                        systemPrompt = input.systemPrompt,
+                        callback = { stepType, content, _ ->
+                            // Forward model streaming events (thinking/text) as SSE
+                            val sseEvent = when (stepType) {
+                                "thinking" -> "thinking"
+                                "text", "complete" -> "text"
+                                "error" -> "error"
+                                else -> null
+                            }
+                            if (sseEvent != null && content.isNotBlank()) {
+                                // Strip <!--THINKING--> blocks from display content
+                                val displayContent = if (sseEvent == "text") {
+                                    stripThinkingBlocks(content)
+                                } else {
+                                    content
+                                }
+                                if (displayContent.isNotBlank()) {
+                                    writeEvent(CopilotStreamEvent(event = sseEvent, data = displayContent))
+                                }
+                            }
+                        },
+                    )
+                    com.silk.backend.kb.KbCopilotAgentResult(
+                        displayText = text,
+                        actions = agent.lastKnowledgeBaseActions,
+                    )
+                },
+                onStreamEvent = { event ->
+                    // Forward copilot-level events (draft/applied/error/done)
+                    when (event.event) {
+                        "draft", "applied" -> {
+                            // data is already JSON, send as-is
+                            write("event: ${event.event}\ndata: ${event.data}\n\n")
+                            flush()
+                        }
+                        "error" -> {
+                            writeEvent(event)
+                        }
+                        "done" -> {
+                            write("event: done\ndata: \n\n")
+                            flush()
+                        }
+                    }
+                },
+            )
+
+            // If the response indicates error but no error event was sent yet
+            if (!response.success && response.draft == null) {
+                writeEvent(CopilotStreamEvent(event = "error", data = response.message))
+                write("event: done\ndata: \n\n")
+                flush()
+            }
+        }
+    }
+}
+
 private fun Route.registerApiKbContextPreferencesGetRoute() {
 
     get("/api/kb/context-preferences") {
@@ -4378,9 +4613,170 @@ private fun Route.registerApiKbContextPreferencesPutRoute() {
         val excludedSpaceIds = req["excludedSpaceIds"]?.let { element ->
             runCatching { element.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull } }.getOrNull()
         } ?: emptyList()
-        val updated = knowledgeBaseContextPreferenceStore.updateExcludedSpaces(userId, excludedSpaceIds)
+        val downrankedSpaceIds = req["downrankedSpaceIds"]?.let { element ->
+            runCatching { element.jsonArray.mapNotNull { it.jsonPrimitive.contentOrNull } }.getOrNull()
+        } ?: emptyList()
+        val updated = knowledgeBaseContextPreferenceStore.update(
+            userId = userId,
+            excludedSpaceIds = excludedSpaceIds,
+            downrankedSpaceIds = downrankedSpaceIds,
+            memoryEnabled = req["memoryEnabled"]?.jsonPrimitive?.booleanOrNull,
+            autoCaptureEnabled = req["autoCaptureEnabled"]?.jsonPrimitive?.booleanOrNull,
+            ephemeralSessionEnabled = req["ephemeralSessionEnabled"]?.jsonPrimitive?.booleanOrNull,
+        )
         call.respondText(
             Json.encodeToString(com.silk.backend.kb.KnowledgeBaseContextPreferences.serializer(), updated),
+            ContentType.Application.Json,
+        )
+    }
+}
+
+private fun Route.registerApiKbMemoryGetRoute() {
+
+    get("/api/kb/memory") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        val groupId = call.request.queryParameters["groupId"]?.trim()?.takeIf { it.isNotEmpty() }
+        val list = if (groupId != null) {
+            knowledgeBaseManager.listGroupMemoryEntries(groupId, userId)
+        } else {
+            knowledgeBaseManager.listMemoryEntries(userId)
+        }
+        call.respondText(
+            Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(KBEntry.serializer()), list),
+            ContentType.Application.Json,
+        )
+    }
+}
+
+private fun Route.registerApiKbMemoryPostRoute() {
+
+    post("/api/kb/memory") {
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.contentOrNull)
+        val content = req["content"]?.jsonPrimitive?.contentOrNull?.trim()
+        if (userId.isNullOrBlank() || content.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing required fields"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val memoryType = req["memoryType"]?.jsonPrimitive?.contentOrNull?.let {
+            runCatching { com.silk.backend.models.KBMemoryType.valueOf(it.trim().uppercase()) }.getOrNull()
+        }
+        if (req["memoryType"] != null && memoryType == null) {
+            call.respondText("""{"success":false,"message":"Invalid memoryType"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val detected = com.silk.backend.kb.detectExplicitMemoryCapture(content)
+        val memoryContent = detected?.content ?: content
+        val type = memoryType ?: detected?.type ?: com.silk.backend.models.KBMemoryType.EPISODIC
+        val groupId = req["groupId"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
+        val entry = if (groupId != null) {
+            knowledgeBaseManager.captureExplicitGroupMemory(
+                userId = userId,
+                groupId = groupId,
+                content = memoryContent,
+                title = req["title"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty().ifEmpty {
+                    detected?.title ?: com.silk.backend.kb.buildMemoryTitle(type, memoryContent)
+                },
+                type = type,
+                key = req["key"]?.jsonPrimitive?.contentOrNull,
+            )
+        } else {
+            knowledgeBaseManager.captureExplicitMemory(
+                userId = userId,
+                content = memoryContent,
+                title = req["title"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty().ifEmpty {
+                    detected?.title ?: com.silk.backend.kb.buildMemoryTitle(type, memoryContent)
+                },
+                type = type,
+                key = req["key"]?.jsonPrimitive?.contentOrNull,
+            )
+        }
+        call.respondText(
+            Json.encodeToString(KBEntry.serializer(), entry),
+            ContentType.Application.Json,
+            HttpStatusCode.Created,
+        )
+    }
+}
+
+private fun Route.registerApiKbMemoryEntryIdDeleteRoute() {
+
+    delete("/api/kb/memory/{entryId}") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@delete
+        }
+        val entry = knowledgeBaseManager.getEntry(entryId, userId)
+        if (entry?.memory == null) {
+            call.respondText("""{"success":false,"message":"Memory entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@delete
+        }
+        // 群组记忆：allow 群组中可管理的用户删除；个人记忆：仅 owner 可删
+        val topic = knowledgeBaseManager.getTopic(entry.topicId, userId)
+        val isGroupMemory = topic?.spaceType == KnowledgeSpaceType.TEAM
+        val canDelete = if (isGroupMemory) {
+            topic != null && knowledgeBaseManager.canManageTopic(topic, userId)
+        } else {
+            entry.ownerId == userId
+        }
+        if (!canDelete) {
+            call.respondText("""{"success":false,"message":"Memory entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@delete
+        }
+        val ok = knowledgeBaseManager.deleteEntry(entryId, userId)
+        call.respondText(
+            """{"success":$ok}""",
+            ContentType.Application.Json,
+            if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound,
+        )
+    }
+}
+
+private fun Route.registerApiKbMemoryEntryIdGetRoute() {
+
+    get("/api/kb/memory/{entryId}") {
+        val entryId = call.parameters["entryId"] ?: ""
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@get
+        }
+        // 使用 getMemoryEntryWithAccess 以追踪访问时间
+        val entry = knowledgeBaseManager.getMemoryEntryWithAccess(entryId, userId)
+        if (entry == null || entry.memory == null) {
+            call.respondText("""{"success":false,"message":"Memory entry not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
+            return@get
+        }
+        call.respondText(
+            Json.encodeToString(KBEntry.serializer(), entry),
+            ContentType.Application.Json,
+        )
+    }
+}
+
+private fun Route.registerApiKbMemoryConsolidatePostRoute() {
+
+    post("/api/kb/memory/consolidate") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
+            return@post
+        }
+        val groupId = call.request.queryParameters["groupId"]?.trim()?.takeIf { it.isNotEmpty() }
+        val report = if (groupId != null) {
+            knowledgeBaseManager.consolidateGroupMemoryStore(groupId, userId)
+        } else {
+            knowledgeBaseManager.consolidateMemoryStore(userId)
+        }
+        call.respondText(
+            kbRouteJson.encodeToString(ConsolidationReport.serializer(), report),
             ContentType.Application.Json,
         )
     }
@@ -4404,4 +4800,144 @@ private fun parseKbEntrySource(req: JsonObject): KBEntrySource? {
 private fun parseKbEntryStatus(req: JsonObject): KBEntryStatus? {
     val raw = req["status"]?.jsonPrimitive?.contentOrNull ?: return null
     return runCatching { KBEntryStatus.valueOf(raw.trim().uppercase()) }.getOrNull()
+}
+
+/**
+ * GET /api/kb/group-assets/{groupId}
+ *
+ * 获取群空间统一资产列表：
+ * - 群上传目录中的文件
+ * - 群团队空间中的 KB 条目（PUBLISHED）
+ * - 群团队空间中的 KB 主题
+ *
+ * 调用者必须为群组成员。
+ */
+private fun Route.registerApiKbGroupAssetsGetRoute() {
+
+    get("/api/kb/group-assets/{groupId}") {
+        val groupId = call.parameters["groupId"] ?: ""
+        if (groupId.isBlank()) {
+            call.respondText(
+                """{"success":false,"message":"Missing groupId"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@get
+        }
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText(
+                """{"success":false,"message":"Missing userId"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@get
+        }
+        try {
+            val response = knowledgeBaseManager.getGroupAssets(groupId, userId)
+            call.respondText(
+                Json.encodeToString(GroupAssetsResponse.serializer(), response),
+                ContentType.Application.Json,
+            )
+        } catch (e: IllegalArgumentException) {
+            call.respondText(
+                """{"success":false,"message":"${e.message ?: "Access denied"}"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.Forbidden,
+            )
+        }
+    }
+}
+
+/**
+ * POST /api/kb/entries/{entryId}/link-file
+ *
+ * 为 KB 条目关联一个群文件引用。
+ * Request body:
+ * {
+ *   "userId": "...",
+ *   "groupId": "...",
+ *   "fileName": "...",
+ *   "fileSize": 12345,
+ *   "mimeType": "image/png",
+ *   "sourceMessageId": "..." (optional)
+ * }
+ */
+private fun Route.registerApiKbEntriesEntryIdLinkFilePostRoute() {
+
+    post("/api/kb/entries/{entryId}/link-file") {
+        val entryId = call.parameters["entryId"] ?: ""
+        if (entryId.isBlank()) {
+            call.respondText(
+                """{"success":false,"message":"Missing entryId"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+
+        val body = call.receiveText()
+        val req = kbRouteJson.decodeFromString<JsonObject>(body)
+        val userId = resolveKbCallerUserIdOrRespond(call, req["userId"]?.jsonPrimitive?.content)
+        val groupId = req["groupId"]?.jsonPrimitive?.contentOrNull
+        val fileName = req["fileName"]?.jsonPrimitive?.contentOrNull
+        val fileSize = req["fileSize"]?.jsonPrimitive?.contentOrNull?.toLongOrNull()
+        val mimeType = req["mimeType"]?.jsonPrimitive?.contentOrNull
+        val sourceMessageId = req["sourceMessageId"]?.jsonPrimitive?.contentOrNull
+
+        val hasMissingFields = userId.isNullOrBlank() || groupId.isNullOrBlank() ||
+            fileName.isNullOrBlank() || fileSize == null || fileSize <= 0L || mimeType.isNullOrBlank()
+        if (hasMissingFields) {
+            call.respondText(
+                """{"success":false,"message":"Missing required fields"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+
+        val entry = knowledgeBaseManager.linkFileToEntry(
+            entryId = entryId,
+            groupId = groupId!!,
+            fileName = fileName!!,
+            fileSize = fileSize!!,
+            mimeType = mimeType!!,
+            userId = userId!!,
+            sourceMessageId = sourceMessageId?.takeIf { it.isNotEmpty() },
+        )
+        if (entry == null) {
+            call.respondText(
+                """{"success":false,"message":"Entry not found or write denied"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.NotFound,
+            )
+            return@post
+        }
+
+        call.respondText(
+            Json.encodeToString(KBEntry.serializer(), entry),
+            ContentType.Application.Json,
+        )
+    }
+}
+
+private fun Route.registerApiAdminKbMigrateToPgPostRoute() {
+
+    post("/api/admin/kb/migrate-to-pg") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText(
+                """{"success":false,"message":"Missing userId"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+
+        val report = knowledgeBaseManager.migrateToPostgres()
+        call.respondText(
+            kbRouteJson.encodeToString(MigrationReport.serializer(), report),
+            ContentType.Application.Json,
+        )
+    }
 }

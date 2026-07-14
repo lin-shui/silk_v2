@@ -5,6 +5,7 @@ import com.silk.backend.database.GroupRepository
 import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.models.KBAccessPolicy
 import com.silk.backend.models.KBEntry
+import com.silk.backend.models.KBMemoryType
 import com.silk.backend.models.KBEntryStatus
 import com.silk.backend.models.KBSourceType
 import com.silk.backend.models.KBTopic
@@ -13,6 +14,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.put
+import io.ktor.client.request.delete
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -21,6 +23,11 @@ import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -281,6 +288,91 @@ class KnowledgeBaseRouteContractTest {
                 val stored = manager.getEntry(created.id, "owner")
                 assertNotNull(stored)
                 assertEquals(KBEntryStatus.CANDIDATE, stored.status)
+            }
+        }
+    }
+
+    @Test
+    fun `memory routes create list and delete explicit memory entries`() {
+        TestWorkspace().use { _ ->
+            testApplication {
+                application { module() }
+
+                val createdResponse = client.post("/api/kb/memory") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """
+                        {
+                          "userId":"owner",
+                          "content":"记住 我喜欢 Kotlin 和 Ktor",
+                          "memoryType":"PREFERENCE"
+                        }
+                        """.trimIndent()
+                    )
+                }
+                assertEquals(HttpStatusCode.Created, createdResponse.status)
+                val created = json.decodeFromString(KBEntry.serializer(), createdResponse.bodyAsText())
+                assertEquals(KBMemoryType.PREFERENCE, created.memory?.type)
+                assertTrue(created.tags.contains("memory"))
+
+                val memoryListResponse = client.get("/api/kb/memory?userId=owner")
+                assertEquals(HttpStatusCode.OK, memoryListResponse.status)
+                val memoryEntries = json.decodeFromString(
+                    ListSerializer(KBEntry.serializer()),
+                    memoryListResponse.bodyAsText(),
+                )
+                assertEquals(listOf(created.id), memoryEntries.map { it.id })
+
+                val topicsResponse = client.get("/api/kb/topics?userId=owner")
+                val visibleTopics = json.decodeFromString(
+                    ListSerializer(KBTopic.serializer()),
+                    topicsResponse.bodyAsText(),
+                )
+                assertTrue(visibleTopics.none { it.project == "memory" })
+
+                val deleteResponse = client.delete("/api/kb/memory/${created.id}?userId=owner")
+                assertEquals(HttpStatusCode.OK, deleteResponse.status)
+
+                val emptyListResponse = client.get("/api/kb/memory?userId=owner")
+                val emptyList = json.decodeFromString(
+                    ListSerializer(KBEntry.serializer()),
+                    emptyListResponse.bodyAsText(),
+                )
+                assertTrue(emptyList.isEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun `context preferences route persists memory toggles`() {
+        TestWorkspace().use { _ ->
+            testApplication {
+                application { module() }
+
+                val updateResponse = client.put("/api/kb/context-preferences") {
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """
+                        {
+                          "userId":"owner",
+                          "excludedSpaceIds":["g1"],
+                          "memoryEnabled":false,
+                          "autoCaptureEnabled":true,
+                          "ephemeralSessionEnabled":true
+                        }
+                        """.trimIndent()
+                    )
+                }
+                assertEquals(HttpStatusCode.OK, updateResponse.status)
+                val updated = json.parseToJsonElement(updateResponse.bodyAsText()).jsonObject
+                assertEquals(false, updated["memoryEnabled"]?.jsonPrimitive?.booleanOrNull)
+                assertEquals(true, updated["autoCaptureEnabled"]?.jsonPrimitive?.booleanOrNull)
+                assertEquals(true, updated["ephemeralSessionEnabled"]?.jsonPrimitive?.booleanOrNull)
+
+                val getResponse = client.get("/api/kb/context-preferences?userId=owner")
+                val restored = json.parseToJsonElement(getResponse.bodyAsText()).jsonObject
+                assertEquals(listOf("g1"), restored["excludedSpaceIds"]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull })
+                assertEquals(false, restored["memoryEnabled"]?.jsonPrimitive?.booleanOrNull)
             }
         }
     }

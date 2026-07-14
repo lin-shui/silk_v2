@@ -18,46 +18,210 @@
 # ============================================================
 
 
-# Java Home - 支持 macOS Homebrew 和 Linux
-if [ -d "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" ]; then
-    export JAVA_HOME="/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"
-elif [ -d "/usr/lib/jvm/java-17-openjdk-amd64" ]; then
-    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-elif [ -d "/usr/lib/jvm/java-17-openjdk" ]; then
-    export JAVA_HOME=/usr/lib/jvm/java-17-openjdk
-else
-    export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java) 2>/dev/null || echo "/usr/bin/java") 2>/dev/null) 2>/dev/null)
-fi
-export PATH=$JAVA_HOME/bin:$PATH
+is_valid_java_home() {
+    [ -n "$1" ] && [ -x "$1/bin/java" ]
+}
 
-# Android SDK - 支持 macOS Homebrew、Linux 和 Android Studio
-if [ -d "/opt/homebrew/share/android-commandlinetools" ]; then
-    export ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
-elif [ -d "$HOME/Library/Android/sdk" ]; then
-    export ANDROID_HOME="$HOME/Library/Android/sdk"
-elif [ -d "/usr/lib/android-sdk" ]; then
-    export ANDROID_HOME=/usr/lib/android-sdk
-elif [ -d "/root/Android/Sdk" ]; then
-    export ANDROID_HOME=/root/Android/Sdk
-elif [ -d "/root/android-sdk" ]; then
-    export ANDROID_HOME=/root/android-sdk
-fi
-if [ -n "$ANDROID_HOME" ]; then
-    export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
-fi
+is_valid_android_sdk() {
+    [ -n "$1" ] && [ -d "$1" ] && [ -d "$1/platform-tools" -o -d "$1/build-tools" -o -d "$1/cmdline-tools" ]
+}
+
+prepend_path_once() {
+    local dir="$1"
+    [ -n "$dir" ] && [ -d "$dir" ] || return 0
+    case ":$PATH:" in
+        *":$dir:"*) ;;
+        *) PATH="$dir:$PATH" ;;
+    esac
+}
+
+read_local_properties_value() {
+    local key="$1"
+    local file="$SILK_DIR/local.properties"
+    [ -f "$file" ] || return 1
+    awk -F= -v k="$key" '$1 == k { sub(/^[[:space:]]+/, "", $2); print $2; exit }' "$file"
+}
+
+upsert_local_properties_value() {
+    local key="$1"
+    local value="$2"
+    local file="$SILK_DIR/local.properties"
+    local tmp
+    tmp=$(mktemp)
+
+    if [ -f "$file" ]; then
+        awk -F= -v k="$key" -v v="$value" '
+            BEGIN { updated = 0 }
+            $1 == k {
+                if (!updated) {
+                    print k "=" v
+                    updated = 1
+                }
+                next
+            }
+            { print }
+            END {
+                if (!updated) {
+                    print k "=" v
+                }
+            }
+        ' "$file" > "$tmp"
+    else
+        printf '%s=%s\n' "$key" "$value" > "$tmp"
+    fi
+
+    mv "$tmp" "$file"
+}
+
+delete_local_properties_value() {
+    local key="$1"
+    local file="$SILK_DIR/local.properties"
+    local tmp
+    [ -f "$file" ] || return 0
+
+    tmp=$(mktemp)
+    awk -F= -v k="$key" '$1 != k { print }' "$file" > "$tmp"
+    mv "$tmp" "$file"
+}
+
+resolve_java_home() {
+    local candidate=""
+    local local_java_home=""
+    local java_bin=""
+
+    if is_valid_java_home "$JAVA_HOME"; then
+        echo "$JAVA_HOME"
+        return 0
+    fi
+
+    local_java_home=$(read_local_properties_value "org.gradle.java.home" 2>/dev/null || true)
+    if is_valid_java_home "$local_java_home"; then
+        echo "$local_java_home"
+        return 0
+    fi
+
+    if [ "$(uname -s)" = "Darwin" ] && [ -x "/usr/libexec/java_home" ]; then
+        candidate=$(/usr/libexec/java_home -v 17 2>/dev/null || true)
+        if is_valid_java_home "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    for candidate in \
+        "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" \
+        "/usr/local/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home" \
+        "/Library/Java/JavaVirtualMachines/temurin-17.jdk/Contents/Home" \
+        "/usr/lib/jvm/java-17-openjdk-amd64" \
+        "/usr/lib/jvm/java-17-openjdk" \
+        "/usr/lib/jvm/temurin-17-jdk"
+    do
+        if is_valid_java_home "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    java_bin=$(command -v java 2>/dev/null || true)
+    if [ -n "$java_bin" ]; then
+        candidate=$(cd "$(dirname "$java_bin")/.." 2>/dev/null && pwd -P)
+        if is_valid_java_home "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+resolve_android_sdk_root() {
+    local candidate=""
+    local local_sdk=""
+    local sdkmanager_bin=""
+    local adb_bin=""
+
+    if is_valid_android_sdk "$ANDROID_HOME"; then
+        echo "$ANDROID_HOME"
+        return 0
+    fi
+
+    if is_valid_android_sdk "$ANDROID_SDK_ROOT"; then
+        echo "$ANDROID_SDK_ROOT"
+        return 0
+    fi
+
+    local_sdk=$(read_local_properties_value "sdk.dir" 2>/dev/null || true)
+    if is_valid_android_sdk "$local_sdk"; then
+        echo "$local_sdk"
+        return 0
+    fi
+
+    for candidate in \
+        "$HOME/Library/Android/sdk" \
+        "$HOME/Android/Sdk" \
+        "$HOME/android-sdk" \
+        "/usr/lib/android-sdk" \
+        "/root/Android/Sdk" \
+        "/root/android-sdk"
+    do
+        if is_valid_android_sdk "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    sdkmanager_bin=$(command -v sdkmanager 2>/dev/null || true)
+    if [ -n "$sdkmanager_bin" ]; then
+        candidate=$(cd "$(dirname "$sdkmanager_bin")/../../.." 2>/dev/null && pwd -P)
+        if is_valid_android_sdk "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    adb_bin=$(command -v adb 2>/dev/null || true)
+    if [ -n "$adb_bin" ]; then
+        candidate=$(cd "$(dirname "$adb_bin")/.." 2>/dev/null && pwd -P)
+        if is_valid_android_sdk "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+sync_toolchain_local_properties() {
+    if is_valid_android_sdk "$ANDROID_HOME"; then
+        upsert_local_properties_value "sdk.dir" "$ANDROID_HOME"
+    fi
+    if is_valid_java_home "$JAVA_HOME"; then
+        upsert_local_properties_value "org.gradle.java.home" "$JAVA_HOME"
+    fi
+}
+
+is_arm64_arch() {
+    case "$(uname -m)" in
+        arm64|aarch64) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 # AAPT2 架构自动检测与配置
 # ARM64 系统需要指定本地 ARM64 AAPT2，否则 Gradle 会下载 x86-64 版本导致无法执行
 setup_aapt2_for_arch() {
-    local CURRENT_ARCH=$(uname -m)
     local LOCAL_PROPERTIES="$SILK_DIR/local.properties"
     
     # 只在 ARM64 系统上需要特殊处理
-    if [ "$CURRENT_ARCH" != "aarch64" ]; then
+    if ! is_arm64_arch; then
         # 非 ARM64 系统，移除 override 配置（如果存在）
         if grep -q "android.aapt2FromMavenOverride" "$LOCAL_PROPERTIES" 2>/dev/null; then
-            sed -i '/android.aapt2FromMavenOverride/d' "$LOCAL_PROPERTIES"
+            delete_local_properties_value "android.aapt2FromMavenOverride"
         fi
+        return 0
+    fi
+
+    if ! is_valid_android_sdk "$ANDROID_HOME" || [ ! -d "$ANDROID_HOME/build-tools" ]; then
         return 0
     fi
     
@@ -80,7 +244,7 @@ setup_aapt2_for_arch() {
     
     # 写入 local.properties
     if grep -q "android.aapt2FromMavenOverride" "$LOCAL_PROPERTIES" 2>/dev/null; then
-        sed -i "s|android.aapt2FromMavenOverride=.*|android.aapt2FromMavenOverride=$ARM64_AAPT2|" "$LOCAL_PROPERTIES"
+        upsert_local_properties_value "android.aapt2FromMavenOverride" "$ARM64_AAPT2"
     else
         echo "" >> "$LOCAL_PROPERTIES"
         echo "# ARM64 aapt2 override - 自动检测" >> "$LOCAL_PROPERTIES"
@@ -120,6 +284,23 @@ if [ -f "$SILK_DIR/.env" ]; then
         BACKEND_BASE_URL="$_PRE_SET_BACKEND_BASE_URL"
     fi
     unset _PRE_SET_BACKEND_BASE_URL
+fi
+
+# Java / Android SDK 路径探测：
+# 1. 保留用户预设环境变量（含 .env）
+# 2. 回退到 local.properties
+# 3. 再尝试系统默认安装路径
+if RESOLVED_JAVA_HOME=$(resolve_java_home); then
+    export JAVA_HOME="$RESOLVED_JAVA_HOME"
+    prepend_path_once "$JAVA_HOME/bin"
+fi
+
+if RESOLVED_ANDROID_HOME=$(resolve_android_sdk_root); then
+    export ANDROID_HOME="$RESOLVED_ANDROID_HOME"
+    export ANDROID_SDK_ROOT="$RESOLVED_ANDROID_HOME"
+    prepend_path_once "$ANDROID_HOME/cmdline-tools/latest/bin"
+    prepend_path_once "$ANDROID_HOME/cmdline-tools/bin"
+    prepend_path_once "$ANDROID_HOME/platform-tools"
 fi
 
 # Weaviate Schema 初始化用 Python
@@ -801,24 +982,62 @@ check_status() {
 
 build_frontend() {
     print_header "🔨 构建前端 (WebApp)"
-    
+
+    run_web_frontend_build() {
+        local gradle_log="$1"
+        (
+            set -o pipefail
+            ./gradlew :frontend:webApp:browserProductionWebpack 2>&1 | tee "$gradle_log"
+        )
+    }
+
+    is_kotlin_js_lock_failure() {
+        local gradle_log="$1"
+        grep -q "kotlinStoreYarnLock" "$gradle_log" \
+            && grep -q "yarn.lock was changed" "$gradle_log"
+    }
+
+    refresh_kotlin_js_yarn_lock() {
+        echo ""
+        echo -e "${YELLOW}检测到 Kotlin/JS yarn.lock 漂移，自动刷新 kotlin-js-store/yarn.lock...${NC}"
+        ./gradlew kotlinUpgradeYarnLock
+    }
+
     echo ""
     echo -e "${BLUE}正在构建前端生产版本...${NC}"
     cd "$SILK_DIR"
-    ./gradlew :frontend:webApp:browserProductionWebpack
-    
-    if [ $? -eq 0 ]; then
+
+    local gradle_log
+    gradle_log=$(mktemp)
+
+    if run_web_frontend_build "$gradle_log"; then
+        local build_ok=true
+    elif is_kotlin_js_lock_failure "$gradle_log"; then
+        if refresh_kotlin_js_yarn_lock && run_web_frontend_build "$gradle_log"; then
+            local build_ok=true
+        else
+            local build_ok=false
+        fi
+    else
+        local build_ok=false
+    fi
+
+    rm -f "$gradle_log"
+
+    if [ "$build_ok" = true ]; then
         echo ""
         echo -e "${GREEN}✅ 前端构建成功${NC}"
         echo -e "  输出目录: $SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"
+
+        # 先在构建产物中替换时间戳，再复制到 backend/static，确保两边内容一致
+        BUILD_TS=$(date +%Y%m%d%H%M%S)
+        sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable/index.html" \
+            && rm -f "$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable/index.html.bak"
         
         # 复制到 backend/static 目录
         echo ""
         echo -e "${BLUE}复制到 backend/static 目录...${NC}"
         cp -r "$SILK_DIR/frontend/webApp/build/dist/js/productionExecutable"/* "$SILK_DIR/backend/static/"
-        # 替换 index.html 中的时间戳占位符，每次构建不同的 ?v= 以清除浏览器缓存
-        BUILD_TS=$(date +%Y%m%d%H%M%S)
-        sed -i.bak "s/__BUILD_TIMESTAMP__/$BUILD_TS/g" "$SILK_DIR/backend/static/index.html" && rm -f "$SILK_DIR/backend/static/index.html.bak"
         echo -e "${GREEN}✅ 已更新 backend/static (build=$BUILD_TS)${NC}"
     else
         echo ""
@@ -834,10 +1053,9 @@ build_frontend() {
 clean_aapt2_cache() {
     local GRADLE_CACHES_DIR="$HOME/.gradle/caches"
     local TRANSFORMS_DIR="$GRADLE_CACHES_DIR/transforms-3"
-    local CURRENT_ARCH=$(uname -m)
     
     # 只在 ARM64 系统上检查
-    if [ "$CURRENT_ARCH" != "aarch64" ]; then
+    if ! is_arm64_arch; then
         return 0
     fi
     
@@ -849,7 +1067,7 @@ clean_aapt2_cache() {
     local LOCAL_AAPT2="$AAPT2_OVERRIDE_PATH"
     
     # 如果全局变量未设置，尝试查找
-    if [ -z "$LOCAL_AAPT2" ] && [ -n "$ANDROID_HOME" ]; then
+    if [ -z "$LOCAL_AAPT2" ] && [ -n "$ANDROID_HOME" ] && [ -d "$ANDROID_HOME/build-tools" ]; then
         for build_tools_dir in "$ANDROID_HOME/build-tools"/*/; do
             if [ -x "${build_tools_dir}aapt2" ]; then
                 local aapt2_arch=$(file "${build_tools_dir}aapt2" 2>/dev/null | grep -E 'x86-64|aarch64|ARM aarch64' | head -1)
@@ -894,6 +1112,14 @@ clean_gradle_kotlin_snapshots() {
 
 build_apk() {
     print_header "📱 构建 Android APK"
+
+    if ! is_valid_android_sdk "$ANDROID_HOME"; then
+        echo -e "  ${RED}❌ 未找到可用的 Android SDK${NC}"
+        echo -e "  请设置 ANDROID_HOME / ANDROID_SDK_ROOT，或在 local.properties 写入 sdk.dir=/your/android/sdk"
+        return 1
+    fi
+
+    sync_toolchain_local_properties
     
     # ARM64 系统需要配置 AAPT2 override
     if [ "$_SETUP_AAPT2_HOOK" = "true" ]; then
@@ -912,7 +1138,7 @@ build_apk() {
     
     # ARM64 系统需要传递 AAPT2 override 参数（local.properties 设置不可靠）
     AAPT2_OVERRIDE_PARAM=""
-    if [ "$(uname -m)" = "aarch64" ]; then
+    if is_arm64_arch && [ -d "$ANDROID_HOME/build-tools" ]; then
         # 查找本地 ARM64 AAPT2
         for build_tools_dir in "$ANDROID_HOME/build-tools"/*/; do
             if [ -x "${build_tools_dir}aapt2" ]; then
@@ -1631,6 +1857,7 @@ quick_restart() {
 
 # 在需要构建 APK 时自动配置 AAPT2
 if [[ "$1" == "build-apk" || "$1" == "ba" || "$1" == "build-all" || "$1" == "bp" || "$1" == "deploy" || "$1" == "d" ]]; then
+    sync_toolchain_local_properties
     setup_aapt2_for_arch
 fi
 

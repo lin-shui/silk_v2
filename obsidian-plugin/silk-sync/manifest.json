@@ -1,0 +1,9 @@
+{
+	"id": "silk-sync",
+	"name": "Silk Sync",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "一键同步 Silk 聊天记录和知识库到 Obsidian",
+	"author": "Silk",
+	"isDesktopOnly": true
+}

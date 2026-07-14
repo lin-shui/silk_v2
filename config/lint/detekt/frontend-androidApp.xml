@@ -1,1 +1,8 @@
-<?xml version="1.0" ?><SmellBaseline><ManuallySuppressedIssues/><CurrentIssues/></SmellBaseline>
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>CyclomaticComplexMethod:KnowledgeBaseScreen.kt$@Composable private fun KnowledgeMemoryDialog( preferences: KnowledgeBaseContextPreferences, entries: List&lt;KBEntryItem&gt;, groupEntries: List&lt;KBEntryItem&gt;, groupId: String?, activeTab: String, isLoading: Boolean, isSaving: Boolean, draftTitle: String, draftContent: String, draftType: KBMemoryType, feedbackMessage: String, onDraftTitleChange: (String) -&gt; Unit, onDraftContentChange: (String) -&gt; Unit, onDraftTypeChange: (KBMemoryType) -&gt; Unit, onPreferencesChange: (KnowledgeBaseContextPreferences) -&gt; Unit, onActiveTabChange: (String) -&gt; Unit, onDismiss: () -&gt; Unit, onSavePreferences: () -&gt; Unit, onCreateMemory: () -&gt; Unit, onDeleteMemory: (String) -&gt; Unit, )</ID>
+    <ID>CyclomaticComplexMethod:KnowledgeBaseScreen.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun KnowledgeBaseScreen(appState: AppState)</ID>
+  </CurrentIssues>
+</SmellBaseline>

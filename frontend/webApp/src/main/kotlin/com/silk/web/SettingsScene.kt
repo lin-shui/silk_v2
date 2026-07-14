@@ -72,6 +72,9 @@ fun SettingsScene(appState: WebAppState) {
     var selectedLanguage by remember { mutableStateOf<Language>(Language.CHINESE) }
     var defaultInstruction by remember { mutableStateOf("") }
 
+    // External Access (Obsidian sync etc.) state
+    var apiTokenVisible by remember { mutableStateOf(false) }
+
     // CC settings state
     var ccBridgeToken by remember { mutableStateOf<String?>(null) }
     var ccBridgeConnected by remember { mutableStateOf(false) }
@@ -604,6 +607,195 @@ fun SettingsScene(appState: WebAppState) {
                             }
                         }) {
                             Text(strings.ccBridgeHelp)
+                        }
+                    }
+                }
+
+                // External Access (Obsidian sync etc.) section
+                Div({
+                    style {
+                        marginBottom(32.px)
+                        padding(20.px)
+                        border {
+                            width(1.px)
+                            style(LineStyle.Solid)
+                            color(Color(SilkColors.border))
+                        }
+                        borderRadius(12.px)
+                        backgroundColor(Color(SilkColors.surfaceElevated))
+                    }
+                }) {
+                    Span({
+                        style {
+                            display(DisplayStyle.Block)
+                            marginBottom(16.px)
+                            color(Color(SilkColors.textPrimary))
+                            fontSize(16.px)
+                            property("font-weight", "600")
+                        }
+                    }) {
+                        Text(strings.externalAccessTitle)
+                    }
+
+                    Div({
+                        style {
+                            display(DisplayStyle.Flex)
+                            flexDirection(FlexDirection.Column)
+                            gap(16.px)
+                        }
+                    }) {
+                        // User ID row
+                        Div({}) {
+                            Span({
+                                style {
+                                    display(DisplayStyle.Block)
+                                    marginBottom(6.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    fontSize(13.px)
+                                }
+                            }) {
+                                Text(strings.userIdLabel)
+                            }
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    gap(8.px)
+                                }
+                            }) {
+                                Span({
+                                    style {
+                                        fontFamily("monospace")
+                                        fontSize(13.px)
+                                        padding(8.px, 12.px)
+                                        backgroundColor(Color("#f5f5f5"))
+                                        borderRadius(6.px)
+                                        color(Color(SilkColors.textPrimary))
+                                        property("user-select", "all")
+                                        property("word-break", "break-all")
+                                    }
+                                }) {
+                                    Text(user.id)
+                                }
+                                Button({
+                                    style {
+                                        padding(6.px, 12.px)
+                                        backgroundColor(Color(SilkColors.secondary))
+                                        color(Color(SilkColors.textPrimary))
+                                        border { width(0.px) }
+                                        borderRadius(6.px)
+                                        property("cursor", "pointer")
+                                        fontSize(12.px)
+                                        property("white-space", "nowrap")
+                                    }
+                                    onClick {
+                                        copyToClipboard(user.id)
+                                        saveMessage = strings.copiedToClipboard
+                                    }
+                                }) {
+                                    Text(strings.copyButton)
+                                }
+                            }
+                        }
+
+                        // API Token row
+                        Div({}) {
+                            Span({
+                                style {
+                                    display(DisplayStyle.Block)
+                                    marginBottom(6.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    fontSize(13.px)
+                                }
+                            }) {
+                                Text(strings.apiTokenLabel)
+                            }
+                            Div({
+                                style {
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    gap(8.px)
+                                }
+                            }) {
+                                val token = settings?.appAuthToken
+                                Span({
+                                    style {
+                                        fontFamily("monospace")
+                                        fontSize(13.px)
+                                        padding(8.px, 12.px)
+                                        backgroundColor(Color("#f5f5f5"))
+                                        borderRadius(6.px)
+                                        color(Color(SilkColors.textPrimary))
+                                        property("user-select", "all")
+                                        property("word-break", "break-all")
+                                        property("cursor", "pointer")
+                                    }
+                                    onClick {
+                                        apiTokenVisible = !apiTokenVisible
+                                    }
+                                }) {
+                                    Text(
+                                        if (token == null) "—"
+                                        else if (apiTokenVisible) token
+                                        else "••••••••••••••••"
+                                    )
+                                }
+                                if (token != null) {
+                                    Button({
+                                        style {
+                                            padding(6.px, 12.px)
+                                            backgroundColor(Color(SilkColors.secondary))
+                                            color(Color(SilkColors.textPrimary))
+                                            border { width(0.px) }
+                                            borderRadius(6.px)
+                                            property("cursor", "pointer")
+                                            fontSize(12.px)
+                                            property("white-space", "nowrap")
+                                        }
+                                        onClick {
+                                            copyToClipboard(token)
+                                            saveMessage = strings.copiedToClipboard
+                                        }
+                                    }) {
+                                        Text(strings.copyButton)
+                                    }
+                                    Button({
+                                        style {
+                                            padding(6.px, 12.px)
+                                            backgroundColor(Color.transparent)
+                                            color(Color(SilkColors.textSecondary))
+                                            border {
+                                                width(1.px)
+                                                style(LineStyle.Solid)
+                                                color(Color(SilkColors.border))
+                                            }
+                                            borderRadius(6.px)
+                                            property("cursor", "pointer")
+                                            fontSize(12.px)
+                                            property("white-space", "nowrap")
+                                        }
+                                        onClick {
+                                            apiTokenVisible = !apiTokenVisible
+                                        }
+                                    }) {
+                                        Text(if (apiTokenVisible) strings.hideButton else strings.showButton)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Help text
+                        Div({
+                            style {
+                                padding(12.px)
+                                backgroundColor(Color("#F0F7FF"))
+                                borderRadius(8.px)
+                                fontSize(12.px)
+                                color(Color(SilkColors.textSecondary))
+                                property("line-height", "1.6")
+                            }
+                        }) {
+                            Text(strings.apiTokenHelp)
                         }
                     }
                 }

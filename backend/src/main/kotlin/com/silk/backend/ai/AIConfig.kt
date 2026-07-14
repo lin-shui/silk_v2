@@ -97,6 +97,20 @@ object AIConfig {
     // SearXNG 自托管搜索引擎地址（如 http://localhost:8080）
     val SEARXNG_URL: String get() = env("SEARXNG_URL") ?: ""
 
+    // ── KB 嵌入向量（Semantic Search） ─────────────────────────────
+    /** OpenAI 兼容的嵌入 API Key（Voyage AI / OpenAI / 本地代理等）。为空时禁用语义搜索。 */
+    val EMBEDDING_API_KEY: String get() = env("EMBEDDING_API_KEY") ?: ""
+    /** OpenAI 兼容的嵌入 API 端点。 */
+    val EMBEDDING_API_URL: String get() = env("EMBEDDING_API_URL") ?: "https://api.voyageai.com/v1/embeddings"
+    /** 嵌入模型名。 */
+    val EMBEDDING_MODEL: String get() = env("EMBEDDING_MODEL") ?: "voyage-3"
+    /** 语义搜索开关：关闭时仅使用关键词匹配。 */
+    val EMBEDDING_ENABLED: Boolean get() = env("EMBEDDING_ENABLED")?.toBoolean() ?: false
+    /** 混合搜索 α（关键词权重），β（向量权重），γ（recency 权重）。α+β+γ ≈ 1.0 */
+    val HYBRID_SEARCH_ALPHA: Double get() = env("HYBRID_SEARCH_ALPHA")?.toDoubleOrNull()?.coerceIn(0.0, 1.0) ?: 0.4
+    val HYBRID_SEARCH_BETA: Double get() = env("HYBRID_SEARCH_BETA")?.toDoubleOrNull()?.coerceIn(0.0, 1.0) ?: 0.4
+    val HYBRID_SEARCH_GAMMA: Double get() = env("HYBRID_SEARCH_GAMMA")?.toDoubleOrNull()?.coerceIn(0.0, 1.0) ?: 0.2
+
     // AutoCLI (nashsu/AutoCLI) 集成
     val AUTOCLI_ENABLED: Boolean get() = env("AUTOCLI_ENABLED")?.toBoolean() ?: false
     val AUTOCLI_PATH: String get() = env("AUTOCLI_PATH")?.trim()?.takeIf { it.isNotEmpty() } ?: "autocli"
@@ -115,6 +129,22 @@ object AIConfig {
     val TOOLS_ENABLED: List<String> get() = env("TOOLS_ENABLED")?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
         ?: listOf("file_search", "web_search", "code_execution", "browser")
     
+    // ── KB PostgreSQL 存储后端（Phase 5 Stage 2） ────────────────
+    /** KB 存储后端："json"（默认）或 "postgres"。通过 -Dsilk.kb.store=postgres 切换。 */
+    val KB_STORE_BACKEND: String get() =
+        (env("SILK_KB_STORE") ?: System.getProperty("silk.kb.store"))?.trim()?.lowercase()
+            ?.takeIf { it == "postgres" } ?: "json"
+    /** PostgreSQL 主机地址，默认 127.0.0.1 */
+    val PG_HOST: String get() = env("PG_HOST") ?: "127.0.0.1"
+    /** PostgreSQL 端口，默认 5432 */
+    val PG_PORT: Int get() = env("PG_PORT")?.toIntOrNull()?.takeIf { it in 1..65535 } ?: 5432
+    /** PostgreSQL 数据库名，默认 silk_kb */
+    val PG_DATABASE: String get() = env("PG_DATABASE") ?: "silk_kb"
+    /** PostgreSQL 用户名，默认 silk */
+    val PG_USER: String get() = env("PG_USER") ?: "silk"
+    /** PostgreSQL 密码（必填），默认空字符串 */
+    val PG_PASSWORD: String get() = env("PG_PASSWORD") ?: ""
+
     // 智能助手任务列表
     val TO_DO_LIST = listOf(
         "理解用户意图",

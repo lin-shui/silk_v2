@@ -1,6 +1,6 @@
 package com.silk.backend.kb
 
-import com.silk.backend.ai.DirectModelAgent
+import com.silk.backend.ai.AvailableReferenceSeed
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.models.KBEntry
 import com.silk.backend.models.KBEntryStatus
@@ -11,7 +11,7 @@ import com.silk.backend.models.KnowledgeSpaceType
 data class KnowledgeBasePromptContext(
     val resolvedUserInput: String,
     val promptBlock: String? = null,
-    val availableReferences: List<DirectModelAgent.AvailableReferenceSeed> = emptyList(),
+    val availableReferences: List<AvailableReferenceSeed> = emptyList(),
     val diagnostics: KnowledgeBaseContextDiagnostics = KnowledgeBaseContextDiagnostics(),
 )
 
@@ -19,8 +19,11 @@ data class KnowledgeBaseContextDiagnostics(
     val manualReferenceCount: Int = 0,
     val pinnedReferenceCount: Int = 0,
     val autoCandidateCount: Int = 0,
+    val memoryReferenceCount: Int = 0,
     val excludedReferenceCount: Int = 0,
     val excludedSpaceCount: Int = 0,
+    /** 降权空间数量：这些空间的条目仍参与召回但优先级降低。 */
+    val downrankedSpaceCount: Int = 0,
 )
 
 private data class KnowledgeBaseReferenceToken(
@@ -49,7 +52,11 @@ fun resolveKnowledgeBasePromptContext(
     knowledgeBaseManager: KnowledgeBaseManager,
     preferredGroupId: String? = null,
     autoCandidateLimit: Int = 3,
+    memoryCandidateLimit: Int = 5,
+    memoryEnabled: Boolean = true,
     selection: KnowledgeBaseContextSelection = KnowledgeBaseContextSelection(),
+    /** 来自持久偏好的降权空间 ID（与 selection 中的降权空间合并）。 */
+    persistentDownrankedSpaceIds: Set<String> = emptySet(),
 ): KnowledgeBasePromptContext {
     val tokens = parseKnowledgeBaseReferenceTokens(rawInput)
     val resolvedByEntryId = resolveManualKnowledgeBaseReferences(tokens, userId, knowledgeBaseManager)
@@ -60,6 +67,7 @@ fun resolveKnowledgeBasePromptContext(
     val manualEntryIds = resolvedByEntryId.keys.toSet()
     val excludedEntryIds = normalizeExcludedEntryIds(selection, manualEntryIds)
     val excludedSpaceIds = normalizeExcludedSpaceIds(selection)
+    val downrankedSpaceIds = normalizeDownrankedSpaceIds(selection, persistentDownrankedSpaceIds)
     val pinnedReferences = resolvePinnedKnowledgeBaseReferences(
         selection = selection,
         manualEntryIds = manualEntryIds,
@@ -75,19 +83,37 @@ fun resolveKnowledgeBasePromptContext(
         autoCandidateLimit = autoCandidateLimit,
         excludedEntryIds = manualEntryIds + pinnedReferences.map { it.entry.id } + excludedEntryIds,
         excludedSpaceIds = excludedSpaceIds,
+        downrankedSpaceIds = downrankedSpaceIds,
     )
-    if (resolvedByEntryId.isEmpty() && pinnedReferences.isEmpty() && autoReferences.isEmpty()) {
+    val memoryReferences = if (memoryEnabled) {
+        resolveMemoryKnowledgeBaseReferences(
+            knowledgeBaseManager = knowledgeBaseManager,
+            userId = userId,
+            query = resolvedUserInput,
+            memoryCandidateLimit = memoryCandidateLimit,
+            preferredGroupId = preferredGroupId,
+        )
+    } else {
+        emptyList()
+    }
+    val hasNoReferences = resolvedByEntryId.isEmpty() &&
+        pinnedReferences.isEmpty() &&
+        autoReferences.isEmpty() &&
+        memoryReferences.isEmpty()
+    if (hasNoReferences) {
         return KnowledgeBasePromptContext(resolvedUserInput = resolvedUserInput)
     }
     val references = buildKnowledgeBaseReferenceSeeds(
         manualReferences = resolvedByEntryId.values.toList(),
         pinnedReferences = pinnedReferences,
         autoReferences = autoReferences,
+        memoryReferences = memoryReferences,
     )
     val promptBlock = buildKnowledgeBasePromptBlock(
         manualReferences = resolvedByEntryId.values.toList(),
         pinnedReferences = pinnedReferences,
         autoReferences = autoReferences,
+        memoryReferences = memoryReferences,
     )
     return KnowledgeBasePromptContext(
         resolvedUserInput = resolvedUserInput,
@@ -97,8 +123,10 @@ fun resolveKnowledgeBasePromptContext(
             manualReferenceCount = resolvedByEntryId.size,
             pinnedReferenceCount = pinnedReferences.size,
             autoCandidateCount = autoReferences.size,
+            memoryReferenceCount = memoryReferences.size,
             excludedReferenceCount = excludedEntryIds.size,
             excludedSpaceCount = excludedSpaceIds.size,
+            downrankedSpaceCount = downrankedSpaceIds.size,
         ),
     )
 }
@@ -152,6 +180,20 @@ private fun normalizeExcludedSpaceIds(
         .toSet()
 }
 
+private fun normalizeDownrankedSpaceIds(
+    selection: KnowledgeBaseContextSelection,
+    persistentDownrankedSpaceIds: Set<String>,
+): Set<String> {
+    val fromSelection = selection.downrankedSpaceIds.asSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .toSet()
+    // 合并消息级与持久偏好，排除那些已被硬排除的空间
+    val allDownranked = fromSelection + persistentDownrankedSpaceIds
+    val excluded = normalizeExcludedSpaceIds(selection)
+    return allDownranked.filterNot { it in excluded }.toSet()
+}
+
 private fun resolvePinnedKnowledgeBaseReferences(
     selection: KnowledgeBaseContextSelection,
     manualEntryIds: Set<String>,
@@ -185,6 +227,7 @@ private fun resolveAutoKnowledgeBaseReferences(
     autoCandidateLimit: Int,
     excludedEntryIds: Set<String>,
     excludedSpaceIds: Set<String>,
+    downrankedSpaceIds: Set<String> = emptySet(),
 ): List<AutoKnowledgeBaseReference> {
     return knowledgeBaseManager.searchEntriesForContext(
         userId = userId,
@@ -193,6 +236,7 @@ private fun resolveAutoKnowledgeBaseReferences(
         limit = autoCandidateLimit,
         excludedEntryIds = excludedEntryIds,
         excludedSpaceIds = excludedSpaceIds,
+        downrankedSpaceIds = downrankedSpaceIds,
     ).map { hit ->
         AutoKnowledgeBaseReference(
             entry = hit.entry,
@@ -202,13 +246,55 @@ private fun resolveAutoKnowledgeBaseReferences(
     }
 }
 
+private fun resolveMemoryKnowledgeBaseReferences(
+    knowledgeBaseManager: KnowledgeBaseManager,
+    userId: String,
+    query: String,
+    memoryCandidateLimit: Int,
+    preferredGroupId: String? = null,
+): List<ResolvedKnowledgeBaseReference> {
+    val personalMemories = knowledgeBaseManager.searchMemoryEntriesForContext(
+        userId = userId,
+        query = query,
+        limit = memoryCandidateLimit,
+    ).map { hit ->
+        ResolvedKnowledgeBaseReference(
+            entry = hit.entry,
+            topic = hit.topic,
+            label = hit.entry.title,
+        )
+    }
+
+    val personalCount = personalMemories.size
+    val groupLimit = (memoryCandidateLimit - personalCount).coerceIn(1, memoryCandidateLimit)
+    val groupMemories = if (!preferredGroupId.isNullOrBlank() && groupLimit > 0) {
+        knowledgeBaseManager.searchGroupMemoryEntriesForContext(
+            userId = userId,
+            groupId = preferredGroupId,
+            query = query,
+            limit = groupLimit,
+        ).map { hit ->
+            ResolvedKnowledgeBaseReference(
+                entry = hit.entry,
+                topic = hit.topic,
+                label = hit.entry.title,
+            )
+        }
+    } else {
+        emptyList()
+    }
+
+    return personalMemories + groupMemories
+}
+
 private fun buildKnowledgeBaseReferenceSeeds(
     manualReferences: List<ResolvedKnowledgeBaseReference>,
     pinnedReferences: List<ResolvedKnowledgeBaseReference>,
     autoReferences: List<AutoKnowledgeBaseReference>,
-): List<DirectModelAgent.AvailableReferenceSeed> {
+    memoryReferences: List<ResolvedKnowledgeBaseReference>,
+): List<AvailableReferenceSeed> {
     return manualReferences.map { resolved ->
-        DirectModelAgent.AvailableReferenceSeed(
+        AvailableReferenceSeed(
             title = "${resolved.topic.name} / ${resolved.entry.title}",
             snippet = buildKnowledgeBaseSnippet(resolved.entry),
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
@@ -218,7 +304,7 @@ private fun buildKnowledgeBaseReferenceSeeds(
             spaceLabel = knowledgeBaseSpaceLabel(resolved.topic),
         )
     } + pinnedReferences.map { resolved ->
-        DirectModelAgent.AvailableReferenceSeed(
+        AvailableReferenceSeed(
             title = "${resolved.topic.name} / ${resolved.entry.title}",
             snippet = buildKnowledgeBaseSnippet(resolved.entry),
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
@@ -228,7 +314,7 @@ private fun buildKnowledgeBaseReferenceSeeds(
             spaceLabel = knowledgeBaseSpaceLabel(resolved.topic),
         )
     } + autoReferences.map { resolved ->
-        DirectModelAgent.AvailableReferenceSeed(
+        AvailableReferenceSeed(
             title = "${resolved.topic.name} / ${resolved.entry.title}",
             snippet = buildKnowledgeBaseSnippet(resolved.entry),
             path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
@@ -236,6 +322,23 @@ private fun buildKnowledgeBaseReferenceSeeds(
             reason = resolved.reasons.joinToString("、"),
             spaceId = knowledgeBaseSpaceId(resolved.topic),
             spaceLabel = knowledgeBaseSpaceLabel(resolved.topic),
+        )
+    } + memoryReferences.map { resolved ->
+        val isGroupMemory = resolved.topic.spaceType == KnowledgeSpaceType.TEAM
+        val spaceLabel = if (isGroupMemory) "群组记忆" else "长期记忆"
+        val spaceId = if (isGroupMemory) {
+            "group-memory:${resolved.topic.groupId ?: resolved.entry.ownerId}"
+        } else {
+            "memory:${resolved.entry.ownerId}"
+        }
+        AvailableReferenceSeed(
+            title = if (isGroupMemory) "Group Memory / ${resolved.entry.title}" else "Memory / ${resolved.entry.title}",
+            snippet = buildKnowledgeBaseSnippet(resolved.entry),
+            path = buildKnowledgeBasePath(resolved.topic.id, resolved.entry.id),
+            origin = "memory",
+            reason = buildMemoryReason(resolved.entry),
+            spaceId = spaceId,
+            spaceLabel = spaceLabel,
         )
     }
 }
@@ -264,6 +367,7 @@ private fun buildKnowledgeBasePromptBlock(
     manualReferences: List<ResolvedKnowledgeBaseReference>,
     pinnedReferences: List<ResolvedKnowledgeBaseReference>,
     autoReferences: List<AutoKnowledgeBaseReference>,
+    memoryReferences: List<ResolvedKnowledgeBaseReference>,
 ): String = buildString {
     appendLine("## 知识库上下文")
     appendLine("以下知识库文档已进入本轮上下文。")
@@ -306,6 +410,31 @@ private fun buildKnowledgeBasePromptBlock(
                 topic = resolved.topic,
                 entry = resolved.entry,
                 reasons = resolved.reasons,
+            )
+        }
+    }
+
+    if (memoryReferences.isNotEmpty()) {
+        val hasGroupMemory = memoryReferences.any { it.topic.spaceType == KnowledgeSpaceType.TEAM }
+        if (hasGroupMemory) {
+            appendLine("### 用户与群组长期记忆")
+            appendLine(MEMORY_PROMPT_HEADER)
+            appendLine("说明：以下包含个人记忆与当前团队的群组共享记忆。")
+        } else {
+            appendLine("### 用户长期记忆")
+            appendLine(MEMORY_PROMPT_HEADER)
+        }
+        memoryReferences.forEach { resolved ->
+            val marker = "[available:${nextIndex++}]"
+            val extraReasons = mutableListOf(buildMemoryReason(resolved.entry))
+            if (resolved.topic.spaceType == KnowledgeSpaceType.TEAM) {
+                extraReasons.add("群组共享记忆")
+            }
+            appendReferenceBlock(
+                marker = marker,
+                topic = resolved.topic,
+                entry = resolved.entry,
+                reasons = extraReasons,
             )
         }
     }

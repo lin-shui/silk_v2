@@ -13,6 +13,11 @@ import java.nio.file.StandardCopyOption
 data class KnowledgeBaseContextPreferences(
     val userId: String,
     val excludedSpaceIds: List<String> = emptyList(),
+    /** 降权空间 ID 列表：这些空间的条目仍参与自动召回，但优先级降低。 */
+    val downrankedSpaceIds: List<String> = emptyList(),
+    val memoryEnabled: Boolean = true,
+    val autoCaptureEnabled: Boolean = false,
+    val ephemeralSessionEnabled: Boolean = false,
     val updatedAt: Long = 0L,
 )
 
@@ -45,35 +50,65 @@ class KnowledgeBaseContextPreferenceStore(
 
     @Synchronized
     fun updateExcludedSpaces(userId: String, excludedSpaceIds: List<String>): KnowledgeBaseContextPreferences {
+        return update(userId = userId, excludedSpaceIds = excludedSpaceIds)
+    }
+
+    @Synchronized
+    fun updateDownrankedSpaces(userId: String, downrankedSpaceIds: List<String>): KnowledgeBaseContextPreferences {
+        return update(userId = userId, downrankedSpaceIds = downrankedSpaceIds)
+    }
+
+    @Synchronized
+    fun update(
+        userId: String,
+        excludedSpaceIds: List<String>? = null,
+        downrankedSpaceIds: List<String>? = null,
+        memoryEnabled: Boolean? = null,
+        autoCaptureEnabled: Boolean? = null,
+        ephemeralSessionEnabled: Boolean? = null,
+    ): KnowledgeBaseContextPreferences {
         val normalizedUserId = userId.trim()
         require(normalizedUserId.isNotEmpty()) { "userId must not be blank" }
-
-        val normalizedExcludedSpaceIds = normalizeExcludedSpaceIds(excludedSpaceIds)
         val store = load()
+        val existing = store.users[normalizedUserId] ?: KnowledgeBaseContextPreferences(userId = normalizedUserId)
+        val normalizedExcludedSpaceIds = normalizeSpaceIds(excludedSpaceIds ?: existing.excludedSpaceIds)
+        val normalizedDownrankedSpaceIds = normalizeSpaceIds(downrankedSpaceIds ?: existing.downrankedSpaceIds)
         val updated = KnowledgeBaseContextPreferences(
             userId = normalizedUserId,
             excludedSpaceIds = normalizedExcludedSpaceIds,
+            downrankedSpaceIds = normalizedDownrankedSpaceIds,
+            memoryEnabled = memoryEnabled ?: existing.memoryEnabled,
+            autoCaptureEnabled = autoCaptureEnabled ?: existing.autoCaptureEnabled,
+            ephemeralSessionEnabled = ephemeralSessionEnabled ?: existing.ephemeralSessionEnabled,
             updatedAt = System.currentTimeMillis(),
         )
-        if (normalizedExcludedSpaceIds.isEmpty()) {
+        if (shouldRemove(updated)) {
             store.users.remove(normalizedUserId)
         } else {
             store.users[normalizedUserId] = updated
         }
         save(store)
-        return if (normalizedExcludedSpaceIds.isEmpty()) {
+        return if (shouldRemove(updated)) {
             KnowledgeBaseContextPreferences(userId = normalizedUserId)
         } else {
             updated
         }
     }
 
-    private fun normalizeExcludedSpaceIds(spaceIds: List<String>): List<String> {
+    private fun normalizeSpaceIds(spaceIds: List<String>): List<String> {
         return spaceIds.asSequence()
             .map(String::trim)
             .filter(String::isNotEmpty)
             .distinct()
             .toList()
+    }
+
+    private fun shouldRemove(preferences: KnowledgeBaseContextPreferences): Boolean {
+        return preferences.excludedSpaceIds.isEmpty() &&
+            preferences.downrankedSpaceIds.isEmpty() &&
+            preferences.memoryEnabled &&
+            !preferences.autoCaptureEnabled &&
+            !preferences.ephemeralSessionEnabled
     }
 
     @Synchronized

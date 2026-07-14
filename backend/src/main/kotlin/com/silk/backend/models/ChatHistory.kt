@@ -65,6 +65,8 @@ data class KnowledgeBaseContextSelection(
     val pinnedEntryIds: List<String> = emptyList(),
     val excludedEntryIds: List<String> = emptyList(),
     val excludedSpaceIds: List<String> = emptyList(),
+    /** 降权空间 ID 列表：这些空间仍参与自动召回，但优先级降低。 */
+    val downrankedSpaceIds: List<String> = emptyList(),
 )
 
 /**

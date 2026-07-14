@@ -76,12 +76,13 @@ dependencies {
     // Playwright（无头浏览器，用于 JavaScript 渲染）
     implementation("com.microsoft.playwright:playwright:1.41.0")
     
-    // Database (Exposed ORM + SQLite)
+    // Database (Exposed ORM + SQLite + PostgreSQL)
     implementation("org.jetbrains.exposed:exposed-core:0.44.1")
     implementation("org.jetbrains.exposed:exposed-dao:0.44.1")
     implementation("org.jetbrains.exposed:exposed-jdbc:0.44.1")
     implementation("org.jetbrains.exposed:exposed-java-time:0.44.1")
     implementation("org.xerial:sqlite-jdbc:3.43.0.0")
+    implementation("org.postgresql:postgresql:42.7.1")
     
     // Password hashing (BCrypt)
     implementation("org.mindrot:jbcrypt:0.4")

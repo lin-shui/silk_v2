@@ -20,6 +20,12 @@
 - `agents/core/AcpUpdateMapperTest`：ACP `session/update` 到 Silk 消息的映射。
 - `agents/acp/AcpClientTest`：ACP JSON-RPC client 行为。
 - `agents/acp/AcpRegistryTest`：ACP adapter 注册、断连与查找。
+- `kb/KnowledgeBaseRouteContractTest`：KB 路由合同（ACL、JWT、capture、memory CRUD、context preferences）。
+- `kb/KnowledgeBaseMemoryTest`：记忆管理全链路（显式/自动记忆、敏感过滤、去重合并、TTL 衰减、群组记忆）。
+- `kb/KnowledgeBasePromptContextTest`：prompt 注入优先级（manual > pinned > auto > memory）、排除/空间过滤、诊断计数。
+- `kb/KnowledgeBaseAiActionsTest`：AI action 解析与执行（create/update entry、workflow provenance）。
+- `kb/KnowledgeBaseCopilotTest`：KB Copilot 草稿生成与写回。
+- `kb/KnowledgeBaseManagerAccessControlTest`：权限控制测试。
 
 运行方式：
 

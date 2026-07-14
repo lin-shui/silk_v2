@@ -37,6 +37,18 @@
   - `agents/acp/AcpClientTest`
   - `agents/acp/AcpRegistryTest`
 
+## Knowledge Base
+
+- Command: `./gradlew :backend:test`
+- Primary tests:
+  - `kb/KnowledgeBaseRouteContractTest` — KB 路由合同（ACL、JWT、capture、memory CRUD、context preferences）
+  - `kb/KnowledgeBaseMemoryTest` — 记忆管理全链路（显式/自动记忆、敏感过滤、去重合并、TTL 衰减、群组记忆）
+  - `kb/KnowledgeBasePromptContextTest` — prompt 注入优先级（manual > pinned > auto > memory）、排除过滤、空间过滤、诊断计数
+  - `kb/KnowledgeBaseAiActionsTest` — AI action 解析与执行（create/update entry、workflow provenance）
+  - `kb/KnowledgeBaseCopilotTest` — KB Copilot 草稿生成与写回
+  - `kb/KnowledgeBaseEmbeddingTest` — 嵌入向量缓存与混合搜索（cosineSimilarity、l2Normalize、KbEmbeddingCache CRUD、NoOpEmbeddingProvider、混合搜索集成）
+  - `kb/KnowledgeBaseManagerAccessControlTest` — 权限控制测试
+
 ## Trusted Directory / Workflow Directory Trust
 
 - Command: `./gradlew :backend:test`

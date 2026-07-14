@@ -59,6 +59,8 @@
   - app version 查询
 - `routes/AsrRoutes.kt`:
   - `/api/asr/transcribe`
+- `routes/ObsidianRoutes.kt`:
+  - `GET /api/obsidian/sync` — 一键导出用户所有群聊 + KB 条目的 Obsidian Markdown
 
 ## ChatServer Flow
 
@@ -73,6 +75,11 @@
 8. Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
 9. `/recall` 命令交给 `UserHistoryAgent`，在 per-user hardlink workspace 中只读检索历史会话
 10. Silk AI / `DirectModelAgent` 响应
+
+其中 Silk AI 主链新增两段 KB 闭环：
+
+- 生成前：把当前用户可读 KB 同步到 agent workspace 的 `knowledge_base/manifest.md` 与 `knowledge_base/topics/**`，供 Grep/Read 自主查阅
+- 生成后：若模型附带 `silk_kb_action` JSON block，后端按当前 userId 权限执行 KB create/update，并把执行结果追加到最终回复
 
 ## Contracts Visible To Clients
 

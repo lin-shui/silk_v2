@@ -1,6 +1,6 @@
 /**
  * Silk 鸿蒙应用 - 全局状态管理
- * 
+ *
  * 使用 ArkUI 的 @Observed 装饰器实现响应式状态
  */
 import { User } from '../models/User';
@@ -29,62 +29,65 @@ export class AppStore {
   private _currentUser: User | null = null;
   private _isLoggedIn: boolean = false;
   private _token: string = '';
-  
+
   // 群组状态
   private _groups: Group[] = [];
   private _currentGroup: Group | null = null;
-  
+
   // 设置状态
   private _settings: UserSettings = createDefaultUserSettings();
-  
+
   // 连接状态
   private _connectionState: ConnectionState = ConnectionState.DISCONNECTED;
-  
+
   // UI 状态
   private _isLoading: boolean = false;
   private _errorMessage: string = '';
-  
+
   // API 客户端
   private readonly apiClient = globalApiClient;
-  
+
   // ==================== 用户相关 ====================
-  
+
   get currentUser(): User | null {
     return this._currentUser;
   }
-  
+
   get isLoggedIn(): boolean {
     return this._isLoggedIn;
   }
-  
+
   get token(): string {
     return this._token;
   }
-  
+
   /**
    * 用户登录
    */
   async login(username: string, password: string): Promise<boolean> {
     this._isLoading = true;
     this._errorMessage = '';
-    
+
     try {
       const response = await this.apiClient.login(username, password);
-      
+
       const loginData = response.data;
       if (response.success && loginData && loginData.user) {
         this._currentUser = loginData.user;
         this._token = loginData.token ? loginData.token : '';
         this._isLoggedIn = true;
-        
+
+        // 同步 token 到 ApiClient（后续 HTTP 请求自动带 Authorization header）
+        this.apiClient.setToken(this._token);
+
         // 保存登录状态到本地存储
         await PreferencesUtil.putString('userId', loginData.user.id);
         await PreferencesUtil.putString('userName', loginData.user.name);
         await PreferencesUtil.putString('token', this._token);
-        
+
         // 加载用户设置
         await this.loadSettings();
-        
+
         return true;
       } else {
         this._errorMessage = response.message || '登录失败';
@@ -97,14 +100,14 @@ export class AppStore {
       this._isLoading = false;
     }
   }
-  
+
   /**
    * 用户注册
    */
   async register(username: string, password: string, fullName: string, phoneNumber: string): Promise<boolean> {
     this._isLoading = true;
     this._errorMessage = '';
-    
+
     try {
       const response = await this.apiClient.register({
         loginName: username,
@@ -112,7 +115,7 @@ export class AppStore {
         fullName: fullName,
         phoneNumber: phoneNumber
       });
-      
+
       if (response.success) {
         // 注册成功后自动登录
         return await this.login(username, password);
@@ -127,7 +130,7 @@ export class AppStore {
       this._isLoading = false;
     }
   }
-  
+
   /**
    * 用户登出
    */
@@ -137,13 +140,16 @@ export class AppStore {
     this._isLoggedIn = false;
     this._groups = [];
     this._currentGroup = null;
-    
+
+    // 清除 ApiClient 的 token
+    this.apiClient.clearToken();
+
     // 清除本地存储
     await PreferencesUtil.remove('userId');
     await PreferencesUtil.remove('userName');
     await PreferencesUtil.remove('token');
   }
-  
+
   /**
    * 尝试恢复会话
    */
@@ -151,7 +157,7 @@ export class AppStore {
     const userId = await PreferencesUtil.getString('userId');
     const userName = await PreferencesUtil.getString('userName');
     const token = await PreferencesUtil.getString('token');
-    
+
     if (userId && userName && token) {
       this._currentUser = {
         id: userId,
@@ -159,19 +165,22 @@ export class AppStore {
       };
       this._token = token;
       this._isLoggedIn = true;
+
+      // 恢复 token 到 ApiClient（后续 HTTP 请求自动带 Authorization header）
+      this.apiClient.setToken(token);
       await this.loadSettings();
       return true;
     }
-    
+
     return false;
   }
-  
+
   // ==================== 群组相关 ====================
-  
+
   get groups(): Group[] {
     return this._groups;
   }
-  
+
   get currentGroup(): Group | null {
     return this._currentGroup;
   }
@@ -179,13 +188,13 @@ export class AppStore {
   set currentGroup(group: Group | null) {
     this._currentGroup = group;
   }
-  
+
   /**
    * 加载用户的群组列表
    */
   async loadGroups(): Promise<void> {
     if (!this._currentUser) return;
-    
+
     this._isLoading = true;
     try {
       const response = await this.apiClient.getGroups(this._currentUser.id);
@@ -200,20 +209,20 @@ export class AppStore {
       this._isLoading = false;
     }
   }
-  
+
   /**
    * 选择当前群组
    */
   setCurrentGroup(group: Group): void {
     this._currentGroup = group;
   }
-  
+
   /**
    * 创建新群组
    */
   async createGroup(name: string, description: string): Promise<Group | null> {
     if (!this._currentUser) return null;
-    
+
     this._isLoading = true;
     try {
       const request: CreateGroupRequest = {
@@ -235,19 +244,19 @@ export class AppStore {
       this._isLoading = false;
     }
   }
-  
+
   // ==================== 设置相关 ====================
-  
+
   get settings(): UserSettings {
     return this._settings;
   }
-  
+
   /**
    * 加载用户设置
    */
   async loadSettings(): Promise<void> {
     if (!this._currentUser) return;
-    
+
     try {
       const response = await this.apiClient.getUserSettings(this._currentUser.id);
       if (response.success && response.data && response.data.settings) {
@@ -257,13 +266,13 @@ export class AppStore {
       console.error(`加载设置失败: ${this.errorToString(error)}`);
     }
   }
-  
+
   /**
    * 更新用户设置
    */
   async updateSettings(settings: UserSettings): Promise<boolean> {
     if (!this._currentUser) return false;
-    
+
     try {
       const response = await this.apiClient.updateUserSettings(this._currentUser.id, settings);
       if (response.success) {
@@ -276,31 +285,31 @@ export class AppStore {
       return false;
     }
   }
-  
+
   // ==================== 连接状态 ====================
-  
+
   get connectionState(): ConnectionState {
     return this._connectionState;
   }
-  
+
   setConnectionState(state: ConnectionState): void {
     this._connectionState = state;
   }
-  
+
   // ==================== UI 状态 ====================
-  
+
   get isLoading(): boolean {
     return this._isLoading;
   }
-  
+
   get errorMessage(): string {
     return this._errorMessage;
   }
-  
+
   clearError(): void {
     this._errorMessage = '';
   }
-  
+
   setLoading(loading: boolean): void {
     this._isLoading = loading;
   }

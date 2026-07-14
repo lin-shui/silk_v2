@@ -767,10 +767,28 @@ fun ChatScene(appState: WebAppState) {
                     padding(12.px, 16.px)
                     property("border-bottom", "1px solid ${SilkColors.border}")
                     display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.SpaceBetween)
                     alignItems(AlignItems.Center)
-                    property("gap", "8px")
                 }
             }) {
+                Span({
+                    style {
+                        fontSize(16.px)
+                        color(Color(SilkColors.primary))
+                        property("font-weight", "700")
+                        property("letter-spacing", "1px")
+                        property("flex-shrink", "0")
+                    }
+                }) {
+                    Text("Silk")
+                }
+                Div({
+                    style {
+                        display(DisplayStyle.Flex)
+                        alignItems(AlignItems.Center)
+                        property("gap", "8px")
+                    }
+                }) {
                 Button({
                     attr("title", "收起列表")
                     style {
@@ -787,22 +805,6 @@ fun ChatScene(appState: WebAppState) {
                         LayoutPrefs.setBool("silk_chat_list_collapsed", true)
                     }
                 }) { Text("«") }
-                Span({
-                    style {
-                        fontSize(16.px)
-                        color(Color(SilkColors.primary))
-                        property("font-weight", "700")
-                        property("letter-spacing", "1px")
-                        property("flex-shrink", "0")
-                    }
-                }) {
-                    Text("Silk")
-                }
-                Div({
-                    style {
-                        property("flex", "1")
-                    }
-                })
                 Span({
                     style {
                         fontSize(12.px)
@@ -911,6 +913,7 @@ fun ChatScene(appState: WebAppState) {
                         }
                     }
                 }
+                } // close right-button group
             }
 
             Div({
@@ -1643,6 +1646,9 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     
     var messageText by remember { mutableStateOf("") }
     var kbContextSelection by remember(group.id) { mutableStateOf(KnowledgeBaseContextSelection()) }
+    var kbPersistentExcludedSpaceIds by remember(group.id) { mutableStateOf<List<String>>(emptyList()) }
+    var kbPersistentDownrankedSpaceIds by remember(group.id) { mutableStateOf<List<String>>(emptyList()) }
+    var kbContextSelectionTouched by remember(group.id) { mutableStateOf(false) }
     var kbCaptureDraft by remember { mutableStateOf<KnowledgeCaptureDraft?>(null) }
     var kbCaptureTopics by remember { mutableStateOf<List<KBTopicItem>>(emptyList()) }
     var kbCaptureGroups by remember { mutableStateOf<List<Group>>(emptyList()) }
@@ -1683,6 +1689,32 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
             kbCaptureResult = if (context.topics.isEmpty()) "还没有可用主题，请先去知识库创建主题。" else null
         }
     }
+    LaunchedEffect(user.id, group.id) {
+        val prefs = ApiClient.getKBContextPreferences(user.id)
+        kbPersistentExcludedSpaceIds = prefs.excludedSpaceIds
+        kbPersistentDownrankedSpaceIds = prefs.downrankedSpaceIds
+        if (!kbContextSelectionTouched) {
+            kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+                restoredSelection = kbContextSelection.takeIf {
+                    it.pinnedEntryIds.isNotEmpty() || it.excludedEntryIds.isNotEmpty()
+                },
+                persistentExcludedSpaceIds = kbPersistentExcludedSpaceIds,
+                persistentDownrankedSpaceIds = kbPersistentDownrankedSpaceIds,
+            )
+        }
+    }
+    LaunchedEffect(messages.size, user.id, kbPersistentExcludedSpaceIds, kbPersistentDownrankedSpaceIds, kbContextSelectionTouched) {
+        if (kbContextSelectionTouched) return@LaunchedEffect
+        if (kbContextSelection.pinnedEntryIds.isNotEmpty() || kbContextSelection.excludedEntryIds.isNotEmpty()) {
+            return@LaunchedEffect
+        }
+        val restoredSelection = latestKnowledgeBaseContextSelection(messages, user.id) ?: return@LaunchedEffect
+        kbContextSelection = mergeKnowledgeBaseContextSelectionWithPersistentSpaces(
+            restoredSelection = restoredSelection,
+            persistentExcludedSpaceIds = kbPersistentExcludedSpaceIds,
+            persistentDownrankedSpaceIds = kbPersistentDownrankedSpaceIds,
+        )
+    }
     var showInvitationDialog by remember { mutableStateOf(false) }
     var isUploading by remember { mutableStateOf(false) }
     var pendingPasteImage by remember { mutableStateOf<dynamic?>(null) }
@@ -1721,6 +1753,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     var mentionSearchText by remember { mutableStateOf("") }
     var mentionStartIndex by remember { mutableStateOf(-1) }
     var mentionMenuPosition by remember { mutableStateOf(Pair(0.0, 0.0)) } // (left, bottom)
+    // $ KB 引用
+    var showKbRefMenu by remember { mutableStateOf(false) }
+    var kbRefSearchText by remember { mutableStateOf("") }
+    var kbRefStartIndex by remember { mutableStateOf(-1) }
+    var kbRefMenuPosition by remember { mutableStateOf(Pair(0.0, 0.0)) }
+    var kbRefSearchResults by remember { mutableStateOf<List<KnowledgeBaseEntrySearchResult>>(emptyList()) }
+    var kbRefIsSearching by remember { mutableStateOf(false) }
     
     // cc-connect token dialog
     var showCcConnectTokenDialog by remember { mutableStateOf(false) }
@@ -1819,9 +1858,12 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         }
     }
     
+    val activeChatNavigationTarget = appState.chatNavigationTarget?.takeIf { it.groupId == group.id }
+
     // 自动滚动到底部 — 包括 contentBlocks（cc-connect / Claudian 流式回复的主要通道）
     // 以及 interactiveOptions（交互式按钮出现在底部时）
-    LaunchedEffect(messages.size, transientMessage, statusMessages.size, contentBlocks, interactiveOptions) {
+    LaunchedEffect(messages.size, transientMessage, statusMessages.size, contentBlocks, interactiveOptions, activeChatNavigationTarget?.requestId) {
+        if (activeChatNavigationTarget?.messageId?.isNullOrBlank() == false) return@LaunchedEffect
         js("""
             setTimeout(function() {
                 var messagesContainer = document.getElementById('messages');
@@ -1830,6 +1872,19 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 }
             }, 100);
         """)
+    }
+
+    LaunchedEffect(activeChatNavigationTarget?.requestId, messages.size, transientMessage?.id) {
+        val target = activeChatNavigationTarget ?: return@LaunchedEffect
+        val messageId = target.messageId
+        if (messageId.isNullOrBlank()) {
+            appState.consumeChatNavigationTarget(target.requestId)
+            return@LaunchedEffect
+        }
+        kotlinx.coroutines.delay(80)
+        if (scrollMessageIntoContainer(CHAT_MESSAGES_CONTAINER_ID, messageId)) {
+            appState.consumeChatNavigationTarget(target.requestId)
+        }
     }
     
     Div({ classes(SilkStylesheet.container) }) {
@@ -2413,7 +2468,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
         // flex: 1 spacer pushes content to bottom; overflow-y: auto enables scroll
         Div({ 
             classes(SilkStylesheet.messagesContainer)
-            id("messages")
+            id(CHAT_MESSAGES_CONTAINER_ID)
             style {
                 property("position", "relative")
                 property("transition", "all 0.2s ease")
@@ -3156,7 +3211,10 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                 KnowledgeBaseContextTray(
                     statusMessages = statusMessages,
                     selection = kbContextSelection,
-                    onSelectionChange = { kbContextSelection = it },
+                    onSelectionChange = {
+                        kbContextSelectionTouched = true
+                        kbContextSelection = it
+                    },
                 )
 // 输入框容器（用于定位 mention 菜单）
                 Div({
@@ -3173,19 +3231,30 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                             val oldValue = messageText
                             messageText = newValue
                             
-                            // 检测 @ 符号
+                            // 检测 @ 符号（@ 用户/Agent）
                             if (newValue.length > oldValue.length) {
                                 val lastChar = newValue.lastOrNull()
                                 if (lastChar == '@') {
-                                    // 计算输入框位置用于 fixed 定位菜单
                                     val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLElement
                                     if (input != null) {
                                         val rect = input.getBoundingClientRect()
                                         mentionMenuPosition = Pair(rect.left, window.innerHeight - rect.top + 4)
                                     }
                                     showMentionMenu = true
+                                    showKbRefMenu = false
                                     mentionStartIndex = newValue.length - 1
                                     mentionSearchText = ""
+                                } else if (lastChar == '$') {
+                                    val input = document.getElementById("chat-input") as? org.w3c.dom.HTMLElement
+                                    if (input != null) {
+                                        val rect = input.getBoundingClientRect()
+                                        kbRefMenuPosition = Pair(rect.left, window.innerHeight - rect.top + 4)
+                                    }
+                                    showKbRefMenu = true
+                                    showMentionMenu = false
+                                    kbRefStartIndex = newValue.length - 1
+                                    kbRefSearchText = ""
+                                    kbRefSearchResults = emptyList()
                                 }
                             }
                             
@@ -3194,10 +3263,20 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                                 val textAfterAt = newValue.substring(mentionStartIndex + 1)
                                 val spaceIndex = textAfterAt.indexOf(' ')
                                 if (spaceIndex >= 0) {
-                                    // 用户输入了空格，关闭菜单
                                     showMentionMenu = false
                                 } else {
                                     mentionSearchText = textAfterAt
+                                }
+                            }
+                            // 如果在 $ KB 引用模式，更新搜索文本
+                            if (showKbRefMenu && kbRefStartIndex >= 0) {
+                                val textAfterDollar = newValue.substring(kbRefStartIndex + 1)
+                                val spaceIndex = textAfterDollar.indexOf(' ')
+                                if (spaceIndex >= 0) {
+                                    showKbRefMenu = false
+                                    kbRefSearchResults = emptyList()
+                                } else {
+                                    kbRefSearchText = textAfterDollar
                                 }
                             }
                         }
@@ -3244,6 +3323,108 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     }
 
                     
+                    // $ KB 引用浮动面板
+                    if (showKbRefMenu) {
+                        val scope = rememberCoroutineScope()
+                        // 搜索延迟 debounce
+                        LaunchedEffect(kbRefSearchText) {
+                            if (kbRefSearchText.length >= 1) {
+                                kbRefIsSearching = true
+                                kotlinx.coroutines.delay(300)
+                                val results = ApiClient.searchKbEntries(user.id, kbRefSearchText)
+                                kbRefSearchResults = results
+                                kbRefIsSearching = false
+                            } else {
+                                kbRefSearchResults = emptyList()
+                                kbRefIsSearching = false
+                            }
+                        }
+                        Div({
+                            style {
+                                property("position", "fixed")
+                                property("left", "${kbRefMenuPosition.first}px")
+                                property("bottom", "${kbRefMenuPosition.second}px")
+                                backgroundColor(Color(SilkColors.surface))
+                                border {
+                                    width(1.px)
+                                    style(LineStyle.Solid)
+                                    color(Color(SilkColors.border))
+                                }
+                                borderRadius(8.px)
+                                property("box-shadow", "0 4px 12px rgba(0,0,0,0.15)")
+                                property("z-index", "9999")
+                                property("max-height", "260px")
+                                property("overflow-y", "auto")
+                                property("min-width", "280px")
+                                property("max-width", "400px")
+                            }
+                        }) {
+                            Div({
+                                style {
+                                    padding(8.px, 12.px)
+                                    fontSize(12.px)
+                                    color(Color(SilkColors.textSecondary))
+                                    property("border-bottom", "1px solid ${SilkColors.border}")
+                                    property("background", SilkColors.surfaceElevated)
+                                }
+                            }) { Text("📚 搜索 KB 文档") }
+                            if (kbRefIsSearching) {
+                                Div({ style { padding(12.px); fontSize(13.px); color(Color(SilkColors.textLight)) } }) {
+                                    Text("搜索中...")
+                                }
+                            } else if (kbRefSearchResults.isEmpty()) {
+                                if (kbRefSearchText.length >= 1) {
+                                    Div({ style { padding(12.px); fontSize(13.px); color(Color(SilkColors.textLight)) } }) {
+                                        Text("未找到匹配文档")
+                                    }
+                                } else {
+                                    Div({ style { padding(12.px); fontSize(13.px); color(Color(SilkColors.textLight)) } }) {
+                                        Text("输入关键词搜索 KB 文档...")
+                                    }
+                                }
+                            } else {
+                                kbRefSearchResults.forEach { result ->
+                                    Div({
+                                        style {
+                                            padding(8.px, 12.px)
+                                            property("cursor", "pointer")
+                                            property("transition", "background-color 0.15s ease")
+                                            property("border-bottom", "1px solid ${SilkColors.border}")
+                                        }
+                                        onClick {
+                                            val beforeDollar = messageText.substring(0, kbRefStartIndex)
+                                            val afterDollar = messageText.substring(kbRefStartIndex + 1)
+                                            val afterSpace = afterDollar.indexOf(' ').let { idx ->
+                                                if (idx >= 0) afterDollar.substring(idx) else ""
+                                            }
+                                            messageText = "$beforeDollar[[kb:${result.entryId}|${result.title}]]$afterSpace"
+                                            showKbRefMenu = false
+                                            kbRefSearchResults = emptyList()
+                                            window.setTimeout({
+                                                val input = document.getElementById("chat-input")
+                                                input?.asDynamic()?.focus()
+                                            }, 0)
+                                        }
+                                        onMouseEnter {
+                                            (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = SilkColors.secondary
+                                        }
+                                        onMouseLeave {
+                                            (it.target as? org.w3c.dom.HTMLElement)?.style?.backgroundColor = "transparent"
+                                        }
+                                    }) {
+                                        Div({ style { fontSize(14.px); fontWeight("500"); color(Color(SilkColors.textPrimary)) } }) {
+                                            Text(result.title)
+                                        }
+                                        Div({ style { marginTop(2.px); fontSize(12.px); color(Color(SilkColors.textLight)) } }) {
+                                            Span({ }) { Text(result.topicName) }
+                                            Span({ style { marginLeft(8.px) } }) { Text("(${result.spaceLabel})") }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // @ Mention 下拉菜单 - 使用 fixed 定位避免被 overflow:hidden 裁剪
                     if (showMentionMenu) {
                         Div({
@@ -4290,6 +4471,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
     if (showFolderExplorer) {
         FolderExplorerDialog(
             groupId = group.id,
+            userId = user.id,
             strings = strings,
             onDismiss = { showFolderExplorer = false }
         )
@@ -4300,11 +4482,13 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
 @Composable
 fun FolderExplorerDialog(
     groupId: String,
+    userId: String,
     strings: com.silk.shared.i18n.Strings,
     onDismiss: () -> Unit
 ) {
     var files by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var processedUrls by remember { mutableStateOf<List<String>>(emptyList()) }
+    var kbEntries by remember { mutableStateOf<List<KBEntryItem>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var refreshTrigger by remember { mutableStateOf(0) }
@@ -4314,6 +4498,13 @@ fun FolderExplorerDialog(
         val apiUrl = "${backendHttpOrigin()}/api/files/list/$groupId"
         isLoading = true
         errorMessage = null
+        // 并行加载 KB 群空间条目
+        scope.launch {
+            val assets = ApiClient.getGroupAssets(groupId, userId)
+            if (assets != null) {
+                kbEntries = assets.kbEntries
+            }
+        }
         try {
             console.log("📁 请求文件列表:", apiUrl)
             val response = window.fetch(apiUrl).await()
@@ -4449,7 +4640,33 @@ fun FolderExplorerDialog(
                         }
                     }
                 } else {
-                    // 1️⃣ 首先显示已下载的 URL 清单
+                    // 0️⃣ KB 群空间条目
+                    if (kbEntries.isNotEmpty()) {
+                        Div({
+                            style {
+                                marginBottom(16.px)
+                            }
+                        }) {
+                            Div({
+                                style {
+                                    fontSize(14.px)
+                                    fontWeight("600")
+                                    color(Color(SilkColors.textSecondary))
+                                    marginBottom(8.px)
+                                    display(DisplayStyle.Flex)
+                                    alignItems(AlignItems.Center)
+                                    property("gap", "6px")
+                                }
+                            }) {
+                                Text("📚 知识库条目 (${kbEntries.size})")
+                            }
+                            kbEntries.forEach { entry ->
+                                GroupAssetEntryRow(entry = entry)
+                            }
+                        }
+                    }
+
+                    // 1️⃣ 然后显示已下载的 URL 清单
                     if (processedUrls.isNotEmpty()) {
                         Div({
                             style {
@@ -5620,7 +5837,8 @@ Div({
         
     Div({
         classes(SilkStylesheet.aiMessageCard, "silk-ai-card")
-        attr("id", "ai-msg-${message.id}")
+        attr("id", messageDomId(message.id))
+        attr("data-message-id", message.id)
         style {
             property("flex", "1")
             property("min-width", "0")
@@ -5666,7 +5884,7 @@ Div({
                         property("background", "rgba(201, 168, 108, 0.1)")
                     }
                     onClick {
-                        val msgEl = document.getElementById("ai-msg-${message.id}")
+                        val msgEl = document.getElementById(messageDomId(message.id))
                         if (msgEl != null) {
                             msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "none"
                             msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "block"
@@ -5692,7 +5910,7 @@ Div({
                         display(DisplayStyle.None)
                     }
                     onClick {
-                        val msgEl = document.getElementById("ai-msg-${message.id}")
+                        val msgEl = document.getElementById(messageDomId(message.id))
                         if (msgEl != null) {
                             msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "block"
                             msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "none"
@@ -5772,7 +5990,7 @@ Div({
                             property("background", "rgba(201, 168, 108, 0.1)")
                         }
                         onClick {
-                            val msgEl = document.getElementById("ai-msg-${message.id}")
+                            val msgEl = document.getElementById(messageDomId(message.id))
                             if (msgEl != null) {
                                 msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "block"
                                 msgEl.querySelector("[data-view='expanded']").asDynamic().style.display = "none"
@@ -5787,7 +6005,7 @@ Div({
             }
             // 最后一条消息默认展开，通过 DOM 操作设置初始状态（跟点击按钮同机制，避免 Compose 样式冲突）
             LaunchedEffect(message.id, isLastMessage) {
-                val msgEl = document.getElementById("ai-msg-${message.id}")
+                val msgEl = document.getElementById(messageDomId(message.id))
                 if (msgEl != null) {
                     if (isLastMessage) {
                         msgEl.querySelector("[data-view='collapsed']").asDynamic().style.display = "none"
@@ -5963,6 +6181,8 @@ fun MessageItem(
     // Agent 状态消息 - 灰色样式
     if (message.category == com.silk.shared.models.MessageCategory.AGENT_STATUS) {
         Div({
+            attr("id", messageDomId(message.id))
+            attr("data-message-id", message.id)
             style {
                 padding(8.px, 16.px)
                 marginBottom(6.px)
@@ -5988,6 +6208,8 @@ fun MessageItem(
     if (message.category == com.silk.shared.models.MessageCategory.AGENT_QUESTION &&
         message.type != MessageType.CARD && message.type != MessageType.CARD_REPLY) {
         Div({
+            attr("id", messageDomId(message.id))
+            attr("data-message-id", message.id)
             style {
                 padding(12.px, 16.px)
                 marginBottom(8.px)
@@ -6043,6 +6265,8 @@ fun MessageItem(
                 }
             Div({
                 classes(SilkStylesheet.messageCard)
+                attr("id", messageDomId(message.id))
+                attr("data-message-id", message.id)
                 style {
                     property("flex", "1")
                     property("min-width", "0")
@@ -6337,6 +6561,8 @@ fun MessageItem(
                 }
             Div({
                 classes(SilkStylesheet.messageCard)
+                attr("id", messageDomId(message.id))
+                attr("data-message-id", message.id)
                 style {
                     property("flex", "1")
                     property("min-width", "0")
@@ -6554,7 +6780,11 @@ fun MessageItem(
             } // close selection wrapper Div
         }
         MessageType.JOIN, MessageType.LEAVE -> {
-            Div({ classes(SilkStylesheet.systemMessage) }) {
+            Div({
+                classes(SilkStylesheet.systemMessage)
+                attr("id", messageDomId(message.id))
+                attr("data-message-id", message.id)
+            }) {
                 Text("• ${message.content} ($timeString)")
             }
         }
@@ -6576,6 +6806,8 @@ fun MessageItem(
                     console.log("🖼 [PREVIEW] message.userId=$message.userId currentUserId=$currentUserId isOwn=$isOwnMessage")
                     Div({
                         classes(SilkStylesheet.messageCard)
+                        attr("id", messageDomId(message.id))
+                        attr("data-message-id", message.id)
                         style {
                             property("flex", "1")
                             property("min-width", "0")
@@ -6762,7 +6994,11 @@ fun MessageItem(
                         }
                     }
                 } else {
-                    Div({ classes(SilkStylesheet.systemMessage) }) {
+                    Div({
+                        classes(SilkStylesheet.systemMessage)
+                        attr("id", messageDomId(message.id))
+                        attr("data-message-id", message.id)
+                    }) {
                         Text("• ${content} ($timeString)")
                     }
                 }
@@ -6771,6 +7007,8 @@ fun MessageItem(
                 if (content.startsWith("# 图片:") || content.contains("## OCR")) {
                     Div({
                         classes(SilkStylesheet.messageCard)
+                        attr("id", messageDomId(message.id))
+                        attr("data-message-id", message.id)
                         style { property("flex", "1"); property("min-width", "0") }
                     }) {
                         Div({ classes(SilkStylesheet.messageHeader) }) {
@@ -6790,7 +7028,11 @@ fun MessageItem(
                         }
                     }
                 } else {
-                    Div({ classes(SilkStylesheet.systemMessage) }) {
+                    Div({
+                        classes(SilkStylesheet.systemMessage)
+                        attr("id", messageDomId(message.id))
+                        attr("data-message-id", message.id)
+                    }) {
                         Text("• ${content} ($timeString)")
                     }
                 }
@@ -6805,7 +7047,12 @@ fun MessageItem(
         MessageType.CARD -> {
             // ACP/Workflow agent 交互卡片（问题/权限/计划）→ CardMessageRenderer
             chatClient?.let {
-                CardMessageRenderer(message, it, currentUserId, currentUserName)
+                Div({
+                    attr("id", messageDomId(message.id))
+                    attr("data-message-id", message.id)
+                }) {
+                    CardMessageRenderer(message, it, currentUserId, currentUserName)
+                }
             }
         }
         MessageType.CARD_REPLY -> {

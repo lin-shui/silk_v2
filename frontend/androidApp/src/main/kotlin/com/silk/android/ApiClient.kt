@@ -1101,6 +1101,99 @@ object ApiClient {
         }
     }
 
+    // ==================== KB Memory API ====================
+
+    suspend fun getKBContextPreferences(userId: String): KnowledgeBaseContextPreferences = withContext(Dispatchers.IO) {
+        try {
+            val response = get("/api/kb/context-preferences?userId=$userId")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("获取知识库上下文偏好失败: $e")
+            KnowledgeBaseContextPreferences(userId = userId)
+        }
+    }
+
+    suspend fun updateKBContextPreferences(
+        userId: String,
+        excludedSpaceIds: List<String>,
+        memoryEnabled: Boolean,
+        autoCaptureEnabled: Boolean,
+        ephemeralSessionEnabled: Boolean,
+    ): KnowledgeBaseContextPreferences? = withContext(Dispatchers.IO) {
+        try {
+            val body = buildJsonObject {
+                put("userId", JsonPrimitive(userId))
+                put("excludedSpaceIds", jsonParser.parseToJsonElement(jsonParser.encodeToString(excludedSpaceIds)))
+                put("memoryEnabled", JsonPrimitive(memoryEnabled))
+                put("autoCaptureEnabled", JsonPrimitive(autoCaptureEnabled))
+                put("ephemeralSessionEnabled", JsonPrimitive(ephemeralSessionEnabled))
+            }.toString()
+            val response = put("/api/kb/context-preferences", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("更新知识库上下文偏好失败: $e")
+            null
+        }
+    }
+
+    suspend fun listKBMemoryEntries(userId: String, groupId: String? = null): List<KBEntryItem> = withContext(Dispatchers.IO) {
+        try {
+            val url = buildString {
+                append("/api/kb/memory?userId=$userId")
+                if (groupId != null) append("&groupId=$groupId")
+            }
+            val response = get(url)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("获取 memory 列表失败: $e")
+            emptyList()
+        }
+    }
+
+    suspend fun createKBMemoryEntry(
+        userId: String,
+        content: String,
+        memoryType: KBMemoryType? = null,
+        title: String? = null,
+        key: String? = null,
+        groupId: String? = null,
+    ): KBEntryItem? = withContext(Dispatchers.IO) {
+        try {
+            val body = buildJsonObject {
+                put("userId", JsonPrimitive(userId))
+                put("content", JsonPrimitive(content))
+                memoryType?.let { put("memoryType", JsonPrimitive(it.name)) }
+                title?.takeIf { it.isNotBlank() }?.let { put("title", JsonPrimitive(it)) }
+                key?.takeIf { it.isNotBlank() }?.let { put("key", JsonPrimitive(it)) }
+                groupId?.let { put("groupId", JsonPrimitive(it)) }
+            }.toString()
+            val response = post("/api/kb/memory", body)
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("创建 memory 失败: $e")
+            null
+        }
+    }
+
+    suspend fun deleteKBMemoryEntry(entryId: String, userId: String, groupId: String? = null): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val endpoint = buildString {
+                append("/api/kb/memory/$entryId?userId=$userId")
+                if (groupId != null) append("&groupId=$groupId")
+            }
+            val response = delete(endpoint)
+            jsonParser.decodeFromString<SimpleResponse>(response).success
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("删除 memory 失败: $e")
+            false
+        }
+    }
+
     // ==================== ASR 语音识别 API ====================
 
     @Suppress("TooGenericExceptionCaught", "SwallowedException")

@@ -124,6 +124,16 @@ object Strings_EN : Strings {
     override val chatWithSilk = "Chat with Silk"
     override val silkChatInputPlaceholder = "Ask Silk anything... (Enter to send)"
 
+    // External Access (Obsidian sync etc.)
+    override val externalAccessTitle = "External Access"
+    override val userIdLabel = "User ID"
+    override val apiTokenLabel = "API Token"
+    override val apiTokenHelp = "Authentication token for external tools (Obsidian, etc.) to access the Silk API."
+    override val copyButton = "Copy"
+    override val copiedToClipboard = "Copied to clipboard"
+    override val showButton = "Show"
+    override val hideButton = "Hide"
+
     // Claude Code settings
     override val ccSettingsTitle = "Claude Code"
     override val ccBridgeTokenLabel = "Bridge Token"
