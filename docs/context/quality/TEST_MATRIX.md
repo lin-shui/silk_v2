@@ -46,6 +46,7 @@
   - `kb/KnowledgeBasePromptContextTest` — prompt 注入优先级（manual > pinned > auto > memory）、排除过滤、空间过滤、诊断计数
   - `kb/KnowledgeBaseAiActionsTest` — AI action 解析与执行（create/update entry、workflow provenance）
   - `kb/KnowledgeBaseCopilotTest` — KB Copilot 草稿生成与写回
+  - `kb/KnowledgeBaseEmbeddingTest` — 嵌入向量缓存与混合搜索（cosineSimilarity、l2Normalize、KbEmbeddingCache CRUD、NoOpEmbeddingProvider、混合搜索集成）
   - `kb/KnowledgeBaseManagerAccessControlTest` — 权限控制测试
 
 ## Trusted Directory / Workflow Directory Trust

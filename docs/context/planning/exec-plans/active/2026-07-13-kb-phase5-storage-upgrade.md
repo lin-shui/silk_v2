@@ -1,7 +1,7 @@
 # KB Phase 5: Storage Upgrade — 嵌入增强 + PostgreSQL 就绪
 
-Status: 计划制定中
-Date: 2026-07-13
+Status: Stage 1 ✅ + Stage 2 ✅（2026-07-14）
+Date: 2026-07-13（Stage 1 完成于 2026-07-14；Stage 2 完成于 2026-07-14）
 
 ## Goal
 
@@ -23,16 +23,18 @@ Date: 2026-07-13
 
 在 JSON store 不变的前提下，新增嵌入生成 + 内存向量索引，实现语义搜索。
 
-| 步骤 | 内容 | 文件 |
-|------|------|------|
-| 1.1 | 嵌入生成器：调用 Anthropic Embeddings API 生成文本向量 | `kb/KnowledgeBaseEmbedding.kt`（新增）|
-| 1.2 | 嵌入缓存文件 `kb_embeddings.json`：entryId → embedding 映射 | 侧边文件，主 store 不变 |
-| 1.3 | 启动时加载嵌入到内存 `Map<String, FloatArray>` | `KnowledgeBaseManager` 增加嵌入字段 |
-| 1.4 | 余弦相似度函数 + 批归一化 | `kb/KnowledgeBaseEmbedding.kt` |
-| 1.5 | `searchEntriesForContext` 混合模式：关键词分 + 向量分(α, β)加权合并 | 修改 `KnowledgeBaseManager.kt` |
-| 1.6 | `searchMemoryEntriesForContext` 同理，叠加 recency + 向量 | 修改 `KnowledgeBaseManager.kt` |
-| 1.7 | 增量更新：entry create/update 时自动生成/刷新嵌入 | `KnowledgeBaseManager` create/update 中调用 |
-| 1.8 | 启动时懒加载缺失嵌入 | `KnowledgeBaseManager` init 中遍历未嵌入条目 |
+| 步骤 | 内容 | 文件 | 状态 |
+|------|------|------|------|
+| 1.1 | 嵌入生成器：调用 OpenAI 兼容 API 生成文本向量（复用 Voyage AI / OpenAI） | `kb/KnowledgeBaseEmbedding.kt` | ✅ 完成 |
+| 1.2 | 嵌入缓存文件 `kb_embeddings.json`：entryId → embedding 映射 | 侧边文件，主 store 不变 | ✅ 完成 |
+| 1.3 | 嵌入缓存管理：`KbEmbeddingCache` 类封装 load/save/update/remove | `kb/KnowledgeBaseEmbedding.kt` | ✅ 完成 |
+| 1.4 | 余弦相似度函数 + L2 归一化 | `kb/KnowledgeBaseEmbedding.kt` | ✅ 完成 |
+| 1.5 | `searchEntriesForContext` 混合模式：关键词分 × α + 向量分 × β | 修改 `KnowledgeBaseManager.kt` | ✅ 完成 |
+| 1.6 | `searchMemoryEntriesForContext` 同理，叠加 recency + 向量 | 修改 `KnowledgeBaseManager.kt` | ✅ 完成 |
+| 1.7 | 增量更新：entry create/update 时自动生成/刷新嵌入 | `KnowledgeBaseManager` create/update 中调用 | ✅ 完成 |
+| 1.8 | 启动时懒加载缺失嵌入 | `KnowledgeBaseManager` init 中 `warmUpMissingEmbeddings()` | ✅ 完成 |
+| 1.9 | 配置项：AIConfig + .env.example（EMBEDDING_ENABLED / API_KEY / HYBRID_SEARCH_*） | `ai/AIConfig.kt` + `.env.example` | ✅ 完成 |
+| 1.10 | 单元测试：cosineSimilarity、l2Normalize、KbEmbeddingCache、NoOpEmbeddingProvider、混合搜索集成 | `kb/KnowledgeBaseEmbeddingTest.kt` | ✅ 完成 |
 
 #### 嵌入模型选择
 
@@ -41,19 +43,19 @@ Date: 2026-07-13
 - 嵌入维度：可变，代码中动态获取
 - 缓存：entry 内容变化时重新生成，否则从 `kb_embeddings.json` 读取
 
-### Stage 2: PostgreSQL + pgvector 主存储
+### Stage 2: PostgreSQL + pgvector 主存储（已完成 ✅ 2026-07-14）
 
 当 JSON store 成为瓶颈时，迁移到 PostgreSQL。
 
-| 步骤 | 内容 |
-|------|------|
-| 2.1 | 添加 `docker-compose.yml` 到项目根目录（PostgreSQL + pgvector） |
-| 2.2 | 添加 PostgreSQL JDBC 驱动 + Exposed PostgreSQL 方言 |
-| 2.3 | 定义 Exposed 表：`kb_topics`、`kb_entries`、`kb_embeddings`（带 pgvector 列） |
-| 2.4 | 添加 `/api/admin/kb/migrate-to-pg` 迁移端点：JSON → PostgreSQL |
-| 2.5 | `KnowledgeBaseManager` 增加 `PgKnowledgeBaseRepository` 实现 |
-| 2.6 | 运行时通过配置 `silk.kb.store=json|postgres` 切换存储后端 |
-| 2.7 | pgvector 原生 ANN 索引 + SQL 过滤实现混合检索 |
+| 步骤 | 内容 | 状态 |
+|------|------|------|
+| 2.1 | 添加 `docker-compose-pg.yml` 到项目根目录（PostgreSQL + pgvector） | ✅ 完成 |
+| 2.2 | 添加 PostgreSQL JDBC 驱动依赖 | ✅ 完成 |
+| 2.3 | 定义 Exposed 表：`KbTopicsTable`、`KbEntriesTable`、`KbEmbeddingsTable`（pgvector text 占位，DDL 由 DatabaseFactory 原生 SQL 创建） | ✅ 完成 |
+| 2.4 | 添加 `/api/admin/kb/migrate-to-pg` 迁移端点 | ✅ 完成 |
+| 2.5 | 实现 `PgKnowledgeBaseRepository`（JDBC 原生 SQL + pgvector ANN） | ✅ 完成 |
+| 2.6 | 运行时通过 `SILK_KB_STORE=postgres` 或 `-Dsilk.kb.store=postgres` 切换存储后端 | ✅ 完成 |
+| 2.7 | pgvector IVFFlat ANN 索引 + SQL `<=>` 余弦距离混合检索 | ✅ 完成 |
 
 ## Design
 

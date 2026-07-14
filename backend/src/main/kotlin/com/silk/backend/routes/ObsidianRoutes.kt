@@ -72,7 +72,7 @@ fun Route.obsidianRoutes() {
                         markdown = markdown,
                     )
                 )
-            } catch (e: Exception) {
+            } @Suppress("TooGenericExceptionCaught") catch (e: Exception) {
                 logger.warn("Failed to export chat for group {}: {}", group.id, e.message)
             }
         }
@@ -100,12 +100,12 @@ fun Route.obsidianRoutes() {
                                 markdown = markdown,
                             )
                         )
-                    } catch (e: Exception) {
+                    } @Suppress("TooGenericExceptionCaught") catch (e: Exception) {
                         logger.warn("Failed to export KB entry {}: {}", entry.id, e.message)
                     }
                 }
             }
-        } catch (e: Exception) {
+        } @Suppress("TooGenericExceptionCaught") catch (e: Exception) {
             logger.warn("Failed to list KB topics for user {}: {}", userId, e.message)
         }
 

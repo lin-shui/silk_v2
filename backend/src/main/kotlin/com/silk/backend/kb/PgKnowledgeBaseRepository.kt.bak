@@ -1,0 +1,441 @@
+package com.silk.backend.kb
+
+import com.silk.backend.ai.AIConfig
+import com.silk.backend.database.DatabaseFactory
+import com.silk.backend.database.KbEmbeddingsTable
+import com.silk.backend.database.KbEntriesTable
+import com.silk.backend.database.KbTopicsTable
+import com.silk.backend.models.*
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import org.jetbrains.exposed.sql.*
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.transactions.transaction
+import org.slf4j.LoggerFactory
+import java.time.LocalDateTime
+import java.time.ZoneOffset
+
+/**
+ * PostgreSQL + pgvector 存储后端的 Knowledge Base 仓库实现。
+ *
+ * 提供与 JSON store 等价的 CRUD 操作，但数据持久化在 PostgreSQL 中。
+ * 嵌入向量通过 pgvector 的 vector 类型原生存储，支持 SQL 级 ANN 搜索。
+ *
+ * 使用方式：由 [KnowledgeBaseManager] 在构造时根据 `silk.kb.store` 配置选择。
+ *
+ * @throws IllegalStateException 如果 PostgreSQL 未初始化（DatabaseFactory.getKbPostgresDatabase() 返回 null）。
+ */
+class PgKnowledgeBaseRepository {
+
+    private val logger = LoggerFactory.getLogger(PgKnowledgeBaseRepository::class.java)
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /** 确保 PG 数据库连接可用。 */
+    private fun requireDb(): Database =
+        DatabaseFactory.getKbPostgresDatabase()
+            ?: error("PostgreSQL 数据库未初始化。请检查 PG_PASSWORD 配置且 docker-compose-pg.yml 已启动。")
+
+    // ── Topics ──
+
+    fun listTopics(): List<KBTopic> {
+        val db = requireDb()
+        return transaction(db) {
+            KbTopicsTable.selectAll().map { row -> rowToTopic(row) }
+        }
+    }
+
+    fun getTopic(topicId: String): KBTopic? {
+        val db = requireDb()
+        return transaction(db) {
+            KbTopicsTable.selectAll().where { KbTopicsTable.id eq topicId }
+                .singleOrNull()?.let { row -> rowToTopic(row) }
+        }
+    }
+
+    fun createTopic(topic: KBTopic): KBTopic {
+        val db = requireDb()
+        return transaction(db) {
+            val now = LocalDateTime.now()
+            KbTopicsTable.insert { insert ->
+                insert[id] = topic.id
+                insert[name] = topic.name
+                insert[project] = topic.project
+                insert[ownerId] = topic.ownerId
+                insert[purpose] = topic.purpose.name
+                insert[spaceType] = topic.spaceType.name
+                insert[groupId] = topic.groupId
+                insert[accessPolicyJson] = json.encodeToString(topic.accessPolicy)
+                insert[createdBy] = topic.createdBy
+                insert[updatedBy] = topic.updatedBy
+                insert[createdAt] = now
+                insert[updatedAt] = now
+            }
+            topic
+        }
+    }
+
+    fun updateTopic(topic: KBTopic): KBTopic {
+        val db = requireDb()
+        return transaction(db) {
+            val now = LocalDateTime.now()
+            KbTopicsTable.update({ KbTopicsTable.id eq topic.id }) { update ->
+                update[name] = topic.name
+                update[project] = topic.project
+                update[ownerId] = topic.ownerId
+                update[purpose] = topic.purpose.name
+                update[spaceType] = topic.spaceType.name
+                update[groupId] = topic.groupId
+                update[accessPolicyJson] = json.encodeToString(topic.accessPolicy)
+                update[updatedBy] = topic.updatedBy
+                update[updatedAt] = now
+            }
+            topic
+        }
+    }
+
+    fun deleteTopic(topicId: String): Boolean {
+        val db = requireDb()
+        return transaction(db) {
+            // 先删除该 topic 下所有条目的嵌入向量
+            val entryIds = KbEntriesTable.slice(KbEntriesTable.id)
+                .selectAll().where { KbEntriesTable.topicId eq topicId }
+                .map { it[KbEntriesTable.id] }
+            if (entryIds.isNotEmpty()) {
+                KbEmbeddingsTable.deleteWhere { KbEmbeddingsTable.entryId inList entryIds }
+            }
+            KbEntriesTable.deleteWhere { KbEntriesTable.topicId eq topicId }
+            KbTopicsTable.deleteWhere { KbTopicsTable.id eq topicId } > 0
+        }
+    }
+
+    // ── Entries ──
+
+    fun listEntries(topicId: String): List<KBEntry> {
+        val db = requireDb()
+        return transaction(db) {
+            KbEntriesTable.selectAll().where { KbEntriesTable.topicId eq topicId }
+                .map { row -> rowToEntry(row) }
+        }
+    }
+
+    fun getEntry(entryId: String): KBEntry? {
+        val db = requireDb()
+        return transaction(db) {
+            KbEntriesTable.selectAll().where { KbEntriesTable.id eq entryId }
+                .singleOrNull()?.let { row -> rowToEntry(row) }
+        }
+    }
+
+    fun createEntry(entry: KBEntry): KBEntry {
+        val db = requireDb()
+        return transaction(db) {
+            val now = LocalDateTime.now()
+            KbEntriesTable.insert { insert ->
+                insert[id] = entry.id
+                insert[topicId] = entry.topicId
+                insert[title] = entry.title
+                insert[content] = entry.content
+                insert[tagsJson] = json.encodeToString(entry.tags)
+            it[ownerId] = entry.ownerId
+            it[status] = entry.status.name
+            it[sourceJson] = json.encodeToString(entry.source)
+            it[memoryJson] = entry.memory?.let { mem -> json.encodeToString(mem) }
+            it[createdBy] = entry.createdBy
+            it[updatedBy] = entry.updatedBy
+            it[createdAt] = now
+            it[updatedAt] = now
+        }
+        entry
+    }
+
+    fun updateEntry(entry: KBEntry): KBEntry = transaction(requireDb()) {
+        val now = LocalDateTime.now()
+        KbEntriesTable.update({ KbEntriesTable.id eq entry.id }) {
+            it[topicId] = entry.topicId
+            it[title] = entry.title
+            it[content] = entry.content
+            it[tagsJson] = json.encodeToString(entry.tags)
+            it[ownerId] = entry.ownerId
+            it[status] = entry.status.name
+            it[sourceJson] = json.encodeToString(entry.source)
+            it[memoryJson] = entry.memory?.let { mem -> json.encodeToString(mem) }
+            it[updatedBy] = entry.updatedBy
+            it[updatedAt] = now
+        }
+        entry
+    }
+
+    fun deleteEntry(entryId: String): Boolean = transaction(requireDb()) {
+        KbEmbeddingsTable.deleteWhere { KbEmbeddingsTable.entryId eq entryId }
+        KbEntriesTable.deleteWhere { KbEntriesTable.id eq entryId } > 0
+    }
+
+    /**
+     * 查询所有条目（全量加载，用于搜索）。
+     */
+    fun allEntries(): List<KBEntry> = transaction(requireDb()) {
+        KbEntriesTable.selectAll().map { rowToEntry(it) }
+    }
+
+    /**
+     * 查询所有 topic（全量加载，用于搜索）。
+     */
+    fun allTopics(): List<KBTopic> = transaction(requireDb()) {
+        KbTopicsTable.selectAll().map { rowToTopic(it) }
+    }
+
+    // ── Embeddings ──
+
+    /**
+     * 保存或更新条目的嵌入向量。
+     * 使用 pgvector 的 vector 类型存储。
+     */
+    fun upsertEmbedding(entryId: String, embedding: List<Float>, model: String) {
+        transaction(requireDb()) {
+            val vectorStr = "[${embedding.joinToString(",")}]"
+            val now = LocalDateTime.now()
+
+            val existing = KbEmbeddingsTable.selectAll().where { KbEmbeddingsTable.entryId eq entryId }
+                .singleOrNull()
+
+            if (existing != null) {
+                // 更新，使用原生 SQL 设置 vector 列
+                exec("""
+                    UPDATE kb_embeddings
+                    SET embedding = '$vectorStr'::vector,
+                        model = '$model',
+                        updated_at = '${now}'
+                    WHERE entry_id = '$entryId'
+                """.trimIndent())
+            } else {
+                exec("""
+                    INSERT INTO kb_embeddings (entry_id, embedding, model, updated_at)
+                    VALUES ('$entryId', '$vectorStr'::vector, '$model', '${now}')
+                """.trimIndent())
+            }
+        }
+    }
+
+    /**
+     * 删除条目的嵌入向量。
+     */
+    fun deleteEmbedding(entryId: String) {
+        transaction(requireDb()) {
+            KbEmbeddingsTable.deleteWhere { KbEmbeddingsTable.entryId eq entryId }
+        }
+    }
+
+    /**
+     * 获取所有嵌入向量（entryId → embedding）。
+     */
+    fun getAllEmbeddings(): Map<String, List<Float>> = transaction(requireDb()) {
+        val rows = exec("SELECT entry_id, embedding::text FROM kb_embeddings") { rs ->
+            generateSequence { if (rs.next()) rs else null }.map {
+                val id = it.getString("entry_id")
+                val vectorStr = it.getString("embedding")
+                id to parseVector(vectorStr)
+            }.toMap()
+        } ?: emptyMap()
+        rows
+    }
+
+    /**
+     * pgvector ANN 搜索：返回按余弦相似度排序的 entryId 列表。
+     * @param queryEmbedding 查询向量
+     * @param limit 最多返回条数
+     * @param topicIds 可选，限制搜索范围（仅在这些 topic 中搜索）
+     * @return 按相似度降序排列的 (entryId, score) 列表
+     */
+    fun vectorSearch(
+        queryEmbedding: List<Float>,
+        limit: Int = 10,
+        topicIds: Set<String>? = null,
+    ): List<Pair<String, Double>> = transaction(requireDb()) {
+        val vectorStr = "[${queryEmbedding.joinToString(",")}]"
+        val topicFilter = topicIds?.takeIf { it.isNotEmpty() }?.let { ids ->
+            val quoted = ids.joinToString("','") { it.replace("'", "''") }
+            "AND e.topic_id IN ('$quoted')"
+            } ?: ""
+
+        val sql = """
+            SELECT e.id AS entry_id,
+                   1 - (emb.embedding <=> '$vectorStr'::vector) AS score
+            FROM kb_embeddings emb
+            INNER JOIN kb_entries e ON e.id = emb.entry_id
+            WHERE emb.embedding IS NOT NULL
+            $topicFilter
+            ORDER BY emb.embedding <=> '$vectorStr'::vector
+            LIMIT $limit
+        """.trimIndent()
+
+        exec(sql) { rs ->
+            generateSequence { if (rs.next()) rs else null }.map {
+                it.getString("entry_id") to it.getDouble("score")
+            }.toList()
+        } ?: emptyList()
+    }
+
+    /**
+     * 混合搜索：结合 SQL 关键词过滤 + pgvector ANN。
+     * @param searchTerms 关键词列表（用于 SQL WHERE title/content ILIKE 过滤）
+     * @param queryEmbedding 查询向量
+     * @param limit 最多返回条数
+     * @param topicIds 可选 topic 过滤
+     * @param alpha 关键词权重
+     * @param beta 向量权重
+     * @return (entryId, combinedScore) 列表
+     */
+    fun hybridSearch(
+        searchTerms: List<String>,
+        queryEmbedding: List<Float>,
+        limit: Int = 10,
+        topicIds: Set<String>? = null,
+        alpha: Double = AIConfig.HYBRID_SEARCH_ALPHA,
+        beta: Double = AIConfig.HYBRID_SEARCH_BETA,
+    ): List<Pair<String, Double>> = transaction(requireDb()) {
+        if (queryEmbedding.isEmpty()) return@transaction emptyList()
+
+        val vectorStr = "[${queryEmbedding.joinToString(",")}]"
+        val topicFilter = topicIds?.takeIf { it.isNotEmpty() }?.let { ids ->
+            val quoted = ids.joinToString("','") { it.replace("'", "''") }
+            "AND ke.topic_id IN ('$quoted')"
+        } ?: ""
+
+        // 用 pgvector 的 <=> 算余弦距离，再叠加关键词匹配加分
+        // 关键词分：title 匹配 +10，content 匹配 +3
+        val keywordCase = searchTerms.joinToString(" + ") { term ->
+            val safeTerm = term.replace("'", "''")
+            """
+                (CASE WHEN LOWER(ke.title) LIKE '%${safeTerm}%' THEN 10 ELSE 0 END +
+                 CASE WHEN LOWER(ke.content) LIKE '%${safeTerm}%' THEN 3 ELSE 0 END)
+            """.trimIndent()
+        }
+
+        // 确保至少有一个关键词匹配
+        val keywordWhere = searchTerms.joinToString(" OR ") { term ->
+            val safeTerm = term.replace("'", "''")
+            "(LOWER(ke.title) LIKE '%${safeTerm}%' OR LOWER(ke.content) LIKE '%${safeTerm}%')"
+        }
+
+        val sql = """
+            WITH scored AS (
+                SELECT e.id AS entry_id,
+                       (${keywordCase}) AS keyword_score,
+                       1 - (emb.embedding <=> '$vectorStr'::vector) AS vector_score
+                FROM kb_embeddings emb
+                INNER JOIN kb_entries e ON e.id = emb.entry_id
+                WHERE emb.embedding IS NOT NULL
+                  AND e.status = 'PUBLISHED'
+                  AND ($keywordWhere)
+                  $topicFilter
+            )
+            SELECT entry_id,
+                   ($alpha * (keyword_score::float / GREATEST((SELECT MAX(keyword_score) FROM scored), 1)) +
+                    $beta * vector_score) AS combined_score
+            FROM scored
+            ORDER BY combined_score DESC
+            LIMIT $limit
+        """.trimIndent()
+
+        exec(sql) { rs ->
+            generateSequence { if (rs.next()) rs else null }.map {
+                it.getString("entry_id") to it.getDouble("combined_score")
+            }.toList()
+        } ?: emptyList()
+    }
+
+    /**
+     * 统计条目数（用于迁移验证）。
+     */
+    fun countEntries(): Long = transaction(requireDb()) {
+        KbEntriesTable.selectAll().count()
+    }
+
+    /**
+     * 统计 topic 数（用于迁移验证）。
+     */
+    fun countTopics(): Long = transaction(requireDb()) {
+        KbTopicsTable.selectAll().count()
+    }
+
+    // ── Row mapping ──
+
+    private fun rowToTopic(row: ResultRow): KBTopic {
+        val accessPolicy = try {
+            val raw = row[KbTopicsTable.accessPolicyJson]
+            if (raw.isNotBlank()) json.decodeFromString<KBAccessPolicy>(raw)
+            else KBAccessPolicy()
+        } catch (_: Exception) {
+            KBAccessPolicy()
+        }
+        return KBTopic(
+            id = row[KbTopicsTable.id],
+            name = row[KbTopicsTable.name],
+            project = row[KbTopicsTable.project],
+            ownerId = row[KbTopicsTable.ownerId],
+            purpose = try { KBTopicPurpose.valueOf(row[KbTopicsTable.purpose]) } catch (_: Exception) { KBTopicPurpose.GENERAL },
+            spaceType = try { KnowledgeSpaceType.valueOf(row[KbTopicsTable.spaceType]) } catch (_: Exception) { KnowledgeSpaceType.PERSONAL },
+            groupId = row[KbTopicsTable.groupId],
+            accessPolicy = accessPolicy,
+            createdBy = row[KbTopicsTable.createdBy],
+            updatedBy = row[KbTopicsTable.updatedBy],
+            createdAt = row[KbTopicsTable.createdAt].toEpochMilli(),
+            updatedAt = row[KbTopicsTable.updatedAt].toEpochMilli(),
+        )
+    }
+
+    private fun rowToEntry(row: ResultRow): KBEntry {
+        val tags = try {
+            val raw = row[KbEntriesTable.tagsJson]
+            if (raw.isNotBlank()) json.decodeFromString<List<String>>(raw)
+            else emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val source = try {
+            val raw = row[KbEntriesTable.sourceJson]
+            if (raw.isNotBlank()) json.decodeFromString<KBEntrySource>(raw)
+            else KBEntrySource()
+        } catch (_: Exception) {
+            KBEntrySource()
+        }
+        val memory = row[KbEntriesTable.memoryJson]?.takeIf { it.isNotBlank() }?.let {
+            try { json.decodeFromString<KBMemoryMetadata>(it) } catch (_: Exception) { null }
+        }
+        return KBEntry(
+            id = row[KbEntriesTable.id],
+            topicId = row[KbEntriesTable.topicId],
+            title = row[KbEntriesTable.title],
+            content = row[KbEntriesTable.content],
+            tags = tags,
+            ownerId = row[KbEntriesTable.ownerId],
+            status = try { KBEntryStatus.valueOf(row[KbEntriesTable.status]) } catch (_: Exception) { KBEntryStatus.PUBLISHED },
+            source = source,
+            memory = memory,
+            createdBy = row[KbEntriesTable.createdBy],
+            updatedBy = row[KbEntriesTable.updatedBy],
+            createdAt = row[KbEntriesTable.createdAt].toEpochMilli(),
+            updatedAt = row[KbEntriesTable.updatedAt].toEpochMilli(),
+        )
+    }
+
+    private fun LocalDateTime.toEpochMilli(): Long =
+        this.toInstant(ZoneOffset.UTC).toEpochMilli()
+
+    companion object {
+        /**
+         * 解析 pgvector 的 vector 文本表示（如 "[0.1,0.2,0.3]"）为 Float 列表。
+         */
+        fun parseVector(vectorStr: String?): List<Float> {
+            if (vectorStr.isNullOrBlank()) return emptyList()
+            return try {
+                vectorStr
+                    .removeSurrounding("[", "]")
+                    .split(",")
+                    .map { it.trim().toFloat() }
+            } catch (_: Exception) {
+                emptyList()
+            }
+        }
+    }
+}
