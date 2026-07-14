@@ -129,6 +129,22 @@ object AIConfig {
     val TOOLS_ENABLED: List<String> get() = env("TOOLS_ENABLED")?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
         ?: listOf("file_search", "web_search", "code_execution", "browser")
     
+    // ── KB PostgreSQL 存储后端（Phase 5 Stage 2） ────────────────
+    /** KB 存储后端："json"（默认）或 "postgres"。通过 -Dsilk.kb.store=postgres 切换。 */
+    val KB_STORE_BACKEND: String get() =
+        (env("SILK_KB_STORE") ?: System.getProperty("silk.kb.store"))?.trim()?.lowercase()
+            ?.takeIf { it == "postgres" } ?: "json"
+    /** PostgreSQL 主机地址，默认 127.0.0.1 */
+    val PG_HOST: String get() = env("PG_HOST") ?: "127.0.0.1"
+    /** PostgreSQL 端口，默认 5432 */
+    val PG_PORT: Int get() = env("PG_PORT")?.toIntOrNull()?.takeIf { it in 1..65535 } ?: 5432
+    /** PostgreSQL 数据库名，默认 silk_kb */
+    val PG_DATABASE: String get() = env("PG_DATABASE") ?: "silk_kb"
+    /** PostgreSQL 用户名，默认 silk */
+    val PG_USER: String get() = env("PG_USER") ?: "silk"
+    /** PostgreSQL 密码（必填），默认空字符串 */
+    val PG_PASSWORD: String get() = env("PG_PASSWORD") ?: ""
+
     // 智能助手任务列表
     val TO_DO_LIST = listOf(
         "理解用户意图",

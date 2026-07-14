@@ -6,8 +6,8 @@
 
 ## Active Execution Plans
 
-- [KB Memory Layer](exec-plans/active/2026-07-07-kb-memory-layer.md)（Phase 1-4 ✅，Phase 5 重启中 → [阶段计划](exec-plans/active/2026-07-13-kb-phase5-storage-upgrade.md)）
-- [KB Phase 5: Storage Upgrade](exec-plans/active/2026-07-13-kb-phase5-storage-upgrade.md)（嵌入语义检索 + PostgreSQL 就绪）
+- [KB Memory Layer](exec-plans/active/2026-07-07-kb-memory-layer.md)（Phase 1-4 ✅，Phase 5 Stage 1 ✅ → [阶段计划](exec-plans/active/2026-07-13-kb-phase5-storage-upgrade.md)）
+- [KB Phase 5: Storage Upgrade](exec-plans/active/2026-07-13-kb-phase5-storage-upgrade.md)（Stage 1 嵌入语义检索 ✅，Stage 2 PostgreSQL ✅）
 - [Lint baseline reduction](exec-plans/active/lint-baseline-reduction.md)
 
 ## Completed Execution Plans

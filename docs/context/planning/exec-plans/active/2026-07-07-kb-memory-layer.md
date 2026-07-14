@@ -120,22 +120,29 @@ MVP 不做：
   - `frontend/webApp/KnowledgeBaseScene.kt` — `KnowledgeMemoryDialog` 增加 Tab 切换（个人记忆 / 群组记忆），在团队空间内打开记忆弹窗时默认切换到群组 Tab，创建/删除操作按活动 Tab 路由到正确空间
 目标：把“用户偏好”和“项目约束”分层。
 
-### Phase 5: Storage Upgrade（已重启，2026-07-13）
+### Phase 5: Storage Upgrade（Stage 1 ✅ + Stage 2 ✅，2026-07-14）
 
 → 详细计划见 [2026-07-13-kb-phase5-storage-upgrade.md](2026-07-13-kb-phase5-storage-upgrade.md)
 
-**策略调整**：分两阶段推进。
-
-**Stage 1（当前执行）**：嵌入向量语义检索
+**Stage 1（已完成）**：嵌入向量语义检索
 - 保持 JSON store 不变
-- 新增嵌入生成器（复用 Anthropic API），生成文本向量
-- 内存向量索引 + 混合搜索（关键词分 × 0.4 + 向量分 × 0.4 + recency × 0.2）
-- 嵌入缓存到 `kb_embeddings.json` 侧边文件
+- 新增嵌入生成器 `OpenAiCompatibleEmbeddingProvider`（兼容 Voyage AI / OpenAI 嵌入 API）
+- `KbEmbeddingCache` 嵌入缓存到 `kb_embeddings.json` 侧边文件
+- 混合搜索（关键词分 × 0.4 + 向量分 × 0.4 + recency × 0.2）覆盖 `searchEntriesForContext` / `searchMemoryEntriesForContext` / `searchGroupMemoryEntriesForContext`
+- 增量刷新：create/update/delete entry 时自动维护嵌入
+- 启动时懒加载缺失嵌入 `warmUpMissingEmbeddings()`
+- 配置项 `EMBEDDING_ENABLED` / `HYBRID_SEARCH_ALPHA/BETA/GAMMA` 可通过 `.env` 调节
+- 单元测试 `KnowledgeBaseEmbeddingTest` 覆盖余弦相似度、L2 归一化、缓存 CRUD、混合搜索集成
 
-**Stage 2（后续阶段）**：PostgreSQL + pgvector 迁移
-- 新增 PostgreSQL docker-compose、JDBC 驱动
-- Exposed 表定义、迁移端点
-- 运行时通过 `silk.kb.store=json|postgres` 切换存储后端
+**Stage 2（已完成 2026-07-14）**：PostgreSQL + pgvector 迁移
+- `docker-compose-pg.yml`（pgvector/pg17 + init SQL 脚本）
+- 新增 `KbTables.kt` Exposed 表定义（kb_topics / kb_entries / kb_embeddings）
+- 新增 `PgKnowledgeBaseRepository`（JDBC 原生 SQL 实现全量 CRUD + pgvector ANN 搜索）
+- `KnowledgeBaseManager` 运行时通过 `SILK_KB_STORE=postgres` 切换存储后端
+- 新增 `POST /api/admin/kb/migrate-to-pg` 迁移端点（JSON → PostgreSQL）
+- `DatabaseFactory` 支持按配置初始化 PostgreSQL 连接 + pgvector 扩展 + IVFFlat 索引
+- `AIConfig` 新增 `KB_STORE_BACKEND` / `PG_HOST` / `PG_PORT` / `PG_DATABASE` / `PG_USER` / `PG_PASSWORD`
+- `.env.example` 新增 PG 配置段
 
 ## Data / Prompt Rules
 

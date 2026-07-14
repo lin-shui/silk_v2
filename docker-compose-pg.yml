@@ -1,0 +1,37 @@
+# Silk Knowledge Base — PostgreSQL + pgvector
+#
+# 启动: docker compose -f docker-compose-pg.yml up -d
+# 停止: docker compose -f docker-compose-pg.yml down
+# 查看日志: docker compose -f docker-compose-pg.yml logs -f
+#
+# PostgreSQL: 127.0.0.1:5432
+# 数据库: silk_kb
+# 用户: silk
+# 密码: silk_kb_secret（通过 .env 中 PG_PASSWORD 覆盖）
+
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: silk-pg-kb
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - silk_pg_kb_data:/var/lib/postgresql/data
+      - ./backend/scripts/pg-init-kb.sql:/docker-entrypoint-initdb.d/init-kb.sql
+    environment:
+      POSTGRES_DB: silk_kb
+      POSTGRES_USER: silk
+      POSTGRES_PASSWORD: ${PG_PASSWORD:-silk_kb_secret}
+      # pgvector 配置
+      POSTGRES_EXTENSIONS: vector
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U silk -d silk_kb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  silk_pg_kb_data:

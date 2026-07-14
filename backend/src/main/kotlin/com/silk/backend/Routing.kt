@@ -72,6 +72,7 @@ import com.silk.backend.kb.KnowledgeBaseCopilotRequest
 import com.silk.backend.kb.KnowledgeBaseContextPreferenceStore
 import com.silk.backend.kb.KnowledgeBaseEntrySearchResponse
 import com.silk.backend.kb.KnowledgeBaseManager
+import com.silk.backend.kb.MigrationReport
 import com.silk.backend.kb.buildKnowledgeBaseWorkspaceEntries
 import com.silk.backend.kb.executeKnowledgeBaseCopilot
 import com.silk.backend.kb.stripThinkingBlocks
@@ -3792,6 +3793,7 @@ private fun Route.workflowKbRoutes() {
         registerApiKbContextPreferencesPutRoute()
         registerApiKbGroupAssetsGetRoute()
         registerApiKbEntriesEntryIdLinkFilePostRoute()
+        registerApiAdminKbMigrateToPgPostRoute()
 
 }
 
@@ -4887,6 +4889,27 @@ private fun Route.registerApiKbEntriesEntryIdLinkFilePostRoute() {
 
         call.respondText(
             Json.encodeToString(KBEntry.serializer(), entry),
+            ContentType.Application.Json,
+        )
+    }
+}
+
+private fun Route.registerApiAdminKbMigrateToPgPostRoute() {
+
+    post("/api/admin/kb/migrate-to-pg") {
+        val userId = resolveKbCallerUserIdOrRespond(call, call.request.queryParameters["userId"])
+        if (userId.isNullOrBlank()) {
+            call.respondText(
+                """{"success":false,"message":"Missing userId"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.BadRequest,
+            )
+            return@post
+        }
+
+        val report = knowledgeBaseManager.migrateToPostgres()
+        call.respondText(
+            kbRouteJson.encodeToString(MigrationReport.serializer(), report),
             ContentType.Application.Json,
         )
     }

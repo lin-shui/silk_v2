@@ -91,13 +91,34 @@ data class KnowledgeBaseEntrySearchResponse(
 
 internal const val PERSONAL_KB_SPACE_ID = "__personal__"
 
+/**
+ * KB 存储后端类型。
+ */
+enum class StoreBackend {
+    /** 使用 JSON 文件存储（默认，向后兼容）。 */
+    JSON,
+    /** 使用 PostgreSQL + pgvector 存储。 */
+    POSTGRES,
+}
+
 class KnowledgeBaseManager(
     private val baseDir: String =
         System.getProperty("silk.kbDir")?.trim()?.takeIf { it.isNotEmpty() } ?: "knowledge_base",
     /** 嵌入生成器。未配置嵌入 API 时使用 NoOpEmbeddingProvider，语义搜索退化为纯关键词。 */
     private val embeddingProvider: EmbeddingProvider = createEmbeddingProvider(),
+    /** 存储后端。默认从 AIConfig.KB_STORE_BACKEND 读取。 */
+    private val storeBackend: StoreBackend = parseStoreBackend(),
 ) {
+    /** PostgreSQL 存储后端（仅在 storeBackend == POSTGRES 时非空）。 */
+    private val pgRepo: PgKnowledgeBaseRepository? by lazy {
+        if (storeBackend == StoreBackend.POSTGRES) PgKnowledgeBaseRepository() else null
+    }
+
     companion object {
+        private fun parseStoreBackend(): StoreBackend {
+            val raw = AIConfig.KB_STORE_BACKEND
+            return if (raw == "postgres") StoreBackend.POSTGRES else StoreBackend.JSON
+        }
         /**
          * 根据配置自动创建嵌入提供者。
          * 若 EMBEDDING_ENABLED 且 EMBEDDING_API_KEY 已配置，返回 OpenAiCompatibleEmbeddingProvider，
@@ -119,6 +140,38 @@ class KnowledgeBaseManager(
 
     init {
         File(baseDir).mkdirs()
+        // 启动时懒加载缺失嵌入（后台异步，不阻塞初始化）
+        if (AIConfig.EMBEDDING_ENABLED) {
+            GlobalScope.launch(Dispatchers.IO) {
+                warmUpMissingEmbeddings()
+            }
+        }
+    }
+
+    /**
+     * 扫描所有 PUBLISHED 条目，找出尚未生成嵌入的条目并异步生成。
+     * 在首次搜索前补齐嵌入缓存，避免新部署后首次搜索全无向量分。
+     */
+    private suspend fun warmUpMissingEmbeddings() {
+        try {
+            val store = load()
+            val cachedIds = embeddingCache.getAllEmbeddings().keys
+            val missing = store.entries.asSequence()
+                .filter { it.status == KBEntryStatus.PUBLISHED }
+                .filter { it.id !in cachedIds }
+                .toList()
+            if (missing.isEmpty()) return
+            logger.info("Warming up embeddings for {} KB entries without cached vectors", missing.size)
+            for (entry in missing) {
+                refreshEntryEmbedding(entry)
+            }
+            logger.info("Completed embedding warm-up for {} entries", missing.size)
+        } catch (e: java.io.IOException) {
+            logger.warn("Embedding warm-up interrupted by I/O error: {}", e.message)
+        } catch (e: InterruptedException) {
+            logger.warn("Embedding warm-up interrupted")
+            Thread.currentThread().interrupt()
+        }
     }
 
     /**
@@ -155,6 +208,26 @@ class KnowledgeBaseManager(
 
     @Synchronized
     private fun load(): KBStore {
+        return if (storeBackend == StoreBackend.POSTGRES && pgRepo != null) {
+            loadFromPostgres()
+        } else {
+            loadFromJson()
+        }
+    }
+
+    @Synchronized
+    private fun save(store: KBStore) {
+        if (storeBackend == StoreBackend.POSTGRES && pgRepo != null) {
+            saveToPostgres(store)
+        } else {
+            saveToJson(store)
+        }
+    }
+
+    /**
+     * 从 JSON 文件加载 KB store。
+     */
+    private fun loadFromJson(): KBStore {
         val store = if (storeFile.exists()) {
             try {
                 json.decodeFromString(storeFile.readText())
@@ -174,12 +247,56 @@ class KnowledgeBaseManager(
         return normalizeStore(store)
     }
 
-    @Synchronized
-    private fun save(store: KBStore) {
+    /**
+     * 保存 KB store 到 JSON 文件。
+     */
+    private fun saveToJson(store: KBStore) {
         File(baseDir).mkdirs()
         val tmp = File("${storeFile.path}.tmp")
         tmp.writeText(json.encodeToString(store))
         Files.move(tmp.toPath(), storeFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+
+    /**
+     * 从 PostgreSQL 加载全部 KB 数据到 KBStore。
+     * 仅在 storeBackend == POSTGRES 时使用。
+     */
+    private fun loadFromPostgres(): KBStore {
+        val repo = pgRepo ?: return KBStore()
+        return try {
+            val topics = repo.allTopics().toMutableList()
+            val entries = repo.allEntries().toMutableList()
+            KBStore(topics = topics, entries = entries)
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            logger.error("Failed to load KB store from PostgreSQL: {}", e.message)
+            KBStore()
+        }
+    }
+
+    /**
+     * 将 KBStore 全量写入 PostgreSQL。
+     * 注意：这是一个全量同步操作。生产环境建议仅用于初始化/迁移场景。
+     * 正常运行时，单个 CRUD 操作应通过 pgRepo 的独立方法完成。
+     */
+    private fun saveToPostgres(store: KBStore) {
+        val repo = pgRepo ?: return
+        try {
+            // 先清空旧数据（事务内完成）
+            val existingTopics = repo.allTopics()
+            for (topic in existingTopics) {
+                repo.deleteTopic(topic.id)
+            }
+            // 写入全部数据
+            for (topic in store.topics) {
+                repo.createTopic(topic)
+            }
+            for (entry in store.entries) {
+                repo.createEntry(entry)
+            }
+            logger.info("Saved {} topics and {} entries to PostgreSQL", store.topics.size, store.entries.size)
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            logger.error("Failed to save KB store to PostgreSQL: {}", e.message)
+        }
     }
 
     // ---- Topics ----
@@ -1418,4 +1535,81 @@ class KnowledgeBaseManager(
         save(store)
         return updated
     }
+
+    // ── Phase 5 Stage 2: PostgreSQL Migration ──
+
+    /**
+     * 将 JSON store 全量迁移到 PostgreSQL。
+     * 仅在当前使用 JSON 后端时有效；已在 PG 后端时返回跳过。
+     *
+     * @return MigrationReport 包含迁移统计信息
+     */
+    fun migrateToPostgres(): MigrationReport {
+        if (storeBackend == StoreBackend.POSTGRES) {
+            logger.warn("migrateToPostgres called but already on POSTGRES backend")
+            return MigrationReport(skipped = true, message = "当前已在 PostgreSQL 后端，无需迁移")
+        }
+
+        val repo: PgKnowledgeBaseRepository
+        try {
+            repo = PgKnowledgeBaseRepository()
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            logger.error("Failed to create PgKnowledgeBaseRepository: {}", e.message)
+            return MigrationReport(success = false, message = "PostgreSQL 未初始化：${e.message}")
+        }
+
+        val store = loadFromJson()
+        if (store.topics.isEmpty() && store.entries.isEmpty()) {
+            return MigrationReport(success = true, topicsMigrated = 0, entriesMigrated = 0, message = "KB store 为空，无需迁移")
+        }
+
+        var topicCount = 0
+        var entryCount = 0
+        var embedCount = 0
+
+        try {
+            for (topic in store.topics) {
+                repo.createTopic(topic)
+                topicCount++
+            }
+            for (entry in store.entries) {
+                repo.createEntry(entry)
+                entryCount++
+            }
+            val embeddings = embeddingCache.getAllEmbeddings()
+            val model = AIConfig.EMBEDDING_MODEL
+            for ((entryId, vector) in embeddings) {
+                if (vector.isNotEmpty()) {
+                    repo.upsertEmbedding(entryId, vector, model)
+                    embedCount++
+                }
+            }
+            logger.info("Migration to PostgreSQL complete: {} topics, {} entries, {} embeddings", topicCount, entryCount, embedCount)
+            return MigrationReport(
+                success = true, topicsMigrated = topicCount,
+                entriesMigrated = entryCount, embeddingsMigrated = embedCount,
+                message = "迁移完成：$topicCount 个主题，$entryCount 个条目，$embedCount 个嵌入向量",
+            )
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            logger.error("Migration to PostgreSQL failed: {}", e.message)
+            return MigrationReport(
+                success = false, topicsMigrated = topicCount,
+                entriesMigrated = entryCount, embeddingsMigrated = embedCount,
+                message = "迁移失败：${e.message}",
+            )
+        }
+    }
 }
+
+/**
+ * PostgreSQL 迁移报告。
+ */
+@kotlinx.serialization.Serializable
+data class MigrationReport(
+    val success: Boolean = false,
+    val skipped: Boolean = false,
+    val topicsMigrated: Int = 0,
+    val entriesMigrated: Int = 0,
+    val embeddingsMigrated: Int = 0,
+    val message: String = "",
+)

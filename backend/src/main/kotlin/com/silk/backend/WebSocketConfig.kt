@@ -542,6 +542,7 @@ class ChatServer(
     /**
      * 如果消息是非 Agent 的 TEXT 消息，启动 URL 处理（异步）
      */
+    @Suppress("UnusedPrivateMember")
     private fun maybeLaunchUrlProcessing(message: Message) {
         if (message.type == MessageType.TEXT && !message.isTransient && !AgentRuntime.isAgentMessage(message)) {
             CoroutineScope(Dispatchers.IO).launch {
