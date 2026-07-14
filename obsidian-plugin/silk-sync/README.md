@@ -11,11 +11,11 @@
 
 ## 使用
 
-1. 点击左侧 ribbon 中的 ☕ 图标，或运行命令「Silk: 一键同步」
-2. 首次使用前需在设置页填写：
-   - **Silk 服务器地址**：如 `http://localhost:8080`
-   - **API Token**：从 Silk 用户设置中获取的 Bearer Token
-   - **用户 ID**：你的 Silk 用户 ID
+1. 首次使用前需在设置页填写：
+   - **Silk 服务器地址**：如 `http://localhost:13096`
+   - **API Token**：登录 Silk Web → 设置 → 外部访问，复制 API Token
+   - **用户 ID**：登录 Silk Web → 设置 → 外部访问，复制用户 ID
+2. 点击左侧 ribbon 中的 🔄 图标，或运行命令「Silk: 一键同步」
 3. 同步后内容出现在 vault 的 `Silk/` 目录下
 
 ## 目录结构

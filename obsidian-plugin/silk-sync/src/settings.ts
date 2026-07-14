@@ -5,7 +5,7 @@ export interface SilkSyncSettings {
 }
 
 export const DEFAULT_SETTINGS: SilkSyncSettings = {
-	serverUrl: "http://localhost:8080",
+	serverUrl: "http://localhost:13096",
 	apiToken: "",
 	userId: "",
 };

@@ -30,7 +30,7 @@ var import_obsidian2 = require("obsidian");
 
 // src/settings.ts
 var DEFAULT_SETTINGS = {
-  serverUrl: "http://localhost:8080",
+  serverUrl: "http://localhost:13096",
   apiToken: "",
   userId: ""
 };
@@ -100,17 +100,28 @@ async function writeFile(app, vaultPath, content) {
 var SilkSyncPlugin = class extends import_obsidian2.Plugin {
   async onload() {
     await this.loadSettings();
-    this.addRibbonIcon("cloud-download", "Silk \u4E00\u952E\u540C\u6B65", async () => {
+    this.addRibbonIcon("sync", "Silk: \u4E00\u952E\u540C\u6B65\u804A\u5929\u8BB0\u5F55\u548C\u77E5\u8BC6\u5E93\u5230 Obsidian", async () => {
+      if (!this.settings.apiToken || !this.settings.userId) {
+        new import_obsidian2.Notice("\u26A0\uFE0F \u8BF7\u5148\u5728 Silk Sync \u8BBE\u7F6E\u9875\u4E2D\u586B\u5199 API Token \u548C\u7528\u6237 ID");
+        return;
+      }
       await runSync(this.app, this.settings);
     });
     this.addCommand({
       id: "silk-sync",
-      name: "\u4E00\u952E\u540C\u6B65 Silk",
+      name: "\u4E00\u952E\u540C\u6B65 Silk \u804A\u5929\u8BB0\u5F55\u4E0E\u77E5\u8BC6\u5E93",
       callback: async () => {
+        if (!this.settings.apiToken || !this.settings.userId) {
+          new import_obsidian2.Notice("\u26A0\uFE0F \u8BF7\u5148\u5728 Silk Sync \u8BBE\u7F6E\u9875\u4E2D\u586B\u5199 API Token \u548C\u7528\u6237 ID");
+          return;
+        }
         await runSync(this.app, this.settings);
       }
     });
     this.addSettingTab(new SilkSyncSettingTab(this.app, this));
+    if (!this.settings.apiToken || !this.settings.userId) {
+      new import_obsidian2.Notice("\u{1F511} Silk Sync: \u8BF7\u8FDB\u5165\u8BBE\u7F6E\u9875\u914D\u7F6E API Token \u548C\u7528\u6237 ID");
+    }
   }
   async loadSettings() {
     this.settings = Object.assign(
@@ -132,23 +143,55 @@ var SilkSyncSettingTab = class extends import_obsidian2.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Silk Sync \u8BBE\u7F6E" });
-    new import_obsidian2.Setting(containerEl).setName("Silk \u670D\u52A1\u5668\u5730\u5740").setDesc("Silk \u540E\u7AEF\u7684\u5730\u5740\uFF0C\u4F8B\u5982 http://localhost:8080").addText(
-      (text) => text.setPlaceholder("http://localhost:8080").setValue(this.plugin.settings.serverUrl).onChange(async (value) => {
+    const helpDiv = containerEl.createDiv({ cls: "silk-sync-help" });
+    helpDiv.style.cssText = "margin-bottom: 16px; padding: 12px; background: #f0f7ff; border-radius: 8px; font-size: 13px; line-height: 1.6; color: #666;";
+    helpDiv.innerHTML = `
+			<strong>\u{1F511} \u914D\u7F6E\u8BF4\u660E</strong><br>
+			1. \u767B\u5F55 Silk Web \u5E94\u7528\uFF0C\u8FDB\u5165\u300C\u8BBE\u7F6E\u300D\u2192\u300C\u5916\u90E8\u8BBF\u95EE\u300D<br>
+			2. \u590D\u5236\u4F60\u7684 <strong>\u7528\u6237 ID</strong> \u548C <strong>API Token</strong> \u586B\u5165\u4E0B\u65B9<br>
+			3. \u70B9\u51FB\u4FA7\u8FB9\u680F <strong>\u{1F504} \u56FE\u6807</strong> \u6216\u8FD0\u884C\u547D\u4EE4\u300CSilk: \u4E00\u952E\u540C\u6B65\u300D\u5F00\u59CB\u540C\u6B65
+		`;
+    new import_obsidian2.Setting(containerEl).setName("Silk \u670D\u52A1\u5668\u5730\u5740").setDesc("Silk \u540E\u7AEF\u7684\u5730\u5740\uFF08\u67E5\u770B .env \u4E2D BACKEND_BASE_URL \u6216 BACKEND_HOST:\u7AEF\u53E3\uFF09").addText(
+      (text) => text.setPlaceholder("http://localhost:13096").setValue(this.plugin.settings.serverUrl).onChange(async (value) => {
         this.plugin.settings.serverUrl = value;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian2.Setting(containerEl).setName("API Token").setDesc("\u4ECE Silk \u7528\u6237\u8BBE\u7F6E\u4E2D\u83B7\u53D6\u7684 API Token").addText((text) => {
-      text.setPlaceholder("\u8F93\u5165 Token").setValue(this.plugin.settings.apiToken).onChange(async (value) => {
+    new import_obsidian2.Setting(containerEl).setName("API Token").setDesc("\u4ECE Silk Web \u8BBE\u7F6E \u2192 \u5916\u90E8\u8BBF\u95EE \u4E2D\u590D\u5236 API Token").addText((text) => {
+      text.setPlaceholder("\u8F93\u5165 API Token").setValue(this.plugin.settings.apiToken).onChange(async (value) => {
         this.plugin.settings.apiToken = value;
         await this.plugin.saveSettings();
       });
       text.inputEl.type = "password";
     });
-    new import_obsidian2.Setting(containerEl).setName("\u7528\u6237 ID").setDesc("\u4F60\u7684 Silk \u7528\u6237 ID").addText(
-      (text) => text.setPlaceholder("\u8F93\u5165 userId").setValue(this.plugin.settings.userId).onChange(async (value) => {
+    new import_obsidian2.Setting(containerEl).setName("\u7528\u6237 ID").setDesc("\u4ECE Silk Web \u8BBE\u7F6E \u2192 \u5916\u90E8\u8BBF\u95EE \u4E2D\u590D\u5236\u7528\u6237 ID").addText(
+      (text) => text.setPlaceholder("\u8F93\u5165\u7528\u6237 ID\uFF08\u5982 user_xxx\uFF09").setValue(this.plugin.settings.userId).onChange(async (value) => {
         this.plugin.settings.userId = value;
         await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian2.Setting(containerEl).setName("\u6D4B\u8BD5\u8FDE\u63A5").setDesc("\u68C0\u67E5\u914D\u7F6E\u662F\u5426\u6B63\u786E\uFF0C\u80FD\u5426\u8FDE\u4E0A Silk \u540E\u7AEF").addButton(
+      (button) => button.setButtonText("\u6D4B\u8BD5").setCta().onClick(async () => {
+        button.setDisabled(true);
+        button.setButtonText("\u6D4B\u8BD5\u4E2D...");
+        try {
+          const url = `${this.plugin.settings.serverUrl.replace(/\/+$/, "")}/api/obsidian/sync?userId=${encodeURIComponent(this.plugin.settings.userId)}`;
+          const resp = await fetch(url, {
+            headers: {
+              Authorization: `Bearer ${this.plugin.settings.apiToken}`
+            }
+          });
+          if (resp.ok) {
+            new import_obsidian2.Notice("\u2705 Silk \u8FDE\u63A5\u6B63\u5E38");
+          } else {
+            new import_obsidian2.Notice(`\u274C \u8FDE\u63A5\u5931\u8D25: HTTP ${resp.status}`);
+          }
+        } catch (e) {
+          new import_obsidian2.Notice(`\u274C \u8FDE\u63A5\u5931\u8D25: ${e.message}`);
+        } finally {
+          button.setDisabled(false);
+          button.setButtonText("\u6D4B\u8BD5");
+        }
       })
     );
   }

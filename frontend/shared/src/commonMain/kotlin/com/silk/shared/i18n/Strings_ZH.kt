@@ -124,6 +124,16 @@ object Strings_ZH : Strings {
     override val chatWithSilk = "与 Silk 对话"
     override val silkChatInputPlaceholder = "直接输入消息与 Silk 对话... (Enter发送)"
 
+    // External Access (Obsidian sync etc.)
+    override val externalAccessTitle = "外部访问"
+    override val userIdLabel = "用户 ID"
+    override val apiTokenLabel = "API Token"
+    override val apiTokenHelp = "用于 Obsidian 等外部工具访问 Silk API 的认证令牌。"
+    override val copyButton = "复制"
+    override val copiedToClipboard = "已复制到剪贴板"
+    override val showButton = "显示"
+    override val hideButton = "隐藏"
+
     // Claude Code settings
     override val ccSettingsTitle = "Claude Code"
     override val ccBridgeTokenLabel = "Bridge Token"

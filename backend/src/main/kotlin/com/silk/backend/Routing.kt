@@ -694,7 +694,13 @@ private fun Route.coreRoutes() {
             
             try {
                 val settings = UserSettingsRepository.getUserSettings(userId)
-                call.respond(UserSettingsResponse(true, "获取设置成功", settings))
+                // 确保 appAuthToken 存在（旧用户可能没有该字段）
+                if (settings.appAuthToken == null) {
+                    UserSettingsRepository.getOrCreateAppAuthToken(userId)
+                }
+                // 重新获取包含完整字段的设置
+                val updatedSettings = UserSettingsRepository.getUserSettings(userId)
+                call.respond(UserSettingsResponse(true, "获取设置成功", updatedSettings))
             } catch (e: Exception) {
                 logger.error("❌ 获取用户设置失败: {}", e.message)
                 call.respond(
