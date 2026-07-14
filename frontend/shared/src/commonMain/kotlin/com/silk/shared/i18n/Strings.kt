@@ -128,6 +128,16 @@ interface Strings {
     val chatWithSilk: String  // "Chat with Silk"
     val silkChatInputPlaceholder: String  // "Type message to Silk..."
 
+    // External Access (Obsidian sync etc.)
+    val externalAccessTitle: String  // "External Access"
+    val userIdLabel: String  // "User ID"
+    val apiTokenLabel: String  // "API Token"
+    val apiTokenHelp: String  // Help text for API Token
+    val copyButton: String  // "Copy"
+    val copiedToClipboard: String  // "Copied to clipboard"
+    val showButton: String  // "Show"
+    val hideButton: String  // "Hide"
+
     // Claude Code settings
     val ccSettingsTitle: String  // "Claude Code"
     val ccBridgeTokenLabel: String  // "Bridge Token"

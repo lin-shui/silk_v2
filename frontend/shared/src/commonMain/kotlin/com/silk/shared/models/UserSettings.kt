@@ -18,6 +18,7 @@ enum class Language {
 data class UserSettings(
     val language: Language = Language.CHINESE,
     val defaultAgentInstruction: String = "You are a helpful technical research assistant. ",
+    val appAuthToken: String? = null,
     val ccBridgeToken: String? = null,
 )
 
