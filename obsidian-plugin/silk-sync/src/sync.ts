@@ -64,15 +64,17 @@ export async function runSync(app: App, settings: SilkSyncSettings) {
 		let chatCount = 0;
 		let kbCount = 0;
 
-		// 写入聊天记录
+		// 写入聊天记录（替换默认 Silk/ 前缀为用户配置的目录）
 		for (const chat of data.chats) {
-			await writeFile(app, chat.vaultPath, chat.markdown);
+			const path = rebasePath(chat.vaultPath, settings.syncDir);
+			await writeFile(app, path, chat.markdown);
 			chatCount++;
 		}
 
 		// 写入 KB 条目
 		for (const entry of data.kbEntries) {
-			await writeFile(app, entry.vaultPath, entry.markdown);
+			const path = rebasePath(entry.vaultPath, settings.syncDir);
+			await writeFile(app, path, entry.markdown);
 			kbCount++;
 		}
 
@@ -81,6 +83,15 @@ export async function runSync(app: App, settings: SilkSyncSettings) {
 		new Notice(`❌ 同步失败: ${e.message}`);
 		console.error("Silk sync error:", e);
 	}
+}
+
+/**
+ * 将 vaultPath 中的默认 "Silk/" 前缀替换为用户自定义目录。
+ * 例如: "Silk/Chats/demo.md" + syncDir="我的笔记" → "我的笔记/Chats/demo.md"
+ */
+function rebasePath(vaultPath: string, syncDir: string): string {
+	const dir = syncDir.replace(/^\/+|\/+$/g, "").trim() || "Silk";
+	return vaultPath.replace(/^Silk\/?/, dir + "/");
 }
 
 /**
