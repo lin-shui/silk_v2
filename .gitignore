@@ -118,6 +118,9 @@ frontend/harmonyApp/oh_modules/
 
 # Agent / IDE session artifacts (not source)
 tmp/
+
+# Obsidian plugin runtime data
+obsidian-plugin/*/data.json
 .silk-runtime/
 backend/bin/
 frontend/desktopApp/bin/
