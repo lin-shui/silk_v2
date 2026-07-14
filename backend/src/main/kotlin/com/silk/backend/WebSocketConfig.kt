@@ -1074,9 +1074,9 @@ class ChatServer(
         }
 
         val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
-
-        // ✅ URL检测和网页下载索引
-        maybeLaunchUrlProcessing(message)
+        val isSingleUserGroup = !isSilkPrivateChat && isSingleHumanGroup()
+        // 单人群组相当于私聊 Silk：自动触发 AI，无需 @silk
+        val effectiveSilkPrivate = isSilkPrivateChat || isSingleUserGroup
 
         // ==================== cc-connect 命令转发 ====================
         if (handleCcCommandMessage(message)) return
@@ -1090,7 +1090,7 @@ class ChatServer(
         if (handleVisionMessage(message)) return
 
         // ==================== Silk AI 回复逻辑 ====================
-        handleSilkAiBroadcast(message, isSilkPrivateChat)
+        handleSilkAiBroadcast(message, effectiveSilkPrivate)
     }
 
     /**
@@ -2262,6 +2262,23 @@ class ChatServer(
      * 获取群组的显示名称
      * 从sessionName（格式：group_<uuid>）获取实际的群组名称
      */
+    /**
+     * 判断当前群组是否只有 1 个真人成员（排除 AI Agent）。
+     * 单人群中所有消息自动触发 AI 回复，无需 @silk。
+     */
+    private fun isSingleHumanGroup(): Boolean {
+        if (!sessionName.startsWith("group_")) return false
+        val groupId = sessionName.removePrefix("group_")
+        return try {
+            val members = GroupRepository.getGroupMembers(groupId)
+            val humanCount = members.count { !AgentRuntime.isAgentUserId(it.userId) }
+            humanCount == 1
+        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+            logger.warn("⚠️ 检查单人群失败: {}", e.message)
+            false
+        }
+    }
+
     private fun getGroupDisplayName(sessionName: String): String? {
         return if (sessionName.startsWith("group_")) {
             // 提取群组ID
