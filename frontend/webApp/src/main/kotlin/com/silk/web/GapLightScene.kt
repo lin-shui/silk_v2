@@ -16,7 +16,7 @@ import org.jetbrains.compose.web.attributes.InputType
 import org.jetbrains.compose.web.css.*
 import org.jetbrains.compose.web.dom.*
 
-private val json = Json { ignoreUnknownKeys = true }
+private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
 
 /**
  * 隙光拾暖数据面板 — 在 Silk Web 中查看小程序内容
