@@ -198,8 +198,7 @@ private fun DiaryListPane(items: List<GapDiary>, loading: Boolean, err: String?,
                 }
                 if (e.hasWarmth && e.matchedStoryId.isNotBlank()) {
                     Div({
-                        style { fontSize(12.px); color(Color(SilkColors.success)); marginBottom(4.px); property("cursor", "pointer"); property("text-decoration", "underline"); property("text-decoration-style", "dotted") }
-                        title("点击在故事长廊中查看此故事")
+                        style { fontSize(12.px); color(Color(SilkColors.success)); marginBottom(4.px); property("cursor", "default") }
                     }) { Text("✨ 匹配温暖故事: ${e.matchedStoryId}") }
                 }
                 Div({ style { fontSize(14.px); color(Color(SilkColors.textPrimary)); property("line-height", "1.6") } }) {
