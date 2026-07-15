@@ -161,9 +161,24 @@ private fun DiaryListPane(items: List<JsDiaryEntry>, loading: Boolean, err: Stri
                     Span({ style { fontSize(13.px); property("font-weight", "bold"); color(Color(SilkColors.primary)) } }) { Text(e.date) }
                     Span({ style { fontSize(12.px); color(Color(SilkColors.textLight)) } }) { Text("#${e.id.take(8)}") }
                 }
+                // 情绪 + 天气 + 温暖故事
+                Row2 {
+                    if (!e.moodState.isNullOrBlank()) {
+                        Span({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) { Text("😊 ${e.moodState}${if (!e.moodCategory.isNullOrBlank()) " · ${e.moodCategory}" else ""}") }
+                    }
+                    if (!e.weather.isNullOrBlank()) {
+                        Span({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) { Text("🌤 ${e.weather}") }
+                    }
+                }
+                // 温暖故事
+                if (e.hasWarmth == true && !e.matchedStoryId.isNullOrBlank()) {
+                    Div({ style { fontSize(12.px); color(Color(SilkColors.success)); marginBottom(4.px) } }) {
+                        Text("✨ 匹配温暖故事: ${e.matchedStoryId}")
+                    }
+                }
                 Div({ style { fontSize(14.px); color(Color(SilkColors.textPrimary)); property("line-height", "1.6") } }) {
-                    val s = e.content.take(200)
-                    Text(s + if (e.content.length > 200) "…" else "")
+                    val s = e.content.take(300)
+                    Text(s + if (e.content.length > 300) "…" else "")
                 }
             }
         }
@@ -269,6 +284,11 @@ private external interface JsDiaryEntry {
     val date: String
     val content: String
     val timestamp: Long
+    val moodCategory: String?
+    val moodState: String?
+    val hasWarmth: Boolean?
+    val matchedStoryId: String?
+    val weather: String?
 }
 
 private external interface JsStory {
