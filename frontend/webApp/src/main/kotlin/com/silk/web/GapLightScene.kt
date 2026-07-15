@@ -172,10 +172,12 @@ private fun DiaryListPane(items: List<GapDiary>, loading: Boolean, err: String?,
         items.forEach { e ->
             itemCard {
                 Row2 {
-                    Span({ style { fontSize(13.px); property("font-weight", "bold"); color(Color(SilkColors.primary)) } }) { Text(e.date) }
+                    Span({ style { fontSize(13.px); property("font-weight", "bold"); color(Color(SilkColors.primary)) } }) {
+                        Text(e.date + if (e.time.isNotBlank()) " ${e.time}" else "")
+                    }
                     Span({ style { fontSize(12.px); color(Color(SilkColors.textLight)) } }) { Text("#${e.id.take(8)}") }
                 }
-                if (e.moodState.isNotBlank() || e.weather != null || e.steps > 0 || e.location.isNotBlank() || e.time.isNotBlank()) {
+                if (e.moodState.isNotBlank() || e.weather != null || e.steps > 0 || e.location.isNotBlank()) {
                     Row2 {
                         val parts = mutableListOf<String>()
                         if (e.moodState.isNotBlank()) parts.add("😊 ${e.moodState}${if (e.moodCategory.isNotBlank()) " · ${e.moodCategory}" else ""}")
@@ -183,7 +185,6 @@ private fun DiaryListPane(items: List<GapDiary>, loading: Boolean, err: String?,
                         if (wt.isNotBlank()) parts.add("🌤 $wt")
                         if (e.steps > 0) parts.add("🚶 ${e.steps} 步")
                         if (e.location.isNotBlank()) parts.add("📍 ${e.location}")
-                        if (e.time.isNotBlank()) parts.add(e.time)
                         Span({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) {
                             Text(parts.joinToString("     "))
                         }
