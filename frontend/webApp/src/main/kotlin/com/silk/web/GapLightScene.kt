@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.browser.localStorage
 import kotlinx.browser.window
 import kotlinx.coroutines.await
 import kotlinx.coroutines.launch
@@ -27,13 +28,13 @@ private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
  */
 @Composable
 fun GapLightScene(appState: WebAppState) {
-    var serverUrl by remember { mutableStateOf("https://www.ai-silk.cloud/api") }
-    var apiToken by remember { mutableStateOf("") }
+    var serverUrl by remember { mutableStateOf(localStorage.getItem("gap_server_url") ?: "https://www.ai-silk.cloud/api") }
+    var apiToken by remember { mutableStateOf(localStorage.getItem("gap_api_token") ?: "") }
     var tab by remember { mutableStateOf("diaries") }
 
     var diaryEntries by remember { mutableStateOf<List<GapDiary>>(emptyList()) }
     var storyEntries by remember { mutableStateOf<List<GapStory>>(emptyList()) }
-    var serverOk by remember { mutableStateOf<Boolean?>(null) }
+    var serverOk by remember { mutableStateOf(localStorage.getItem("gap_server_ok")?.toBooleanStrictOrNull()) }
     var loading by remember { mutableStateOf(false) }
     var errMsg by remember { mutableStateOf<String?>(null) }
     var lastSyncLabel by remember { mutableStateOf<String?>(null) }
@@ -49,7 +50,12 @@ fun GapLightScene(appState: WebAppState) {
         Header()
         ConfigBar(serverUrl, apiToken, serverOk, lastSyncLabel, { url, token ->
             serverUrl = url; apiToken = token
-        }, { serverOk = it })
+            localStorage.setItem("gap_server_url", url)
+            localStorage.setItem("gap_api_token", token)
+        }, {
+            serverOk = it
+            localStorage.setItem("gap_server_ok", it?.toString() ?: "")
+        })
         // Tab nav
         TabNav(tab) { tab = it }
         // Content
