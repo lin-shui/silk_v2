@@ -189,7 +189,14 @@ private fun DiaryListPane(items: List<GapDiary>, loading: Boolean, err: String?,
                         if (e.moodState.isNotBlank()) parts.add("😊 ${e.moodState}${if (e.moodCategory.isNotBlank()) " · ${e.moodCategory}" else ""}")
                         val wt = weatherDisplay(e.weather)
                         if (wt.isNotBlank()) parts.add("🌤 $wt")
-                        if (e.steps > 0) parts.add("🚶 ${e.steps} 步")
+                        if (e.steps > 0 || e.finalSteps > 0) {
+                            val stepText = when {
+                                e.steps > 0 && e.finalSteps > 0 -> "🚶 ${e.steps} → ${e.finalSteps} 步"
+                                e.finalSteps > 0 -> "🚶 ${e.finalSteps} 步"
+                                else -> "🚶 ${e.steps} 步"
+                            }
+                            parts.add(stepText)
+                        }
                         if (e.location.isNotBlank()) parts.add("📍 ${e.location}")
                         Span({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) {
                             Text(parts.joinToString("     "))
@@ -291,6 +298,7 @@ data class GapDiary(
     val hasWarmth: Boolean = false,
     val matchedStoryId: String = "",
     val steps: Int = 0,
+    val finalSteps: Int = 0,
     val location: String = "",
     val time: String = "",
 )
