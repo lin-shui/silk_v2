@@ -12,6 +12,10 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import org.jetbrains.compose.web.attributes.InputType
 import org.jetbrains.compose.web.css.*
 import org.jetbrains.compose.web.dom.*
@@ -171,13 +175,14 @@ private fun DiaryListPane(items: List<GapDiary>, loading: Boolean, err: String?,
                     Span({ style { fontSize(13.px); property("font-weight", "bold"); color(Color(SilkColors.primary)) } }) { Text(e.date) }
                     Span({ style { fontSize(12.px); color(Color(SilkColors.textLight)) } }) { Text("#${e.id.take(8)}") }
                 }
-                if (e.moodState.isNotBlank() || e.weather.isNotBlank()) {
+                if (e.moodState.isNotBlank() || e.weather != null) {
                     Row2 {
                         if (e.moodState.isNotBlank()) {
                             Span({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) { Text("😊 ${e.moodState}${if (e.moodCategory.isNotBlank()) " · ${e.moodCategory}" else ""}") }
                         }
-                        if (e.weather.isNotBlank()) {
-                            Span({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) { Text("🌤 ${e.weather}") }
+                        val weatherText = weatherDisplay(e.weather)
+                        if (weatherText.isNotBlank()) {
+                            Span({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)) } }) { Text("🌤 $weatherText") }
                         }
                     }
                 }
@@ -270,7 +275,7 @@ data class GapDiary(
     val timestamp: Long = 0L,
     val moodCategory: String = "",
     val moodState: String = "",
-    val weather: String = "",
+    val weather: JsonElement? = null,
     val hasWarmth: Boolean = false,
     val matchedStoryId: String = "",
 )
@@ -333,3 +338,13 @@ private suspend fun fetchStories(baseUrl: String, onResult: (List<GapStory>, Str
 }
 
 private fun nowStr(): String = js("new Date().toLocaleString('zh-CN')") as String
+
+/** 将天气字段转为显示文本（字段可能是字符串或 {text, code, temperature} 对象） */
+private fun weatherDisplay(weather: JsonElement?): String {
+    if (weather == null) return ""
+    return when (weather) {
+        is kotlinx.serialization.json.JsonObject -> weather["text"]?.jsonPrimitive?.contentOrNull ?: ""
+        is kotlinx.serialization.json.JsonPrimitive -> weather.contentOrNull ?: ""
+        else -> ""
+    }
+}
