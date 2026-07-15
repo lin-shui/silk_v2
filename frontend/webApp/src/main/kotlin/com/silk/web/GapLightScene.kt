@@ -43,10 +43,9 @@ fun GapLightScene(appState: WebAppState) {
     }) {
         // Header
         Header()
-        // Config bar
-        ConfigBar(serverUrl, apiToken, serverOk, lastSyncLabel) { url, token ->
+        ConfigBar(serverUrl, apiToken, serverOk, lastSyncLabel, { url, token ->
             serverUrl = url; apiToken = token
-        }
+        }, { serverOk = it })
         // Tab nav
         TabNav(tab) { tab = it }
         // Content
@@ -97,7 +96,7 @@ private fun Header() {
 }
 
 @Composable
-private fun ConfigBar(serverUrl: String, apiToken: String, serverOk: Boolean?, lastSync: String?, onChange: (String, String) -> Unit) {
+private fun ConfigBar(serverUrl: String, apiToken: String, serverOk: Boolean?, lastSync: String?, onChange: (String, String) -> Unit, onTestResult: (Boolean?) -> Unit) {
     val scope = rememberCoroutineScope()
     Div({
         style {
@@ -123,7 +122,7 @@ private fun ConfigBar(serverUrl: String, apiToken: String, serverOk: Boolean?, l
             onClick {
                 scope.launch {
                     val ok = pingHealth(serverUrl)
-                    // serverOk will be passed from parent
+                    onTestResult(ok)
                 }
             }
         }) { Text("检测连接") }
