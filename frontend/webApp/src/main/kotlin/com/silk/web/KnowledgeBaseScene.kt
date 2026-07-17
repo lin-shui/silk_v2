@@ -587,7 +587,11 @@ internal fun computeLineDiff(original: String, modified: String): List<DiffChunk
         }
     }
 
-    return chunks
+    return chunks.filterNot { chunk ->
+        // Filter out unchanged chunks with empty text (blank lines, trailing newlines)
+        // to avoid confusing empty "未更改内容" sections in the diff review UI.
+        chunk.type == "unchanged" && chunk.originalText.isEmpty()
+    }
 }
 
 @Composable

@@ -290,6 +290,7 @@ private fun buildKnowledgeBaseWorkspaceSpaceLabel(topic: KBTopic): String {
  * Compute a line-level diff between original and new content using LCS (Longest Common Subsequence).
  * Returns a list of DiffChunks that can be rendered by the frontend for inline diff review.
  */
+@Suppress("CyclomaticComplexMethod")
 fun computeLineDiff(original: String, newContent: String): List<DiffChunk> {
     val origLines = original.split("\n")
     val newLines = newContent.split("\n")
@@ -362,7 +363,11 @@ fun computeLineDiff(original: String, newContent: String): List<DiffChunk> {
 
     // Reverse to chronological order, then merge consecutive same-type chunks
     val orderedChunks = reverseChunks.asReversed()
-    return mergeDiffChunks(orderedChunks)
+    return mergeDiffChunks(orderedChunks).filterNot { chunk ->
+        // Filter out unchanged chunks with empty text (e.g. blank lines, trailing newlines)
+        // so the diff review UI doesn't show confusing empty "未更改内容" sections.
+        chunk.type == "unchanged" && chunk.originalText.isEmpty()
+    }
 }
 
 /**
