@@ -276,7 +276,7 @@ internal fun KnowledgeBaseCaptureDialog(
                     property("flex-wrap", "wrap")
                 }
             }) {
-                CaptureBadge("candidate", SilkColors.primaryDark)
+                CaptureBadge(knowledgeStatusLabel(KBEntryStatus.CANDIDATE), SilkColors.primaryDark)
                 CaptureBadge(knowledgeCaptureSourceLabel(draft.sourceType), SilkColors.primary)
             }
 

@@ -267,18 +267,39 @@ internal fun KnowledgeBaseMeetingCaptureDialog(
                 }
 
                 KnowledgeCaptureField("置信度") {
-                    Input(InputType.Text) {
-                        value(confidenceText)
-                        onInput { onConfidenceTextChange(it.value) }
-                        attr("inputmode", "decimal")
-                        attr("placeholder", "0.90")
+                    val rawConfidence = confidenceText.trim().toDoubleOrNull()
+                    val clampedConfidence = rawConfidence?.coerceIn(0.0, 1.0)
+                    val isConfidenceOutOfRange = rawConfidence != null && rawConfidence != clampedConfidence
+                    Div({
                         style {
-                            width(120.px)
-                            height(40.px)
-                            borderRadius(8.px)
-                            border(1.px, LineStyle.Solid, Color(SilkColors.border))
-                            padding(0.px, 10.px)
-                            property("box-sizing", "border-box")
+                            display(DisplayStyle.Flex)
+                            flexDirection(FlexDirection.Column)
+                            property("gap", "4px")
+                        }
+                    }) {
+                        Input(InputType.Text) {
+                            value(confidenceText)
+                            onInput { onConfidenceTextChange(it.value) }
+                            attr("inputmode", "decimal")
+                            attr("placeholder", "0.90")
+                            style {
+                                width(120.px)
+                                height(40.px)
+                                borderRadius(8.px)
+                                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                                padding(0.px, 10.px)
+                                property("box-sizing", "border-box")
+                            }
+                        }
+                        if (isConfidenceOutOfRange) {
+                            Div({
+                                style {
+                                    fontSize(11.px)
+                                    color(Color("#C85046"))
+                                }
+                            }) {
+                                Text("超出范围(0–1)，实际存为 ${clampedConfidence?.let { "${(it * 100).toInt()}%" } ?: "0%"}")
+                            }
                         }
                     }
                 }
@@ -291,7 +312,7 @@ internal fun KnowledgeBaseMeetingCaptureDialog(
                     property("flex-wrap", "wrap")
                 }
             }) {
-                CaptureBadge(status.name.lowercase(), if (status == KBEntryStatus.PUBLISHED) SilkColors.success else SilkColors.primaryDark)
+                CaptureBadge(knowledgeStatusLabel(status), if (status == KBEntryStatus.PUBLISHED) SilkColors.success else SilkColors.primaryDark)
                 CaptureBadge("会议沉淀", SilkColors.primary)
             }
 
