@@ -98,6 +98,8 @@ internal const val KNOWLEDGE_COPILOT_SIDEBAR_MIN_WIDTH = 320.0
 internal const val KNOWLEDGE_COPILOT_SIDEBAR_MAX_WIDTH = 520.0
 private const val KNOWLEDGE_COPILOT_SIDEBAR_WIDTH_KEY = "silk_kb_copilot_sidebar_width"
 private const val KNOWLEDGE_COPILOT_DEFAULT_PROMPT = ""
+// P1-3: Responsive breakpoint for auto-collapsing sidebars on narrow screens
+private const val RESPONSIVE_BREAKPOINT_PX = 768.0
 
 internal fun clampKnowledgeSidebarWidth(width: Double): Double =
     width.coerceIn(KNOWLEDGE_SIDEBAR_MIN_WIDTH, KNOWLEDGE_SIDEBAR_MAX_WIDTH)
@@ -424,6 +426,16 @@ internal fun knowledgeFilterForStatus(status: KBEntryStatus): KnowledgeEntryFilt
         KBEntryStatus.PUBLISHED -> KnowledgeEntryFilter.PUBLISHED
         KBEntryStatus.ARCHIVED -> KnowledgeEntryFilter.ARCHIVED
         KBEntryStatus.DELETED -> KnowledgeEntryFilter.ALL
+    }
+}
+
+// P2: Chinese status label for KB entry status
+internal fun knowledgeStatusLabel(status: KBEntryStatus): String {
+    return when (status) {
+        KBEntryStatus.CANDIDATE -> "候选"
+        KBEntryStatus.PUBLISHED -> "已发布"
+        KBEntryStatus.ARCHIVED -> "已归档"
+        KBEntryStatus.DELETED -> "已删除"
     }
 }
 
@@ -1731,7 +1743,7 @@ private fun EntryRow(
                 property("flex-wrap", "wrap")
             }
         }) {
-            KnowledgeBadge(entry.status.name.lowercase(), SilkColors.primaryDark)
+            KnowledgeBadge(knowledgeStatusLabel(entry.status), SilkColors.primaryDark)
             KnowledgeBadge(knowledgeSourceShortLabel(entry.source.sourceType), SilkColors.primary)
         }
     }
@@ -1756,6 +1768,7 @@ private fun KnowledgeEditorPane(
     editorSplitRatio: Double,
     availableEditorWidthPx: Double,
     canEdit: Boolean,
+    hasUnsavedChanges: Boolean,
     savedTitle: String,
     spaceLabel: String?,
     permissionLabel: String?,
@@ -1804,6 +1817,7 @@ private fun KnowledgeEditorPane(
                 saveMessage = saveMessage,
                 editorMode = editorMode,
                 canEdit = canEdit,
+                hasUnsavedChanges = hasUnsavedChanges,
                 onTitleChange = onTitleChange,
                 onResetTitle = onResetTitle,
                 onEditorModeChange = onEditorModeChange,
@@ -2097,6 +2111,7 @@ private fun KnowledgeEditorToolbar(
     saveMessage: String,
     editorMode: KnowledgeEditorMode,
     canEdit: Boolean,
+    hasUnsavedChanges: Boolean,
     onTitleChange: (String) -> Unit,
     onResetTitle: () -> Unit,
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
@@ -2227,6 +2242,7 @@ private fun KnowledgeEditorToolbar(
             editorMode = editorMode,
             modeSwitchPresentation = modeSwitchPresentation,
             canEdit = canEdit,
+            hasUnsavedChanges = hasUnsavedChanges,
             onEditorModeChange = onEditorModeChange,
             onMoveEntry = onMoveEntry,
             onDeleteEntry = onDeleteEntry,
@@ -2249,6 +2265,7 @@ private fun KnowledgeEditorToolbarActions(
     editorMode: KnowledgeEditorMode,
     modeSwitchPresentation: KnowledgeEditorModeSwitchPresentation,
     canEdit: Boolean,
+    hasUnsavedChanges: Boolean,
     onEditorModeChange: (KnowledgeEditorMode) -> Unit,
     onMoveEntry: (() -> Unit)?,
     onDeleteEntry: (() -> Unit)?,
@@ -2260,7 +2277,7 @@ private fun KnowledgeEditorToolbarActions(
     onExport: () -> Unit,
     onCopyReference: () -> Unit,
 ) {
-    val canSave = canEdit && !isSaving && title.trim().isNotBlank()
+    val canSave = canEdit && !isSaving && title.trim().isNotBlank() && hasUnsavedChanges
     Div({
         style {
             display(DisplayStyle.Flex)
@@ -2460,7 +2477,7 @@ private fun KnowledgeEntryMetaBar(
             permissionLabel?.let {
                 KnowledgeBadge(it, if (it == "可编辑") SilkColors.success else SilkColors.warning)
             }
-            KnowledgeBadge(entry.status.name.lowercase(), SilkColors.primaryDark)
+            KnowledgeBadge(knowledgeStatusLabel(entry.status), SilkColors.primaryDark)
             topic?.project?.takeIf { it.isNotBlank() }?.let { project ->
                 KnowledgeBadge(project, SilkColors.textSecondary)
             }
@@ -2736,6 +2753,7 @@ private fun CreateTopicDialog(
             onCancel = onDismiss,
             onConfirm = onConfirm,
             confirmLabel = "创建",
+            confirmEnabled = topicName.isNotBlank(),
         )
     }
 }
@@ -3162,6 +3180,7 @@ private fun CreateEntryDialog(
             onCancel = onDismiss,
             onConfirm = onConfirm,
             confirmLabel = "创建",
+            confirmEnabled = entryTitle.isNotBlank(),
         )
     }
 }
@@ -4736,6 +4755,7 @@ private fun MoveKnowledgeEntryDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
+    val selectedTopicName = targetTopics.find { it.id == selectedTargetTopicId }?.name.orEmpty()
     ModalDialog(title = "移动条目", onDismiss = onDismiss) {
         Div({
             style {
@@ -4760,12 +4780,91 @@ private fun MoveKnowledgeEntryDialog(
                 )
             }
         }
+        // P0-2: Show selected target confirmation
+        if (selectedTargetTopicId.isNotBlank()) {
+            Div({
+                style {
+                    padding(8.px, 12.px)
+                    borderRadius(8.px)
+                    backgroundColor(Color("#F0F7EE"))
+                    fontSize(13.px)
+                    color(Color(SilkColors.textPrimary))
+                    marginBottom(12.px)
+                    fontWeight("600")
+                }
+            }) {
+                Text("将移动到：$selectedTopicName")
+            }
+        }
         DialogActions(
             onCancel = onDismiss,
             onConfirm = onConfirm,
             confirmLabel = if (isSaving) "移动中..." else "确认移动",
             confirmEnabled = !isSaving && selectedTargetTopicId.isNotBlank(),
         )
+    }
+}
+
+@Composable
+private fun UnsavedChangesDialog(
+    currentTitle: String,
+    onSave: () -> Unit,
+    onDiscard: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    ModalDialog(title = "未保存的修改", onDismiss = onCancel) {
+        Div({
+            style {
+                fontSize(13.px)
+                color(Color(SilkColors.textSecondary))
+                marginBottom(16.px)
+                property("line-height", "1.6")
+            }
+        }) {
+            Text("当前条目“$currentTitle”有未保存的修改。")
+        }
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                justifyContent(JustifyContent.FlexEnd)
+                property("gap", "8px")
+                marginTop(8.px)
+            }
+        }) {
+            Button({
+                style {
+                    backgroundColor(Color(SilkColors.surface))
+                    color(Color(SilkColors.textSecondary))
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    borderRadius(6.px)
+                    padding(8.px, 16.px)
+                    property("cursor", "pointer")
+                }
+                onClick { onCancel() }
+            }) { Text("取消") }
+            Button({
+                style {
+                    backgroundColor(Color("#C85046"))
+                    color(Color.white)
+                    border(0.px)
+                    borderRadius(6.px)
+                    padding(8.px, 16.px)
+                    property("cursor", "pointer")
+                }
+                onClick { onDiscard() }
+            }) { Text("放弃修改") }
+            Button({
+                style {
+                    backgroundColor(Color(SilkColors.primary))
+                    color(Color.white)
+                    border(0.px)
+                    borderRadius(6.px)
+                    padding(8.px, 16.px)
+                    property("cursor", "pointer")
+                }
+                onClick { onSave() }
+            }) { Text("保存并切换") }
+        }
     }
 }
 
@@ -5074,10 +5173,12 @@ private suspend fun loadKnowledgeEntries(
     onSelectedEntryChange: (KBEntryItem?) -> Unit,
     onEditorContentChange: (String) -> Unit,
     onEntriesChange: (List<KBEntryItem>) -> Unit,
+    onEntryFilterChange: ((KnowledgeEntryFilter) -> Unit)? = null,
 ) {
     onSelectedTopicChange(topic)
     onSelectedEntryChange(null)
     onEditorContentChange("")
+    onEntryFilterChange?.invoke(KnowledgeEntryFilter.ALL)
     onEntriesChange(ApiClient.getKBEntries(topic.id, userId))
 }
 
@@ -5449,6 +5550,9 @@ private suspend fun deleteKnowledgeEntry(
         onEditorContentChange(nextEntry?.content.orEmpty())
         onSaveMessageChange("条目已删除")
         onDialogVisibilityChange(false)
+    } else {
+        // P0-3: Show error when delete fails
+        onSaveMessageChange("删除失败：${response.message.ifBlank { "请稍后重试" }}")
     }
     onSavingChange(false)
 }
@@ -5480,6 +5584,9 @@ private suspend fun deleteKnowledgeTopic(
         onSelectedSpaceIdChange(defaultKnowledgeSpaceIdForTopic(null))
         onSaveMessageChange("主题已删除")
         onDialogVisibilityChange(false)
+    } else {
+        // P0-3: Show error when delete fails
+        onSaveMessageChange("删除失败：${response.message.ifBlank { "请稍后重试" }}")
     }
     onSavingChange(false)
 }
@@ -5524,6 +5631,7 @@ private suspend fun createKnowledgeTopic(
     spaceOptions: List<KnowledgeSpaceOption>,
     selectedSpaceId: String,
     onTopicsChange: (List<KBTopicItem>) -> Unit,
+    onSelectedTopicChange: (KBTopicItem?) -> Unit,
     onVisibilityChange: (Boolean) -> Unit,
     onNameChange: (String) -> Unit,
     onProjectChange: (String) -> Unit,
@@ -5535,7 +5643,7 @@ private suspend fun createKnowledgeTopic(
             label = "个人",
             type = KnowledgeSpaceType.PERSONAL,
         )
-    ApiClient.createKBTopic(
+    val created = ApiClient.createKBTopic(
         name = topicName.trim(),
         project = topicProject.trim(),
         userId = userId,
@@ -5545,7 +5653,12 @@ private suspend fun createKnowledgeTopic(
             teamMembersCanWrite = selectedSpace.type == KnowledgeSpaceType.TEAM,
         ),
     )
-    onTopicsChange(ApiClient.getKBTopics(userId))
+    val refreshedTopics = ApiClient.getKBTopics(userId)
+    onTopicsChange(refreshedTopics)
+    // Auto-select the newly created topic
+    if (created != null) {
+        onSelectedTopicChange(refreshedTopics.find { it.id == created.id } ?: created)
+    }
     resetTopicDialog(onVisibilityChange, onNameChange, onProjectChange)
 }
 
@@ -5780,6 +5893,11 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     var memoryFeedback by remember { mutableStateOf("") }
     // "personal" or "group"; only relevant when selectedSpaceId is a group space
     var memoryActiveTab by remember { mutableStateOf("personal") }
+    // Memory delete confirmation (P1: avoid accidental deletion)
+    var showMemoryDeleteConfirm by remember { mutableStateOf(false) }
+    var pendingDeleteMemoryId by remember { mutableStateOf("") }
+    var pendingDeleteMemoryTitle by remember { mutableStateOf("") }
+    var pendingDeleteMemoryGroupMode by remember { mutableStateOf(false) }
     // Group files view for team spaces (shown as a special topic in sidebar)
     var showGroupFilesView by remember(selectedSpaceId) { mutableStateOf(false) }
     var groupFilesResponse by remember { mutableStateOf<ApiClient.GroupAssetsResponse?>(null) }
@@ -5896,7 +6014,9 @@ fun KnowledgeBaseScene(appState: WebAppState) {
         )
     }
     var entryFilter by remember { mutableStateOf(KnowledgeEntryFilter.ALL) }
-
+    // P0-1: Unsaved changes guard when switching entries
+    var showUnsavedChangesDialog by remember { mutableStateOf(false) }
+    var pendingSwitchEntry by remember { mutableStateOf<KBEntryItem?>(null) }
     LaunchedEffect(user.id) {
         isLoading = true
         val groupsResponse = ApiClient.getUserGroups(user.id)
@@ -5930,6 +6050,9 @@ fun KnowledgeBaseScene(appState: WebAppState) {
     val batchMergeCandidateEntries = remember(entries, selectedCandidateEntryIds) {
         entries.filter { it.id in selectedCandidateEntryIds && it.status == KBEntryStatus.CANDIDATE }
     }
+    // P0-1: Track whether editor has unsaved changes
+    val hasUnsavedChanges = (editorContent != (selectedEntry?.content.orEmpty())) ||
+        (editorTitle != (selectedEntry?.title.orEmpty()))
 
     LaunchedEffect(selectedSpaceId, topics) {
         if (selectedTopic != null && filteredTopics.none { it.id == selectedTopic?.id }) {
@@ -5962,8 +6085,35 @@ fun KnowledgeBaseScene(appState: WebAppState) {
         if (showBatchMergeCandidatesDialog && mergeTargetOptions.none { it.entry.id == batchMergeTargetEntryId }) {
             batchMergeTargetEntryId = mergeTargetOptions.firstOrNull()?.entry?.id.orEmpty()
         }
-        if (showMoveEntryDialog && moveTargetTopics.none { it.id == moveTargetTopicId }) {
-            moveTargetTopicId = moveTargetTopics.firstOrNull()?.id.orEmpty()
+        // P0-2: Don't auto-select first target for move dialog; user must explicitly choose
+    }
+
+    // P1-3: 768px 窄屏自动折叠侧栏
+    DisposableEffect(Unit) {
+        val listener: (Event) -> Unit = {
+            if (window.innerWidth < RESPONSIVE_BREAKPOINT_PX) {
+                if (!topicsSidebarCollapsed) {
+                    topicsSidebarCollapsed = true
+                    LayoutPrefs.setBool("kb_sidebar_collapsed", true)
+                }
+                if (!entrySidebarCollapsed) {
+                    entrySidebarCollapsed = true
+                    LayoutPrefs.setBool("kb_entry_sidebar_collapsed", true)
+                }
+            }
+        }
+        // Check on mount
+        listener(js("new Event('resize')").unsafeCast<Event>())
+        window.addEventListener("resize", listener)
+        onDispose { window.removeEventListener("resize", listener) }
+    }
+
+    // P1: 筛选变化时 selectedEntry 不在可见列表中则清除编辑器
+    LaunchedEffect(entryFilter, filteredEntries) {
+        if (selectedEntry != null && filteredEntries.none { it.id == selectedEntry?.id }) {
+            selectedEntry = null
+            editorContent = ""
+            editorTitle = ""
         }
     }
 
@@ -5989,6 +6139,8 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 }
             }
             saveMessage = "已打开引用文档"
+        } else {
+            saveMessage = "条目不存在或已被删除"
         }
         appState.consumeKnowledgeBaseNavigationTarget(target.requestId)
     }
@@ -6094,6 +6246,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                             onSelectedEntryChange = { selectedEntry = it },
                             onEditorContentChange = { editorContent = it },
                             onEntriesChange = { entries = it },
+                            onEntryFilterChange = { entryFilter = it },
                         )
                     }
                 },
@@ -6240,11 +6393,17 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                     selectedCandidateEntryIds = toggleKnowledgeEntrySelection(selectedCandidateEntryIds, entryId)
                 },
                 onEntrySelect = { entry ->
-                    loadKnowledgeEntry(
-                        entry = entry,
-                        onSelectedEntryChange = { selectedEntry = it },
-                        onEditorContentChange = { editorContent = it },
-                    )
+                    // P0-1: Check for unsaved changes before switching entries
+                    if (hasUnsavedChanges && selectedEntry != null && selectedEntry?.id != entry.id) {
+                        pendingSwitchEntry = entry
+                        showUnsavedChangesDialog = true
+                    } else {
+                        loadKnowledgeEntry(
+                            entry = entry,
+                            onSelectedEntryChange = { selectedEntry = it },
+                            onEditorContentChange = { editorContent = it },
+                        )
+                    }
                 },
                 onEntryDragStart = { entry ->
                     selectedTopic?.let { sourceTopic ->
@@ -6316,6 +6475,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                     editorMode = editorMode,
                     editorSplitRatio = editorSplitRatio,
                     availableEditorWidthPx = baseEditorWidth - copilotSidebarOffset,
+                    hasUnsavedChanges = hasUnsavedChanges,
                 canEdit = canEditSelectedTopic,
                 spaceLabel = selectedTopicSpaceLabel,
                 permissionLabel = selectedTopicPermissionLabel,
@@ -6362,7 +6522,8 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                     ?.takeIf { canEditSelectedTopic && moveTargetTopics.isNotEmpty() }
                     ?.let {
                         {
-                            moveTargetTopicId = moveTargetTopics.firstOrNull()?.id.orEmpty()
+                            // P0-2: Don't auto-select first target; user must explicitly choose
+                            moveTargetTopicId = ""
                             showMoveEntryDialog = true
                         }
                     },
@@ -6667,25 +6828,16 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 }
             },
             onDeleteMemory = { entryId ->
-                scope.launch {
-                    isMemorySaving = true
-                    val isGroupMode = memoryActiveTab == "group" && currentGroupId != null
-                    val deleted = ApiClient.deleteKBMemoryEntry(
-                        entryId, user.id,
-                        groupId = if (isGroupMode) currentGroupId else null,
-                    )
-                    memoryFeedback = if (deleted) {
-                        if (isGroupMode) {
-                            groupMemoryEntries = groupMemoryEntries.filterNot { it.id == entryId }
-                        } else {
-                            memoryEntries = memoryEntries.filterNot { it.id == entryId }
-                        }
-                        "记忆已删除"
-                    } else {
-                        "删除记忆失败"
-                    }
-                    isMemorySaving = false
+                // P1: Show confirmation before deleting memory
+                val entry = if (memoryActiveTab == "group") {
+                    groupMemoryEntries.find { it.id == entryId }
+                } else {
+                    memoryEntries.find { it.id == entryId }
                 }
+                pendingDeleteMemoryId = entryId
+                pendingDeleteMemoryTitle = entry?.title?.takeIf { it.isNotBlank() }?.let { "“$it”" } ?: "该条目"
+                pendingDeleteMemoryGroupMode = memoryActiveTab == "group" && currentGroupId != null
+                showMemoryDeleteConfirm = true
             },
         )
     }
@@ -6775,6 +6927,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                         spaceOptions = spaceOptions,
                         selectedSpaceId = newTopicSpaceId,
                         onTopicsChange = { topics = it },
+                        onSelectedTopicChange = { selectedTopic = it },
                         onVisibilityChange = { showCreateTopicDialog = it },
                         onNameChange = { newTopicName = it },
                         onProjectChange = { newTopicProject = it },
@@ -7193,6 +7346,7 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                                     onSelectedEntryChange = { selectedEntry = it },
                                     onEditorContentChange = { editorContent = it },
                                     onEntriesChange = { entries = it },
+                                    onEntryFilterChange = { entryFilter = it },
                                 )
                             }
                         }
@@ -7200,6 +7354,90 @@ fun KnowledgeBaseScene(appState: WebAppState) {
                 },
             )
         }
+    }
+
+    // ── P1: Memory delete confirmation dialog ──
+    if (showMemoryDeleteConfirm && pendingDeleteMemoryId.isNotBlank()) {
+        ConfirmKnowledgeDeleteDialog(
+            title = "删除记忆",
+            description = "确定要删除${pendingDeleteMemoryTitle}吗？此操作不可撤销。",
+            confirmLabel = "确认删除",
+            isSaving = isMemorySaving,
+            onDismiss = {
+                showMemoryDeleteConfirm = false
+                pendingDeleteMemoryId = ""
+            },
+            onConfirm = {
+                val deleteEntryId = pendingDeleteMemoryId
+                val isGroupMode = pendingDeleteMemoryGroupMode
+                showMemoryDeleteConfirm = false
+                pendingDeleteMemoryId = ""
+                scope.launch {
+                    isMemorySaving = true
+                    val currentGroupId = selectedSpaceId.takeIf { it != PERSONAL_SPACE_ID }
+                    val deleted = ApiClient.deleteKBMemoryEntry(
+                        deleteEntryId, user.id,
+                        groupId = if (isGroupMode) currentGroupId else null,
+                    )
+                    memoryFeedback = if (deleted) {
+                        if (isGroupMode) {
+                            groupMemoryEntries = groupMemoryEntries.filterNot { it.id == deleteEntryId }
+                        } else {
+                            memoryEntries = memoryEntries.filterNot { it.id == deleteEntryId }
+                        }
+                        "记忆已删除"
+                    } else {
+                        "删除记忆失败"
+                    }
+                    isMemorySaving = false
+                }
+            },
+        )
+    }
+
+    // ── P0-1: Unsaved changes guard dialog ──
+    val entryToSwitchTo = pendingSwitchEntry
+    if (showUnsavedChangesDialog && entryToSwitchTo != null) {
+        UnsavedChangesDialog(
+            currentTitle = selectedEntry?.title.orEmpty(),
+            onSave = {
+                scope.launch {
+                    saveKnowledgeEntry(
+                        entry = selectedEntry,
+                        topic = selectedTopic,
+                        editorTitle = editorTitle,
+                        editorContent = editorContent,
+                        userId = user.id,
+                        onSavingChange = { isSaving = it },
+                        onSaveMessageChange = { saveMessage = it },
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEditorTitleChange = { editorTitle = it },
+                        onEntriesChange = { entries = it },
+                    )
+                    // After save, switch to pending entry
+                    loadKnowledgeEntry(
+                        entry = entryToSwitchTo,
+                        onSelectedEntryChange = { selectedEntry = it },
+                        onEditorContentChange = { editorContent = it },
+                    )
+                    showUnsavedChangesDialog = false
+                    pendingSwitchEntry = null
+                }
+            },
+            onDiscard = {
+                loadKnowledgeEntry(
+                    entry = entryToSwitchTo,
+                    onSelectedEntryChange = { selectedEntry = it },
+                    onEditorContentChange = { editorContent = it },
+                )
+                showUnsavedChangesDialog = false
+                pendingSwitchEntry = null
+            },
+            onCancel = {
+                showUnsavedChangesDialog = false
+                pendingSwitchEntry = null
+            },
+        )
     }
 
     // ── File preview overlay ──
@@ -7815,7 +8053,7 @@ private fun MergeKnowledgeEntryDialog(
                 }) {
                     targetEntries.forEach { option ->
                         org.jetbrains.compose.web.dom.Option(value = option.entry.id) {
-                            Text("${option.topic.name} / ${option.entry.title} · ${option.entry.status.name.lowercase()}")
+                            Text("${option.topic.name} / ${option.entry.title} · ${knowledgeStatusLabel(option.entry.status)}")
                         }
                     }
                 }

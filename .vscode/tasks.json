@@ -12,6 +12,16 @@
 			"type": "shell",
 			"command": "cd /Users/pengzhike/Documents/project/huawei/silk_v2 && ./gradlew :frontend:webApp:nodeTest",
 			"group": "test"
+		},
+		{
+			"label": "compile-web",
+			"type": "shell",
+			"command": "cd /Users/pengzhike/Documents/project/huawei/silk_v2 && ./gradlew :frontend:webApp:compileProductionExecutableKotlinJs 2>&1 | tail -40"
+		},
+		{
+			"label": "compile-backend",
+			"type": "shell",
+			"command": "cd /Users/pengzhike/Documents/project/huawei/silk_v2 && ./gradlew :backend:compileKotlin 2>&1 | tail -10"
 		}
 	]
 }
