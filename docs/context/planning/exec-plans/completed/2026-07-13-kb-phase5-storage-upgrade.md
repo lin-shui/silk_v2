@@ -1,7 +1,7 @@
 # KB Phase 5: Storage Upgrade — 嵌入增强 + PostgreSQL 就绪
 
-Status: Stage 1 ✅ + Stage 2 ✅（2026-07-14）
-Date: 2026-07-13（Stage 1 完成于 2026-07-14；Stage 2 完成于 2026-07-14）
+Status: 已完成（Stage 1 ✅ + Stage 2 ✅，2026-07-14 验证通过）
+Date: 2026-07-13（Stage 1 完成于 2026-07-14；Stage 2 完成于 2026-07-14；归档于 2026-07-14）
 
 ## Goal
 

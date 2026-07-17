@@ -1,7 +1,7 @@
 # KB Memory Layer Plan
 
-Status: 进行中（Phase 1-4 ✅，Phase 5 重启中 → [2026-07-13-kb-phase5-storage-upgrade.md](2026-07-13-kb-phase5-storage-upgrade.md)；Android 记忆管理入口 2026-07-10 已补）
-Date: 2026-07-07（Phase 5 重启于 2026-07-13）
+Status: 已完成（Phase 1-4 ✅，Phase 5 Stage 1 + Stage 2 ✅，2026-07-14 验证通过）
+Date: 2026-07-07（Phase 5 重启于 2026-07-13，完成于 2026-07-14）
 
 ## Goal
 
@@ -122,7 +122,7 @@ MVP 不做：
 
 ### Phase 5: Storage Upgrade（Stage 1 ✅ + Stage 2 ✅，2026-07-14）
 
-→ 详细计划见 [2026-07-13-kb-phase5-storage-upgrade.md](2026-07-13-kb-phase5-storage-upgrade.md)
+→ 详细计划见 [2026-07-13-kb-phase5-storage-upgrade.md](../completed/2026-07-13-kb-phase5-storage-upgrade.md)（已归档）
 
 **Stage 1（已完成）**：嵌入向量语义检索
 - 保持 JSON store 不变

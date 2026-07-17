@@ -6,8 +6,7 @@
 
 ## Active Execution Plans
 
-- [KB Memory Layer](exec-plans/active/2026-07-07-kb-memory-layer.md)（Phase 1-4 ✅，Phase 5 Stage 1 ✅ → [阶段计划](exec-plans/active/2026-07-13-kb-phase5-storage-upgrade.md)）
-- [KB Phase 5: Storage Upgrade](exec-plans/active/2026-07-13-kb-phase5-storage-upgrade.md)（Stage 1 嵌入语义检索 ✅，Stage 2 PostgreSQL ✅）
+- [KB Memory Layer](exec-plans/active/2026-07-07-kb-memory-layer.md)（Phase 1-4 ✅，Phase 5 ✅ → 已归档 `exec-plans/completed/`）
 - [Lint baseline reduction](exec-plans/active/lint-baseline-reduction.md)
 
 ## Completed Execution Plans
@@ -17,6 +16,7 @@
 - [KB Copilot: Streaming + Inline Diff Edit + UX Polish](exec-plans/completed/2026-07-10-kb-copilot-streaming-inline-edit.md)
 - [KB Copilot: 三状态流程改造](exec-plans/completed/2026-07-13-kb-copilot-three-state-redesign.md)
 - [KB Candidate Merge: Diff Preview](exec-plans/completed/2026-07-13-kb-candidate-merge-diff-preview.md)
+- [KB Phase 5: Storage Upgrade](exec-plans/completed/2026-07-13-kb-phase5-storage-upgrade.md)（Stage 1 嵌入语义检索 ✅，Stage 2 PostgreSQL ✅，2026-07-14 验证通过）
 
 ## Usage
 
