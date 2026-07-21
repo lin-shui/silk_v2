@@ -140,13 +140,13 @@ fun backendHttpOrigin(): String {
 
 internal fun backendWsOrigin(): String {
     val hostname = window.location.hostname
-    val isLocalDev = hostname == "localhost" || hostname == "127.0.0.1"
     val wsProtocol = if (window.location.protocol == "https:") "wss:" else "ws:"
+    val isLocalDev = hostname == "localhost" || hostname == "127.0.0.1"
     if (isLocalDev) {
         return "$wsProtocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
     }
-    // 生产环境走 443 标准端口（避免非标准端口被网络封锁）
-    return "$wsProtocol//$hostname"
+    // 生产环境走页面同源，由 nginx 统一代理 WebSocket 和 API
+    return "$wsProtocol//${window.location.host}"
 }
 
 // ==================== 安全的 JS 互操作辅助函数（避免在 js("...") 中引用 Kotlin 变量） ====================
