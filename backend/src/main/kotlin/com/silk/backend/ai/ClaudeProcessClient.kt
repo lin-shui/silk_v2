@@ -218,7 +218,7 @@ class ClaudeProcessClient(
 
         // 使用非阻塞读取 + 超时检测，避免 tool 调用后无后续输出导致永久挂起
         val inputStream = process.inputStream
-        val timeoutAfterToolMs = 60_000L  // tool 标记后 60 秒无新输出则断开
+        val timeoutAfterToolMs = 30_000L  // 30 秒无新输出则主动断开（防止 Claude 进程永久挂起）
         var shouldStop = false
 
         while (!shouldStop) {
@@ -274,13 +274,11 @@ class ClaudeProcessClient(
                     }
                 }
             } else {
-                // 无数据可用：检查 tool 超时
-                if (hasToolMarker) {
-                    val idle = System.currentTimeMillis() - lastReceiveTime
-                    if (idle > timeoutAfterToolMs) {
-                        logger.warn("[ClaudeProcessClient] tool 调用后 {}ms 无新输出，主动断开", idle)
-                        shouldStop = true
-                    }
+                // 无数据可用：检查空闲超时（超过 60 秒无输出则断开，避免进程永久挂起）
+                val idle = System.currentTimeMillis() - lastReceiveTime
+                if (idle > timeoutAfterToolMs) {
+                    logger.warn("[ClaudeProcessClient] {}ms 无新输出，主动断开 (hasToolMarker={})", idle, hasToolMarker)
+                    shouldStop = true
                 }
                 // 短暂休眠避免 busy-wait
                 if (!shouldStop) {
