@@ -4168,7 +4168,7 @@ private fun Route.registerApiKbTopicsTopicIdDeleteRoute() {
         }
         val ok = knowledgeBaseManager.deleteTopic(topicId, userId)
         call.respondText(
-            """{"success":$ok,"message":""}""",
+            """{"success":$ok}""",
             ContentType.Application.Json,
             if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
         )
@@ -4381,7 +4381,7 @@ private fun Route.registerApiKbEntriesEntryIdDeleteRoute() {
         }
         val ok = knowledgeBaseManager.deleteEntry(entryId, userId)
         call.respondText(
-            """{"success":$ok,"message":""}""",
+            """{"success":$ok}""",
             ContentType.Application.Json,
             if (ok) HttpStatusCode.OK else HttpStatusCode.NotFound
         )
