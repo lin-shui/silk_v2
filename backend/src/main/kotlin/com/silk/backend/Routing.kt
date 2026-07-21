@@ -349,6 +349,7 @@ fun Application.configureRouting() {
         ccConnectBridgeRoute()
         ccConnectApiRoutes()
         workflowKbRoutes()
+        pollMessagesRoute()
         obsidianRoutes()
         chatWebSocketRoute()
         audioDuplexRoute()
@@ -2505,9 +2506,9 @@ private fun Route.unreadTodoMessageRoutes() {
                 // 获取群组的 ChatServer 并发送消息
                 val groupChatServer = getGroupChatServer(request.groupId)
                 
-                // 创建消息
+                // 创建消息（优先使用客户端生成的 ID，避免前端轮询模式下去重失败导致重复消息）
                 val message = Message(
-                    id = UUID.randomUUID().toString(),
+                    id = request.messageId ?: UUID.randomUUID().toString(),
                     content = request.content,
                     userId = request.userId,
                     userName = request.userName,
@@ -2593,6 +2594,32 @@ private fun Route.unreadTodoMessageRoutes() {
         
         // ==================== Agent Bridge WebSocket (ACP) ====================
 
+}
+
+private fun Route.pollMessagesRoute() {
+    get("/api/messages/poll/{groupId}") {
+        val groupId = call.parameters["groupId"] ?: return@get
+        val since = call.parameters["since"]?.toLongOrNull() ?: 0L
+        val historyManager = ChatHistoryManager()
+        val history = historyManager.loadChatHistory(groupId)
+        val entries = history?.messages?.filter { it.timestamp > since } ?: emptyList()
+        // 转换为前端 WebSocket Message 格式
+        val messages = entries.map { entry ->
+            Message(
+                id = entry.messageId,
+                userId = entry.senderId,
+                userName = entry.senderName,
+                content = entry.content,
+                timestamp = entry.timestamp,
+                type = try { MessageType.valueOf(entry.messageType) } catch (e: Exception) { MessageType.TEXT },
+                references = emptyList(),
+                contentBlocks = null,
+                interactiveOptions = null,
+                kbContextSelection = null,
+            )
+        }
+        call.respond(messages)
+    }
 }
 
 // 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。

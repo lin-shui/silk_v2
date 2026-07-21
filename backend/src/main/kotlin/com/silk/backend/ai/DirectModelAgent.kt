@@ -357,16 +357,21 @@ class DirectModelAgent(
         }
 
         val response = try {
-            // 优先使用 Claude CLI（内置 web_search、Grep、Read、glob 工具，原生支持 [citation:N] 引用）
-            try {
-                chatViaClaudeProcess(toolContext, callback)
-            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                logger.warn("⚠️ [DirectModelAgent] Claude CLI 调用失败，回退到 API 路径: ${e.message}")
-                val apiKey = AIConfig.ANTHROPIC_API_KEY
-                if (apiKey.isNotBlank()) {
-                    chatViaAnthropicApi(apiKey, toolContext, callback)
-                } else {
-                    throw e
+            if (AIConfig.DEEPCODE_CLI_PATH.isNotBlank()) {
+                // 使用 deepcode-cli（配置了 DEEPCODE_CLI_PATH 时优先走此路径）
+                chatViaDeepCodeCli(callback)
+            } else {
+                // 优先使用 Claude CLI（内置 web_search、Grep、Read、glob 工具，原生支持 [citation:N] 引用）
+                try {
+                    chatViaClaudeProcess(toolContext, callback)
+                } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
+                    logger.warn("⚠️ [DirectModelAgent] Claude CLI 调用失败，回退到 API 路径: ${e.message}")
+                    val apiKey = AIConfig.ANTHROPIC_API_KEY
+                    if (apiKey.isNotBlank()) {
+                        chatViaAnthropicApi(apiKey, toolContext, callback)
+                    } else {
+                        throw e
+                    }
                 }
             }
         } catch (e: CancellationException) {
@@ -529,6 +534,41 @@ class DirectModelAgent(
         val topicSegment = "${sanitizeWorkspaceSegment(entry.topicName)}__${entry.topicId}"
         val entrySegment = "${sanitizeWorkspaceSegment(entry.entryTitle)}__${entry.entryId}.md"
         return "topics/$topicSegment/$entrySegment"
+    }
+
+    /**
+     * 通过 deepcode-cli --headless 调用模型。
+     * 将已构建好的完整 prompt（含系统指令 + 对话历史 + 上下文）传给 deepcode-cli，
+     * deepcode-cli 只做模型调用引擎，不管理自身上下文。
+     *
+     * 当 AIConfig.DEEPCODE_CLI_PATH 配置后，此路径优先于 claude CLI。
+     */
+    private suspend fun chatViaDeepCodeCli(
+        callback: suspend (String, String, Boolean) -> Unit
+    ): String {
+        callback("thinking", "🤔 思考中...", false)
+        // 构建完整 prompt：同 chatViaClaudeProcess，包含 system + 对话历史
+        val fullPrompt = buildString {
+            for (msg in conversationHistory) {
+                when (msg.role) {
+                    "system" -> {
+                        appendLine(msg.content)
+                        appendLine()
+                    }
+                    "user" -> {
+                        appendLine("User: ${msg.content}")
+                    }
+                    "assistant" -> {
+                        appendLine("Assistant: ${msg.content}")
+                        appendLine()
+                    }
+                }
+            }
+            appendLine()
+            appendLine("Assistant:")
+        }
+        val client = DeepCodeProcessClient(groupId = sessionId)
+        return client.streamCompletion(fullPrompt, callback)
     }
 
     private suspend fun chatViaClaudeProcess(

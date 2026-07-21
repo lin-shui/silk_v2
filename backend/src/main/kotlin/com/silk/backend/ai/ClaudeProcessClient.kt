@@ -2,7 +2,6 @@ package com.silk.backend.ai
 
 import com.silk.backend.EnvLoader
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -121,126 +120,61 @@ class ClaudeProcessClient(
 
         return withContext(Dispatchers.IO) {
             val env = buildClaudeProcessEnv()
-            runClaudeProcess(callId, cmd, env, absWorkspaceDir, callback, promptFile)
-        }
-    }
+            val processBuilder = ProcessBuilder(cmd)
+                .directory(File(absWorkspaceDir))
+                .redirectErrorStream(false)
+            processBuilder.environment().putAll(env)
 
-    /**
-     * 在 IO 调度器中运行 claude 子进程，包含看门狗、流式读取和异常处理。
-     */
-    private suspend fun runClaudeProcess(
-        callId: String,
-        cmd: List<String>,
-        env: MutableMap<String, String>,
-        absWorkspaceDir: String,
-        callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
-        promptFile: java.io.File,
-    ): String {
-        val processBuilder = ProcessBuilder(cmd)
-            .directory(File(absWorkspaceDir))
-            .redirectErrorStream(false)
-        processBuilder.environment().putAll(env)
-        val process = processBuilder.start()
+            val process = processBuilder.start()
 
-        return try {
-            coroutineScope {
-                // 读取 stderr（Landlock 警告等），仅打日志不流入聊天
-                val stderrLogger = launch {
-                    try {
-                        process.errorStream.bufferedReader().forEachLine { line ->
-                            if (line.isNotBlank()) {
-                                logger.info("[ClaudeProcessClient-{}] stderr: {}", callId, line.trim())
+            try {
+                coroutineScope {
+                    // 读取 stderr（Landlock 警告等），仅打日志不流入聊天
+                    val stderrLogger = launch {
+                        try {
+                            process.errorStream.bufferedReader().forEachLine { line ->
+                                if (line.isNotBlank()) {
+                                    logger.info("[ClaudeProcessClient-{}] stderr: {}", callId, line.trim())
+                                }
                             }
-                        }
-                    } catch (_: java.io.IOException) { /* process destroyed */ }
-                }
-
-                // 共享状态：最后收到数据的时间 & 是否检测到 tool 标记
-                val lastReceiveTime = java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis())
-                val hasToolMarker = java.util.concurrent.atomic.AtomicBoolean(false)
-
-                // tool 空闲看门狗：检测到 tool 标记后 idleTimeoutMs 无新数据则断开
-                val toolWatchdog = launchToolWatchdog(callId, process, lastReceiveTime, hasToolMarker)
-
-                // 总超时看门狗
-                val watchdog = launchTimeoutWatchdog(callId, process)
-
-                try {
-                    val onOutput: (String) -> Unit = { cleaned ->
-                        lastReceiveTime.set(System.currentTimeMillis())
-                        if (!hasToolMarker.get() && (cleaned.contains("<!--TOOL") || cleaned.contains("<!--END_TOOL-->"))) {
-                            hasToolMarker.set(true)
-                        }
+                        } catch (_: java.io.IOException) { /* process destroyed */ }
                     }
-                    val result = streamProcessOutput(process, callback, onOutput)
 
-                    val exitCode = process.waitFor()
-                    logExit(callId, result, exitCode)
-                    result
-                } finally {
-                    watchdog.cancel()
-                    toolWatchdog.cancel()
-                    stderrLogger.cancel()
+                    // 看门狗：超时强行关闭
+                    val watchdog = launch {
+                        delay(responseTimeoutMs)
+                        logger.warn("[ClaudeProcessClient-{}] 响应超时 ({}ms)，强制关闭进程", callId, responseTimeoutMs)
+                        process.destroyForcibly()
+                    }
+
+                    try {
+                        val result = streamProcessOutput(process, callback)
+
+                        val exitCode = process.waitFor()
+
+                        if (exitCode == 0) {
+                            logger.info("[ClaudeProcessClient-{}] 完成: groupId={}, chars={}", callId, groupId, result.length)
+                        } else {
+                            logger.warn("[ClaudeProcessClient-{}] 退出码非零: exitCode={}, groupId={}, output={}",
+                                callId, exitCode, groupId, result.take(500))
+                        }
+
+                        result
+                    } finally {
+                        watchdog.cancel()
+                        stderrLogger.cancel()
+                    }
                 }
+            } catch (e: CancellationException) {
+                process.destroyForcibly()
+                throw e
+            } catch (e: Exception) {
+                process.destroyForcibly()
+                logger.error("[ClaudeProcessClient-{}] 异常: {}", callId, e.message)
+                throw e
+            } finally {
+                promptFile.delete()
             }
-        } catch (e: CancellationException) {
-            process.destroyForcibly()
-            throw e
-        } catch (e: Exception) {
-            process.destroyForcibly()
-            logger.error("[ClaudeProcessClient-{}] 异常: {}", callId, e.message)
-            throw e
-        } finally {
-            promptFile.delete()
-        }
-    }
-
-    /**
-     * 启动 tool 空闲看门狗：检测到 tool 标记后 idleTimeoutMs 无新数据则关闭输入流。
-     */
-    private fun CoroutineScope.launchToolWatchdog(
-        callId: String,
-        process: Process,
-        lastReceiveTime: java.util.concurrent.atomic.AtomicLong,
-        hasToolMarker: java.util.concurrent.atomic.AtomicBoolean,
-    ) = launch {
-        val toolIdleTimeoutMs = 60_000L
-        var active = true
-        while (active) {
-            delay(2_000) // 每 2 秒检查一次
-            if (hasToolMarker.get()) {
-                val idle = System.currentTimeMillis() - lastReceiveTime.get()
-                if (idle > toolIdleTimeoutMs) {
-                    logger.warn("[ClaudeProcessClient-{}] tool 调用后 {}ms 无新输出，主动断开",
-                        callId, idle)
-                    process.inputStream.close()
-                    active = false
-                }
-            }
-        }
-    }
-
-    /**
-     * 启动总超时看门狗：超过 responseTimeoutMs 无响应则强制关闭进程。
-     */
-    private fun CoroutineScope.launchTimeoutWatchdog(
-        callId: String,
-        process: Process,
-    ) = launch {
-        delay(responseTimeoutMs)
-        logger.warn("[ClaudeProcessClient-{}] 响应超时 ({}ms)，强制关闭进程", callId, responseTimeoutMs)
-        process.destroyForcibly()
-    }
-
-    /**
-     * 记录子进程退出日志。
-     */
-    private fun logExit(callId: String, result: String, exitCode: Int) {
-        if (exitCode == 0) {
-            logger.info("[ClaudeProcessClient-{}] 完成: groupId={}, chars={}", callId, groupId, result.length)
-        } else {
-            logger.warn("[ClaudeProcessClient-{}] 退出码非零: exitCode={}, groupId={}, output={}",
-                callId, exitCode, groupId, result.take(500))
         }
     }
 
@@ -269,38 +203,52 @@ class ClaudeProcessClient(
 
     /**
      * 读取子进程 stdout，按阈值流式回调增量文本，返回累计的完整文本。
-     * 使用阻塞 read 确保低延迟，通过并行看门狗处理 tool 调用后的空闲超时。
+     * 与原内联读取循环等价：清理 ANSI/回车，处理跨 read 边界的不完整 UTF-8 尾字节，
+     * 累计长度达到 sendThreshold 时回调增量，结束后回调剩余文本。
      */
-    @Suppress("NestedBlockDepth")
     private suspend fun streamProcessOutput(
         process: Process,
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
-        onOutput: (cleaned: String) -> Unit,  // 用于通知 watchdog 有数据到达
     ): String {
         val output = StringBuilder()
         var lastSentLength = 0
         var overflow = ByteArray(0)
+        var lastReceiveTime = System.currentTimeMillis()
+        var hasToolMarker = false
 
-        val buf = ByteArray(4096)
-        var running = true
-        while (running) {
-            var bytesRead = -1
-            try {
-                bytesRead = process.inputStream.read(buf)
+        // 使用非阻塞读取 + 超时检测，避免 tool 调用后无后续输出导致永久挂起
+        val inputStream = process.inputStream
+        val timeoutAfterToolMs = 30_000L  // 30 秒无新输出则主动断开（防止 Claude 进程永久挂起）
+        var shouldStop = false
+
+        while (!shouldStop) {
+            // 带超时的非阻塞读取
+            val avail = try {
+                inputStream.available()
             } catch (e: java.io.IOException) {
-                logger.warn("streamProcessOutput: 输入流被看门狗关闭", e)
-                running = false
+                logger.warn("[ClaudeProcessClient] 检查 available 异常: {}", e.message)
+                break
             }
-            if (running && bytesRead != -1) {
+
+            if (avail > 0) {
+                val readBuf = ByteArray(minOf(avail, 4096))
+                val bytesRead = try {
+                    inputStream.read(readBuf)
+                } catch (e: java.io.IOException) {
+                    logger.warn("[ClaudeProcessClient] 读取流异常: {}", e.message)
+                    break
+                }
+                if (bytesRead == -1) break
                 currentCoroutineContext().ensureActive()
+                lastReceiveTime = System.currentTimeMillis()
 
                 val merged = if (overflow.isNotEmpty()) {
                     ByteArray(overflow.size + bytesRead).apply {
                         overflow.copyInto(this)
-                        buf.copyInto(this, overflow.size, 0, bytesRead)
+                        readBuf.copyInto(this, overflow.size, 0, bytesRead)
                     }
                 } else {
-                    buf.copyOfRange(0, bytesRead)
+                    readBuf.copyOfRange(0, bytesRead)
                 }
 
                 val decoded = merged.decodeToString()
@@ -314,7 +262,11 @@ class ClaudeProcessClient(
 
                 if (cleaned.isNotBlank()) {
                     output.append(cleaned)
-                    onOutput(cleaned)
+                    // 检测 tool 标记
+                    if (!hasToolMarker && (cleaned.contains("<!--TOOL") || cleaned.contains("<!--END_TOOL-->"))) {
+                        hasToolMarker = true
+                    }
+
                     if (output.length - lastSentLength >= sendThreshold) {
                         val delta = output.substring(lastSentLength)
                         lastSentLength = output.length
@@ -322,7 +274,16 @@ class ClaudeProcessClient(
                     }
                 }
             } else {
-                running = false
+                // 无数据可用：检查空闲超时（超过 60 秒无输出则断开，避免进程永久挂起）
+                val idle = System.currentTimeMillis() - lastReceiveTime
+                if (idle > timeoutAfterToolMs) {
+                    logger.warn("[ClaudeProcessClient] {}ms 无新输出，主动断开 (hasToolMarker={})", idle, hasToolMarker)
+                    shouldStop = true
+                }
+                // 短暂休眠避免 busy-wait
+                if (!shouldStop) {
+                    kotlinx.coroutines.delay(500)
+                }
             }
         }
 

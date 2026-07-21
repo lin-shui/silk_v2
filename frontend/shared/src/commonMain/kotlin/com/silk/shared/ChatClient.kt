@@ -319,6 +319,7 @@ class ChatClient(
                             if (it.id == message.id) message else it
                         }
                         // edit 只更新已有卡片内容，不影响状态（agent 可能仍在工作中）
+                        return
                     } else {
                         val exists = _messages.value.any { it.id == message.id }
                         if (!exists) {
@@ -343,7 +344,8 @@ class ChatClient(
                         _transientContentBlocks.value = emptyList()
                         _interactiveOptions.value = emptyList()
                         suppressTransient = false
-                    } else {
+                    } else if (isSilkAi) {
+                        // AI 最终回复到达 → 清除流式状态，显示完整回复
                         _transientMessage.value = null
                         _statusMessages.value = emptyList()
                         _isGenerating.value = false
@@ -351,6 +353,9 @@ class ChatClient(
                         // 不清除 _interactiveOptions：cc-connect 的交互按钮独立于普通消息生命周期，
                         // 由 CLEAR_STATUS 或 sendCcAnswer 负责清除。普通消息到达不应取消等待中的按钮。
                         suppressTransient = false
+                        _pendingQuestionId.value = null
+                    } else {
+                        // 其他用户的非临时消息 → 不打断 AI 生成（不清除流式状态）
                         _pendingQuestionId.value = null
                     }
                 }

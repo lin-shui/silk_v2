@@ -511,14 +511,14 @@ data class TokenRefreshResponse(
 object ApiClient {
     private val BASE_URL: String
         get() {
-            // 优先走同源，兼容 nginx 代理；
-            // 仅在本地前端 dev server 直连场景下切到后端端口，避免跨端口登录失效。
-            val protocol = window.location.protocol
             val hostname = window.location.hostname
             val origin = window.location.origin.let { if (it.endsWith("/")) it.dropLast(1) else it }
-            val currentPort = window.location.port
 
-            return if (currentPort == BuildConfig.FRONTEND_PORT) {
+            // 生产环境（非 localhost）始终走同源，配合 nginx 代理后端 API，避免跨端口 CORS 问题
+            // 本地开发环境（localhost/127.0.0.1）且端口匹配时切到后端端口
+            val isLocalDev = hostname == "localhost" || hostname == "127.0.0.1"
+            return if (isLocalDev) {
+                val protocol = window.location.protocol
                 "$protocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
             } else {
                 origin

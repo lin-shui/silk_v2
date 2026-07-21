@@ -128,25 +128,25 @@ object SilkColors {
 }
 
 fun backendHttpOrigin(): String {
-    val protocol = window.location.protocol
     val hostname = window.location.hostname
-    val currentPort = window.location.port
-    return if (currentPort == BuildConfig.FRONTEND_PORT) {
-        "$protocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
-    } else {
-        window.location.origin
+    val isLocalDev = hostname == "localhost" || hostname == "127.0.0.1"
+    if (isLocalDev) {
+        val protocol = window.location.protocol
+        return "$protocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
     }
+    // 生产环境走同源，由 nginx 代理后端 API
+    return window.location.origin
 }
 
 internal fun backendWsOrigin(): String {
+    val hostname = window.location.hostname
     val wsProtocol = if (window.location.protocol == "https:") "wss:" else "ws:"
-    val currentPort = window.location.port
-    val host = if (currentPort == BuildConfig.FRONTEND_PORT) {
-        "${window.location.hostname}:${BuildConfig.BACKEND_HTTP_PORT}"
-    } else {
-        window.location.host
+    val isLocalDev = hostname == "localhost" || hostname == "127.0.0.1"
+    if (isLocalDev) {
+        return "$wsProtocol//$hostname:${BuildConfig.BACKEND_HTTP_PORT}"
     }
-    return "$wsProtocol//$host"
+    // 生产环境走页面同源，由 nginx 统一代理 WebSocket 和 API
+    return "$wsProtocol//${window.location.host}"
 }
 
 // ==================== 安全的 JS 互操作辅助函数（避免在 js("...") 中引用 Kotlin 变量） ====================
@@ -2623,14 +2623,11 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     classes(SilkStylesheet.aiMessageContent)
                     style { property("margin-top", "4px") }
                 }) {
-                    // Thinking block rendered outside the loop for stable composition identity
-                    val thinkingBlock = contentBlocks.firstOrNull { it.type == "thinking" }
-                    if (thinkingBlock != null) {
-                        ThinkingBlock(content = thinkingBlock.content, isComplete = thinkingBlock.isComplete)
-                    }
+                    // 按 index 顺序渲染，保持 block 出现的时间顺序
+                    // （thinking / tool / text 交错出现时各自显示在对应位置）
                     for (block in contentBlocks) {
                         when (block.type) {
-                            "thinking" -> { /* rendered above */ }
+                            "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete)
                             "text" -> MarkdownContent(content = block.content, references = emptyList())
                             "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
                         }
@@ -5585,10 +5582,8 @@ fun MarkdownContent(
                 val img = images.item(imgIdx) as? HTMLElement ?: continue
                 val src = img.getAttribute("src") ?: ""
                 if (src.startsWith("http://")) {
-                    // 代理在 API 后端，不在前端静态服务器
-                    val backendPort = BuildConfig.BACKEND_HTTP_PORT
-                    val loc = window.location
-                    val proxyBase = "${loc.protocol}//${loc.hostname}:$backendPort"
+                    // 图片代理走同源，由 nginx 转发到后端
+                    val proxyBase = window.location.origin
                     img.setAttribute("src", "$proxyBase/api/image-proxy?url=${js("encodeURIComponent")(src)}")
                 }
             }
@@ -5929,16 +5924,11 @@ Div({
         // 内容区域 — 长内容渲染折叠+展开两个视图，DOM 切换 display（不触发 Compose 重组）
         val contentBlocksForRender = message.contentBlocks
         if (!contentBlocksForRender.isNullOrEmpty()) {
-            // 持久化消息回放：从结构化 content blocks 渲染
+            // 持久化消息回放：按 index 顺序渲染结构化 content blocks
             Div({ classes(SilkStylesheet.aiMessageContent) }) {
-                // Thinking block rendered outside the loop for stable composition identity
-                val thinkingBlock = contentBlocksForRender.firstOrNull { it.type == "thinking" }
-                if (thinkingBlock != null) {
-                    ThinkingBlock(content = thinkingBlock.content, isComplete = thinkingBlock.isComplete)
-                }
                 for (block in contentBlocksForRender) {
                     when (block.type) {
-                        "thinking" -> { /* rendered above */ }
+                        "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete)
                         "text" -> MarkdownContent(content = block.content, references = message.references)
                         "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
                     }

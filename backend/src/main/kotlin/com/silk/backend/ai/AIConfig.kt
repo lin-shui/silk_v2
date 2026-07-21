@@ -36,6 +36,13 @@ object AIConfig {
     val CLAUDE_CLI_WORKSPACE_ROOT: String get() =
         env("CLAUDE_CLI_WORKSPACE_ROOT") ?: "backend/chat_workspaces"
 
+    // ── deepcode-cli 配置（替换 claude CLI） ─────────────────────
+    /** deepcode-cli 可执行文件路径，为空时使用 claude CLI。设置此项将绕过 claude CLI 直接使用 deepcode */
+    val DEEPCODE_CLI_PATH: String get() = env("DEEPCODE_CLI_PATH") ?: ""
+    /** deepcode-cli 单次响应超时（毫秒），默认 5 分钟 */
+    val DEEPCODE_CLI_TIMEOUT_MS: Long get() =
+        env("DEEPCODE_CLI_TIMEOUT_MS")?.toLongOrNull()?.takeIf { it > 0 } ?: 300_000L
+
     /**
      * 调用大模型（OpenAI 兼容）时的 HTTP 超时（毫秒）。
      * 对 [java.net.http.HttpClient] 而言，在流式响应下主要约束「建立连接 + 收到响应头」的耗时；

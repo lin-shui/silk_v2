@@ -3,6 +3,7 @@ package com.silk.shared
 import org.w3c.dom.WebSocket as BrowserWebSocket
 import org.w3c.dom.MessageEvent
 import org.w3c.dom.events.Event
+import kotlinx.browser.window
 
 actual class PlatformWebSocket actual constructor(
     private val serverUrl: String,
@@ -13,92 +14,54 @@ actual class PlatformWebSocket actual constructor(
     private val onLog: LogCallback?
 ) {
     private var ws: BrowserWebSocket? = null
-    
-    private fun log(message: String) {
-        println(message)
-        onLog?.invoke(message)
-    }
+    private var isDisconnecting = false
+
+    private fun log(message: String) { println(message); onLog?.invoke(message) }
 
     private fun errorMessage(error: dynamic): String =
         error?.message ?: error?.toString() ?: "Unknown error"
-    
+
     actual val isConnected: Boolean
         get() = ws?.readyState == BrowserWebSocket.OPEN
-    
+
     actual fun connect(token: String?, userId: String, userName: String, groupId: String) {
+        isDisconnecting = false
+
         try {
-            // 关闭旧连接（静默，不触发 onclose 回调）
             ws?.let { old ->
-                old.onclose = null
-                old.onerror = null
-                old.onmessage = null
-                old.onopen = null
-                try {
-                    old.close(1000, "Switching group")
-                } catch (error: dynamic) {
-                    log("⚠️ [WebSocket] 旧连接关闭异常: ${errorMessage(error)}")
-                }
+                old.onclose = null; old.onerror = null; old.onmessage = null; old.onopen = null
+                try { old.close(1000, "Switching group") } catch (_: dynamic) { /* close failure is safe to ignore */ }
             }
 
-            val safeUserName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")
-            val safeGroupId = groupId.replace(" ", "_").replace("&", "_").replace("=", "_")
-            
-            // 优先使用 JWT token，fallback 到 userId
-            val fullUrl = if (!token.isNullOrBlank()) {
-                "$serverUrl/chat?token=$token&userName=$safeUserName&groupId=$safeGroupId"
+            val safeName = userName.replace(" ", "_").replace("&", "_").replace("=", "_")
+            val safeGroup = groupId.replace(" ", "_").replace("&", "_").replace("=", "_")
+            val url = if (!token.isNullOrBlank()) {
+                "$serverUrl/chat?token=$token&userName=$safeName&groupId=$safeGroup"
             } else {
-                "$serverUrl/chat?userId=$userId&userName=$safeUserName&groupId=$safeGroupId"
+                "$serverUrl/chat?userId=$userId&userName=$safeName&groupId=$safeGroup"
             }
-            log("🔗 [WebSocket] 连接到: $fullUrl")
-            
-            ws = BrowserWebSocket(fullUrl)
-            
-            ws?.onopen = { _: Event ->
-                log("✅ [WebSocket] 连接已打开")
-                onConnected()
-            }
-            
-            ws?.onclose = { _: Event ->
-                log("🔌 [WebSocket] 连接已关闭")
-                onDisconnected()
-            }
-            
-            ws?.onerror = { _: Event ->
-                log("❌ [WebSocket] 错误")
-                onError("WebSocket error")
-            }
-            
-            ws?.onmessage = { event: MessageEvent ->
-                val data = event.data
-                if (data is String) {
-                    onMessage(data)
-                }
-            }
-        } catch (error: dynamic) {
-            val message = errorMessage(error)
-            log("❌ [WebSocket] 创建失败: $message")
-            onError(message)
-        }
+            log("🔗 [WebSocket] $url")
+
+            ws = BrowserWebSocket(url)
+
+            ws?.onopen = { log("✅ WS open"); onConnected() }
+            ws?.onclose = { if (!isDisconnecting) onDisconnected() }
+            ws?.onerror = { log("❌ WS error"); onError("WebSocket error") }
+            ws?.onmessage = { e -> val d = e.data; if (d is String) onMessage(d) }
+        } catch (e: dynamic) { onError(errorMessage(e)) }
     }
-    
+
     actual fun send(message: String) {
-        try {
-            if (isConnected) {
-                ws?.send(message)
-            } else {
-                log("⚠️ [WebSocket] 未连接，无法发送消息")
-            }
-        } catch (error: dynamic) {
-            log("❌ [WebSocket] 发送失败: ${errorMessage(error)}")
+        if (ws?.readyState == BrowserWebSocket.OPEN) {
+            try { ws?.send(message) } catch (e: dynamic) { log("❌ WS send: " + errorMessage(e)) }
+        } else {
+            log("⚠️ not connected")
         }
     }
-    
+
     actual fun disconnect() {
-        try {
-            ws?.close(1000, "Client disconnecting")
-            ws = null
-        } catch (error: dynamic) {
-            log("⚠️ [WebSocket] 关闭异常: ${errorMessage(error)}")
-        }
+        isDisconnecting = true
+        try { ws?.close(1000, "Client disconnecting"); ws = null } catch (_: dynamic) { /* close failure is safe to ignore */ }
+        onDisconnected()
     }
 }
