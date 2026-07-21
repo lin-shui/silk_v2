@@ -2506,9 +2506,9 @@ private fun Route.unreadTodoMessageRoutes() {
                 // 获取群组的 ChatServer 并发送消息
                 val groupChatServer = getGroupChatServer(request.groupId)
                 
-                // 创建消息
+                // 创建消息（优先使用客户端生成的 ID，避免前端轮询模式下去重失败导致重复消息）
                 val message = Message(
-                    id = UUID.randomUUID().toString(),
+                    id = request.messageId ?: UUID.randomUUID().toString(),
                     content = request.content,
                     userId = request.userId,
                     userName = request.userName,

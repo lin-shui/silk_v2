@@ -1,5 +1,6 @@
 package com.silk.backend.database
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import java.time.LocalDateTime
 
@@ -296,7 +297,9 @@ data class SendMessageRequest(
     val groupId: String,
     val userId: String,
     val userName: String,
-    val content: String
+    val content: String,
+    /** 客户端生成的 message ID（来自 WebSocket Message.id）；为空时由服务端生成 UUID */
+    @SerialName("id") val messageId: String? = null,
 )
 
 /**
