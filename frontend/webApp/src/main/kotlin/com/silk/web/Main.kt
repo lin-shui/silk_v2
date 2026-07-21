@@ -2623,14 +2623,11 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     classes(SilkStylesheet.aiMessageContent)
                     style { property("margin-top", "4px") }
                 }) {
-                    // Thinking block rendered outside the loop for stable composition identity
-                    val thinkingBlock = contentBlocks.firstOrNull { it.type == "thinking" }
-                    if (thinkingBlock != null) {
-                        ThinkingBlock(content = thinkingBlock.content, isComplete = thinkingBlock.isComplete)
-                    }
+                    // 按 index 顺序渲染，保持 block 出现的时间顺序
+                    // （thinking / tool / text 交错出现时各自显示在对应位置）
                     for (block in contentBlocks) {
                         when (block.type) {
-                            "thinking" -> { /* rendered above */ }
+                            "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete)
                             "text" -> MarkdownContent(content = block.content, references = emptyList())
                             "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
                         }
@@ -5927,16 +5924,11 @@ Div({
         // 内容区域 — 长内容渲染折叠+展开两个视图，DOM 切换 display（不触发 Compose 重组）
         val contentBlocksForRender = message.contentBlocks
         if (!contentBlocksForRender.isNullOrEmpty()) {
-            // 持久化消息回放：从结构化 content blocks 渲染
+            // 持久化消息回放：按 index 顺序渲染结构化 content blocks
             Div({ classes(SilkStylesheet.aiMessageContent) }) {
-                // Thinking block rendered outside the loop for stable composition identity
-                val thinkingBlock = contentBlocksForRender.firstOrNull { it.type == "thinking" }
-                if (thinkingBlock != null) {
-                    ThinkingBlock(content = thinkingBlock.content, isComplete = thinkingBlock.isComplete)
-                }
                 for (block in contentBlocksForRender) {
                     when (block.type) {
-                        "thinking" -> { /* rendered above */ }
+                        "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete)
                         "text" -> MarkdownContent(content = block.content, references = message.references)
                         "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
                     }
