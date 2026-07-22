@@ -1982,7 +1982,7 @@ export struct ChatPage {
         Column() {
           ForEach(this.transientContentBlocks.filter((b: ContentBlock) => b.type === 'thinking'),
             (block: ContentBlock) => {
-              ThinkingPanel({ thinking: block.content, isComplete: block.isComplete })
+              ThinkingPanel({ thinking: block.content, isComplete: block.isComplete, elapsedMs: block.elapsedMs })
             })
 
           ForEach(this.transientContentBlocks.filter((b: ContentBlock) => b.type === 'tool_use'),

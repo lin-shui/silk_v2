@@ -46,6 +46,8 @@ export interface ContentBlock {
   isComplete: boolean;
   toolName: string;
   toolId: string;
+  /** 仅对 thinking block 有意义：后端记录的真实思考耗时（毫秒）。0 表示未提供。 */
+  elapsedMs: number;
 }
 
 /**

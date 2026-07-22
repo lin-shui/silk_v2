@@ -1326,7 +1326,7 @@ fun ChatScreen(appState: AppState) {
                             val textB = transientContentBlocks.firstOrNull { it.type == "text" }
 
                             if (tb != null) {
-                                ThinkingBlock(thinkingText = tb.content, isComplete = tb.isComplete, isExpanded = !tb.isComplete, onToggle = { })
+                                ThinkingBlock(thinkingText = tb.content, isComplete = tb.isComplete, isExpanded = !tb.isComplete, elapsedMs = tb.elapsedMs, onToggle = { })
                             }
                             for (tool in toolBs) {
                                 var tExp by remember { mutableStateOf(true) }
@@ -2528,20 +2528,27 @@ token  = "${tokenInfo.token ?: ""}"
 /**
  * 思考过程组件（含计时器）— 对应 Web 端 ChatRenderer.kt 的 ThinkingBlock。
  * 在思考进行中显示 "Thinking Xs..."，完成后显示 "Thought for Xs"。
+ *
+ * @param elapsedMs 后端记录的真实思考耗时（毫秒）。>0 时优先使用，避免组件重新挂载丢失计时。
+ *                  0 表示后端未提供（旧消息兼容），回退到组件挂载时起的本地计时。
  */
 @Composable
 fun ThinkingBlock(
     thinkingText: String,
     isComplete: Boolean = false,
     isExpanded: Boolean = false,
+    elapsedMs: Long = 0L,
     onToggle: () -> Unit = {}
 ) {
     var elapsedSeconds by remember { mutableLongStateOf(0L) }
     val startEpochMs = remember { System.currentTimeMillis() }
     val show = isExpanded || !isComplete
 
-    LaunchedEffect(isComplete) {
-        if (isComplete) {
+    // 后端提供了真实耗时则直接用；否则回退到本地 ticker（兼容旧消息）
+    LaunchedEffect(isComplete, elapsedMs) {
+        if (elapsedMs > 0) {
+            elapsedSeconds = elapsedMs / 1000
+        } else if (isComplete) {
             elapsedSeconds = (System.currentTimeMillis() - startEpochMs) / 1000
         } else {
             elapsedSeconds = 0
@@ -2674,6 +2681,7 @@ fun AIMessageCardAndroid(
                         thinkingText = thinkingBlock.content,
                         isComplete = thinkingBlock.isComplete,
                         isExpanded = isThinkingExpanded || !thinkingBlock.isComplete,
+                        elapsedMs = thinkingBlock.elapsedMs,
                         onToggle = { onThinkingExpandChange(!isThinkingExpanded) }
                     )
                 }

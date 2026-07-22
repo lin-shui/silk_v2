@@ -175,6 +175,8 @@ class DeepCodeProcessClient(
 
         // 结构化 block 跟踪
         private val streamingBlocks = mutableMapOf<Int, ContentBlock>()
+        // 每个 block 的开始时间（用于 thinking block 计算真实耗时）
+        private val blockStartMs = mutableMapOf<Int, Long>()
         private var nextBlockIndex = 0
         private var currentTextIndex = -1
         private var currentThinkingIndex = -1
@@ -196,8 +198,14 @@ class DeepCodeProcessClient(
                 }
                 lastSentLength = textOutput.length
             }
+            val nowMs = System.currentTimeMillis()
             streamingBlocks.forEach { (idx, block) ->
-                streamingBlocks[idx] = block.copy(isComplete = true)
+                val finalElapsed = blockStartMs.remove(idx)?.let { start -> nowMs - start }
+                    ?: block.elapsedMs
+                streamingBlocks[idx] = block.copy(
+                    isComplete = true,
+                    elapsedMs = if (block.type == "thinking") finalElapsed else block.elapsedMs
+                )
             }
             emitBlocksState()
         }
@@ -285,6 +293,7 @@ class DeepCodeProcessClient(
             closeCurrentTextBlock()
             val idx = nextBlockIndex++
             currentThinkingIndex = idx
+            blockStartMs[idx] = System.currentTimeMillis()
             streamingBlocks[idx] = ContentBlock(
                 index = idx, type = "thinking",
                 content = "", isComplete = false,
@@ -297,6 +306,7 @@ class DeepCodeProcessClient(
             closeCurrentTextBlock()
             val idx = nextBlockIndex++
             currentToolIndex = idx
+            blockStartMs[idx] = System.currentTimeMillis()
             streamingBlocks[idx] = ContentBlock(
                 index = idx, type = "tool_use",
                 content = "", isComplete = false,
@@ -307,7 +317,16 @@ class DeepCodeProcessClient(
 
         private suspend fun endBlock(idx: Int) {
             if (idx >= 0) {
-                streamingBlocks[idx] = streamingBlocks[idx]!!.copy(isComplete = true)
+                val existing = streamingBlocks[idx]
+                if (existing != null) {
+                    val finalElapsed = blockStartMs.remove(idx)?.let { start ->
+                        System.currentTimeMillis() - start
+                    } ?: existing.elapsedMs
+                    streamingBlocks[idx] = existing.copy(
+                        isComplete = true,
+                        elapsedMs = if (existing.type == "thinking") finalElapsed else existing.elapsedMs
+                    )
+                }
                 emitBlocksState()
             }
         }
@@ -335,8 +354,13 @@ class DeepCodeProcessClient(
         }
 
         private suspend fun emitBlocksState() {
+            val nowMs = System.currentTimeMillis()
             val jsonStr = buildJsonArray {
                 streamingBlocks.entries.sortedBy { it.key }.forEach { (_, block) ->
+                    // 进行中的 thinking block：用真实开始时间算 live 时长
+                    val liveElapsed = if (block.type == "thinking" && !block.isComplete) {
+                        blockStartMs[block.index]?.let { start -> nowMs - start } ?: 0L
+                    } else block.elapsedMs
                     addJsonObject {
                         put("index", block.index)
                         put("type", block.type)
@@ -344,6 +368,7 @@ class DeepCodeProcessClient(
                         put("isComplete", block.isComplete)
                         put("toolName", block.toolName)
                         put("toolId", block.toolId)
+                        put("elapsedMs", liveElapsed)
                     }
                 }
             }.toString()

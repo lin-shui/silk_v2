@@ -55,5 +55,11 @@ data class ContentBlock(
     val content: String = "",
     val isComplete: Boolean = false,
     val toolName: String = "",
-    val toolId: String = ""
+    val toolId: String = "",
+    /**
+     * 仅对 thinking block 有意义：由后端记录的真实思考耗时（毫秒）。
+     * 前端据此显示 "Thought for Xs"，避免因组件重新挂载导致计时丢失。
+     * 0 表示未提供（兼容旧消息），前端回退到旧的本地计时逻辑。
+     */
+    val elapsedMs: Long = 0L
 )

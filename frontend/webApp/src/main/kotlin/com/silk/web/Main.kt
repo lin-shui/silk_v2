@@ -2627,7 +2627,7 @@ fun ChatAppWithGroup(user: User, group: Group, appState: WebAppState) {
                     // （thinking / tool / text 交错出现时各自显示在对应位置）
                     for (block in contentBlocks) {
                         when (block.type) {
-                            "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete)
+                            "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete, elapsedMs = block.elapsedMs)
                             "text" -> MarkdownContent(content = block.content, references = emptyList())
                             "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
                         }
@@ -5928,7 +5928,7 @@ Div({
             Div({ classes(SilkStylesheet.aiMessageContent) }) {
                 for (block in contentBlocksForRender) {
                     when (block.type) {
-                        "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete)
+                        "thinking" -> ThinkingBlock(content = block.content, isComplete = block.isComplete, elapsedMs = block.elapsedMs)
                         "text" -> MarkdownContent(content = block.content, references = message.references)
                         "tool_use" -> ToolCallBlock(name = block.toolName, summary = block.content, content = block.content)
                     }

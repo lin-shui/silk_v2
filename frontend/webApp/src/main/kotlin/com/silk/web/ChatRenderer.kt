@@ -177,19 +177,25 @@ fun StructuredContent(content: String, references: List<MessageReference>, msgId
 
 // ── Thinking Block ──
 
+/**
+ * @param elapsedMs 后端记录的真实思考耗时（毫秒）。>0 时优先使用，避免组件重新挂载丢失计时。
+ *                  0 表示后端未提供（旧消息兼容），回退到组件挂载时起的本地计时。
+ */
 @Composable
-fun ThinkingBlock(content: String, isComplete: Boolean = false) {
+fun ThinkingBlock(content: String, isComplete: Boolean = false, elapsedMs: Long = 0L) {
     var expanded by remember { mutableStateOf(false) }
     var elapsedSeconds by remember { mutableStateOf(0L) }
     val startEpochMs = remember { kotlin.js.Date.now().toLong() }
+    // 后端提供了真实耗时则直接用，避免本地 ticker 重新挂载丢失计时
+    val serverSeconds = elapsedMs / 1000
 
-    // Single LaunchedEffect: timer while thinking, final value on completion
-    LaunchedEffect(isComplete) {
-        if (isComplete) {
-            // Immediately set final elapsed time (no delay)
+    // 仅当后端未提供 elapsedMs 时，才启动本地 ticker（兼容旧消息或异常情况）
+    LaunchedEffect(isComplete, elapsedMs) {
+        if (elapsedMs > 0) {
+            elapsedSeconds = serverSeconds
+        } else if (isComplete) {
             elapsedSeconds = (kotlin.js.Date.now().toLong() - startEpochMs) / 1000
         } else {
-            // Continuous ticker while thinking is in progress
             elapsedSeconds = 0
             while (true) {
                 kotlinx.coroutines.delay(1000)

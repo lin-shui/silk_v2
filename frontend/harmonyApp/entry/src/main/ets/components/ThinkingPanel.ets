@@ -9,12 +9,20 @@ import { Theme, SilkColors } from '../common/Theme';
 export struct ThinkingPanel {
   @Prop thinking: string = '';
   @Prop isComplete: boolean = false;
+  /** 后端记录的真实思考耗时（毫秒）。>0 时优先使用，避免组件重新挂载丢失计时。
+   *  0 表示后端未提供（旧消息兼容），回退到组件挂载时起的本地计时。 */
+  @Prop elapsedMs: number = 0;
   @State isExpanded: boolean = false;
   @State elapsedSeconds: number = 0;
   private startTime: number = Date.now();
   private timerId: number = -1;
 
   aboutToAppear(): void {
+    // 后端提供了真实耗时则直接用，不启动本地 ticker
+    if (this.elapsedMs > 0) {
+      this.elapsedSeconds = Math.floor(this.elapsedMs / 1000);
+      return;
+    }
     this.startTime = Date.now();
     if (!this.isComplete) {
       this.timerId = setInterval(() => {
@@ -31,7 +39,8 @@ export struct ThinkingPanel {
   }
 
   /**
-   * 当 isComplete 变为 true 时停止计时器并记录最终时间
+   * 当 isComplete 变为 true 时停止计时器并记录最终时间。
+   * 后端已提供 elapsedMs 时直接采用，无需本地计时。
    */
   onIsCompleteChange(): void {
     if (this.isComplete) {
@@ -39,13 +48,20 @@ export struct ThinkingPanel {
         clearInterval(this.timerId);
         this.timerId = -1;
       }
-      this.elapsedSeconds = Math.floor((Date.now() - this.startTime) / 1000);
+      if (this.elapsedMs > 0) {
+        this.elapsedSeconds = Math.floor(this.elapsedMs / 1000);
+      } else {
+        this.elapsedSeconds = Math.floor((Date.now() - this.startTime) / 1000);
+      }
     }
   }
 
   build() {
-    // 监听 isComplete 变化
-    if (this.isComplete && this.timerId !== -1) {
+    // 后端提供了真实耗时则直接同步（每次 build 都校正）
+    if (this.elapsedMs > 0) {
+      this.elapsedSeconds = Math.floor(this.elapsedMs / 1000);
+    } else if (this.isComplete && this.timerId !== -1) {
+      // 监听 isComplete 变化（本地计时回退分支）
       clearInterval(this.timerId);
       this.timerId = -1;
       this.elapsedSeconds = Math.floor((Date.now() - this.startTime) / 1000);

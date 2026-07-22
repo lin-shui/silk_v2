@@ -45,7 +45,7 @@ export struct AIMessageCard {
       Column() {
         // 思考过程（带计时器）
         ForEach(blocks.filter((b: ContentBlock) => b.type === 'thinking'), (block: ContentBlock) => {
-          ThinkingPanel({ thinking: block.content, isComplete: block.isComplete })
+          ThinkingPanel({ thinking: block.content, isComplete: block.isComplete, elapsedMs: block.elapsedMs })
         })
 
         // 工具调用

@@ -75,7 +75,10 @@ data class ContentBlock(
     val content: String = "",
     val isComplete: Boolean = false,
     val toolName: String = "",
-    val toolId: String = ""
+    val toolId: String = "",
+    /** 仅对 thinking block 有意义：后端记录的真实思考耗时（毫秒）。
+     *  0 表示未提供（旧消息兼容），前端回退到本地计时。 */
+    val elapsedMs: Long = 0L
 )
 
 @Serializable

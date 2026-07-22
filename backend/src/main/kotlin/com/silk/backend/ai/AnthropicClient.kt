@@ -180,12 +180,20 @@ class AnthropicClient(
 
         // 结构化 content block 追踪
         val streamingBlocks = mutableMapOf<Int, ContentBlock>()
+        // 每个 block 的开始时间（用于 thinking block 计算真实耗时）
+        val blockStartMs = mutableMapOf<Int, Long>()
         var currentThinkingIndex = -1
 
-        // 当 block 状态变化时，emit 完整 block 列表到前端
+        // 当 block 状态变化时，emit 完整 block 列表到前端。
+        // 进行中的 thinking block 会带 live elapsedMs，让前端显示实时计时。
         suspend fun emitBlocksState() {
+            val nowMs = System.currentTimeMillis()
             val jsonStr = buildJsonArray {
                 streamingBlocks.entries.sortedBy { it.key }.forEach { (_, block) ->
+                    // 进行中的 thinking block：用真实开始时间算 live 时长
+                    val liveElapsed = if (block.type == "thinking" && !block.isComplete) {
+                        blockStartMs[block.index]?.let { start -> nowMs - start } ?: 0L
+                    } else block.elapsedMs
                     addJsonObject {
                         put("index", block.index)
                         put("type", block.type)
@@ -193,6 +201,7 @@ class AnthropicClient(
                         put("isComplete", block.isComplete)
                         put("toolName", block.toolName)
                         put("toolId", block.toolId)
+                        put("elapsedMs", liveElapsed)
                     }
                 }
             }.toString()
@@ -229,6 +238,7 @@ class AnthropicClient(
                                         completedToolCalls = completedToolCalls,
                                         collectedCitations = collectedCitations,
                                         streamingBlocks = streamingBlocks,
+                                        blockStartMs = blockStartMs,
                                         currentThinkingIndexRef = { currentThinkingIndex },
                                         setCurrentThinkingIndex = { currentThinkingIndex = it },
                                         onBlockChanged = ::emitBlocksState
@@ -285,6 +295,7 @@ class AnthropicClient(
         completedToolCalls: MutableList<ToolCall>,
         collectedCitations: MutableList<Citation>,
         streamingBlocks: MutableMap<Int, ContentBlock>,
+        blockStartMs: MutableMap<Int, Long>,
         currentThinkingIndexRef: () -> Int,
         setCurrentThinkingIndex: (Int) -> Unit,
         onBlockChanged: suspend () -> Unit
@@ -295,13 +306,13 @@ class AnthropicClient(
         when (type) {
             "content_block_start" -> handleContentBlockStart(
                 obj, fullText, pendingToolUses, collectedCitations,
-                streamingBlocks, setCurrentThinkingIndex, onBlockChanged
+                streamingBlocks, blockStartMs, setCurrentThinkingIndex, onBlockChanged
             )
             "content_block_delta" -> handleContentBlockDelta(
                 obj, fullText, pendingToolUses, streamingBlocks, onBlockChanged
             )
             "content_block_stop" -> handleContentBlockStop(
-                obj, pendingToolUses, completedToolCalls, streamingBlocks, onBlockChanged
+                obj, pendingToolUses, completedToolCalls, streamingBlocks, blockStartMs, onBlockChanged
             )
             "message_delta" -> handleMessageDelta(obj)
         }
@@ -314,6 +325,7 @@ class AnthropicClient(
         pendingToolUses: MutableMap<Int, PendingToolUse>,
         collectedCitations: MutableList<Citation>,
         streamingBlocks: MutableMap<Int, ContentBlock>,
+        blockStartMs: MutableMap<Int, Long>,
         setCurrentThinkingIndex: (Int) -> Unit,
         onBlockChanged: suspend () -> Unit
     ) {
@@ -331,6 +343,7 @@ class AnthropicClient(
                 handleWebSearchResultBlockStart(index, block, fullText, collectedCitations, streamingBlocks, onBlockChanged)
             "thinking" -> {
                 setCurrentThinkingIndex(index)
+                blockStartMs[index] = System.currentTimeMillis()
                 val initial = block["thinking"]?.jsonPrimitive?.content ?: ""
                 streamingBlocks[index] = ContentBlock(
                     index = index, type = "thinking",
@@ -540,21 +553,22 @@ class AnthropicClient(
         pendingToolUses: MutableMap<Int, PendingToolUse>,
         completedToolCalls: MutableList<ToolCall>,
         streamingBlocks: MutableMap<Int, ContentBlock>,
+        blockStartMs: MutableMap<Int, Long>,
         onBlockChanged: suspend () -> Unit
     ) {
         val index = obj["index"]?.jsonPrimitive?.int ?: return
 
         val pending = pendingToolUses.remove(index)
         if (pending == null) {
-            // 非 tool_use block（text/thinking），仅标记完成
-            markBlockComplete(index, streamingBlocks, onBlockChanged)
+            // 非 tool_use block（text/thinking），仅标记完成（thinking 锁定真实耗时）
+            markBlockComplete(index, streamingBlocks, blockStartMs, onBlockChanged)
             return
         }
 
         // web_search 是服务端工具，Anthropic 自行处理，我们无需响应
         if (pending.name == "web_search") {
             logger.info("[Anthropic] Claude 使用了 web_search")
-            markBlockComplete(index, streamingBlocks, onBlockChanged)
+            markBlockComplete(index, streamingBlocks, blockStartMs, onBlockChanged)
             return
         }
 
@@ -572,6 +586,7 @@ class AnthropicClient(
         val toolSummary = generateToolDescription(pending.name, validArgs)
 
         // 标记 block 完成并设置描述内容，通知前端
+        blockStartMs.remove(index) // tool block 不需要 elapsedMs
         val existing = streamingBlocks[index]
         if (existing != null) {
             streamingBlocks[index] = existing.copy(
@@ -593,14 +608,22 @@ class AnthropicClient(
         )
     }
 
-    /** 标记 streamingBlocks[index] 为完成并通知前端（若该 block 存在）。 */
+    /** 标记 streamingBlocks[index] 为完成并通知前端（若该 block 存在）。
+     *  对于 thinking block，同时锁定真实耗时到 elapsedMs。 */
     private suspend fun markBlockComplete(
         index: Int,
         streamingBlocks: MutableMap<Int, ContentBlock>,
+        blockStartMs: MutableMap<Int, Long>,
         onBlockChanged: suspend () -> Unit
     ) {
         val existing = streamingBlocks[index] ?: return
-        streamingBlocks[index] = existing.copy(isComplete = true)
+        val finalElapsed = blockStartMs.remove(index)?.let { start ->
+            System.currentTimeMillis() - start
+        } ?: existing.elapsedMs
+        streamingBlocks[index] = existing.copy(
+            isComplete = true,
+            elapsedMs = if (existing.type == "thinking") finalElapsed else existing.elapsedMs
+        )
         onBlockChanged()
     }
 
