@@ -87,7 +87,7 @@
   - 后端 `WebSocketConfig.kt`
   - 共享前端 `frontend/shared/.../models/Message.kt`
 - HTTP 响应/请求 DTO 中的 CC 模块（`CcStateResponse` / `DirEntry` / `DirListingResponse`）只在 `frontend/shared/.../models/UserSettings.kt` 一处定义；backend 通过 `implementation(project(":frontend:shared"))` 直接 import。新增字段改一处即可。
-- WebSocket `blocks_state` 消息：后端流式发送完整 content block 列表（含 type/content/isComplete），前端替换前一次列表。类型包括 `thinking`（ThinkingBlock 折叠渲染）、`text`（MarkdownContent）、`tool_use`（ToolCallBlock）。
+- WebSocket `blocks_state` 消息：后端流式发送完整 content block 列表（含 type/content/isComplete/elapsedMs），前端替换前一次列表。类型包括 `thinking`（ThinkingBlock 折叠渲染）、`text`（MarkdownContent）、`tool_use`（ToolCallBlock）。`elapsedMs` 仅对 thinking block 有意义——进行中 block 由后端推 live 计时（`now - blockStartMs`），完成时锁定真实耗时；前端据此显示"Thought for Xs"，避免组件重新挂载导致计时丢失。0 表示后端未提供（旧消息兼容），前端回退到本地计时。
 - 文件消息 payload 同时影响：
   - `routes/FileRoutes.kt`
   - `backend/BackendFileContractTest.kt`

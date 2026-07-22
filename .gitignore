@@ -147,6 +147,9 @@ nginx_silk_36795_36796.conf
 # Cursor IDE session artifacts
 .cursor/
 
+# ZCode agent artifacts
+.zcode/
+
 # Backend generated output
 backend/backend/
 

@@ -8,6 +8,7 @@
   - `availableReferences`：本轮可引用的 KB 条目列表（含 `spaceId`/`spaceLabel`/`origin`/`reason`），经 `registerReference` 写入 `MessageReference`
   - `additionalContext: String?`：由 `resolveKnowledgeBasePromptContext` 生成的 KB prompt 文本块，追加到系统提示词末尾
   - `callback`：流式回调（thinking/text/blocks_state/tool 相关事件）
+- 对话历史回传给模型前会剥离结构化标记块（`stripStructuredMarkers`）：`loadRecentHistory` 读持久化历史、`chat()` 保存本轮回复到 `conversationHistory` 时都会调用，去掉 `<!--THINKING-->...<!--END_THINKING-->` 和 `<!--TOOL-->...<!--END_TOOL-->` 块。原因是 thinking 块里含历史时刻的"当前时间"注入，会让模型在新思考中误引用过期时间。**仅用于回传给模型的 prompt 清洗**——持久化存储和前端渲染均保留完整 markers（前端走 contentBlocks 或 content 的 segment parser）。
 - `DirectModelAgent` 还会在每轮生成前接收一份 workspace 视角的 KB 快照：
   - `knowledge_base/manifest.md`：当前用户可读 topic/entry 清单（含 ids、状态、space、相对路径）
   - `knowledge_base/topics/<topic>__<topicId>/<entry>__<entryId>.md`：单条 KB 文档，供 Claude CLI 的 Grep/Read 主动查阅
@@ -25,9 +26,18 @@
 - `ai/AnthropicClient.kt` 封装与 Anthropic Messages API 的通信：
   - SSE 流式解析（content_block_start/delta/stop + message_delta，含 thinking_delta）
   - 结构化 content block 追踪：流式过程中维护 `streamingBlocks` 映射（thinking/text/tool_use），通过 `blocks_state` 回调每步推送到前端实时渲染
+  - thinking block 真实耗时：每个 block 创建时记 `blockStartMs[index]`，进行中 emit 时推 live elapsed，完成时（`markBlockComplete`）锁定到 `elapsedMs` 字段
   - 内部 Message ↔ Anthropic 格式双向转换
   - 工具定义转换（custom tools → {name, description, input_schema}，web_search → 原生 `web_search_20260209`）
   - tool_use 收集与残缺 JSON 修复
+
+## DeepCode CLI Client
+
+- `ai/DeepCodeProcessClient.kt` 是 deepcode-cli 进程路径的并行 client（对应 `DirectModelAgent.chatViaDeepCodeCli`），当 `AIConfig.DEEPCODE_CLI_PATH` 非空时优先于 Anthropic API / claude CLI 启用：
+  - 通过子进程调用 `deepcode --headless --prompt "<fullPrompt>"`，stdout 增量读取
+  - 解析 stdout 中的 `<!--THINKING-->`/`<!--END_THINKING-->`、`<!--TOOL name="...">`/`<!--END_TOOL-->` 标记，映射成与 AnthropicClient 同样的 content block 模型
+  - 复用 `blocks_state` 协议向前端推送，thinking block 同样计算真实耗时填 `elapsedMs`（`StreamState.blockStartMs` 追踪开始时间，`endBlock`/`flushRemaining` 锁定最终值）
+  - `stripInternalNoise` 过滤 deepcode 内部 JSON 噪声（如 skill 匹配阶段的 `{"skillNames": [...]}` 输出）
 
 ## Tool Calling
 

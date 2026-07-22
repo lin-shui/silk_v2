@@ -43,6 +43,22 @@ private fun sanitizeWorkspaceSegment(raw: String): String {
     return cleaned.ifBlank { "untitled" }.take(80)
 }
 
+/**
+ * 结构化标记正则：匹配 `<!--THINKING-->...<!--END_THINKING-->` 与 `<!--TOOL...-->...<!--END_TOOL-->` 整块。
+ * 这些是流式渲染用的标记，回传给模型的历史中应当剥离 ——
+ * 尤其是 thinking 块里含历史时刻的"当前时间"注入，会让模型在新思考中误引用过期时间。
+ *
+ * 注意：仅用于回传给模型的 prompt 清洗；持久化存储和前端渲染均不经此函数
+ * （前端走 contentBlocks 或 content 字段的 segment parser，保留完整内容）。
+ */
+private val STRUCTURED_MARKER_BLOCK = Regex(
+    """<!--THINKING-->[\s\S]*?<!--END_THINKING-->|<!--TOOL[^>]*-->[\s\S]*?<!--END_TOOL-->"""
+)
+
+/** 剥离 assistant 消息中的结构化标记块，只保留正文部分。 */
+private fun stripStructuredMarkers(content: String): String =
+    STRUCTURED_MARKER_BLOCK.replace(content, "").trim()
+
 private fun String.escapeMarkdownTable(): String = replace("|", "\\|").replace("\n", " ")
 
 private fun withCitationGuidelines(systemPrompt: String?): String {
@@ -158,7 +174,11 @@ class DirectModelAgent(
             val content = if (role == "user") {
                 "[${entry.senderName}] ${entry.content}"
             } else {
-                entry.content
+                // 剥离 assistant 历史中的 thinking/tool 标记块：
+                // thinking 里含历史时刻的"当前时间"注入，会让模型在新思考中误引用过期时间；
+                // tool 块是大段 JSON 搜索结果，对回传给模型的上下文无价值且浪费 token。
+                // 前端渲染不走此路径（走 contentBlocks 或 content 的 segment parser）。
+                stripStructuredMarkers(entry.content)
             }
             conversationHistory.add(Message(role = role, content = content))
         }
@@ -382,8 +402,8 @@ class DirectModelAgent(
             "抱歉，处理您的问题时发生了错误。"
         }
 
-        // 保存回复到对话历史
-        conversationHistory.add(Message(role = "assistant", content = response))
+        // 保存回复到对话历史（剥离 thinking/tool 标记块，避免污染后续轮次）
+        conversationHistory.add(Message(role = "assistant", content = stripStructuredMarkers(response)))
         callback("complete", response, true)
         return response
     }
