@@ -79,9 +79,24 @@ fun SourceControlPanel(userId: String, groupId: String, refreshSignal: Int, widt
                 property("border-bottom", "1px solid ${SilkColors.border}")
             }
         }) {
-            Span({ style { fontWeight("600"); color(Color(SilkColors.textPrimary)); property("flex", "1") } }) {
+            Span({ style { fontWeight("600"); color(Color(SilkColors.textPrimary)) } }) {
                 Text("代码审查")
             }
+            // 分支名（detached HEAD 时退化为短 commit）；取不到就不显示
+            val branchLabel = changes?.let { it.branch.ifBlank { it.head } }.orEmpty()
+            if (branchLabel.isNotBlank()) {
+                Span({
+                    style {
+                        color(Color(SilkColors.textSecondary))
+                        fontSize(13.px)
+                        property("white-space", "nowrap")
+                        property("overflow", "hidden")
+                        property("text-overflow", "ellipsis")
+                        property("min-width", "0")
+                    }
+                }) { Text("· $branchLabel") }
+            }
+            Div({ style { property("flex", "1") } }) {}
             Button({
                 onClick { scope.launch { reload() } }
                 style { property("cursor", "pointer") }

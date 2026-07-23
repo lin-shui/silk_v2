@@ -48,6 +48,15 @@ async def _is_git_repo(cwd: str) -> bool:
     return code == 0 and out.strip() == "true"
 
 
+async def _branch_and_head(cwd: str) -> tuple[str, str]:
+    """(branch, shortHead) for the working tree. branch is "" on detached HEAD;
+    shortHead is the abbreviated commit. Any git error degrades to "" so callers
+    can treat both as best-effort metadata."""
+    _, branch, _ = await _run_git(["branch", "--show-current"], cwd)
+    code, head, _ = await _run_git(["rev-parse", "--short", "HEAD"], cwd)
+    return branch.strip(), (head.strip() if code == 0 else "")
+
+
 def _count_untracked(abs_path: str) -> tuple[int, int, bool]:
     """(additions, deletions, binary) for an untracked file: whole file is added."""
     try:
@@ -66,6 +75,8 @@ def _count_untracked(abs_path: str) -> tuple[int, int, bool]:
 async def git_status(cwd: str) -> dict[str, Any]:
     if not await _is_git_repo(cwd):
         return {"success": True, "isGitRepo": False, "cwd": cwd, "files": []}
+
+    branch, head = await _branch_and_head(cwd)
 
     # ± counts for tracked changes: lines look like "adds\tdels\tpath"; binary -> "-\t-\tpath"
     counts: dict[str, tuple[int, int, bool]] = {}
@@ -105,7 +116,8 @@ async def git_status(cwd: str) -> dict[str, Any]:
             "deletions": dele,
             "binary": binary,
         })
-    return {"success": True, "isGitRepo": True, "cwd": cwd, "files": files}
+    return {"success": True, "isGitRepo": True, "cwd": cwd,
+            "branch": branch, "head": head, "files": files}
 
 
 async def git_diff(cwd: str, path: str) -> dict[str, Any]:

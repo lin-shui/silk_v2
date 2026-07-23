@@ -21,6 +21,8 @@ data class GitChangesResponse(
     val supported: Boolean = true,
     val isGitRepo: Boolean = true,
     val cwd: String = "",
+    val branch: String = "",      // current branch; "" on detached HEAD or older bridge
+    val head: String = "",        // short HEAD commit; "" if unavailable
     val files: List<GitFileChangeDto> = emptyList(),
     val message: String = "",
     val reason: String? = null,   // cc-connect 专属空态："ccconnect"
