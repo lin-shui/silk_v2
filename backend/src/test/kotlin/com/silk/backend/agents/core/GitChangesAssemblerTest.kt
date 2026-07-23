@@ -35,6 +35,24 @@ class GitChangesAssemblerTest {
     }
 
     @Test
+    fun decodesBranchAndHead() {
+        val raw = Json.parseToJsonElement(
+            """{"success":true,"isGitRepo":true,"cwd":"/repo","branch":"develop_sjh","head":"a1b2c3d","files":[]}"""
+        )
+        val resp = GitChangesAssembler.assembleChanges(connected = true, supported = true, raw = raw)
+        assertEquals("develop_sjh", resp.branch)
+        assertEquals("a1b2c3d", resp.head)
+    }
+
+    @Test
+    fun branchAndHeadDefaultToBlankWhenBridgeOmitsThem() {
+        // older bridge that predates the branch fields — must stay backward-compatible
+        val resp = GitChangesAssembler.assembleChanges(connected = true, supported = true, raw = Json.parseToJsonElement(sampleStatus))
+        assertEquals("", resp.branch)
+        assertEquals("", resp.head)
+    }
+
+    @Test
     fun notConnectedShortCircuits() {
         val resp = GitChangesAssembler.assembleChanges(connected = false, supported = true, raw = null)
         assertFalse(resp.success)
