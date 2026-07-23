@@ -65,10 +65,13 @@ fun LoginScene(appState: WebAppState) {
         }
     }
     
-    // 从 appState 读取错误信息，读完后清除（确保每次变更都能刷新显示）
-    val errorMessage = appState.loginError
-    if (errorMessage.isNotEmpty()) {
-        appState.loginError = ""
+    // 用 remember 保存错误信息，避免 recompose 时立即清空导致一闪而过
+    var errorMessage by remember { mutableStateOf("") }
+    LaunchedEffect(appState.loginError) {
+        if (appState.loginError.isNotEmpty()) {
+            errorMessage = appState.loginError
+            appState.loginError = ""
+        }
     }
     var isLoading by remember { mutableStateOf(false) }
     // 密码登录表单
