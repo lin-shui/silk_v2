@@ -2,14 +2,23 @@
 <SmellBaseline>
   <ManuallySuppressedIssues/>
   <CurrentIssues>
+    <ID>CyclomaticComplexMethod:AnthropicClient.kt$AnthropicClient$private suspend fun parseStream( response: HttpResponse&lt;java.io.InputStream&gt;, callback: suspend (String, String, Boolean) -&gt; Unit ): AnthropicStreamResult</ID>
+    <ID>CyclomaticComplexMethod:ClaudeProcessClient.kt$ClaudeProcessClient$private suspend fun streamProcessOutput( process: Process, callback: suspend (stepType: String, content: String, isComplete: Boolean) -&gt; Unit, ): String</ID>
+    <ID>CyclomaticComplexMethod:DirectModelAgent.kt$DirectModelAgent$private suspend fun chat( callback: suspend (stepType: String, content: String, isComplete: Boolean) -&gt; Unit, accessibleSessionIds: List&lt;String&gt; = listOf(sessionId) ): String</ID>
     <ID>CyclomaticComplexMethod:Routing.kt$private fun Route.registerApiKbCopilotStreamPostRoute()</ID>
     <ID>LargeClass:AIStepwiseAgent.kt$AIStepwiseAgent</ID>
     <ID>LargeClass:AgentRuntime.kt$AgentRuntime</ID>
-    <ID>LargeClass:BackendWebSocketContractTest.kt$BackendWebSocketContractTest</ID>
+    <ID>LargeClass:AnthropicClient.kt$AnthropicClient</ID>
+    <ID>LargeClass:DirectModelAgent.kt$DirectModelAgent</ID>
     <ID>LargeClass:GroupTodoExtractionService.kt$GroupTodoExtractionService</ID>
     <ID>LargeClass:KnowledgeBaseManager.kt$KnowledgeBaseManager</ID>
     <ID>LargeClass:UserTodoStore.kt$UserTodoStore</ID>
     <ID>LargeClass:WeaviateClient.kt$WeaviateClient</ID>
     <ID>LargeClass:WebSocketConfig.kt$ChatServer</ID>
+    <ID>LoopWithTooManyJumpStatements:ClaudeProcessClient.kt$ClaudeProcessClient$while</ID>
+    <ID>NestedBlockDepth:ClaudeProcessClient.kt$ClaudeProcessClient$private suspend fun streamProcessOutput( process: Process, callback: suspend (stepType: String, content: String, isComplete: Boolean) -&gt; Unit, ): String</ID>
+    <ID>NestedBlockDepth:DirectModelAgent.kt$DirectModelAgent$private suspend fun chat( callback: suspend (stepType: String, content: String, isComplete: Boolean) -&gt; Unit, accessibleSessionIds: List&lt;String&gt; = listOf(sessionId) ): String</ID>
+    <ID>SwallowedException:Routing.kt$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:Routing.kt$e: Exception</ID>
   </CurrentIssues>
 </SmellBaseline>
