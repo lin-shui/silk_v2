@@ -50,13 +50,16 @@ fun Route.workspaceRoutes(workspaceManager: WorkspaceManager) {
             val token = authHeader?.removePrefix("Bearer ")?.trim()
             val userId = if (token != null) JwtProvider.verifyAccessToken(token) else null
             if (userId == null) return@patch call.respond(HttpStatusCode.Unauthorized)
+            val roomId = call.parameters["roomId"] ?: return@patch call.respond(HttpStatusCode.BadRequest)
             val wsId = call.parameters["wsId"] ?: return@patch call.respond(HttpStatusCode.BadRequest)
             val ws = workspaceManager.getWorkspace(wsId)
-            if (ws == null || ws.ownerId != userId) return@patch call.respond(HttpStatusCode.NotFound)
+            if (ws == null || ws.ownerId != userId || ws.roomId != roomId) return@patch call.respond(HttpStatusCode.NotFound)
             val req = call.receive<PatchWorkspaceRequest>()
             req.visibility?.let { v -> workspaceManager.updateVisibility(wsId, v) }
             req.name?.let { n -> workspaceManager.updateName(wsId, n) }
-            call.respond(workspaceManager.getWorkspace(wsId) ?: HttpStatusCode.NotFound)
+            val updated = workspaceManager.getWorkspace(wsId)
+                ?: return@patch call.respond(HttpStatusCode.NotFound)
+            call.respond(updated)
         }
 
         delete("{wsId}") {
@@ -64,9 +67,10 @@ fun Route.workspaceRoutes(workspaceManager: WorkspaceManager) {
             val token = authHeader?.removePrefix("Bearer ")?.trim()
             val userId = if (token != null) JwtProvider.verifyAccessToken(token) else null
             if (userId == null) return@delete call.respond(HttpStatusCode.Unauthorized)
+            val roomId = call.parameters["roomId"] ?: return@delete call.respond(HttpStatusCode.BadRequest)
             val wsId = call.parameters["wsId"] ?: return@delete call.respond(HttpStatusCode.BadRequest)
             val ws = workspaceManager.getWorkspace(wsId)
-            if (ws == null || ws.ownerId != userId) return@delete call.respond(HttpStatusCode.NotFound)
+            if (ws == null || ws.ownerId != userId || ws.roomId != roomId) return@delete call.respond(HttpStatusCode.NotFound)
             workspaceManager.deleteWorkspace(wsId)
             call.respond(HttpStatusCode.NoContent)
         }
