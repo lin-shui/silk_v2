@@ -16,6 +16,9 @@ import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.DirEntry
 import com.silk.shared.models.DirListingResponse
 import com.silk.shared.models.Message
+import com.silk.shared.models.MessageScope
+import com.silk.web.workspace.WorkspaceDto
+import com.silk.web.workspace.fetchWorkspaces
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.launch
@@ -981,6 +984,9 @@ private fun WorkflowChatPanel(
     var kbCaptureContent by remember(groupId) { mutableStateOf("") }
     var kbCaptureSaving by remember(groupId) { mutableStateOf(false) }
     var kbCaptureResult by remember(groupId) { mutableStateOf<String?>(null) }
+    // Workspace tab bar state
+    var workspaces by remember(groupId) { mutableStateOf<List<WorkspaceDto>>(emptyList()) }
+    var activeTab by remember(groupId) { mutableStateOf("team") }
     val resetKnowledgeCaptureDialog: () -> Unit = {
         kbCaptureDraft = null
         kbCaptureTopics = emptyList()
@@ -1026,6 +1032,11 @@ private fun WorkflowChatPanel(
                 persistentDownrankedSpaceIds = kbPersistentDownrankedSpaceIds,
             )
         }
+    }
+    // Load workspaces for tab bar
+    LaunchedEffect(groupId) {
+        val token = JwtManager.getAccessToken() ?: return@LaunchedEffect
+        workspaces = fetchWorkspaces(groupId, token)
     }
     LaunchedEffect(messages.size, userId, kbPersistentExcludedSpaceIds, kbPersistentDownrankedSpaceIds, kbContextSelectionTouched) {
         if (kbContextSelectionTouched) return@LaunchedEffect
@@ -1257,6 +1268,50 @@ private fun WorkflowChatPanel(
         }) { Text(if (sourcePanelOpen) "✕ 审查" else "⌥ 审查") }
     }
 
+    // Workspace tab bar
+    Div({
+        style {
+            property("flex-shrink", "0")
+            display(DisplayStyle.Flex)
+            flexDirection(FlexDirection.Row)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            backgroundColor(Color(SilkColors.surfaceElevated))
+            padding(0.px, 12.px)
+            property("gap", "4px")
+        }
+    }) {
+        // Team Channel tab (always visible)
+        val isTeam = activeTab == "team"
+        Div({
+            style {
+                padding(8.px, 14.px)
+                fontSize(13.px)
+                fontWeight(if (isTeam) "600" else "400")
+                color(Color(if (isTeam) SilkColors.primary else SilkColors.textSecondary))
+                property("cursor", "pointer")
+                property("border-bottom", if (isTeam) "2px solid ${SilkColors.primary}" else "2px solid transparent")
+                property("user-select", "none")
+            }
+            onClick { activeTab = "team" }
+        }) { Text("Team Channel") }
+        // Workspace tabs
+        workspaces.forEach { ws ->
+            val isActive = activeTab == ws.workspaceId
+            Div({
+                style {
+                    padding(8.px, 14.px)
+                    fontSize(13.px)
+                    fontWeight(if (isActive) "600" else "400")
+                    color(Color(if (isActive) SilkColors.primary else SilkColors.textSecondary))
+                    property("cursor", "pointer")
+                    property("border-bottom", if (isActive) "2px solid ${SilkColors.primary}" else "2px solid transparent")
+                    property("user-select", "none")
+                }
+                onClick { activeTab = ws.workspaceId }
+            }) { Text(ws.name) }
+        }
+    }
+
     // Messages area
     Div({
         id(WORKFLOW_MESSAGES_CONTAINER_ID)
@@ -1268,13 +1323,20 @@ private fun WorkflowChatPanel(
             property("background", SilkColors.backgroundGradient)
         }
     }) {
-        // Persistent messages
-        messages.forEachIndexed { index, message ->
+        // Persistent messages — filtered by active tab scope
+        val visibleMessages = messages.filter { msg ->
+            when (activeTab) {
+                "team" -> msg.scope == MessageScope.TEAM
+                else -> (msg.scope == MessageScope.WORKSPACE && msg.workspaceId == activeTab) ||
+                        msg.scope == MessageScope.TEAM
+            }
+        }
+        visibleMessages.forEachIndexed { index, message ->
             key(message.id) {
                 MessageItem(
                     message = message,
                     isTransient = false,
-                    isLastMessage = index == messages.lastIndex,
+                    isLastMessage = index == visibleMessages.lastIndex,
                     currentUserId = userId,
                     currentUserName = userName,
                     groupId = groupId,
