@@ -226,7 +226,7 @@ internal fun getGroupChatServer(groupId: String): ChatServer {
         val sessionName = "group_$groupId"
         val wf = workflowManager.getWorkflowByGroupId(groupId)
         val isSilkChat = wf != null && wf.agentType == "silk_chat"
-        ChatServer(sessionName, isSilkChat).also {
+        ChatServer(sessionName, isSilkChat, workspaceManager).also {
             logger.info("🆕 创建新的群组聊天服务器: {} (silkChat={})", sessionName, isSilkChat)
         }
     }
