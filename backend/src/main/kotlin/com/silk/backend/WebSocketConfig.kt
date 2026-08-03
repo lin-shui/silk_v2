@@ -155,6 +155,8 @@ data class Message(
     val interactiveOptions: List<InteractiveOption>? = null,  // 交互式按钮选项（用于 cc-connect 提问）
     val kbContextSelection: com.silk.backend.models.KnowledgeBaseContextSelection? = null,  // 本轮知识库上下文选择（手动/固定/排除）
     val action: String? = null,  // null = 新消息(默认), "edit" = 覆盖同ID消息（CARD 编辑）
+    val scope: MessageScope = MessageScope.TEAM,
+    val workspaceId: String? = null,
 )
 
 @Serializable
@@ -178,6 +180,9 @@ enum class MessageCategory {
     AGENT_QUESTION,   // Agent 向用户提问（需要用户回答）
     AGENT_PERMISSION, // Agent 工具权限确认（需要用户允许/拒绝）
 }
+
+@Serializable
+enum class MessageScope { TEAM, WORKSPACE }
 
 @Serializable
 data class User(
