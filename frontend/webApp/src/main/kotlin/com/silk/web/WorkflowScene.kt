@@ -986,6 +986,7 @@ private fun WorkflowChatPanel(
     var kbCaptureResult by remember(groupId) { mutableStateOf<String?>(null) }
     // Workspace tab bar state
     var workspaces by remember(groupId) { mutableStateOf<List<WorkspaceDto>>(emptyList()) }
+    var workspaceLoadError by remember(groupId) { mutableStateOf<String?>(null) }
     var activeTab by remember(groupId) { mutableStateOf("team") }
     val resetKnowledgeCaptureDialog: () -> Unit = {
         kbCaptureDraft = null
@@ -1035,8 +1036,14 @@ private fun WorkflowChatPanel(
     }
     // Load workspaces for tab bar
     LaunchedEffect(groupId) {
-        val token = JwtManager.getAccessToken() ?: return@LaunchedEffect
-        workspaces = fetchWorkspaces(groupId, token)
+        workspaceLoadError = null
+        try {
+            val token = JwtManager.getAccessToken() ?: return@LaunchedEffect
+            workspaces = fetchWorkspaces(groupId, token)
+        } catch (e: Exception) {
+            workspaceLoadError = "Failed to load workspaces"
+            console.error("fetchWorkspaces error:", e.message)
+        }
     }
     LaunchedEffect(messages.size, userId, kbPersistentExcludedSpaceIds, kbPersistentDownrankedSpaceIds, kbContextSelectionTouched) {
         if (kbContextSelectionTouched) return@LaunchedEffect
@@ -1294,6 +1301,16 @@ private fun WorkflowChatPanel(
             }
             onClick { activeTab = "team" }
         }) { Text("Team Channel") }
+        // Error indicator when workspace fetch fails
+        if (workspaceLoadError != null && workspaces.isEmpty()) {
+            Span({
+                style {
+                    color(Color("#ff4444"))
+                    marginLeft(4.px)
+                    fontSize(11.px)
+                }
+            }) { Text("⚠ workspaces unavailable") }
+        }
         // Workspace tabs
         workspaces.forEach { ws ->
             val isActive = activeTab == ws.workspaceId
@@ -1326,9 +1343,10 @@ private fun WorkflowChatPanel(
         // Persistent messages — filtered by active tab scope
         val visibleMessages = messages.filter { msg ->
             when (activeTab) {
-                "team" -> msg.scope == MessageScope.TEAM
+                "team" -> msg.scope == MessageScope.TEAM || msg.scope == null
                 else -> (msg.scope == MessageScope.WORKSPACE && msg.workspaceId == activeTab) ||
-                        msg.scope == MessageScope.TEAM
+                        msg.scope == MessageScope.TEAM ||
+                        msg.scope == null
             }
         }
         visibleMessages.forEachIndexed { index, message ->

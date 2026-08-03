@@ -37,7 +37,7 @@ suspend fun fetchWorkspaces(roomId: String, authToken: String): List<WorkspaceDt
         val body = response.text().await()
         workspaceJson.decodeFromString(body)
     } catch (e: Exception) {
-        console.log("fetchWorkspaces failed:", e.message)
+        console.error("fetchWorkspaces failed:", e.message)
         emptyList()
     }
 }
