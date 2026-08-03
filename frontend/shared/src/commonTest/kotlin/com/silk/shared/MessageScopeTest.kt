@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class MessageScopeTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -18,8 +19,8 @@ class MessageScopeTest {
             scope = MessageScope.WORKSPACE, workspaceId = "ws_abc"
         )
         val encoded = json.encodeToString(Message.serializer(), msg)
-        assert(encoded.contains("\"scope\":\"WORKSPACE\""))
-        assert(encoded.contains("\"workspaceId\":\"ws_abc\""))
+        assertTrue(encoded.contains("\"scope\":\"WORKSPACE\""), "scope field missing from JSON")
+        assertTrue(encoded.contains("\"workspaceId\":\"ws_abc\""), "workspaceId field missing from JSON")
         val decoded = json.decodeFromString(Message.serializer(), encoded)
         assertEquals(MessageScope.WORKSPACE, decoded.scope)
         assertEquals("ws_abc", decoded.workspaceId)
