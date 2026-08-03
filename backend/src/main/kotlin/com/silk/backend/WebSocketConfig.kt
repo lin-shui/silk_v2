@@ -36,6 +36,8 @@ import com.silk.backend.kb.executeKnowledgeBaseAiActions
 import com.silk.backend.kb.resolveKnowledgeBasePromptContext
 import com.silk.backend.kb.buildMemoryKey
 import com.silk.backend.models.KnowledgeBaseContextSelection
+import com.silk.backend.workspace.WorkspaceManager
+import com.silk.backend.workspace.WorkspaceVisibility
 import org.slf4j.LoggerFactory
 
 private val knowledgeBaseManager: KnowledgeBaseManager get() = KnowledgeBaseManager()
@@ -202,7 +204,8 @@ data class PendingImageState(
 
 class ChatServer(
     private val sessionName: String = "default_room",
-    private val isSilkChatWorkflow: Boolean = false
+    private val isSilkChatWorkflow: Boolean = false,
+    private val workspaceManager: WorkspaceManager = WorkspaceManager(),
 ) {
     private val logger = LoggerFactory.getLogger(ChatServer::class.java)
     private val connections = ConcurrentHashMap<String, CopyOnWriteArrayList<WebSocketSession>>()
@@ -361,13 +364,25 @@ class ChatServer(
 
         // 从内存发送历史消息（init 已从磁盘加载，无需重复 I/O）
         val recentMessages = messageHistory.takeLast(50)
-        if (recentMessages.isNotEmpty()) {
+        // 按 scope 权限过滤历史消息（Phase 1 所有消息均为 TEAM，直接 pass-through）
+        val visibleMessages = recentMessages.filter { msg ->
+            when (msg.scope) {
+                MessageScope.TEAM -> true
+                MessageScope.WORKSPACE -> {
+                    val wsId = msg.workspaceId ?: return@filter true
+                    val ws = workspaceManager.getWorkspace(wsId) ?: return@filter false
+                    userId == ws.ownerId || userId in ws.copilots ||
+                        ws.visibility == WorkspaceVisibility.SHARED
+                }
+            }
+        }
+        if (visibleMessages.isNotEmpty()) {
             val batch = Json.encodeToString(
                 kotlinx.serialization.builtins.ListSerializer(Message.serializer()),
-                recentMessages
+                visibleMessages
             )
             session.send(Frame.Text(batch))
-            logger.debug("📜 批量发送 {} 条历史消息给 {}", recentMessages.size, userName)
+            logger.debug("📜 批量发送 {} 条历史消息给 {} (过滤前: {})", visibleMessages.size, userName, recentMessages.size)
         }
 
         // 短暂延迟确保批量历史帧先于 history_end 标记到达客户端
@@ -546,6 +561,22 @@ class ChatServer(
             }
         }
         logger.debug("📤 [broadcast] 消息已广播到 {} 个连接", sessions.size)
+    }
+
+    /**
+     * 将消息广播到指定 userId 集合的所有 WebSocket 连接（用于 WORKSPACE scope 路由）
+     */
+    private suspend fun broadcastMessageToSessions(message: Message, userIds: Set<String>) {
+        val messageJson = Json.encodeToString(message)
+        connections.entries
+            .filter { (userId, _) -> userId in userIds }
+            .flatMap { (_, sessions) -> sessions }
+            .forEach { session ->
+                sendFrameSafely(session, messageJson) { error ->
+                    logger.warn("📤 [broadcast] workspace scope 消息发送失败: {}", error.message)
+                }
+            }
+        logger.debug("📤 [broadcast] workspace scope 消息已广播, eligible={}", userIds)
     }
 
     /**
@@ -1080,7 +1111,29 @@ class ChatServer(
         if (shouldSkipBroadcastForCcWaiting(msg)) {
             logger.debug("⏭️ [broadcast] 跳过广播: cc-connect waitingForInput (msg={})", msg.content.take(20))
         } else {
-            broadcastMessageToAllSessions(msg)
+            when (msg.scope) {
+                MessageScope.TEAM -> broadcastMessageToAllSessions(msg)
+                MessageScope.WORKSPACE -> {
+                    val wsId = msg.workspaceId
+                    if (wsId == null) {
+                        broadcastMessageToAllSessions(msg)
+                    } else {
+                        val ws = workspaceManager.getWorkspace(wsId)
+                        if (ws == null) {
+                            broadcastMessageToAllSessions(msg)
+                        } else {
+                            val eligible = buildSet<String> {
+                                add(ws.ownerId)
+                                addAll(ws.copilots)
+                                if (ws.visibility == WorkspaceVisibility.SHARED) {
+                                    addAll(connections.keys)
+                                }
+                            }
+                            broadcastMessageToSessions(msg, eligible)
+                        }
+                    }
+                }
+            }
         }
 
         val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
