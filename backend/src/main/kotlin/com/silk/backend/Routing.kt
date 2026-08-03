@@ -89,6 +89,8 @@ import com.silk.backend.routes.agentChangesRoutes
 import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
 import com.silk.backend.routes.obsidianRoutes
+import com.silk.backend.routes.workspaceRoutes
+import com.silk.backend.workspace.WorkspaceManager
 import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.core.AgentRegistry
 import com.silk.backend.agents.core.AgentRuntime
@@ -166,6 +168,7 @@ import org.slf4j.LoggerFactory
 private val groupChatServers = ConcurrentHashMap<String, ChatServer>()
 private val logger = LoggerFactory.getLogger("Routing")
 private val workflowManager = WorkflowManager()
+private val workspaceManager = WorkspaceManager()
 private val trustedDirManager = TrustedDirManager()
 private val knowledgeBaseManager: KnowledgeBaseManager get() = KnowledgeBaseManager()
 
@@ -351,6 +354,7 @@ fun Application.configureRouting() {
         workflowKbRoutes()
         pollMessagesRoute()
         obsidianRoutes()
+        workspaceRoutes(workspaceManager)
         chatWebSocketRoute()
         audioDuplexRoute()
     }
