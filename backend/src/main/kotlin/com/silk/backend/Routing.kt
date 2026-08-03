@@ -2649,15 +2649,31 @@ private fun Route.agentBridgeRoute() {
                 return@webSocket
             }
 
-            val workspaceId = call.request.queryParameters["workspaceId"]
-            if (workspaceId.isNullOrBlank()) {
-                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing workspaceId"))
-                return@webSocket
-            }
-            val wsRecord = workspaceManager.getWorkspace(workspaceId)
-            if (wsRecord == null || wsRecord.ownerId != userId) {
-                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid workspaceId"))
-                return@webSocket
+            // workspaceId 可选：
+            //   - 提供时：验证归属并使用
+            //   - 省略时：自动解析该用户在任意 room 的默认工作区（向后兼容旧 bridge 命令）
+            val workspaceId: String = run {
+                val raw = call.request.queryParameters["workspaceId"]
+                if (!raw.isNullOrBlank()) {
+                    // 显式指定：验证 ownership
+                    val wsRecord = workspaceManager.getWorkspace(raw)
+                    if (wsRecord == null || wsRecord.ownerId != userId) {
+                        close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid workspaceId"))
+                        return@webSocket
+                    }
+                    raw
+                } else {
+                    // 未指定：取该用户名下第一个工作区；若完全没有则创建一个占位工作区
+                    // （首次连接 bridge、还没有打开任何工作流页面时的兜底）
+                    workspaceManager.getOrCreateDefaultWorkspace(userId, "default")
+                        .also { ws ->
+                            logger.info(
+                                "🔌 Agent Bridge: workspaceId 未指定，自动解析为 {} (向后兼容)",
+                                ws.workspaceId
+                            )
+                        }
+                        .workspaceId
+                }
             }
 
             logger.info("🔌 Agent Bridge 连接: userId={}, workspaceId={}, agentType={}", userId, workspaceId, agentType)
