@@ -630,7 +630,7 @@ object AgentRuntime {
         session: AgentSession,
         broadcastFn: suspend (Message) -> Unit,
     ) {
-        val acp = getAcpClient(agentType, session.userId, session.groupId)
+        val acp = getAcpClient(agentType, session.userId)
         if (acp != null && session.acpSessionId != null) {
             try {
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -664,7 +664,7 @@ object AgentRuntime {
         session: AgentSession,
         broadcastFn: suspend (Message) -> Unit,
     ) {
-        val acp = getAcpClient(agentType, session.userId, session.groupId)
+        val acp = getAcpClient(agentType, session.userId)
         if (acp != null) {
             try {
                 val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -699,7 +699,7 @@ object AgentRuntime {
         session: AgentSession,
         broadcastFn: suspend (Message) -> Unit,
     ) {
-        val acp = getAcpClient(agentType, session.userId, session.groupId)
+        val acp = getAcpClient(agentType, session.userId)
         if (acp == null) {
             broadcastFn(AgentMessages.system(
                 "${descriptor.displayName} 未连接，无法加载会话",
@@ -748,7 +748,7 @@ object AgentRuntime {
         broadcastFn: suspend (Message) -> Unit,
     ) {
         // 尝试让 adapter 处理
-        val acp = getAcpClient(agentType, userId = session.userId, workspaceId = session.groupId) ?: return
+        val acp = getAcpClient(agentType, session.userId) ?: return
         val result = descriptor.handleSilkCommand(cmd, session, acp)
         when (result) {
             is SilkCommandResult.Error -> broadcastFn(AgentMessages.system(
@@ -771,7 +771,7 @@ object AgentRuntime {
         val agentType = overrideAgentType ?: ctx.currentAgentType ?: return
         val descriptor = AgentRegistry.getByType(agentType) ?: return
         val session = ctx.getOrCreateSession(agentType)
-        val acp = getAcpClient(agentType, userId, ctx.workspaceId)
+        val acp = getAcpClient(agentType, userId)
 
         // ★ Must check before session.running — when CLI is blocked on AskUserQuestion,
         // running is still true. Checking running first would queue the answer → deadlock.
@@ -997,7 +997,7 @@ object AgentRuntime {
             return
         }
 
-        val acp = getAcpClient(session.agentType, session.userId, session.groupId)
+        val acp = getAcpClient(session.agentType, session.userId)
         if (acp != null && session.acpSessionId != null) {
             try {
                 acp.sessionCancel(session.acpSessionId!!)
@@ -1115,7 +1115,7 @@ object AgentRuntime {
             agentName = descriptor.displayName,
         ))
 
-        val acp = getAcpClient(session.agentType, session.userId, session.groupId)
+        val acp = getAcpClient(session.agentType, session.userId)
         if (acp == null) {
             broadcastFn(AgentMessages.system(
                 "回答发送失败: Bridge 未连接",
@@ -1442,8 +1442,8 @@ object AgentRuntime {
         scope.launch { broadcastFn(cardMsg) }
     }
 
-    private fun getAcpClient(agentType: String, userId: String, workspaceId: String): AcpClient? {
-        return AcpRegistry.get(userId, workspaceId, agentType)
+    private fun getAcpClient(agentType: String, userId: String): AcpClient? {
+        return AcpRegistry.get(userId, agentType)
     }
 
     /**
@@ -1452,7 +1452,7 @@ object AgentRuntime {
      */
     private fun cleanupSessionHandlers(session: AgentSession) {
         val sid = session.acpSessionId ?: return
-        getAcpClient(session.agentType, session.userId, session.groupId)?.removeHandlers(sid)
+        getAcpClient(session.agentType, session.userId)?.removeHandlers(sid)
     }
 
     // ========== Plan D proxy API ==========
@@ -1495,7 +1495,7 @@ object AgentRuntime {
         val ctx = contexts[key(userId, workspaceId)] ?: return null
         val agentType = ctx.currentAgentType ?: return null
         val session = ctx.sessions[agentType] ?: return null
-        val client = AcpRegistry.get(userId, workspaceId, agentType) ?: return null
+        val client = AcpRegistry.get(userId, agentType) ?: return null
         val sessionId = ensureAcpSessionId(session, client, ctx) ?: return null
         return ActiveAcpSession(client, sessionId, ctx.workingDir, agentType)
     }
@@ -1611,7 +1611,7 @@ object AgentRuntime {
         if (existingSession?.running == true) {
             return CdResult.Err("任务运行中，请先 /cancel 再 /cd")
         }
-        val acp = AcpRegistry.get(userId, workspaceId, agentType)
+        val acp = AcpRegistry.get(userId, agentType)
             ?: return CdResult.Err("ACP Bridge 未连接")
 
         // adapter 端用 sessionId 索引 cwd；如果还没有 ACP session 就先建一个
@@ -1657,12 +1657,8 @@ object AgentRuntime {
         path: String?,
         showHidden: Boolean,
         agentType: String = "claude-code",
-        workspaceId: String = "",
     ): kotlinx.serialization.json.JsonObject? {
-        val resolvedWorkspaceId = workspaceId.ifBlank {
-            AcpRegistry.getFirstWorkspaceForAgent(userId, agentType) ?: ""
-        }
-        val acp = AcpRegistry.get(userId, resolvedWorkspaceId, agentType) ?: return null
+        val acp = AcpRegistry.get(userId, agentType) ?: return null
         return try {
             val resp = AcpExtensions.listDir(acp, path ?: "", showHidden)
             resp.jsonObject

@@ -35,7 +35,7 @@ class AgentRuntimeAcpIntegrationTest {
     fun `prompt lifecycle sends sessionNew and sessionPrompt`() = runTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
-        AcpRegistry.put("u1", "g1", "claude-code", client, remoteIp = "127.0.0.1")
+        AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
         AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
 
@@ -99,7 +99,7 @@ class AgentRuntimeAcpIntegrationTest {
     fun `cancel sends sessionCancel notification`() = runTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
-        AcpRegistry.put("u1", "g1", "claude-code", client, remoteIp = "127.0.0.1")
+        AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
         AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
 
@@ -147,7 +147,7 @@ class AgentRuntimeAcpIntegrationTest {
     fun `handleAgentDisconnect clears running state`() = runTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
-        AcpRegistry.put("u1", "g1", "claude-code", client, remoteIp = "127.0.0.1")
+        AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
         AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
 
@@ -187,7 +187,7 @@ class AgentRuntimeAcpIntegrationTest {
     fun `stopReason max_tokens shows warning`() = runTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
-        AcpRegistry.put("u1", "g1", "claude-code", client, remoteIp = "127.0.0.1")
+        AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
         AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
 
@@ -225,7 +225,7 @@ class AgentRuntimeAcpIntegrationTest {
     fun `stopReason refusal shows refusal message`() = runTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
-        AcpRegistry.put("u1", "g1", "claude-code", client, remoteIp = "127.0.0.1")
+        AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
         AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
 
@@ -262,8 +262,8 @@ class AgentRuntimeAcpIntegrationTest {
     fun `two groups sharing same AcpClient receive their own updates`() = runTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
-        AcpRegistry.put("u1", "g1", "claude-code", client, remoteIp = "127.0.0.1")
-        AcpRegistry.put("u1", "g2", "claude-code", client, remoteIp = "127.0.0.1")
+        AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
+        AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
         AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
         AgentRuntime.autoActivateForWorkspace("u1", "g2", "claude-code")

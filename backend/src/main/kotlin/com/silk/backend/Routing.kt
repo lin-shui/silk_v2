@@ -198,12 +198,9 @@ private fun isAnyBridgeConnected(userId: String): Boolean =
 private fun getAnyBridgeIp(userId: String): String? {
     val connected = AcpRegistry.listConnected(userId)
     if (connected.isEmpty()) return null
-    // entries are "${workspaceId}::${agentType}"; prefer claude-code
-    val preferred = connected.firstOrNull { AcpRegistry.extractAgentType(it) == "claude-code" }
-        ?: connected.first()
-    val workspaceId = AcpRegistry.extractWorkspaceId(preferred)
-    val agentType = AcpRegistry.extractAgentType(preferred)
-    return AcpRegistry.getRemoteIp(userId, workspaceId, agentType)
+    // entries are "${agentType}"; prefer claude-code
+    val agentType = connected.firstOrNull { it == "claude-code" } ?: connected.first()
+    return AcpRegistry.getRemoteIp(userId, agentType)
 }
 
 /**
@@ -213,9 +210,7 @@ private fun getAnyBridgeIp(userId: String): String? {
 private fun resolveActiveAgentType(userId: String): String? {
     val connected = AcpRegistry.listConnected(userId)
     if (connected.isEmpty()) return null
-    val preferred = connected.firstOrNull { AcpRegistry.extractAgentType(it) == "claude-code" }
-        ?: connected.first()
-    return AcpRegistry.extractAgentType(preferred)
+    return connected.firstOrNull { it == "claude-code" } ?: connected.first()
 }
 
 /**
@@ -2683,7 +2678,6 @@ private fun Route.agentBridgeRoute() {
             val client = try {
                 AcpRegistry.acceptConnection(
                     userId = userId,
-                    workspaceId = workspaceId,
                     agentType = agentType,
                     session = this,
                     remoteIp = remoteIp,
@@ -2714,7 +2708,7 @@ private fun Route.agentBridgeRoute() {
                 logger.info("[Agent Bridge] initialize 成功: agentCapabilities={}", result.agentCapabilities)
             } catch (e: Exception) {
                 logger.error("[Agent Bridge] initialize 失败: {}", e.message)
-                AcpRegistry.unregister(userId, workspaceId, agentType)
+                AcpRegistry.unregister(userId, agentType)
                 close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "initialize failed"))
                 return@webSocket
             }
@@ -2728,11 +2722,11 @@ private fun Route.agentBridgeRoute() {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Normal: session scope cancelled on connection close
             } catch (e: Exception) {
-                logger.error("❌ Agent Bridge WebSocket 错误: userId={}, workspaceId={}, agentType={}, error={}", userId, workspaceId, agentType, e.message)
+                logger.error("❌ Agent Bridge WebSocket 错误: userId={}, agentType={}, error={}", userId, agentType, e.message)
             } finally {
-                logger.info("🔌 Agent Bridge 断开: userId={}, workspaceId={}, agentType={}", userId, workspaceId, agentType)
+                logger.info("🔌 Agent Bridge 断开: userId={}, agentType={}", userId, agentType)
                 scope.cancel()
-                AcpRegistry.unregister(userId, workspaceId, agentType)
+                AcpRegistry.unregister(userId, agentType)
                 AgentRuntime.handleAgentDisconnect(userId, agentType)
             }
         }
@@ -3632,7 +3626,7 @@ private fun Route.workflowKbRoutes() {
                     add(kotlinx.serialization.json.buildJsonObject {
                         put("agentType", kotlinx.serialization.json.JsonPrimitive(underscoreType))
                         put("displayName", kotlinx.serialization.json.JsonPrimitive(desc.displayName))
-                        put("connected", kotlinx.serialization.json.JsonPrimitive(AcpRegistry.isAnyConnected(userId, dashType)))
+                        put("connected", kotlinx.serialization.json.JsonPrimitive(AcpRegistry.isConnected(userId, dashType)))
                     })
                 }
             }

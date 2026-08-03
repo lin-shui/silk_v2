@@ -20,20 +20,20 @@ class AcpRegistryTest {
     fun `put and get by userId+agentType`() = runTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
-        AcpRegistry.put("user1", "ws1", "claude-code", client, remoteIp = "127.0.0.1")
-        assertEquals(client, AcpRegistry.get("user1", "ws1", "claude-code"))
-        assertTrue(AcpRegistry.isConnected("user1", "ws1", "claude-code"))
-        assertEquals("127.0.0.1", AcpRegistry.getRemoteIp("user1", "ws1", "claude-code"))
-        assertEquals(listOf("ws1::claude-code"), AcpRegistry.listConnected("user1"))
+        AcpRegistry.put("user1", "claude-code", client, remoteIp = "127.0.0.1")
+        assertEquals(client, AcpRegistry.get("user1", "claude-code"))
+        assertTrue(AcpRegistry.isConnected("user1", "claude-code"))
+        assertEquals("127.0.0.1", AcpRegistry.getRemoteIp("user1", "claude-code"))
+        assertEquals(listOf("claude-code"), AcpRegistry.listConnected("user1"))
     }
 
     @Test
     fun `unregister removes entry`() = runTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
-        AcpRegistry.put("user1", "ws1", "claude-code", client, remoteIp = null)
-        AcpRegistry.unregister("user1", "ws1", "claude-code")
-        assertNull(AcpRegistry.get("user1", "ws1", "claude-code"))
+        AcpRegistry.put("user1", "claude-code", client, remoteIp = null)
+        AcpRegistry.unregister("user1", "claude-code")
+        assertNull(AcpRegistry.get("user1", "claude-code"))
         assertTrue(AcpRegistry.listConnected("user1").isEmpty())
     }
 
@@ -43,9 +43,9 @@ class AcpRegistryTest {
         val c1 = AcpClient(t1, scope = backgroundScope)
         val t2 = InMemoryAcpTransport()
         val c2 = AcpClient(t2, scope = backgroundScope)
-        AcpRegistry.put("u", "ws1", "claude-code", c1, remoteIp = null)
-        val evicted = AcpRegistry.put("u", "ws1", "claude-code", c2, remoteIp = null)
+        AcpRegistry.put("u", "claude-code", c1, remoteIp = null)
+        val evicted = AcpRegistry.put("u", "claude-code", c2, remoteIp = null)
         assertEquals(c1, evicted, "old client must be returned for caller to close")
-        assertEquals(c2, AcpRegistry.get("u", "ws1", "claude-code"))
+        assertEquals(c2, AcpRegistry.get("u", "claude-code"))
     }
 }
