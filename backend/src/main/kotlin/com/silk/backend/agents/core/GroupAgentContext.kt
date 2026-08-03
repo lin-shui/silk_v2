@@ -9,14 +9,14 @@ import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * per-(userId, groupId) 上下文。
- * - workingDir 被该 group 下所有 agent 共享
+ * per-(userId, workspaceId) 上下文。
+ * - workingDir 被该 workspace 下所有 agent 共享
  * - currentAgentType 是 /use 指针；null = 普通 Silk AI
- * - sessions 索引该 group 下所有 agent 的 AgentSession
+ * - sessions 索引该 workspace 下所有 agent 的 AgentSession
  */
 class GroupAgentContext(
     val userId: String,
-    val groupId: String,
+    val workspaceId: String,
     @Volatile var workingDir: String = System.getProperty("user.dir") ?: "/",
     @Volatile var currentAgentType: String? = null,
     val sessions: ConcurrentHashMap<String, AgentSession> = ConcurrentHashMap(),
@@ -34,7 +34,7 @@ class GroupAgentContext(
     /** 获取或创建指定 agentType 的 session。 */
     fun getOrCreateSession(agentType: String): AgentSession {
         return sessions.getOrPut(agentType) {
-            AgentSession(userId = userId, groupId = groupId, agentType = agentType)
+            AgentSession(userId = userId, groupId = workspaceId, agentType = agentType)
         }
     }
 
