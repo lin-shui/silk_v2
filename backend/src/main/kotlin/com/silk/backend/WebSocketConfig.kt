@@ -206,6 +206,8 @@ class ChatServer(
 ) {
     private val logger = LoggerFactory.getLogger(ChatServer::class.java)
     private val connections = ConcurrentHashMap<String, CopyOnWriteArrayList<WebSocketSession>>()
+    // Per-user workspaceId: populated at join time, used by handleIfActive / cancelIfActive
+    private val userWorkspaceIds = ConcurrentHashMap<String, String>()
     private val messageHistory = Collections.synchronizedList(mutableListOf<Message>())
     private val historyManager = ChatHistoryManager()
     private val historyJson = Json { ignoreUnknownKeys = true }
@@ -331,7 +333,8 @@ class ChatServer(
         }
     }
 
-    suspend fun join(userId: String, userName: String, session: WebSocketSession) {
+    suspend fun join(userId: String, userName: String, session: WebSocketSession, workspaceId: String = "") {
+        if (workspaceId.isNotBlank()) userWorkspaceIds[userId] = workspaceId
         // 权限校验：群聊仅允许群成员加入（否则会导致历史/工具上下文越权）
         if (sessionName.startsWith("group_") && !AgentRuntime.isAgentUserId(userId)) {
             val groupId = sessionName.removePrefix("group_")
@@ -416,6 +419,7 @@ class ChatServer(
         // 只有当该用户所有连接都断开后，才标记为离线
         if (connections[userId] == null) {
             historyManager.removeMember(sessionName, userId)
+            userWorkspaceIds.remove(userId)
         }
 
         // 不发送离开消息到聊天室（避免产生无意义的历史记录）
@@ -750,7 +754,7 @@ class ChatServer(
                 .trim()
             val ccHandled = AgentRuntime.handleIfActive(
                 userId = message.userId,
-                groupId = groupId,
+                workspaceId = userWorkspaceIds[message.userId] ?: sessionName,
                 text = ccText,
                 userName = message.userName,
                 broadcastFn = ccBroadcastFn,
@@ -1300,7 +1304,7 @@ class ChatServer(
                     try { session.send(Frame.Text(msgJson)) } catch (_: Exception) {}
                 }
             }
-            val ccCancelled = AgentRuntime.cancelIfActive(userId, groupId, ccBroadcastFn)
+            val ccCancelled = AgentRuntime.cancelIfActive(userId, userWorkspaceIds[userId] ?: sessionName, ccBroadcastFn)
             if (ccCancelled) {
                 logger.info("🛑 已通过 AgentRuntime 取消 Agent 任务")
                 broadcastSystemStatus("CLEAR_STATUS")

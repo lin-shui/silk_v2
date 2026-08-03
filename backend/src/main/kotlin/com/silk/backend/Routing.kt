@@ -198,8 +198,12 @@ private fun isAnyBridgeConnected(userId: String): Boolean =
 private fun getAnyBridgeIp(userId: String): String? {
     val connected = AcpRegistry.listConnected(userId)
     if (connected.isEmpty()) return null
-    val preferred = if (connected.contains("claude-code")) "claude-code" else connected.first()
-    return AcpRegistry.getRemoteIp(userId, preferred)
+    // entries are "${workspaceId}::${agentType}"; prefer claude-code
+    val preferred = connected.firstOrNull { AcpRegistry.extractAgentType(it) == "claude-code" }
+        ?: connected.first()
+    val workspaceId = AcpRegistry.extractWorkspaceId(preferred)
+    val agentType = AcpRegistry.extractAgentType(preferred)
+    return AcpRegistry.getRemoteIp(userId, workspaceId, agentType)
 }
 
 /**
@@ -209,7 +213,9 @@ private fun getAnyBridgeIp(userId: String): String? {
 private fun resolveActiveAgentType(userId: String): String? {
     val connected = AcpRegistry.listConnected(userId)
     if (connected.isEmpty()) return null
-    return if (connected.contains("claude-code")) "claude-code" else connected.first()
+    val preferred = connected.firstOrNull { AcpRegistry.extractAgentType(it) == "claude-code" }
+        ?: connected.first()
+    return AcpRegistry.extractAgentType(preferred)
 }
 
 /**
@@ -290,56 +296,45 @@ fun Application.configureRouting() {
     // AgentRuntime 持久化 wiring：cdSync 成功 / prompt 完成时把 workingDir + cliSessionId 写回
     // workflow_store.json，让重启后能 seed 恢复对话。复用 Workflow.sessionId 字段存 cliSessionId。
     AgentRuntime.setWorkflowPersistence(object : AgentRuntime.WorkflowPersistence {
-        override fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean =
-            workflowManager.updateWorkingDir(rawGroupId, workingDir)
+        override fun persistWorkingDir(rawWorkspaceId: String, workingDir: String): Boolean =
+            workspaceManager.updateWorkingDir(rawWorkspaceId, workingDir)
 
-        override fun persistCliSession(rawGroupId: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
-            workflowManager.updateSessionState(rawGroupId, cliSessionId, sessionStarted)
+        override fun persistCliSession(rawWorkspaceId: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
+            false // agentType unknown at this call-site; use4-arg overload
 
-        override fun persistCliSession(rawGroupId: String, agentType: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
-            workflowManager.updateSessionState(rawGroupId, agentType, cliSessionId, sessionStarted)
+        override fun persistCliSession(rawWorkspaceId: String, agentType: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
+            workspaceManager.updateSessionState(rawWorkspaceId, agentType, cliSessionId, sessionStarted)
 
-        override fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean =
-            workflowManager.updateActiveAgent(rawGroupId, agentType)
+        override fun persistActiveAgent(rawWorkspaceId: String, agentType: String): Boolean =
+            workspaceManager.updateActiveAgent(rawWorkspaceId, agentType)
 
-        override fun persistPermissionMode(rawGroupId: String, permissionMode: String): Boolean =
-            workflowManager.updatePermissionMode(rawGroupId, permissionMode)
+        override fun persistPermissionMode(rawWorkspaceId: String, permissionMode: String): Boolean =
+            workspaceManager.updatePermissionMode(rawWorkspaceId, permissionMode)
 
-        override fun loadSeed(rawGroupId: String): AgentRuntime.WorkflowSeed? {
-            val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
-            if (wf.workingDir.isBlank() && wf.sessionId.isBlank()) return null
+        override fun loadSeed(rawWorkspaceId: String): AgentRuntime.WorkflowSeed? {
+            val ws = workspaceManager.getWorkspace(rawWorkspaceId) ?: return null
+            if (ws.workingDir.isBlank() && ws.cliSessionId.isNullOrBlank()) return null
             return AgentRuntime.WorkflowSeed(
-                workingDir = wf.workingDir,
-                cliSessionId = wf.sessionId.takeIf { it.isNotBlank() },
-                sessionStarted = wf.sessionStarted,
-                permissionMode = wf.permissionMode,
+                workingDir = ws.workingDir,
+                cliSessionId = ws.cliSessionId?.takeIf { it.isNotBlank() },
+                sessionStarted = ws.sessionStarted,
+                permissionMode = ws.permissionMode,
             )
         }
 
-        override fun loadSeed(rawGroupId: String, agentType: String): AgentRuntime.WorkflowSeed? {
-            val wf = workflowManager.getWorkflowByGroupId(rawGroupId) ?: return null
-            // 优先取 per-agent state；缺失时仅当 agentType 等于 workflow 默认 agent 才回落到旧字段，
-            // 避免别的 agent 拿到不属于它的 cliSessionId 触发 resume 失败。
-            val perAgent = wf.agentSessions[agentType]
-            val defaultDash = when (wf.agentType) {
-                "claude_code" -> "claude-code"
-                else -> wf.agentType
-            }
-            val cliSid = perAgent?.sessionId?.takeIf { it.isNotBlank() }
-                ?: wf.sessionId.takeIf { it.isNotBlank() && agentType == defaultDash }
-            val sessionStarted = perAgent?.sessionStarted
-                ?: (wf.sessionStarted && agentType == defaultDash)
-            if (wf.workingDir.isBlank() && cliSid.isNullOrBlank()) return null
+        override fun loadSeed(rawWorkspaceId: String, agentType: String): AgentRuntime.WorkflowSeed? {
+            val triple = workspaceManager.loadSeed(rawWorkspaceId, agentType) ?: return null
+            val ws = workspaceManager.getWorkspace(rawWorkspaceId) ?: return null
             return AgentRuntime.WorkflowSeed(
-                workingDir = wf.workingDir,
-                cliSessionId = cliSid,
-                sessionStarted = sessionStarted,
-                permissionMode = wf.permissionMode,
+                workingDir = triple.first,
+                cliSessionId = triple.second,
+                sessionStarted = triple.third,
+                permissionMode = ws.permissionMode,
             )
         }
 
-        override fun resolveWorkflowId(rawGroupId: String): String? =
-            workflowManager.getWorkflowByGroupId(rawGroupId)?.id
+        override fun resolveWorkflowId(rawWorkspaceId: String): String? =
+            workspaceManager.getWorkspace(rawWorkspaceId)?.workspaceId
     })
 
     routing {
@@ -2651,13 +2646,25 @@ private fun Route.agentBridgeRoute() {
                 return@webSocket
             }
 
-            logger.info("🔌 Agent Bridge 连接: userId={}, agentType={}", userId, agentType)
+            val workspaceId = call.request.queryParameters["workspaceId"]
+            if (workspaceId.isNullOrBlank()) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "missing workspaceId"))
+                return@webSocket
+            }
+            val wsRecord = workspaceManager.getWorkspace(workspaceId)
+            if (wsRecord == null || wsRecord.ownerId != userId) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid workspaceId"))
+                return@webSocket
+            }
+
+            logger.info("🔌 Agent Bridge 连接: userId={}, workspaceId={}, agentType={}", userId, workspaceId, agentType)
             val remoteIp = call.request.local.remoteAddress
 
             val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
             val client = try {
                 AcpRegistry.acceptConnection(
                     userId = userId,
+                    workspaceId = workspaceId,
                     agentType = agentType,
                     session = this,
                     remoteIp = remoteIp,
@@ -2688,7 +2695,7 @@ private fun Route.agentBridgeRoute() {
                 logger.info("[Agent Bridge] initialize 成功: agentCapabilities={}", result.agentCapabilities)
             } catch (e: Exception) {
                 logger.error("[Agent Bridge] initialize 失败: {}", e.message)
-                AcpRegistry.unregister(userId, agentType)
+                AcpRegistry.unregister(userId, workspaceId, agentType)
                 close(CloseReason(CloseReason.Codes.INTERNAL_ERROR, "initialize failed"))
                 return@webSocket
             }
@@ -2702,11 +2709,11 @@ private fun Route.agentBridgeRoute() {
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Normal: session scope cancelled on connection close
             } catch (e: Exception) {
-                logger.error("❌ Agent Bridge WebSocket 错误: userId={}, agentType={}, error={}", userId, agentType, e.message)
+                logger.error("❌ Agent Bridge WebSocket 错误: userId={}, workspaceId={}, agentType={}, error={}", userId, workspaceId, agentType, e.message)
             } finally {
-                logger.info("🔌 Agent Bridge 断开: userId={}, agentType={}", userId, agentType)
+                logger.info("🔌 Agent Bridge 断开: userId={}, workspaceId={}, agentType={}", userId, workspaceId, agentType)
                 scope.cancel()
-                AcpRegistry.unregister(userId, agentType)
+                AcpRegistry.unregister(userId, workspaceId, agentType)
                 AgentRuntime.handleAgentDisconnect(userId, agentType)
             }
         }
@@ -3606,7 +3613,7 @@ private fun Route.workflowKbRoutes() {
                     add(kotlinx.serialization.json.buildJsonObject {
                         put("agentType", kotlinx.serialization.json.JsonPrimitive(underscoreType))
                         put("displayName", kotlinx.serialization.json.JsonPrimitive(desc.displayName))
-                        put("connected", kotlinx.serialization.json.JsonPrimitive(AcpRegistry.isConnected(userId, dashType)))
+                        put("connected", kotlinx.serialization.json.JsonPrimitive(AcpRegistry.isAnyConnected(userId, dashType)))
                     })
                 }
             }
@@ -3855,19 +3862,16 @@ private fun Route.chatWebSocketRoute() {
             // 为每个群组获取或创建独立的ChatServer
             val groupChatServer = getGroupChatServer(groupId)
 
-            // 工作流群组自动激活 agent 模式（仅非 silk_chat 类型）。
-            // M4 Task 3: 优先取持久化的 activeAgent；缺失则回落到 workflow.agentType（underscore→dash）。
-            val workflow = workflowManager.getWorkflowByGroupId(groupId)
-            if (workflow != null && workflow.agentType != "silk_chat") {
-                val resolvedAgent = workflow.activeAgent.takeIf { it.isNotBlank() }
-                    ?: when (workflow.agentType) {
-                        "claude_code" -> "claude-code"
-                        else -> workflow.agentType
-                    }
-                AgentRuntime.autoActivateForWorkflow(userId, "group_$groupId", resolvedAgent)
+            // 工作空间自动激活 agent 模式（仅非 silk_chat 类型）。
+            // Task 4/5: 使用 workspaceManager 替代 workflowManager。
+            val workspace = workspaceManager.getOrCreateDefaultWorkspace(userId, groupId)
+            if (workspace.agentType != "silk_chat") {
+                val resolvedAgent = workspace.activeAgent.takeIf { it.isNotBlank() }
+                    ?: workspace.agentType
+                AgentRuntime.autoActivateForWorkspace(userId, workspace.workspaceId, resolvedAgent)
 
                 // Re-broadcast pending question if agent is waiting for user answer
-                val pendingSnapshot = AgentRuntime.snapshotPendingQuestion(userId, "group_$groupId")
+                val pendingSnapshot = AgentRuntime.snapshotPendingQuestion(userId, workspace.workspaceId)
                 if (pendingSnapshot != null) {
                     val questionMsg = com.silk.backend.agents.core.AgentMessages.question(
                         content = com.silk.backend.agents.core.AgentMessages.formatQuestionText(pendingSnapshot.questions),
@@ -3880,7 +3884,7 @@ private fun Route.chatWebSocketRoute() {
             }
 
             try {
-                groupChatServer.join(userId, userName, this)
+                groupChatServer.join(userId, userName, this, workspace.workspaceId)
                 
                 incoming.consumeEach { frame ->
                     when (frame) {
