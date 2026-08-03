@@ -87,6 +87,8 @@ object AgentRuntime {
         fun loadSeed(rawWorkspaceId: String, agentType: String): WorkflowSeed? = loadSeed(rawWorkspaceId)
         /** 根据 rawWorkspaceId 反查唯一 ID；Phase 1 直接返回 rawWorkspaceId 本身。 */
         fun resolveWorkflowId(rawWorkspaceId: String): String? = null
+        /** Returns the room/group ID for a workspace; null if not found. */
+        fun loadRoomId(rawWorkspaceId: String): String? = null
     }
 
     data class WorkflowSeed(
@@ -283,9 +285,12 @@ object AgentRuntime {
                 } catch (_: IllegalArgumentException) { /* ignore invalid value */ }
             }
         }
+        val roomId = try { persistence?.loadRoomId(workspaceId) ?: workspaceId }
+        catch (e: Exception) { workspaceId }
+        ctx.roomId = roomId
         logger.info(
-            "[AgentRuntime] workspace 自动激活: userId={}, workspaceId={}, agentType={}, workingDir={}, cliSeed={}",
-            userId, workspaceId, agentType, ctx.workingDir, seed?.cliSessionId?.take(8) ?: "-"
+            "[AgentRuntime] workspace 自动激活: userId={}, workspaceId={}, agentType={}, roomId={}, workingDir={}, cliSeed={}",
+            userId, workspaceId, agentType, roomId, ctx.workingDir, seed?.cliSessionId?.take(8) ?: "-"
         )
     }
 
@@ -318,7 +323,7 @@ object AgentRuntime {
             session.cancelled = false
             session.pendingQuestion = null
             logger.info(
-                "[AgentRuntime] Bridge 断线，agent 任务已终止: userId={}, workspaceId=, agentType={}",
+                "[AgentRuntime] Bridge 断线，agent 任务已终止: userId={}, workspaceId={}, agentType={}",
                 userId, ctx.workspaceId, agentType
             )
         }
@@ -917,7 +922,7 @@ object AgentRuntime {
             when (result.stopReason) {
                 StopReason.END_TURN -> accumulated.toString()
                     .takeIf { it.isNotEmpty() }
-                    ?.let { postProcessAgentFinalContent(it, session.userId, ctx.workspaceId) }
+                    ?.let { postProcessAgentFinalContent(it, session.userId, ctx.workspaceId, ctx.roomId) }
                     ?.takeIf { it.isNotBlank() }
                     ?.let { finalContent ->
                         broadcastFn(AgentMessages.final(
@@ -1016,10 +1021,10 @@ object AgentRuntime {
         rawContent: String,
         userId: String,
         workspaceId: String,
+        roomId: String = workspaceId,
         manager: KnowledgeBaseManager = knowledgeBaseManager,
         resolveWorkflowId: (String) -> String? = { rawWsId ->
             persistence?.resolveWorkflowId(rawWsId)
-                ?: workflowManager.getWorkflowByGroupId(rawWsId)?.id
         },
         recentMessageIdsProvider: (String) -> List<String> = ::loadRecentMessageIds,
     ): String {
@@ -1027,13 +1032,15 @@ object AgentRuntime {
         if (parsed.actions.isEmpty()) return parsed.cleanedContent
 
         val workflowId = resolveWorkflowId(workspaceId)
-        val recentMessageIds = recentMessageIdsProvider(workspaceId)
+        val recentMessageIds = recentMessageIdsProvider(
+            if (roomId.isNotBlank()) "group_$roomId" else workspaceId
+        )
         val results = executeKnowledgeBaseAiActions(
             manager = manager,
             request = KnowledgeBaseAiExecutionRequest(
                 userId = userId,
-                preferredGroupId = workspaceId.takeIf { it.isNotBlank() },
-                sourceGroupId = workspaceId.takeIf { it.isNotBlank() },
+                preferredGroupId = roomId.takeIf { it.isNotBlank() },
+                sourceGroupId = roomId.takeIf { it.isNotBlank() },
                 workflowId = workflowId,
                 recentMessageIds = recentMessageIds,
             ),

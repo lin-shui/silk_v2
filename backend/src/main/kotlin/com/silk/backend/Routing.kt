@@ -335,6 +335,9 @@ fun Application.configureRouting() {
 
         override fun resolveWorkflowId(rawWorkspaceId: String): String? =
             workspaceManager.getWorkspace(rawWorkspaceId)?.workspaceId
+
+        override fun loadRoomId(rawWorkspaceId: String): String? =
+            workspaceManager.getWorkspace(rawWorkspaceId)?.roomId
     })
 
     routing {

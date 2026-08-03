@@ -222,6 +222,7 @@ class AgentRuntimeTest {
                 """.trimIndent(),
                 userId = "owner",
                 workspaceId = "group_group-7",
+                roomId = "group-7",
                 manager = manager,
                 resolveWorkflowId = { "wf-7" },
                 recentMessageIdsProvider = { listOf("msg-1", "msg-2") },
@@ -235,7 +236,7 @@ class AgentRuntimeTest {
             assertEquals(KBEntryStatus.CANDIDATE, stored.status)
             assertEquals(KBSourceType.WORKFLOW, stored.source.sourceType)
             assertEquals("wf-7", stored.source.workflowId)
-            assertEquals("group_group-7", stored.source.sourceGroupId)
+            assertEquals("group-7", stored.source.sourceGroupId)
             assertEquals(listOf("msg-1", "msg-2"), stored.source.messageIds)
         }
     }

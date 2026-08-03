@@ -17,6 +17,8 @@ import java.util.concurrent.ConcurrentHashMap
 class GroupAgentContext(
     val userId: String,
     val workspaceId: String,
+    /** The room/group ID associated with this workspace. Populated by autoActivateForWorkspace. */
+    @Volatile var roomId: String = "",
     @Volatile var workingDir: String = System.getProperty("user.dir") ?: "/",
     @Volatile var currentAgentType: String? = null,
     val sessions: ConcurrentHashMap<String, AgentSession> = ConcurrentHashMap(),
