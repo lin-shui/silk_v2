@@ -36,7 +36,7 @@ class WorkspaceManager(
         Files.move(tmp.toPath(), storeFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
     }
 
-    fun createWorkspace(roomId: String, ownerId: String, name: String): PersonalWorkspace {
+    @Synchronized fun createWorkspace(roomId: String, ownerId: String, name: String): PersonalWorkspace {
         val store = load()
         val ws = PersonalWorkspace(
             workspaceId = "ws_${System.currentTimeMillis()}_${(1000..9999).random()}",
@@ -154,7 +154,7 @@ class WorkspaceManager(
     }
 
     /** On startup: skip if workspace_store.json already exists; otherwise migrate from workflow_store.json. */
-    fun runMigration() {
+    @Synchronized fun runMigration() {
         if (storeFile.exists()) { logger.info("workspace_store exists, skipping migration"); return }
         if (!legacyStoreFile.exists()) { logger.info("No workflow_store.json, nothing to migrate"); return }
         @Serializable data class OldStore(val workflows: List<Workflow> = emptyList())
@@ -164,7 +164,7 @@ class WorkspaceManager(
         for (wf in oldStore.workflows) {
             val agent = when (wf.agentType) { "claude_code" -> "claude-code"; else -> wf.agentType }
             store.workspaces.add(PersonalWorkspace(
-                workspaceId = "ws_${wf.id}", roomId = wf.groupId, ownerId = wf.ownerId,
+                workspaceId = "ws_${System.currentTimeMillis()}_${(1000..9999).random()}", roomId = wf.groupId, ownerId = wf.ownerId,
                 name = wf.name.ifBlank { "default" }, workingDir = wf.workingDir,
                 agentType = agent, cliSessionId = wf.sessionId.takeIf { it.isNotBlank() },
                 sessionStarted = wf.sessionStarted, activeAgent = wf.activeAgent,
