@@ -2,10 +2,10 @@
 
 **文档类型**：产品设计文档 + 技术实现参考  
 **创建日期**：2026-07-24  
-**状态**：实施中（Phase 1 + Phase 1.5 已完成，Phase 2 代码与自动化验证已完成，待真实 bridge 手工验收）
+**状态**：实施中（Phase 1、Phase 1.5、Phase 2 已完成；下一阶段为 Phase 3 GitHub 集成 MVP）
 **作者**：产品 + 工程对齐讨论产出
 
-**Phase 2 手工验收记录**：[2026-08-04-phase2-manual-acceptance.md](2026-08-04-phase2-manual-acceptance.md)
+**最近完成**：Phase 2 于 2026-08-04 完成代码、自动化验证和双账号真实 bridge 基本手工验收。
 
 ---
 
@@ -600,7 +600,7 @@ backend/src/main/kotlin/com/silk/backend/
 - [x] CC 状态/目录/设置/Source Control 全部迁移到 workspaceId
 - [x] Owner/Observer/Co-pilot 的 prompt、stop、card reply 权限服务端闭环
 - [x] 重启回放、发送时可见性和未知 workspace 的自动化合同测试
-- [ ] 双用户、双连接、真实 bridge 集成验收（Phase 2 进入质量门槛）
+- [x] 双用户、双连接、真实 bridge 基本集成验收（Phase 2 完成；深度并发与断线场景保留为持续回归项）
 
 详细计划：`docs/superpowers/plans/2026-08-03-phase1.5-workflow-room-foundation-hardening.md`
 
@@ -608,13 +608,15 @@ backend/src/main/kotlin/com/silk/backend/
 
 **目标**：同一 Room 内多用户各自连设备、独立工作区并行运行。
 
-- [ ] 真实 bridge 手工验收：多用户并发 ACP 连接在同一 Room 的隔离性（用户级 bridge + 工作区级 AgentRuntime/ACP session）
+- [x] 双账号真实 bridge 基本手工验收：同一 Room 内的可见性、旁观与 Co-pilot 主流程通过
 - [x] Workspace 可见性（SHARED/PRIVATE）+ 广播路由按 scope 生效（含历史回放权限过滤）
 - [x] Co-pilot 授权 API + UI（授权弹窗含风险提示文案）
 - [x] 前端 Web：Team Channel + 成员工作区 Tab（按人分组，活跃状态角标）
 - [x] Workflow Room 成员闭环：Owner 搜索/增删成员，成员可发现 Room，移除时撤销 Co-pilot 与在线连接
 - [x] Team Channel 触发策略统一：普通消息不触发 AI，仅前置 `@Silk` 触发，不区分单人/多人
 - [x] 自动化验证：多用户并行，消息不跨工作区混入；私密工作区消息不出现在未授权历史 / recall / export
+
+**完成说明（2026-08-04）**：Phase 2 已关闭，可以进入 Phase 3。更高并发、断线重连、授权撤销与成员移除后的在线连接失效继续纳入回归验证，但不再作为 Phase 3 的进入阻塞项。
 
 ### Phase 3：GitHub 集成 MVP
 
