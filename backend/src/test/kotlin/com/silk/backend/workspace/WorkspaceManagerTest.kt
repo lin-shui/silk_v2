@@ -7,6 +7,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class WorkspaceManagerTest {
@@ -51,6 +52,85 @@ class WorkspaceManagerTest {
         val ws = mgr.createWorkspace("room1", "user1", "default")
         mgr.updateWorkingDir(ws.workspaceId, "/home/user/project")
         assertEquals("/home/user/project", mgr.getWorkspace(ws.workspaceId)!!.workingDir)
+    }
+
+    @Test fun `archive and restore persist lifecycle timestamps`() {
+        val mgr = WorkspaceManager(tempDir.absolutePath)
+        val workspace = mgr.createWorkspace("room1", "user1", "lifecycle")
+
+        assertTrue(mgr.updateLifecycleState(workspace.workspaceId, WorkspaceLifecycleState.ARCHIVED))
+        val archived = mgr.getWorkspace(workspace.workspaceId)!!
+        assertEquals(WorkspaceLifecycleState.ARCHIVED, archived.lifecycleState)
+        assertNotNull(archived.archivedAt)
+
+        assertTrue(mgr.updateLifecycleState(workspace.workspaceId, WorkspaceLifecycleState.ACTIVE))
+        val restored = mgr.getWorkspace(workspace.workspaceId)!!
+        assertEquals(WorkspaceLifecycleState.ACTIVE, restored.lifecycleState)
+        assertNull(restored.archivedAt)
+    }
+
+    @Test fun `private visibility clears and rejects copilots`() {
+        val mgr = WorkspaceManager(tempDir.absolutePath)
+        val workspace = mgr.createWorkspace(
+            roomId = "room1",
+            ownerId = "owner",
+            name = "shared",
+            visibility = WorkspaceVisibility.SHARED,
+        )
+
+        assertTrue(mgr.updateCopilots(workspace.workspaceId, listOf("copilot")))
+        assertTrue(mgr.updateVisibility(workspace.workspaceId, WorkspaceVisibility.PRIVATE))
+        assertEquals(emptyList(), mgr.getWorkspace(workspace.workspaceId)!!.copilots)
+        assertTrue(!mgr.updateCopilots(workspace.workspaceId, listOf("copilot")))
+    }
+
+    @Test fun `last shared name is preserved after workspace becomes private`() {
+        val mgr = WorkspaceManager(tempDir.absolutePath)
+        val workspace = mgr.createWorkspace(
+            roomId = "room1",
+            ownerId = "owner",
+            name = "shared-name",
+            visibility = WorkspaceVisibility.SHARED,
+        )
+
+        assertTrue(mgr.updateName(workspace.workspaceId, "shared-renamed"))
+        assertTrue(mgr.updateVisibility(workspace.workspaceId, WorkspaceVisibility.PRIVATE))
+        assertTrue(mgr.updateName(workspace.workspaceId, "private-secret-name"))
+
+        val updated = mgr.getWorkspace(workspace.workspaceId)!!
+        assertEquals("private-secret-name", updated.name)
+        assertEquals("shared-renamed", updated.lastSharedName)
+    }
+
+    @Test fun `legacy shared workspace captures its name when becoming private`() {
+        File(tempDir, "workspace_store.json").writeText(
+            """{"workspaces":[{"workspaceId":"legacy-shared","roomId":"room1","ownerId":"owner",
+              "name":"legacy-shared-name","visibility":"SHARED"}]}"""
+        )
+        val mgr = WorkspaceManager(tempDir.absolutePath)
+
+        assertTrue(mgr.updateVisibility("legacy-shared", WorkspaceVisibility.PRIVATE))
+        assertTrue(mgr.updateName("legacy-shared", "private-secret-name"))
+
+        val updated = mgr.getWorkspace("legacy-shared")!!
+        assertEquals("private-secret-name", updated.name)
+        assertEquals("legacy-shared-name", updated.lastSharedName)
+    }
+
+    @Test fun `legacy private history name is frozen when first backfilled`() {
+        File(tempDir, "workspace_store.json").writeText(
+            """{"workspaces":[{"workspaceId":"legacy-private","roomId":"room1","ownerId":"owner",
+              "name":"best-known-shared-name","visibility":"PRIVATE"}]}"""
+        )
+        val mgr = WorkspaceManager(tempDir.absolutePath)
+
+        val backfilled = mgr.backfillLastSharedName("legacy-private")!!
+        assertEquals("best-known-shared-name", backfilled.lastSharedName)
+        assertTrue(mgr.updateName("legacy-private", "private-secret-name"))
+
+        val updated = mgr.getWorkspace("legacy-private")!!
+        assertEquals("private-secret-name", updated.name)
+        assertEquals("best-known-shared-name", updated.lastSharedName)
     }
 
     @Test fun `migrates from workflow_store json`() {

@@ -7,6 +7,9 @@ import kotlinx.serialization.Serializable
 enum class WorkspaceVisibility { SHARED, PRIVATE }
 
 @Serializable
+enum class WorkspaceLifecycleState { ACTIVE, ARCHIVED }
+
+@Serializable
 data class PersonalWorkspace(
     val workspaceId: String,
     val roomId: String,
@@ -20,7 +23,10 @@ data class PersonalWorkspace(
     val agentSessions: Map<String, AgentSessionState> = emptyMap(),
     val permissionMode: String = "",
     val visibility: WorkspaceVisibility = WorkspaceVisibility.PRIVATE,
+    val lastSharedName: String? = null,
     val copilots: List<String> = emptyList(),
+    val lifecycleState: WorkspaceLifecycleState = WorkspaceLifecycleState.ACTIVE,
+    val archivedAt: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 )

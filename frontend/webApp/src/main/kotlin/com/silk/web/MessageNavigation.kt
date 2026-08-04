@@ -51,6 +51,12 @@ internal fun scrollMessageIntoContainer(containerId: String, messageId: String):
     return true
 }
 
+internal fun scrollContainerToBottom(containerId: String): Boolean {
+    val container = document.getElementById(containerId) as? HTMLElement ?: return false
+    container.scrollTop = container.scrollHeight.toDouble()
+    return true
+}
+
 internal fun resetMessageNavigationViewport() {
     val root = document.documentElement as? HTMLElement
     val body = document.body

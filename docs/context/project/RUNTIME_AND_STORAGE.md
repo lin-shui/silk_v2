@@ -21,10 +21,11 @@
 | Uploaded files | `chat_history/<session>/uploads/` | 文件消息、下载 |
 | AI workspace (cross-group) | `backend/chat_workspaces/<session>/other_groups/` | Silk 专属对话 AI 跨群搜索上下文 |
 | URL dedupe | `chat_history/<session>/uploads/processed_urls.txt` | URL/PDF 下载去重 |
-| User history workspace views | `user_workspace_views/user_<user>/` | `UserWorkspaceManager` 为 `/recall` 创建 hardlink 视图，映射该用户可访问的 `chat_history/group_<group>/` |
-| AI cross-group workspace | `backend/chat_workspaces/<session>/other_groups/` | `DirectModelAgent.writeOtherGroupsHistories()`：Silk 专属对话写入其他群最近历史，供 AI Grep/Read 跨群检索 |
+| User history workspace views | `user_workspace_views/user_<user>/` | `UserWorkspaceManager` 按 TEAM/WORKSPACE ACL 生成消息过滤副本，供 `/recall` 检索；session 元数据可 hardlink |
+| AI cross-group workspace | `backend/chat_workspaces/<session>/other_groups/` | `DirectModelAgent.writeOtherGroupsHistories()` 按调用者消息 ACL 写入其他群最近历史 |
 | User todos | `chat_history/user_todos/*.json` or `-Dsilk.userTodoBaseDir=...` | `UserTodoStore`（兼容旧 `backend/chat_history/user_todos` / `../chat_history/user_todos` 查找） |
 | Workflow store | `~/.silk-data/workflows/workflow_store.json`, `SILK_WORKFLOW_DIR`, or `-Dsilk.workflowDir=...` | `WorkflowManager` |
+| Personal workspace store | `~/.silk-data/workflows/workspace_store.json`, override 同上 | `WorkspaceManager`（Agent runtime、可见性、Co-pilot、ACTIVE/ARCHIVED 生命周期、最近活动） |
 | Trusted directories | `~/.silk-data/workflows/trusted_dirs.json` (co-located with workflow store) | `TrustedDirManager` |
 | KB store | `knowledge_base/kb_store.json` (JSON) or PostgreSQL (`SILK_KB_STORE=postgres` + `docker-compose-pg.yml`) | `KnowledgeBaseManager`（topic-level personal/team scope、ACL、旧 store 兼容读取；PG 后端通过 `PgKnowledgeBaseRepository` 实现） |
 | KB context preferences | `knowledge_base/context_preferences.json` (co-located with KB store) | `KnowledgeBaseContextPreferenceStore`（用户级 `excludedSpaceIds` 长期偏好，以及 `memoryEnabled` / `autoCaptureEnabled` / `ephemeralSessionEnabled` 开关；`GET/PUT /api/kb/context-preferences`） |

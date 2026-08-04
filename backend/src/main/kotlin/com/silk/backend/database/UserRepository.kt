@@ -190,9 +190,7 @@ object UserRepository {
         }
     }
 
-    /**
-     * 根据名称关键词搜索用户（模糊匹配 fullName 或 loginName）
-     */
+    /** 根据名称、登录名或电话号码搜索用户。 */
     fun searchUsersByName(query: String, limit: Int = 10): List<User> {
         val lowerQuery = query.lowercase()
         return transaction {
@@ -200,7 +198,8 @@ object UserRepository {
                 .mapNotNull { rowToUser(it) }
                 .filter { user ->
                     user.fullName.lowercase().contains(lowerQuery) ||
-                    user.loginName.lowercase().contains(lowerQuery)
+                    user.loginName.lowercase().contains(lowerQuery) ||
+                    user.phoneNumber.contains(query)
                 }
                 .take(limit)
         }
@@ -219,4 +218,3 @@ object UserRepository {
         )
     }
 }
-

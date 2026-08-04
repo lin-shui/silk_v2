@@ -1,28 +1,38 @@
 package com.silk.backend
 
+import com.silk.backend.auth.JwtProvider
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.database.MarkReadRequest
 import com.silk.backend.database.SimpleResponse
 import com.silk.backend.database.UnreadCountResponse
 import com.silk.backend.models.ChatHistory
 import com.silk.backend.models.ChatHistoryEntry
+import com.silk.backend.models.Workflow
+import com.silk.backend.agents.core.AgentRuntime
 import com.silk.backend.testsupport.HttpOnlyWebPageDownloaderOverride
 import com.silk.backend.testsupport.LocalWebContentServer
+import com.silk.backend.workflow.WorkflowManager
+import com.silk.backend.workspace.WorkspaceManager
+import com.silk.backend.workspace.WorkspaceVisibility
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.websocket.DefaultClientWebSocketSession
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.request.url
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.Frame
+import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -173,6 +183,232 @@ class BackendWebSocketContractTest {
         }
     }
 
+    @Test
+    fun `workflow websocket rejects authenticated non member before workspace activation`() {
+        TestWorkspace().use {
+            testApplication {
+                application { module() }
+
+                val createResponse = client.post("/api/workflows") {
+                    header(
+                        HttpHeaders.Authorization,
+                        "Bearer ${JwtProvider.generateAccessToken("workflow-owner")}",
+                    )
+                    contentType(ContentType.Application.Json)
+                    setBody(
+                        """{"userId":"workflow-owner","name":"Membership Contract","agentType":"silk_chat"}"""
+                    )
+                }
+                assertEquals(HttpStatusCode.Created, createResponse.status)
+                val workflow = createResponse.decode<Workflow>()
+
+                val wsClient = createClient { install(WebSockets) }
+                val intruderSession = wsClient.connectChat(
+                    userId = "ignored-client-id",
+                    userName = "Intruder",
+                    groupId = workflow.groupId,
+                    token = JwtProvider.generateAccessToken("workflow-intruder"),
+                )
+
+                val closeReason = withTimeout(5_000) { intruderSession.closeReason.await() }
+                assertNotNull(closeReason)
+                assertEquals(CloseReason.Codes.VIOLATED_POLICY.code, closeReason.code)
+                assertEquals("room membership required", closeReason.message)
+                assertNull(ChatHistoryManager().loadSessionData("group_${workflow.groupId}"))
+            }
+        }
+    }
+
+    @Test
+    fun `workflow websocket isolates workspace streams and reauthorizes copilot control`() {
+        TestWorkspace().use { workspace ->
+            val aliceId = "phase2-alice"
+            val bobId = "phase2-bob"
+            val group = assertNotNull(GroupRepository.createGroup("Phase 2 Multi User", aliceId))
+            assertTrue(GroupRepository.addUserToGroup(group.id, bobId))
+            WorkflowManager(workspace.workflowDir.absolutePath).createWorkflow(
+                name = "Phase 2 Multi User",
+                description = "",
+                userId = aliceId,
+                groupId = group.id,
+                agentType = "claude_code",
+                taskFocus = "",
+            )
+            val workspaceManager = WorkspaceManager(workspace.workflowDir.absolutePath)
+            val alicePrivate = workspaceManager.createWorkspace(
+                roomId = group.id,
+                ownerId = aliceId,
+                name = "private-auth",
+                workingDir = workspace.workflowDir.absolutePath,
+            )
+            val aliceSecond = workspaceManager.createWorkspace(
+                roomId = group.id,
+                ownerId = aliceId,
+                name = "second-workspace",
+                workingDir = workspace.workflowDir.absolutePath,
+            )
+
+            try {
+                testApplication {
+                    application { module() }
+                    val wsClient = createClient { install(WebSockets) }
+                    val aliceSession = wsClient.connectChat(
+                        userId = "ignored-alice",
+                        userName = "Alice",
+                        groupId = group.id,
+                        token = JwtProvider.generateAccessToken(aliceId),
+                    )
+                    val bobSession = wsClient.connectChat(
+                        userId = "ignored-bob",
+                        userName = "Bob",
+                        groupId = group.id,
+                        token = JwtProvider.generateAccessToken(bobId),
+                    )
+                    assertTrue(aliceSession.receiveHistory().isEmpty())
+                    assertTrue(bobSession.receiveHistory().isEmpty())
+
+                    aliceSession.send(Frame.Text(json.encodeToString(workspaceText(
+                        id = "alice-private",
+                        userId = aliceId,
+                        workspaceId = alicePrivate.workspaceId,
+                    ))))
+                    assertNotNull(aliceSession.receiveMatching { it.id == "alice-private" })
+                    assertNull(bobSession.receiveMatching(600) { it.id == "alice-private" })
+
+                    workspaceManager.updateVisibility(alicePrivate.workspaceId, WorkspaceVisibility.SHARED)
+                    aliceSession.send(Frame.Text(json.encodeToString(workspaceText(
+                        id = "alice-shared",
+                        userId = aliceId,
+                        workspaceId = alicePrivate.workspaceId,
+                    ))))
+                    assertNotNull(aliceSession.receiveMatching { it.id == "alice-shared" })
+                    assertNotNull(bobSession.receiveMatching { it.id == "alice-shared" })
+
+                    val bobReplaySession = wsClient.connectChat(
+                        userId = "ignored-bob-replay",
+                        userName = "Bob",
+                        groupId = group.id,
+                        token = JwtProvider.generateAccessToken(bobId),
+                    )
+                    val bobReplay = bobReplaySession.receiveHistory()
+                    assertTrue(bobReplay.any { it.id == "alice-shared" })
+                    assertTrue(bobReplay.none { it.id == "alice-private" })
+
+                    bobSession.send(Frame.Text(json.encodeToString(workspaceText(
+                        id = "observer-denied",
+                        userId = bobId,
+                        workspaceId = alicePrivate.workspaceId,
+                    ))))
+                    assertNull(bobSession.receiveMatching(600) { it.id == "observer-denied" })
+                    assertNull(aliceSession.receiveMatching(600) { it.id == "observer-denied" })
+
+                    bobSession.send(Frame.Text(json.encodeToString(
+                        workspaceText("observer-stop", bobId, alicePrivate.workspaceId)
+                            .copy(type = MessageType.STOP_GENERATE)
+                    )))
+                    bobSession.send(Frame.Text(json.encodeToString(
+                        workspaceText("observer-card", bobId, alicePrivate.workspaceId)
+                            .copy(type = MessageType.CARD_REPLY, content = "{}")
+                    )))
+
+                    val observerBarrier = Message(
+                        id = "observer-barrier",
+                        userId = bobId,
+                        userName = "Bob",
+                        content = "observer authorization barrier",
+                        timestamp = 1L,
+                        type = MessageType.SYSTEM,
+                        scope = MessageScope.TEAM,
+                    )
+                    bobSession.send(Frame.Text(json.encodeToString(observerBarrier)))
+                    assertNotNull(bobSession.receiveMatching { it.id == "observer-barrier" })
+                    assertNotNull(aliceSession.receiveMatching { it.id == "observer-barrier" })
+
+                    workspaceManager.updateCopilots(alicePrivate.workspaceId, listOf(bobId))
+                    bobSession.send(Frame.Text(json.encodeToString(workspaceText(
+                        id = "copilot-accepted",
+                        userId = bobId,
+                        workspaceId = alicePrivate.workspaceId,
+                    ))))
+                    assertNotNull(bobSession.receiveMatching { it.id == "copilot-accepted" })
+                    assertNotNull(aliceSession.receiveMatching { it.id == "copilot-accepted" })
+                    assertNotNull(AgentRuntime.snapshotState(aliceId, alicePrivate.workspaceId))
+                    assertNull(AgentRuntime.snapshotState(bobId, alicePrivate.workspaceId))
+
+                    workspaceManager.updateCopilots(alicePrivate.workspaceId, emptyList())
+                    bobSession.send(Frame.Text(json.encodeToString(workspaceText(
+                        id = "copilot-revoked",
+                        userId = bobId,
+                        workspaceId = alicePrivate.workspaceId,
+                    ))))
+                    assertNull(bobSession.receiveMatching(600) { it.id == "copilot-revoked" })
+                    assertNull(aliceSession.receiveMatching(600) { it.id == "copilot-revoked" })
+
+                    val teamMessage = Message(
+                        id = "team-visible",
+                        userId = bobId,
+                        userName = "Bob",
+                        content = "team coordination",
+                        timestamp = 1L,
+                        isTransient = true,
+                        scope = MessageScope.TEAM,
+                    )
+                    bobSession.send(Frame.Text(json.encodeToString(teamMessage)))
+                    assertNotNull(bobSession.receiveMatching { it.id == "team-visible" })
+                    assertNotNull(aliceSession.receiveMatching { it.id == "team-visible" })
+
+                    val aliceSecondSession = wsClient.connectChat(
+                        userId = "ignored-alice-second",
+                        userName = "Alice",
+                        groupId = group.id,
+                        token = JwtProvider.generateAccessToken(aliceId),
+                    )
+                    aliceSecondSession.receiveHistory()
+                    aliceSession.send(Frame.Text(json.encodeToString(workspaceText(
+                        id = "alice-workspace-one",
+                        userId = aliceId,
+                        workspaceId = alicePrivate.workspaceId,
+                    ))))
+                    aliceSecondSession.send(Frame.Text(json.encodeToString(workspaceText(
+                        id = "alice-workspace-two",
+                        userId = aliceId,
+                        workspaceId = aliceSecond.workspaceId,
+                    ))))
+                    assertNotNull(aliceSession.receiveMatching { it.id == "alice-workspace-one" })
+                    assertNotNull(aliceSecondSession.receiveMatching { it.id == "alice-workspace-two" })
+
+                    val persisted = assertNotNull(
+                        ChatHistoryManager().loadChatHistory("group_${group.id}")
+                    ).messages
+                    val workspaceOneEntry = assertNotNull(
+                        persisted.firstOrNull { it.messageId == "alice-workspace-one" },
+                        "workspace one missing; persisted=${persisted.map { it.messageId }}",
+                    )
+                    val workspaceTwoEntry = assertNotNull(
+                        persisted.firstOrNull { it.messageId == "alice-workspace-two" },
+                        "workspace two missing; persisted=${persisted.map { it.messageId }}",
+                    )
+                    assertEquals(
+                        alicePrivate.workspaceId,
+                        workspaceOneEntry.workspaceId,
+                    )
+                    assertEquals(
+                        aliceSecond.workspaceId,
+                        workspaceTwoEntry.workspaceId,
+                    )
+                    assertTrue(persisted.none { it.messageId in setOf("observer-denied", "copilot-revoked") })
+
+                    aliceSecondSession.close()
+                    bobReplaySession.close()
+                    bobSession.close()
+                    aliceSession.close()
+                }
+            } finally {
+                AgentRuntime.clearForTest()
+            }
+        }
+    }
+
     private fun createGroupForTest(groupName: String) =
         assertNotNull(GroupRepository.createGroup(groupName, hostId = "host-user"))
 
@@ -201,12 +437,24 @@ class BackendWebSocketContractTest {
         messageType = "TEXT"
     )
 
+    private fun workspaceText(id: String, userId: String, workspaceId: String) = Message(
+        id = id,
+        userId = userId,
+        userName = userId,
+        content = id,
+        timestamp = 1L,
+        scope = MessageScope.WORKSPACE,
+        workspaceId = workspaceId,
+    )
+
     private suspend fun HttpClient.connectChat(
         userId: String,
         userName: String,
-        groupId: String
+        groupId: String,
+        token: String? = null,
     ): DefaultClientWebSocketSession = webSocketSession {
-        url("/chat?userId=$userId&userName=$userName&groupId=$groupId")
+        val tokenParameter = token?.let { "&token=$it" }.orEmpty()
+        url("/chat?userId=$userId&userName=$userName&groupId=$groupId$tokenParameter")
     }
 
     private suspend fun DefaultClientWebSocketSession.receiveHistory(): List<Message> = buildList {
@@ -228,6 +476,18 @@ class BackendWebSocketContractTest {
                 return message
             }
         }
+    }
+
+    private suspend fun DefaultClientWebSocketSession.receiveMatching(
+        timeoutMillis: Long = 5_000,
+        predicate: (Message) -> Boolean,
+    ): Message? = withTimeoutOrNull(timeoutMillis) {
+        var matched: Message? = null
+        while (matched == null) {
+            val message = receiveRawMessage(timeoutMillis) ?: return@withTimeoutOrNull null
+            if (!message.isHistoryEndMarker() && predicate(message)) matched = message
+        }
+        matched
     }
 
     private suspend fun DefaultClientWebSocketSession.receiveRawMessage(timeoutMillis: Long): Message? {

@@ -21,7 +21,9 @@ data class Message(
     val interactiveOptions: List<InteractiveOption>? = null,  // 交互式按钮选项（用于 cc-connect 提问）
     val action: String? = null,  // null = 新消息(默认), "edit" = 覆盖同ID消息（CARD 编辑）
     val scope: MessageScope = MessageScope.TEAM,
-    val workspaceId: String? = null
+    val workspaceId: String? = null,
+    // 服务端写入：WORKSPACE 消息发送时是否允许 Room Observer 查看。
+    val observerVisible: Boolean = false,
 )
 
 @Serializable
@@ -98,4 +100,3 @@ fun isAgentUserId(userId: String): Boolean = userId.endsWith("_ai_agent")
 
 @Serializable
 enum class MessageScope { TEAM, WORKSPACE }
-

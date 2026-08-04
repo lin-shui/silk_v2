@@ -10,6 +10,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
@@ -36,7 +38,9 @@ import com.silk.backend.kb.executeKnowledgeBaseAiActions
 import com.silk.backend.kb.resolveKnowledgeBasePromptContext
 import com.silk.backend.kb.buildMemoryKey
 import com.silk.backend.models.KnowledgeBaseContextSelection
+import com.silk.backend.models.ChatHistoryEntry
 import com.silk.backend.workspace.WorkspaceManager
+import com.silk.backend.workspace.WorkspaceAccessPolicy
 import com.silk.backend.workspace.WorkspaceVisibility
 import org.slf4j.LoggerFactory
 
@@ -159,6 +163,7 @@ data class Message(
     val action: String? = null,  // null = 新消息(默认), "edit" = 覆盖同ID消息（CARD 编辑）
     val scope: MessageScope = MessageScope.TEAM,
     val workspaceId: String? = null,
+    val observerVisible: Boolean = false,
 )
 
 @Serializable
@@ -202,16 +207,34 @@ data class PendingImageState(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+internal fun hasLeadingSilkMention(content: String): Boolean {
+    val suffix = content.trimStart().takeIf { it.startsWith("@silk", ignoreCase = true) }
+        ?.drop("@silk".length)
+        ?: return false
+    return suffix.isEmpty() || suffix.first().isWhitespace() || suffix.first() in ",，:：;；.!。！？、"
+}
+
+internal fun shouldTriggerSilkAi(isSilkPrivateChat: Boolean, content: String): Boolean =
+    isSilkPrivateChat || hasLeadingSilkMention(content)
+
+internal fun extractSilkRequest(content: String, isSilkPrivateChat: Boolean): String {
+    if (isSilkPrivateChat) return content
+    val trimmed = content.trimStart()
+    if (!hasLeadingSilkMention(trimmed)) return trimmed
+    return trimmed.drop("@silk".length)
+        .trimStart()
+        .trimStart(',', '，', ':', '：')
+        .trimStart()
+}
+
 class ChatServer(
     private val sessionName: String = "default_room",
-    private val isSilkChatWorkflow: Boolean = false,
     private val workspaceManager: WorkspaceManager = WorkspaceManager(),
 ) {
     private val logger = LoggerFactory.getLogger(ChatServer::class.java)
     private val connections = ConcurrentHashMap<String, CopyOnWriteArrayList<WebSocketSession>>()
-    // Per-user workspaceId: populated at join time, used by handleIfActive / cancelIfActive
-    private val userWorkspaceIds = ConcurrentHashMap<String, String>()
     private val messageHistory = Collections.synchronizedList(mutableListOf<Message>())
+    private val messagePersistenceMutex = Mutex()
     private val historyManager = ChatHistoryManager()
     private val historyJson = Json { ignoreUnknownKeys = true }
     private val silkAgent = SilkAgent().apply {
@@ -292,6 +315,9 @@ class ChatServer(
                                 null
                             }
                         },
+                        scope = entry.scope,
+                        workspaceId = entry.workspaceId,
+                        observerVisible = entry.observerVisible,
                     )
                     messageHistory.add(msg)
                 }
@@ -306,6 +332,7 @@ class ChatServer(
 
     // ── 待处理图片状态（图片+文字合并发给 vision 模型） ──
     private val pendingImages = ConcurrentHashMap<String, PendingImageState>()
+    private val revokedRoomMembers = ConcurrentHashMap.newKeySet<String>()
 
     fun setPendingImage(userId: String, ocrText: String, fileName: String, file: java.io.File, downloadUrl: String) {
         val key = "$sessionName:$userId"
@@ -336,8 +363,7 @@ class ChatServer(
         }
     }
 
-    suspend fun join(userId: String, userName: String, session: WebSocketSession, workspaceId: String = "") {
-        if (workspaceId.isNotBlank()) userWorkspaceIds[userId] = workspaceId
+    suspend fun join(userId: String, userName: String, session: WebSocketSession) {
         // 权限校验：群聊仅允许群成员加入（否则会导致历史/工具上下文越权）
         if (sessionName.startsWith("group_") && !AgentRuntime.isAgentUserId(userId)) {
             val groupId = sessionName.removePrefix("group_")
@@ -353,6 +379,7 @@ class ChatServer(
         }
 
         connections.getOrPut(userId) { CopyOnWriteArrayList() }.add(session)
+        revokedRoomMembers.remove(userId)
 
         // 如果是第一个真实用户加入，让 Silk AI 也加入（静默模式）
         if (!isAgentJoined && !AgentRuntime.isAgentUserId(userId)) {
@@ -369,10 +396,9 @@ class ChatServer(
             when (msg.scope) {
                 MessageScope.TEAM -> true
                 MessageScope.WORKSPACE -> {
-                    val wsId = msg.workspaceId ?: return@filter true
-                    val ws = workspaceManager.getWorkspace(wsId) ?: return@filter false
-                    userId == ws.ownerId || userId in ws.copilots ||
-                        ws.visibility == WorkspaceVisibility.SHARED
+                    val ws = WorkspaceAccessPolicy.resolveInRoom(workspaceManager, roomId(), msg.workspaceId)
+                        ?: return@filter false
+                    WorkspaceAccessPolicy.canRead(ws, userId, msg.observerVisible)
                 }
             }
         }
@@ -434,12 +460,28 @@ class ChatServer(
         // 只有当该用户所有连接都断开后，才标记为离线
         if (connections[userId] == null) {
             historyManager.removeMember(sessionName, userId)
-            userWorkspaceIds.remove(userId)
         }
 
         // 不发送离开消息到聊天室（避免产生无意义的历史记录）
         // 用户离开已经通过会话管理记录
         logger.debug("👋 用户已离开聊天室: {} ({})", userName, userId)
+    }
+
+    suspend fun revokeRoomMember(userId: String) {
+        revokedRoomMembers.add(userId)
+        val sessions = connections.remove(userId).orEmpty()
+        sessions.forEach { session ->
+            runChatCatching {
+                session.close(
+                    CloseReason(
+                        CloseReason.Codes.VIOLATED_POLICY,
+                        "Room membership revoked",
+                    )
+                )
+            }
+        }
+        historyManager.removeMember(sessionName, userId)
+        logger.info("🔒 已撤销 Room 成员连接: room={}, userId={}, sessions={}", roomId(), userId, sessions.size)
     }
 
     /**
@@ -493,12 +535,12 @@ class ChatServer(
             historyManager.addMessage(sessionName, message)
             logger.debug("💾 [broadcast] 消息已保存: {}", message.id)
 
-            // 记录新消息用于未读追踪
-            val groupId = sessionName.removePrefix("group_")
-            UnreadRepository.recordNewMessage(groupId, System.currentTimeMillis(), message.userId)
-
-            // 启动 Weaviate 索引（异步）
-            launchWeaviateMessageIndex(message)
+            if (message.scope == MessageScope.TEAM) {
+                // Workspace 未读和搜索必须按 audience 建模；在专用索引完成前不进入群级通道。
+                val groupId = sessionName.removePrefix("group_")
+                UnreadRepository.recordNewMessage(groupId, System.currentTimeMillis(), message.userId)
+                launchWeaviateMessageIndex(message)
+            }
         }
     }
 
@@ -737,7 +779,7 @@ class ChatServer(
     private fun loadChatHistoryForCc(): List<com.silk.backend.ccconnect.HistoryEntry>? {
         val chatHistory = historyManager.loadChatHistory(sessionName)
         return chatHistory?.messages
-            ?.filter { it.messageType == "TEXT" }
+            ?.filter { it.messageType == "TEXT" && it.scope == MessageScope.TEAM }
             ?.takeLast(50)
             ?.map { entry ->
                 com.silk.backend.ccconnect.HistoryEntry(
@@ -754,45 +796,35 @@ class ChatServer(
      * 处理 Claude Code 模式拦截：如果 AgentRuntime 处于活跃状态，拦截消息
      * @return true 表示已处理（应 return），false 表示未处理（继续后续流程）
      */
-    private suspend fun handleClaudeCodeBroadcastInterception(message: Message, isSilkPrivateChat: Boolean): Boolean {
-        if (!shouldInterceptForClaudeCode(message, isSilkPrivateChat)) {
+    private suspend fun handleClaudeCodeBroadcastInterception(message: Message): Boolean {
+        if (!shouldInterceptForClaudeCode(message)) {
             return false
         }
 
-        val groupId = sessionName
-        val ccUserId = message.userId
-        val userSessions = connections[ccUserId]
-        if (userSessions != null && userSessions.isNotEmpty()) {
-            val ccBroadcastFn: suspend (Message) -> Unit = { msg ->
-                runChatCatching {
-                    if (!msg.isTransient) {
-                        messageHistory.add(msg)
-                        historyManager.addMessage(sessionName, msg)
-                    }
-                    val msgJson = Json.encodeToString(msg)
-                    val currentSessions = connections[ccUserId] ?: emptyList()
-                    currentSessions.forEach { session ->
-                        sendFrameSafely(session, msgJson) { error ->
-                            logger.warn("[CC] 发送消息到某连接失败: {}", error.message)
-                        }
-                    }
-                }.onFailure { e ->
-                    logger.warn("[CC] 发送消息失败: {}", e.message)
-                }
-            }
-            val ccText = message.content
-                .removePrefix("@Silk").removePrefix("@silk")
-                .trim()
-            val ccHandled = AgentRuntime.handleIfActive(
-                userId = message.userId,
-                workspaceId = userWorkspaceIds[message.userId] ?: sessionName,
-                text = ccText,
-                userName = message.userName,
-                broadcastFn = ccBroadcastFn,
-            )
-            if (ccHandled) return true
+        val workspace = WorkspaceAccessPolicy.resolveInRoom(workspaceManager, roomId(), message.workspaceId)
+            ?: return true
+        if (!WorkspaceAccessPolicy.canControl(workspace, message.userId)) return true
+
+        val agentType = workspace.activeAgent.ifBlank { workspace.agentType }
+        if (AgentRuntime.snapshotState(workspace.ownerId, workspace.workspaceId) == null) {
+            AgentRuntime.autoActivateForWorkspace(workspace.ownerId, workspace.workspaceId, agentType)
         }
-        return false
+        val ccBroadcastFn: suspend (Message) -> Unit = { response ->
+            broadcast(
+                response.copy(
+                    scope = MessageScope.WORKSPACE,
+                    workspaceId = workspace.workspaceId,
+                )
+            )
+        }
+        val ccText = message.content.removePrefix("@Silk").removePrefix("@silk").trim()
+        return AgentRuntime.handleIfActive(
+            userId = workspace.ownerId,
+            workspaceId = workspace.workspaceId,
+            text = ccText,
+            userName = message.userName,
+            broadcastFn = ccBroadcastFn,
+        )
     }
 
     /**
@@ -887,27 +919,12 @@ class ChatServer(
         if (!AgentRuntime.isAgentMessage(message) && message.type == MessageType.TEXT && !message.isTransient) {
             messagesSinceAgentResponse++
 
-            val shouldTriggerAI = isSilkPrivateChat || isSilkChatWorkflow ||
-                                  message.content.startsWith("@Silk") ||
-                                  message.content.startsWith("@silk")
-
-            if (shouldTriggerAI) {
-                val silkContent = extractSilkContent(message.content, isSilkPrivateChat)
+            if (shouldTriggerSilkAi(isSilkPrivateChat, message.content)) {
+                val silkContent = extractSilkRequest(message.content, isSilkPrivateChat)
                 processSilkAiRequest(message, silkContent, isSilkPrivateChat)
             } else {
                 logger.debug("📝 [broadcast] 普通消息已索引，不触发 AI 回复: {}...", message.content.take(30))
             }
-        }
-    }
-
-    /**
-     * 提取 Silk 内容（移除 @silk/@Silk 前缀）
-     */
-    private fun extractSilkContent(content: String, isSilkPrivateChat: Boolean): String {
-        return if (isSilkPrivateChat || isSilkChatWorkflow) {
-            content
-        } else {
-            content.removePrefix("@Silk").removePrefix("@silk").trim()
         }
     }
 
@@ -1058,7 +1075,8 @@ class ChatServer(
      * 检查是否应该跳过广播（cc-connect 等待输入时）
      */
     private fun shouldSkipBroadcastForCcWaiting(msg: Message): Boolean {
-        return msg.type == MessageType.TEXT
+        return msg.scope == MessageScope.TEAM
+            && msg.type == MessageType.TEXT
             && msg.userId != "cc-connect" && msg.userId != "system"
             && com.silk.backend.ccconnect.CcConnectRegistry.isConnected(sessionName.removePrefix("group_"))
             && com.silk.backend.ccconnect.CcConnectRegistry.isWaitingForInput(sessionName.removePrefix("group_"))
@@ -1067,93 +1085,123 @@ class ChatServer(
     /**
      * 检查是否应该为 Claude Code 拦截消息
      */
-    private fun shouldInterceptForClaudeCode(message: Message, isSilkPrivateChat: Boolean): Boolean {
-        return !isSilkPrivateChat
+    private fun shouldInterceptForClaudeCode(message: Message): Boolean {
+        return message.scope == MessageScope.WORKSPACE
             && message.type == MessageType.TEXT
             && !message.isTransient
             && !AgentRuntime.isAgentMessage(message)
     }
 
+    private fun roomId(): String = sessionName.removePrefix("group_")
+
+    internal fun canonicalizeMessage(message: Message): Message? {
+        if (message.userId in revokedRoomMembers) {
+            logger.warn("拒绝已撤销 Room 成员消息: room={}, userId={}", roomId(), message.userId)
+            return null
+        }
+        if (message.scope == MessageScope.TEAM) {
+            return message.copy(workspaceId = null, observerVisible = false)
+        }
+        val workspace = WorkspaceAccessPolicy.resolveInRoom(workspaceManager, roomId(), message.workspaceId)
+        if (workspace == null) {
+            logger.warn("拒绝 WORKSPACE 消息: room={}, workspaceId={} 不存在或不属于该 Room", roomId(), message.workspaceId)
+            return null
+        }
+        if (!AgentRuntime.isAgentMessage(message) && message.userId != "system" &&
+            !WorkspaceAccessPolicy.canControl(workspace, message.userId)
+        ) {
+            logger.warn("拒绝 WORKSPACE 消息: userId={} 无权控制 workspace={}", message.userId, workspace.workspaceId)
+            return null
+        }
+        return message.copy(
+            workspaceId = workspace.workspaceId,
+            observerVisible = workspace.visibility == WorkspaceVisibility.SHARED,
+        )
+    }
+
+    private suspend fun broadcastByScope(message: Message) {
+        when (message.scope) {
+            MessageScope.TEAM -> broadcastMessageToAllSessions(message)
+            MessageScope.WORKSPACE -> {
+                val workspace = WorkspaceAccessPolicy.resolveInRoom(workspaceManager, roomId(), message.workspaceId)
+                    ?: return
+                val eligible = WorkspaceAccessPolicy.eligibleUsers(
+                    workspace = workspace,
+                    observerVisible = message.observerVisible,
+                    roomUserIds = connections.keys,
+                )
+                broadcastMessageToSessions(message, eligible)
+            }
+        }
+    }
+
+    @Suppress("CyclomaticComplexMethod")
     suspend fun broadcast(message: Message) {
+        val canonicalMessage = canonicalizeMessage(message) ?: return
         // 🛑 停止生成：立即取消活跃的 AI 任务并通知客户端
-        if (message.type == MessageType.STOP_GENERATE) {
-            handleStopGeneration(message.userId)
+        if (canonicalMessage.type == MessageType.STOP_GENERATE) {
+            handleStopGeneration(canonicalMessage)
             return
         }
 
         // 🃏 卡片回复：路由到 CardReplyRouter，不触发 AI/Agent 流程
-        if (message.type == MessageType.CARD_REPLY) {
-            handleCardReply(message)
+        if (canonicalMessage.type == MessageType.CARD_REPLY) {
+            handleCardReply(canonicalMessage)
             return
         }
+
+        val routedMessage = canonicalMessage
 
         // ✅ 添加调试日志
-        logger.debug("📨 [broadcast] 收到消息: ID={}, User={}, IsTransient={}, Content={}...", message.id, message.userName, message.isTransient, message.content.take(30))
+        logger.debug("📨 [broadcast] 收到消息: ID={}, User={}, IsTransient={}, Content={}...", routedMessage.id, routedMessage.userName, routedMessage.isTransient, routedMessage.content.take(30))
 
-        // ✅ 防止重复处理：检查消息是否已经在历史中
-        if (shouldSkipDuplicateMessage(message)) {
-            logger.warn("⚠️ [broadcast] 忽略重复消息: {} from {}", message.id, message.userName)
-            return
-        }
+        val msg = messagePersistenceMutex.withLock {
+            // 重复检查和历史读改写必须属于同一个临界区，避免多连接并发覆盖。
+            if (shouldSkipDuplicateMessage(routedMessage)) {
+                logger.warn("⚠️ [broadcast] 忽略重复消息: {} from {}", routedMessage.id, routedMessage.userName)
+                return@withLock null
+            }
 
-        // 归一化时间戳：用服务端时间替换客户端/浏览器时间，确保所有消息使用同源时钟
-        val msg = if (isPersistableNewMessage(message)) {
-            message.copy(timestamp = System.currentTimeMillis())
-        } else {
-            message
-        }
+            // 归一化时间戳：用服务端时间替换客户端/浏览器时间，确保所有消息使用同源时钟
+            val normalized = if (isPersistableNewMessage(routedMessage)) {
+                routedMessage.copy(timestamp = System.currentTimeMillis())
+            } else {
+                routedMessage
+            }
+            if (normalized.scope == MessageScope.WORKSPACE && !normalized.isTransient) {
+                normalized.workspaceId?.let { workspaceManager.touchWorkspace(it, normalized.timestamp) }
+            }
 
-        // 持久化消息（内存历史、文件系统、未读追踪、Weaviate 索引）
-        persistBroadcastMessageIfNeeded(msg)
+            // 持久化消息（内存历史、文件系统、未读追踪、Weaviate 索引）
+            persistBroadcastMessageIfNeeded(normalized)
+            normalized
+        } ?: return
 
         // ⛔ cc-connect 等待回答时，用户 TEXT 消息由下方 cc-connect 路由直接转发给引擎，
         // 不必在此广播——否则按钮值（如 "perm:allow"）会作为用户消息展示给所有人。
         if (shouldSkipBroadcastForCcWaiting(msg)) {
             logger.debug("⏭️ [broadcast] 跳过广播: cc-connect waitingForInput (msg={})", msg.content.take(20))
         } else {
-            when (msg.scope) {
-                MessageScope.TEAM -> broadcastMessageToAllSessions(msg)
-                MessageScope.WORKSPACE -> {
-                    val wsId = msg.workspaceId
-                    if (wsId == null) {
-                        broadcastMessageToAllSessions(msg)
-                    } else {
-                        val ws = workspaceManager.getWorkspace(wsId)
-                        if (ws == null) {
-                            broadcastMessageToAllSessions(msg)
-                        } else {
-                            val eligible = buildSet<String> {
-                                add(ws.ownerId)
-                                addAll(ws.copilots)
-                                if (ws.visibility == WorkspaceVisibility.SHARED) {
-                                    addAll(connections.keys)
-                                }
-                            }
-                            broadcastMessageToSessions(msg, eligible)
-                        }
-                    }
-                }
-            }
+            broadcastByScope(msg)
         }
 
         val isSilkPrivateChat = getGroupDisplayName(sessionName)?.startsWith("[Silk]") == true
-        val isSingleUserGroup = !isSilkPrivateChat && isSingleHumanGroup()
-        // 单人群组相当于私聊 Silk：自动触发 AI，无需 @silk
-        val effectiveSilkPrivate = isSilkPrivateChat || isSingleUserGroup
 
         // ==================== cc-connect 命令转发 ====================
-        if (handleCcCommandMessage(message)) return
-        if (handleCcTextPrefixCommand(message)) return
-        if (handleCcConnectRouting(message)) return
+        if (routedMessage.scope == MessageScope.TEAM && handleCcCommandMessage(routedMessage)) return
+        if (routedMessage.scope == MessageScope.TEAM && handleCcTextPrefixCommand(routedMessage)) return
+        if (routedMessage.scope == MessageScope.TEAM && handleCcConnectRouting(routedMessage)) return
 
         // ==================== Claude Code 模式拦截 ====================
-        if (handleClaudeCodeBroadcastInterception(message, isSilkPrivateChat)) return
+        if (handleClaudeCodeBroadcastInterception(routedMessage)) return
 
         // ==================== Vision 图片+文字合并处理 ====================
-        if (handleVisionMessage(message)) return
+        if (handleVisionMessage(routedMessage)) return
 
         // ==================== Silk AI 回复逻辑 ====================
-        handleSilkAiBroadcast(message, effectiveSilkPrivate)
+        if (routedMessage.scope == MessageScope.TEAM) {
+            handleSilkAiBroadcast(routedMessage, isSilkPrivateChat)
+        }
     }
 
     /**
@@ -1339,33 +1387,21 @@ class ChatServer(
      * 处理停止生成请求：取消活跃 AI 任务并清理客户端状态。
      * 同时支持 Silk 普通会话（取消协程）和 Claude Code 模式（委托 Bridge 取消）。
      */
-    private suspend fun handleStopGeneration(userId: String) {
-        logger.info("🛑 收到停止生成请求 (userId={})", userId)
+    private suspend fun handleStopGeneration(message: Message) {
+        logger.info("🛑 收到停止生成请求 (userId={}, workspaceId={})", message.userId, message.workspaceId)
 
-        // 1. Agent 模式：委托 AgentRuntime 取消
-        val groupId = sessionName
-        val userSessions = connections[userId]
-        if (userSessions != null && userSessions.isNotEmpty()) {
-            val ccBroadcastFn: suspend (Message) -> Unit = { msg ->
-                if (!msg.isTransient) {
-                    messageHistory.add(msg)
-                    historyManager.addMessage(sessionName, msg)
-                }
-                val msgJson = Json.encodeToString(msg)
-                val currentSessions = connections[userId] ?: emptyList()
-                currentSessions.forEach { session ->
-                    try { session.send(Frame.Text(msgJson)) } catch (_: Exception) {}
-                }
+        if (message.scope == MessageScope.WORKSPACE) {
+            val workspace = WorkspaceAccessPolicy.resolveInRoom(workspaceManager, roomId(), message.workspaceId)
+                ?: return
+            if (!WorkspaceAccessPolicy.canControl(workspace, message.userId)) return
+            val ccBroadcastFn: suspend (Message) -> Unit = { response ->
+                broadcast(response.copy(scope = MessageScope.WORKSPACE, workspaceId = workspace.workspaceId))
             }
-            val ccCancelled = AgentRuntime.cancelIfActive(userId, userWorkspaceIds[userId] ?: sessionName, ccBroadcastFn)
-            if (ccCancelled) {
-                logger.info("🛑 已通过 AgentRuntime 取消 Agent 任务")
-                broadcastSystemStatus("CLEAR_STATUS")
-                return
-            }
+            AgentRuntime.cancelIfActive(workspace.ownerId, workspace.workspaceId, ccBroadcastFn)
+            return
         }
 
-        // 2. Silk 普通会话：取消协程
+        // Team Channel / 普通 Silk 会话：取消 DirectModelAgent 协程。
         val job = activeAiJob
         if (job != null && job.isActive) {
             job.cancel()
@@ -1493,7 +1529,7 @@ class ChatServer(
             // Load recent chat history (same pattern as TEXT routing)
             val chatHistory = historyManager.loadChatHistory(sessionName)
             val historyEntries = chatHistory?.messages
-                ?.filter { it.messageType == "TEXT" }
+                ?.filter { it.messageType == "TEXT" && it.scope == MessageScope.TEAM }
                 ?.takeLast(50)
                 ?.map { entry ->
                     com.silk.backend.ccconnect.HistoryEntry(
@@ -1879,7 +1915,9 @@ class ChatServer(
 
         // 加载聊天历史并设置到 Agent（用于群组统计等功能 + 近期上下文）
         val chatHistory = historyManager.loadChatHistory(sessionName)
-        val historyMessages = chatHistory?.messages ?: emptyList()
+        val historyMessages = chatHistory?.messages
+            ?.filter { it.scope == MessageScope.TEAM }
+            .orEmpty()
         directModelAgent.setGroupChatHistory(historyMessages)
         directModelAgent.loadRecentHistory(historyMessages, SilkAgent.AGENT_ID)
 
@@ -2020,6 +2058,7 @@ class ChatServer(
                 userInput = kbContext.resolvedUserInput,
                 systemPrompt = systemPrompt,
                 accessibleSessionIds = accessibleSessionIds,
+                historyUserId = userId,
                 availableReferences = kbContext.availableReferences,
                 additionalContext = kbContext.promptBlock,
             ) { stepType, content, isComplete ->
@@ -2325,23 +2364,6 @@ class ChatServer(
      * 获取群组的显示名称
      * 从sessionName（格式：group_<uuid>）获取实际的群组名称
      */
-    /**
-     * 判断当前群组是否只有 1 个真人成员（排除 AI Agent）。
-     * 单人群中所有消息自动触发 AI 回复，无需 @silk。
-     */
-    private fun isSingleHumanGroup(): Boolean {
-        if (!sessionName.startsWith("group_")) return false
-        val groupId = sessionName.removePrefix("group_")
-        return try {
-            val members = GroupRepository.getGroupMembers(groupId)
-            val humanCount = members.count { !AgentRuntime.isAgentUserId(it.userId) }
-            humanCount == 1
-        } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-            logger.warn("⚠️ 检查单人群失败: {}", e.message)
-            false
-        }
-    }
-
     private fun getGroupDisplayName(sessionName: String): String? {
         return if (sessionName.startsWith("group_")) {
             // 提取群组ID
@@ -2397,6 +2419,9 @@ class ChatServer(
             logger.error("❌ [recallMessage] 无权撤回此消息: sender={}, requester={}", messageEntry.senderId, userId)
             return RecallResult(false, "只能撤回自己发送的消息", emptyList())
         }
+        if (!canReadHistoryEntry(messageEntry, userId)) {
+            return RecallResult(false, "消息不存在", emptyList())
+        }
 
         val deletedMessageIds = mutableListOf<String>()
 
@@ -2406,7 +2431,11 @@ class ChatServer(
         val messageIndex = chatHistory.messages.indexOf(messageEntry)
         val agentReplies = chatHistory.messages
             .drop(messageIndex + 1)
-            .takeWhile { AgentRuntime.isAgentUserId(it.senderId) }
+            .takeWhile {
+                AgentRuntime.isAgentUserId(it.senderId) &&
+                    it.scope == messageEntry.scope &&
+                    it.workspaceId == messageEntry.workspaceId
+            }
 
         if (agentReplies.isNotEmpty()) {
             val agentIds = agentReplies.map { it.messageId }
@@ -2415,9 +2444,9 @@ class ChatServer(
             historyManager.deleteMessages(sessionName, allIds)
             deletedMessageIds.addAll(allIds)
             messageHistory.removeIf { it.id in allIds }
-            broadcastRecallNotification(allIds)
+            broadcastRecallNotifications(listOf(messageEntry) + agentReplies)
             // 同步删除 Weaviate 向量索引
-            CoroutineScope(Dispatchers.IO).launch {
+            if (messageEntry.scope == MessageScope.TEAM) CoroutineScope(Dispatchers.IO).launch {
                 try {
                     WeaviateClient.getInstance().deleteChatMessages(sessionName, allIds)
                 } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
@@ -2430,9 +2459,9 @@ class ChatServer(
             historyManager.deleteMessages(sessionName, listOf(messageId))
             deletedMessageIds.add(messageId)
             messageHistory.removeIf { it.id == messageId }
-            broadcastRecallNotification(listOf(messageId))
+            broadcastRecallNotifications(listOf(messageEntry))
             // 同步删除 Weaviate 向量索引
-            CoroutineScope(Dispatchers.IO).launch {
+            if (messageEntry.scope == MessageScope.TEAM) CoroutineScope(Dispatchers.IO).launch {
                 try {
                     WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
                 } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
@@ -2457,16 +2486,23 @@ class ChatServer(
         if (messageEntry == null) {
             return RecallResult(false, "消息不存在", emptyList())
         }
+        if (!canReadHistoryEntry(messageEntry, userId)) {
+            return RecallResult(false, "消息不存在", emptyList())
+        }
 
         val isOwnMessage = messageEntry.senderId == userId
         val hostId = getGroupHostId(sessionName)
-        val isGroupHost = hostId == userId
+        val isGroupHost = hostId == userId && messageEntry.scope == MessageScope.TEAM
 
         val isSilkReplyToMe = if (AgentRuntime.isAgentUserId(messageEntry.senderId)) {
             val msgIndex = chatHistory.messages.indexOf(messageEntry)
             val precedingMsg = chatHistory.messages
                 .take(msgIndex)
-                .lastOrNull { !AgentRuntime.isAgentUserId(it.senderId) }
+                .lastOrNull {
+                    !AgentRuntime.isAgentUserId(it.senderId) &&
+                        it.scope == messageEntry.scope &&
+                        it.workspaceId == messageEntry.workspaceId
+                }
             precedingMsg?.senderId == userId &&
                 (precedingMsg.content.startsWith("@Silk") || precedingMsg.content.startsWith("@silk"))
         } else false
@@ -2477,9 +2513,9 @@ class ChatServer(
 
         historyManager.deleteMessages(sessionName, listOf(messageId))
         messageHistory.removeIf { it.id == messageId }
-        broadcastRecallNotification(listOf(messageId))
+        broadcastRecallNotifications(listOf(messageEntry))
         // 同步删除 Weaviate 向量索引
-        CoroutineScope(Dispatchers.IO).launch {
+        if (messageEntry.scope == MessageScope.TEAM) CoroutineScope(Dispatchers.IO).launch {
             try {
                 WeaviateClient.getInstance().deleteChatMessages(sessionName, listOf(messageId))
             } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
@@ -2495,26 +2531,35 @@ class ChatServer(
     /**
      * 广播撤回通知给所有连接的客户端
      */
-    private suspend fun broadcastRecallNotification(messageIds: List<String>) {
-        val recallMessage = Message(
-            id = generateId(),
-            userId = "system",
-            userName = "系统",
-            content = messageIds.joinToString(","),
-            timestamp = System.currentTimeMillis(),
-            type = MessageType.RECALL,
-            isTransient = true
-        )
-        val notificationJson = Json.encodeToString(recallMessage)
+    private suspend fun broadcastRecallNotifications(entries: List<ChatHistoryEntry>) {
+        entries.groupBy { Triple(it.scope, it.workspaceId, it.observerVisible) }
+            .forEach { (audience, audienceEntries) ->
+                val recallMessage = Message(
+                    id = generateId(),
+                    userId = "system",
+                    userName = "系统",
+                    content = audienceEntries.joinToString(",") { it.messageId },
+                    timestamp = System.currentTimeMillis(),
+                    type = MessageType.RECALL,
+                    isTransient = true,
+                    scope = audience.first,
+                    workspaceId = audience.second,
+                    observerVisible = audience.third,
+                )
+                broadcastByScope(recallMessage)
+            }
+        logger.debug("📢 [broadcastRecallNotification] 已按 scope 广播撤回通知: {}", entries.map { it.messageId })
+    }
 
-        allSessions().forEach { session ->
-            try {
-                session.send(Frame.Text(notificationJson))
-            } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
-                logger.error("❌ [broadcastRecallNotification] 发送失败: {}", e.message)
+    private fun canReadHistoryEntry(entry: ChatHistoryEntry, userId: String): Boolean {
+        return when (entry.scope) {
+            MessageScope.TEAM -> true
+            MessageScope.WORKSPACE -> {
+                val workspace = WorkspaceAccessPolicy.resolveInRoom(workspaceManager, roomId(), entry.workspaceId)
+                    ?: return false
+                WorkspaceAccessPolicy.canRead(workspace, userId, entry.observerVisible)
             }
         }
-        logger.debug("📢 [broadcastRecallNotification] 已广播撤回通知: {}", messageIds)
     }
 
     private fun generateId(): String {
@@ -2561,15 +2606,19 @@ class ChatServer(
             messageHistory.add(message)
             historyManager.addMessage(sessionName, message)
         }
-        // 广播给所有客户端
-        val messageJson = Json.encodeToString(message)
-        allSessions().forEach { session ->
-            try { session.send(Frame.Text(messageJson)) } catch (_: Exception) {}
-        }
+        broadcastByScope(message)
         // 路由到注册的 handler
         try {
             val reply = Json.decodeFromString<com.silk.backend.card.CardReplyPayload>(message.content)
-            val broadcastRef: suspend (Message) -> Unit = { msg -> broadcast(msg) }
+            val broadcastRef: suspend (Message) -> Unit = { response ->
+                broadcast(
+                    response.copy(
+                        scope = message.scope,
+                        workspaceId = message.workspaceId,
+                        observerVisible = message.observerVisible,
+                    )
+                )
+            }
             val expired = com.silk.backend.card.CardReplyRouter.route(sessionName, reply, broadcastRef)
             if (expired) {
                 // 兜底：卡片已过期，发系统提示并 disable 卡片
@@ -2581,6 +2630,8 @@ class ChatServer(
                     timestamp = System.currentTimeMillis(),
                     type = MessageType.SYSTEM,
                     isTransient = false,
+                    scope = message.scope,
+                    workspaceId = message.workspaceId,
                 ))
                 broadcast(Message(
                     id = reply.cardId,
@@ -2592,6 +2643,8 @@ class ChatServer(
                     timestamp = System.currentTimeMillis(),
                     type = MessageType.CARD,
                     action = "edit",
+                    scope = message.scope,
+                    workspaceId = message.workspaceId,
                 ))
             }
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {

@@ -11,7 +11,6 @@ import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.kb.buildKnowledgeBaseActionSummary
 import com.silk.backend.kb.executeKnowledgeBaseAiActions
 import com.silk.backend.kb.extractKnowledgeBaseAiActions
-import com.silk.backend.workflow.WorkflowManager
 import kotlinx.coroutines.sync.withLock
 import com.silk.backend.card.CardReplyRouter
 import com.silk.backend.card.CardReplyHandler
@@ -60,7 +59,7 @@ object AgentRuntime {
     // ========== Workflow 持久化（Plan E2） ==========
 
     /**
-     * Workflow 持久化回调：让 AgentRuntime 把 workingDir 和 cli_session_id 写回 WorkflowManager。
+     * Workspace 持久化回调：让 AgentRuntime 把 workingDir 和 cli_session_id 写回 WorkspaceManager。
      * 由 [Application]/[configureRouting] 在启动时通过 [setWorkflowPersistence] 注入。
      */
     interface WorkflowPersistence {
@@ -102,15 +101,10 @@ object AgentRuntime {
     private var persistence: WorkflowPersistence? = null
     private val chatHistoryManager by lazy { ChatHistoryManager() }
     private val knowledgeBaseManager by lazy { KnowledgeBaseManager() }
-    private val workflowManager by lazy { WorkflowManager() }
 
     fun setWorkflowPersistence(p: WorkflowPersistence) {
         persistence = p
     }
-
-    /** group_xxx → xxx；非 group_ 前缀原样返回 */
-    private fun stripGroupPrefix(groupId: String): String =
-        if (groupId.startsWith("group_")) groupId.removePrefix("group_") else groupId
 
     /**
      * 把 ACP `session/prompt` response 里的 meta（adapter 携带的 cost/duration/turns/cliSessionId）
@@ -285,8 +279,12 @@ object AgentRuntime {
                 } catch (_: IllegalArgumentException) { /* ignore invalid value */ }
             }
         }
-        val roomId = try { persistence?.loadRoomId(workspaceId) ?: workspaceId }
-        catch (e: Exception) { workspaceId }
+        val roomId = try {
+            persistence?.loadRoomId(workspaceId) ?: workspaceId
+        } catch (e: Exception) {
+            logger.warn("[AgentRuntime] loadRoomId 失败: {}", e.message)
+            workspaceId
+        }
         ctx.roomId = roomId
         logger.info(
             "[AgentRuntime] workspace 自动激活: userId={}, workspaceId={}, agentType={}, roomId={}, workingDir={}, cliSeed={}",
@@ -1026,7 +1024,9 @@ object AgentRuntime {
         resolveWorkflowId: (String) -> String? = { rawWsId ->
             persistence?.resolveWorkflowId(rawWsId)
         },
-        recentMessageIdsProvider: (String) -> List<String> = ::loadRecentMessageIds,
+        recentMessageIdsProvider: (String) -> List<String> = { groupId ->
+            loadRecentMessageIds(groupId, workspaceId)
+        },
     ): String {
         val parsed = extractKnowledgeBaseAiActions(rawContent)
         if (parsed.actions.isEmpty()) return parsed.cleanedContent
@@ -1049,9 +1049,10 @@ object AgentRuntime {
         return (parsed.cleanedContent.trimEnd() + buildKnowledgeBaseActionSummary(results)).trimEnd()
     }
 
-    private fun loadRecentMessageIds(groupId: String): List<String> {
+    private fun loadRecentMessageIds(groupId: String, workspaceId: String): List<String> {
         return chatHistoryManager.loadChatHistory(groupId)
             ?.messages
+            ?.filter { it.scope == com.silk.backend.MessageScope.WORKSPACE && it.workspaceId == workspaceId }
             ?.takeLast(8)
             ?.mapNotNull { it.messageId.takeIf(String::isNotBlank) }
             .orEmpty()

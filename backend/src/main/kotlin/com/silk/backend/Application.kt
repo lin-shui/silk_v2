@@ -1,6 +1,7 @@
 package com.silk.backend
 
 import com.silk.backend.auth.configureJwtAuth
+import com.silk.backend.MessageScope
 import com.silk.backend.database.DatabaseFactory
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.search.WeaviateClient
@@ -142,7 +143,8 @@ private fun indexSessionDirToWeaviate(
         if (content.isBlank()) return SessionIndexResult(0, 0, 0)
 
         val chatHistory = json.decodeFromString<com.silk.backend.models.ChatHistory>(content)
-        val messages = chatHistory.messages
+        // 群级搜索索引只接受 TEAM stream；Workspace 搜索需独立 audience-aware 索引。
+        val messages = chatHistory.messages.filter { it.scope == MessageScope.TEAM }
         if (messages.isEmpty()) return SessionIndexResult(0, 0, 0)
 
         // 读取游标文件（记录最后索引的消息ID）

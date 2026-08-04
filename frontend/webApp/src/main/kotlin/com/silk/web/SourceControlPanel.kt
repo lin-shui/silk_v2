@@ -41,7 +41,7 @@ import org.jetbrains.compose.web.dom.Text
  */
 @Suppress("CyclomaticComplexMethod", "LongMethod")
 @Composable
-fun SourceControlPanel(userId: String, groupId: String, refreshSignal: Int, widthPx: Int) {
+fun SourceControlPanel(workspaceId: String, refreshSignal: Int, widthPx: Int) {
     val scope = rememberCoroutineScope()
     var changes by remember { mutableStateOf<GitChangesResponse?>(null) }
     var refreshing by remember { mutableStateOf(false) }
@@ -50,12 +50,12 @@ fun SourceControlPanel(userId: String, groupId: String, refreshSignal: Int, widt
 
     suspend fun reload() {
         refreshing = true
-        changes = ApiClient.getGitChanges(userId, groupId)
+        changes = ApiClient.getGitChanges(workspaceId)
         refreshing = false
     }
 
     // 初次加载 + 父级每次 bump refreshSignal 时自动重拉
-    LaunchedEffect(groupId, refreshSignal) { reload() }
+    LaunchedEffect(workspaceId, refreshSignal) { reload() }
 
     Div({
         style {
@@ -123,7 +123,7 @@ fun SourceControlPanel(userId: String, groupId: String, refreshSignal: Int, widt
                         if (nowOpen && !diffCache.containsKey(file.path)) {
                             diffCache[file.path] = null  // 标记加载中
                             scope.launch {
-                                val d = ApiClient.getGitFileDiff(userId, groupId, file.path)
+                                val d = ApiClient.getGitFileDiff(workspaceId, file.path)
                                 diffCache[file.path] = if (d.isBinary) "" else d.patch
                             }
                         }

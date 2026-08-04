@@ -1,5 +1,6 @@
 package com.silk.backend.models
 
+import com.silk.backend.MessageScope
 import kotlinx.serialization.Serializable
 
 /**
@@ -58,6 +59,9 @@ data class ChatHistoryEntry(
     val contentBlocksJson: String? = null,
     val interactiveOptionsJson: String? = null,
     val kbContextSelection: KnowledgeBaseContextSelection? = null,
+    val scope: MessageScope = MessageScope.TEAM,
+    val workspaceId: String? = null,
+    val observerVisible: Boolean = false,
 )
 
 @Serializable
@@ -79,4 +83,3 @@ data class ChatHistory(
     // @Silk 设置的角色提示，作为 AI 回复的 system prompt suffix
     var rolePrompt: String? = null
 )
-

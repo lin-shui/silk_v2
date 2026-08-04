@@ -227,6 +227,8 @@ fun CardMessageRenderer(
                                 userName = userName,
                                 content = replyJson,
                                 type = MessageType.CARD_REPLY,
+                                scope = message.scope,
+                                workspaceId = message.workspaceId,
                             )
                         }
                     }

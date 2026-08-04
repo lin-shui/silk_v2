@@ -226,9 +226,44 @@ data class WorkflowItem(
     val ownerId: String = "",
     val groupId: String = "",
     val agentType: String = "claude_code",
+    val ownerDisplayName: String = "",
+    val role: String = "OWNER",
     val createdAt: Long = 0,
     val updatedAt: Long = 0,
 )
+
+@Serializable
+data class WorkflowRoomMember(
+    val id: String,
+    val fullName: String,
+    val role: String,
+)
+
+@Serializable
+data class WorkflowMemberCandidate(
+    val id: String,
+    val loginName: String,
+    val fullName: String,
+    val phoneNumber: String,
+)
+
+@Serializable
+data class WorkflowRoomMembersResponse(
+    val success: Boolean,
+    val members: List<WorkflowRoomMember> = emptyList(),
+    val message: String = "",
+)
+
+@Serializable
+data class WorkflowMemberCandidatesResponse(
+    val success: Boolean,
+    val candidates: List<WorkflowMemberCandidate> = emptyList(),
+    val message: String = "",
+)
+
+internal fun workflowRoomMemberRequestBody(userId: String): String = buildJsonObject {
+    put("userId", kotlinx.serialization.json.JsonPrimitive(userId))
+}.toString()
 
 @Serializable
 data class AgentInfo(
@@ -974,11 +1009,11 @@ object ApiClient {
     }
 
     /**
-     * 查询 user+group 在 CC 模式下的当前状态（含工作目录），用于工作流前端显示
+     * 查询 workspace 的当前 Agent 状态（含工作目录），用于工作流前端显示。
      */
-    suspend fun getCcState(userId: String, groupId: String): CcStateResponse {
+    suspend fun getCcState(userId: String, workspaceId: String): CcStateResponse {
         return try {
-            val response = get("/users/$userId/cc-state/$groupId")
+            val response = get("/users/$userId/cc-state/$workspaceId")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("查询CC状态失败:", e)
@@ -989,13 +1024,22 @@ object ApiClient {
     /**
      * 列出 Bridge 机器上指定路径下的子目录（用于 Folder Picker）
      */
-    suspend fun listCcDir(userId: String, path: String? = null, showHidden: Boolean = false): DirListingResponse {
+    suspend fun listCcDir(
+        userId: String,
+        path: String? = null,
+        showHidden: Boolean = false,
+        workspaceId: String? = null,
+    ): DirListingResponse {
         return try {
             val query = buildString {
                 append("?showHidden=$showHidden")
                 if (!path.isNullOrBlank()) {
                     append("&path=")
                     append(encodeUri(path))
+                }
+                if (!workspaceId.isNullOrBlank()) {
+                    append("&workspaceId=")
+                    append(encodeUri(workspaceId))
                 }
             }
             val response = get("/users/$userId/cc-fs/list$query")
@@ -1010,13 +1054,12 @@ object ApiClient {
     }
 
     /**
-     * 直接为 user+group 切换 Bridge 工作目录（不发聊天消息，不出现 /cd 气泡）。
-     * groupId 可传 raw（如 "abc"）或已带前缀（如 "group_abc"），后端会兼容处理。
+     * 直接为 workspace 切换 Bridge 工作目录（不发聊天消息，不出现 /cd 气泡）。
      */
-    suspend fun cdCcDir(userId: String, groupId: String, path: String): CcStateResponse {
+    suspend fun cdCcDir(userId: String, workspaceId: String, path: String): CcStateResponse {
         return try {
             val body = kotlinx.serialization.json.buildJsonObject {
-                put("groupId", kotlinx.serialization.json.JsonPrimitive(groupId))
+                put("workspaceId", kotlinx.serialization.json.JsonPrimitive(workspaceId))
                 put("path", kotlinx.serialization.json.JsonPrimitive(path))
             }.toString()
             val response = post("/users/$userId/cc-fs/cd", body)
@@ -1030,13 +1073,13 @@ object ApiClient {
     /** 更新工作流会话设置（agent / permissionMode）。 */
     suspend fun updateCcSettings(
         userId: String,
-        groupId: String,
+        workspaceId: String,
         activeAgent: String? = null,
         permissionMode: String? = null,
     ): CcStateResponse {
         return try {
             val body = kotlinx.serialization.json.buildJsonObject {
-                put("groupId", kotlinx.serialization.json.JsonPrimitive(groupId))
+                put("workspaceId", kotlinx.serialization.json.JsonPrimitive(workspaceId))
                 if (!activeAgent.isNullOrBlank()) {
                     put("activeAgent", kotlinx.serialization.json.JsonPrimitive(activeAgent))
                 }
@@ -1211,7 +1254,7 @@ object ApiClient {
 
     suspend fun getWorkflows(userId: String): List<WorkflowItem> {
         return try {
-            val response = get("/api/workflows?userId=$userId")
+            val response = get("/api/workflows/visible?userId=${encodeUri(userId)}")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("获取工作流失败:", e)
@@ -1219,11 +1262,95 @@ object ApiClient {
         }
     }
 
+    suspend fun getWorkflowRoomMembers(workflowId: String): WorkflowRoomMembersResponse {
+        return try {
+            val response = get("/api/workflows/${encodeUri(workflowId)}/members")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("获取 Workflow Room 成员失败:", e)
+            WorkflowRoomMembersResponse(false, message = "网络错误")
+        }
+    }
+
+    suspend fun searchWorkflowMemberCandidates(
+        workflowId: String,
+        query: String,
+    ): WorkflowMemberCandidatesResponse {
+        return try {
+            val response = get(
+                "/api/workflows/${encodeUri(workflowId)}/members/candidates?query=${encodeUri(query)}"
+            )
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            console.log("搜索 Workflow Room 成员失败:", e)
+            WorkflowMemberCandidatesResponse(false, message = "网络错误")
+        }
+    }
+
+    suspend fun addWorkflowRoomMember(
+        workflowId: String,
+        userId: String,
+    ): WorkflowRoomMembersResponse {
+        val body = workflowRoomMemberRequestBody(userId)
+        return requestWorkflowRoomMembers(
+            method = "POST",
+            endpoint = "/api/workflows/${encodeUri(workflowId)}/members",
+            body = body,
+        )
+    }
+
+    suspend fun removeWorkflowRoomMember(
+        workflowId: String,
+        userId: String,
+    ): WorkflowRoomMembersResponse = requestWorkflowRoomMembers(
+        method = "DELETE",
+        endpoint = "/api/workflows/${encodeUri(workflowId)}/members/${encodeUri(userId)}",
+    )
+
+    private suspend fun requestWorkflowRoomMembers(
+        method: String,
+        endpoint: String,
+        body: String? = null,
+    ): WorkflowRoomMembersResponse = try {
+        val init = if (body == null) {
+            RequestInit(method = method, headers = authHeaders())
+        } else {
+            RequestInit(method = method, headers = authHeaders(), body = body)
+        }
+        val response = fetchWithRetry(endpoint, init)
+        val responseBody = response.text().await()
+        if (response.ok) {
+            jsonParser.decodeFromString(responseBody)
+        } else {
+            val backendMessage = try {
+                jsonParser.decodeFromString<WorkflowRoomMembersResponse>(responseBody).message
+            } catch (_: Exception) {
+                ""
+            }
+            WorkflowRoomMembersResponse(
+                success = false,
+                message = backendMessage.ifBlank { workflowMemberHttpError(response.status.toInt()) },
+            )
+        }
+    } catch (e: Exception) {
+        console.log("Workflow Room 成员操作失败:", e)
+        WorkflowRoomMembersResponse(false, message = "网络错误，请稍后重试")
+    }
+
+    private fun workflowMemberHttpError(status: Int): String = when (status) {
+        400 -> "成员参数无效"
+        401 -> "登录状态已失效，请重新登录"
+        403 -> "只有 Room Owner 可以管理成员"
+        404 -> "Workflow Room 或成员不存在"
+        409 -> "用户已在 Room 中"
+        else -> "成员操作失败（HTTP $status）"
+    }
+
     // ==================== Source Control (代码审查) API ====================
 
-    suspend fun getGitChanges(userId: String, groupId: String): GitChangesResponse {
+    suspend fun getGitChanges(workspaceId: String): GitChangesResponse {
         return try {
-            val response = get("/api/agent/changes?userId=$userId&groupId=$groupId")
+            val response = get("/api/agent/changes?workspaceId=${encodeUri(workspaceId)}")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("获取代码改动失败:", e)
@@ -1231,10 +1358,10 @@ object ApiClient {
         }
     }
 
-    suspend fun getGitFileDiff(userId: String, groupId: String, path: String): GitFileDiffResponse {
+    suspend fun getGitFileDiff(workspaceId: String, path: String): GitFileDiffResponse {
         return try {
             val encoded = js("encodeURIComponent")(path) as String
-            val response = get("/api/agent/changes/file?userId=$userId&groupId=$groupId&path=$encoded")
+            val response = get("/api/agent/changes/file?workspaceId=${encodeUri(workspaceId)}&path=$encoded")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             console.log("获取文件 diff 失败:", e)
@@ -1330,10 +1457,10 @@ object ApiClient {
 
     suspend fun deleteWorkflow(workflowId: String, userId: String): Boolean {
         return try {
-            val response = window.fetch(
-                "$BASE_URL/api/workflows/$workflowId?userId=$userId",
-                RequestInit(method = "DELETE")
-            ).await()
+            val response = fetchWithRetry(
+                "/api/workflows/$workflowId?userId=$userId",
+                RequestInit(method = "DELETE", headers = authHeaders()),
+            )
             response.ok
         } catch (e: Exception) {
             console.log("删除工作流失败:", e)

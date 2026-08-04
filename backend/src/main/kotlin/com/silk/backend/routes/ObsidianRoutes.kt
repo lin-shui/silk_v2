@@ -1,10 +1,14 @@
 package com.silk.backend.routes
 
 import com.silk.backend.ChatHistoryManager
+import com.silk.backend.MessageScope
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.export.ChatObsidianExporter
 import com.silk.backend.kb.KBObsidianExporter
 import com.silk.backend.kb.KnowledgeBaseManager
+import com.silk.backend.resolveAuthenticatedUserId
+import com.silk.backend.workspace.WorkspaceAccessPolicy
+import com.silk.backend.workspace.WorkspaceManager
 import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
@@ -27,16 +31,22 @@ private val json = Json { ignoreUnknownKeys = true }
  * 返回该用户所有群聊 + KB 条目的 Obsidian Markdown，
  * 供 Obsidian 插件一键拉取写入 vault。
  */
-fun Route.obsidianRoutes() {
+@Suppress("CyclomaticComplexMethod")
+fun Route.obsidianRoutes(workspaceManager: WorkspaceManager) {
     get("/api/obsidian/sync") {
-        val userId = call.request.queryParameters["userId"]?.trim().orEmpty()
-        if (userId.isBlank()) {
-            call.respondText(
-                """{"success":false,"message":"Missing userId"}""",
+        val userId = call.resolveAuthenticatedUserId()
+            ?: return@get call.respondText(
+                """{"success":false,"message":"Unauthorized"}""",
                 ContentType.Application.Json,
-                HttpStatusCode.BadRequest,
+                HttpStatusCode.Unauthorized,
             )
-            return@get
+        val requestedUserId = call.request.queryParameters["userId"]?.trim()
+        if (!requestedUserId.isNullOrBlank() && requestedUserId != userId) {
+            return@get call.respondText(
+                """{"success":false,"message":"Authenticated user mismatch"}""",
+                ContentType.Application.Json,
+                HttpStatusCode.Forbidden,
+            )
         }
 
         // --- 1. 拉取用户所属群组 ---
@@ -47,7 +57,21 @@ fun Route.obsidianRoutes() {
         for (group in groups) {
             try {
                 val sessionName = "group_${group.id}"
-                val chatHistory = historyManager.loadChatHistory(sessionName)
+                val chatHistory = historyManager.loadChatHistory(sessionName)?.let { history ->
+                    history.copy(messages = history.messages.filter { entry ->
+                        when (entry.scope) {
+                            MessageScope.TEAM -> true
+                            MessageScope.WORKSPACE -> {
+                                val workspace = WorkspaceAccessPolicy.resolveInRoom(
+                                    workspaceManager,
+                                    group.id,
+                                    entry.workspaceId,
+                                ) ?: return@filter false
+                                WorkspaceAccessPolicy.canRead(workspace, userId, entry.observerVisible)
+                            }
+                        }
+                    }.toMutableList())
+                }
                 if (chatHistory == null || chatHistory.messages.isEmpty()) continue
 
                 val markdown = ChatObsidianExporter.toMarkdown(

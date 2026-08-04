@@ -53,6 +53,11 @@ class WorkflowManager(
     fun listWorkflows(userId: String): List<Workflow> =
         load().workflows.filter { it.ownerId == userId }
 
+    fun listAllWorkflows(): List<Workflow> = load().workflows
+
+    fun getWorkflowById(workflowId: String): Workflow? =
+        load().workflows.find { it.id == workflowId }
+
     @Synchronized
     fun createWorkflow(name: String, description: String, userId: String, groupId: String): Workflow =
         createWorkflow(name, description, userId, groupId, "claude_code", "")

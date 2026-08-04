@@ -2,8 +2,10 @@
 
 **文档类型**：产品设计文档 + 技术实现参考  
 **创建日期**：2026-07-24  
-**状态**：设计完成，待实现  
+**状态**：实施中（Phase 1 + Phase 1.5 已完成，Phase 2 代码与自动化验证已完成，待真实 bridge 手工验收）
 **作者**：产品 + 工程对齐讨论产出
+
+**Phase 2 手工验收记录**：[2026-08-04-phase2-manual-acceptance.md](2026-08-04-phase2-manual-acceptance.md)
 
 ---
 
@@ -259,6 +261,8 @@ Team Channel 中的 AI 是 Silk 平台的 **DirectModelAgent**，与普通 Room 
 **能做**：回答团队进展问题、汇总 PR/Issue 内容、分析 CI 失败原因  
 **不能做**：访问文件系统、执行代码（这是个人工作区 AI 的职责）
 
+**用户消息触发规则**：Team Channel 默认是人工讨论空间，普通消息只广播和持久化，不自动调用 AI。无论 Room 是单人还是多人，只有以 `@Silk` 开头的消息才触发 `DirectModelAgent`。`[Silk]` 私聊仍保持无需 mention 的隐式 AI 对话。
+
 ### 6.3 内容来源与推送规则
 
 | 内容类型 | 来源 | 推送到 Team Channel？ | 说明 |
@@ -278,7 +282,7 @@ Team Channel 中的 AI 是 Silk 平台的 **DirectModelAgent**，与普通 Room 
 当 Workflow Room 中只有一名成员连接了设备时：
 
 - Team Channel **始终存在**，不隐藏（行为一致性，避免多人加入后 UI 突变）
-- 进入"个人模式"：仅显示 GitHub 事件通知，AI 可正常对话
+- 进入"个人模式"：仅显示 GitHub 事件通知，需要 AI 时仍使用 `@Silk`
 - 无成员工作区 Tab（仅有一人，无需分组）
 - 第二个成员连接后自然激活多人协作功能，无需特殊操作
 
@@ -359,6 +363,7 @@ Team Channel 中的 Issue 卡片提供"开始开发"入口：
 **决策**：工作区只有共享和私密两种状态，不支持按成员设置可见性。  
 **理由**：同一代码仓的团队成员通常可以共享代码工作内容；按人设置权限矩阵复杂度高于价值。  
 **未来扩展**：如有按人授权旁观的需求，可在此基础上加入白名单机制。
+**可见性切换的历史语义**：历史消息不随可见性变更而追溯变更。PRIVATE→SHARED 切换后，切换时刻之前产生的消息对 Observer 仍不可见，仅从切换时刻起的新消息参与 Room 成员广播；SHARED→PRIVATE 切换后，Observer 已收到的历史消息不删除，但后续消息停止推送。后端在消息落盘时写入 `observerVisible` 可见性快照，历史回放按该快照过滤。
 
 ### ADR-6：每人每 Room 工作区数量不设上限
 
@@ -371,6 +376,20 @@ Team Channel 中的 Issue 卡片提供"开始开发"入口：
 **决策**：Team Channel 的 AI 与普通 Room 一致，均为 DirectModelAgent，不引入新 AI 类型。  
 **理由**：与"Workflow Room 是普通 Room 增强"的原则一致；扩展成本低（注入 GitHub 上下文即可）。  
 **差异**：Team Channel 的 DirectModelAgent 实例被注入 GitHub 事件上下文，这是与普通 Room 的唯一配置差异。
+**触发**：用户消息必须以 `@Silk` 开头才进入 DirectModelAgent，不根据当前成员数切换行为。
+
+### ADR-8：Room 复用 Group 实体，不引入新 Room 数据结构
+
+**决策**：Workflow Room 直接复用现有 Group 实体；`roomId` = `groupId`（`group_xxx` 格式），不新增独立 Room 表或 Room 实体。
+**理由**：消除双实体维护成本；现有 Group 已承载成员管理、聊天历史、权限校验等基础能力，Workflow Room 只是在 Group 上叠加 workspace 相关逻辑。
+**影响**：新增 API 路径 `/api/rooms/{roomId}/...` 中的 `roomId` 在后端直接映射为 `groupId`；`WorkspaceManager` 按 `(roomId = groupId)` 组织工作区；前端不需要新的 Room 实体 API。
+
+### ADR-9：GitHub PAT 以 AES-GCM 加密存储，密钥来自环境变量
+
+**决策**：GitHub PAT 在落盘前用 AES-GCM 加密，密钥由 `SILK_ENCRYPTION_KEY` 环境变量提供（32 字节，Base64 编码）。
+**理由**：PAT 拥有仓库写权限，明文存储是高风险；env var 注入 key 是最小可行方案，不引入外部 key management 服务。
+**权衡**：无密钥轮转机制；env var 泄漏则加密失效。Phase 3 实现时需在 `BOOTSTRAP.md` 补充密钥生成说明（`openssl rand -base64 32`）。
+**降级方案**：若 `SILK_ENCRYPTION_KEY` 未设置，Git 绑定请求直接返回错误，拒绝以明文存储 PAT；不做静默降级。
 
 ---
 
@@ -395,6 +414,8 @@ Team Channel 中的 Issue 卡片提供"开始开发"入口：
 | `WorkflowManager` | 按 `groupId` 存储，无用户维度 | 重构为 `WorkspaceManager`，按 `workspaceId` 存储 |
 | `Message` 数据类 | 无 scope / workspaceId 字段 | 新增 `scope: MessageScope`、`workspaceId: String?` |
 | `ChatServer` 广播逻辑 | 全量广播给 Room 所有人 | 按 scope 路由（TEAM → 全员；WORKSPACE → 工作区成员）|
+| `AcpRegistry` | key = `"${userId}::${agentType}"` | 保持用户级 bridge 连接；同一 bridge 通过多个 ACP session 承载多个工作区。多设备选择后续通过 `bridgeId/deviceId` 扩展，不把 workspaceId 混入连接身份 |
+| `AgentRuntime` | context key = `"${userId}_${groupId}"`；`GroupAgentContext.workingDir` 在同 (user, group) 内所有工作区共享 | key 改为 `"${userId}_${workspaceId}"`；11 个 public API 方法的 `groupId` 参数改为 `workspaceId`；`WorkflowPersistence` 接口的 `rawGroupId` 改为 `rawWorkspaceId` |
 | 前端消息渲染 | 单一扁平消息流 | 增加 Tab 分组视图 |
 
 ### 9.2 新增数据模型
@@ -492,6 +513,11 @@ backend/src/main/kotlin/com/silk/backend/
 | DELETE | `/api/rooms/{roomId}/workspaces/{wsId}` | 删除 |
 | POST | `/api/rooms/{roomId}/workspaces/{wsId}/copilots` | 授权 Co-pilot |
 | DELETE | `/api/rooms/{roomId}/workspaces/{wsId}/copilots/{userId}` | 撤销 Co-pilot |
+| GET | `/api/workflows/visible` | 按当前 JWT 成员身份列出可见 Workflow Room |
+| GET | `/api/workflows/{workflowId}/members` | 列出 Room 成员 |
+| GET | `/api/workflows/{workflowId}/members/candidates` | Owner 搜索可添加用户 |
+| POST | `/api/workflows/{workflowId}/members` | Owner 添加 Room 成员 |
+| DELETE | `/api/workflows/{workflowId}/members/{userId}` | Owner 移除成员并撤销 Co-pilot/在线连接 |
 | POST | `/api/rooms/{roomId}/git/binding` | 绑定 GitHub 仓库 |
 | DELETE | `/api/rooms/{roomId}/git/binding` | 解绑 |
 | POST | `/api/git/webhook/{roomId}` | Webhook 接收（HMAC 鉴权）|
@@ -507,7 +533,41 @@ backend/src/main/kotlin/com/silk/backend/
 - `Workflow.activeAgent` → `PersonalWorkspace.agentType`
 - 新增字段使用默认值（`visibility = PRIVATE`，`name = "default"`）
 
-迁移在服务启动时自动执行，完成后删除旧文件。
+迁移在服务启动时自动执行；旧文件保留用于兼容和人工回滚，不自动删除。
+
+### 9.7 框架层关键改造设计
+
+#### Bridge 连接与 Workspace session 分层
+
+`AcpRegistry` 保持用户级 key `"${userId}::${agentType}"`。Bridge 表示一台用户设备上的 agent adapter 连接，不等同于某个工作区；多个工作区通过该连接创建各自独立的 ACP session。
+
+`AgentRuntime` 继续按 `(ownerId, workspaceId)` 隔离 cwd、active agent、permission mode 和 CLI session。若后续支持同一用户同 agentType 多台设备，新增稳定的 `bridgeId/deviceId` 并由 Workspace 显式绑定，不使用 workspaceId 充当设备身份。
+
+#### AgentRuntime context key 迁移
+
+当前 key = `"${userId}_${groupId}"`；`GroupAgentContext.workingDir` 在同 `(userId, groupId)` 内所有工作区共享，多工作区时互相覆盖。
+
+新 key 改为 `"${userId}_${workspaceId}"`，每个工作区持有独立的 `GroupAgentContext`（独立的 `workingDir`、`currentAgentType`、`agentSessions`）。主要改动：
+
+1. `GroupAgentContext.groupId` 字段改为 `workspaceId`
+2. `AgentRuntime.context(userId, groupId)` → `context(userId, workspaceId)`
+3. 以下 **11 个 public API 方法**的 `groupId: String` 参数统一改为 `workspaceId: String`：
+   `handleIfActive`、`cancelIfActive`、`autoActivateForWorkflow`、`snapshotState`、
+   `ensureActiveAcpSession`、`switchAgent`、`setPermissionMode`、`snapshotPendingQuestion`、
+   `cdSync`、`cleanupState`，以及 broadcast 回调中传入的 groupId
+4. `WorkflowPersistence` 接口所有方法的 `rawGroupId` 参数改为 `rawWorkspaceId`；
+   `WorkflowManager.getWorkflowByGroupId` 改为 `WorkspaceManager.getWorkspaceById`
+
+**调用侧**：`ChatServer.broadcast()` 调用 `AgentRuntime.handleIfActive` 时，需从消息的 `workspaceId` 字段（或从 `sessionName` 推导的 roomId + 当前用户活跃 workspaceId）传入正确的 workspaceId。
+
+#### 消息历史的 scope 分离
+
+`scope=WORKSPACE` 的消息和 TEAM 消息写入同一 Room 历史，通过字段区分；前端 Tab 只选择消息目标，后端不依赖用户级 active workspace 状态：
+
+- **持久化**：`scope` / `workspaceId` / `observerVisible` 随消息落盘（旧消息默认 TEAM，向后兼容）
+- **历史回放**（`join` 时）：TEAM 消息全员可见；WORKSPACE 消息始终对 Owner/当前 Co-pilot 可见，Observer 仅能读取发送时 `observerVisible=true` 的消息
+- **recall / export**：同样按权限过滤，不向无权用户暴露私密工作区消息内容
+- **执行路由**：TEAM 普通消息只广播，仅前置 `@Silk` 的用户消息进入 DirectModelAgent；WORKSPACE 经服务端 Owner/Co-pilot 鉴权后进入 `(workspace.ownerId, workspaceId)` 的编码 Agent context
 
 ---
 
@@ -517,23 +577,44 @@ backend/src/main/kotlin/com/silk/backend/
 
 **目标**：底层数据模型迁移，用户可见行为不变。
 
-- [ ] `PersonalWorkspace` 数据类 + `WorkspaceManager`
-- [ ] `Message` 共享模型新增 `scope` / `workspaceId`（同步三端 FileContractsTest）
-- [ ] `WorkflowManager` → `WorkspaceManager` 数据迁移（自动）
-- [ ] `ChatServer` 广播支持 scope 过滤（TEAM/WORKSPACE）
-- [ ] Workspace API 端点（CRUD）
-- [ ] 前端 Web：Team Channel / 工作区 Tab 基础框架（单人时 Tab 不显示）
-- [ ] 验证：单人工作流场景行为不变
+> **注**：`Message` 共享模型变更（`scope` / `workspaceId` 字段）是跨三端契约点，建议作为独立的最小 PR 先行落地（只加字段+默认值，不改广播逻辑），通过三端 FileContractsTest 验证后，其余工作再并行推进。
+
+- [x] `PersonalWorkspace` 数据类 + `WorkspaceManager`
+- [x] `Message` 共享模型新增 `scope` / `workspaceId`（共享合同已同步）
+- [x] `WorkflowManager` → `WorkspaceManager` 数据迁移（自动）
+- [x] `AcpRegistry` 保持用户级 `(userId, agentType)`，由工作区级 ACP session 隔离对话
+- [x] `AgentRuntime` context key 改为 `(ownerId, workspaceId)`；控制 API 改为显式 `workspaceId`
+- [x] `ChatServer` 广播支持 scope 过滤（TEAM/WORKSPACE）；历史回放按权限过滤（见 9.7）
+- [x] Workspace API 端点（CRUD）
+- [x] 前端 Web：Team Channel / 工作区 Tab 基础框架
+- [x] 验证：单人工作流场景兼容（全量测试与跨端编译通过）
+
+### Phase 1.5：消息、历史与设备权限边界加固
+
+**目标**：在多人 UI 开始前完成端到端 Stream 合同和权限门禁。
+
+- [x] 普通 Room 不创建/激活 PersonalWorkspace
+- [x] TEAM/WORKSPACE 入站目标显式化，移除用户级 active workspace 路由依赖
+- [x] scope/workspaceId/发送时可见性完整持久化
+- [x] WebSocket、poll、export、recall、搜索统一执行 Workspace ACL
+- [x] CC 状态/目录/设置/Source Control 全部迁移到 workspaceId
+- [x] Owner/Observer/Co-pilot 的 prompt、stop、card reply 权限服务端闭环
+- [x] 重启回放、发送时可见性和未知 workspace 的自动化合同测试
+- [ ] 双用户、双连接、真实 bridge 集成验收（Phase 2 进入质量门槛）
+
+详细计划：`docs/superpowers/plans/2026-08-03-phase1.5-workflow-room-foundation-hardening.md`
 
 ### Phase 2：多用户多工作区支持
 
 **目标**：同一 Room 内多用户各自连设备、独立工作区并行运行。
 
-- [ ] 验证多用户并发 ACP 连接在同一 Room 的隔离性（`AgentRuntime` + `AcpRegistry`）
-- [ ] Workspace 可见性（SHARED/PRIVATE）+ 广播路由按 scope 生效
-- [ ] Co-pilot 授权 API + UI（授权弹窗含风险提示文案）
-- [ ] 前端 Web：Team Channel + 成员工作区 Tab（按人分组，活跃状态角标）
-- [ ] 验证：多用户并行，消息不跨工作区混入
+- [ ] 真实 bridge 手工验收：多用户并发 ACP 连接在同一 Room 的隔离性（用户级 bridge + 工作区级 AgentRuntime/ACP session）
+- [x] Workspace 可见性（SHARED/PRIVATE）+ 广播路由按 scope 生效（含历史回放权限过滤）
+- [x] Co-pilot 授权 API + UI（授权弹窗含风险提示文案）
+- [x] 前端 Web：Team Channel + 成员工作区 Tab（按人分组，活跃状态角标）
+- [x] Workflow Room 成员闭环：Owner 搜索/增删成员，成员可发现 Room，移除时撤销 Co-pilot 与在线连接
+- [x] Team Channel 触发策略统一：普通消息不触发 AI，仅前置 `@Silk` 触发，不区分单人/多人
+- [x] 自动化验证：多用户并行，消息不跨工作区混入；私密工作区消息不出现在未授权历史 / recall / export
 
 ### Phase 3：GitHub 集成 MVP
 
@@ -554,6 +635,15 @@ backend/src/main/kotlin/com/silk/backend/
 - [ ] Android / Harmony 前端适配
 - [ ] Guest 角色（第四角色，按需）
 - [ ] GitHub OAuth 替换 PAT
+
+---
+
+### 范围外声明
+
+以下内容明确不在本次重设计范围内：
+
+- **cc-connect 群组**：cc-connect 通过独立的 `/ccconnect-bridge` 端点连接，有独立的群组类型和消息路由逻辑；本次不迁移 cc-connect 群组到 Workflow Room 模型，保持现状不变。
+- **Android / Harmony 前端 UI 适配**：Phase 1–3 的 `Message` 模型字段变更（`scope` / `workspaceId`）会触发 `FileContractsTest`，Android 和 Harmony 需同步更新共享模型以保持编译通过，但完整的多工作区 UI 适配在 Phase 4 处理。
 
 ---
 

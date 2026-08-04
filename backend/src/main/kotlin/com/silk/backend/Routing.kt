@@ -84,13 +84,18 @@ import com.silk.backend.models.KBSourceType
 import com.silk.backend.models.KBTopic
 import com.silk.backend.models.KnowledgeSpaceType
 import com.silk.backend.models.Workflow
+import com.silk.backend.models.ChatHistory
 import com.silk.backend.workflow.WorkflowManager
 import com.silk.backend.routes.agentChangesRoutes
 import com.silk.backend.routes.asrRoutes
 import com.silk.backend.routes.fileRoutes
 import com.silk.backend.routes.obsidianRoutes
 import com.silk.backend.routes.workspaceRoutes
+import com.silk.backend.routes.workflowRoomRoutes
 import com.silk.backend.workspace.WorkspaceManager
+import com.silk.backend.workspace.WorkspaceAccessPolicy
+import com.silk.backend.workspace.WorkspaceLifecycleState
+import com.silk.backend.workspace.PersonalWorkspace
 import com.silk.backend.agents.acp.AcpRegistry
 import com.silk.backend.agents.core.AgentRegistry
 import com.silk.backend.agents.core.AgentRuntime
@@ -167,10 +172,54 @@ import org.slf4j.LoggerFactory
 // 群组聊天服务器映射（每个群组一个ChatServer实例）
 private val groupChatServers = ConcurrentHashMap<String, ChatServer>()
 private val logger = LoggerFactory.getLogger("Routing")
-private val workflowManager = WorkflowManager()
-private val workspaceManager = WorkspaceManager()
-private val trustedDirManager = TrustedDirManager()
+private data class WorkflowStorageManagers(
+    val workflowManager: WorkflowManager,
+    val workspaceManager: WorkspaceManager,
+    val trustedDirManager: TrustedDirManager,
+)
+
+private val workflowStorageManagers = ConcurrentHashMap<String, WorkflowStorageManagers>()
+
+private fun currentWorkflowStorageDir(): String =
+    System.getProperty("silk.workflowDir")?.trim()?.takeIf { it.isNotEmpty() }
+        ?: System.getenv("SILK_WORKFLOW_DIR")?.trim()?.takeIf { it.isNotEmpty() }
+        ?: "${System.getProperty("user.home")}/.silk-data/workflows"
+
+private val currentWorkflowStorageManagers: WorkflowStorageManagers
+    get() {
+        val storageDir = currentWorkflowStorageDir()
+        return workflowStorageManagers.computeIfAbsent(storageDir) { dir ->
+            WorkflowStorageManagers(
+                workflowManager = WorkflowManager(dir),
+                workspaceManager = WorkspaceManager(dir),
+                trustedDirManager = TrustedDirManager(dir),
+            )
+        }
+    }
+
+private val workflowManager: WorkflowManager get() = currentWorkflowStorageManagers.workflowManager
+private val workspaceManager: WorkspaceManager get() = currentWorkflowStorageManagers.workspaceManager
+private val trustedDirManager: TrustedDirManager get() = currentWorkflowStorageManagers.trustedDirManager
 private val knowledgeBaseManager: KnowledgeBaseManager get() = KnowledgeBaseManager()
+
+internal fun filterChatHistoryForUser(
+    history: ChatHistory,
+    userId: String,
+    roomId: String,
+    manager: WorkspaceManager = workspaceManager,
+): ChatHistory {
+    val visible = history.messages.filter { entry ->
+        when (entry.scope) {
+            MessageScope.TEAM -> true
+            MessageScope.WORKSPACE -> {
+                val workspace = WorkspaceAccessPolicy.resolveInRoom(manager, roomId, entry.workspaceId)
+                    ?: return@filter false
+                WorkspaceAccessPolicy.canRead(workspace, userId, entry.observerVisible)
+            }
+        }
+    }
+    return history.copy(messages = visible.toMutableList())
+}
 
 private fun sanitizeFileName(input: String): String =
     input.replace(Regex("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]"), "_").take(100)
@@ -213,6 +262,42 @@ private fun resolveActiveAgentType(userId: String): String? {
     return connected.firstOrNull { it == "claude-code" } ?: connected.first()
 }
 
+private suspend fun ApplicationCall.resolveControllableWorkspace(
+    pathUserId: String,
+    workspaceId: String,
+): PersonalWorkspace? {
+    val callerId = resolveAuthenticatedUserId()
+    if (callerId == null) {
+        respond(HttpStatusCode.Unauthorized)
+        return null
+    }
+    if (pathUserId.isBlank() || pathUserId != callerId || workspaceId.isBlank()) {
+        respond(HttpStatusCode.Forbidden)
+        return null
+    }
+    val workspace = workspaceManager.getWorkspace(workspaceId)
+    if (workspace == null || !GroupRepository.isUserInGroup(workspace.roomId, callerId) ||
+        !WorkspaceAccessPolicy.canControl(workspace, callerId)
+    ) {
+        respond(HttpStatusCode.NotFound)
+        return null
+    }
+    return workspace
+}
+
+private suspend fun ApplicationCall.resolveOwnPathUser(pathUserId: String): String? {
+    val callerId = resolveAuthenticatedUserId()
+    if (callerId == null) {
+        respond(HttpStatusCode.Unauthorized)
+        return null
+    }
+    if (pathUserId.isBlank() || callerId != pathUserId) {
+        respond(HttpStatusCode.Forbidden)
+        return null
+    }
+    return callerId
+}
+
 /**
  * 获取或创建指定群组的ChatServer
  */
@@ -220,9 +305,9 @@ internal fun getGroupChatServer(groupId: String): ChatServer {
     return groupChatServers.computeIfAbsent(groupId) {
         val sessionName = "group_$groupId"
         val wf = workflowManager.getWorkflowByGroupId(groupId)
-        val isSilkChat = wf != null && wf.agentType == "silk_chat"
-        ChatServer(sessionName, isSilkChat, workspaceManager).also {
-            logger.info("🆕 创建新的群组聊天服务器: {} (silkChat={})", sessionName, isSilkChat)
+        val isWorkflowRoom = wf != null
+        ChatServer(sessionName, workspaceManager).also {
+            logger.info("🆕 创建新的群组聊天服务器: {} (workflowRoom={})", sessionName, isWorkflowRoom)
         }
     }
 }
@@ -337,7 +422,7 @@ fun Application.configureRouting() {
 
     routing {
         coreRoutes()
-        agentChangesRoutes()
+        agentChangesRoutes(workspaceManager)
         authRoutes()
         groupContactRoutes()
         unreadTodoMessageRoutes()
@@ -346,15 +431,26 @@ fun Application.configureRouting() {
         ccConnectApiRoutes()
         workflowKbRoutes()
         pollMessagesRoute()
-        obsidianRoutes()
-        workspaceRoutes(workspaceManager)
+        obsidianRoutes(workspaceManager)
+        workspaceRoutes(
+            workspaceManager = workspaceManager,
+            trustedDirManager = trustedDirManager,
+            isWorkflowRoom = { roomId -> workflowManager.getWorkflowByGroupId(roomId) != null },
+        )
+        workflowRoomRoutes(
+            workflowManager = workflowManager,
+            workspaceManager = workspaceManager,
+            onMemberRevoked = { roomId, userId ->
+                groupChatServers[roomId]?.revokeRoomMember(userId)
+            },
+        )
         chatWebSocketRoute()
         audioDuplexRoute()
     }
 }
 
 // 聚合一组独立的 Ktor 路由注册；圈复杂度来自注册的 handler 数量而非真实控制流，各 handler 自身已是独立闭包。
-@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+@Suppress("CyclomaticComplexMethod", "ComplexCondition", "TooGenericExceptionCaught", "SwallowedException")
 private fun Route.coreRoutes() {
         get("/") {
             val html = """
@@ -757,11 +853,7 @@ private fun Route.coreRoutes() {
 
         // 获取 CC 设置（token + bridge 状态）
         get("/users/{userId}/cc-settings") {
-            val userId = call.parameters["userId"] ?: ""
-            if (userId.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
-                return@get
-            }
+            val userId = call.resolveOwnPathUser(call.parameters["userId"].orEmpty()) ?: return@get
             try {
                 val token = UserSettingsRepository.getBridgeToken(userId)
                 val connected = isAnyBridgeConnected(userId)
@@ -775,11 +867,7 @@ private fun Route.coreRoutes() {
 
         // 生成/重新生成 Bridge Token
         post("/users/{userId}/cc-settings/generate-token") {
-            val userId = call.parameters["userId"] ?: ""
-            if (userId.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
-                return@post
-            }
+            val userId = call.resolveOwnPathUser(call.parameters["userId"].orEmpty()) ?: return@post
             try {
                 val token = UserSettingsRepository.generateBridgeToken(userId)
                 // 踢掉用旧 token 认证的 ACP 连接
@@ -798,34 +886,20 @@ private fun Route.coreRoutes() {
 
         // 查询 Bridge 在线状态
         get("/users/{userId}/cc-settings/bridge-status") {
-            val userId = call.parameters["userId"] ?: ""
-            if (userId.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, CcSettingsResponse(false, "用户ID不能为空"))
-                return@get
-            }
+            val userId = call.resolveOwnPathUser(call.parameters["userId"].orEmpty()) ?: return@get
             val connected = isAnyBridgeConnected(userId)
             val bridgeIp = if (connected) getAnyBridgeIp(userId) else null
             call.respond(CcSettingsResponse(true, "ok", bridgeConnected = connected, bridgeIp = bridgeIp))
         }
 
-        // 查询 user+group 的 CC 当前状态（含工作目录），供工作流前端显示
-        get("/users/{userId}/cc-state/{groupId}") {
-            val userId = call.parameters["userId"] ?: ""
-            val rawGroupId = call.parameters["groupId"] ?: ""
-            if (userId.isBlank() || rawGroupId.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, CcStateResponse(success = false))
-                return@get
-            }
-            // CC 状态 key 使用 sessionName 格式 "group_{groupId}"（见 autoActivateForWorkflow 调用点）
-            // 兼容：前端可能传 raw 或已带前缀
-            val candidateIds = listOf(
-                if (rawGroupId.startsWith("group_")) rawGroupId else "group_$rawGroupId",
-                rawGroupId,
-            ).distinct()
-            val agentSnap = candidateIds.firstNotNullOfOrNull { gid ->
-                AgentRuntime.snapshotState(userId, gid)
-            }
-            val bridgeConnected = isAnyBridgeConnected(userId)
+        // 查询 workspace 的 Agent 当前状态（含工作目录），供工作流前端显示。
+        get("/users/{userId}/cc-state/{workspaceId}") {
+            val pathUserId = call.parameters["userId"].orEmpty()
+            val workspaceId = call.parameters["workspaceId"].orEmpty()
+            val workspace = call.resolveControllableWorkspace(pathUserId, workspaceId) ?: return@get
+            val ownerId = workspace.ownerId
+            val agentSnap = AgentRuntime.snapshotState(ownerId, workspaceId)
+            val bridgeConnected = isAnyBridgeConnected(ownerId)
             if (agentSnap != null) {
                 val descriptor = agentSnap.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
                 call.respond(
@@ -847,21 +921,27 @@ private fun Route.coreRoutes() {
             }
         }
 
-        // 列出 Bridge 所在机器上某路径下的子目录（用于工作流 Folder Picker）
+        // 列出 workspace owner 的 Bridge 所在机器上某路径下的子目录。
         // path 为空表示使用 bridge 当前 workingDir 起点
         get("/users/{userId}/cc-fs/list") {
-            val userId = call.parameters["userId"] ?: ""
+            val pathUserId = call.parameters["userId"].orEmpty()
+            val workspaceId = call.request.queryParameters["workspaceId"].orEmpty()
             val path = call.request.queryParameters["path"]
             val showHidden = call.request.queryParameters["showHidden"]?.toBoolean() ?: false
-            if (userId.isBlank()) {
-                call.respond(HttpStatusCode.BadRequest, DirListingResponse(success = false, error = "userId 为空"))
-                return@get
+            val workspace = workspaceId.takeIf { it.isNotBlank() }?.let {
+                call.resolveControllableWorkspace(pathUserId, it) ?: return@get
             }
-            if (!isAnyBridgeConnected(userId)) {
+            val ownerId = workspace?.ownerId
+                ?: call.resolveOwnPathUser(pathUserId)
+                ?: return@get
+            if (!isAnyBridgeConnected(ownerId)) {
                 call.respond(HttpStatusCode.Conflict, DirListingResponse(success = false, error = "Bridge 未连接"))
                 return@get
             }
-            val raw = AgentRuntime.listDirectory(userId, path, showHidden, agentType = resolveActiveAgentType(userId) ?: "claude-code")
+            val agentType = workspace?.activeAgent?.takeIf { it.isNotBlank() }
+                ?: resolveActiveAgentType(ownerId)
+                ?: "claude-code"
+            val raw = AgentRuntime.listDirectory(ownerId, path, showHidden, agentType = agentType)
             if (raw == null) {
                 call.respond(HttpStatusCode.GatewayTimeout, DirListingResponse(success = false, error = "Bridge 未响应或超时"))
                 return@get
@@ -894,10 +974,10 @@ private fun Route.coreRoutes() {
             }
         }
 
-        // 直接切换 user+group 的工作目录（不经过聊天消息流，避免 /cd 在聊天中显示气泡）。
-        // 请求体（JSON）：{ "groupId": "...", "path": "..." }
+        // 直接切换 workspace 的工作目录（不经过聊天消息流，避免 /cd 在聊天中显示气泡）。
+        // 请求体（JSON）：{ "workspaceId": "...", "path": "..." }
         post("/users/{userId}/cc-fs/cd") {
-            val userId = call.parameters["userId"] ?: ""
+            val pathUserId = call.parameters["userId"].orEmpty()
             val reqJson = try {
                 Json.parseToJsonElement(call.receiveText()).jsonObject
             } catch (e: Exception) {
@@ -907,18 +987,20 @@ private fun Route.coreRoutes() {
                 )
                 return@post
             }
-            val groupId = reqJson["groupId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val workspaceId = reqJson["workspaceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val rawPath = reqJson["path"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            if (userId.isBlank() || groupId.isBlank() || rawPath.isBlank()) {
+            if (workspaceId.isBlank() || rawPath.isBlank()) {
                 call.respond(
                     HttpStatusCode.BadRequest,
-                    CcStateResponse(success = false, error = "userId / groupId / path 不能为空")
+                    CcStateResponse(success = false, error = "workspaceId / path 不能为空")
                 )
                 return@post
             }
+            val workspace = call.resolveControllableWorkspace(pathUserId, workspaceId) ?: return@post
+            val ownerId = workspace.ownerId
             // 信任目录检查（bridgeId 格式 "ip:<ip>" 兼容已有 trust 记录）
-            val bridgeId = resolveBridgeId(userId) ?: "unknown"
-            if (!trustedDirManager.isTrusted(userId, bridgeId, rawPath)) {
+            val bridgeId = resolveBridgeId(ownerId) ?: "unknown"
+            if (!trustedDirManager.isTrusted(ownerId, bridgeId, rawPath)) {
                 call.respond(
                     HttpStatusCode.BadRequest,
                     CcStateResponse(
@@ -928,9 +1010,8 @@ private fun Route.coreRoutes() {
                 )
                 return@post
             }
-            // 与 autoActivateForWorkflow 一致使用 "group_<id>" 形式作为 CC state key
-            val ccGroupId = if (groupId.startsWith("group_")) groupId else "group_$groupId"
-            when (val result = AgentRuntime.cdSync(userId, ccGroupId, rawPath, agentType = resolveActiveAgentType(userId) ?: "claude-code")) {
+            val agentType = workspace.activeAgent.ifBlank { resolveActiveAgentType(ownerId) ?: "claude-code" }
+            when (val result = AgentRuntime.cdSync(ownerId, workspaceId, rawPath, agentType = agentType)) {
                 is AgentRuntime.CdResult.Err -> {
                     call.respond(
                         HttpStatusCode.Conflict,
@@ -938,18 +1019,17 @@ private fun Route.coreRoutes() {
                     )
                 }
                 is AgentRuntime.CdResult.Ok -> {
-                    val snap = AgentRuntime.snapshotState(userId, ccGroupId)
-                    val bridgeConnected = isAnyBridgeConnected(userId)
+                    val snap = AgentRuntime.snapshotState(ownerId, workspaceId)
+                    val bridgeConnected = isAnyBridgeConnected(ownerId)
                     // 切目录会重置 sessionId（等价于 /new），在聊天里广播一条提示让用户感知
-                    val rawGid = if (ccGroupId.startsWith("group_")) ccGroupId.removePrefix("group_") else ccGroupId
                     val descriptor = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
                     try {
-                        getGroupChatServer(rawGid).broadcast(
+                        getGroupChatServer(workspace.roomId).broadcast(
                             com.silk.backend.agents.core.AgentMessages.system(
                                 "工作目录已切换至：${result.resolvedPath} 会话已重置",
                                 agentUserId = descriptor?.agentUserId ?: SilkAgent.AGENT_ID,
                                 agentName = descriptor?.displayName ?: SilkAgent.AGENT_NAME,
-                            )
+                            ).copy(scope = MessageScope.WORKSPACE, workspaceId = workspaceId)
                         )
                     } catch (e: Exception) {
                         logger.warn("广播切目录提示失败: {}", e.message)
@@ -974,7 +1054,7 @@ private fun Route.coreRoutes() {
 
         // API-driven 切换 agent / 权限模式（更改对话框用，不走聊天消息流）
         post("/users/{userId}/cc-settings/update") {
-            val userId = call.parameters["userId"] ?: ""
+            val pathUserId = call.parameters["userId"].orEmpty()
             val reqJson = try {
                 Json.parseToJsonElement(call.receiveText()).jsonObject
             } catch (e: Exception) {
@@ -984,15 +1064,16 @@ private fun Route.coreRoutes() {
                 )
                 return@post
             }
-            val groupId = reqJson["groupId"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            if (userId.isBlank() || groupId.isBlank()) {
+            val workspaceId = reqJson["workspaceId"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            if (workspaceId.isBlank()) {
                 call.respond(
                     HttpStatusCode.BadRequest,
-                    CcStateResponse(success = false, error = "userId / groupId 不能为空")
+                    CcStateResponse(success = false, error = "workspaceId 不能为空")
                 )
                 return@post
             }
-            val ccGroupId = if (groupId.startsWith("group_")) groupId else "group_$groupId"
+            val workspace = call.resolveControllableWorkspace(pathUserId, workspaceId) ?: return@post
+            val ownerId = workspace.ownerId
             val newAgent = reqJson["activeAgent"]?.jsonPrimitive?.contentOrNull
             val newPermMode = reqJson["permissionMode"]?.jsonPrimitive?.contentOrNull
 
@@ -1001,7 +1082,7 @@ private fun Route.coreRoutes() {
             if (!newAgent.isNullOrBlank()) {
                 // 前端传 underscore form（claude_code），runtime 用 dash form（claude-code）
                 val dashType = newAgent.replace('_', '-')
-                val descriptor = AgentRuntime.switchAgent(userId, ccGroupId, dashType)
+                val descriptor = AgentRuntime.switchAgent(ownerId, workspaceId, dashType)
                 if (descriptor == null) {
                     call.respond(
                         HttpStatusCode.BadRequest,
@@ -1009,14 +1090,12 @@ private fun Route.coreRoutes() {
                     )
                     return@post
                 }
-                // 持久化到 workflow record（switchAgent 已持久化 runtime 侧）
-                workflowManager.updateActiveAgent(groupId, dashType)
                 agentSwitchMsg = "已切换到 ${descriptor.displayName}。"
             }
 
             // 切换权限模式
             if (!newPermMode.isNullOrBlank()) {
-                val ok = AgentRuntime.setPermissionMode(userId, ccGroupId, newPermMode)
+                val ok = AgentRuntime.setPermissionMode(ownerId, workspaceId, newPermMode)
                 if (!ok) {
                     call.respond(
                         HttpStatusCode.BadRequest,
@@ -1024,21 +1103,19 @@ private fun Route.coreRoutes() {
                     )
                     return@post
                 }
-                workflowManager.updatePermissionMode(groupId, newPermMode)
             }
 
             // 广播系统消息通知前端
-            val rawGid = if (ccGroupId.startsWith("group_")) ccGroupId.removePrefix("group_") else ccGroupId
             if (agentSwitchMsg != null) {
                 try {
-                    val snap = AgentRuntime.snapshotState(userId, ccGroupId)
+                    val snap = AgentRuntime.snapshotState(ownerId, workspaceId)
                     val desc = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
-                    getGroupChatServer(rawGid).broadcast(
+                    getGroupChatServer(workspace.roomId).broadcast(
                         com.silk.backend.agents.core.AgentMessages.system(
                             agentSwitchMsg,
                             agentUserId = desc?.agentUserId ?: SilkAgent.AGENT_ID,
                             agentName = desc?.displayName ?: SilkAgent.AGENT_NAME,
-                        )
+                        ).copy(scope = MessageScope.WORKSPACE, workspaceId = workspaceId)
                     )
                 } catch (e: Exception) {
                     logger.warn("广播 agent 切换提示失败: {}", e.message)
@@ -1046,8 +1123,8 @@ private fun Route.coreRoutes() {
             }
 
             // 返回最新状态
-            val snap = AgentRuntime.snapshotState(userId, ccGroupId)
-            val bridgeConnected = isAnyBridgeConnected(userId)
+            val snap = AgentRuntime.snapshotState(ownerId, workspaceId)
+            val bridgeConnected = isAnyBridgeConnected(ownerId)
             val descriptor = snap?.agentType?.let { com.silk.backend.agents.core.AgentRegistry.getByType(it) }
             call.respond(
                 CcStateResponse(
@@ -1066,15 +1143,8 @@ private fun Route.coreRoutes() {
         // ==================== Trusted Directory API ====================
 
         get("/users/{userId}/trusted-dirs/check") {
-            val userId = call.parameters["userId"] ?: ""
+            val userId = call.resolveOwnPathUser(call.parameters["userId"].orEmpty()) ?: return@get
             val path = call.request.queryParameters["path"] ?: ""
-            if (userId.isBlank()) {
-                call.respond(
-                    HttpStatusCode.BadRequest,
-                    TrustedDirCheckResponse(trusted = false, bridgeConnected = false)
-                )
-                return@get
-            }
             val bridgeConnected = isAnyBridgeConnected(userId)
             val bridgeId = if (bridgeConnected) resolveBridgeId(userId) else null
             val trusted = if (bridgeConnected && path.isNotBlank() && bridgeId != null) {
@@ -1090,7 +1160,7 @@ private fun Route.coreRoutes() {
         }
 
         post("/users/{userId}/trusted-dirs") {
-            val userId = call.parameters["userId"] ?: ""
+            val userId = call.resolveOwnPathUser(call.parameters["userId"].orEmpty()) ?: return@post
             val req = try {
                 Json.decodeFromString<AddTrustRequest>(call.receiveText())
             } catch (e: Exception) {
@@ -1101,7 +1171,7 @@ private fun Route.coreRoutes() {
                 )
                 return@post
             }
-            if (userId.isBlank() || req.path.isBlank()) {
+            if (req.path.isBlank()) {
                 call.respondText(
                     """{"success":false,"message":"userId 和 path 不能为空"}""",
                     ContentType.Application.Json,
@@ -1119,7 +1189,7 @@ private fun Route.coreRoutes() {
         }
 
         delete("/users/{userId}/trusted-dirs") {
-            val userId = call.parameters["userId"] ?: ""
+            val userId = call.resolveOwnPathUser(call.parameters["userId"].orEmpty()) ?: return@delete
             val req = try {
                 Json.decodeFromString<AddTrustRequest>(call.receiveText())
             } catch (e: Exception) {
@@ -1130,7 +1200,7 @@ private fun Route.coreRoutes() {
                 )
                 return@delete
             }
-            if (userId.isBlank() || req.path.isBlank()) {
+            if (req.path.isBlank()) {
                 call.respondText(
                     """{"success":false,"message":"userId 和 path 不能为空"}""",
                     ContentType.Application.Json,
@@ -1148,7 +1218,7 @@ private fun Route.coreRoutes() {
         }
 
         get("/users/{userId}/trusted-dirs") {
-            val userId = call.parameters["userId"] ?: ""
+            val userId = call.resolveOwnPathUser(call.parameters["userId"].orEmpty()) ?: return@get
             val bridgeId = call.request.queryParameters["bridgeId"]
             val entries = trustedDirManager.listTrusts(userId, bridgeId).map {
                 TrustedDirRecordDto(it.bridgeId, it.path, it.trustedAt)
@@ -1160,6 +1230,18 @@ private fun Route.coreRoutes() {
         get("/download/report/{sessionName}/{fileName...}") {
             val sessionName = call.parameters["sessionName"] ?: "default_room"
             val fileName = call.parameters.getAll("fileName")?.joinToString("/") ?: ""
+            val callerId = call.resolveAuthenticatedUserId()
+                ?: return@get call.respond(HttpStatusCode.Unauthorized)
+            val groupId = sessionName.removePrefix("group_")
+            if (!sessionName.startsWith("group_") || !GroupRepository.isUserInGroup(groupId, callerId) ||
+                fileName.isBlank() || fileName.contains("..") || File(fileName).isAbsolute
+            ) {
+                return@get call.respond(HttpStatusCode.NotFound)
+            }
+            // 旧 PDF 没有逐消息 scope 元数据，无法可靠过滤 PRIVATE workspace 内容。
+            if (workflowManager.getWorkflowByGroupId(groupId) != null) {
+                return@get call.respond(HttpStatusCode.Conflict, "Workflow Room 暂不支持 PDF 报告导出")
+            }
             
             logger.debug("📥 PDF下载请求:")
             logger.debug("   sessionName: {}", sessionName)
@@ -1562,7 +1644,7 @@ private fun Route.groupContactRoutes() {
             val groupId = call.parameters["groupId"] ?: ""
             val exportMode = call.request.queryParameters["export"]?.trim().orEmpty()
             if (exportMode == "obsidian_markdown") {
-                val userId = call.request.queryParameters["userId"]?.trim().orEmpty()
+                val userId = call.resolveAuthenticatedUserId().orEmpty()
                 fun respondExportJson(success: Boolean, message: String, fileName: String = "", markdown: String = ""): String {
                     return buildJsonObject {
                         put("success", success)
@@ -1602,7 +1684,7 @@ private fun Route.groupContactRoutes() {
                     groupId = groupId,
                     groupName = group.name,
                     sessionName = sessionName,
-                    history = chatHistory
+                    history = filterChatHistoryForUser(chatHistory, userId, groupId)
                 )
                 val safeGroupName = group.name
                     .replace(Regex("[^a-zA-Z0-9._-]"), "_")
@@ -1952,7 +2034,7 @@ private fun Route.groupContactRoutes() {
                 HttpStatusCode.BadRequest,
                 SimpleResponse(false, "缺少群组ID")
             )
-            val userId = call.request.queryParameters["userId"]?.trim().orEmpty()
+            val userId = call.resolveAuthenticatedUserId().orEmpty()
             if (userId.isBlank()) {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少 userId"))
                 return@get
@@ -1976,11 +2058,12 @@ private fun Route.groupContactRoutes() {
                 return@get
             }
 
+            val visibleHistory = filterChatHistoryForUser(chatHistory, userId, groupId)
             val markdown = ChatObsidianExporter.toMarkdown(
                 groupId = groupId,
                 groupName = group.name,
                 sessionName = sessionName,
-                history = chatHistory
+                history = visibleHistory
             )
             val safeGroupName = group.name
                 .replace(Regex("[^a-zA-Z0-9._-]"), "_")
@@ -1993,8 +2076,8 @@ private fun Route.groupContactRoutes() {
                 ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, fileName).toString()
             )
             call.response.headers.append("X-Silk-Group-Id", groupId)
-            call.response.headers.append("X-Silk-Session-Id", chatHistory.sessionId)
-            call.response.headers.append("X-Silk-Updated-At", (chatHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
+            call.response.headers.append("X-Silk-Session-Id", visibleHistory.sessionId)
+            call.response.headers.append("X-Silk-Updated-At", (visibleHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
             call.respondText(markdown, ContentType.parse("text/markdown; charset=utf-8"))
         }
         get("/groups/{groupId}/export/markdown") {
@@ -2002,7 +2085,7 @@ private fun Route.groupContactRoutes() {
                 HttpStatusCode.BadRequest,
                 SimpleResponse(false, "缺少群组ID")
             )
-            val userId = call.request.queryParameters["userId"]?.trim().orEmpty()
+            val userId = call.resolveAuthenticatedUserId().orEmpty()
             if (userId.isBlank()) {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少 userId"))
                 return@get
@@ -2026,11 +2109,12 @@ private fun Route.groupContactRoutes() {
                 return@get
             }
 
+            val visibleHistory = filterChatHistoryForUser(chatHistory, userId, groupId)
             val markdown = ChatObsidianExporter.toMarkdown(
                 groupId = groupId,
                 groupName = group.name,
                 sessionName = sessionName,
-                history = chatHistory
+                history = visibleHistory
             )
             val safeGroupName = group.name
                 .replace(Regex("[^a-zA-Z0-9._-]"), "_")
@@ -2043,8 +2127,8 @@ private fun Route.groupContactRoutes() {
                 ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, fileName).toString()
             )
             call.response.headers.append("X-Silk-Group-Id", groupId)
-            call.response.headers.append("X-Silk-Session-Id", chatHistory.sessionId)
-            call.response.headers.append("X-Silk-Updated-At", (chatHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
+            call.response.headers.append("X-Silk-Session-Id", visibleHistory.sessionId)
+            call.response.headers.append("X-Silk-Updated-At", (visibleHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
             call.respondText(markdown, ContentType.parse("text/markdown; charset=utf-8"))
         }
         // 兼容受限网关：走 /download 前缀导出 Obsidian Markdown
@@ -2053,7 +2137,7 @@ private fun Route.groupContactRoutes() {
                 HttpStatusCode.BadRequest,
                 SimpleResponse(false, "缺少群组ID")
             )
-            val userId = call.request.queryParameters["userId"]?.trim().orEmpty()
+            val userId = call.resolveAuthenticatedUserId().orEmpty()
             if (userId.isBlank()) {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少 userId"))
                 return@get
@@ -2077,11 +2161,12 @@ private fun Route.groupContactRoutes() {
                 return@get
             }
 
+            val visibleHistory = filterChatHistoryForUser(chatHistory, userId, groupId)
             val markdown = ChatObsidianExporter.toMarkdown(
                 groupId = groupId,
                 groupName = group.name,
                 sessionName = sessionName,
-                history = chatHistory
+                history = visibleHistory
             )
             val safeGroupName = group.name
                 .replace(Regex("[^a-zA-Z0-9._-]"), "_")
@@ -2094,8 +2179,8 @@ private fun Route.groupContactRoutes() {
                 ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, fileName).toString()
             )
             call.response.headers.append("X-Silk-Group-Id", groupId)
-            call.response.headers.append("X-Silk-Session-Id", chatHistory.sessionId)
-            call.response.headers.append("X-Silk-Updated-At", (chatHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
+            call.response.headers.append("X-Silk-Session-Id", visibleHistory.sessionId)
+            call.response.headers.append("X-Silk-Updated-At", (visibleHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
             call.respondText(markdown, ContentType.parse("text/markdown; charset=utf-8"))
         }
         
@@ -2433,7 +2518,7 @@ private fun Route.unreadTodoMessageRoutes() {
         // ==================== 消息发送 API（用于转发等功能） ====================
         get("/api/messages/export/markdown") {
             val groupId = call.request.queryParameters["groupId"]?.trim().orEmpty()
-            val userId = call.request.queryParameters["userId"]?.trim().orEmpty()
+            val userId = call.resolveAuthenticatedUserId().orEmpty()
             if (groupId.isBlank()) {
                 call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少 groupId"))
                 return@get
@@ -2461,11 +2546,12 @@ private fun Route.unreadTodoMessageRoutes() {
                 return@get
             }
 
+            val visibleHistory = filterChatHistoryForUser(chatHistory, userId, groupId)
             val markdown = ChatObsidianExporter.toMarkdown(
                 groupId = groupId,
                 groupName = group.name,
                 sessionName = sessionName,
-                history = chatHistory
+                history = visibleHistory
             )
             val safeGroupName = group.name
                 .replace(Regex("[^a-zA-Z0-9._-]"), "_")
@@ -2478,14 +2564,19 @@ private fun Route.unreadTodoMessageRoutes() {
                 ContentDisposition.Attachment.withParameter(ContentDisposition.Parameters.FileName, fileName).toString()
             )
             call.response.headers.append("X-Silk-Group-Id", groupId)
-            call.response.headers.append("X-Silk-Session-Id", chatHistory.sessionId)
-            call.response.headers.append("X-Silk-Updated-At", (chatHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
+            call.response.headers.append("X-Silk-Session-Id", visibleHistory.sessionId)
+            call.response.headers.append("X-Silk-Updated-At", (visibleHistory.messages.maxOfOrNull { it.timestamp } ?: 0L).toString())
             call.respondText(markdown, ContentType.parse("text/markdown; charset=utf-8"))
         }
 
         post("/api/messages/send") {
             try {
+                val callerId = call.resolveAuthenticatedUserId()
+                    ?: return@post call.respond(HttpStatusCode.Unauthorized)
                 val request = call.receive<SendMessageRequest>()
+                if (request.userId != callerId) {
+                    return@post call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "用户身份不匹配"))
+                }
                 
                 // 检查群组是否存在
                 val group = GroupRepository.findGroupById(request.groupId)
@@ -2495,7 +2586,7 @@ private fun Route.unreadTodoMessageRoutes() {
                 }
                 
                 // 检查用户是否在群组中
-                if (!GroupRepository.isUserInGroup(request.groupId, request.userId)) {
+                if (!GroupRepository.isUserInGroup(request.groupId, callerId)) {
                     call.respond(SimpleResponse(false, "您不是该群组成员"))
                     return@post
                 }
@@ -2507,7 +2598,7 @@ private fun Route.unreadTodoMessageRoutes() {
                 val message = Message(
                     id = request.messageId ?: UUID.randomUUID().toString(),
                     content = request.content,
-                    userId = request.userId,
+                    userId = callerId,
                     userName = request.userName,
                     timestamp = System.currentTimeMillis(),
                     type = MessageType.TEXT
@@ -2528,7 +2619,12 @@ private fun Route.unreadTodoMessageRoutes() {
         // ==================== 消息撤回 API ====================
         post("/api/messages/recall") {
             try {
+                val callerId = call.resolveAuthenticatedUserId()
+                    ?: return@post call.respond(HttpStatusCode.Unauthorized)
                 val request = call.receive<RecallMessageRequest>()
+                if (request.userId != callerId || !GroupRepository.isUserInGroup(request.groupId, callerId)) {
+                    return@post call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "无权操作该消息"))
+                }
                 
                 // 检查群组是否存在
                 val group = GroupRepository.findGroupById(request.groupId)
@@ -2543,11 +2639,11 @@ private fun Route.unreadTodoMessageRoutes() {
                 // 撤回消息
                 val result = groupChatServer.recallMessage(
                     messageId = request.messageId,
-                    userId = request.userId
+                    userId = callerId
                 )
                 
                 if (result.success) {
-                    logger.info("🗑️ 消息已撤回: {} by {}", request.messageId, request.userId)
+                    logger.info("🗑️ 消息已撤回: {} by {}", request.messageId, callerId)
                     call.respond(SimpleResponse(true, result.message))
                 } else {
                     call.respond(SimpleResponse(false, result.message))
@@ -2562,7 +2658,12 @@ private fun Route.unreadTodoMessageRoutes() {
         // ==================== 消息删除 API ====================
         post("/api/messages/delete") {
             try {
+                val callerId = call.resolveAuthenticatedUserId()
+                    ?: return@post call.respond(HttpStatusCode.Unauthorized)
                 val request = call.receive<RecallMessageRequest>()
+                if (request.userId != callerId || !GroupRepository.isUserInGroup(request.groupId, callerId)) {
+                    return@post call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "无权操作该消息"))
+                }
                 
                 val group = GroupRepository.findGroupById(request.groupId)
                 if (group == null) {
@@ -2573,11 +2674,11 @@ private fun Route.unreadTodoMessageRoutes() {
                 val groupChatServer = getGroupChatServer(request.groupId)
                 val result = groupChatServer.deleteMessage(
                     messageId = request.messageId,
-                    userId = request.userId
+                    userId = callerId
                 )
                 
                 if (result.success) {
-                    logger.info("🗑️ 消息已删除: {} by {}", request.messageId, request.userId)
+                    logger.info("🗑️ 消息已删除: {} by {}", request.messageId, callerId)
                     call.respond(SimpleResponse(true, result.message))
                 } else {
                     call.respond(SimpleResponse(false, result.message))
@@ -2595,11 +2696,18 @@ private fun Route.unreadTodoMessageRoutes() {
 
 private fun Route.pollMessagesRoute() {
     get("/api/messages/poll/{groupId}") {
-        val groupId = call.parameters["groupId"] ?: return@get
-        val since = call.parameters["since"]?.toLongOrNull() ?: 0L
+        val groupId = call.parameters["groupId"]
+            ?: return@get call.respond(HttpStatusCode.BadRequest, SimpleResponse(false, "缺少 groupId"))
+        val userId = call.resolveAuthenticatedUserId()
+            ?: return@get call.respond(HttpStatusCode.Unauthorized, SimpleResponse(false, "未认证"))
+        if (!GroupRepository.isUserInGroup(groupId, userId)) {
+            return@get call.respond(HttpStatusCode.Forbidden, SimpleResponse(false, "您不是该群组成员"))
+        }
+        val since = call.request.queryParameters["since"]?.toLongOrNull() ?: 0L
         val historyManager = ChatHistoryManager()
         val history = historyManager.loadChatHistory(groupId)
-        val entries = history?.messages?.filter { it.timestamp > since } ?: emptyList()
+        val visibleHistory = history?.let { filterChatHistoryForUser(it, userId, groupId) }
+        val entries = visibleHistory?.messages?.filter { it.timestamp > since } ?: emptyList()
         // 转换为前端 WebSocket Message 格式
         val messages = entries.map { entry ->
             Message(
@@ -2612,7 +2720,10 @@ private fun Route.pollMessagesRoute() {
                 references = emptyList(),
                 contentBlocks = null,
                 interactiveOptions = null,
-                kbContextSelection = null,
+                kbContextSelection = entry.kbContextSelection,
+                scope = entry.scope,
+                workspaceId = entry.workspaceId,
+                observerVisible = entry.observerVisible,
             )
         }
         call.respond(messages)
@@ -2644,34 +2755,18 @@ private fun Route.agentBridgeRoute() {
                 return@webSocket
             }
 
-            // workspaceId 可选：
-            //   - 提供时：验证归属并使用
-            //   - 省略时：自动解析该用户在任意 room 的默认工作区（向后兼容旧 bridge 命令）
-            val workspaceId: String = run {
-                val raw = call.request.queryParameters["workspaceId"]
-                if (!raw.isNullOrBlank()) {
-                    // 显式指定：验证 ownership
-                    val wsRecord = workspaceManager.getWorkspace(raw)
-                    if (wsRecord == null || wsRecord.ownerId != userId) {
-                        close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid workspaceId"))
-                        return@webSocket
-                    }
-                    raw
-                } else {
-                    // 未指定：取该用户名下第一个工作区；若完全没有则创建一个占位工作区
-                    // （首次连接 bridge、还没有打开任何工作流页面时的兜底）
-                    workspaceManager.getOrCreateDefaultWorkspace(userId, "default")
-                        .also { ws ->
-                            logger.info(
-                                "🔌 Agent Bridge: workspaceId 未指定，自动解析为 {} (向后兼容)",
-                                ws.workspaceId
-                            )
-                        }
-                        .workspaceId
+            // Bridge 是 user + agentType 级资源；workspace 只在具体 prompt/session 时选择。
+            // 旧客户端可继续携带 workspaceId，但这里只校验，不创建占位工作区。
+            val requestedWorkspaceId = call.request.queryParameters["workspaceId"]
+            if (!requestedWorkspaceId.isNullOrBlank()) {
+                val workspace = workspaceManager.getWorkspace(requestedWorkspaceId)
+                if (workspace == null || workspace.ownerId != userId) {
+                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "invalid workspaceId"))
+                    return@webSocket
                 }
             }
 
-            logger.info("🔌 Agent Bridge 连接: userId={}, workspaceId={}, agentType={}", userId, workspaceId, agentType)
+            logger.info("🔌 Agent Bridge 连接: userId={}, agentType={}", userId, agentType)
             val remoteIp = call.request.local.remoteAddress
 
             val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO)
@@ -3610,15 +3705,8 @@ private fun Route.ccConnectApiRoutes() {
 @Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
 private fun Route.workflowKbRoutes() {
         get("/api/agents") {
-            val userId = call.request.queryParameters["userId"]
-            if (userId.isNullOrBlank()) {
-                call.respondText(
-                    """{"success":false,"message":"Missing userId"}""",
-                    ContentType.Application.Json,
-                    HttpStatusCode.BadRequest,
-                )
-                return@get
-            }
+            val userId = call.resolveOwnPathUser(call.request.queryParameters["userId"].orEmpty())
+                ?: return@get
             val arr = kotlinx.serialization.json.buildJsonArray {
                 AgentRegistry.list().forEach { desc ->
                     val dashType = desc.agentType
@@ -3636,11 +3724,8 @@ private fun Route.workflowKbRoutes() {
         // ==================== Workflow API ====================
 
         get("/api/workflows") {
-            val userId = call.request.queryParameters["userId"]
-            if (userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@get
-            }
+            val userId = call.resolveOwnPathUser(call.request.queryParameters["userId"].orEmpty())
+                ?: return@get
             val list = workflowManager.listWorkflows(userId)
             call.respondText(
                 Json.encodeToString(kotlinx.serialization.builtins.ListSerializer(Workflow.serializer()), list),
@@ -3661,9 +3746,10 @@ private fun Route.workflowKbRoutes() {
             val body = call.receiveText()
             val json = Json { ignoreUnknownKeys = true }
             val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
-            val userId = req["userId"]?.jsonPrimitive?.content
+            val requestUserId = req["userId"]?.jsonPrimitive?.content.orEmpty()
+            val userId = call.resolveOwnPathUser(requestUserId) ?: return@post
             val name = req["name"]?.jsonPrimitive?.content
-            if (userId.isNullOrBlank() || name.isNullOrBlank()) {
+            if (name.isNullOrBlank()) {
                 respondError(HttpStatusCode.BadRequest, "Missing userId or name")
                 return@post
             }
@@ -3683,6 +3769,7 @@ private fun Route.workflowKbRoutes() {
             if (agentType == "silk_chat") {
                 // Silk Chat 类型：跳过 bridge/目录校验，无 cdSync，直接返回
                 val wf = workflowManager.createWorkflow(name, desc, userId, group.id, agentType, taskFocus)
+                workspaceManager.createWorkspace(group.id, userId, "default", agentType = "silk-chat")
                 call.respondText(
                     Json.encodeToString(Workflow.serializer(), wf),
                     ContentType.Application.Json,
@@ -3722,10 +3809,20 @@ private fun Route.workflowKbRoutes() {
             }
 
             val wf = workflowManager.createWorkflow(name, desc, userId, group.id, agentType, "")
+            val runtimeAgentType = agentType.replace('_', '-')
+            val workspace = workspaceManager.createWorkspace(
+                group.id,
+                userId,
+                "default",
+                agentType = runtimeAgentType,
+            )
+            if (permissionMode.isNotBlank()) {
+                workspaceManager.updatePermissionMode(workspace.workspaceId, permissionMode)
+            }
 
             // cdSync 必须成功才能算创建完成；失败时回滚 group + workflow + CC state，避免遗留无效记录
             val cdResult: AgentRuntime.CdResult = try {
-                AgentRuntime.cdSync(userId, "group_${group.id}", initialDir, agentType = resolveActiveAgentType(userId) ?: "claude-code")
+                AgentRuntime.cdSync(userId, workspace.workspaceId, initialDir, agentType = runtimeAgentType)
             } catch (e: Exception) {
                 AgentRuntime.CdResult.Err(e.message ?: "初始目录切换异常")
             }
@@ -3733,17 +3830,13 @@ private fun Route.workflowKbRoutes() {
                 logger.warn("⚠️ 工作流 {} 初始 /cd 失败，回滚 group + workflow: {}", wf.id, cdResult.reason)
                 workflowManager.deleteWorkflow(wf.id, userId)
                 com.silk.backend.database.GroupRepository.deleteGroup(group.id)
-                AgentRuntime.cleanupState(userId, "group_${group.id}")
+                AgentRuntime.cleanupState(userId, workspace.workspaceId)
+                workspaceManager.deleteWorkspace(workspace.workspaceId)
                 respondError(HttpStatusCode.Conflict, "工作目录设置失败：${cdResult.reason}")
                 return@post
             }
-            // 同步把 workingDir 写到 workflow record，确保返回给前端的 wf 对象包含真实路径
             val resolvedPath = (cdResult as AgentRuntime.CdResult.Ok).resolvedPath
-            workflowManager.updateWorkingDir(group.id, resolvedPath)
-            // 创建时指定的 permissionMode 持久化到 workflow record（seed 加载时生效）
-            if (permissionMode.isNotBlank()) {
-                workflowManager.updatePermissionMode(group.id, permissionMode)
-            }
+            workspaceManager.updateWorkingDir(workspace.workspaceId, resolvedPath)
             val wfWithDir = wf.copy(workingDir = resolvedPath, permissionMode = permissionMode, updatedAt = System.currentTimeMillis())
 
             call.respondText(
@@ -3755,16 +3848,14 @@ private fun Route.workflowKbRoutes() {
 
         delete("/api/workflows/{workflowId}") {
             val workflowId = call.parameters["workflowId"] ?: ""
-            val userId = call.request.queryParameters["userId"]
-            if (userId.isNullOrBlank()) {
-                call.respondText("""{"success":false,"message":"Missing userId"}""", ContentType.Application.Json, HttpStatusCode.BadRequest)
-                return@delete
-            }
+            val userId = call.resolveOwnPathUser(call.request.queryParameters["userId"].orEmpty())
+                ?: return@delete
             // 删除前查出关联的 groupId，用于清理群组和 ChatServer
             val workflow = workflowManager.getWorkflow(workflowId, userId)
             val ok = workflowManager.deleteWorkflow(workflowId, userId)
             if (ok && workflow != null && workflow.groupId.isNotBlank()) {
                 groupChatServers.remove(workflow.groupId)
+                workspaceManager.deleteWorkspacesForRoom(workflow.groupId)
                 com.silk.backend.database.GroupRepository.deleteGroup(workflow.groupId)
             }
             call.respondText(
@@ -3779,9 +3870,10 @@ private fun Route.workflowKbRoutes() {
             val body = call.receiveText()
             val json = Json { ignoreUnknownKeys = true }
             val req = json.decodeFromString<kotlinx.serialization.json.JsonObject>(body)
-            val userId = req["userId"]?.jsonPrimitive?.content ?: ""
+            val userId = call.resolveOwnPathUser(req["userId"]?.jsonPrimitive?.content.orEmpty())
+                ?: return@put
             val newName = req["name"]?.jsonPrimitive?.content?.trim() ?: ""
-            if (workflowId.isBlank() || userId.isBlank() || newName.isBlank()) {
+            if (workflowId.isBlank() || newName.isBlank()) {
                 call.respondText(
                     """{"success":false,"message":"Missing workflowId, userId, or name"}""",
                     ContentType.Application.Json, HttpStatusCode.BadRequest
@@ -3813,8 +3905,21 @@ private fun Route.workflowKbRoutes() {
                 call.respondText("""{"success":false,"message":"Workflow not found"}""", ContentType.Application.Json, HttpStatusCode.NotFound)
                 return@get
             }
+            val callerId = call.resolveAuthenticatedUserId()
+                ?: return@get call.respond(HttpStatusCode.Unauthorized)
+            if (!GroupRepository.isUserInGroup(groupId, callerId)) {
+                return@get call.respond(HttpStatusCode.NotFound)
+            }
+            val visibleWorkflow = if (wf.ownerId == callerId) wf else wf.copy(
+                workingDir = "",
+                sessionId = "",
+                sessionStarted = false,
+                activeAgent = "",
+                agentSessions = emptyMap(),
+                permissionMode = "",
+            )
             call.respondText(
-                Json.encodeToString(Workflow.serializer(), wf),
+                Json.encodeToString(Workflow.serializer(), visibleWorkflow),
                 ContentType.Application.Json
             )
         }
@@ -3849,18 +3954,25 @@ private fun Route.workflowKbRoutes() {
 }
 
 // /chat 聊天 WebSocket：单 handler 内处理连接/历史回放/消息分发，控制流敏感且耦合，拆分风险高于收益。
-@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught", "SwallowedException")
+@Suppress("CyclomaticComplexMethod", "ComplexCondition", "TooGenericExceptionCaught", "SwallowedException")
 private fun Route.chatWebSocketRoute() {
         webSocket("/chat") {
-            // 支持 JWT 认证：优先从 token 参数解析 userId，fallback 到旧版 userId 参数
+            val groupId = call.parameters["groupId"] ?: "default_room"
+            val workflow = workflowManager.getWorkflowByGroupId(groupId)
             val token = call.parameters["token"]
-            val resolvedUserId = if (!token.isNullOrBlank()) {
-                JwtProvider.verifyAccessToken(token) ?: call.parameters["userId"]
-            } else {
-                call.parameters["userId"]
+            val tokenUserId = token?.takeIf { it.isNotBlank() }?.let(JwtProvider::verifyAccessToken)
+            if ((!token.isNullOrBlank() && tokenUserId == null) || (workflow != null && tokenUserId == null)) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "valid JWT required"))
+                return@webSocket
             }
+            if (workflow != null && !GroupRepository.isUserInGroup(groupId, tokenUserId.orEmpty())) {
+                close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "room membership required"))
+                return@webSocket
+            }
+            // 普通 Room 暂保留无 token 的旧客户端兼容；Workflow Room 强制使用 JWT。
+            val resolvedUserId = tokenUserId ?: call.parameters["userId"]
             val userId = resolvedUserId ?: UUID.randomUUID().toString()
-            val userName = if (!token.isNullOrBlank() && JwtProvider.verifyAccessToken(token) != null) {
+            val userName = if (tokenUserId != null) {
                 // 从 JWT 登录的用户名（从数据库查找）
                 UserRepository.findUserById(userId)?.fullName
                     ?: call.parameters["userName"]
@@ -3868,49 +3980,53 @@ private fun Route.chatWebSocketRoute() {
             } else {
                 call.parameters["userName"] ?: "User_${userId.take(6)}"
             }
-            val groupId = call.parameters["groupId"] ?: "default_room"
-
             logger.info("👤 用户连接: {} ({}) -> 群组: {}", userName, userId, groupId)
 
             // 为每个群组获取或创建独立的ChatServer
             val groupChatServer = getGroupChatServer(groupId)
 
-            // 工作空间自动激活 agent 模式（仅非 silk_chat 类型）。
-            // Task 4/5: 使用 workspaceManager 替代 workflowManager。
-            val workspace = workspaceManager.getOrCreateDefaultWorkspace(userId, groupId)
-            if (workspace.agentType != "silk_chat") {
-                val resolvedAgent = workspace.activeAgent.takeIf { it.isNotBlank() }
-                    ?: workspace.agentType
-                AgentRuntime.autoActivateForWorkspace(userId, workspace.workspaceId, resolvedAgent)
-
-                // Re-broadcast pending question if agent is waiting for user answer
-                val pendingSnapshot = AgentRuntime.snapshotPendingQuestion(userId, workspace.workspaceId)
-                if (pendingSnapshot != null) {
-                    val questionMsg = com.silk.backend.agents.core.AgentMessages.question(
-                        content = com.silk.backend.agents.core.AgentMessages.formatQuestionText(pendingSnapshot.questions),
-                        requestId = pendingSnapshot.requestId,
-                        agentUserId = pendingSnapshot.agentUserId,
-                        agentName = pendingSnapshot.agentName,
-                    )
-                    groupChatServer.broadcast(questionMsg)
+            // 恢复该用户显式创建的可执行工作区；连接 Room 不会隐式创建默认工作区。
+            val ownedWorkspaces = if (workflow == null) emptyList() else {
+                workspaceManager.listWorkspaces(userId, groupId).filter {
+                    it.lifecycleState == WorkspaceLifecycleState.ACTIVE && it.workingDir.isNotBlank()
                 }
             }
+            ownedWorkspaces
+                .map { workspace -> workspace to workspace.activeAgent.ifBlank { workspace.agentType } }
+                .filterNot { (_, agent) -> agent == "silk-chat" || agent == "silk_chat" }
+                .forEach { (workspace, resolvedAgent) ->
+                    AgentRuntime.autoActivateForWorkspace(userId, workspace.workspaceId, resolvedAgent)
+
+                    // Re-broadcast pending question if agent is waiting for user answer
+                    AgentRuntime.snapshotPendingQuestion(userId, workspace.workspaceId)?.let { pendingSnapshot ->
+                        val questionMsg = com.silk.backend.agents.core.AgentMessages.question(
+                            content = com.silk.backend.agents.core.AgentMessages.formatQuestionText(pendingSnapshot.questions),
+                            requestId = pendingSnapshot.requestId,
+                            agentUserId = pendingSnapshot.agentUserId,
+                            agentName = pendingSnapshot.agentName,
+                        ).copy(scope = MessageScope.WORKSPACE, workspaceId = workspace.workspaceId)
+                        groupChatServer.broadcast(questionMsg)
+                    }
+                }
 
             try {
-                groupChatServer.join(userId, userName, this, workspace.workspaceId)
+                groupChatServer.join(userId, userName, this)
                 
                 incoming.consumeEach { frame ->
                     when (frame) {
                         is Frame.Text -> {
                             val receivedText = frame.readText()
                             try {
-                                val message = Json.decodeFromString<Message>(receivedText)
+                                val decodedMessage = Json.decodeFromString<Message>(receivedText)
+                                // 客户端不能声明其他用户身份；所有入站消息绑定到已认证 WebSocket caller。
+                                val message = decodedMessage.copy(userId = userId, userName = userName)
 
                                 // ⛔ cc-connect 按钮答案拦截：按钮值（如 perm:allow）是引擎产生的
                                 // 机器 token，不应作为聊天消息显示。拦截在 broadcast() 之前，
                                 // 完全不存历史、不广播给客户端。
                                 // 仅拦截已知的按钮 token 格式（自然语言回复仍正常显示）。
                                 val isCcButtonAnswerCandidate = message.type == MessageType.TEXT &&
+                                    message.scope == MessageScope.TEAM &&
                                     !message.isTransient &&
                                     message.userId != "cc-connect" && message.userId != "system"
                                 if (isCcButtonAnswerCandidate) {
@@ -4031,7 +4147,7 @@ private data class KbCallerResolution(
     val invalidToken: Boolean = false,
 )
 
-private fun ApplicationCall.resolveAuthenticatedUserId(): String? {
+internal fun ApplicationCall.resolveAuthenticatedUserId(): String? {
     val authorization = request.headers[AUTHORIZATION_HEADER]?.trim().orEmpty()
     if (!authorization.startsWith(BEARER_PREFIX, ignoreCase = true)) return null
     val token = authorization.substring(BEARER_PREFIX.length).trim()

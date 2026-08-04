@@ -26,9 +26,13 @@ SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可�
 - `workflow/WorkflowManager.kt`:
   - 默认 `~/.silk-data/workflows/workflow_store.json`
   - 可用 `SILK_WORKFLOW_DIR` 或 `-Dsilk.workflowDir=...` 覆盖
-  - 基础 CRUD + 工作流 agent 状态持久化（`workingDir` / `activeAgent` / `agentSessions[agentType]`），用于后端重启后无感恢复用户的工作目录、当前 agent 与对话历史
-  - `agentSessions[agentType].sessionId` 存对应 adapter 的真实 session id（Claude Code 为 `cliSessionId`，Codex 为 thread id）；旧 `sessionId` / `sessionStarted` 字段保留为当前 agent 的兼容镜像
-  - `updateWorkingDir(groupId, workingDir)` / `updateSessionState(groupId, agentType, sessionId, sessionStarted)` / `updateActiveAgent(...)` 由 `AgentRuntime.WorkflowPersistence` 回调驱动；写入跳过等值无变化以省 I/O
+  - 保留 Workflow Room 入口元数据与旧记录；不再作为 Agent runtime 状态的权威存储
+- `workspace/WorkspaceManager.kt`:
+  - 默认 `~/.silk-data/workflows/workspace_store.json`，覆盖方式同 Workflow
+  - 持久化 PersonalWorkspace 的 `workingDir` / `activeAgent` / `permissionMode` / `agentSessions` / `visibility` / `lastSharedName` / `copilots` / `lifecycleState` / `updatedAt`
+  - `AgentRuntime.WorkflowPersistence` 以 `workspaceId` 读写；首次启动从 `workflow_store.json` 迁移，但不删除旧文件
+  - `WorkspaceAccessPolicy` 统一 Owner/Co-pilot/Observer 的控制与消息读取判定；PRIVATE 后端强制清空/拒绝 Co-pilot，历史使用发送时 `observerVisible` 快照
+  - `routes/WorkspaceRoutes.kt` 提供 JWT + Room membership 保护的发现/CRUD，返回裁剪后的 Owner 展示名、`RUNNING/WAITING/IDLE/OFFLINE` 活动状态与生命周期；有历史的工作区只能归档，不能硬删除。Observer 合法保留的历史共享流以 `historyOnly` 元数据返回，只含 Owner 与最后共享名称，runtime 字段保持脱敏；旧记录缺少 `lastSharedName` 时会在首次历史发现时冻结当前可用名称，避免后续 PRIVATE 重命名继续外泄
 - `kb/KnowledgeBaseManager.kt`:
   - `knowledge_base/kb_store.json`
   - Topic / Entry CRUD（Topic 带 `purpose`(GENERAL/MEMORY) + `spaceType`(PERSONAL/TEAM) / `groupId` / `KBAccessPolicy`；Entry 带 `status`(CANDIDATE/PUBLISHED/ARCHIVED/DELETED) / `KBEntrySource` 来源 / 可选 `memory` 元数据，`KBSourceType` 含 `MANUAL/CHAT/AI_RESPONSE/WORKFLOW/MEETING/FILE/URL`，其中 `CHAT`/`AI_RESPONSE`/`WORKFLOW` 强制入库为 `CANDIDATE`）
@@ -103,7 +107,8 @@ SQLite 数据库默认在 `./silk_database.db`，测试或特殊运行场景可�
 ## Route Ownership
 
 - Todo HTTP 主要仍在 `Routing.kt`
-- Workflow HTTP 在 `Routing.kt` 的 `/api/workflows`
+- Workflow 元数据 HTTP 在 `Routing.kt` 的 `/api/workflows`；成员可见 Workflow 列表与 Room 成员管理在 `routes/WorkflowRoomRoutes.kt`（`GET /api/workflows/visible`、`GET/POST/DELETE /api/workflows/{workflowId}/members*`），身份只从 Bearer JWT 解析，只允许 Owner 搜索、添加和移除成员；PersonalWorkspace HTTP 在 `routes/WorkspaceRoutes.kt` 的 `/api/rooms/{roomId}/workspaces`
+- 移除 Workflow Room 成员会同步撤销其在该 Room 所有 Workspace 中的 Co-pilot 权限，关闭当前 WebSocket 连接，并拒绝旧连接继续发送消息
 - Trusted directory HTTP 在 `Routing.kt` 的 `/users/{userId}/trusted-dirs/*`
 - KB HTTP 在 `Routing.kt` 的 `/api/kb/*`（含 `PUT /api/kb/topics/{id}` 改主题/访问策略、`POST /api/kb/captures` 入库候选、`PUT /api/kb/entries/{entryId}` 支持移动条目到同 space 内其他 topic、`GET /api/kb/entries/search`（$ 快捷引用 KB 文档的搜索端点）、`POST /api/kb/copilot`（同步）和 `POST /api/kb/copilot/stream`（SSE 流式）在 KB 页面内生成/应用 AI 编辑草稿——支持条目级 `update_entry` 和主题级 `create_entry` 两种模式，`entryId` 可选填；流式端点通过 `thinking`/`text`/`draft`/`applied`/`error`/`done` 事件逐帧推送；草稿 `KnowledgeBaseCopilotDraft` 新增 `diffChunks: List<DiffChunk>` 字段（后端 LCS 行级 diff 算法生成），供前端 `DiffReviewPane` 逐块接受/拒绝；前端 `KnowledgeCopilotSidebar` 按 `CopilotSidebarState`（INPUT/PREVIEW/REVIEW）三状态渲染，每个状态一个主按钮，审阅控制在侧栏而非编辑区；`GET/POST/DELETE /api/kb/memory*` 管理显式长期记忆、`GET /api/kb/memory/{entryId}` 带访问追踪读取单条记忆、`POST /api/kb/memory/consolidate` 触发去重合并与 TTL 衰减、`GET/PUT /api/kb/context-preferences` 读写用户级空间与 memory 偏好；既有路由按调用方 userId 做读写/成员可见性鉴权）
 - ACP 外部 agent 的 KB 后处理在 `AgentRuntime.kt`：最终回复会先抽取 `silk_kb_action` 再广播，从而让 workflow 内的 Claude Code / Codex / Cursor 与内建 Silk AI 共享同一套 KB 落库路径

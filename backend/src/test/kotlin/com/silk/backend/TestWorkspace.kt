@@ -19,12 +19,14 @@ internal class TestWorkspace : AutoCloseable {
     val chatHistoryDir = File(rootDir, "chat_history")
     val userTodoDir = File(chatHistoryDir, "user_todos")
     val knowledgeBaseDir = File(rootDir, "knowledge_base")
+    val workflowDir = File(rootDir, "workflows")
 
     init {
         System.setProperty("silk.databasePath", dbFile.absolutePath)
         System.setProperty("silk.chatHistoryDir", chatHistoryDir.absolutePath)
         System.setProperty("silk.userTodoBaseDir", userTodoDir.absolutePath)
         System.setProperty("silk.kbDir", knowledgeBaseDir.absolutePath)
+        System.setProperty("silk.workflowDir", workflowDir.absolutePath)
 
         val database = Database.connect(
             url = "jdbc:sqlite:${dbFile.absolutePath}",
@@ -40,6 +42,7 @@ internal class TestWorkspace : AutoCloseable {
         System.clearProperty("silk.chatHistoryDir")
         System.clearProperty("silk.userTodoBaseDir")
         System.clearProperty("silk.kbDir")
+        System.clearProperty("silk.workflowDir")
         rootDir.deleteRecursively()
     }
 }

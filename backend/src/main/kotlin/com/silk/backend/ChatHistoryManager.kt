@@ -110,7 +110,7 @@ class ChatHistoryManager(
     }
 
     private inline fun <T> withSessionLock(sessionName: String, action: () -> T): T {
-        val lockKey = getSessionDir(sessionName)
+        val lockKey = getHistoryFile(sessionName).absolutePath
         val lock = sessionLocks.computeIfAbsent(lockKey) { Any() }
         return synchronized(lock) {
             action()
@@ -282,32 +282,37 @@ class ChatHistoryManager(
         sessionName: String,
         message: Message
     ) {
-        val historyFile = getHistoryFile(sessionName)
-        val chatHistory = loadChatHistory(sessionName) ?: run {
-            // 如果历史文件存在但加载失败，拒绝写入，避免覆盖潜在可恢复数据
-            if (historyFile.exists()) {
-                logger.warn("⚠️ 历史文件存在但无法解析，跳过写入避免覆盖: {}", sessionName)
-                return
+        withSessionLock(sessionName) {
+            val historyFile = getHistoryFile(sessionName)
+            val chatHistory = loadChatHistory(sessionName) ?: run {
+                // 如果历史文件存在但加载失败，拒绝写入，避免覆盖潜在可恢复数据
+                if (historyFile.exists()) {
+                    logger.warn("⚠️ 历史文件存在但无法解析，跳过写入避免覆盖: {}", sessionName)
+                    return
+                }
+                val sessionId = loadSessionData(sessionName)?.sessionId ?: sessionName
+                ChatHistory(sessionId = sessionId)
             }
-            val sessionId = loadSessionData(sessionName)?.sessionId ?: sessionName
-            ChatHistory(sessionId = sessionId)
+
+            val entry = ChatHistoryEntry(
+                messageId = message.id,
+                senderId = message.userId,
+                senderName = message.userName,
+                content = message.content,
+                timestamp = message.timestamp,
+                messageType = message.type.name,
+                references = message.references,
+                kbContextSelection = message.kbContextSelection,
+                contentBlocksJson = message.contentBlocks?.let { json.encodeToString(it) },
+                interactiveOptionsJson = message.interactiveOptions?.let { json.encodeToString(it) },
+                scope = message.scope,
+                workspaceId = message.workspaceId,
+                observerVisible = message.observerVisible,
+            )
+
+            chatHistory.messages.add(entry)
+            saveChatHistory(sessionName, chatHistory)
         }
-        
-        val entry = ChatHistoryEntry(
-            messageId = message.id,
-            senderId = message.userId,
-            senderName = message.userName,
-            content = message.content,
-            timestamp = message.timestamp,
-            messageType = message.type.name,
-            references = message.references,
-            kbContextSelection = message.kbContextSelection,
-            contentBlocksJson = message.contentBlocks?.let { json.encodeToString(it) },
-            interactiveOptionsJson = message.interactiveOptions?.let { json.encodeToString(it) },
-        )
-        
-        chatHistory.messages.add(entry)
-        saveChatHistory(sessionName, chatHistory)
     }
 
     /**
@@ -317,28 +322,33 @@ class ChatHistoryManager(
         sessionName: String,
         message: Message,
     ) {
-        val chatHistory = loadChatHistory(sessionName) ?: return
+        withSessionLock(sessionName) {
+            val chatHistory = loadChatHistory(sessionName) ?: return
 
-        val entry = ChatHistoryEntry(
-            messageId = message.id,
-            senderId = message.userId,
-            senderName = message.userName,
-            content = message.content,
-            timestamp = message.timestamp,
-            messageType = message.type.name,
-            references = message.references,
-            kbContextSelection = message.kbContextSelection,
-        )
+            val entry = ChatHistoryEntry(
+                messageId = message.id,
+                senderId = message.userId,
+                senderName = message.userName,
+                content = message.content,
+                timestamp = message.timestamp,
+                messageType = message.type.name,
+                references = message.references,
+                kbContextSelection = message.kbContextSelection,
+                scope = message.scope,
+                workspaceId = message.workspaceId,
+                observerVisible = message.observerVisible,
+            )
 
-        val index = chatHistory.messages.indexOfFirst { it.messageId == message.id }
-        if (index >= 0) {
-            chatHistory.messages[index] = entry
-            saveChatHistory(sessionName, chatHistory)
-            logger.debug("✏️ [editMessage] 替换历史消息: {} in {}", message.id, sessionName)
-        } else {
-            logger.warn("⚠️ [editMessage] 未找到原消息，改为追加: {} in {}", message.id, sessionName)
-            chatHistory.messages.add(entry)
-            saveChatHistory(sessionName, chatHistory)
+            val index = chatHistory.messages.indexOfFirst { it.messageId == message.id }
+            if (index >= 0) {
+                chatHistory.messages[index] = entry
+                saveChatHistory(sessionName, chatHistory)
+                logger.debug("✏️ [editMessage] 替换历史消息: {} in {}", message.id, sessionName)
+            } else {
+                logger.warn("⚠️ [editMessage] 未找到原消息，改为追加: {} in {}", message.id, sessionName)
+                chatHistory.messages.add(entry)
+                saveChatHistory(sessionName, chatHistory)
+            }
         }
     }
 
@@ -347,18 +357,20 @@ class ChatHistoryManager(
      * @Silk 消息中的角色指令会被保存，用于后续 AI 回复
      */
     fun updateRolePrompt(sessionName: String, rolePrompt: String?) {
-        val historyFile = getHistoryFile(sessionName)
-        val chatHistory = loadChatHistory(sessionName) ?: run {
-            if (historyFile.exists()) {
-                logger.warn("⚠️ 历史文件存在但无法解析，跳过角色提示写入避免覆盖: {}", sessionName)
-                return
+        withSessionLock(sessionName) {
+            val historyFile = getHistoryFile(sessionName)
+            val chatHistory = loadChatHistory(sessionName) ?: run {
+                if (historyFile.exists()) {
+                    logger.warn("⚠️ 历史文件存在但无法解析，跳过角色提示写入避免覆盖: {}", sessionName)
+                    return
+                }
+                val sessionId = loadSessionData(sessionName)?.sessionId ?: sessionName
+                ChatHistory(sessionId = sessionId)
             }
-            val sessionId = loadSessionData(sessionName)?.sessionId ?: sessionName
-            ChatHistory(sessionId = sessionId)
+            chatHistory.rolePrompt = rolePrompt
+            saveChatHistory(sessionName, chatHistory)
+            logger.debug("🎭 角色提示已更新: {} -> {}...", sessionName, rolePrompt?.take(50))
         }
-        chatHistory.rolePrompt = rolePrompt
-        saveChatHistory(sessionName, chatHistory)
-        logger.debug("🎭 角色提示已更新: {} -> {}...", sessionName, rolePrompt?.take(50))
     }
     
     /**
@@ -458,18 +470,20 @@ class ChatHistoryManager(
      * @return 是否删除成功
      */
     fun deleteMessage(sessionName: String, messageId: String): Boolean {
-        val chatHistory = loadChatHistory(sessionName) ?: return false
-        
-        val initialSize = chatHistory.messages.size
-        chatHistory.messages.removeIf { it.messageId == messageId }
-        
-        if (chatHistory.messages.size < initialSize) {
-            saveChatHistory(sessionName, chatHistory)
-            logger.info("🗑️ 消息已删除: {} (会话: {})", messageId, sessionName)
-            return true
+        return withSessionLock(sessionName) {
+            val chatHistory = loadChatHistory(sessionName) ?: return false
+
+            val initialSize = chatHistory.messages.size
+            chatHistory.messages.removeIf { it.messageId == messageId }
+
+            if (chatHistory.messages.size < initialSize) {
+                saveChatHistory(sessionName, chatHistory)
+                logger.info("🗑️ 消息已删除: {} (会话: {})", messageId, sessionName)
+                true
+            } else {
+                false
+            }
         }
-        
-        return false
     }
     
     /**
@@ -480,19 +494,21 @@ class ChatHistoryManager(
      */
     fun deleteMessages(sessionName: String, messageIds: List<String>): Int {
         if (messageIds.isEmpty()) return 0
-        
-        val chatHistory = loadChatHistory(sessionName) ?: return 0
-        
-        val initialSize = chatHistory.messages.size
-        chatHistory.messages.removeIf { it.messageId in messageIds }
-        val deletedCount = initialSize - chatHistory.messages.size
-        
-        if (deletedCount > 0) {
-            saveChatHistory(sessionName, chatHistory)
-            logger.info("🗑️ 批量删除消息: {} 条 (会话: {})", deletedCount, sessionName)
+
+        return withSessionLock(sessionName) {
+            val chatHistory = loadChatHistory(sessionName) ?: return 0
+
+            val initialSize = chatHistory.messages.size
+            chatHistory.messages.removeIf { it.messageId in messageIds }
+            val deletedCount = initialSize - chatHistory.messages.size
+
+            if (deletedCount > 0) {
+                saveChatHistory(sessionName, chatHistory)
+                logger.info("🗑️ 批量删除消息: {} 条 (会话: {})", deletedCount, sessionName)
+            }
+
+            deletedCount
         }
-        
-        return deletedCount
     }
     
     /** 扫描连续AI回复时对单条消息的判定结果。 */

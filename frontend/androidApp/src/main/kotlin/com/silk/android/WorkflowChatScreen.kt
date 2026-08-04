@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
+import com.silk.shared.models.MessageScope
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -68,6 +69,7 @@ fun WorkflowChatScreen(appState: AppState) {
     val workflow = appState.selectedWorkflow ?: return
     val user = appState.currentUser ?: return
     val groupId = workflow.groupId
+    val messageScope = if (workflow.agentType == "silk_chat") MessageScope.TEAM else MessageScope.WORKSPACE
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -95,6 +97,7 @@ fun WorkflowChatScreen(appState: AppState) {
         var availableAgents by remember(groupId) { mutableStateOf<List<AgentInfo>>(emptyList()) }
         var showPermModeDropdown by remember(groupId) { mutableStateOf(false) }
         var showAgentDropdown by remember(groupId) { mutableStateOf(false) }
+        var workspaceId by remember(groupId) { mutableStateOf<String?>(null) }
         val listState = rememberLazyListState()
 
         // AI 消息展开/收起状态（与 ChatScreen 相同的 pattern）
@@ -106,7 +109,7 @@ fun WorkflowChatScreen(appState: AppState) {
             if (groupId.isBlank()) return@LaunchedEffect
             try {
                 chatClient.clearMessages()
-                chatClient.connect(user.id, user.fullName, groupId)
+                chatClient.connect(user.id, user.fullName, groupId, token = ApiClient.accessToken)
             } catch (e: Exception) {
                 println("❌ 工作流 WebSocket 连接失败: ${e.message}")
             }
@@ -115,9 +118,14 @@ fun WorkflowChatScreen(appState: AppState) {
         // Sync working dir, agent display, permission mode after WebSocket connects
         LaunchedEffect(groupId, connectionState) {
             if (groupId.isBlank()) return@LaunchedEffect
+            val activeWorkspaceId = ApiClient.getWorkspaces(groupId)
+                .firstOrNull { it.ownerId == user.id }
+                ?.workspaceId
+                ?: return@LaunchedEffect
+            workspaceId = activeWorkspaceId
             if (connectionState == ConnectionState.CONNECTED) {
                 kotlinx.coroutines.delay(200)
-                val snap = ApiClient.getCcState(user.id, groupId)
+                val snap = ApiClient.getCcState(user.id, activeWorkspaceId)
                 if (snap.success) {
                     if (snap.workingDir.isNotBlank()) workingDir = snap.workingDir
                     activeAgentDisplay = snap.agentDisplayName
@@ -137,13 +145,14 @@ fun WorkflowChatScreen(appState: AppState) {
         }
 
         // 监听新增消息，刷新 activeAgent / permissionMode 显示
-        LaunchedEffect(messages.size) {
+        LaunchedEffect(messages.size, workspaceId) {
+            val activeWorkspaceId = workspaceId ?: return@LaunchedEffect
             val latest = messages.lastOrNull() ?: return@LaunchedEffect
             val isAgentSwitchMessage = latest.type == com.silk.shared.models.MessageType.SYSTEM &&
                 (latest.content.startsWith("已切换到") || latest.content.contains("已激活") ||
                     latest.content.contains("已退出 agent"))
             if (isAgentSwitchMessage) {
-                val snap = ApiClient.getCcState(user.id, groupId)
+                val snap = ApiClient.getCcState(user.id, activeWorkspaceId)
                 if (snap.success) {
                     activeAgentDisplay = snap.agentDisplayName
                     permissionMode = snap.permissionMode
@@ -389,7 +398,15 @@ fun WorkflowChatScreen(appState: AppState) {
                             Surface(
                                 onClick = {
                                     scope.launch {
-                                        chatClient.sendMessage(user.id, user.fullName, "/new")
+                                        val activeWorkspaceId = workspaceId.takeIf { messageScope == MessageScope.WORKSPACE }
+                                        if (messageScope == MessageScope.WORKSPACE && activeWorkspaceId == null) return@launch
+                                        chatClient.sendMessage(
+                                            user.id,
+                                            user.fullName,
+                                            "/new",
+                                            scope = messageScope,
+                                            workspaceId = activeWorkspaceId,
+                                        )
                                     }
                                 },
                                 shape = RoundedCornerShape(12.dp),
@@ -451,7 +468,7 @@ fun WorkflowChatScreen(appState: AppState) {
                                                             val newMode = value.ifBlank { "INTERACTIVE" }
                                                             scope.launch {
                                                                 val resp = ApiClient.updateCcSettings(
-                                                                    user.id, groupId,
+                                                                    user.id, workspaceId ?: return@launch,
                                                                     permissionMode = newMode,
                                                                 )
                                                                 if (resp.success) {
@@ -517,7 +534,7 @@ fun WorkflowChatScreen(appState: AppState) {
                                                         if (!isCurrent && agent.connected) {
                                                             scope.launch {
                                                                 val resp = ApiClient.updateCcSettings(
-                                                                    user.id, groupId,
+                                                                    user.id, workspaceId ?: return@launch,
                                                                     activeAgent = agent.agentType,
                                                                 )
                                                                 if (resp.success) {
@@ -557,7 +574,16 @@ fun WorkflowChatScreen(appState: AppState) {
                             )
                             if (isGenerating) {
                                 Button(
-                                    onClick = { chatClient.stopGeneration(user.id, user.fullName) },
+                                    onClick = {
+                                        val activeWorkspaceId = workspaceId.takeIf { messageScope == MessageScope.WORKSPACE }
+                                        if (messageScope == MessageScope.WORKSPACE && activeWorkspaceId == null) return@Button
+                                        chatClient.stopGeneration(
+                                            user.id,
+                                            user.fullName,
+                                            messageScope,
+                                            activeWorkspaceId,
+                                        )
+                                    },
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFF4D4F)),
                                     modifier = Modifier.height(56.dp),
                                 ) { Text("停止", color = Color.White) }
@@ -567,7 +593,15 @@ fun WorkflowChatScreen(appState: AppState) {
                                         val text = messageText.text.trim()
                                         if (text.isNotEmpty()) {
                                             scope.launch {
-                                                chatClient.sendMessage(user.id, user.fullName, text)
+                                                val activeWorkspaceId = workspaceId.takeIf { messageScope == MessageScope.WORKSPACE }
+                                                if (messageScope == MessageScope.WORKSPACE && activeWorkspaceId == null) return@launch
+                                                chatClient.sendMessage(
+                                                    user.id,
+                                                    user.fullName,
+                                                    text,
+                                                    scope = messageScope,
+                                                    workspaceId = activeWorkspaceId,
+                                                )
                                             }
                                             messageText = TextFieldValue("")
                                         }
@@ -588,6 +622,7 @@ fun WorkflowChatScreen(appState: AppState) {
         if (showFolderPicker) {
             FolderPickerDialog(
                 userId = user.id,
+                workspaceId = workspaceId,
                 initialPath = workingDir.ifBlank { null },
                 onDismiss = { showFolderPicker = false },
                 onConfirm = { selectedPath ->
@@ -605,7 +640,11 @@ fun WorkflowChatScreen(appState: AppState) {
                                 is TrustCheckResult.Error ->
                                     errorDialogMessage = "检查信任状态失败：${tc.message}"
                                 is TrustCheckResult.Trusted -> {
-                                    val cdResp = ApiClient.cdCcDir(user.id, groupId, selectedPath)
+                                    val cdResp = ApiClient.cdCcDir(
+                                        user.id,
+                                        workspaceId ?: return@launch,
+                                        selectedPath,
+                                    )
                                     if (cdResp.success) {
                                         workingDir = cdResp.workingDir
                                     } else {
@@ -633,7 +672,11 @@ fun WorkflowChatScreen(appState: AppState) {
                             return@launch
                         }
                         showTrustConfirm = false
-                        val cdResp = ApiClient.cdCcDir(user.id, groupId, trustConfirmPath)
+                        val cdResp = ApiClient.cdCcDir(
+                            user.id,
+                            workspaceId ?: return@launch,
+                            trustConfirmPath,
+                        )
                         if (cdResp.success) {
                             workingDir = cdResp.workingDir
                         } else {
