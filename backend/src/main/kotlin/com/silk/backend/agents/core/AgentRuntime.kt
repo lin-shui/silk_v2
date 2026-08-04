@@ -11,7 +11,6 @@ import com.silk.backend.kb.KnowledgeBaseManager
 import com.silk.backend.kb.buildKnowledgeBaseActionSummary
 import com.silk.backend.kb.executeKnowledgeBaseAiActions
 import com.silk.backend.kb.extractKnowledgeBaseAiActions
-import com.silk.backend.workflow.WorkflowManager
 import kotlinx.coroutines.sync.withLock
 import com.silk.backend.card.CardReplyRouter
 import com.silk.backend.card.CardReplyHandler
@@ -49,7 +48,7 @@ import java.util.concurrent.ConcurrentHashMap
 object AgentRuntime {
 
     private val logger = LoggerFactory.getLogger(AgentRuntime::class.java)
-    private val contexts = ConcurrentHashMap<String, GroupAgentContext>() // "${userId}_${groupId}"
+    private val contexts = ConcurrentHashMap<String, GroupAgentContext>() // "${userId}_${workspaceId}"
 
     init {
         AgentRegistry.register(ClaudeCodeDescriptor)
@@ -60,33 +59,35 @@ object AgentRuntime {
     // ========== Workflow 持久化（Plan E2） ==========
 
     /**
-     * Workflow 持久化回调：让 AgentRuntime 把 workingDir 和 cli_session_id 写回 WorkflowManager。
+     * Workspace 持久化回调：让 AgentRuntime 把 workingDir 和 cli_session_id 写回 WorkspaceManager。
      * 由 [Application]/[configureRouting] 在启动时通过 [setWorkflowPersistence] 注入。
      */
     interface WorkflowPersistence {
         /** workingDir 变化时持久化（cdSync 成功后异步触发）。 */
-        fun persistWorkingDir(rawGroupId: String, workingDir: String): Boolean
-        /** CLI session id 变化时持久化（prompt 完成后从 meta 拿到）。旧 API，per-workflow 单值。 */
-        fun persistCliSession(rawGroupId: String, cliSessionId: String, sessionStarted: Boolean): Boolean
+        fun persistWorkingDir(rawWorkspaceId: String, workingDir: String): Boolean
+        /** CLI session id 变化时持久化（prompt 完成后从 meta 拿到）。旧 API，per-workspace 单值。 */
+        fun persistCliSession(rawWorkspaceId: String, cliSessionId: String, sessionStarted: Boolean): Boolean
         /**
          * M4 Task 3: per-agent 持久化。agentType 是 runtime dash form。
          * 默认实现回退到旧的单值版本以保持 backward-compat。
          */
-        fun persistCliSession(rawGroupId: String, agentType: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
-            persistCliSession(rawGroupId, cliSessionId, sessionStarted)
+        fun persistCliSession(rawWorkspaceId: String, agentType: String, cliSessionId: String, sessionStarted: Boolean): Boolean =
+            persistCliSession(rawWorkspaceId, cliSessionId, sessionStarted)
         /** M4 Task 3: 持久化用户当前激活的 agent（dash form）。 */
-        fun persistActiveAgent(rawGroupId: String, agentType: String): Boolean = false
+        fun persistActiveAgent(rawWorkspaceId: String, agentType: String): Boolean = false
         /** 持久化工具权限模式。 */
-        fun persistPermissionMode(rawGroupId: String, permissionMode: String): Boolean = false
-        /** 启动 / 首次激活时根据 workflow record 提供 seed；返回 null 表示不是 workflow 或无值可 seed。 */
-        fun loadSeed(rawGroupId: String): WorkflowSeed?
+        fun persistPermissionMode(rawWorkspaceId: String, permissionMode: String): Boolean = false
+        /** 启动 / 首次激活时根据 workspace record 提供 seed；返回 null 表示无值可 seed。 */
+        fun loadSeed(rawWorkspaceId: String): WorkflowSeed?
         /**
          * M4 Task 3: per-agent seed。返回该 agent 自己的 cliSessionId。
          * 默认实现回退到旧的单值版本（向后兼容老 impl）。
          */
-        fun loadSeed(rawGroupId: String, agentType: String): WorkflowSeed? = loadSeed(rawGroupId)
-        /** 根据 workflow groupId 反查 workflowId；非 workflow 群返回 null。 */
-        fun resolveWorkflowId(rawGroupId: String): String? = null
+        fun loadSeed(rawWorkspaceId: String, agentType: String): WorkflowSeed? = loadSeed(rawWorkspaceId)
+        /** 根据 rawWorkspaceId 反查唯一 ID；Phase 1 直接返回 rawWorkspaceId 本身。 */
+        fun resolveWorkflowId(rawWorkspaceId: String): String? = null
+        /** Returns the room/group ID for a workspace; null if not found. */
+        fun loadRoomId(rawWorkspaceId: String): String? = null
     }
 
     data class WorkflowSeed(
@@ -100,15 +101,10 @@ object AgentRuntime {
     private var persistence: WorkflowPersistence? = null
     private val chatHistoryManager by lazy { ChatHistoryManager() }
     private val knowledgeBaseManager by lazy { KnowledgeBaseManager() }
-    private val workflowManager by lazy { WorkflowManager() }
 
     fun setWorkflowPersistence(p: WorkflowPersistence) {
         persistence = p
     }
-
-    /** group_xxx → xxx；非 group_ 前缀原样返回 */
-    private fun stripGroupPrefix(groupId: String): String =
-        if (groupId.startsWith("group_")) groupId.removePrefix("group_") else groupId
 
     /**
      * 把 ACP `session/prompt` response 里的 meta（adapter 携带的 cost/duration/turns/cliSessionId）
@@ -134,37 +130,37 @@ object AgentRuntime {
     }
 
     /** 异步持久化 workingDir（不阻塞调用方）。 */
-    private fun persistWorkingDirAsync(groupId: String, workingDir: String) {
+    private fun persistWorkingDirAsync(workspaceId: String, workingDir: String) {
         val p = persistence ?: return
         CoroutineScope(Dispatchers.IO).launch {
-            try { p.persistWorkingDir(stripGroupPrefix(groupId), workingDir) }
+            try { p.persistWorkingDir(workspaceId, workingDir) }
             catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 workingDir 失败: {}", e.message) }
         }
     }
 
     /** 异步持久化 cliSessionId / sessionStarted（per-agent，M4 Task 3）。 */
-    private fun persistCliSessionAsync(groupId: String, agentType: String, cliSessionId: String, started: Boolean) {
+    private fun persistCliSessionAsync(workspaceId: String, agentType: String, cliSessionId: String, started: Boolean) {
         val p = persistence ?: return
         CoroutineScope(Dispatchers.IO).launch {
-            try { p.persistCliSession(stripGroupPrefix(groupId), agentType, cliSessionId, started) }
+            try { p.persistCliSession(workspaceId, agentType, cliSessionId, started) }
             catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 cliSessionId 失败: {}", e.message) }
         }
     }
 
     /** 异步持久化工具权限模式。 */
-    private fun persistPermissionModeAsync(groupId: String, permissionMode: PermissionMode) {
+    private fun persistPermissionModeAsync(workspaceId: String, permissionMode: PermissionMode) {
         val p = persistence ?: return
         CoroutineScope(Dispatchers.IO).launch {
-            try { p.persistPermissionMode(stripGroupPrefix(groupId), permissionMode.name) }
+            try { p.persistPermissionMode(workspaceId, permissionMode.name) }
             catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 permissionMode 失败: {}", e.message) }
         }
     }
 
     /** 异步持久化用户当前激活的 agent（M4 Task 3）。 */
-    private fun persistActiveAgentAsync(groupId: String, agentType: String) {
+    private fun persistActiveAgentAsync(workspaceId: String, agentType: String) {
         val p = persistence ?: return
         CoroutineScope(Dispatchers.IO).launch {
-            try { p.persistActiveAgent(stripGroupPrefix(groupId), agentType) }
+            try { p.persistActiveAgent(workspaceId, agentType) }
             catch (e: Exception) { logger.warn("[AgentRuntime] 持久化 activeAgent 失败: {}", e.message) }
         }
     }
@@ -197,13 +193,13 @@ object AgentRuntime {
      */
     suspend fun handleIfActive(
         userId: String,
-        groupId: String,
+        workspaceId: String,
         text: String,
         userName: String,
         broadcastFn: suspend (Message) -> Unit,
     ): Boolean {
-        val ctx = context(userId, groupId)
-        val route = CommandRouter.route(text, userId, groupId, ctx.currentAgentType)
+        val ctx = context(userId, workspaceId)
+        val route = CommandRouter.route(text, userId, workspaceId, ctx.currentAgentType)
 
         return when (route) {
             is CommandRouter.RouteResult.ListAgents -> {
@@ -245,10 +241,10 @@ object AgentRuntime {
      */
     suspend fun cancelIfActive(
         userId: String,
-        groupId: String,
+        workspaceId: String,
         broadcastFn: suspend (Message) -> Unit,
     ): Boolean {
-        val ctx = context(userId, groupId)
+        val ctx = context(userId, workspaceId)
         val agentType = ctx.currentAgentType ?: return false
         val session = ctx.sessions[agentType] ?: return false
         if (!session.running) return false
@@ -258,16 +254,16 @@ object AgentRuntime {
     }
 
     /**
-     * 工作流自动激活 agent（静默）。
+     * 工作区自动激活 agent（静默）。
      * Plan B 无持久化，只设 currentAgentType。
      */
-    fun autoActivateForWorkflow(userId: String, groupId: String, agentType: String) {
-        val ctx = context(userId, groupId)
+    fun autoActivateForWorkspace(userId: String, workspaceId: String, agentType: String) {
+        val ctx = context(userId, workspaceId)
         ctx.currentAgentType = agentType
         val session = ctx.getOrCreateSession(agentType)
         // 优先从 WorkflowPersistence 加载该 agent 的 per-agent seed
         val seed = try {
-            persistence?.loadSeed(stripGroupPrefix(groupId), agentType)
+            persistence?.loadSeed(workspaceId, agentType)
         } catch (e: Exception) {
             logger.warn("[AgentRuntime] loadSeed 失败: {}", e.message)
             null
@@ -283,9 +279,16 @@ object AgentRuntime {
                 } catch (_: IllegalArgumentException) { /* ignore invalid value */ }
             }
         }
+        val roomId = try {
+            persistence?.loadRoomId(workspaceId) ?: workspaceId
+        } catch (e: Exception) {
+            logger.warn("[AgentRuntime] loadRoomId 失败: {}", e.message)
+            workspaceId
+        }
+        ctx.roomId = roomId
         logger.info(
-            "[AgentRuntime] 工作流自动激活: userId={}, groupId={}, agentType={}, workingDir={}, cliSeed={}",
-            userId, groupId, agentType, ctx.workingDir, seed?.cliSessionId?.take(8) ?: "-"
+            "[AgentRuntime] workspace 自动激活: userId={}, workspaceId={}, agentType={}, roomId={}, workingDir={}, cliSeed={}",
+            userId, workspaceId, agentType, roomId, ctx.workingDir, seed?.cliSessionId?.take(8) ?: "-"
         )
     }
 
@@ -318,8 +321,8 @@ object AgentRuntime {
             session.cancelled = false
             session.pendingQuestion = null
             logger.info(
-                "[AgentRuntime] Bridge 断线，agent 任务已终止: userId={}, groupId={}, agentType={}",
-                userId, ctx.groupId, agentType
+                "[AgentRuntime] Bridge 断线，agent 任务已终止: userId={}, workspaceId={}, agentType={}",
+                userId, ctx.workspaceId, agentType
             )
         }
         session.acpSessionId = null
@@ -327,11 +330,11 @@ object AgentRuntime {
 
     // ========== 内部方法 ==========
 
-    private fun key(userId: String, groupId: String) = "${userId}_${groupId}"
+    private fun key(userId: String, workspaceId: String) = "${userId}_${workspaceId}"
 
-    private fun context(userId: String, groupId: String): GroupAgentContext {
-        return contexts.getOrPut(key(userId, groupId)) {
-            GroupAgentContext(userId = userId, groupId = groupId)
+    private fun context(userId: String, workspaceId: String): GroupAgentContext {
+        return contexts.getOrPut(key(userId, workspaceId)) {
+            GroupAgentContext(userId = userId, workspaceId = workspaceId)
         }
     }
 
@@ -367,7 +370,7 @@ object AgentRuntime {
         // 不再受其他 agent 干扰。同时持久化 activeAgent 让重启后保持选择。
         val session = ctx.getOrCreateSession(agentType)
         val seed = try {
-            persistence?.loadSeed(stripGroupPrefix(ctx.groupId), agentType)
+            persistence?.loadSeed(ctx.workspaceId, agentType)
         } catch (e: Exception) {
             logger.warn("[AgentRuntime] /use {} loadSeed 失败: {}", agentType, e.message)
             null
@@ -379,7 +382,7 @@ object AgentRuntime {
                 agentType, seed.cliSessionId.take(8),
             )
         }
-        persistActiveAgentAsync(ctx.groupId, agentType)
+        persistActiveAgentAsync(ctx.workspaceId, agentType)
         broadcastFn(AgentMessages.system(
             "已切换到 ${descriptor.displayName}。",
             agentUserId = descriptor.agentUserId,
@@ -402,7 +405,7 @@ object AgentRuntime {
         session.running = false
         session.cancelled = false
         session.messageQueue.clear()
-        persistCliSessionAsync(ctx.groupId, agentType, "", false)
+        persistCliSessionAsync(ctx.workspaceId, agentType, "", false)
         broadcastFn(AgentMessages.system(
             "${descriptor.displayName} 已激活\n发送消息开始对话，/help 查看命令，/exit 退出",
             agentUserId = descriptor.agentUserId,
@@ -431,7 +434,7 @@ object AgentRuntime {
         }
 
         // 解析 remainingText 中的 slash 命令
-        val route = CommandRouter.route(remainingText, userId, ctx.groupId, agentType)
+        val route = CommandRouter.route(remainingText, userId, ctx.workspaceId, agentType)
         when (route) {
             is CommandRouter.RouteResult.Command -> handleCommand(ctx, route.cmd, broadcastFn)
             is CommandRouter.RouteResult.Prompt -> handlePrompt(ctx, route.text, userId, userName, broadcastFn, overrideAgentType = agentType)
@@ -538,7 +541,7 @@ object AgentRuntime {
         session.cancelled = false
         session.messageQueue.clear()
         // 清除已持久化的 cliSessionId，让重启后不会盲目 resume 一个废 session（与 cdSync 行为一致）
-        persistCliSessionAsync(ctx.groupId, agentType, "", false)
+        persistCliSessionAsync(ctx.workspaceId, agentType, "", false)
         broadcastFn(AgentMessages.system(
             "已开启新会话",
             agentUserId = descriptor.agentUserId,
@@ -743,7 +746,7 @@ object AgentRuntime {
         broadcastFn: suspend (Message) -> Unit,
     ) {
         // 尝试让 adapter 处理
-        val acp = getAcpClient(agentType, userId = session.userId) ?: return
+        val acp = getAcpClient(agentType, session.userId) ?: return
         val result = descriptor.handleSilkCommand(cmd, session, acp)
         when (result) {
             is SilkCommandResult.Error -> broadcastFn(AgentMessages.system(
@@ -910,14 +913,14 @@ object AgentRuntime {
             }
             if (!metaCliSid.isNullOrBlank()) {
                 session.cliSessionId = metaCliSid
-                persistCliSessionAsync(ctx.groupId, session.agentType, metaCliSid, true)
+                persistCliSessionAsync(ctx.workspaceId, session.agentType, metaCliSid, true)
             }
 
             // prompt 完成处理
             when (result.stopReason) {
                 StopReason.END_TURN -> accumulated.toString()
                     .takeIf { it.isNotEmpty() }
-                    ?.let { postProcessAgentFinalContent(it, session.userId, ctx.groupId) }
+                    ?.let { postProcessAgentFinalContent(it, session.userId, ctx.workspaceId, ctx.roomId) }
                     ?.takeIf { it.isNotBlank() }
                     ?.let { finalContent ->
                         broadcastFn(AgentMessages.final(
@@ -1015,26 +1018,29 @@ object AgentRuntime {
     internal fun postProcessAgentFinalContent(
         rawContent: String,
         userId: String,
-        groupId: String,
+        workspaceId: String,
+        roomId: String = workspaceId,
         manager: KnowledgeBaseManager = knowledgeBaseManager,
-        resolveWorkflowId: (String) -> String? = { rawGroupId ->
-            persistence?.resolveWorkflowId(rawGroupId)
-                ?: workflowManager.getWorkflowByGroupId(rawGroupId)?.id
+        resolveWorkflowId: (String) -> String? = { rawWsId ->
+            persistence?.resolveWorkflowId(rawWsId)
         },
-        recentMessageIdsProvider: (String) -> List<String> = ::loadRecentMessageIds,
+        recentMessageIdsProvider: (String) -> List<String> = { groupId ->
+            loadRecentMessageIds(groupId, workspaceId)
+        },
     ): String {
         val parsed = extractKnowledgeBaseAiActions(rawContent)
         if (parsed.actions.isEmpty()) return parsed.cleanedContent
 
-        val rawGroupId = stripGroupPrefix(groupId)
-        val workflowId = resolveWorkflowId(rawGroupId)
-        val recentMessageIds = recentMessageIdsProvider(groupId)
+        val workflowId = resolveWorkflowId(workspaceId)
+        val recentMessageIds = recentMessageIdsProvider(
+            if (roomId.isNotBlank()) "group_$roomId" else workspaceId
+        )
         val results = executeKnowledgeBaseAiActions(
             manager = manager,
             request = KnowledgeBaseAiExecutionRequest(
                 userId = userId,
-                preferredGroupId = rawGroupId.takeIf { it.isNotBlank() },
-                sourceGroupId = rawGroupId.takeIf { it.isNotBlank() },
+                preferredGroupId = roomId.takeIf { it.isNotBlank() },
+                sourceGroupId = roomId.takeIf { it.isNotBlank() },
                 workflowId = workflowId,
                 recentMessageIds = recentMessageIds,
             ),
@@ -1043,9 +1049,10 @@ object AgentRuntime {
         return (parsed.cleanedContent.trimEnd() + buildKnowledgeBaseActionSummary(results)).trimEnd()
     }
 
-    private fun loadRecentMessageIds(groupId: String): List<String> {
+    private fun loadRecentMessageIds(groupId: String, workspaceId: String): List<String> {
         return chatHistoryManager.loadChatHistory(groupId)
             ?.messages
+            ?.filter { it.scope == com.silk.backend.MessageScope.WORKSPACE && it.workspaceId == workspaceId }
             ?.takeLast(8)
             ?.mapNotNull { it.messageId.takeIf(String::isNotBlank) }
             .orEmpty()
@@ -1459,8 +1466,8 @@ object AgentRuntime {
         val permissionMode: String = "",
     )
 
-    fun snapshotState(userId: String, groupId: String): AgentStateSnapshot? {
-        val ctx = contexts[key(userId, groupId)] ?: return null
+    fun snapshotState(userId: String, workspaceId: String): AgentStateSnapshot? {
+        val ctx = contexts[key(userId, workspaceId)] ?: return null
         val agentType = ctx.currentAgentType
         val session = if (agentType != null) ctx.sessions[agentType] else null
         return AgentStateSnapshot(
@@ -1481,16 +1488,12 @@ object AgentRuntime {
      * 这里在 bridge 已连时按需 sessionNew（bridge 端只登记 cwd、不启动 CLI），
      * 让用户进入工作流后无需先发消息即可代码审查。
      */
-    suspend fun ensureActiveAcpSession(userId: String, groupId: String): ActiveAcpSession? {
-        val candidates = listOf(
-            if (groupId.startsWith("group_")) groupId else "group_$groupId",
-            groupId,
-        ).distinct()
-        return candidates.firstNotNullOfOrNull { gid -> resolveOrCreateAcpSession(userId, gid) }
+    suspend fun ensureActiveAcpSession(userId: String, workspaceId: String): ActiveAcpSession? {
+        return resolveOrCreateAcpSession(userId, workspaceId)
     }
 
-    private suspend fun resolveOrCreateAcpSession(userId: String, groupId: String): ActiveAcpSession? {
-        val ctx = contexts[key(userId, groupId)] ?: return null
+    private suspend fun resolveOrCreateAcpSession(userId: String, workspaceId: String): ActiveAcpSession? {
+        val ctx = contexts[key(userId, workspaceId)] ?: return null
         val agentType = ctx.currentAgentType ?: return null
         val session = ctx.sessions[agentType] ?: return null
         val client = AcpRegistry.get(userId, agentType) ?: return null
@@ -1526,13 +1529,13 @@ object AgentRuntime {
      * API-driven agent switch (like /use but without chat broadcast).
      * Returns the descriptor on success, null if agentType not found.
      */
-    fun switchAgent(userId: String, groupId: String, agentType: String): AgentDescriptor? {
+    fun switchAgent(userId: String, workspaceId: String, agentType: String): AgentDescriptor? {
         val descriptor = AgentRegistry.getByType(agentType) ?: return null
-        val ctx = context(userId, groupId)
+        val ctx = context(userId, workspaceId)
         ctx.currentAgentType = agentType
         val session = ctx.getOrCreateSession(agentType)
         val seed = try {
-            persistence?.loadSeed(stripGroupPrefix(groupId), agentType)
+            persistence?.loadSeed(workspaceId, agentType)
         } catch (e: Exception) {
             logger.warn("[AgentRuntime] switchAgent {} loadSeed failed: {}", agentType, e.message)
             null
@@ -1540,7 +1543,7 @@ object AgentRuntime {
         if (seed != null && !seed.cliSessionId.isNullOrBlank() && seed.sessionStarted) {
             session.cliSessionId = seed.cliSessionId
         }
-        persistActiveAgentAsync(groupId, agentType)
+        persistActiveAgentAsync(workspaceId, agentType)
         return descriptor
     }
 
@@ -1548,14 +1551,14 @@ object AgentRuntime {
      * API-driven permission mode change.
      * Returns true if the mode was set successfully.
      */
-    fun setPermissionMode(userId: String, groupId: String, mode: String): Boolean {
+    fun setPermissionMode(userId: String, workspaceId: String, mode: String): Boolean {
         val pm = try { PermissionMode.valueOf(mode) } catch (_: IllegalArgumentException) { return false }
-        val ctx = context(userId, groupId)
+        val ctx = context(userId, workspaceId)
         val agentType = ctx.currentAgentType ?: return false
         val session = ctx.getOrCreateSession(agentType)
         if (session.permissionMode == pm) return true // no-op
         session.permissionMode = pm
-        persistPermissionModeAsync(groupId, pm)
+        persistPermissionModeAsync(workspaceId, pm)
         return true
     }
 
@@ -1568,8 +1571,8 @@ object AgentRuntime {
         val agentName: String,
     )
 
-    fun snapshotPendingQuestion(userId: String, groupId: String): PendingQuestionSnapshot? {
-        val ctx = contexts[key(userId, groupId)] ?: return null
+    fun snapshotPendingQuestion(userId: String, workspaceId: String): PendingQuestionSnapshot? {
+        val ctx = contexts[key(userId, workspaceId)] ?: return null
         val agentType = ctx.currentAgentType ?: return null
         val session = ctx.sessions[agentType] ?: return null
         val pending = session.pendingQuestion ?: return null
@@ -1600,11 +1603,11 @@ object AgentRuntime {
      */
     suspend fun cdSync(
         userId: String,
-        groupId: String,
+        workspaceId: String,
         path: String,
         agentType: String = "claude-code",
     ): CdResult {
-        val ctx = context(userId, groupId)
+        val ctx = context(userId, workspaceId)
         val existingSession = ctx.sessions[agentType]
         if (existingSession?.running == true) {
             return CdResult.Err("任务运行中，请先 /cancel 再 /cd")
@@ -1628,18 +1631,14 @@ object AgentRuntime {
 
         return try {
             val resp = AcpExtensions.setCwd(acp, acpSessionId!!, path)
-            // adapter 返回 {ok: true, path: <resolved>}
             val resolvedPath = resp.jsonObject["path"]?.jsonPrimitive?.contentOrNull ?: path
             ctx.workingDir = resolvedPath
-            // adapter 已经把它的 cli_session_id 设为 null；本地也重置 acpSessionId + cliSessionId
-            // 让下次 prompt 走 sessionNew 重建（与旧 cdSync 重置 sessionId 行为对齐）
             cleanupSessionHandlers(session)
             session.acpSessionId = null
             session.cliSessionId = null
-            persistWorkingDirAsync(groupId, resolvedPath)
-            // 切目录等价于 /new：清空已持久化的 cliSessionId 让重启不会盲目 resume 一个废 session
-            persistCliSessionAsync(groupId, agentType, "", false)
-            logger.info("[AgentRuntime] cdSync 成功: userId={}, groupId={}, path={}", userId, groupId, resolvedPath)
+            persistWorkingDirAsync(workspaceId, resolvedPath)
+            persistCliSessionAsync(workspaceId, agentType, "", false)
+            logger.info("[AgentRuntime] cdSync 成功: userId={}, workspaceId={}, path={}", userId, workspaceId, resolvedPath)
             CdResult.Ok(resolvedPath)
         } catch (e: com.silk.backend.agents.acp.AcpRpcException) {
             CdResult.Err(e.rpcError.message)
@@ -1673,8 +1672,8 @@ object AgentRuntime {
         }
     }
 
-    fun cleanupState(userId: String, groupId: String) {
-        val ctx = contexts.remove(key(userId, groupId)) ?: return
+    fun cleanupState(userId: String, workspaceId: String) {
+        val ctx = contexts.remove(key(userId, workspaceId)) ?: return
         for ((_, session) in ctx.sessions) {
             cleanupSessionHandlers(session)
             // Clean up any pending card reply handler to prevent memory leak

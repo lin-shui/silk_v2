@@ -55,6 +55,17 @@
 - Primary tests:
   - `trust/TrustedDirManagerTest`
 
+## Workflow Room / Personal Workspace
+
+- Command: `./gradlew :backend:test`
+- Primary tests:
+  - `workspace/WorkspaceManagerTest` — workspace CRUD、runtime seed 与 legacy workflow migration
+  - `workspace/WorkspaceAccessPolicyTest` — Owner/Co-pilot/Observer 权限、发送时可见性快照、历史 scope 持久化与 fail-closed 消息目标
+  - `workspace/WorkspaceHistoryMetadataContractTest` — 已撤销共享历史的 Owner/名称展示、PRIVATE 重命名隔离与 runtime 元数据脱敏
+  - `SilkAiTriggerPolicyTest` — `[Silk]` 私聊隐式触发，Team Channel 仅完整的前置 `@Silk` mention 触发且与成员数无关
+  - `BackendHttpContractTest` — Workflow Room Owner 增删成员、非成员鉴权、成员发现 Room 与移除后 Co-pilot 清理
+  - `BackendWebSocketContractTest` — 普通 Room WebSocket 回放/广播/成员校验，以及 Workflow Room 双用户、双连接、PRIVATE/SHARED、Observer/Co-pilot 动态授权与同用户多工作区隔离
+
 ## Web File Contract / Parser
 
 - Commands:

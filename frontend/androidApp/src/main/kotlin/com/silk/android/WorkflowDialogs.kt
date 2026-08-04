@@ -126,6 +126,7 @@ internal fun joinPath(parent: String, child: String, separator: String): String 
 @Composable
 fun FolderPickerDialog(
     userId: String,
+    workspaceId: String? = null,
     initialPath: String?,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
@@ -142,7 +143,7 @@ fun FolderPickerDialog(
         loadJob = scope.launch {
             loading = true
             errorMsg = null
-            val resp = ApiClient.listCcDir(userId, path)
+            val resp = ApiClient.listCcDir(userId, path, workspaceId = workspaceId)
             loading = false
             if (resp.success) {
                 listing = resp
@@ -321,7 +322,7 @@ internal fun permModeLabel(mode: String): String = when (mode) {
 @Composable
 fun WorkflowSettingsDialog(
     userId: String,
-    groupId: String,
+    workspaceId: String,
     currentWorkingDir: String,
     currentAgentDisplay: String,
     currentPermissionMode: String,
@@ -345,7 +346,7 @@ fun WorkflowSettingsDialog(
     LaunchedEffect(Unit) {
         val agents = ApiClient.listAgents(userId)
         availableAgents = agents
-        val snap = ApiClient.getCcState(userId, groupId)
+        val snap = ApiClient.getCcState(userId, workspaceId)
         if (snap.success && snap.agentType.isNotBlank()) {
             selectedAgentType = snap.agentType.replace('-', '_')
         }
@@ -382,18 +383,18 @@ fun WorkflowSettingsDialog(
                     is TrustCheckResult.Error -> { errorMsg = "检查信任状态失败：${tc.message}"; return }
                     is TrustCheckResult.Trusted -> {}
                 }
-                val cdResp = ApiClient.cdCcDir(userId, groupId, resultDir)
+                val cdResp = ApiClient.cdCcDir(userId, workspaceId, resultDir)
                 if (!cdResp.success) { errorMsg = "切换目录失败：${cdResp.error ?: "未知错误"}"; return }
                 newDir = cdResp.workingDir
             }
 
             // 2. Agent / 权限模式变化
-            val currentAgentUnderscore = ApiClient.getCcState(userId, groupId).agentType.replace('-', '_')
+            val currentAgentUnderscore = ApiClient.getCcState(userId, workspaceId).agentType.replace('-', '_')
             val agentChanged = selectedAgentType.isNotBlank() && selectedAgentType != currentAgentUnderscore
             val permChanged = selectedPermMode != currentPermissionMode
             if (agentChanged || permChanged) {
                 val resp = ApiClient.updateCcSettings(
-                    userId, groupId,
+                    userId, workspaceId,
                     activeAgent = if (agentChanged) selectedAgentType else null,
                     permissionMode = if (permChanged) selectedPermMode.ifBlank { "INTERACTIVE" } else null,
                 )
@@ -538,6 +539,7 @@ fun WorkflowSettingsDialog(
     if (showFolderPicker) {
         FolderPickerDialog(
             userId = userId,
+            workspaceId = workspaceId,
             initialPath = editDir.ifBlank { null },
             onDismiss = { showFolderPicker = false },
             onConfirm = { path ->

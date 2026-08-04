@@ -65,7 +65,7 @@ class AgentRuntimeTest {
         val messages = mutableListOf<Message>()
         val handled = AgentRuntime.handleIfActive(
             userId = "u1",
-            groupId = "g1",
+            workspaceId = "g1",
             text = "/cc",
             userName = "Alice",
             broadcastFn = { messages.add(it) },
@@ -78,7 +78,7 @@ class AgentRuntimeTest {
     fun `handleIfActive with plain text when no agent active returns false`() = runTest {
         val handled = AgentRuntime.handleIfActive(
             userId = "u1",
-            groupId = "g1",
+            workspaceId = "g1",
             text = "hello world",
             userName = "Alice",
             broadcastFn = {},
@@ -95,7 +95,7 @@ class AgentRuntimeTest {
         // Then @cc hello should route
         val handled = AgentRuntime.handleIfActive(
             userId = "u1",
-            groupId = "g1",
+            workspaceId = "g1",
             text = "@cc hello",
             userName = "Alice",
             broadcastFn = { messages.add(it) },
@@ -110,13 +110,13 @@ class AgentRuntimeTest {
     }
 
     @Test
-    fun `autoActivateForWorkflow sets currentAgentType`() = runTest {
-        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+    fun `autoActivateForWorkspace sets currentAgentType`() = runTest {
+        AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
         // After activation, handleIfActive with plain text should return true
         val messages = mutableListOf<Message>()
         val handled = AgentRuntime.handleIfActive(
             userId = "u1",
-            groupId = "g1",
+            workspaceId = "g1",
             text = "hello",
             userName = "Alice",
             broadcastFn = { messages.add(it) },
@@ -134,7 +134,7 @@ class AgentRuntimeTest {
 
     @Test
     fun `snapshotState returns active state after activation`() {
-        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
         val snap = AgentRuntime.snapshotState("u1", "g1")
         assertNotNull(snap)
         assertTrue(snap.active)
@@ -144,7 +144,7 @@ class AgentRuntimeTest {
 
     @Test
     fun `snapshotState reflects workingDir`() {
-        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
         val snap = AgentRuntime.snapshotState("u1", "g1")
         assertNotNull(snap)
         assertTrue(snap.workingDir.isNotEmpty())
@@ -152,7 +152,7 @@ class AgentRuntimeTest {
 
     @Test
     fun `cleanupState removes context`() {
-        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
         assertNotNull(AgentRuntime.snapshotState("u1", "g1"))
         AgentRuntime.cleanupState("u1", "g1")
         assertNull(AgentRuntime.snapshotState("u1", "g1"))
@@ -221,7 +221,8 @@ class AgentRuntimeTest {
                     ```
                 """.trimIndent(),
                 userId = "owner",
-                groupId = "group_group-7",
+                workspaceId = "group_group-7",
+                roomId = "group-7",
                 manager = manager,
                 resolveWorkflowId = { "wf-7" },
                 recentMessageIdsProvider = { listOf("msg-1", "msg-2") },

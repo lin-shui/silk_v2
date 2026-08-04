@@ -1,6 +1,7 @@
 package com.silk.backend.todos
 
 import com.silk.backend.ChatHistoryManager
+import com.silk.backend.MessageScope
 import com.silk.backend.ai.AIConfig
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.database.UserRepository
@@ -443,6 +444,7 @@ actionType / actionDetail（能填就填，影响手机端是否显示「运行�
     private fun buildGroupSlice(groupId: String, groupName: String): GroupSlice? {
         val hist = loadChatHistoryForGroup(groupId) ?: return null
         val msgs = hist.messages
+            .filter { it.scope == MessageScope.TEAM }
             .filter { isContentMessage(it.messageType) }
             .filter { it.content.isNotBlank() }
             .map { Triple(it.senderName, it.content.trim(), it.timestamp) }

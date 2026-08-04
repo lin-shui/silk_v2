@@ -19,7 +19,11 @@ data class Message(
     val kbContextSelection: KnowledgeBaseContextSelection? = null,  // KB 上下文选择（pinned/excluded 条目）
     val contentBlocks: List<ContentBlock>? = null,  // 结构化 content block（流式 / 持久化回放）
     val interactiveOptions: List<InteractiveOption>? = null,  // 交互式按钮选项（用于 cc-connect 提问）
-    val action: String? = null  // null = 新消息(默认), "edit" = 覆盖同ID消息（CARD 编辑）
+    val action: String? = null,  // null = 新消息(默认), "edit" = 覆盖同ID消息（CARD 编辑）
+    val scope: MessageScope = MessageScope.TEAM,
+    val workspaceId: String? = null,
+    // 服务端写入：WORKSPACE 消息发送时是否允许 Room Observer 查看。
+    val observerVisible: Boolean = false,
 )
 
 @Serializable
@@ -94,3 +98,5 @@ const val SILK_AGENT_DISPLAY_NAME = "Silk"
 /** 判断某个 userId 是否属于 AI agent（所有 agent 的 userId 均以 _ai_agent 结尾）。 */
 fun isAgentUserId(userId: String): Boolean = userId.endsWith("_ai_agent")
 
+@Serializable
+enum class MessageScope { TEAM, WORKSPACE }

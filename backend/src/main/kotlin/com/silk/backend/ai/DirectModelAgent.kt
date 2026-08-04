@@ -2,6 +2,9 @@ package com.silk.backend.ai
 
 import com.silk.backend.kb.KnowledgeBaseAiAction
 import com.silk.backend.kb.extractKnowledgeBaseAiActions
+import com.silk.backend.MessageScope
+import com.silk.backend.workspace.WorkspaceAccessPolicy
+import com.silk.backend.workspace.WorkspaceManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
@@ -110,6 +113,7 @@ class DirectModelAgent(
     private val sessionId: String = "default"
 ) {
     private val logger = LoggerFactory.getLogger(DirectModelAgent::class.java)
+    private val workflowWorkspaceManager by lazy { WorkspaceManager() }
 
     /** Claude CLI 进程客户端 */
     private lateinit var claudeProcessClient: ClaudeProcessClient
@@ -196,6 +200,7 @@ class DirectModelAgent(
         userInput: String,
         systemPrompt: String? = null,
         accessibleSessionIds: List<String> = listOf(sessionId),
+        historyUserId: String? = null,
         availableReferences: List<AvailableReferenceSeed> = emptyList(),
         additionalContext: String? = null,
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit
@@ -252,7 +257,7 @@ class DirectModelAgent(
                 callback(stepType, content, isComplete)
             }
         }
-        val rawResponse = chat(wrappedCallback, accessibleSessionIds)
+        val rawResponse = chat(wrappedCallback, accessibleSessionIds, historyUserId)
         if (lastAgentResponse == null) {
             val finalized = finalizeAgentResponse(rawResponse)
             lastAgentResponse = AgentResponse(content = finalized.content, references = finalized.references)
@@ -301,9 +306,11 @@ class DirectModelAgent(
      * 构建 prompt 并调用 claude CLI。
      * 将 conversationHistory 格式化为文本 prompt，包含 system + 对话轮次 + 当前消息。
      */
+    @Suppress("CyclomaticComplexMethod", "NestedBlockDepth")
     private suspend fun chat(
         callback: suspend (stepType: String, content: String, isComplete: Boolean) -> Unit,
-        accessibleSessionIds: List<String> = listOf(sessionId)
+        accessibleSessionIds: List<String> = listOf(sessionId),
+        historyUserId: String? = null,
     ): String {
         if (!::claudeProcessClient.isInitialized) {
             val fallback = "backend/chat_workspaces/$sessionId"
@@ -317,7 +324,7 @@ class DirectModelAgent(
         callback("thinking", "🤔 思考中...", false)
 
         // 如果是 Silk 专属对话（有多个 accessibleSession），写入其他群的历史供 AI 参考
-        writeOtherGroupsHistories(accessibleSessionIds)
+        writeOtherGroupsHistories(accessibleSessionIds, historyUserId)
 
         // 将对话历史写入 chat_history.md，供 Claude 的 Grep/Read 工具搜索
         val historyFile = java.io.File(workspaceDir, "chat_history.md")
@@ -412,20 +419,23 @@ class DirectModelAgent(
      * 将用户其他群聊的聊天历史写入工作区，供 AI 搜索参考。
      * 每次调用都会重新写入，确保包含最新的消息。
      */
-    private fun writeOtherGroupsHistories(accessibleSessionIds: List<String>) {
-        if (accessibleSessionIds.size <= 1) return // 仅当前会话，无需额外写入
+    private fun writeOtherGroupsHistories(accessibleSessionIds: List<String>, userId: String?) {
         if (workspaceDir.isBlank()) return
+
+        val otherGroupsDir = java.io.File(workspaceDir, "other_groups")
+        if (otherGroupsDir.exists()) otherGroupsDir.deleteRecursively()
+        if (accessibleSessionIds.size <= 1 || userId.isNullOrBlank()) return
+        otherGroupsDir.mkdirs()
 
         logger.info("📋 写入其他群聊历史: sessionId={}, accessibleCount={}, ids={}",
             sessionId, accessibleSessionIds.size, accessibleSessionIds)
 
-        val otherGroupsDir = java.io.File(workspaceDir, "other_groups")
         val chatHistoryBaseDir = System.getProperty("silk.chatHistoryDir")?.trim()?.takeIf { it.isNotEmpty() } ?: "chat_history"
         val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
 
         for (sessionName in accessibleSessionIds) {
             if (sessionName == sessionId) continue // 跳过当前群
-            writeSingleGroupHistory(sessionName, otherGroupsDir, chatHistoryBaseDir, json)
+            writeSingleGroupHistory(sessionName, otherGroupsDir, chatHistoryBaseDir, json, userId)
         }
     }
 
@@ -436,7 +446,8 @@ class DirectModelAgent(
         sessionName: String,
         otherGroupsDir: java.io.File,
         chatHistoryBaseDir: String,
-        json: kotlinx.serialization.json.Json
+        json: kotlinx.serialization.json.Json,
+        userId: String,
     ) {
         val groupId = sessionName.removePrefix("group_")
         val group = com.silk.backend.database.GroupRepository.findGroupById(groupId)
@@ -453,10 +464,23 @@ class DirectModelAgent(
             if (content.isBlank()) return
 
             val chatHistory = json.decodeFromString<com.silk.backend.models.ChatHistory>(content)
-            if (chatHistory.messages.isEmpty()) return
+            val visibleHistory = chatHistory.copy(messages = chatHistory.messages.filter { entry ->
+                when (entry.scope) {
+                    MessageScope.TEAM -> true
+                    MessageScope.WORKSPACE -> {
+                        val workspace = WorkspaceAccessPolicy.resolveInRoom(
+                            workflowWorkspaceManager,
+                            groupId,
+                            entry.workspaceId,
+                        ) ?: return@filter false
+                        WorkspaceAccessPolicy.canRead(workspace, userId, entry.observerVisible)
+                    }
+                }
+            }.toMutableList())
+            if (visibleHistory.messages.isEmpty()) return
 
-            writeGroupHistoryToFile(targetFile, groupDisplayName, chatHistory)
-            logger.debug("已刷新其他群聊历史: {} ({} 条消息)", groupDisplayName, chatHistory.messages.size)
+            writeGroupHistoryToFile(targetFile, groupDisplayName, visibleHistory)
+            logger.debug("已刷新其他群聊历史: {} ({} 条消息)", groupDisplayName, visibleHistory.messages.size)
         } catch (@Suppress("TooGenericExceptionCaught") e: Exception) {
             logger.warn("⚠️ 读取群聊历史失败 [{}]: {}", sessionName, e.message)
         }

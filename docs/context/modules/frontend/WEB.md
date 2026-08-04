@@ -34,6 +34,13 @@
 - 改布局壳层时，确认 `AppState.kt` 与 `Main.kt` 的 scene/tab 状态流
 - 改 Audio Duplex 时看 `AudioDuplexScene.kt` 与后端 `/ws/audio-duplex`
 - 工作流面板（`WorkflowScene.kt`）含 Folder Picker：
+  - Team Channel 与 Personal Workspace 使用独立 Tab；composer、停止生成、卡片回复和 Agent 回包都携带显式 `scope/workspaceId`
+  - Team Channel 中的人工对话不自动触发 AI；无论 Room 是单人还是多人，只有以 `@Silk` 开头的消息进入 Silk `DirectModelAgent`。Workspace 由后端路由到目标 Owner 的编码 Agent。Observer 只读发送时共享的历史，不能操作卡片或本地控制面
+  - Workflow 列表按当前 JWT 成员身份发现，非 Owner 加入后也能看到共享 Room；header 的“成员”面板向所有成员展示名单，Owner 可按登录名、姓名或手机号搜索并增删成员
+  - 工作区可在 Web 内创建、重命名、切换共享、管理 Room 成员 Co-pilot、归档/恢复/删除；他人当前共享工作区按 Owner 身份稳定分组（Observer 与 Co-pilot 都保留在 Owner 名下），Co-pilot 另有操作权限快捷分组；已撤销共享但仍可合法读取的消息单列为“历史共享”，选项显示“Owner - 最后共享名称”，窄屏收敛为去重后的单一下拉选择器
+  - 切换 Team Channel 或 Workspace 时，消息区在内容完成布局后滚到当前流底部；显式跳转到某条消息时由消息定位逻辑接管，不被自动滚底覆盖
+  - 活动状态每 5 秒从 Workspace API 刷新；Observer/已归档/已撤销共享状态不渲染 composer，Co-pilot 明确标识正在操作 Owner 的远程设备
+  - CC 状态、切目录、Agent/权限设置与 Source Control 全部使用 `workspaceId`，不再使用 `groupId` 作为 Agent context key
   - header 显示 agent 名（取自 `Message.userName`）和当前工作目录
   - "更改" 链接 / 创建工作流的"选择…" 按钮 → `FolderPickerDialog`（面包屑 + `..` + 子目录 + 手动输入）
   - 切目录走 HTTP `cdCcDir`（不发聊天 `/cd` 气泡）；FolderPicker 内部用 `loadJob` 取消旧请求避免 stale 覆盖

@@ -189,5 +189,26 @@ object SilkChatStyles {
     box-shadow: 0 0 0 6px rgba(201, 168, 108, 0.12);
     transition: background 0.2s ease, outline-color 0.2s ease, box-shadow 0.2s ease;
 }
+
+.silk-workspace-nav-desktop {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.silk-workspace-nav-mobile {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+}
+
+@media (max-width: 760px) {
+    .silk-workspace-nav-desktop { display: none; }
+    .silk-workspace-nav-mobile { display: flex; }
+}
 """.trimIndent()
 }

@@ -84,6 +84,7 @@ fun CardMessageRenderer(
     chatClient: ChatClient,
     currentUserId: String,
     userName: String,
+    canInteract: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
 
@@ -153,7 +154,7 @@ fun CardMessageRenderer(
                 when (element.tag) {
                     "text" -> CardTextElement(element)
                     "divider" -> CardDividerElement()
-                    "button" -> CardButtonElement(
+                    "button" -> if (canInteract) CardButtonElement(
                         element = element,
                         disabled = isDisabled,
                         onSubmit = { buttonValue ->
@@ -180,12 +181,14 @@ fun CardMessageRenderer(
                                     userName = userName,
                                     content = replyJson,
                                     type = MessageType.CARD_REPLY,
+                                    scope = message.scope,
+                                    workspaceId = message.workspaceId,
                                 )
                             }
                         }
                     )
-                    "text_input" -> CardTextInputElement(element, isDisabled, inputValues)
-                    "text_area" -> CardTextAreaElement(element, isDisabled, inputValues)
+                    "text_input" -> if (canInteract) CardTextInputElement(element, isDisabled, inputValues)
+                    "text_area" -> if (canInteract) CardTextAreaElement(element, isDisabled, inputValues)
                 }
             }
         }

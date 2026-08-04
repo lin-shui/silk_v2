@@ -68,7 +68,14 @@ kotlin {
                 implementation("io.ktor:ktor-client-okhttp:2.3.6")  // OkHttp 支持 WebSocket
             }
         }
-        
+
+        val commonTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
+            }
+        }
+
         // iOS 相关配置暂时禁用
     }
 }

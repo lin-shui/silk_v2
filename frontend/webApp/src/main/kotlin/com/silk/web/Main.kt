@@ -6120,6 +6120,7 @@ fun MessageItem(
     isLastMessage: Boolean = false,
     isRecalling: Boolean = false,
     chatClient: com.silk.shared.ChatClient? = null,
+    canInteractWithCards: Boolean = true,
     onRecall: (String) -> Unit = {},
     onCopy: (String) -> Unit = {},
     onCaptureToKnowledgeBase: (Message) -> Unit = {},
@@ -7043,7 +7044,13 @@ fun MessageItem(
                     attr("id", messageDomId(message.id))
                     attr("data-message-id", message.id)
                 }) {
-                    CardMessageRenderer(message, it, currentUserId, currentUserName)
+                    CardMessageRenderer(
+                        message,
+                        it,
+                        currentUserId,
+                        currentUserName,
+                        canInteract = canInteractWithCards,
+                    )
                 }
             }
         }

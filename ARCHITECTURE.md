@@ -21,9 +21,10 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
    - Agent 框架（Claude Code / Codex）拦截：`AgentRuntime.handleIfActive()`
    - Silk AI / `DirectModelAgent` 响应
 5. Claude Code / Codex 通过 ACP 协议（JSON-RPC 2.0 over WebSocket）连接 `/agent-bridge` 端点；外部 `cc_bridge/acp_adapter.py` 和 `codex_bridge/codex_adapter.py` adapter 跑各自 CLI 并流式回传。
-6. Workflow 持久化每条工作流的 `activeAgent` 与 per-agent `agentSessions[agentType]`；进入工作流时 `autoActivateForWorkflow` 读 `workflow.activeAgent`（不再硬编码 claude-code），用户 `/use <agent>` 切换会落盘。
-7. `Routing.kt` 另提供 `/ws/audio-duplex`，把客户端音频双工 WebSocket 代理到 `AIConfig.AUDIO_DUPLEX_URL` 上游 Worker。
-8. `frontend/shared` 定义多端共享消息模型、WebSocket 客户端行为、解析逻辑。
+6. Workflow Room 复用 Group（`roomId = groupId`），消息显式分为 `TEAM` 与 `WORKSPACE(roomId, workspaceId)`；TEAM 始终对 Room 成员广播，只有以 `@Silk` 开头的用户消息才进入 `DirectModelAgent`，WORKSPACE 经 Owner/Co-pilot 鉴权后进入 `AgentRuntime(ownerId, workspaceId)`。
+7. `WorkspaceManager` 在 `workspace_store.json` 持久化工作目录、active agent、权限模式、per-agent session、可见性、最后共享名称、Co-pilot 和 `ACTIVE/ARCHIVED` 生命周期；`workflow_store.json` 暂保留工作流入口元数据并作为一次性迁移源。Workflow Room 连接只恢复已显式创建且 cwd 非空的活动工作区，不会隐式创建默认编码工作区。SHARED 转 PRIVATE 后，Observer 的历史入口只返回 Owner 与最后共享名称，不暴露私有阶段名称或 runtime 元数据。
+8. `Routing.kt` 另提供 `/ws/audio-duplex`，把客户端音频双工 WebSocket 代理到 `AIConfig.AUDIO_DUPLEX_URL` 上游 Worker。
+9. `frontend/shared` 定义多端共享消息模型、WebSocket 客户端行为、解析逻辑。
 
 ## Persistent State
 
@@ -33,10 +34,11 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 - 上传文件：`chat_history/<session>/uploads/`
 - AI 工作区（跨群上下文）：`backend/chat_workspaces/<session>/other_groups/`
 - URL 去重缓存：`processed_urls.txt`
-- 用户历史 workspace 视图：`user_workspace_views/user_<user>/`（通过 hardlink 映射该用户可访问的 `chat_history/group_<group>/`，供 `/recall` 只读检索）
-- AI 跨群工作区：`backend/chat_workspaces/<session>/other_groups/`（Silk 专属对话写入其他群最近历史，供 AI Grep/Read 跨群检索）
+- 用户历史 workspace 视图：`user_workspace_views/user_<user>/`（消息历史按 TEAM/WORKSPACE ACL 生成过滤副本；`session.json` 可使用 hardlink）
+- AI 跨群工作区：`backend/chat_workspaces/<session>/other_groups/`（Silk 专属对话按调用者消息 ACL 写入其他群最近历史）
 - 用户 Todo：`chat_history/user_todos/<user>.json`
-- Workflow：`~/.silk-data/workflows/workflow_store.json`（可用 `SILK_WORKFLOW_DIR` 或 `-Dsilk.workflowDir=...` 覆盖）
+- Workflow 元数据：`~/.silk-data/workflows/workflow_store.json`
+- Personal Workspace 运行状态：`~/.silk-data/workflows/workspace_store.json`（二者均可用 `SILK_WORKFLOW_DIR` 或 `-Dsilk.workflowDir=...` 覆盖）
 - TrustedDir：`~/.silk-data/workflows/trusted_dirs.json`（与 Workflow 目录同源）
 - Knowledge Base：`knowledge_base/kb_store.json`（Topic / Entry CRUD；个人/团队空间 + 访问控制 `KBAccessPolicy`；条目状态/来源；user memory 复用 KB store，以 `purpose=MEMORY` 的个人 topic 保存 `profile` / `preference` / `episodic` / `procedural` 条目；group memory 以 `purpose=MEMORY` + `spaceType=TEAM` + `groupId` 的团队 topic 保存团队共享记忆；`[[kb:...]]` 内联引用 + 固定/排除/自动检索的上下文选择 `kbContextSelection`，以及可关闭的长期 memory 注入（含个人与群组双层记忆），统一由 `resolveKnowledgeBasePromptContext` 注入 AI 上下文）
 - Knowledge Base AI bridge：聊天主链会把当前用户可读的 KB 条目同步到 agent workspace `knowledge_base/manifest.md` + `knowledge_base/topics/**`，供 `DirectModelAgent` 与 ACP 外部 agent 通过 Grep/Read 自主查阅；当模型在回复末尾输出 `silk_kb_action` JSON block 时，后端会按当前用户权限执行 KB create/update，并把结果回写到最终回复；该后处理现在同时覆盖内建 Silk AI 与 `AgentRuntime` 承载的外部 agent 回复。若当前会话属于 workflow，会补齐 `workflowId + sourceGroupId + recentMessageIds` provenance，且未显式指定 `sourceType` 的 KB create 默认按 `WORKFLOW` 候选入库；Web KB 页另有 `POST /api/kb/copilot`（同步）和 `POST /api/kb/copilot/stream`（SSE 流式），复用同一套 `DirectModelAgent + silk_kb_action` 流程，支持条目级（`update_entry`）和主题级（`create_entry`）两种模式；`entryId` 可选填，为空时自动进入主题级模式；还支持多轮对话（`ConversationTurn`），`conversationHistory` 注入历史轮次引导 AI 基于上下文响应当前指令。流式端点通过 SSE 事件（`thinking`/`text`/`draft`/`applied`/`error`/`done`）逐帧推送 AI 生成进度，前端 `ApiClient.streamKBCopilot()` 消费并实时展示打字机效果。前端 `KnowledgeCopilotSidebar` 按三状态（INPUT/PREVIEW/REVIEW）渲染，每个状态一个主按钮，审阅控制移至侧栏而非编辑区。当用户显式发送“记住 xxx”时，聊天主链会先写入长期 memory；当用户打开 `autoCaptureEnabled` 时，主链还会从低风险偏好指令中自动提取 `response_language` / `response_style` / `code_language_preference` / `tech_stack_preference` / `output_format_preference`，并通过 `containsSensitiveContent` 过滤敏感内容；随后再按偏好开关决定是否把相关 memory 一并注入本轮 prompt。KB 搜索已支持嵌入向量语义检索（`kb/KnowledgeBaseEmbedding.kt`），通过 `EMBEDDING_ENABLED` + `EMBEDDING_API_KEY` 启用后，搜索从纯关键词升级为混合评分（关键词分 × α + 向量分 × β），嵌入缓存在 `kb_embeddings.json` 侧边文件。KB 存储后端支持 JSON file store（默认）和 PostgreSQL + pgvector（`SILK_KB_STORE=postgres`），通过 `KnowledgeBaseManager.storeBackend` 路由到 `PgKnowledgeBaseRepository`（JDBC 原生 SQL + pgvector ANN 混合检索）
@@ -49,12 +51,12 @@ Silk 是一个以 Kotlin 为主的多端聊天系统：
 | App/bootstrap | `Application.kt`, `settings.gradle.kts`, root `build.gradle.kts`, `silk.sh` | 运行入口与构建编排 |
 | HTTP routes | `Routing.kt`, `routes/FileRoutes.kt`, `routes/AsrRoutes.kt`, `routes/AgentChangesRoutes.kt`, `routes/ObsidianRoutes.kt` | `Routing.kt` 仍然很大，是主索引点；`AgentChangesRoutes` 是只读代码审查（Source Control）路由；`ObsidianRoutes` 提供 `/api/obsidian/sync` 一键导出 |
 | Obsidian integration | `obsidian-plugin/silk-sync/` | Obsidian 插件，一键同步 Silk 聊天记录和 KB 条目到 vault |
-| Chat/WebSocket | `WebSocketConfig.kt`, `ChatHistoryManager.kt` | 消息主链、历史、URL 下载 |
+| Chat/WebSocket | `WebSocketConfig.kt`, `ChatHistoryManager.kt`, `workspace/WorkspaceAccessPolicy.kt` | 消息主链、scope ACL、历史、URL 下载 |
 | Agent framework | `agents/core/`, `agents/acp/`, `agents/adapters/` | Claude Code 与 Codex via ACP，唯一执行路径 |
 | AI/tools/search | `ai/`（AnthropicClient + DirectModelAgent）, `utils/WebPageDownloader.kt` | Anthropic Messages API + 原生 web_search 工具 + 后端 grep 搜索 |
 | Auth/data | `auth/`, `database/`, `models/` | SQLite + Exposed |
 | Card system | `card/CardBuilder.kt`, `card/CardReplyRouter.kt`, `card/CardModels.kt` | 交互卡片构造、JSON schema、回复路由 |
-| Domain modules | `todos/`, `workflow/`, `trust/`, `kb/`, `export/`, `pdf/` | Todo/Workflow/TrustedDir/KB（含 `[[kb:...]]` 内联引用）混合文件存储 + 可选 PostgreSQL（`SILK_KB_STORE=postgres`） |
+| Domain modules | `todos/`, `workflow/`, `workspace/`, `trust/`, `kb/`, `export/`, `pdf/` | Todo/Workflow/PersonalWorkspace/TrustedDir/KB（含 `[[kb:...]]` 内联引用）混合文件存储 + 可选 PostgreSQL（`SILK_KB_STORE=postgres`） |
 | Shared client contract | `frontend/shared/` | 三端消息/文件/Audio Duplex 合同面 |
 | Web | `frontend/webApp/` | 当前最完整的桌面浏览器 UI |
 | Android | `frontend/androidApp/` | 四 Tab + 移动端流程 |

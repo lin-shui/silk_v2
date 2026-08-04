@@ -19,17 +19,30 @@ import com.silk.backend.database.UserRepository
 import com.silk.backend.database.UserTodoItemDto
 import com.silk.backend.database.UserTodosResponse
 import com.silk.backend.database.UserSettingsResponse
+import com.silk.backend.auth.JwtProvider
 import com.silk.backend.models.ChatHistory
 import com.silk.backend.models.ChatHistoryEntry
+import com.silk.backend.models.Workflow
+import com.silk.backend.routes.WorkspaceDto
+import com.silk.backend.routes.WorkflowMemberCandidatesResponse
+import com.silk.backend.routes.WorkflowRoomMembersResponse
+import com.silk.backend.routes.WorkflowSummaryDto
 import com.silk.backend.todos.UserTodoStore
+import com.silk.backend.workflow.WorkflowManager
+import com.silk.backend.workspace.WorkspaceLifecycleState
+import com.silk.backend.workspace.WorkspaceManager
+import com.silk.backend.workspace.WorkspaceVisibility
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.patch
 import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.server.testing.testApplication
@@ -257,9 +270,252 @@ class BackendHttpContractTest {
     }
 
     @Test
+    fun `workflow routes bind mutations to jwt caller and redact runtime state from members`() {
+        TestWorkspace().use { workspace ->
+            testApplication {
+                application { module() }
+
+                val ownerId = "workflow-route-owner"
+                val memberId = "workflow-route-member"
+                val ownerToken = JwtProvider.generateAccessToken(ownerId)
+                val memberToken = JwtProvider.generateAccessToken(memberId)
+                val createBody = """{"userId":"$ownerId","name":"Workflow ACL","agentType":"silk_chat"}"""
+
+                val unauthenticated = client.post("/api/workflows") {
+                    contentType(ContentType.Application.Json)
+                    setBody(createBody)
+                }
+                assertEquals(HttpStatusCode.Unauthorized, unauthenticated.status)
+
+                val mismatched = client.post("/api/workflows") {
+                    header(HttpHeaders.Authorization, "Bearer $memberToken")
+                    contentType(ContentType.Application.Json)
+                    setBody(createBody)
+                }
+                assertEquals(HttpStatusCode.Forbidden, mismatched.status)
+
+                val createdResponse = client.post("/api/workflows") {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                    contentType(ContentType.Application.Json)
+                    setBody(createBody)
+                }
+                assertEquals(HttpStatusCode.Created, createdResponse.status)
+                val created = createdResponse.decode<Workflow>()
+                assertTrue(GroupRepository.addUserToGroup(created.groupId, memberId))
+
+                val manager = WorkflowManager(workspace.workflowDir.absolutePath)
+                manager.updateWorkingDir(created.groupId, "/private/owner/project")
+                manager.updateSessionState(created.groupId, "private-session", sessionStarted = true)
+
+                val memberView = client.get("/api/workflows/by-group/${created.groupId}") {
+                    header(HttpHeaders.Authorization, "Bearer $memberToken")
+                }.decode<Workflow>()
+                assertEquals(created.id, memberView.id)
+                assertEquals("", memberView.workingDir)
+                assertEquals("", memberView.sessionId)
+                assertFalse(memberView.sessionStarted)
+
+                val memberRename = client.put("/api/workflows/${created.id}") {
+                    header(HttpHeaders.Authorization, "Bearer $memberToken")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"userId":"$ownerId","name":"Hijacked"}""")
+                }
+                assertEquals(HttpStatusCode.Forbidden, memberRename.status)
+
+                val memberDelete = client.delete("/api/workflows/${created.id}?userId=$ownerId") {
+                    header(HttpHeaders.Authorization, "Bearer $memberToken")
+                }
+                assertEquals(HttpStatusCode.Forbidden, memberDelete.status)
+
+                val ownerDelete = client.delete("/api/workflows/${created.id}?userId=$ownerId") {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                }
+                assertEquals(HttpStatusCode.OK, ownerDelete.status)
+            }
+        }
+    }
+
+    @Test
+    fun `workflow room owner manages members and members discover the shared room`() {
+        TestWorkspace().use { workspace ->
+            testApplication {
+                application { module() }
+
+                val owner = createTestUser("room-owner", "Room Owner", "13800000021")
+                val member = createTestUser("room-member", "Room Member", "13800000022")
+                val outsider = createTestUser("room-outsider", "Room Outsider", "13800000023")
+                val group = createGroupForTest("wf_member_contract", owner.id)
+                val workflow = WorkflowManager(workspace.workflowDir.absolutePath).createWorkflow(
+                    name = "Member Contract",
+                    description = "",
+                    userId = owner.id,
+                    groupId = group.id,
+                )
+                val ownerToken = JwtProvider.generateAccessToken(owner.id)
+                val memberToken = JwtProvider.generateAccessToken(member.id)
+                val outsiderToken = JwtProvider.generateAccessToken(outsider.id)
+
+                val ownerVisible = client.get("/api/workflows/visible") {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                }.decode<List<WorkflowSummaryDto>>()
+                assertEquals(listOf(workflow.id), ownerVisible.map { it.id })
+                assertEquals("OWNER", ownerVisible.single().role)
+
+                val beforeAdd = client.get("/api/workflows/visible") {
+                    header(HttpHeaders.Authorization, "Bearer $memberToken")
+                }.decode<List<WorkflowSummaryDto>>()
+                assertTrue(beforeAdd.isEmpty())
+
+                val candidates = client.get(
+                    "/api/workflows/${workflow.id}/members/candidates?query=13800000022"
+                ) {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                }.decode<WorkflowMemberCandidatesResponse>()
+                assertEquals(listOf(member.id), candidates.candidates.map { it.id })
+
+                val forbiddenAdd = client.post("/api/workflows/${workflow.id}/members") {
+                    header(HttpHeaders.Authorization, "Bearer $outsiderToken")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"userId":"${member.id}"}""")
+                }
+                assertEquals(HttpStatusCode.NotFound, forbiddenAdd.status)
+
+                val added = client.post("/api/workflows/${workflow.id}/members") {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"userId":"${member.id}"}""")
+                }
+                assertEquals(HttpStatusCode.Created, added.status)
+                assertEquals(2, added.decode<WorkflowRoomMembersResponse>().members.size)
+
+                val memberVisible = client.get("/api/workflows/visible") {
+                    header(HttpHeaders.Authorization, "Bearer $memberToken")
+                }.decode<List<WorkflowSummaryDto>>()
+                assertEquals(listOf(workflow.id), memberVisible.map { it.id })
+                assertEquals("MEMBER", memberVisible.single().role)
+
+                val workspaceManager = WorkspaceManager(workspace.workflowDir.absolutePath)
+                val personalWorkspace = workspaceManager.createWorkspace(
+                    roomId = group.id,
+                    ownerId = owner.id,
+                    name = "shared",
+                    visibility = WorkspaceVisibility.SHARED,
+                )
+                assertTrue(workspaceManager.updateCopilots(personalWorkspace.workspaceId, listOf(member.id)))
+
+                val removed = client.delete("/api/workflows/${workflow.id}/members/${member.id}") {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                }
+                assertEquals(HttpStatusCode.OK, removed.status)
+                assertFalse(GroupRepository.isUserInGroup(group.id, member.id))
+                assertTrue(
+                    WorkspaceManager(workspace.workflowDir.absolutePath)
+                        .getWorkspace(personalWorkspace.workspaceId)?.copilots.orEmpty().isEmpty()
+                )
+
+                val afterRemove = client.get("/api/workflows/visible") {
+                    header(HttpHeaders.Authorization, "Bearer $memberToken")
+                }.decode<List<WorkflowSummaryDto>>()
+                assertTrue(afterRemove.isEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun `workspace routes expose safe discovery lifecycle and deletion contracts`() {
+        TestWorkspace().use { workspace ->
+            val owner = createTestUser("workspace-owner", "Alice Owner", "13800000031")
+            val observer = createTestUser("workspace-observer", "Bob Observer", "13800000032")
+            val group = createGroupForTest("Workspace Contract Room", owner.id)
+            assertTrue(GroupRepository.addUserToGroup(group.id, observer.id))
+            WorkflowManager(workspace.workflowDir.absolutePath).createWorkflow(
+                name = "Workspace Contract",
+                description = "",
+                userId = owner.id,
+                groupId = group.id,
+                agentType = "claude_code",
+                taskFocus = "",
+            )
+            val manager = WorkspaceManager(workspace.workflowDir.absolutePath)
+            val active = manager.createWorkspace(
+                roomId = group.id,
+                ownerId = owner.id,
+                name = "Auth refactor",
+                workingDir = "/private/alice/auth",
+                visibility = WorkspaceVisibility.SHARED,
+            )
+
+            testApplication {
+                application { module() }
+                val ownerToken = JwtProvider.generateAccessToken(owner.id)
+                val observerToken = JwtProvider.generateAccessToken(observer.id)
+
+                val ownerList = client.get("/api/rooms/${group.id}/workspaces") {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                }.decode<List<WorkspaceDto>>()
+                assertEquals(1, ownerList.size)
+                assertEquals("Alice Owner", ownerList.single().ownerDisplayName)
+                assertEquals("/private/alice/auth", ownerList.single().workingDir)
+                assertEquals("OWNER", ownerList.single().role)
+                assertEquals("OFFLINE", ownerList.single().activity.state.name)
+
+                val observerList = client.get("/api/rooms/${group.id}/workspaces") {
+                    header(HttpHeaders.Authorization, "Bearer $observerToken")
+                }.decode<List<WorkspaceDto>>()
+                assertEquals(1, observerList.size)
+                assertEquals("", observerList.single().workingDir)
+                assertTrue(observerList.single().copilots.isEmpty())
+                assertEquals("OBSERVER", observerList.single().role)
+
+                val privateWithCopilot = client.patch(
+                    "/api/rooms/${group.id}/workspaces/${active.workspaceId}"
+                ) {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"visibility":"PRIVATE","copilots":["${observer.id}"]}""")
+                }
+                assertEquals(HttpStatusCode.BadRequest, privateWithCopilot.status)
+
+                val deleteWhileActive = client.delete(
+                    "/api/rooms/${group.id}/workspaces/${active.workspaceId}"
+                ) {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                }
+                assertEquals(HttpStatusCode.Conflict, deleteWhileActive.status)
+
+                val observerArchive = client.patch(
+                    "/api/rooms/${group.id}/workspaces/${active.workspaceId}"
+                ) {
+                    header(HttpHeaders.Authorization, "Bearer $observerToken")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"lifecycleState":"ARCHIVED"}""")
+                }
+                assertEquals(HttpStatusCode.NotFound, observerArchive.status)
+
+                val archived = client.patch(
+                    "/api/rooms/${group.id}/workspaces/${active.workspaceId}"
+                ) {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                    contentType(ContentType.Application.Json)
+                    setBody("""{"lifecycleState":"ARCHIVED"}""")
+                }.decode<WorkspaceDto>()
+                assertEquals(WorkspaceLifecycleState.ARCHIVED, archived.lifecycleState)
+
+                val deleteArchived = client.delete(
+                    "/api/rooms/${group.id}/workspaces/${active.workspaceId}"
+                ) {
+                    header(HttpHeaders.Authorization, "Bearer $ownerToken")
+                }
+                assertEquals(HttpStatusCode.NoContent, deleteArchived.status)
+            }
+        }
+    }
+
+    @Test
     fun `message recall route removes sender message from isolated history`() {
         TestWorkspace().use { workspace ->
-            val group = createGroupForTest("Recall Route Group")
+            val callerId = "recall-owner"
+            val group = createGroupForTest("Recall Route Group", callerId)
             seedGroupHistory(
                 group.id,
                 listOf(
@@ -277,13 +533,14 @@ class BackendHttpContractTest {
                 application { module() }
 
                 val recallResponse = client.post("/api/messages/recall") {
+                    header(HttpHeaders.Authorization, "Bearer ${JwtProvider.generateAccessToken(callerId)}")
                     contentType(ContentType.Application.Json)
                     setBody(
                         json.encodeToString(
                             RecallMessageRequest(
                                 groupId = group.id,
                                 messageId = "msg-1",
-                                userId = "recall-owner"
+                                userId = callerId
                             )
                         )
                     )
@@ -304,7 +561,8 @@ class BackendHttpContractTest {
     @Test
     fun `message recall route rejects non sender and keeps message intact`() {
         TestWorkspace().use {
-            val group = createGroupForTest("Recall Permission Group")
+            val callerId = "other-user"
+            val group = createGroupForTest("Recall Permission Group", callerId)
             seedGroupHistory(
                 group.id,
                 listOf(
@@ -322,13 +580,14 @@ class BackendHttpContractTest {
                 application { module() }
 
                 val recallResponse = client.post("/api/messages/recall") {
+                    header(HttpHeaders.Authorization, "Bearer ${JwtProvider.generateAccessToken(callerId)}")
                     contentType(ContentType.Application.Json)
                     setBody(
                         json.encodeToString(
                             RecallMessageRequest(
                                 groupId = group.id,
                                 messageId = "msg-2",
-                                userId = "other-user"
+                                userId = callerId
                             )
                         )
                     )
@@ -347,7 +606,8 @@ class BackendHttpContractTest {
     @Test
     fun `message recall route also removes silk reply for silk prompt`() {
         TestWorkspace().use {
-            val group = createGroupForTest("Recall Silk Group")
+            val callerId = "silk-caller"
+            val group = createGroupForTest("Recall Silk Group", callerId)
             seedGroupHistory(
                 group.id,
                 listOf(
@@ -379,13 +639,14 @@ class BackendHttpContractTest {
                 application { module() }
 
                 val recallResponse = client.post("/api/messages/recall") {
+                    header(HttpHeaders.Authorization, "Bearer ${JwtProvider.generateAccessToken(callerId)}")
                     contentType(ContentType.Application.Json)
                     setBody(
                         json.encodeToString(
                             RecallMessageRequest(
                                 groupId = group.id,
                                 messageId = "user-msg",
-                                userId = "silk-caller"
+                                userId = callerId
                             )
                         )
                     )
@@ -418,8 +679,8 @@ class BackendHttpContractTest {
         ) ?: error("Failed to create test user: $loginName")
     }
 
-    private fun createGroupForTest(groupName: String) =
-        assertNotNull(GroupRepository.createGroup(groupName, hostId = "host-user"))
+    private fun createGroupForTest(groupName: String, hostId: String) =
+        assertNotNull(GroupRepository.createGroup(groupName, hostId = hostId))
 
     private fun seedGroupHistory(groupId: String, entries: List<ChatHistoryEntry>) {
         ChatHistoryManager().saveChatHistory(

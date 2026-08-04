@@ -4,6 +4,9 @@ import com.silk.backend.database.Group
 import com.silk.backend.database.GroupRepository
 import com.silk.backend.models.ChatHistory
 import com.silk.backend.models.SessionData
+import com.silk.backend.workspace.WorkspaceAccessPolicy
+import com.silk.backend.workspace.WorkspaceManager
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
@@ -16,14 +19,8 @@ import java.nio.file.attribute.BasicFileAttributes
  * 用户历史会话 workspace 管理器。
  *
  * 为每个用户在 [workspaceBaseDir] 下维护一个目录，
- * 通过硬链接（hardlink）将该用户所属群组的 chat_history.json / session.json
- * 映射到 workspace 内，供只读 Claude agent（dontAsk 模式）探索。
- *
- * 硬链接特性：
- * - 零额外磁盘开销（共享 inode）
- * - 对 dontAsk 模式透明（看起来就是普通文件）
- * - 后端原子写入（temp -> rename）会创建新 inode 导致断链，
- *   每次 [ensureWorkspace] 会检测并重建。
+ * chat_history.json 必须先按用户可见性生成过滤副本；session.json 不含消息正文，
+ * 仍可使用硬链接。不能把原始群历史暴露给历史 Agent。
  */
 class UserWorkspaceManager(
     private val chatHistoryDir: String =
@@ -31,7 +28,8 @@ class UserWorkspaceManager(
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: "chat_history",
-    private val workspaceBaseDir: String = "user_workspace_views"
+    private val workspaceBaseDir: String = "user_workspace_views",
+    private val workflowWorkspaceManager: WorkspaceManager = WorkspaceManager(),
 ) {
     private val logger = LoggerFactory.getLogger(UserWorkspaceManager::class.java)
     private val json = Json { ignoreUnknownKeys = true }
@@ -51,7 +49,7 @@ class UserWorkspaceManager(
         wsDir.toFile().mkdirs()
 
         val userGroups = GroupRepository.getUserGroups(userId)
-        syncHardlinks(wsDir, userGroups)
+        syncViews(wsDir, userGroups, userId)
         writeIndex(wsDir, userGroups)
 
         logger.info("UserWorkspace ready: userId={}, groups={}, path={}",
@@ -62,9 +60,9 @@ class UserWorkspaceManager(
     /**
      * 同步硬链接：创建缺失的、刷新断链的、清理已退出群组的。
      */
-    private fun syncHardlinks(wsDir: Path, groups: List<Group>) {
+    private fun syncViews(wsDir: Path, groups: List<Group>, userId: String) {
         cleanupStaleGroupDirs(wsDir, groups.map { "group_${it.id}" }.toSet())
-        groups.forEach { syncGroupHardlinks(wsDir, it) }
+        groups.forEach { syncGroupView(wsDir, it, userId) }
     }
 
     private fun cleanupStaleGroupDirs(wsDir: Path, expectedDirs: Set<String>) {
@@ -77,14 +75,36 @@ class UserWorkspaceManager(
             }
     }
 
-    private fun syncGroupHardlinks(wsDir: Path, group: Group) {
+    private fun syncGroupView(wsDir: Path, group: Group, userId: String) {
         val originalDir = Path.of(chatHistoryDir, "group_${group.id}")
         if (!Files.exists(originalDir)) return
 
         val groupDir = wsDir.resolve("group_${group.id}")
         groupDir.toFile().mkdirs()
 
-        historyFileNames.forEach { syncHistoryHardlink(originalDir, groupDir, it) }
+        syncFilteredHistory(originalDir, groupDir, group.id, userId)
+        syncHistoryHardlink(originalDir, groupDir, "session.json")
+    }
+
+    private fun syncFilteredHistory(originalDir: Path, groupDir: Path, roomId: String, userId: String) {
+        val history = loadChatHistory(originalDir) ?: return
+        val filtered = history.copy(messages = history.messages.filter { entry ->
+            when (entry.scope) {
+                MessageScope.TEAM -> true
+                MessageScope.WORKSPACE -> {
+                    val workspace = WorkspaceAccessPolicy.resolveInRoom(
+                        workflowWorkspaceManager,
+                        roomId,
+                        entry.workspaceId,
+                    ) ?: return@filter false
+                    WorkspaceAccessPolicy.canRead(workspace, userId, entry.observerVisible)
+                }
+            }
+        }.toMutableList())
+        val target = groupDir.resolve("chat_history.json").toFile()
+        val tmp = groupDir.resolve("chat_history.json.tmp").toFile()
+        tmp.writeText(json.encodeToString(filtered))
+        Files.move(tmp.toPath(), target.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
     }
 
     private fun syncHistoryHardlink(originalDir: Path, groupDir: Path, fileName: String) {
@@ -118,9 +138,9 @@ class UserWorkspaceManager(
             appendLine()
 
             for (group in groups) {
-                val originalDir = Path.of(chatHistoryDir, "group_${group.id}")
-                val sessionInfo = loadSessionData(originalDir)
-                val chatInfo = loadChatHistory(originalDir)
+                val viewDir = wsDir.resolve("group_${group.id}")
+                val sessionInfo = loadSessionData(viewDir)
+                val chatInfo = loadChatHistory(viewDir)
 
                 appendLine("## ${cleanGroupName(group.name)}")
                 appendLine("- 目录: group_${group.id}/")
@@ -201,7 +221,4 @@ class UserWorkspaceManager(
         else -> "群聊"
     }
 
-    private companion object {
-        val historyFileNames = listOf("chat_history.json", "session.json")
-    }
 }

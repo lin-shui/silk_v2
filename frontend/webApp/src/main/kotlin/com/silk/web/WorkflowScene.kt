@@ -12,10 +12,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import com.silk.shared.ChatClient
 import com.silk.shared.ConnectionState
+import com.silk.shared.messageStreamKey
 import com.silk.shared.models.KnowledgeBaseContextSelection
 import com.silk.shared.models.DirEntry
 import com.silk.shared.models.DirListingResponse
 import com.silk.shared.models.Message
+import com.silk.shared.models.MessageScope
+import com.silk.web.workspace.WorkspaceDto
+import com.silk.web.workspace.WorkspaceApiException
+import com.silk.web.workspace.createWorkspace as createRoomWorkspace
+import com.silk.web.workspace.deleteWorkspace as deleteRoomWorkspace
+import com.silk.web.workspace.fetchWorkspaces
+import com.silk.web.workspace.patchWorkspace as patchRoomWorkspace
 import kotlinx.browser.document
 import kotlinx.browser.window
 import kotlinx.coroutines.launch
@@ -134,8 +142,16 @@ fun WorkflowScene(appState: WebAppState) {
 
     LaunchedEffect(user.id) {
         isLoading = true
-        workflows = ApiClient.getWorkflows(user.id)
-        isLoading = false
+        while (true) {
+            workflows = ApiClient.getWorkflows(user.id)
+            isLoading = false
+            kotlinx.coroutines.delay(5_000)
+        }
+    }
+
+    LaunchedEffect(workflows) {
+        val selectedId = selectedWorkflow?.id ?: return@LaunchedEffect
+        selectedWorkflow = workflows.find { it.id == selectedId }
     }
 
     val activeWorkflowNavigationTarget = appState.workflowNavigationTarget
@@ -279,20 +295,28 @@ fun WorkflowScene(appState: WebAppState) {
                                     if (isSelected) fontWeight("bold")
                                 }
                             }) { Text(wf.name) }
-                            Button({
-                                style {
-                                    backgroundColor(Color("transparent"))
-                                    color(Color(SilkColors.textSecondary))
-                                    border(0.px)
-                                    property("cursor", "pointer")
-                                    fontSize(18.px)
-                                    padding(4.px, 8.px)
+                            if (wf.ownerId == user.id) {
+                                Button({
+                                    style {
+                                        backgroundColor(Color("transparent"))
+                                        color(Color(SilkColors.textSecondary))
+                                        border(0.px)
+                                        property("cursor", "pointer")
+                                        fontSize(18.px)
+                                        padding(4.px, 8.px)
+                                    }
+                                    onClick { evt ->
+                                        evt.stopPropagation()
+                                        menuWorkflow = if (menuWorkflow == wf) null else wf
+                                    }
+                                }) { Text("⋮") }
+                            } else {
+                                Span({
+                                    style { color(Color(SilkColors.textSecondary)); fontSize(11.px) }
+                                }) {
+                                    Text(wf.ownerDisplayName.ifBlank { "共享" })
                                 }
-                                onClick { evt ->
-                                    evt.stopPropagation()
-                                    menuWorkflow = if (menuWorkflow == wf) null else wf
-                                }
-                            }) { Text("⋮") }
+                            }
                         }
                     }
                 }
@@ -350,6 +374,7 @@ fun WorkflowScene(appState: WebAppState) {
                         groupId = wf.groupId,
                         workflowId = wf.id,
                         workflowName = wf.name,
+                        workflowRole = wf.role,
                     )
                 }
             }
@@ -929,7 +954,7 @@ fun WorkflowScene(appState: WebAppState) {
     }
 }
 
-@Suppress("CyclomaticComplexMethod")
+@Suppress("CyclomaticComplexMethod", "TooGenericExceptionCaught")
 @Composable
 private fun WorkflowChatPanel(
     appState: WebAppState,
@@ -938,13 +963,14 @@ private fun WorkflowChatPanel(
     groupId: String,
     workflowId: String,
     workflowName: String,
+    workflowRole: String,
 ) {
     val scope = rememberCoroutineScope()
     val wsUrl = remember { backendWsOrigin() }
     val chatClient = remember { ChatClient(wsUrl) }
     val messages by chatClient.messages.collectAsState()
-    val transientMessage by chatClient.transientMessage.collectAsState()
-    val statusMessages by chatClient.statusMessages.collectAsState()
+    val transientMessages by chatClient.transientMessages.collectAsState()
+    val statusMessagesByStream by chatClient.statusMessagesByStream.collectAsState()
     val connectionState by chatClient.connectionState.collectAsState()
     val isGenerating by chatClient.isGenerating.collectAsState()
     var messageText by remember(groupId) { mutableStateOf("") }
@@ -981,6 +1007,82 @@ private fun WorkflowChatPanel(
     var kbCaptureContent by remember(groupId) { mutableStateOf("") }
     var kbCaptureSaving by remember(groupId) { mutableStateOf(false) }
     var kbCaptureResult by remember(groupId) { mutableStateOf<String?>(null) }
+    // Workspace tab bar state
+    var workspaces by remember(groupId) { mutableStateOf<List<WorkspaceDto>>(emptyList()) }
+    var workspaceLoadError by remember(groupId) { mutableStateOf<String?>(null) }
+    var activeTab by remember(groupId) { mutableStateOf("team") }
+    var workspaceRefreshVersion by remember(groupId) { mutableStateOf(0) }
+    var showWorkspaceCreate by remember(groupId) { mutableStateOf(false) }
+    var workspaceManageTarget by remember(groupId) { mutableStateOf<WorkspaceDto?>(null) }
+    var groupMembers by remember(groupId) { mutableStateOf<List<GroupMember>>(emptyList()) }
+    var showRoomMembers by remember(groupId) { mutableStateOf(false) }
+    var roomMembers by remember(groupId) { mutableStateOf<List<WorkflowRoomMember>>(emptyList()) }
+    var memberCandidates by remember(groupId) { mutableStateOf<List<WorkflowMemberCandidate>>(emptyList()) }
+    var memberQuery by remember(groupId) { mutableStateOf("") }
+    var memberBusy by remember(groupId) { mutableStateOf(false) }
+    var memberError by remember(groupId) { mutableStateOf<String?>(null) }
+    var memberFeedback by remember(groupId) { mutableStateOf<String?>(null) }
+
+    suspend fun refreshRoomMembers() {
+        val response = ApiClient.getWorkflowRoomMembers(workflowId)
+        if (response.success) {
+            roomMembers = response.members
+            groupMembers = response.members.map {
+                GroupMember(id = it.id, fullName = it.fullName, role = it.role)
+            }
+            memberError = null
+        } else {
+            memberError = response.message.ifBlank { "成员加载失败" }
+        }
+    }
+    val currentWorkspaces = workspaces.filterNot { it.historyOnly }
+    val historicalWorkspaceMetadata = workspaces
+        .filter { it.historyOnly }
+        .map { it.copy(lifecycleState = "REVOKED") }
+    val historicalWorkspaceTabs = historicalWorkspaceMetadata + messages.asSequence()
+        .filter { it.scope == MessageScope.WORKSPACE && it.observerVisible && !it.workspaceId.isNullOrBlank() }
+        .mapNotNull { it.workspaceId }
+        .distinct()
+        .filter { id -> currentWorkspaces.none { it.workspaceId == id } }
+        .filter { id -> historicalWorkspaceMetadata.none { it.workspaceId == id } }
+        .map { id ->
+            WorkspaceDto(
+                workspaceId = id,
+                roomId = groupId,
+                ownerId = "",
+                name = "已撤销的工作区",
+                role = "OBSERVER",
+                lifecycleState = "REVOKED",
+                historyOnly = true,
+            )
+        }
+        .toList()
+    val workspaceTabs = currentWorkspaces + historicalWorkspaceTabs
+    val activeWorkspace = workspaceTabs.firstOrNull { it.workspaceId == activeTab }
+    val activeWorkspaceId = activeWorkspace?.workspaceId
+    val canControlActiveWorkspace = activeWorkspace?.lifecycleState == "ACTIVE" &&
+        (activeWorkspace.role == "OWNER" || activeWorkspace.role == "COPILOT")
+    val canSendToActiveTab = activeTab == "team" || canControlActiveWorkspace
+    val activeStreamKey = messageStreamKey(
+        if (activeTab == "team") MessageScope.TEAM else MessageScope.WORKSPACE,
+        activeWorkspaceId,
+    )
+    val transientMessage = transientMessages[activeStreamKey]
+    val statusMessages = statusMessagesByStream[activeStreamKey].orEmpty()
+    val isActiveStreamGenerating = if (activeTab == "team") {
+        isGenerating && (transientMessage != null || statusMessages.isNotEmpty())
+    } else {
+        transientMessage != null || statusMessages.isNotEmpty() ||
+            activeWorkspace?.activity?.state in setOf("RUNNING", "WAITING")
+    }
+    val belongsToActiveTab: (Message) -> Boolean = { message ->
+        if (activeTab == "team") {
+            message.scope == MessageScope.TEAM
+        } else {
+            message.scope == MessageScope.WORKSPACE && message.workspaceId == activeTab
+        }
+    }
+    val activeMessageCount = messages.count(belongsToActiveTab)
     val resetKnowledgeCaptureDialog: () -> Unit = {
         kbCaptureDraft = null
         kbCaptureTopics = emptyList()
@@ -1027,6 +1129,28 @@ private fun WorkflowChatPanel(
             )
         }
     }
+    // Workspace discovery and activity state share one server-authoritative snapshot.
+    LaunchedEffect(groupId, connectionState, workspaceRefreshVersion) {
+        if (connectionState == ConnectionState.CONNECTED) kotlinx.coroutines.delay(150)
+        val token = JwtManager.getAccessToken() ?: return@LaunchedEffect
+        while (true) {
+            try {
+                workspaces = fetchWorkspaces(groupId, token)
+                workspaceLoadError = null
+            } catch (e: WorkspaceApiException) {
+                workspaceLoadError = e.message
+                console.error("fetchWorkspaces error:", e.message)
+            } catch (e: Exception) {
+                workspaceLoadError = "工作区加载失败"
+                console.error("fetchWorkspaces error:", e.message)
+            }
+            kotlinx.coroutines.delay(5_000)
+        }
+    }
+    LaunchedEffect(groupId, userId) {
+        refreshRoomMembers()
+        availableAgents = ApiClient.listAgents(userId)
+    }
     LaunchedEffect(messages.size, userId, kbPersistentExcludedSpaceIds, kbPersistentDownrankedSpaceIds, kbContextSelectionTouched) {
         if (kbContextSelectionTouched) return@LaunchedEffect
         if (kbContextSelection.pinnedEntryIds.isNotEmpty() || kbContextSelection.excludedEntryIds.isNotEmpty()) {
@@ -1050,13 +1174,20 @@ private fun WorkflowChatPanel(
     //   2. 创建工作流时后端 cdSync（返回 workflow 时前端会重新进入面板，这里会触发）
     //   3. session_resumed / new_session 事件（极低频）
     // 因此此处不再按消息数量 poll；若将来需要捕获 3 的变化，可监听特定系统消息再触发。
-    LaunchedEffect(groupId, connectionState) {
-        if (groupId.isBlank()) return@LaunchedEffect
+    LaunchedEffect(activeWorkspaceId, connectionState) {
+        val workspaceId = activeWorkspaceId
+        if (workspaceId == null || !canControlActiveWorkspace) {
+            workingDir = ""
+            activeAgentDisplay = ""
+            permissionMode = ""
+            sourcePanelOpen = false
+            return@LaunchedEffect
+        }
         // WebSocket 连上后稍等片刻，让后端 autoActivateForWorkflow 完成
         if (connectionState == ConnectionState.CONNECTED) {
             kotlinx.coroutines.delay(200)
         }
-        val snap = ApiClient.getCcState(userId, groupId)
+        val snap = ApiClient.getCcState(userId, workspaceId)
         if (snap.success) {
             workingDir = snap.workingDir
             activeAgentDisplay = snap.agentDisplayName
@@ -1068,12 +1199,14 @@ private fun WorkflowChatPanel(
     // 监听新增消息，刷新 activeAgent / permissionMode 显示。
     // 后端在 agent 切换、权限模式切换时都会广播 SYSTEM 消息（"已切换到 ..."），
     // 新增消息改变 messages.size → 触发此 effect → 仅检查最新一条是否匹配。
-    LaunchedEffect(messages.size) {
+    LaunchedEffect(messages.size, activeWorkspaceId) {
+        val workspaceId = activeWorkspaceId ?: return@LaunchedEffect
+        if (!canControlActiveWorkspace) return@LaunchedEffect
         val latest = messages.lastOrNull() ?: return@LaunchedEffect
         val isAgentStatusMessage = latest.type == com.silk.shared.models.MessageType.SYSTEM &&
             (latest.content.startsWith("已切换到") || latest.content.contains("已激活") || latest.content.contains("已退出 agent"))
         if (isAgentStatusMessage) {
-            val snap = ApiClient.getCcState(userId, groupId)
+            val snap = ApiClient.getCcState(userId, workspaceId)
             if (snap.success) {
                 activeAgentDisplay = snap.agentDisplayName
                 permissionMode = snap.permissionMode
@@ -1087,7 +1220,7 @@ private fun WorkflowChatPanel(
     LaunchedEffect(groupId) {
         chatClient.clearMessages()
         try {
-            chatClient.connect(userId, userName, groupId)
+            chatClient.connect(userId, userName, groupId, token = JwtManager.getAccessToken())
         } catch (e: dynamic) {
             console.error("❌ 工作流 WebSocket 连接失败:", e.toString())
         }
@@ -1104,14 +1237,13 @@ private fun WorkflowChatPanel(
 
     // Auto-scroll
     val activeWorkflowNavigationTarget = appState.workflowNavigationTarget?.takeIf { it.workflowId == workflowId }
-    LaunchedEffect(messages.size, transientMessage, statusMessages.size, activeWorkflowNavigationTarget?.requestId) {
+    LaunchedEffect(activeTab, activeMessageCount, transientMessage, statusMessages.size) {
         if (activeWorkflowNavigationTarget?.messageId?.isNullOrBlank() == false) return@LaunchedEffect
-        js("""
-            setTimeout(function() {
-                var c = document.getElementById('wf-messages');
-                if (c) c.scrollTop = c.scrollHeight;
-            }, 100);
-        """)
+        kotlinx.coroutines.delay(50)
+        scrollContainerToBottom(WORKFLOW_MESSAGES_CONTAINER_ID)
+        // Cards and formatted content may settle after the first layout pass.
+        kotlinx.coroutines.delay(150)
+        scrollContainerToBottom(WORKFLOW_MESSAGES_CONTAINER_ID)
     }
 
     LaunchedEffect(activeWorkflowNavigationTarget?.requestId, messages.size, transientMessage?.id) {
@@ -1188,8 +1320,8 @@ private fun WorkflowChatPanel(
                     property("white-space", "nowrap")
                 }
             }) { Text(workflowName) }
-            // 工作目录 + 内联"更改"链接（贴在路径右侧，视觉更紧凑）
-            Div({
+            // 本地工作目录只对 Owner / Co-pilot 显示。
+            if (canControlActiveWorkspace) Div({
                 style {
                     display(DisplayStyle.Flex)
                     alignItems(AlignItems.Center)
@@ -1229,6 +1361,23 @@ private fun WorkflowChatPanel(
                 }
             }
         }
+        Button({
+            attr("title", "Room 成员")
+            style {
+                height(32.px)
+                padding(0.px, 10.px)
+                borderRadius(6.px)
+                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                backgroundColor(Color.white)
+                color(Color(SilkColors.textSecondary))
+                property("cursor", "pointer")
+                property("flex-shrink", "0")
+            }
+            onClick {
+                showRoomMembers = true
+                scope.launch { refreshRoomMembers() }
+            }
+        }) { Text("成员") }
         // Connection status indicator - only show when not connected
         if (connectionState != ConnectionState.CONNECTED) {
             Span({
@@ -1251,10 +1400,195 @@ private fun WorkflowChatPanel(
             }
         }
         // 源代码管理面板开关（D5）：打开时立即触发一次刷新
+        if (canControlActiveWorkspace) {
+            Button({
+                onClick { sourcePanelOpen = !sourcePanelOpen; if (sourcePanelOpen) diffRefreshSignal += 1 }
+                style { property("cursor", "pointer"); property("margin-left", "auto") }
+            }) { Text(if (sourcePanelOpen) "✕ 审查" else "⌥ 审查") }
+        }
+    }
+
+    // Workspace navigation: grouped on desktop, one stable selector on narrow screens.
+    val ownedActive = currentWorkspaces
+        .filter { it.ownerId == userId && it.lifecycleState == "ACTIVE" }
+        .sortedByDescending { it.recentActivityAt }
+    val archivedOwned = currentWorkspaces
+        .filter { it.ownerId == userId && it.lifecycleState == "ARCHIVED" }
+        .sortedByDescending { it.recentActivityAt }
+    val copilotWorkspaces = currentWorkspaces
+        .filter { it.role == "COPILOT" && it.lifecycleState == "ACTIVE" }
+        .sortedByDescending { it.recentActivityAt }
+    val memberWorkspaceGroups = currentWorkspaces
+        .filter {
+            it.ownerId != userId && it.lifecycleState == "ACTIVE" &&
+                it.role in setOf("OBSERVER", "COPILOT")
+        }
+        .groupBy { it.ownerId }
+        .map { (ownerId, ownerWorkspaces) ->
+            Triple(
+                ownerId,
+                ownerWorkspaces.firstOrNull()?.ownerDisplayName.orEmpty().ifBlank { "Room member" },
+                ownerWorkspaces.sortedByDescending { it.recentActivityAt },
+            )
+        }
+        .sortedBy { it.second }
+    val historicalSharedWorkspaces = historicalWorkspaceTabs.sortedByDescending { workspace ->
+        messages.lastOrNull { it.workspaceId == workspace.workspaceId }?.timestamp ?: 0L
+    }
+    val mobileWorkspaces = (
+        ownedActive + copilotWorkspaces + memberWorkspaceGroups.flatMap { it.third } +
+            archivedOwned + historicalSharedWorkspaces
+        ).distinctBy { it.workspaceId }
+
+    Div({
+        style {
+            property("flex-shrink", "0")
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("border-bottom", "1px solid ${SilkColors.border}")
+            backgroundColor(Color(SilkColors.surfaceElevated))
+            padding(6.px, 12.px)
+            property("gap", "8px")
+            property("min-height", "42px")
+            property("box-sizing", "border-box")
+        }
+    }) {
+        Div({ attr("class", "silk-workspace-nav-desktop") }) {
+            WorkspaceTabButton(
+                label = "Team Channel",
+                isActive = activeTab == "team",
+                onClick = { activeTab = "team" },
+            )
+            ownedActive.forEach { workspace ->
+                WorkspaceTabButton(
+                    label = workspace.name,
+                    workspace = workspace,
+                    isActive = activeTab == workspace.workspaceId,
+                    onClick = { activeTab = workspace.workspaceId },
+                )
+            }
+            if (copilotWorkspaces.isNotEmpty()) {
+                WorkspaceGroupSelect(
+                    label = "Co-pilot",
+                    workspaces = copilotWorkspaces,
+                    activeTab = activeTab,
+                    onSelect = { activeTab = it },
+                )
+            }
+            memberWorkspaceGroups.forEach { (ownerId, ownerName, ownerWorkspaces) ->
+                key(ownerId) {
+                    WorkspaceGroupSelect(
+                        label = ownerName,
+                        workspaces = ownerWorkspaces,
+                        activeTab = activeTab,
+                        onSelect = { activeTab = it },
+                    )
+                }
+            }
+            if (historicalSharedWorkspaces.isNotEmpty()) {
+                WorkspaceGroupSelect(
+                    label = "历史共享",
+                    workspaces = historicalSharedWorkspaces,
+                    activeTab = activeTab,
+                    onSelect = { activeTab = it },
+                )
+            }
+            if (archivedOwned.isNotEmpty()) {
+                WorkspaceGroupSelect(
+                    label = "已归档",
+                    workspaces = archivedOwned,
+                    activeTab = activeTab,
+                    onSelect = { activeTab = it },
+                )
+            }
+            if (activeTab != "team" && activeWorkspace == null) {
+                Span({
+                    style {
+                        padding(7.px, 10.px)
+                        color(Color(SilkColors.error))
+                        fontSize(13.px)
+                    }
+                }) { Text("工作区不可用") }
+            }
+        }
+
+        Div({ attr("class", "silk-workspace-nav-mobile") }) {
+            Select({
+                style {
+                    property("flex", "1")
+                    property("min-width", "0")
+                    height(34.px)
+                    borderRadius(6.px)
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    backgroundColor(Color.white)
+                    padding(4.px, 8.px)
+                }
+                onChange { activeTab = it.value ?: "team" }
+            }) {
+                Option("team", attrs = { if (activeTab == "team") attr("selected", "") }) {
+                    Text("Team Channel")
+                }
+                if (activeTab != "team" && activeWorkspace == null) {
+                    Option(activeTab, attrs = { attr("selected", ""); attr("disabled", "") }) {
+                        Text("工作区不可用")
+                    }
+                }
+                mobileWorkspaces.forEach { workspace ->
+                    val prefix = when {
+                        workspace.lifecycleState == "REVOKED" -> "历史共享"
+                        workspace.lifecycleState == "ARCHIVED" -> "已归档"
+                        workspace.ownerId == userId -> "我的"
+                        workspace.role == "COPILOT" -> "Co-pilot · ${workspace.ownerDisplayName}"
+                        else -> workspace.ownerDisplayName
+                    }
+                    val optionLabel = if (workspace.lifecycleState == "REVOKED") {
+                        "$prefix / ${workspace.ownerDisplayName} - ${workspace.name}"
+                    } else {
+                        "$prefix / ${workspace.name} · ${workspace.activity.state}"
+                    }
+                    Option(
+                        workspace.workspaceId,
+                        attrs = { if (activeTab == workspace.workspaceId) attr("selected", "") },
+                    ) { Text(optionLabel) }
+                }
+            }
+        }
+
+        if (workspaceLoadError != null) {
+            Span({
+                attr("title", workspaceLoadError ?: "工作区加载失败")
+                style { color(Color(SilkColors.error)); fontSize(12.px) }
+            }) { Text("工作区加载失败") }
+        }
+        if (activeWorkspace?.role == "OWNER") {
+            Button({
+                attr("title", "管理当前工作区")
+                style {
+                    width(32.px); height(32.px); padding(0.px)
+                    borderRadius(6.px)
+                    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                    backgroundColor(Color.white)
+                    color(Color(SilkColors.textSecondary))
+                    property("cursor", "pointer")
+                    property("flex-shrink", "0")
+                }
+                onClick { workspaceManageTarget = activeWorkspace }
+            }) { Text("⚙") }
+        }
         Button({
-            onClick { sourcePanelOpen = !sourcePanelOpen; if (sourcePanelOpen) diffRefreshSignal += 1 }
-            style { property("cursor", "pointer"); property("margin-left", "auto") }
-        }) { Text(if (sourcePanelOpen) "✕ 审查" else "⌥ 审查") }
+            attr("title", "新建工作区")
+            style {
+                width(32.px); height(32.px); padding(0.px)
+                borderRadius(6.px)
+                border(0.px)
+                backgroundColor(Color(SilkColors.primary))
+                color(Color.white)
+                fontSize(20.px)
+                property("cursor", "pointer")
+                property("flex-shrink", "0")
+            }
+            onClick { showWorkspaceCreate = true }
+        }) { Text("+") }
     }
 
     // Messages area
@@ -1268,17 +1602,22 @@ private fun WorkflowChatPanel(
             property("background", SilkColors.backgroundGradient)
         }
     }) {
-        // Persistent messages
-        messages.forEachIndexed { index, message ->
+        // Persistent messages — filtered by active tab scope
+        val visibleMessages = messages.filter(belongsToActiveTab)
+        visibleMessages.forEachIndexed { index, message ->
             key(message.id) {
                 MessageItem(
                     message = message,
                     isTransient = false,
-                    isLastMessage = index == messages.lastIndex,
+                    isLastMessage = index == visibleMessages.lastIndex,
                     currentUserId = userId,
                     currentUserName = userName,
                     groupId = groupId,
                     chatClient = chatClient,
+                    canInteractWithCards = message.scope != MessageScope.WORKSPACE ||
+                        workspaceTabs.firstOrNull { it.workspaceId == message.workspaceId }?.let {
+                            it.lifecycleState == "ACTIVE" && it.role in setOf("OWNER", "COPILOT")
+                        } == true,
                     onCopy = { content -> copyTextToClipboard(content) },
                     onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                 )
@@ -1286,7 +1625,9 @@ private fun WorkflowChatPanel(
         }
 
         // Status messages（KB 上下文状态条改由输入区上方的 KnowledgeBaseContextTray 展示）
-        val visibleStatusMessages = statusMessages.filterNot(::isKnowledgeBaseContextStatusMessage)
+        val visibleStatusMessages = statusMessages
+            .filter(belongsToActiveTab)
+            .filterNot(::isKnowledgeBaseContextStatusMessage)
         if (visibleStatusMessages.isNotEmpty()) {
             Div({
                 style {
@@ -1315,7 +1656,7 @@ private fun WorkflowChatPanel(
         }
 
         // Transient (streaming) message
-        transientMessage?.let { message ->
+        transientMessage?.takeIf(belongsToActiveTab)?.let { message ->
             val shouldShowTransient = message.content.isNotBlank() &&
                 message.currentStep == null &&
                 message.totalSteps == null &&
@@ -1328,6 +1669,7 @@ private fun WorkflowChatPanel(
                     currentUserName = userName,
                     groupId = groupId,
                     chatClient = chatClient,
+                    canInteractWithCards = canControlActiveWorkspace,
                     onCopy = { content -> copyTextToClipboard(content) },
                     onCaptureToKnowledgeBase = onCaptureToKnowledgeBase,
                 )
@@ -1337,7 +1679,23 @@ private fun WorkflowChatPanel(
         }
     }
 
-    // Input area
+    if (activeWorkspace?.role == "COPILOT") {
+        Div({
+            style {
+                property("flex-shrink", "0")
+                padding(8.px, 16.px)
+                backgroundColor(Color("#FFF8E1"))
+                color(Color("#7A4F00"))
+                property("border-top", "1px solid #F2D28B")
+                fontSize(12.px)
+            }
+        }) {
+            Text("Co-pilot · ${activeWorkspace.ownerDisplayName} / ${activeWorkspace.name} · 远程设备操作")
+        }
+    }
+
+    // Input area is absent in observer and archived modes, so cards and composer cannot imply control.
+    if (canSendToActiveTab) {
     Div({
         style {
             property("flex-shrink", "0")
@@ -1350,7 +1708,7 @@ private fun WorkflowChatPanel(
         }
     }) {
         KnowledgeBaseContextTray(
-            statusMessages = statusMessages,
+            statusMessages = statusMessages.filter(belongsToActiveTab),
             selection = kbContextSelection,
             onSelectionChange = {
                 kbContextSelectionTouched = true
@@ -1366,8 +1724,8 @@ private fun WorkflowChatPanel(
                 property("position", "relative")
             }
         }) {
-            // New session badge
-            Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock) } }) {
+            // Workspace session controls are only available to Owner / Co-pilot.
+            if (canControlActiveWorkspace) Div({ style { property("position", "relative"); display(DisplayStyle.InlineBlock) } }) {
                 Span({
                     style {
                         fontSize(12.px)
@@ -1382,7 +1740,13 @@ private fun WorkflowChatPanel(
                     }
                     onClick {
                         scope.launch {
-                            chatClient.sendMessage(userId, userName, "/new")
+                            chatClient.sendMessage(
+                                userId = userId,
+                                userName = userName,
+                                content = "/new",
+                                scope = if (activeTab == "team") MessageScope.TEAM else MessageScope.WORKSPACE,
+                                workspaceId = activeTab.takeUnless { it == "team" },
+                            )
                         }
                     }
                 }) { Text("新会话") }
@@ -1452,7 +1816,7 @@ private fun WorkflowChatPanel(
                                             if (!isCurrent) {
                                                 scope.launch {
                                                     val resp = ApiClient.updateCcSettings(
-                                                        userId, groupId,
+                                                        userId, activeWorkspaceId ?: return@launch,
                                                         permissionMode = value,
                                                     )
                                                     if (resp.success) {
@@ -1531,7 +1895,7 @@ private fun WorkflowChatPanel(
                                                 showAgentDropdown = false
                                                 scope.launch {
                                                     val resp = ApiClient.updateCcSettings(
-                                                        userId, groupId,
+                                                        userId, activeWorkspaceId ?: return@launch,
                                                         activeAgent = agent.agentType,
                                                     )
                                                     if (resp.success) {
@@ -1578,6 +1942,7 @@ private fun WorkflowChatPanel(
             }
         }) {
         TextArea {
+            if (!canSendToActiveTab) attr("disabled", "")
             value(messageText)
             onInput { event ->
                 val newValue = event.value
@@ -1612,16 +1977,18 @@ private fun WorkflowChatPanel(
             attr("id", "wf-composer-input")
             attr("placeholder", "向 Agent 发送消息...（Shift+Enter 换行）")
             onKeyDown { event ->
-                if (shouldSubmitWorkflowMessage(event, messageText)) {
+                if (canSendToActiveTab && shouldSubmitWorkflowMessage(event, messageText)) {
                     event.preventDefault()
                     val text = messageText.trim()
                     messageText = ""
                     scope.launch {
                         chatClient.sendMessage(
-                            userId,
-                            userName,
-                            text,
-                            kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+                            userId = userId,
+                            userName = userName,
+                            content = text,
+                            kbContextSelection = kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+                            scope = if (activeTab == "team") MessageScope.TEAM else MessageScope.WORKSPACE,
+                            workspaceId = activeTab.takeUnless { it == "team" },
                         )
                     }
                 }
@@ -1742,7 +2109,7 @@ private fun WorkflowChatPanel(
             }
         }
 
-        if (isGenerating) {
+        if (isActiveStreamGenerating && canSendToActiveTab) {
             Button({
                 style {
                     backgroundColor(Color("#FF4D4F"))
@@ -1756,32 +2123,41 @@ private fun WorkflowChatPanel(
                     property("transition", "all 0.2s ease")
                 }
                 onClick {
-                    scope.launch { chatClient.stopGeneration(userId, userName) }
+                    scope.launch {
+                        chatClient.stopGeneration(
+                            userId = userId,
+                            userName = userName,
+                            scope = if (activeTab == "team") MessageScope.TEAM else MessageScope.WORKSPACE,
+                            workspaceId = activeTab.takeUnless { it == "team" },
+                        )
+                    }
                 }
             }) { Text("停止") }
         } else {
             Button({
                 style {
                     backgroundColor(
-                        if (messageText.isNotBlank()) Color(SilkColors.primary) else Color(SilkColors.primaryLight)
+                        if (messageText.isNotBlank() && canSendToActiveTab) Color(SilkColors.primary) else Color(SilkColors.primaryLight)
                     )
                     color(Color.white)
                     border(0.px)
                     borderRadius(8.px)
                     padding(8.px, 16.px)
-                    property("cursor", if (messageText.isNotBlank()) "pointer" else "default")
+                    property("cursor", if (messageText.isNotBlank() && canSendToActiveTab) "pointer" else "default")
                     fontSize(14.px)
                 }
                 onClick {
-                    if (messageText.isNotBlank()) {
+                    if (messageText.isNotBlank() && canSendToActiveTab) {
                         val text = messageText.trim()
                         messageText = ""
                         scope.launch {
                             chatClient.sendMessage(
-                                userId,
-                                userName,
-                                text,
-                                kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+                                userId = userId,
+                                userName = userName,
+                                content = text,
+                                kbContextSelection = kbContextSelection.takeIf(::hasKnowledgeBaseContextSelection),
+                                scope = if (activeTab == "team") MessageScope.TEAM else MessageScope.WORKSPACE,
+                                workspaceId = activeTab.takeUnless { it == "team" },
                             )
                         }
                     }
@@ -1790,8 +2166,29 @@ private fun WorkflowChatPanel(
         }
         } // close input row Div
     }
+    } else {
+        Div({
+            style {
+                property("flex-shrink", "0")
+                padding(12.px, 16.px)
+                property("border-top", "1px solid ${SilkColors.border}")
+                backgroundColor(Color(SilkColors.surfaceElevated))
+                color(Color(SilkColors.textSecondary))
+                fontSize(13.px)
+            }
+        }) {
+            Text(
+                when {
+                    activeWorkspace == null -> "工作区不可用或共享已撤销"
+                    activeWorkspace.lifecycleState == "REVOKED" -> "历史共享只读 · 当前共享已撤销"
+                    activeWorkspace.lifecycleState == "ARCHIVED" -> "工作区已归档"
+                    else -> "只读旁观"
+                }
+            )
+        }
+    }
     } // close 聊天列 Div
-        if (sourcePanelOpen) {
+        if (sourcePanelOpen && activeWorkspaceId != null && canControlActiveWorkspace) {
             ColumnResizer(
                 isLeftPanel = false,
                 minWidth = 300,
@@ -1801,8 +2198,7 @@ private fun WorkflowChatPanel(
                 onCommit = { LayoutPrefs.setInt("silk_wf_scpanel_w", sourcePanelWidth) },
             )
             SourceControlPanel(
-                userId = userId,
-                groupId = groupId,
+                workspaceId = activeWorkspaceId,
                 refreshSignal = diffRefreshSignal,
                 widthPx = sourcePanelWidth,
             )
@@ -1861,6 +2257,7 @@ private fun WorkflowChatPanel(
     if (showFolderPicker) {
         FolderPickerDialog(
             userId = userId,
+            workspaceId = activeWorkspaceId,
             initialPath = workingDir.ifBlank { null },
             onDismiss = { showFolderPicker = false },
             onConfirm = { selectedPath ->
@@ -1878,7 +2275,11 @@ private fun WorkflowChatPanel(
                             is ApiClient.TrustCheckResult.Error ->
                                 switchError = "检查信任状态失败：${tc.message}"
                             is ApiClient.TrustCheckResult.Trusted -> {
-                                val cdResp = ApiClient.cdCcDir(userId, groupId, selectedPath)
+                                val cdResp = ApiClient.cdCcDir(
+                                    userId,
+                                    activeWorkspaceId ?: return@launch,
+                                    selectedPath,
+                                )
                                 if (cdResp.success) {
                                     workingDir = cdResp.workingDir
                                 } else {
@@ -1906,7 +2307,11 @@ private fun WorkflowChatPanel(
                         return@launch
                     }
                     showTrustConfirm = false
-                    val cdResp = ApiClient.cdCcDir(userId, groupId, trustConfirmPath)
+                    val cdResp = ApiClient.cdCcDir(
+                        userId,
+                        activeWorkspaceId ?: return@launch,
+                        trustConfirmPath,
+                    )
                     if (cdResp.success) {
                         workingDir = cdResp.workingDir
                     } else {
@@ -1915,6 +2320,1014 @@ private fun WorkflowChatPanel(
                 }
             },
         )
+    }
+
+    if (showWorkspaceCreate) {
+        WorkspaceCreateDialog(
+            userId = userId,
+            roomId = groupId,
+            agents = availableAgents,
+            onDismiss = { showWorkspaceCreate = false },
+            onCreated = { created ->
+                workspaces = (workspaces.filterNot { it.workspaceId == created.workspaceId } + created)
+                activeTab = created.workspaceId
+                showWorkspaceCreate = false
+                workspaceRefreshVersion += 1
+            },
+        )
+    }
+
+    workspaceManageTarget?.let { target ->
+        WorkspaceManageDialog(
+            roomId = groupId,
+            workspace = target,
+            members = groupMembers,
+            onDismiss = { workspaceManageTarget = null },
+            onUpdated = { updated ->
+                workspaces = workspaces.map { if (it.workspaceId == updated.workspaceId) updated else it }
+                workspaceManageTarget = updated
+                workspaceRefreshVersion += 1
+            },
+            onDeleted = { deletedId ->
+                workspaces = workspaces.filterNot { it.workspaceId == deletedId }
+                if (activeTab == deletedId) activeTab = "team"
+                workspaceManageTarget = null
+                workspaceRefreshVersion += 1
+            },
+        )
+    }
+
+    if (showRoomMembers) {
+        WorkflowRoomMembersDialog(
+            isOwner = workflowRole == "OWNER",
+            members = roomMembers,
+            candidates = memberCandidates,
+            query = memberQuery,
+            busy = memberBusy,
+            errorMessage = memberError,
+            successMessage = memberFeedback,
+            onQueryChange = {
+                memberQuery = it
+                memberCandidates = emptyList()
+                memberFeedback = null
+            },
+            onSearch = {
+                scope.launch {
+                    memberBusy = true
+                    memberError = null
+                    memberFeedback = null
+                    try {
+                        val response = ApiClient.searchWorkflowMemberCandidates(workflowId, memberQuery.trim())
+                        if (response.success) {
+                            memberCandidates = response.candidates
+                        } else {
+                            memberError = response.message.ifBlank { "搜索失败" }
+                        }
+                    } finally {
+                        memberBusy = false
+                    }
+                }
+            },
+            onAdd = { candidate ->
+                scope.launch {
+                    memberBusy = true
+                    memberError = null
+                    memberFeedback = null
+                    try {
+                        val response = ApiClient.addWorkflowRoomMember(workflowId, candidate.id)
+                        if (response.success) {
+                            roomMembers = response.members
+                            groupMembers = response.members.map {
+                                GroupMember(id = it.id, fullName = it.fullName, role = it.role)
+                            }
+                            memberCandidates = memberCandidates.filterNot { it.id == candidate.id }
+                            memberFeedback = "已添加 ${candidate.fullName}"
+                        } else {
+                            memberError = response.message.ifBlank { "添加成员失败" }
+                        }
+                    } finally {
+                        memberBusy = false
+                    }
+                }
+            },
+            onRemove = { member ->
+                scope.launch {
+                    memberBusy = true
+                    memberError = null
+                    memberFeedback = null
+                    try {
+                        val response = ApiClient.removeWorkflowRoomMember(workflowId, member.id)
+                        if (response.success) {
+                            roomMembers = response.members
+                            groupMembers = response.members.map {
+                                GroupMember(id = it.id, fullName = it.fullName, role = it.role)
+                            }
+                            memberFeedback = "已移除 ${member.fullName}"
+                            workspaceRefreshVersion += 1
+                        } else {
+                            memberError = response.message.ifBlank { "移除成员失败" }
+                        }
+                    } finally {
+                        memberBusy = false
+                    }
+                }
+            },
+            onDismiss = {
+                showRoomMembers = false
+                memberCandidates = emptyList()
+                memberError = null
+                memberFeedback = null
+            },
+        )
+    }
+}
+
+@Composable
+private fun WorkflowRoomMembersDialog(
+    isOwner: Boolean,
+    members: List<WorkflowRoomMember>,
+    candidates: List<WorkflowMemberCandidate>,
+    query: String,
+    busy: Boolean,
+    errorMessage: String?,
+    successMessage: String?,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onAdd: (WorkflowMemberCandidate) -> Unit,
+    onRemove: (WorkflowRoomMember) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalOverlay(onDismiss = onDismiss) {
+        Div({
+            style {
+                width(520.px)
+                property("max-width", "calc(100vw - 32px)")
+                property("max-height", "calc(100vh - 48px)")
+                property("overflow-y", "auto")
+                backgroundColor(Color.white)
+                borderRadius(8.px)
+                padding(20.px)
+                property("box-sizing", "border-box")
+                property("box-shadow", "0 12px 36px rgba(0,0,0,0.18)")
+            }
+        }) {
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.SpaceBetween)
+                    alignItems(AlignItems.Center)
+                    marginBottom(18.px)
+                }
+            }) {
+                H3({
+                    style {
+                        marginTop(0.px)
+                        marginBottom(0.px)
+                        color(Color(SilkColors.textPrimary))
+                        fontSize(18.px)
+                    }
+                }) {
+                    Text("Room 成员")
+                }
+                Button({
+                    attr("type", "button")
+                    attr("title", "关闭")
+                    style {
+                        width(32.px); height(32.px); padding(0.px)
+                        border(0.px); backgroundColor(Color("transparent"))
+                        color(Color(SilkColors.textSecondary)); fontSize(20.px)
+                        property("cursor", "pointer")
+                    }
+                    onClick { onDismiss() }
+                }) { Text("×") }
+            }
+
+            WorkflowMemberSearchSection(isOwner, query, busy, onQueryChange, onSearch)
+
+            if (errorMessage != null) {
+                Div({
+                    style {
+                        color(Color(SilkColors.error))
+                        fontSize(13.px)
+                        marginBottom(12.px)
+                    }
+                }) { Text(errorMessage) }
+            }
+            if (successMessage != null) {
+                Div({
+                    style {
+                        color(Color("#2E7D32"))
+                        fontSize(13.px)
+                        marginBottom(12.px)
+                    }
+                }) { Text(successMessage) }
+            }
+
+            WorkflowMemberCandidatesSection(candidates, busy, onAdd)
+            WorkflowCurrentMembersSection(isOwner, members, busy, onRemove)
+        }
+    }
+}
+
+@Composable
+private fun WorkflowMemberSearchSection(
+    isOwner: Boolean,
+    query: String,
+    busy: Boolean,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+) {
+    if (!isOwner) return
+    val disabled = busy || query.isBlank()
+    Div({
+        style {
+            display(DisplayStyle.Flex)
+            property("gap", "8px")
+            marginBottom(12.px)
+        }
+    }) {
+        Input(InputType.Text) {
+            value(query)
+            onInput { onQueryChange(it.value) }
+            attr("placeholder", "用户名、姓名或电话号码")
+            style {
+                property("flex", "1")
+                property("min-width", "0")
+                height(36.px)
+                padding(0.px, 10.px)
+                borderRadius(6.px)
+                border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                property("box-sizing", "border-box")
+            }
+        }
+        Button({
+            attr("type", "button")
+            if (disabled) attr("disabled", "")
+            style {
+                height(36.px)
+                padding(0.px, 14.px)
+                border(0.px)
+                borderRadius(6.px)
+                backgroundColor(Color(SilkColors.primary))
+                color(Color.white)
+                property("cursor", if (disabled) "default" else "pointer")
+                property("opacity", if (disabled) "0.55" else "1")
+            }
+            onClick { onSearch() }
+        }) { Text("搜索") }
+    }
+}
+
+@Composable
+private fun WorkflowMemberCandidatesSection(
+    candidates: List<WorkflowMemberCandidate>,
+    busy: Boolean,
+    onAdd: (WorkflowMemberCandidate) -> Unit,
+) {
+    if (candidates.isEmpty()) return
+    Div({ style { marginBottom(16.px) } }) {
+        candidates.forEach { candidate ->
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    justifyContent(JustifyContent.SpaceBetween)
+                    property("gap", "12px")
+                    padding(10.px, 0.px)
+                    property("border-bottom", "1px solid ${SilkColors.border}")
+                }
+            }) {
+                Div({ style { property("min-width", "0") } }) {
+                    Div({ style { color(Color(SilkColors.textPrimary)); fontSize(14.px) } }) {
+                        Text(candidate.fullName)
+                    }
+                    Div({ style { color(Color(SilkColors.textSecondary)); fontSize(12.px) } }) {
+                        Text("${candidate.loginName} · ${candidate.phoneNumber}")
+                    }
+                }
+                Button({
+                    attr("type", "button")
+                    if (busy) attr("disabled", "")
+                    style {
+                        height(30.px); padding(0.px, 12.px)
+                        borderRadius(6.px); border(0.px)
+                        backgroundColor(Color(SilkColors.primary)); color(Color.white)
+                        property("cursor", if (busy) "default" else "pointer")
+                        property("opacity", if (busy) "0.55" else "1")
+                    }
+                    onClick { onAdd(candidate) }
+                }) { Text(if (busy) "添加中..." else "添加") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkflowCurrentMembersSection(
+    isOwner: Boolean,
+    members: List<WorkflowRoomMember>,
+    busy: Boolean,
+    onRemove: (WorkflowRoomMember) -> Unit,
+) {
+    var pendingRemovalId by remember { mutableStateOf<String?>(null) }
+    Div({ style { color(Color(SilkColors.textSecondary)); fontSize(12.px); marginBottom(6.px) } }) {
+        Text("当前成员 · ${members.size}")
+    }
+    members.forEach { member ->
+        val canRemove = isOwner && member.role != "OWNER"
+        val confirming = pendingRemovalId == member.id
+        Div({
+            style {
+                display(DisplayStyle.Flex)
+                alignItems(AlignItems.Center)
+                justifyContent(JustifyContent.SpaceBetween)
+                property("gap", "12px")
+                property("min-height", "42px")
+                property("border-bottom", "1px solid ${SilkColors.border}")
+            }
+        }) {
+            Div({ style { display(DisplayStyle.Flex); alignItems(AlignItems.Center); property("gap", "8px") } }) {
+                Span({ style { color(Color(SilkColors.textPrimary)); fontSize(14.px) } }) { Text(member.fullName) }
+                if (member.role == "OWNER") {
+                    Span({ style { color(Color(SilkColors.primary)); fontSize(11.px) } }) { Text("Owner") }
+                }
+            }
+            if (canRemove) {
+                Button({
+                    attr("type", "button")
+                    if (busy) attr("disabled", "")
+                    style {
+                        height(30.px); padding(0.px, 10.px)
+                        borderRadius(6.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.error))
+                        backgroundColor(if (confirming) Color(SilkColors.error) else Color.white)
+                        color(if (confirming) Color.white else Color(SilkColors.error))
+                        property("cursor", if (busy) "default" else "pointer")
+                    }
+                    onClick {
+                        if (confirming) {
+                            pendingRemovalId = null
+                            onRemove(member)
+                        } else {
+                            pendingRemovalId = member.id
+                        }
+                    }
+                }) { Text(if (confirming) "确认移除" else "移除") }
+            }
+        }
+    }
+}
+
+@Suppress("CyclomaticComplexMethod", "LongMethod", "TooGenericExceptionCaught")
+@Composable
+private fun WorkspaceCreateDialog(
+    userId: String,
+    roomId: String,
+    agents: List<AgentInfo>,
+    onDismiss: () -> Unit,
+    onCreated: (WorkspaceDto) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var name by remember { mutableStateOf("") }
+    var workingDir by remember { mutableStateOf("") }
+    var agentType by remember(agents) {
+        mutableStateOf(agents.firstOrNull { it.connected }?.agentType.orEmpty())
+    }
+    var visibility by remember { mutableStateOf("PRIVATE") }
+    var saving by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var showFolderPicker by remember { mutableStateOf(false) }
+    var showTrustConfirm by remember { mutableStateOf(false) }
+    var trustBridgeId by remember { mutableStateOf<String?>(null) }
+
+    suspend fun create() {
+        val token = JwtManager.getAccessToken()
+        if (token == null) {
+            errorMessage = "登录状态已失效"
+            return
+        }
+        if (name.isBlank() || workingDir.isBlank() || agentType.isBlank()) {
+            errorMessage = "请填写名称、Agent 和工作目录"
+            return
+        }
+        saving = true
+        errorMessage = null
+        try {
+            val created = createRoomWorkspace(
+                roomId = roomId,
+                authToken = token,
+                name = name.trim(),
+                workingDir = workingDir.trim(),
+                agentType = agentType,
+                visibility = visibility,
+            )
+            onCreated(created)
+        } catch (e: WorkspaceApiException) {
+            if (e.errorCode == "DIRECTORY_NOT_TRUSTED") {
+                trustBridgeId = e.bridgeId
+                showTrustConfirm = true
+            } else {
+                errorMessage = e.message
+            }
+        } catch (e: Exception) {
+            errorMessage = e.message ?: "创建工作区失败"
+        } finally {
+            saving = false
+        }
+    }
+
+    suspend fun validateAndCreate() {
+        if (workingDir.isBlank()) {
+            errorMessage = "请选择工作目录"
+            return
+        }
+        when (val trust = ApiClient.checkTrustedDir(userId, workingDir.trim())) {
+            is ApiClient.TrustCheckResult.Trusted -> create()
+            is ApiClient.TrustCheckResult.NotTrusted -> {
+                trustBridgeId = trust.bridgeId
+                showTrustConfirm = true
+            }
+            is ApiClient.TrustCheckResult.BridgeDisconnected -> errorMessage = "Bridge 未连接"
+            is ApiClient.TrustCheckResult.Error -> errorMessage = trust.message
+        }
+    }
+
+    ModalOverlay(onDismiss = { if (!saving) onDismiss() }) {
+        Div({
+            style {
+                backgroundColor(Color.white)
+                borderRadius(8.px)
+                padding(24.px)
+                width(460.px)
+                property("max-width", "calc(100vw - 32px)")
+                property("box-sizing", "border-box")
+                property("box-shadow", "0 8px 32px rgba(0,0,0,0.16)")
+            }
+        }) {
+            H3({ style { marginTop(0.px); marginBottom(20.px); color(Color(SilkColors.textPrimary)) } }) {
+                Text("新建工作区")
+            }
+            WorkspaceFormLabel("名称")
+            Input(InputType.Text) {
+                value(name)
+                onInput { name = it.value }
+                attr("placeholder", "例如：auth refactor")
+                style { workspaceFormInputStyle() }
+            }
+
+            WorkspaceFormLabel("Agent")
+            Select({
+                style { workspaceFormInputStyle() }
+                onChange { agentType = it.value ?: "" }
+            }) {
+                if (agents.isEmpty()) {
+                    Option("") { Text("没有可用 Agent") }
+                }
+                agents.forEach { agent ->
+                    Option(
+                        agent.agentType,
+                        attrs = {
+                            if (!agent.connected) attr("disabled", "")
+                            if (agent.agentType == agentType) attr("selected", "")
+                        },
+                    ) { Text("${agent.displayName}${if (agent.connected) "" else "（离线）"}") }
+                }
+            }
+
+            WorkspaceFormLabel("工作目录")
+            Div({ style { display(DisplayStyle.Flex); property("gap", "8px") } }) {
+                Input(InputType.Text) {
+                    value(workingDir)
+                    onInput { workingDir = it.value }
+                    attr("placeholder", "工作目录路径")
+                    style { workspaceFormInputStyle(flex = true) }
+                }
+                Button({
+                    attr("title", "选择工作目录")
+                    style {
+                        width(40.px); height(40.px); padding(0.px)
+                        borderRadius(6.px)
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        backgroundColor(Color.white)
+                        color(Color(SilkColors.primary))
+                        property("cursor", "pointer")
+                    }
+                    onClick { showFolderPicker = true }
+                }) { Text("📂") }
+            }
+
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    justifyContent(JustifyContent.SpaceBetween)
+                    marginTop(16.px)
+                    marginBottom(18.px)
+                }
+            }) {
+                Div {
+                    Div({ style { fontSize(13.px); fontWeight("600"); color(Color(SilkColors.textPrimary)) } }) {
+                        Text("团队可见")
+                    }
+                    Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginTop(2.px) } }) {
+                        Text(if (visibility == "SHARED") "SHARED" else "PRIVATE")
+                    }
+                }
+                Input(InputType.Checkbox) {
+                    checked(visibility == "SHARED")
+                    onInput { visibility = if (visibility == "SHARED") "PRIVATE" else "SHARED" }
+                    style { property("transform", "scale(1.2)") }
+                }
+            }
+
+            errorMessage?.let { message ->
+                Div({ style { color(Color(SilkColors.error)); fontSize(12.px); marginBottom(12.px) } }) {
+                    Text(message)
+                }
+            }
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    justifyContent(JustifyContent.FlexEnd)
+                    property("gap", "8px")
+                }
+            }) {
+                WorkspaceSecondaryButton("取消", disabled = saving, onClick = onDismiss)
+                WorkspacePrimaryButton(
+                    label = if (saving) "创建中..." else "创建",
+                    disabled = saving || name.isBlank() || workingDir.isBlank() || agentType.isBlank(),
+                    onClick = { scope.launch { validateAndCreate() } },
+                )
+            }
+        }
+    }
+
+    if (showFolderPicker) {
+        FolderPickerDialog(
+            userId = userId,
+            initialPath = workingDir.ifBlank { null },
+            onDismiss = { showFolderPicker = false },
+            onConfirm = {
+                workingDir = it
+                showFolderPicker = false
+            },
+        )
+    }
+    if (showTrustConfirm) {
+        TrustConfirmDialog(
+            path = workingDir,
+            bridgeId = trustBridgeId,
+            onDismiss = { showTrustConfirm = false },
+            onTrust = {
+                scope.launch {
+                    saving = true
+                    val added = ApiClient.addTrustedDir(userId, workingDir)
+                    saving = false
+                    if (added) {
+                        showTrustConfirm = false
+                        create()
+                    } else {
+                        errorMessage = "添加信任记录失败"
+                    }
+                }
+            },
+        )
+    }
+}
+
+@Suppress("CyclomaticComplexMethod", "LongMethod", "TooGenericExceptionCaught")
+@Composable
+private fun WorkspaceManageDialog(
+    roomId: String,
+    workspace: WorkspaceDto,
+    members: List<GroupMember>,
+    onDismiss: () -> Unit,
+    onUpdated: (WorkspaceDto) -> Unit,
+    onDeleted: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var name by remember(workspace.workspaceId) { mutableStateOf(workspace.name) }
+    var visibility by remember(workspace.workspaceId) { mutableStateOf(workspace.visibility) }
+    var copilots by remember(workspace.workspaceId) { mutableStateOf(workspace.copilots.toSet()) }
+    var saving by remember { mutableStateOf(false) }
+    var deleteArmed by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var successMessage by remember { mutableStateOf<String?>(null) }
+
+    suspend fun update(
+        updatedName: String? = null,
+        updatedVisibility: String? = null,
+        updatedCopilots: List<String>? = null,
+        lifecycleState: String? = null,
+    ) {
+        val token = JwtManager.getAccessToken()
+        if (token == null) {
+            errorMessage = "登录状态已失效"
+            return
+        }
+        saving = true
+        errorMessage = null
+        successMessage = null
+        try {
+            val updated = patchRoomWorkspace(
+                roomId = roomId,
+                workspaceId = workspace.workspaceId,
+                authToken = token,
+                name = updatedName,
+                visibility = updatedVisibility,
+                copilots = updatedCopilots,
+                lifecycleState = lifecycleState,
+            )
+            onUpdated(updated)
+            successMessage = when (lifecycleState) {
+                "ARCHIVED" -> "工作区已归档"
+                "ACTIVE" -> "工作区已恢复"
+                else -> "设置已保存"
+            }
+        } catch (e: WorkspaceApiException) {
+            errorMessage = e.message
+        } catch (e: Exception) {
+            errorMessage = e.message ?: "工作区更新失败"
+        } finally {
+            saving = false
+        }
+    }
+
+    suspend fun delete() {
+        val token = JwtManager.getAccessToken()
+        if (token == null) {
+            errorMessage = "登录状态已失效"
+            return
+        }
+        saving = true
+        errorMessage = null
+        try {
+            deleteRoomWorkspace(roomId, workspace.workspaceId, token)
+            onDeleted(workspace.workspaceId)
+        } catch (e: WorkspaceApiException) {
+            errorMessage = e.message
+        } catch (e: Exception) {
+            errorMessage = e.message ?: "删除工作区失败"
+        } finally {
+            saving = false
+        }
+    }
+
+    ModalOverlay(onDismiss = { if (!saving) onDismiss() }) {
+        Div({
+            style {
+                backgroundColor(Color.white)
+                borderRadius(8.px)
+                padding(24.px)
+                width(500.px)
+                property("max-width", "calc(100vw - 32px)")
+                property("max-height", "calc(100vh - 48px)")
+                property("overflow-y", "auto")
+                property("box-sizing", "border-box")
+                property("box-shadow", "0 8px 32px rgba(0,0,0,0.16)")
+            }
+        }) {
+            H3({ style { marginTop(0.px); marginBottom(4.px); color(Color(SilkColors.textPrimary)) } }) {
+                Text("工作区设置")
+            }
+            Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginBottom(18.px) } }) {
+                Text("${workspace.ownerDisplayName} · ${workspace.agentType} · ${workspace.activity.state}")
+            }
+
+            WorkspaceFormLabel("名称")
+            Input(InputType.Text) {
+                value(name)
+                onInput {
+                    name = it.value
+                    successMessage = null
+                }
+                style { workspaceFormInputStyle() }
+            }
+
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    alignItems(AlignItems.Center)
+                    justifyContent(JustifyContent.SpaceBetween)
+                    marginTop(14.px)
+                    marginBottom(14.px)
+                }
+            }) {
+                Div {
+                    Div({ style { fontSize(13.px); fontWeight("600"); color(Color(SilkColors.textPrimary)) } }) {
+                        Text("团队可见")
+                    }
+                    Div({ style { fontSize(12.px); color(Color(SilkColors.textSecondary)); marginTop(2.px) } }) {
+                        Text(if (visibility == "SHARED") "SHARED" else "PRIVATE")
+                    }
+                }
+                Input(InputType.Checkbox) {
+                    checked(visibility == "SHARED")
+                    onInput {
+                        visibility = if (visibility == "SHARED") "PRIVATE" else "SHARED"
+                        successMessage = null
+                    }
+                    style { property("transform", "scale(1.2)") }
+                }
+            }
+
+            Div({
+                style {
+                    padding(10.px, 12.px)
+                    backgroundColor(Color("#FFF8E1"))
+                    color(Color("#7A4F00"))
+                    borderRadius(6.px)
+                    fontSize(12.px)
+                    property("line-height", "1.5")
+                    marginBottom(10.px)
+                }
+            }) { Text("Co-pilot 可以在 ${workspace.ownerDisplayName} 的设备上执行代码。") }
+
+            WorkspaceFormLabel("Co-pilot")
+            val eligibleMembers = members.filter { it.id != workspace.ownerId }
+            if (eligibleMembers.isEmpty()) {
+                Div({ style { color(Color(SilkColors.textSecondary)); fontSize(12.px); marginBottom(14.px) } }) {
+                    Text("没有可授权的 Room 成员")
+                }
+            } else {
+                Div({
+                    style {
+                        border(1.px, LineStyle.Solid, Color(SilkColors.border))
+                        borderRadius(6.px)
+                        property("max-height", "160px")
+                        property("overflow-y", "auto")
+                        marginBottom(14.px)
+                    }
+                }) {
+                    eligibleMembers.forEach { member ->
+                        val selected = member.id in copilots
+                        Div({
+                            style {
+                                display(DisplayStyle.Flex)
+                                alignItems(AlignItems.Center)
+                                justifyContent(JustifyContent.SpaceBetween)
+                                padding(9.px, 12.px)
+                                property("border-bottom", "1px solid ${SilkColors.border}")
+                            }
+                        }) {
+                            Div {
+                                Div({ style { fontSize(13.px); color(Color(SilkColors.textPrimary)) } }) {
+                                    Text(member.fullName)
+                                }
+                                Div({ style { fontSize(11.px); color(Color(SilkColors.textSecondary)); marginTop(2.px) } }) {
+                                    Text(member.role)
+                                }
+                            }
+                            Input(InputType.Checkbox) {
+                                checked(selected && visibility == "SHARED")
+                                if (visibility != "SHARED") attr("disabled", "")
+                                onInput {
+                                    copilots = if (selected) copilots - member.id else copilots + member.id
+                                    successMessage = null
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            errorMessage?.let { message ->
+                Div({ style { color(Color(SilkColors.error)); fontSize(12.px); marginBottom(12.px) } }) {
+                    Text(message)
+                }
+            }
+            successMessage?.let { message ->
+                Div({ style { color(Color("#2E7D32")); fontSize(12.px); marginBottom(12.px) } }) {
+                    Text(message)
+                }
+            }
+
+            Div({
+                style {
+                    display(DisplayStyle.Flex)
+                    property("flex-wrap", "wrap")
+                    justifyContent(JustifyContent.SpaceBetween)
+                    property("gap", "8px")
+                    padding(14.px, 0.px)
+                    property("border-top", "1px solid ${SilkColors.border}")
+                }
+            }) {
+                Div({ style { display(DisplayStyle.Flex); property("gap", "8px") } }) {
+                    WorkspaceSecondaryButton(
+                        label = if (workspace.lifecycleState == "ACTIVE") "归档" else "恢复",
+                        disabled = saving,
+                        onClick = {
+                            scope.launch {
+                                update(
+                                    lifecycleState = if (workspace.lifecycleState == "ACTIVE") "ARCHIVED" else "ACTIVE"
+                                )
+                            }
+                        },
+                    )
+                    if (workspace.lifecycleState == "ARCHIVED") {
+                        if (deleteArmed) {
+                            WorkspaceDangerButton("确认删除", saving) { scope.launch { delete() } }
+                        } else {
+                            WorkspaceDangerButton("删除", saving) { deleteArmed = true }
+                        }
+                    }
+                }
+                Div({ style { display(DisplayStyle.Flex); property("gap", "8px") } }) {
+                    WorkspaceSecondaryButton("取消", saving, onDismiss)
+                    WorkspacePrimaryButton(
+                        label = when {
+                            saving -> "保存中..."
+                            successMessage == "设置已保存" -> "已保存"
+                            else -> "保存"
+                        },
+                        disabled = saving || name.isBlank(),
+                        onClick = {
+                            scope.launch {
+                                update(
+                                    updatedName = name.trim(),
+                                    updatedVisibility = visibility,
+                                    updatedCopilots = if (visibility == "SHARED") copilots.toList() else emptyList(),
+                                )
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceFormLabel(label: String) {
+    Span({
+        style {
+            property("display", "block")
+            fontSize(12.px)
+            color(Color(SilkColors.textSecondary))
+            marginTop(12.px)
+            marginBottom(5.px)
+        }
+    }) { Text(label) }
+}
+
+private fun org.jetbrains.compose.web.css.StyleScope.workspaceFormInputStyle(flex: Boolean = false) {
+    if (flex) property("flex", "1") else width(100.percent)
+    height(40.px)
+    borderRadius(6.px)
+    border(1.px, LineStyle.Solid, Color(SilkColors.border))
+    padding(8.px, 10.px)
+    fontSize(13.px)
+    backgroundColor(Color.white)
+    property("box-sizing", "border-box")
+}
+
+@Composable
+private fun WorkspacePrimaryButton(label: String, disabled: Boolean, onClick: () -> Unit) {
+    Button({
+        if (disabled) attr("disabled", "")
+        style {
+            minHeight(36.px)
+            border(0.px)
+            borderRadius(6.px)
+            padding(7.px, 16.px)
+            backgroundColor(Color(if (disabled) SilkColors.primaryLight else SilkColors.primary))
+            color(Color.white)
+            property("cursor", if (disabled) "not-allowed" else "pointer")
+        }
+        onClick { if (!disabled) onClick() }
+    }) { Text(label) }
+}
+
+@Composable
+private fun WorkspaceSecondaryButton(label: String, disabled: Boolean, onClick: () -> Unit) {
+    Button({
+        if (disabled) attr("disabled", "")
+        style {
+            minHeight(36.px)
+            borderRadius(6.px)
+            border(1.px, LineStyle.Solid, Color(SilkColors.border))
+            padding(7.px, 14.px)
+            backgroundColor(Color.white)
+            color(Color(SilkColors.textSecondary))
+            property("cursor", if (disabled) "not-allowed" else "pointer")
+        }
+        onClick { if (!disabled) onClick() }
+    }) { Text(label) }
+}
+
+@Composable
+private fun WorkspaceDangerButton(label: String, disabled: Boolean, onClick: () -> Unit) {
+    Button({
+        if (disabled) attr("disabled", "")
+        style {
+            minHeight(36.px)
+            borderRadius(6.px)
+            border(1.px, LineStyle.Solid, Color("#D32F2F"))
+            padding(7.px, 14.px)
+            backgroundColor(Color.white)
+            color(Color("#D32F2F"))
+            property("cursor", if (disabled) "not-allowed" else "pointer")
+        }
+        onClick { if (!disabled) onClick() }
+    }) { Text(label) }
+}
+
+@Composable
+private fun WorkspaceActivityDot(state: String) {
+    val color = when (state) {
+        "RUNNING" -> "#2E7D32"
+        "WAITING" -> "#F9A825"
+        "IDLE" -> "#78909C"
+        else -> "#BDBDBD"
+    }
+    Span({
+        attr("title", state.lowercase().replaceFirstChar { it.uppercase() })
+        style {
+            width(8.px); height(8.px)
+            borderRadius(50.percent)
+            backgroundColor(Color(color))
+            property("display", "inline-block")
+            property("flex-shrink", "0")
+        }
+    })
+}
+
+@Composable
+private fun WorkspaceTabButton(
+    label: String,
+    isActive: Boolean,
+    workspace: WorkspaceDto? = null,
+    onClick: () -> Unit,
+) {
+    Div({
+        attr("title", workspace?.let { "${it.ownerDisplayName} / ${it.name} / ${it.activity.state}" } ?: label)
+        style {
+            display(DisplayStyle.Flex)
+            alignItems(AlignItems.Center)
+            property("gap", "6px")
+            padding(7.px, 10.px)
+            borderRadius(6.px)
+            fontSize(13.px)
+            fontWeight(if (isActive) "600" else "400")
+            color(Color(if (isActive) SilkColors.primary else SilkColors.textSecondary))
+            backgroundColor(Color(if (isActive) SilkColors.surface else "transparent"))
+            property("cursor", "pointer")
+            property("user-select", "none")
+            property("max-width", "190px")
+            property("white-space", "nowrap")
+        }
+        onClick { onClick() }
+    }) {
+        workspace?.let { WorkspaceActivityDot(it.activity.state) }
+        Span({
+            style {
+                property("overflow", "hidden")
+                property("text-overflow", "ellipsis")
+            }
+        }) { Text(label) }
+    }
+}
+
+@Composable
+private fun WorkspaceGroupSelect(
+    label: String,
+    workspaces: List<WorkspaceDto>,
+    activeTab: String,
+    onSelect: (String) -> Unit,
+) {
+    val selected = workspaces.firstOrNull { it.workspaceId == activeTab }
+    key(selected?.workspaceId.orEmpty()) {
+        Select({
+            attr("title", "$label · ${workspaces.size}")
+            style {
+                height(32.px)
+                property("max-width", "190px")
+                borderRadius(6.px)
+                border(1.px, LineStyle.Solid, Color(if (selected != null) SilkColors.primary else SilkColors.border))
+                backgroundColor(Color.white)
+                color(Color(if (selected != null) SilkColors.primary else SilkColors.textSecondary))
+                padding(4.px, 8.px)
+                fontSize(12.px)
+            }
+            onChange { value -> value.value?.takeIf { it.isNotBlank() }?.let(onSelect) }
+        }) {
+            Option("", attrs = { if (selected == null) attr("selected", "") }) {
+                Text("$label (${workspaces.size})")
+            }
+            workspaces.forEach { workspace ->
+                Option(
+                    workspace.workspaceId,
+                    attrs = { if (selected?.workspaceId == workspace.workspaceId) attr("selected", "") },
+                ) {
+                    Text(
+                        if (workspace.lifecycleState == "REVOKED") {
+                            "${workspace.ownerDisplayName} - ${workspace.name}"
+                        }
+                        else "${workspace.name} · ${workspace.activity.state}"
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1925,7 +3338,7 @@ private fun WorkflowChatPanel(
 @Composable
 private fun WorkflowSettingsDialog(
     userId: String,
-    groupId: String,
+    workspaceId: String,
     currentWorkingDir: String,
     currentAgentDisplay: String,
     currentPermissionMode: String,
@@ -1949,7 +3362,7 @@ private fun WorkflowSettingsDialog(
         val agents = ApiClient.listAgents(userId)
         availableAgents = agents
         // 从当前显示名反查 agentType
-        val snap = ApiClient.getCcState(userId, groupId)
+        val snap = ApiClient.getCcState(userId, workspaceId)
         if (snap.success && snap.agentType.isNotBlank()) {
             // agentType 从 runtime 是 dash form，转 underscore form 用于 dropdown
             selectedAgentType = snap.agentType.replace('-', '_')
@@ -1985,7 +3398,7 @@ private fun WorkflowSettingsDialog(
                     }
                     else -> {}
                 }
-                val cdResp = ApiClient.cdCcDir(userId, groupId, resultDir)
+                val cdResp = ApiClient.cdCcDir(userId, workspaceId, resultDir)
                 if (!cdResp.success) {
                     errorMsg = "切换目录失败：${cdResp.error ?: "未知错误"}"
                     return
@@ -1996,14 +3409,14 @@ private fun WorkflowSettingsDialog(
             // 2. Agent / 权限模式变化：合并为一次 API 调用
             val currentAgentUnderscore = currentAgentDisplay.let {
                 // 从当前 snapshot 再取一次精确的 agentType
-                val s = ApiClient.getCcState(userId, groupId)
+                val s = ApiClient.getCcState(userId, workspaceId)
                 s.agentType.replace('-', '_')
             }
             val agentChanged = selectedAgentType.isNotBlank() && selectedAgentType != currentAgentUnderscore
             val permChanged = selectedPermMode != currentPermissionMode
             if (agentChanged || permChanged) {
                 val resp = ApiClient.updateCcSettings(
-                    userId, groupId,
+                    userId, workspaceId,
                     activeAgent = if (agentChanged) selectedAgentType else null,
                     permissionMode = if (permChanged) selectedPermMode.ifBlank { "INTERACTIVE" } else null,
                 )
@@ -2236,6 +3649,7 @@ private fun WorkflowSettingsDialog(
 @Composable
 private fun FolderPickerDialog(
     userId: String,
+    workspaceId: String? = null,
     initialPath: String?,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
@@ -2254,7 +3668,7 @@ private fun FolderPickerDialog(
         loadJob = scope.launch {
             loading = true
             errorMsg = null
-            val resp = ApiClient.listCcDir(userId, path)
+            val resp = ApiClient.listCcDir(userId, path, workspaceId = workspaceId)
             // 到这里说明本协程未被 cancel（否则 listCcDir 内部会重新抛 CancellationException）
             loading = false
             if (resp.success) {

@@ -7,7 +7,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * (userId, agentType) → AcpClient 索引。
- * Plan A 阶段只是骨架；连接生命周期管理（accept/挤旧/通知 framework）放到 Plan B/C。
+ * Bridge 是用户级别的接入，与工作区无关；同一用户同一 agentType 全局共享一个连接。
+ * 用户在不同工作区使用同一 bridge，工作目录/会话上下文由 GroupAgentContext(workspaceId) 独立管理。
  */
 object AcpRegistry {
 
@@ -19,8 +20,7 @@ object AcpRegistry {
     private fun key(userId: String, agentType: String) = "${userId}::${agentType}"
 
     /**
-     * 注册新 client。如果同 (userId, agentType) 已有旧 client，**返回旧 client**让调用方负责 close。
-     * Plan A 不直接 close，避免与 framework 层职责重叠。
+     * 注册新 client。如果同 (userId, agentType) 已有旧 client，close 旧连接并注册新的。
      */
     fun put(userId: String, agentType: String, client: AcpClient, remoteIp: String?): AcpClient? {
         val previous = entries.put(key(userId, agentType), Entry(client, remoteIp))
@@ -29,7 +29,7 @@ object AcpRegistry {
 
     /**
      * 接受一个 Ktor WebSocket 连接，包装为 AcpClient 并注册。
-     * 如果同 (userId, agentType) 已有旧 client，返回旧 client 供调用方关闭。
+     * 同 (userId, agentType) 已有旧连接时，踢掉旧连接。
      */
     suspend fun acceptConnection(
         userId: String,

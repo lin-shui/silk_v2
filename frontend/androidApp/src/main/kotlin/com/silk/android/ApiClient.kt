@@ -221,6 +221,18 @@ data class WorkflowItem(
     val updatedAt: Long = 0,
 )
 
+@Serializable
+data class WorkspaceDto(
+    val workspaceId: String,
+    val roomId: String,
+    val ownerId: String,
+    val name: String,
+    val workingDir: String = "",
+    val agentType: String = "claude-code",
+    val visibility: String = "PRIVATE",
+    val role: String = "OBSERVER",
+)
+
 sealed class CreateWorkflowResult {
     data class Ok(val workflow: WorkflowItem) : CreateWorkflowResult()
     data class Err(val message: String) : CreateWorkflowResult()
@@ -761,6 +773,9 @@ object ApiClient {
                 connectTimeout = 10000
                 readTimeout = 10000
             }
+            if (!accessToken.isNullOrBlank()) {
+                connection.setRequestProperty("Authorization", "Bearer $accessToken")
+            }
             
             connection.outputStream.use { os ->
                 os.write(jsonBody.toByteArray())
@@ -782,6 +797,9 @@ object ApiClient {
                 connectTimeout = 10000
                 readTimeout = 10000
             }
+            if (!accessToken.isNullOrBlank()) {
+                connection.setRequestProperty("Authorization", "Bearer $accessToken")
+            }
             
             connection.inputStream.bufferedReader().use { it.readText() }
         } finally {
@@ -798,6 +816,9 @@ object ApiClient {
                 connectTimeout = 10000
                 readTimeout = 10000
             }
+            if (!accessToken.isNullOrBlank()) {
+                connection.setRequestProperty("Authorization", "Bearer $accessToken")
+            }
             connection.inputStream.bufferedReader().use { it.readText() }
         } finally {
             connection.disconnect()
@@ -810,6 +831,17 @@ object ApiClient {
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             println("获取工作流失败: $e")
+            emptyList()
+        }
+    }
+
+    suspend fun getWorkspaces(roomId: String): List<WorkspaceDto> = withContext(Dispatchers.IO) {
+        try {
+            val response = get("/api/rooms/$roomId/workspaces")
+            jsonParser.decodeFromString(response)
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            println("获取工作区失败: $e")
             emptyList()
         }
     }
@@ -875,9 +907,9 @@ object ApiClient {
         }
     }
 
-    suspend fun getCcState(userId: String, groupId: String): CcStateResponse = withContext(Dispatchers.IO) {
+    suspend fun getCcState(userId: String, workspaceId: String): CcStateResponse = withContext(Dispatchers.IO) {
         try {
-            val response = get("/users/$userId/cc-state/$groupId")
+            val response = get("/users/$userId/cc-state/$workspaceId")
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -890,12 +922,16 @@ object ApiClient {
         userId: String,
         path: String? = null,
         showHidden: Boolean = false,
+        workspaceId: String? = null,
     ): DirListingResponse = withContext(Dispatchers.IO) {
         try {
             val params = buildString {
                 append("?showHidden=$showHidden")
                 if (!path.isNullOrBlank()) {
                     append("&path=").append(java.net.URLEncoder.encode(path, "UTF-8"))
+                }
+                if (!workspaceId.isNullOrBlank()) {
+                    append("&workspaceId=").append(java.net.URLEncoder.encode(workspaceId, "UTF-8"))
                 }
             }
             val response = get("/users/$userId/cc-fs/list$params")
@@ -907,10 +943,10 @@ object ApiClient {
         }
     }
 
-    suspend fun cdCcDir(userId: String, groupId: String, path: String): CcStateResponse = withContext(Dispatchers.IO) {
+    suspend fun cdCcDir(userId: String, workspaceId: String, path: String): CcStateResponse = withContext(Dispatchers.IO) {
         try {
             val body = buildJsonObject {
-                put("groupId", JsonPrimitive(groupId))
+                put("workspaceId", JsonPrimitive(workspaceId))
                 put("path", JsonPrimitive(path))
             }.toString()
             val response = post("/users/$userId/cc-fs/cd", body)
@@ -938,13 +974,13 @@ object ApiClient {
     /** 更新工作流会话设置（agent / permissionMode）。 */
     suspend fun updateCcSettings(
         userId: String,
-        groupId: String,
+        workspaceId: String,
         activeAgent: String? = null,
         permissionMode: String? = null,
     ): CcStateResponse = withContext(Dispatchers.IO) {
         try {
             val body = buildJsonObject {
-                put("groupId", JsonPrimitive(groupId))
+                put("workspaceId", JsonPrimitive(workspaceId))
                 if (!activeAgent.isNullOrBlank()) {
                     put("activeAgent", JsonPrimitive(activeAgent))
                 }

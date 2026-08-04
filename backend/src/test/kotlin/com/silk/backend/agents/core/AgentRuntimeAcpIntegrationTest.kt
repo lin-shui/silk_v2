@@ -37,12 +37,12 @@ class AgentRuntimeAcpIntegrationTest {
         val client = AcpClient(transport, scope = backgroundScope)
         AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
-        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
 
         val deferred = async {
             AgentRuntime.handleIfActive(
                 userId = "u1",
-                groupId = "g1",
+                workspaceId = "g1",
                 text = "hello",
                 userName = "Alice",
                 broadcastFn = {},
@@ -81,12 +81,12 @@ class AgentRuntimeAcpIntegrationTest {
 
     @Test
     fun `prompt without bridge connection shows not connected message`() = runTest {
-        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
 
         val messages = mutableListOf<Message>()
         val handled = AgentRuntime.handleIfActive(
             userId = "u1",
-            groupId = "g1",
+            workspaceId = "g1",
             text = "hello",
             userName = "Alice",
             broadcastFn = { messages.add(it) },
@@ -101,13 +101,13 @@ class AgentRuntimeAcpIntegrationTest {
         val client = AcpClient(transport, scope = backgroundScope)
         AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
-        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
 
         // Start a prompt in background
         val promptDeferred = async {
             AgentRuntime.handleIfActive(
                 userId = "u1",
-                groupId = "g1",
+                workspaceId = "g1",
                 text = "hello",
                 userName = "Alice",
                 broadcastFn = {},
@@ -149,13 +149,13 @@ class AgentRuntimeAcpIntegrationTest {
         val client = AcpClient(transport, scope = backgroundScope)
         AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
-        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
 
         // Start a prompt
         val promptDeferred = async {
             AgentRuntime.handleIfActive(
                 userId = "u1",
-                groupId = "g1",
+                workspaceId = "g1",
                 text = "hello",
                 userName = "Alice",
                 broadcastFn = {},
@@ -189,13 +189,13 @@ class AgentRuntimeAcpIntegrationTest {
         val client = AcpClient(transport, scope = backgroundScope)
         AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
-        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
 
         val messages = mutableListOf<Message>()
         val deferred = async {
             AgentRuntime.handleIfActive(
                 userId = "u1",
-                groupId = "g1",
+                workspaceId = "g1",
                 text = "hello",
                 userName = "Alice",
                 broadcastFn = { messages.add(it) },
@@ -227,13 +227,13 @@ class AgentRuntimeAcpIntegrationTest {
         val client = AcpClient(transport, scope = backgroundScope)
         AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
-        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
+        AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
 
         val messages = mutableListOf<Message>()
         val deferred = async {
             AgentRuntime.handleIfActive(
                 userId = "u1",
-                groupId = "g1",
+                workspaceId = "g1",
                 text = "hello",
                 userName = "Alice",
                 broadcastFn = { messages.add(it) },
@@ -263,9 +263,10 @@ class AgentRuntimeAcpIntegrationTest {
         val transport = InMemoryAcpTransport()
         val client = AcpClient(transport, scope = backgroundScope)
         AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
+        AcpRegistry.put("u1", "claude-code", client, remoteIp = "127.0.0.1")
 
-        AgentRuntime.autoActivateForWorkflow("u1", "g1", "claude-code")
-        AgentRuntime.autoActivateForWorkflow("u1", "g2", "claude-code")
+        AgentRuntime.autoActivateForWorkspace("u1", "g1", "claude-code")
+        AgentRuntime.autoActivateForWorkspace("u1", "g2", "claude-code")
 
         val messagesG1 = mutableListOf<Message>()
         val messagesG2 = mutableListOf<Message>()
@@ -336,10 +337,10 @@ class AgentRuntimeAcpIntegrationTest {
     }
 
     /** Wait for the background prompt coroutine to complete (session.running becomes false). */
-    private suspend fun awaitSessionIdle(userId: String, groupId: String, timeoutMs: Long = 5000) {
+    private suspend fun awaitSessionIdle(userId: String, workspaceId: String, timeoutMs: Long = 5000) {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
-            val state = AgentRuntime.snapshotState(userId, groupId)
+            val state = AgentRuntime.snapshotState(userId, workspaceId)
             if (state == null || !state.running) return
             kotlinx.coroutines.delay(10)
         }

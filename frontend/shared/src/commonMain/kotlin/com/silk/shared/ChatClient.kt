@@ -3,6 +3,7 @@ package com.silk.shared
 import com.silk.shared.models.Message
 import com.silk.shared.models.MessageCategory
 import com.silk.shared.models.MessageType
+import com.silk.shared.models.MessageScope
 import com.silk.shared.models.ContentBlock
 import com.silk.shared.models.InteractiveOption
 import com.silk.shared.models.KnowledgeBaseContextSelection
@@ -41,6 +42,9 @@ expect class PlatformWebSocket(
     val isConnected: Boolean
 }
 
+fun messageStreamKey(scope: MessageScope, workspaceId: String?): String =
+    if (scope == MessageScope.TEAM) "TEAM" else "WORKSPACE:${workspaceId.orEmpty()}"
+
 class ChatClient(
     private val serverUrl: String,
     private val onLog: LogCallback? = null
@@ -58,13 +62,20 @@ class ChatClient(
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
     
-    // 单独的临时消息状态（只保留最新的一条）- 用于 AI 增量回复
+    // Legacy latest-stream view, kept for normal Room and mobile clients.
     private val _transientMessage = MutableStateFlow<Message?>(null)
     val transientMessage: StateFlow<Message?> = _transientMessage.asStateFlow()
+
+    // Workflow Room can run multiple workspace streams concurrently.
+    private val _transientMessages = MutableStateFlow<Map<String, Message>>(emptyMap())
+    val transientMessages: StateFlow<Map<String, Message>> = _transientMessages.asStateFlow()
     
     // 系统状态消息列表（用于显示搜索、索引等状态）
     private val _statusMessages = MutableStateFlow<List<Message>>(emptyList())
     val statusMessages: StateFlow<List<Message>> = _statusMessages.asStateFlow()
+
+    private val _statusMessagesByStream = MutableStateFlow<Map<String, List<Message>>>(emptyMap())
+    val statusMessagesByStream: StateFlow<Map<String, List<Message>>> = _statusMessagesByStream.asStateFlow()
 
     // Agent 提问等待回答状态（AskUserQuestion requestId）
     private val _pendingQuestionId = MutableStateFlow<String?>(null)
@@ -91,7 +102,46 @@ class ChatClient(
     private val _ccMetadataJson = MutableStateFlow<String?>(null)
     val ccMetadataJson: StateFlow<String?> = _ccMetadataJson.asStateFlow()
     
-    private var suppressTransient: Boolean = false
+    private val suppressedTransientStreams = mutableSetOf<String>()
+
+    private fun setTransientMessage(message: Message?) {
+        if (message == null) return
+        val key = messageStreamKey(message.scope, message.workspaceId)
+        _transientMessages.value = _transientMessages.value + (key to message)
+        _transientMessage.value = message
+    }
+
+    private fun clearTransientMessage(scope: MessageScope, workspaceId: String?) {
+        val key = messageStreamKey(scope, workspaceId)
+        _transientMessages.value = _transientMessages.value - key
+        _transientMessage.value = _transientMessages.value.values.maxByOrNull { it.timestamp }
+    }
+
+    private fun updateStatusMessage(message: Message) {
+        val key = messageStreamKey(message.scope, message.workspaceId)
+        val current = _statusMessagesByStream.value[key].orEmpty()
+        val existingIndex = current.indexOfFirst { it.id == message.id }
+        val updated = if (existingIndex >= 0) {
+            current.toMutableList().apply { set(existingIndex, message) }
+        } else {
+            (current + message).takeLast(10)
+        }
+        _statusMessagesByStream.value = _statusMessagesByStream.value + (key to updated)
+        _statusMessages.value = _statusMessagesByStream.value.values.flatten().takeLast(10)
+    }
+
+    private fun clearStatusMessages(scope: MessageScope, workspaceId: String?) {
+        val key = messageStreamKey(scope, workspaceId)
+        _statusMessagesByStream.value = _statusMessagesByStream.value - key
+        _statusMessages.value = _statusMessagesByStream.value.values.flatten().takeLast(10)
+    }
+
+    private fun clearStreamState(scope: MessageScope, workspaceId: String?) {
+        clearTransientMessage(scope, workspaceId)
+        clearStatusMessages(scope, workspaceId)
+        _isGenerating.value = _transientMessages.value.isNotEmpty() ||
+            _statusMessagesByStream.value.values.any { it.isNotEmpty() }
+    }
     
     private var webSocket: PlatformWebSocket? = null
     private var connectionGen: Int = 0
@@ -166,7 +216,7 @@ class ChatClient(
     }
 
     @Suppress("CyclomaticComplexMethod", "NestedBlockDepth")
-    private fun handleMessage(text: String) {
+    internal fun handleMessage(text: String) {
         // 批量历史帧：服务端将最多 50 条消息编码为 JSON 数组一次性发送
         // 不依赖 _isLoadingHistory 状态，防止超时后历史消息被丢弃
         if (text.startsWith("[")) {
@@ -221,14 +271,14 @@ class ChatClient(
             }
             
             val isSilkAi = isAgentUserId(message.userId)
+            val streamKey = messageStreamKey(message.scope, message.workspaceId)
             
             // 停止后抑制残余流式消息（允许 CLEAR_STATUS 通过）
-            if (suppressTransient && isSilkAi && message.isTransient) {
+            if (streamKey in suppressedTransientStreams && isSilkAi && message.isTransient) {
                 if (message.category == MessageCategory.AGENT_STATUS &&
                     message.content.startsWith("CLEAR_STATUS")) {
-                    _statusMessages.value = emptyList()
-                    _isGenerating.value = false
-                    suppressTransient = false
+                    clearStreamState(message.scope, message.workspaceId)
+                    suppressedTransientStreams.remove(streamKey)
                     _pendingQuestionId.value = null
                 }
                 return
@@ -246,7 +296,7 @@ class ChatClient(
                 }
                 // 结构化 content blocks（流式替换完整 block 列表），同时可能携带交互式选项
                 message.isTransient && message.contentBlocks != null -> {
-                    _transientMessage.value = null
+                    clearTransientMessage(message.scope, message.workspaceId)
                     _transientContentBlocks.value = message.contentBlocks
                     if (message.interactiveOptions != null) {
                         log("🔘 [ChatClient] 设置 interactiveOptions: ${message.interactiveOptions.size} options: ${message.interactiveOptions.map { it.label }}")
@@ -262,9 +312,8 @@ class ChatClient(
                 message.category == MessageCategory.AGENT_STATUS -> {
                     if (message.content.startsWith("CLEAR_STATUS")) {
                         log("🧹 [ChatClient] 清除状态消息")
-                        _statusMessages.value = emptyList()
-                        _isGenerating.value = false
-                        suppressTransient = false
+                        clearStreamState(message.scope, message.workspaceId)
+                        suppressedTransientStreams.remove(streamKey)
                         _pendingQuestionId.value = null
                         _transientContentBlocks.value = emptyList()  // 清除内容块
                         log("🔘 [ChatClient] CLEAR_STATUS 清除 interactiveOptions")
@@ -272,13 +321,7 @@ class ChatClient(
                     } else {
                         log("🔄 [ChatClient] Agent 状态消息: ${message.content.take(40)}")
                         if (isSilkAi) _isGenerating.value = true
-                        val existingIndex = _statusMessages.value.indexOfFirst { it.id == message.id }
-                        val updated = if (existingIndex >= 0) {
-                            _statusMessages.value.toMutableList().apply { set(existingIndex, message) }
-                        } else {
-                            (_statusMessages.value + message).takeLast(10)
-                        }
-                        _statusMessages.value = updated
+                        updateStatusMessage(message)
                     }
                 }
                 // 增量临时消息：拼接到已有内容尾部
@@ -286,20 +329,20 @@ class ChatClient(
                     if (isSilkAi) _isGenerating.value = true
                     // Clear structured blocks — raw text is being streamed instead
                     _transientContentBlocks.value = emptyList()
-                    val existing = _transientMessage.value
+                    val existing = _transientMessages.value[streamKey]
                     if (existing != null &&
                         existing.userId == message.userId &&
                         existing.type == message.type) {
                         val newContent = existing.content + message.content
-                        _transientMessage.value = existing.copy(
+                        setTransientMessage(existing.copy(
                             content = newContent,
                             timestamp = message.timestamp,
                             currentStep = message.currentStep,
                             totalSteps = message.totalSteps
-                        )
+                        ))
                         log("📝 [ChatClient] 增量拼接: +${message.content.length}字 -> 总${newContent.length}字")
                     } else {
-                        _transientMessage.value = message
+                        setTransientMessage(message)
                         log("📝 [ChatClient] 增量首帧: ${message.content.length}字")
                     }
                 }
@@ -309,7 +352,7 @@ class ChatClient(
                     if (isSilkAi) _isGenerating.value = true
                     // Clear structured blocks — raw text is being shown instead
                     _transientContentBlocks.value = emptyList()
-                    _transientMessage.value = message
+                    setTransientMessage(message)
                 }
                 // 普通消息：添加到消息列表（如果不存在），或替换（如果 action="edit"）
                 else -> {
@@ -338,21 +381,17 @@ class ChatClient(
                         val reqId = message.id.removePrefix("agent_question_")
                         _pendingQuestionId.value = reqId
                         // Must clear isGenerating so the send button shows (not stop button)
-                        _isGenerating.value = false
-                        _transientMessage.value = null
-                        _statusMessages.value = emptyList()
+                        clearStreamState(message.scope, message.workspaceId)
                         _transientContentBlocks.value = emptyList()
                         _interactiveOptions.value = emptyList()
-                        suppressTransient = false
+                        suppressedTransientStreams.remove(streamKey)
                     } else if (isSilkAi) {
                         // AI 最终回复到达 → 清除流式状态，显示完整回复
-                        _transientMessage.value = null
-                        _statusMessages.value = emptyList()
-                        _isGenerating.value = false
+                        clearStreamState(message.scope, message.workspaceId)
                         _transientContentBlocks.value = emptyList()
                         // 不清除 _interactiveOptions：cc-connect 的交互按钮独立于普通消息生命周期，
                         // 由 CLEAR_STATUS 或 sendCcAnswer 负责清除。普通消息到达不应取消等待中的按钮。
-                        suppressTransient = false
+                        suppressedTransientStreams.remove(streamKey)
                         _pendingQuestionId.value = null
                     } else {
                         // 其他用户的非临时消息 → 不打断 AI 生成（不清除流式状态）
@@ -366,10 +405,20 @@ class ChatClient(
     }
     
     fun stopGeneration(userId: String, userName: String) {
+        stopGeneration(userId, userName, MessageScope.TEAM, null)
+    }
+
+    fun stopGeneration(
+        userId: String,
+        userName: String,
+        scope: MessageScope,
+        workspaceId: String?,
+    ) {
         if (webSocket == null || _connectionState.value != ConnectionState.CONNECTED) return
         log("🛑 [ChatClient] 停止 AI 生成")
         
-        val transient = _transientMessage.value
+        val streamKey = messageStreamKey(scope, workspaceId)
+        val transient = _transientMessages.value[streamKey]
         if (transient != null && transient.content.isNotEmpty()) {
             val partialMessage = transient.copy(
                 isTransient = false,
@@ -385,7 +434,9 @@ class ChatClient(
             userName = userName,
             content = "",
             timestamp = Clock.System.now().toEpochMilliseconds(),
-            type = MessageType.STOP_GENERATE
+            type = MessageType.STOP_GENERATE,
+            scope = scope,
+            workspaceId = workspaceId,
         )
         try {
             val jsonMessage = Json.encodeToString(stopMessage)
@@ -394,10 +445,8 @@ class ChatClient(
             log("❌ [ChatClient] 发送停止信号失败: ${e.message}")
         }
         
-        suppressTransient = true
-        _isGenerating.value = false
-        _transientMessage.value = null
-        _statusMessages.value = emptyList()
+        suppressedTransientStreams.add(streamKey)
+        clearStreamState(scope, workspaceId)
         _pendingQuestionId.value = null
         _transientContentBlocks.value = emptyList()
         _interactiveOptions.value = emptyList()
@@ -408,8 +457,10 @@ class ChatClient(
         userName: String,
         content: String,
         kbContextSelection: KnowledgeBaseContextSelection? = null,
+        scope: MessageScope = MessageScope.TEAM,
+        workspaceId: String? = null,
     ) {
-        suppressTransient = false
+        suppressedTransientStreams.remove(messageStreamKey(scope, workspaceId))
         // 用户发送新文本消息时清除等待中的交互按钮（cc-connect 场景）
         if (_interactiveOptions.value.isNotEmpty()) {
             log("🔘 [ChatClient] sendMessage 清除 interactiveOptions")
@@ -424,6 +475,8 @@ class ChatClient(
             timestamp = Clock.System.now().toEpochMilliseconds(),
             type = MessageType.TEXT,
             kbContextSelection = kbContextSelection,
+            scope = scope,
+            workspaceId = workspaceId,
         )
         
         _messages.value = _messages.value + message
@@ -495,7 +548,14 @@ class ChatClient(
      * 发送指定类型的消息（用于 CARD_REPLY 等非 TEXT 消息）。
      * 不添加到本地消息列表——卡片回复由服务器广播后通过 handleMessage 统一处理。
      */
-    suspend fun sendMessage(userId: String, userName: String, content: String, type: MessageType) {
+    suspend fun sendMessage(
+        userId: String,
+        userName: String,
+        content: String,
+        type: MessageType,
+        scope: MessageScope = MessageScope.TEAM,
+        workspaceId: String? = null,
+    ) {
         val message = Message(
             id = generateId(),
             userId = userId,
@@ -503,6 +563,8 @@ class ChatClient(
             content = content,
             timestamp = Clock.System.now().toEpochMilliseconds(),
             type = type,
+            scope = scope,
+            workspaceId = workspaceId,
         )
         try {
             val jsonMessage = Json.encodeToString(message)
@@ -518,7 +580,7 @@ class ChatClient(
         webSocket = null
         _connectionState.value = ConnectionState.DISCONNECTED
         _isGenerating.value = false
-        suppressTransient = false
+        suppressedTransientStreams.clear()
         log("✅ [ChatClient] 已断开连接")
     }
     
@@ -526,10 +588,13 @@ class ChatClient(
         log("🗑️ [ChatClient] 清空所有消息")
         _messages.value = emptyList()
         _transientMessage.value = null
+        _transientMessages.value = emptyMap()
+        _statusMessages.value = emptyList()
+        _statusMessagesByStream.value = emptyMap()
         _isGenerating.value = false
         _isLoadingHistory.value = false
         historyBuffer.clear()
-        suppressTransient = false
+        suppressedTransientStreams.clear()
         _transientContentBlocks.value = emptyList()
         _interactiveOptions.value = emptyList()
     }
@@ -542,6 +607,7 @@ class ChatClient(
     fun clearTransientOnly() {
         log("🗑️ [ChatClient] 只清空临时消息")
         _transientMessage.value = null
+        _transientMessages.value = emptyMap()
         _transientContentBlocks.value = emptyList()
         _interactiveOptions.value = emptyList()
     }

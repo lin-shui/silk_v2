@@ -21,7 +21,9 @@
 - 维护 WebSocket 连接状态
 - 历史回放缓冲与一次性刷入
 - transient / incremental AI 消息拼接
+- transient 和 status 同时维护兼容的最新值与按 `TEAM` / `WORKSPACE:<workspaceId>` 隔离的 map，两个工作区并发流不会相互覆盖
 - 停止生成消息发送
+- Workflow Room stream 合同：`Message.scope`、`workspaceId`、`observerVisible`；`ChatClient.sendMessage/stopGeneration` 显式传递消息目标
 - 跨端消息模型与基础 API response 模型
 - 知识库上下文合同：`Message.kbContextSelection`(`KnowledgeBaseContextSelection`：`pinnedEntryIds`/`excludedEntryIds`) + `MessageReference.origin/reason`；`ChatClient.sendMessage(..., kbContextSelection)` 把本轮选择带给后端，后端据此重建 KB prompt 上下文并回广播 `references`
 - CC 模块前后端共享 DTO（避免双份维护）
@@ -33,6 +35,7 @@
   - 后端 `WebSocketConfig.kt`
   - `frontend/shared/models/Message.kt`
   - 三端 UI 解析
+  - `scope` 的旧消息默认值必须保持 `TEAM`；`observerVisible` 只能由服务端按发送时 Workspace 可见性写入
 - 改文件消息 payload：
   - Web / Android / Desktop `FileContractsTest`
   - 后端文件相关合同测试
