@@ -693,13 +693,13 @@ object SilkStylesheet : StyleSheet() {
         color(Color(SilkColors.primary))
         property("letter-spacing", "0.5px")
     }
-    
+
     val timestamp by style {
         fontSize(11.px)
         color(Color(SilkColors.textLight))
         property("font-style", "italic")
     }
-    
+
     val systemMessage by style {
         fontSize(12.px)
         color(Color(SilkColors.textSecondary))
@@ -707,7 +707,7 @@ object SilkStylesheet : StyleSheet() {
         marginBottom(8.px)
         property("font-style", "italic")
     }
-    
+
     val inputContainer by style {
         display(DisplayStyle.Flex)
         property("flex-shrink", "0")
@@ -717,7 +717,7 @@ object SilkStylesheet : StyleSheet() {
         property("gap", "8px")
         property("box-shadow", "0 -2px 8px rgba(169, 137, 77, 0.05)")
     }
-    
+
     val input by style {
         property("flex", "1")
         padding(10.px)
