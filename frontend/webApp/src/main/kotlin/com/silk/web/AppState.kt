@@ -131,10 +131,25 @@ class WebAppState {
         currentScene = scene
     }
 
-    /** Switch top-level tab; if the Settings overlay is open, dismiss it first. */
+    /** Switch top-level tab after dismissing any utility page layered over the main content. */
     fun selectTab(tab: NavTab) {
-        if (currentScene == Scene.SETTINGS) navigateBack()
+        closeUtilityScenes()
         currentTab = tab
+    }
+
+    fun openContacts() {
+        if (currentScene == Scene.CONTACTS && currentTab == NavTab.CONVERSATIONS) return
+        selectTab(NavTab.CONVERSATIONS)
+        navigateTo(Scene.CONTACTS)
+    }
+
+    private fun closeUtilityScenes() {
+        while (currentScene == Scene.SETTINGS || currentScene == Scene.CONTACTS) {
+            if (!navigateBack()) {
+                currentScene = if (selectedGroup != null) Scene.CHAT_ROOM else Scene.GROUP_LIST
+                break
+            }
+        }
     }
 
     fun openKnowledgeBaseEntry(entryId: String, topicId: String? = null) {

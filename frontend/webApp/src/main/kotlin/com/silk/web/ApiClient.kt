@@ -703,7 +703,7 @@ object ApiClient {
             val response = post("/api/rooms", body)
             jsonParser.decodeFromString(response)
         } catch (e: Exception) {
-            console.log("创建会话失败:", e)
+            console.error("创建会话失败:", e)
             null
         }
     }
@@ -1284,7 +1284,7 @@ object ApiClient {
         runCatching { jsonParser.decodeFromString<RoomActionResponse>(responseBody) }
             .getOrElse { RoomActionResponse(false, "操作失败（HTTP ${response.status}）") }
     } catch (e: Exception) {
-        console.log("群组操作失败:", e)
+        console.error("群组操作失败:", e)
         RoomActionResponse(false, "网络错误，请稍后重试")
     }
 

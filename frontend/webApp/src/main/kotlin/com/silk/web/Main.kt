@@ -569,7 +569,7 @@ fun SilkNavRail(appState: WebAppState) {
             icon = "\uD83D\uDC64",
             isActive = appState.currentScene == Scene.CONTACTS,
         ) {
-            appState.navigateTo(Scene.CONTACTS)
+            appState.openContacts()
         }
         NavRailUtilityButton(
             title = "设置",
@@ -651,7 +651,7 @@ object SilkStylesheet : StyleSheet() {
         property("letter-spacing", "2px")
         property("box-shadow", "0 2px 8px rgba(169, 137, 77, 0.2)")
     }
-    
+
     val statusBar by style {
         property("flex-shrink", "0")
         padding(4.px, 16.px)
@@ -661,7 +661,7 @@ object SilkStylesheet : StyleSheet() {
         property("font-size", "12px")
         property("letter-spacing", "1px")
     }
-    
+
     val messagesContainer by style {
         property("flex", "1")
         property("min-height", "0")
@@ -671,7 +671,7 @@ object SilkStylesheet : StyleSheet() {
         padding(12.px)
         property("background", SilkColors.backgroundGradient)
     }
-    
+
     val messageCard by style {
         backgroundColor(Color(SilkColors.surfaceElevated))
         borderRadius(12.px)
@@ -681,13 +681,13 @@ object SilkStylesheet : StyleSheet() {
         property("border", "1px solid ${SilkColors.border}")
         property("transition", "all 0.2s ease")
     }
-    
+
     val messageHeader by style {
         display(DisplayStyle.Flex)
         property("justify-content", "space-between")
         marginBottom(6.px)
     }
-    
+
     val userName by style {
         property("font-weight", "600")
         color(Color(SilkColors.primary))
@@ -1133,11 +1133,7 @@ fun ChatAppWithGroup(
     var isExportingMarkdown by remember { mutableStateOf(false) }
     var exportMarkdownHint by remember { mutableStateOf<String?>(null) }
     var showFolderExplorer by remember { mutableStateOf(false) }
-    var folderFiles by remember { mutableStateOf<List<FileInfo>>(emptyList()) }
     var isLoadingFiles by remember { mutableStateOf(false) }
-    
-    // Drag-and-drop state
-    var isDraggingOver by remember { mutableStateOf(false) }
 
     var contacts by remember { mutableStateOf<List<Contact>>(emptyList()) }
     var groupMembers by remember { mutableStateOf<List<GroupMember>>(emptyList()) }
@@ -1383,7 +1379,7 @@ fun ChatAppWithGroup(
                             try {
                                 ApiClient.deleteMessage(group.id, msgId, user.id)
                             } catch (e: dynamic) {
-                                console.log("删除消息失败:", msgId, e)
+                                console.error("删除消息失败:", msgId, e)
                             }
                         }
                     }
@@ -2276,10 +2272,8 @@ fun ChatAppWithGroup(
                         }
                     }
 
-                    
                     // $ KB 引用浮动面板
                     if (showKbRefMenu) {
-                        val scope = rememberCoroutineScope()
                         // 搜索延迟 debounce
                         LaunchedEffect(kbRefSearchText) {
                             if (kbRefSearchText.length >= 1) {
@@ -2871,13 +2865,11 @@ fun ChatAppWithGroup(
             busy = isLoadingContacts,
             errorMessage = addMemberResult?.takeIf { it.startsWith("❌") },
             successMessage = addMemberResult?.takeUnless { it.startsWith("❌") },
-            emptyCandidatesMessage = if (memberSearchQuery.isBlank()) {
-                strings.noContactsToAdd
-            } else if (!memberSearchAttempted) {
-                "点击搜索或按 Enter 查看匹配用户"
-            } else {
-                "未找到可添加的用户"
-            },
+            emptyCandidatesMessage = roomMemberCandidateEmptyMessage(
+                strings = strings,
+                query = memberSearchQuery,
+                searchAttempted = memberSearchAttempted,
+            ),
             onQueryChange = { query ->
                 memberSearchQuery = query
                 memberSearchResults = emptyList()
@@ -2935,10 +2927,11 @@ fun ChatAppWithGroup(
                             chatClient.disconnect()
                         } catch (e: dynamic) { /* ignore disconnect errors */ }
                         val response = ApiClient.startPrivateChat(user.id, member.id)
-                        if (response.success && response.group != null) {
-                            appState.selectGroup(response.group!!)
+                        val privateGroup = response.group
+                        if (response.success && privateGroup != null) {
+                            appState.selectGroup(privateGroup)
                         } else {
-                            console.log("❌ 无法创建对话: ${response.message}")
+                            console.error("无法创建对话: ${response.message}")
                         }
                     }
                 } else {

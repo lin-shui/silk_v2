@@ -1580,13 +1580,11 @@ private fun WorkflowChatPanel(
             busy = memberBusy,
             errorMessage = memberError,
             successMessage = memberFeedback,
-            emptyCandidatesMessage = if (memberQuery.isBlank()) {
-                strings.noContactsToAdd
-            } else if (!memberSearchAttempted) {
-                "点击搜索或按 Enter 查看匹配用户"
-            } else {
-                "未找到可添加的用户"
-            },
+            emptyCandidatesMessage = roomMemberCandidateEmptyMessage(
+                strings = strings,
+                query = memberQuery,
+                searchAttempted = memberSearchAttempted,
+            ),
             onQueryChange = {
                 memberQuery = it
                 memberCandidates = emptyList()

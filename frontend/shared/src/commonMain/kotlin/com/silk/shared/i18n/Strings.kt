@@ -81,6 +81,9 @@ interface Strings {
     val addMembersToGroup: String
     val addMemberButton: String
     val noContactsToAdd: String
+    val memberSearchPlaceholder: String
+    val memberSearchPrompt: String
+    val noAddableUsers: String
     val groupMembersTitleWithCount: String  // Format: "Group Members ({count})"
     val inviteToGroup: String
     val selectShareMethod: String

@@ -60,6 +60,19 @@ internal data class ConversationRoomMemberCandidateItem(
     val detail: String = "",
 )
 
+internal fun isRoomMemberSearchDisabled(query: String, busy: Boolean): Boolean =
+    busy || query.isBlank()
+
+internal fun roomMemberCandidateEmptyMessage(
+    strings: Strings,
+    query: String,
+    searchAttempted: Boolean,
+): String = when {
+    query.isBlank() -> strings.noContactsToAdd
+    !searchAttempted -> strings.memberSearchPrompt
+    else -> strings.noAddableUsers
+}
+
 @Suppress("CyclomaticComplexMethod")
 @Composable
 internal fun ConversationRoomMembersDialog(
@@ -156,7 +169,7 @@ internal fun ConversationRoomMembersDialog(
                         property("border-bottom", "1px solid ${SilkColors.border}")
                     }
                 }) {
-                    val searchDisabled = busy || query.isBlank()
+                    val searchDisabled = isRoomMemberSearchDisabled(query, busy)
                     Div({
                         style {
                             display(DisplayStyle.Flex)
@@ -173,7 +186,7 @@ internal fun ConversationRoomMembersDialog(
                                     onSearch()
                                 }
                             }
-                            attr("placeholder", "用户名、姓名或电话号码")
+                            attr("placeholder", strings.memberSearchPlaceholder)
                             style {
                                 property("flex", "1")
                                 property("min-width", "0")

@@ -103,8 +103,7 @@ internal fun ConversationRoomComposerTools(
                                 window.__silkScreenshotUploadUrl
                             );
                         };
-                    }).catch(function(error) {
-                        console.log('截图取消:', error);
+                    }).catch(function() {
                         if (window.__screenshotDone) {
                             window.__screenshotDone();
                             window.__screenshotDone = undefined;
@@ -129,7 +128,7 @@ internal fun ConversationRoomComposerTools(
                 try {
                     mediaRecorder?.stop()
                 } catch (error: dynamic) {
-                    console.log("停止录音失败:", error)
+                    console.error("停止录音失败:", error)
                     isTranscribing = false
                 }
             }
@@ -164,7 +163,7 @@ internal fun ConversationRoomComposerTools(
                                         onMessageTextChange(updated)
                                     }
                                 } catch (error: Throwable) {
-                                    console.log("语音识别失败:", error)
+                                    console.error("语音识别失败:", error)
                                 } finally {
                                     isTranscribing = false
                                     try {
@@ -179,7 +178,7 @@ internal fun ConversationRoomComposerTools(
                         recorder.start()
                         isVoiceRecording = true
                     } catch (error: dynamic) {
-                        console.log("无法启动录音:", error)
+                        console.error("无法启动录音:", error)
                     }
                 }
             }

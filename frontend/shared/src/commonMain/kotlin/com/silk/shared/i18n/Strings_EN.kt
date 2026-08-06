@@ -77,6 +77,9 @@ object Strings_EN : Strings {
     override val addMembersToGroup = "Add Members to Group"
     override val addMemberButton = "Add member"
     override val noContactsToAdd = "No contacts to add\n(All contacts are already in the group)"
+    override val memberSearchPlaceholder = "Username, name, or phone number"
+    override val memberSearchPrompt = "Select Search or press Enter to view matching users"
+    override val noAddableUsers = "No addable users found"
     override val groupMembersTitleWithCount = "Group Members ({count})"  // {count} will be replaced
     override val inviteToGroup = "Invite to Group"
     override val selectShareMethod = "Select sharing method:"
